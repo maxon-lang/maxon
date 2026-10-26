@@ -16914,7 +16914,7 @@ end 'DivisorZeroVerdict'
 //
 // ⚠⚠ **THE COMBINATIONS ARE SPELLED OUT AS AN ENUM RATHER THAN CARRIED IN A TWO-FIELD `type`, AND
 // THAT IS A MEASURED CONSTRAINT rather than a style choice.** This is asked once per division AND
-// once per int→int ranged cast in the program (`aliasChangesTheDivisionProof`), which is a hot
+// once per bare-local cast to a non-zero alias (`aliasChangesTheDivisionProof`), which is a hot
 // parse path — and a Maxon `type` returned by value is a HEAP RECORD: `Self{...}` emits an
 // `__mm_alloc` (a two-`Integer` `Pair.create` allocates 16 bytes). A struct there costs
 // **+6,146 allocations in `phase:parse` at scale rung
@@ -62632,8 +62632,12 @@ export type Parser
 			view admittingAlias = self.aliasAdmittingLiteral(current, targetType: targetType) if currentIsALiteral else self.anchors.undeclaredAlias
 			var admittingLetCast = self.aliasAdmittingLiteral(current, targetType: targetType) if castReadsAwait else self.anchors.undeclaredAlias
 			let literalConstant = self.foldedConstantOf(current) if currentIsALiteral else LetCastConstant.unknown
+			let operand = current
 			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: currentIsBareLocal)
-			currentIsBareLocal = false
+
+			// A cast that hands its operand back leaves the local's own value, so the next cast in the
+			// chain must still withhold its record from it, or the local claims that cast's alias.
+			currentIsBareLocal = currentIsBareLocal and current == operand
 			currentIsALiteral = false
 
 			if castReadsAwait 'aCastConstantRead'
@@ -64505,12 +64509,11 @@ export type Parser
 	// cast target can say, and the one that makes `let d = z as NonZero` the language's escape hatch from a
 	// checked divide rather than a no-op the divide cannot see.
 	//
-	// ⭐ **WITHOUT IT THE ESCAPE HATCH IS UNREACHABLE, AND THE CANONICAL SPELLING OF IT IS THE CORPUS'S OWN.**
-	// `divisorProof` asks `declaredAliasOfValue`, which is tag-guarded on `named` — so a cast that
-	// leaves the value's tag `integer` leaves the alias invisible, and `100 / d` after `let d = z as NonZero`
-	// would demand a `try`. `specs/ranged-typealias.md`'s `cast-guard-fires-before-the-division` and
-	// `field-default-then-guarded-casts` spell exactly that; `specs/arithmetic-operators.md:37`
-	// documents it as THE way out. An exemption whose own spelling is broken would be no exemption.
+	// Only a bare-local source mints. `divisorProof` reads the alias through `valueDenotedAlias`,
+	// which takes the record `finishCast` writes, and `finishCast` withholds that record when the
+	// result is the bare local itself. Without a mint, `100 / d` after `let d = z as NonZero` would
+	// demand a `try`, as in `specs/ranged-typealias.md`'s `cast-guard-fires-before-the-division`.
+	// Every other source carries the alias in the record and needs no new value.
 	//
 	// ⚠ **THE SAFETY ARGUMENT IS `aliasChangesTheShiftFill`'s, VERBATIM, FOR AN INT TARGET** — a DECLARED
 	// RANGED INT alias and nothing else. Inside that gate a value's other tag-dispatched answers are provably
@@ -64529,8 +64532,12 @@ export type Parser
 	// zero can only ever weaken the answer — so neither mints. That is what keeps `x as Byte`, `x as Percent`
 	// and `x as AsciiCode` the byte-for-byte no-ops they have always been while `z as NonZero` is not.
 	function castChangesTheDivisionProof(value ValueId, targetAlias DeclaredAlias, sourceIsBareLocal bool) returns bool
+		if not sourceIsBareLocal 'theRecordCanCarryIt'
+			return false
+		end 'theRecordCanCarryIt'
+
 		return match targetAlias 'a'
-			declared(alias) gives self.aliasChangesTheDivisionProof(value, alias: alias, sourceIsBareLocal: sourceIsBareLocal)
+			declared(alias) gives self.aliasChangesTheDivisionProof(value, alias: alias)
 			undeclared gives false
 		end 'a'
 	end 'castChangesTheDivisionProof'
@@ -64698,27 +64705,16 @@ export type Parser
 	// The half of the question above that is about the ALIAS, split out exactly as
 	// `aliasChangesTheShiftFill` is and for the same reason: the arms read as the sentences they are.
 	//
-	// ⭐ **THE FLOAT ARM FIRES ONLY FOR A BARE-LOCAL SOURCE, WHICH IS `aliasChangesTheDivisionSignedness`'s
-	// GATE AND ITS REASON.** Every other float source carries the target alias in the record `finishCast`
-	// writes, and `divisorProof` reads it there through `valueDenotedAlias` — no new value and no new op.
-	// A bare local is the one shape that record is WITHHELD for (one value under two names), so a fresh
-	// identity is the only place the proof can live. ⚠ The INT arm mints for every source, and narrowing it
-	// to match would move the rendered Target IR at every `z as NonZero`.
-	//
 	// ⚠⚠ **IT ASKS ONLY THE ZERO HALF OF THE PROOF, AND THAT IS DELIBERATE.** A cast target can
 	// move the OTHER hazard too — `z as SmallCount` for an `int(0 to 100)` would tell a `mod` its divisor is
 	// never `-1` and save it the overflow guard — and this predicate answers `false` for it, because the
 	// target admits zero. The consequence is a needless 4-op guard on that one shape and NOTHING else: no
 	// wrong answer, no lost diagnostic, and the divide there is already paying a full checked expansion.
-	// Widening it would cost far more than it saves — every zero-admitting narrowing cast in the language
-	// (`x as Byte`, `x as Percent`, `x as AsciiCode`) would start MINTING a value where it is a byte-for-byte
-	// no-op today, which is the property the header above exists to protect.
-	function aliasChangesTheDivisionProof(value ValueId, alias RangedTypeAlias, sourceIsBareLocal bool) returns bool
+	// Widening it would cost far more than it saves — every zero-admitting narrowing cast of a bare
+	// local (`x as Byte`, `x as Percent`, `x as AsciiCode`) would start MINTING a value where it is a
+	// byte-for-byte no-op today, which is the property the header above exists to protect.
+	function aliasChangesTheDivisionProof(value ValueId, alias RangedTypeAlias) returns bool
 		let isFloat = aliasIsFloat(alias)
-
-		if isFloat and not sourceIsBareLocal 'theRecordCanCarryIt'
-			return false
-		end 'theRecordCanCarryIt'
 
 		if not rangeExcludesZero(alias.low, high: alias.high, isFloat: isFloat) 'admitsZero'
 			return false
