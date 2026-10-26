@@ -921,7 +921,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:5:25: Cannot cast from struct to int
+error E3009: <fragment>:5:25: Cannot cast from (int, int) to int
 ```
 
 <!-- test: error.a-tuple-literal-in-an-array-of-scalars-in-a-body -->
@@ -935,7 +935,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:6:26: Cannot cast from struct to int
+error E3009: <fragment>:6:26: Cannot cast from (int, int) to int
 ```
 
 <!-- test: an-array-of-element-alias-casts-in-a-body -->

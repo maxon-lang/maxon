@@ -3603,3 +3603,230 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:10:8: cannot assign a value of type 'function' to element 0 of tuple (Wide, Wide), which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
+
+<!-- test: error.a-tuple-pushed-into-an-array-of-words-names-the-tuple-type -->
+A tuple handed to an array of scalars is named by its tuple type, not by the kind word `struct`.
+```maxon
+typealias Word = bits(64)
+typealias Words = Array with Word
+
+function main() returns ExitCode
+	let t = (0, 1)
+	var words = Words.create()
+	words.push(t)
+	return words.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:8: argument type mismatch for 'value': expected 'Word', got '(int, int)'
+```
+
+<!-- test: error.a-tuple-operand-of-an-arithmetic-operator-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let a = (1, 2) + 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:3:17: Cannot operate on (int, int) and int
+```
+
+<!-- test: error.a-tuple-operand-of-a-shift-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let a = t shl 1
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:4:12: Cannot operate on (int, int) and int
+```
+
+<!-- test: error.a-tuple-dividend-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let a = t / 2
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:4:12: Cannot operate on (int, int) and int
+```
+
+<!-- test: error.the-same-tuple-on-both-sides-of-an-operator-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let a = t + t
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:12: operator '+' is not defined for type '(int, int)'
+```
+
+<!-- test: error.two-different-tuples-on-an-operator-name-both-tuple-types -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let u = (1, "one")
+	let a = t + u
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:5:12: Cannot operate on (int, int) and (int, String)
+```
+
+<!-- test: error.a-negated-tuple-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let a = -t
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:4:10: Cannot negate (int, int)
+```
+
+<!-- test: error.not-of-a-tuple-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let a = not t
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:10: operator 'not' requires integer operands, but this one is (int, int)
+```
+
+<!-- test: error.an-interpolated-tuple-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let s = "{t}"
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:4:12: Type '(int, int)' used in string interpolation must have a toString method
+```
+
+<!-- test: error.a-tuple-scrutinee-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	match t 'm'
+		1 then print("one")
+		default then print("other")
+	end 'm'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2028: <fragment>:5:3: pattern type 'int' does not match scrutinee type '(int, int)'
+```
+
+<!-- test: error.a-tuple-condition-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	if t 'c'
+		print("x")
+	end 'c'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:5: 'if' requires a bool condition, got '(int, int)'
+```
+
+<!-- test: error.a-tuple-ternary-condition-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let a = 1 if t else 2
+	return a as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2028: <fragment>:4:12: ternary expression requires a bool condition, got '(int, int)'
+```
+
+<!-- test: error.a-tuple-returned-as-a-scalar-names-the-tuple-type -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pair() returns Integer
+	let t = (1, 2)
+	return t
+end 'pair'
+
+function main() returns ExitCode
+	return pair() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:2: Cannot return '(int, int)' from function declared to return 'Integer'
+```
+
+<!-- test: error.a-tuple-assigned-to-a-scalar-variable-names-the-tuple-type -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let t = (1, 2)
+	var n = 1 as Integer
+	n = t
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:2: cannot assign a value of type '(int, int)' to variable 'n', which holds 'int'
+```
+
+<!-- test: error.iterating-a-tuple-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	for x in t 'f'
+		print("x")
+	end 'f'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:2: Unsupported: `for … in` over a `(int, int)` value — the compiler iterates an `Array`, a `FixedArray`, a `List`, a `Map`'s `(key, value)` entries, a `String`'s grapheme clusters, the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`, and any type declaring the cursor protocol `current()` + `advance() throws IterationError`
+```
+
+<!-- test: error.a-tuple-range-bound-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	var trips = 0 as Count
+	for x in t to 3 'l'
+		trips = trips + 1
+	end 'l'
+	return trips as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:11: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a '(int, int)'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
+```
+
+<!-- test: error.a-tuple-in-a-character-set-literal-names-the-tuple-type -->
+```maxon
+function main() returns ExitCode
+	let t = (1, 2)
+	let cs = CharSet from [t]
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:25: 'CharSet' requires a Character, but its argument is (int, int)
+```
