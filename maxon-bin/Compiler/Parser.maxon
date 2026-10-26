@@ -314,6 +314,13 @@ type OperandAlias
 	end 'mixed'
 end 'OperandAlias'
 
+union OperandAliasAgreement
+	leftDecides
+	rightAdopted
+	common(members NameRoster, ancestor ByteArray)
+	disjoint
+end 'OperandAliasAgreement'
+
 // The synthetic capture NAME an inherited witness occupies its env slot under. `$` is unwritable in a Maxon
 // identifier — the same property `parseClosureExpression` mints its lifted names on — so this can collide
 // with no user binding the body captures, and the constraint index makes one name per constraint. It is a
@@ -41837,26 +41844,38 @@ export type Parser
 	// ⚠ **ASKED AFTER `requireBinOpOperands`**, so a genuine class mismatch (`3 + true`) keeps its own
 	// wording — this rule is about two values that are already both numbers.
 	function operandAliasIdentity(lhs ValueId, rhs ValueId, opName String, opTok Token) returns OperandAlias throws SourceParseError
-		view left = self.operandAliasAnswer(lhs)
-		view right = self.operandAliasAnswer(rhs)
+		match self.agreeOperandAliases(self.operandAliasAnswer(lhs), right: self.operandAliasAnswer(rhs)) 'agreement'
+			leftDecides then return self.operandAliasOf(lhs)
+			rightAdopted then return self.operandAliasOf(rhs)
+			common(members, ancestor) then return OperandAlias.mixed(operandAliasSetBrand(members), ancestor: ancestor.clone())
+			disjoint then throw self.operandAliasRefusal(opName, left: self.operandAliasOf(lhs).identity, right: self.operandAliasOf(rhs).identity, opTok: opTok)
+		end 'agreement'
+	end 'operandAliasIdentity'
 
+	// The one alias-agreement rule, asked by a body's operators and by a file-scope fold
+	// (`requireConstAliasesAgree`), so the two cannot disagree about which pair needs a cast.
+	function agreeOperandAliases(left ByteArray, right ByteArray) returns OperandAliasAgreement
 		if left.equals(right) or right.isEmpty() 'theLeftDecides'
-			return self.operandAliasOf(lhs)
+			return OperandAliasAgreement.leftDecides
 		end 'theLeftDecides'
 
 		if left.isEmpty() 'theLeftAdoptsTheRight'
-			return self.operandAliasOf(rhs)
+			return OperandAliasAgreement.rightAdopted
 		end 'theLeftAdoptsTheRight'
 
 		let members = operandAliasSetUnion(left, right: right)
 		let ancestor = self.signatures.nearestCommonAliasAncestor(members, readerFilePath: self.job.path)
 
 		if ancestor.isEmpty() 'noCommonAncestor'
-			throw SourceParseError.operandAliasMismatch(opName, left: self.signatures.aliasIdentityDisplay(self.operandAliasOf(lhs).identity), right: self.signatures.aliasIdentityDisplay(self.operandAliasOf(rhs).identity), line: opTok.line, column: opTok.column)
+			return OperandAliasAgreement.disjoint
 		end 'noCommonAncestor'
 
-		return OperandAlias.mixed(operandAliasSetBrand(members), ancestor: ancestor)
-	end 'operandAliasIdentity'
+		return OperandAliasAgreement.common(members, ancestor: ancestor)
+	end 'agreeOperandAliases'
+
+	function operandAliasRefusal(opName String, left ByteArray, right ByteArray, opTok Token) returns SourceParseError
+		return SourceParseError.operandAliasMismatch(opName, left: self.signatures.aliasIdentityDisplay(left), right: self.signatures.aliasIdentityDisplay(right), line: opTok.line, column: opTok.column)
+	end 'operandAliasRefusal'
 
 	function operandAliasOf(value ValueId) returns OperandAlias
 		let brand = self.brandOf(value)
@@ -93589,6 +93608,7 @@ export type Parser
 		if comparisonOperator(opTok.kind) 'comparison'
 			try self.requireConstComparable(left, right: right, opTok: opTok)
 			let cmpOp = infixCmpOp(opTok.kind)
+			try self.requireConstAliasesAgree(left, right: right, opName: comparisonOpSpelling(cmpOp), opTok: opTok)
 
 			// A float comparison folds with the host's native f64 (`foldFloatCompare`), NEVER over the
 			// raw bit patterns: two negatives order opposite to their patterns, so an integer compare of
@@ -93607,6 +93627,9 @@ export type Parser
 		if shiftOperator(op) 'shift'
 			return try self.foldConstShift(left, count: right, op: op, countStart: countStart)
 		end 'shift'
+
+		// Below the shift: its count is a bit count, not a value of the result's type (`emitBinOp`).
+		try self.requireConstAliasesAgree(left, right: right, opName: opTok.kind.rawValue, opTok: opTok)
 
 		// Float arithmetic (`+ - * /`) folds with the host's native f64 (`foldFloatBinOp`), an INT
 		// operand of a mixed `1 + 2.0` first PROMOTED to its f64 value (`constFloatBits`). `mod` and the
@@ -93713,6 +93736,26 @@ export type Parser
 			throw ConstEvalError.defective(err)
 		end 'rejected'
 	end 'requireConstOperands'
+
+	function requireConstAliasesAgree(left ConstValue, right ConstValue, opName String, opTok Token) throws ConstEvalError
+		let leftAlias = self.constOperandAlias(left)
+		let rightAlias = self.constOperandAlias(right)
+
+		match self.agreeOperandAliases(leftAlias, right: rightAlias) 'agreement'
+			leftDecides or
+			rightAdopted or
+			common then return
+			disjoint then throw ConstEvalError.defective(self.operandAliasRefusal(opName, left: leftAlias, right: rightAlias, opTok: opTok))
+		end 'agreement'
+	end 'requireConstAliasesAgree'
+
+	function constOperandAlias(value ConstValue) returns ByteArray
+		if value.typeName.isEmpty() 'carriesNoName'
+			return EmptySourceText
+		end 'carriesNoName'
+
+		return self.signatures.rangedIdentityOfSpelling(value.typeName, readerFilePath: self.job.path)
+	end 'constOperandAlias'
 
 	// A prefix `-` or `not`, mirroring `parseUnary` over values. Both readings of `not` come from
 	// `notOperatorFor`, so a constant `not` complements exactly what a runtime `not` complements.

@@ -190,7 +190,8 @@ Write `value as Alias` to convert a value of another alias.
 Arithmetic keeps the alias of its operands. Two operands of one alias give that alias; an unnamed operand
 (a literal, a loop counter) adopts the named one, and so does an ancestor (`block + offset` over a
 `BlockId` and an `ElementIndex` is a `BlockId`); two aliases with no common ancestor are **E3005** until
-one side is cast. The same rule governs comparisons. A shift takes the alias of its left operand.
+one side is cast. The same rule governs comparisons, and a [top-level initializer](/docs/language/variables/#top-level-variables)
+refuses the same pairs. A shift takes the alias of its left operand.
 
 Two subtypes of one parent make a *mixed* expression. It lands in any destination one of its operands'
 aliases satisfies — a parameter, a field, an `otherwise` or `match` merge — computed into a temporary of the

@@ -886,6 +886,24 @@ end 'main'
 error E2015: <fragment>:5:9: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
 ```
 
+<!-- test: error.a-file-scope-fold-adds-countof-to-another-alias-only-through-a-cast -->
+A file-scope initializer that adds a `countof` to a constant of another alias meets the same mismatch, since the folded `countof` is a `Count` there too.
+```maxon
+typealias Small = int(0 to 100)
+typealias Vec3 = FixedArray with 3 Small
+
+let base = 5 as Small
+let size = countof(Vec3)
+let total = base + size
+
+function main() returns ExitCode
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:18: operator '+' requires both operands to be the same type: 'Small' and 'Count' are different typealiases — cast one side with 'as'
+```
+
 <!-- test: error.a-top-level-countof-is-a-count -->
 A file-scope `countof` is a `Count` as it is in a body, so a top-level `let` bound to it adds to another alias only through a cast, and the mismatch is the one `error.countof-is-a-count` reports.
 ```maxon

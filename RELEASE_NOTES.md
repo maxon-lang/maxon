@@ -197,6 +197,10 @@ release's version as its heading when the release is cut.
 - A cast whose operand is itself a cast, `x as A as B` or `(x as A) as B`, is E2079.
   Fix: cast directly to the final type (`x as B`), or, when both steps do work (a range check, then a
   reinterpretation as `bits(n)`), bind the first: `let a = x as A`, then `a as B`.
+- A file-scope `let` or `static` initializer whose operator combines two different typealiases with no
+  common ancestor (`let t = a + b` over a `Small` and a `Tally`, a comparison, `and`, `or`, `xor` or `mod`)
+  is E3005, as it is in a function body.
+  Fix: cast one side with `as` (`a + (b as Small)`).
 
 ## 0.5.0 — 2026-10-08
 

@@ -1627,6 +1627,41 @@ end 'main'
 error E3005: <fragment>:8:10: operator 'min' requires both operands to be the same type: 'Age' and 'Year' are different typealiases — cast one side with 'as'
 ```
 
+<!-- test: error.file-scope-mixed-alias-addition -->
+A file-scope initializer folds its operators under the rule a body applies, so two constants of different aliases meet only through a cast.
+```maxon
+typealias Small = int(0 to 100)
+typealias Tally = int(0 to 100)
+
+let a = 5 as Small
+let b = 5 as Tally
+let t = a + b
+
+function main() returns ExitCode
+	return t as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:11: operator '+' requires both operands to be the same type: 'Small' and 'Tally' are different typealiases — cast one side with 'as'
+```
+
+<!-- test: error.file-scope-mixed-alias-comparison -->
+```maxon
+typealias Small = int(0 to 100)
+typealias Tally = int(0 to 100)
+
+let a = 5 as Small
+let b = 5 as Tally
+let lt = a < b
+
+function main() returns ExitCode
+	return 3 if lt else 4
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:12: operator '<' requires both operands to be the same type: 'Small' and 'Tally' are different typealiases — cast one side with 'as'
+```
+
 <!-- test: error.arithmetic-result-carries-the-alias -->
 `a + a2` over `Age` IS an `Age`, so it is refused at a `Year` parameter exactly as `a` alone would be.
 ```maxon
@@ -1797,6 +1832,53 @@ end 'main'
 ```
 ```stdout
 93 31 32 41
+```
+
+<!-- test: file-scope-constants-of-one-alias-meet-without-a-cast -->
+At file scope a constant of an alias folds with another of the same alias, and with a literal on either side.
+```maxon
+typealias Small = int(0 to 100)
+
+let a = 5 as Small
+let c = 7 as Small
+let sum = a + a
+let up = a + 1
+let literalFirst = 2 + a
+let ordered = a < c
+
+function main() returns ExitCode
+	print("{sum} {up} {literalFirst} {ordered}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 6 7 true
+```
+
+<!-- test: file-scope-constants-of-sibling-aliases-meet-through-their-ancestor -->
+Two file-scope constants whose aliases share an ancestor under `implements` fold with no cast, as the same pair does in a body.
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias VarId = int(0 to u64.max) implements ElementIndex
+
+let block = 3 as BlockId
+let varId = 4 as VarId
+let sum = block + varId
+let before = block < varId
+
+function main() returns ExitCode
+	print("{sum} {before}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 true
 ```
 
 <!-- test: a-literal-decays-at-every-door -->
