@@ -156,14 +156,11 @@ reachable here; that fallback exists FOR this property and its header names this
 resolve to nothing, the cast would evaporate and the exit code would come out right anyway: green
 because the lookup FAILED.
 
-An exit code cannot tell the two apart, and for the CONSTANT operand below neither can the emitted code:
-the value folds and a folded in-range cast emits nothing either way.
-
-⚠ **A RUNTIME OPERAND DOES DISCRIMINATE, so only the CONSTANT one needs this case's argument.**
-Every stdlib alias this loader lists is a checked QUANTITY, whose door refuses a value that arrived
-from a signed domain — so `x as Milliseconds` emits a guard where `x as NoSuchName` cannot, and the
-two are told apart by the emitted code. `stdlib/Builtins.maxon`'s roster names the aliases that
-are raw PATTERNS instead, and those are the ones that would emit nothing.
+An exit code cannot tell the two apart. The emitted code can: every stdlib alias this loader lists is
+a checked QUANTITY, whose door refuses a value that arrived from a signed domain — so
+`seed() as Milliseconds` emits a guard where a cast to a name that resolved to nothing cannot.
+`stdlib/Builtins.maxon`'s roster names the aliases that are raw PATTERNS instead, and a cast to one
+of those would emit nothing.
 
 What discriminates HERE is the DIAGNOSTIC, and it is the stronger half in any case: a guard
 distinguishes a name that resolved to a NARROW range from one that resolved to nothing, while the
@@ -175,8 +172,13 @@ resolving (the module removed from `stdlib/`, the bare-name fallback narrowed, t
 renamed) this test would produce the next test's output and FAIL. Do not delete the negative
 half; it is what makes the positive half mean something.
 ```maxon
+function seed() returns FullRangeInt
+	return 5
+end 'seed'
+
 function main() returns ExitCode
-	return (5 as Milliseconds) as ExitCode
+	let ms = seed() as Milliseconds
+	return ms as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -187,12 +189,17 @@ end 'main'
 The negative half of the pair above: `Millisecond` (singular) is not declared anywhere, and the
 program is otherwise character-for-character the same.
 ```maxon
+function seed() returns FullRangeInt
+	return 5
+end 'seed'
+
 function main() returns ExitCode
-	return (5 as Millisecond) as ExitCode
+	let ms = seed() as Millisecond
+	return ms as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/cast-target-type-resolution/error.cast-to-misspelled-stdlib-typealias.maxon:3:12: Unknown type 'Millisecond'
+error E3011: specs/cast-target-type-resolution/error.cast-to-misspelled-stdlib-typealias.maxon:7:18: Unknown type 'Millisecond'
 ```
 
 <!-- test: error.cast-int-literal-to-enum -->

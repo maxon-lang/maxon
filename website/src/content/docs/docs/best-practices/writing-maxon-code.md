@@ -1005,6 +1005,10 @@ unannotated `let` every use of which takes the plain constant the same way (`let
 only where a `Count` is declared): write `let limit = 10`. A `public`, `export` or `module` `let` keeps its
 cast, and so does one a closure captures.
 
+A cast whose operand is a cast (`x as A as B`, `(x as A) as B`) is **E2079**: cast directly to `B`. When
+both steps do work — a range check, then a reinterpretation as `bits(n)` — bind the first:
+`let a = x as A`, then `a as B`.
+
 ## Other Features
 
 ### Closures

@@ -110,7 +110,7 @@ type Label
 end 'Label'
 
 function choose(label Label, wide Integer, flag bool) returns Integer
-	let r = (label.text.byteLength() + label.text.byteLength() + label.text.byteLength() + label.text.byteLength() > 0 and ((wide + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1) as Octet) as Integer > 3) if flag else false
+	let r = (label.text.byteLength() + label.text.byteLength() + label.text.byteLength() + label.text.byteLength() > 0 and (wide + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1) as Octet > 3) if flag else false
 	return 1 if r else 0
 end 'choose'
 
@@ -145,7 +145,7 @@ type Label
 end 'Label'
 
 function choose(label Label, wide Integer, flag bool) returns Integer
-	let r = (label.text.byteLength() + label.text.byteLength() + label.text.byteLength() + label.text.byteLength() > 0 and ((wide + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1) as Octet) as Integer > 3) if flag else false
+	let r = (label.text.byteLength() + label.text.byteLength() + label.text.byteLength() + label.text.byteLength() > 0 and (wide + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1) as Octet > 3) if flag else false
 	return 1 if r else 0
 end 'choose'
 

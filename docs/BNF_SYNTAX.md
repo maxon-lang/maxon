@@ -801,7 +801,7 @@ try_block_otherwise
 | 5     | `shl`  `shr`                          | Left          |
 | 6     | `+`  `-`                              | Left          |
 | 7     | `*`  `/`  `mod`                       | Left          |
-| 8     | `as` (type cast)                      | Left (postfix)|
+| 8     | `as` (type cast)                      | None (postfix)|
 | 9     | `-` (unary negation), `not`, `async`, `await`, `spawn` | Right (prefix)|
 | 10    | `.` (member access), `()` (call)      | Left (postfix)|
 
@@ -832,7 +832,7 @@ additive      = multiplicative { ('+' | '-') multiplicative }
 multiplicative
               = cast_expr { ('*' | '/' | 'mod') cast_expr }
 
-cast_expr     = unary_expr { 'as' type_ref }
+cast_expr     = unary_expr [ 'as' type_ref ]                (* an operand that is a cast, parenthesized or not, is E2079 *)
 
 unary_expr    = '-' postfix_expr                            (* '--x' is a parse error; write '-(-x)' *)
               | 'not' unary_expr

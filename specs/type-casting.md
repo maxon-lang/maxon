@@ -1132,15 +1132,20 @@ end 'main'
 error E3010: <fragment>:21:13: unneeded cast: 'Idx' already fits in 'Idx'
 ```
 
-<!-- test: a-literal-cast-to-a-same-named-alias-from-another-file-is-not-unneeded -->
-The literal cast names this file's `Codepoint`, a different type from the library's of that name, so it is
-not unneeded: it gives the literal the file's own type. That value then reaches the library's `Codepoint`
-parameter through an explicit conversion, which is not unneeded either.
+<!-- test: a-cast-between-same-named-aliases-of-two-files-is-not-unneeded -->
+This file's `Codepoint` is a different type from the library's of that name, so a value of it reaches the
+library's `Codepoint` parameter only through an explicit conversion, and that conversion is not unneeded.
 ```maxon
 typealias Codepoint = int(0 to 200)
 
+function seed() returns ExitCode
+	return 32
+end 'seed'
+
 function main() returns ExitCode
-	if Unicode.isWhitespace((32 as Codepoint) as stdlib.Codepoint) 'space'
+	let space = seed() as Codepoint
+
+	if Unicode.isWhitespace(space as stdlib.Codepoint) 'space'
 		return 5
 	end 'space'
 	return 1
@@ -1830,4 +1835,105 @@ end 'main'
 ```
 ```maxoncstderr
 error E3010: specs/type-casting/error.a-top-level-cast-to-the-type-a-global-already-has-is-unneeded.maxon:5:18: unneeded cast: 'Tally' already fits in 'Tally'
+```
+
+<!-- test: error.a-cast-of-a-cast-is-refused -->
+A cast takes a value, never the result of another cast: cast directly to the type you want.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 100)
+typealias Tiny = int(0 to 10)
+
+function shrink(x Integer) returns Tiny
+	return x as Small as Tiny
+end 'shrink'
+
+function main() returns ExitCode
+	return shrink(5) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2079: <fragment>:7:20: a cast cannot take another cast as its operand — cast directly to 'Tiny'
+```
+
+<!-- test: error.a-parenthesized-cast-of-a-cast-is-refused -->
+Parentheses do not change it: the operand is still a cast.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 100)
+typealias Tiny = int(0 to 10)
+
+function shrink(x Integer) returns Tiny
+	return (x as Small) as Tiny
+end 'shrink'
+
+function main() returns ExitCode
+	return shrink(5) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2079: <fragment>:7:22: a cast cannot take another cast as its operand — cast directly to 'Tiny'
+```
+
+<!-- test: error.a-top-level-cast-of-a-cast-is-refused -->
+A file-scope initialiser is held to the same rule.
+```maxon
+typealias Small = int(0 to 100)
+typealias Tiny = int(0 to 10)
+
+let Limit = 5 as Small as Tiny
+
+function main() returns ExitCode
+	return Limit as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2079: <fragment>:5:24: a cast cannot take another cast as its operand — cast directly to 'Tiny'
+```
+
+<!-- test: error.a-top-level-parenthesized-cast-of-a-cast-is-refused -->
+```maxon
+typealias Small = int(0 to 100)
+typealias Tiny = int(0 to 10)
+
+let Limit = (5 as Small) as Tiny
+
+function main() returns ExitCode
+	return Limit as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2079: <fragment>:5:26: a cast cannot take another cast as its operand — cast directly to 'Tiny'
+```
+
+<!-- test: a-top-level-cast-of-a-negated-cast-is-allowed -->
+The operand of the outer cast is a negation, not a cast, so this is no chain: at file scope as in a body, `-(x as A) as B` casts the negated value.
+```maxon
+typealias Small = int(0 to 100)
+typealias Signed = int(-100 to 100)
+
+let Back = -(7 as Small) as Signed
+
+function main() returns ExitCode
+	return (Back + 10) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: error.a-top-level-negated-constant-is-range-checked-after-the-negation -->
+A cast applies to the whole negation, so `-K as Small` checks `-5`, at file scope as in a body.
+```maxon
+typealias Small = int(0 to 100)
+
+let K = 5 as Small
+let M = -K as Small
+
+function main() returns ExitCode
+	return (K + M) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:12: Value -5 is outside the range of 'Small' (int(0 to 100))
 ```

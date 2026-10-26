@@ -1788,11 +1788,16 @@ end 'main'
 A typealias declared inside the stdlib is reachable as a cast target from any
 file, regardless of its source-level visibility modifier. The stdlib's internal
 ranged aliases (`ElementIndex`, `EntryCount`, …) appear in the public collection
-API, so user code must be able to name them in an `as` cast — `5 as ElementIndex`
+API, so user code must be able to name them in an `as` cast — `seed() as ElementIndex`
 resolves rather than being refused as a typealias that is not exported.
 ```maxon
+function seed() returns FullRangeInt
+	return 5
+end 'seed'
+
 function main() returns ExitCode
-	return (5 as ElementIndex) as ExitCode
+	let i = seed() as ElementIndex
+	return i as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3280,7 +3285,7 @@ end 'pad'
 
 function main() returns ExitCode
 	let j = pad(100, b: 200, c: 300)
-	return apply(function(n Wide) gives ((n - j) as Small) as Wide, x: 605) as ExitCode
+	return apply(function(n Wide) gives (n - j) as Small, x: 605) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3300,7 +3305,7 @@ function apply(f Fn1, x Wide) returns Wide
 end 'apply'
 
 function main() returns ExitCode
-	return apply(function(n Wide) gives ((n + 1) as Small) as Wide, x: 605) as ExitCode
+	return apply(function(n Wide) gives (n + 1) as Small, x: 605) as ExitCode
 end 'main'
 ```
 ```exitcode

@@ -962,7 +962,8 @@ public typealias Digit = int(0 to 9)
 let R = sqrt(4.0)
 
 function main() returns ExitCode
-	return (R as Digit) as ExitCode
+	let d = R as Digit
+	return d as ExitCode
 end 'main'
 
 // --- file: a.maxon

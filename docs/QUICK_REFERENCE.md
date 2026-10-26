@@ -1132,6 +1132,7 @@ Math.pow(base, exponent: e)  // base raised to exponent
 // Narrowing is checked at run time; a cast to the type the value already has is E3010,
 // and so is a literal cast to the alias its destination declares (f(8080 as Port)),
 // or in a `let` every use of which would take the bare literal.
+// A cast of a cast (x as A as B, (x as A) as B) is E2079: cast to B, or bind `let a = x as A` first.
 typealias Real = float(f64.min to f64.max)
 typealias Octet = int(0 to u8.max)
 let f = 5 as Real

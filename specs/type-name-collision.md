@@ -2379,8 +2379,13 @@ clean compile, no diagnostic.**
 // --- file: a.maxon
 typealias Widget = int(0 to 5)
 
+function seed() returns ExitCode
+	return 3
+end 'seed'
+
 module function fromA() returns ExitCode
-	return (3 as Widget) as ExitCode
+	let w = seed() as Widget
+	return w as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
@@ -2424,8 +2429,13 @@ name would bind an integer to a two-slot destructuring.
 // --- file: a.maxon
 typealias Pair = int(0 to 5)
 
+function seed() returns ExitCode
+	return 4
+end 'seed'
+
 module function fromA() returns ExitCode
-	return (4 as Pair) as ExitCode
+	let p = seed() as Pair
+	return p as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
@@ -2529,8 +2539,13 @@ still `named` at the crossing erases them too, **even when the reader and the de
 // --- file: a.maxon
 typealias Level = int(0 to 5)
 
+function seed() returns ExitCode
+	return 3
+end 'seed'
+
 module function fromA() returns ExitCode
-	return (3 as Level) as ExitCode
+	let l = seed() as Level
+	return l as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
@@ -2568,8 +2583,13 @@ returns a value that depends on the payload rather than merely compiling.
 // --- file: a.maxon
 typealias Container = int(0 to 5)
 
+function seed() returns ExitCode
+	return 2
+end 'seed'
+
 module function fromA() returns ExitCode
-	return (2 as Container) as ExitCode
+	let c = seed() as Container
+	return c as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
@@ -2901,13 +2921,23 @@ export typealias Integer = int(0 to 1000)
 // --- file: beta/b.maxon
 export typealias Integer = int(0 to 1000)
 
+function seed() returns ExitCode
+	return 2
+end 'seed'
+
 export function pickB() returns ExitCode
-	return (2 as beta.Integer) as ExitCode
+	let two = seed() as beta.Integer
+	return two as ExitCode
 end 'pickB'
 
 // --- file: main.maxon
+function seed() returns ExitCode
+	return 40
+end 'seed'
+
 function main() returns ExitCode
-	return ((40 as alpha.Integer) as ExitCode) + pickB()
+	let forty = seed() as alpha.Integer
+	return (forty as ExitCode) + pickB()
 end 'main'
 ```
 ```maxoncstderr
@@ -2922,8 +2952,13 @@ file and earns E3092.
 // --- file: ranks/score.maxon
 export typealias Score = int(0 to 100)
 
+function seed() returns ExitCode
+	return 7
+end 'seed'
+
 export function grade() returns ExitCode
-	return (7 as ranks.Score) as ExitCode
+	let score = seed() as ranks.Score
+	return score as ExitCode
 end 'grade'
 
 // --- file: kinds/score.maxon
@@ -3316,7 +3351,8 @@ function main() returns ExitCode
 	let v = try await h.divide(10, by: 2) otherwise return 70
 	print("{v}\n")
 
-	let w = try await h.divide(1, by: 0) otherwise return (3 as calc.Fault) as ExitCode
+	let fallback = (v - 9) as calc.Fault
+	let w = try await h.divide(1, by: 0) otherwise return fallback as ExitCode
 	return w as ExitCode
 end 'main'
 ```

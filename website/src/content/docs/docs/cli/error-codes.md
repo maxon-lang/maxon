@@ -243,6 +243,10 @@ A capability qualifier is written where no boundary takes one. `keep` and `sole`
 
 A method is named without its call where a value is wanted: `apply(Ops.twice, x: 21)`. `Type.method` names a method -- a static one, an instance one read through its type, a static the compiler provides (`int.fromString`, `__ManagedFile.openRead`), or a requirement read through a type parameter (`T.make`) -- and a method is not a function value. Only a free function's name or a closure is. Wrap the call in a closure: `function(n) gives Ops.twice(n)`. An instance method is called on a value, `function(value) gives value.size()`, and a requirement on a concrete type that implements its interface.
 
+### E2079 — `castOperandIsACast`
+
+A cast's operand is itself a cast: `x as A as B`, or `(x as A) as B` through any parentheses. Cast directly to the final type, `x as B`. When both steps do work, such as a range check followed by a reinterpretation as a `bits(n)` pattern, bind the first result: `let a = x as A`, then `a as B`.
+
 ## Semantic Analysis (E3xxx)
 
 Type checking, borrowing, visibility, declaration lookup.

@@ -263,6 +263,10 @@ end 'main'
 | a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](/docs/language/ranged-typealiases/#construction) |
 | a literal in an unannotated `let` every use of which takes the plain constant (`let p = 8080 as Port`, read only as a `Port` argument) | **E3010** `unneeded cast: the literal 8080 already fits every use of 'p'` |
 | one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
+| a cast of a cast (`x as A as B`, `(x as A) as B`) | **E2079** `a cast cannot take another cast as its operand — cast directly to 'B'` |
+
+A cast takes one step. Where two steps each do work — a range check, then a reinterpretation as a
+`bits(n)` pattern — bind the first result and cast that: `let a = x as A`, then `a as B`.
 
 ### Floats to Integers
 

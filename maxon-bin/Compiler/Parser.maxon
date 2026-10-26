@@ -3369,6 +3369,11 @@ union ConstLetCastRecord
 	recorded(first ElementIndex, pastEnd ElementIndex, cast LiteralCast, constant LetCastConstant)
 end 'ConstLetCastRecord'
 
+union RecordedCast
+	nothingRecorded
+	recorded(first ElementIndex, pastEnd ElementIndex)
+end 'RecordedCast'
+
 function constantOfFoldedValue(value ConstValue) returns LetCastConstant
 	if value.aboveSignedMax 'mayExceedTheSignedTop'
 		return LetCastConstant.unknown
@@ -10164,6 +10169,10 @@ end 'viewMisplaced'
 function methodAsFunctionValueAt(explanation String, memberTok Token) returns SourceParseError
 	return SourceParseError.registryRefused(ErrorCode.methodAsFunctionValue, explanation: explanation, line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
 end 'methodAsFunctionValueAt'
+
+function castOfACast(asTok Token, targetName String) returns SourceParseError
+	return SourceParseError.registryRefused(ErrorCode.castOperandIsACast, explanation: "a cast cannot take another cast as its operand — cast directly to '{targetName}'", line: asTok.line, column: asTok.column, note: DiagnosticNote.none)
+end 'castOfACast'
 
 function methodAsFunctionValue(spelled String, memberTok Token) returns SourceParseError
 	return methodAsFunctionValueAt("'{spelled}' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives {spelled}(...)'", memberTok: memberTok)
@@ -19586,6 +19595,10 @@ export type Parser
 	let job as ParseJob
 
 	var constLetCast = ConstLetCastRecord.none
+
+	// The token span of the most recently completed cast. It is never cleared: a record left by an
+	// earlier expression cannot match, because `operandIsACast` asks for the operand's exact span.
+	var lastCast = RecordedCast.nothingRecorded
 
 	// ⭐⭐ **THE `match` CONSTRUCTS CURRENTLY BEING PARSED, INNERMOST LAST — two scalar columns, pushed in
 	// lockstep.** An arm's coverage point needs TWO positions: its OWN, so the line listing counts the arm's
@@ -36093,7 +36106,7 @@ export type Parser
 		// touches are chains of THREE or more segments — and every one of those was already a parse that
 		// minted `named("a.b")` and then met a dangling `.c` with no rule for it. There is no type position
 		// in the grammar where a type reference may legally be followed by `.<name>`: an `as` cast is
-		// not a postfix operator here (`parseCast` loops only on another `as`), and a return clause, a
+		// not a postfix operator here (`parseCast` ends at its target), and a return clause, a
 		// parameter, a field and a generic argument are each closed by their own follower.
 		//
 		// ⭐⭐ **IT IS THE *SAME* WALK THE CALL DOOR USES — ONE `dottedChainLengthAt`, ONE
@@ -62596,63 +62609,93 @@ export type Parser
 	// float-converts.
 	function parseCast(func IrFunction) returns ValueId throws SourceParseError
 		let operandStart = self.pos
-		var current = try self.parseUnary(func)
+		let operand = try self.parseUnary(func)
 
 		// ⚠ Asked only once an `as` is actually there, and this is a HOT path — `parseCast` wraps every
 		// expression leaf in the program, while a cast is rare. `rhsWasBareLocalReference` walks tokens and
 		// probes the scope; paying that per leaf would be a cost the feature does not earn.
 		if not self.at(TokenKind.as) 'noCast'
-			return current
+			return operand
 		end 'noCast'
 
 		// ⭐ **WAS THE OPERAND A BARE REFERENCE TO A LOCAL?** Asked HERE, while the cursor still sits just
 		// past the operand, because `applyCast` may not stamp a declared alias onto a value that another
-		// BINDING also names (see `ValueDeclaredAliasMap`). A later hop of the loop casts a CAST RESULT,
-		// which is this parse's own temporary and is bound to no name, so the answer is false from then on.
-		var currentIsBareLocal = self.rhsWasBareLocalReference(operandStart)
-		var currentIsALiteral = self.spansANumericLiteral(operandStart)
-		let castLetReads = self.letCastReadsOfOperand(current, first: operandStart, pastEnd: self.pos) if self.trackedLetCasts() else LetCastRoster.none
-		var castReadsAwait = not rosterIsEmpty(castLetReads)
+		// BINDING also names (see `ValueDeclaredAliasMap`).
+		let operandEnd = self.pos
+		let operandIsBareLocal = self.rhsWasBareLocalReference(operandStart)
+		let operandIsALiteral = self.spansANumericLiteral(operandStart)
+		let castLetReads = self.letCastReadsOfOperand(operand, first: operandStart, pastEnd: operandEnd) if self.trackedLetCasts() else LetCastRoster.none
+		let castReadsAwait = not rosterIsEmpty(castLetReads)
+		let asTok = try self.consume(TokenKind.as)
 
-		while self.at(TokenKind.as) 'cast'
-			let asTok = try self.consume(TokenKind.as)
+		// Captured BEFORE the target is parsed: E2003 anchors on the TARGET NAME, and by the time
+		// `parseTypeReference` returns the cursor is past it. (For a two-token `Wrapper.Idx` target this
+		// is the first of the two.)
+		let targetTok = self.current()
+		let targetStart = self.pos
+		let targetType = try self.parseTypeReference(BarePrimitiveVoice.asACastTarget)
 
-			// Captured BEFORE the target is parsed: E2003 anchors on the TARGET NAME, and by the time
-			// `parseTypeReference` returns the cursor is past it. (For a two-token `Wrapper.Idx` target this
-			// is the first of the two.)
-			let targetTok = self.current()
-			let targetType = try self.parseTypeReference(BarePrimitiveVoice.asACastTarget)
+		if self.operandIsACast(operandStart, operandEnd: operandEnd) 'aParenthesizedCast'
+			throw castOfACast(asTok, targetName: self.tokenTextFrom(targetStart, endIndex: self.pos))
+		end 'aParenthesizedCast'
 
-			if self.castEmitsAnOp(current, targetType: targetType, sourceIsBareLocal: currentIsBareLocal) 'theCastProducesTheValue'
-				self.releaseCompletedOperand()
-			end 'theCastProducesTheValue'
+		if self.castEmitsAnOp(operand, targetType: targetType, sourceIsBareLocal: operandIsBareLocal) 'theCastProducesTheValue'
+			self.releaseCompletedOperand()
+		end 'theCastProducesTheValue'
 
-			// Asked of the literal before the cast: the cast's result denotes the target alias itself, so it
-			// would admit an out-of-range literal too.
-			view admittingAlias = self.aliasAdmittingLiteral(current, targetType: targetType) if currentIsALiteral else self.anchors.undeclaredAlias
-			var admittingLetCast = self.aliasAdmittingLiteral(current, targetType: targetType) if castReadsAwait else self.anchors.undeclaredAlias
-			let literalConstant = self.foldedConstantOf(current) if currentIsALiteral else LetCastConstant.unknown
-			let operand = current
-			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: currentIsBareLocal)
+		// Asked of the literal before the cast: the cast's result denotes the target alias itself, so it
+		// would admit an out-of-range literal too.
+		view admittingAlias = self.aliasAdmittingLiteral(operand, targetType: targetType) if operandIsALiteral else self.anchors.undeclaredAlias
+		var admittingLetCast = self.aliasAdmittingLiteral(operand, targetType: targetType) if castReadsAwait else self.anchors.undeclaredAlias
+		let literalConstant = self.foldedConstantOf(operand) if operandIsALiteral else LetCastConstant.unknown
+		let result = try self.applyCast(operand, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: operandIsBareLocal)
+		self.lastCast = RecordedCast.recorded(operandStart, pastEnd: self.pos)
 
-			// A cast that hands its operand back leaves the local's own value, so the next cast in the
-			// chain must still withhold its record from it, or the local claims that cast's alias.
-			currentIsBareLocal = currentIsBareLocal and current == operand
-			currentIsALiteral = false
+		if castReadsAwait 'aCastConstantRead'
+			self.claimLetCastsThroughACast(castLetReads, admitted: admittingLetCast)
+		end 'aCastConstantRead'
 
-			if castReadsAwait 'aCastConstantRead'
-				self.claimLetCastsThroughACast(castLetReads, admitted: admittingLetCast)
-				castReadsAwait = false
-			end 'aCastConstantRead'
+		if self.at(TokenKind.as) 'aCastOfACast'
+			let outerAsTok = try self.consume(TokenKind.as)
+			let outerTargetStart = self.pos
+			_ = try self.parseTypeReference(BarePrimitiveVoice.asACastTarget)
+			throw castOfACast(outerAsTok, targetName: self.tokenTextFrom(outerTargetStart, endIndex: self.pos))
+		end 'aCastOfACast'
 
-			match admittingAlias 'aLiteralTheTargetAlreadyAdmits'
-				undeclared then break
-				declared(alias) then self.recordLiteralCast(current, alias: alias, first: operandStart, asTok: asTok, constant: literalConstant)
-			end 'aLiteralTheTargetAlreadyAdmits'
-		end 'cast'
+		match admittingAlias 'aLiteralTheTargetAlreadyAdmits'
+			undeclared then return result
+			declared(alias) then self.recordLiteralCast(result, alias: alias, first: operandStart, asTok: asTok, constant: literalConstant)
+		end 'aLiteralTheTargetAlreadyAdmits'
 
-		return current
+		return result
 	end 'parseCast'
+
+	function operandIsACast(operandStart ElementIndex, operandEnd ElementIndex) returns bool
+		return match self.lastCast 'recorded'
+			nothingRecorded gives false
+			recorded(first, pastEnd) gives self.onlyParenthesesSurround(first, pastEnd: pastEnd, operandStart: operandStart, operandEnd: operandEnd)
+		end 'recorded'
+	end 'operandIsACast'
+
+	function onlyParenthesesSurround(first ElementIndex, pastEnd ElementIndex, operandStart ElementIndex, operandEnd ElementIndex) returns bool
+		if first < operandStart or pastEnd > operandEnd or first - operandStart != operandEnd - pastEnd 'notTheOperandsWholeSpan'
+			return false
+		end 'notTheOperandsWholeSpan'
+
+		for index in operandStart upto first 'opening'
+			if self.kindAt(index) != TokenKind.leftParen 'notAnOpeningParenthesis'
+				return false
+			end 'notAnOpeningParenthesis'
+		end 'opening'
+
+		for index in pastEnd upto operandEnd 'closing'
+			if self.kindAt(index) != TokenKind.rightParen 'notAClosingParenthesis'
+				return false
+			end 'notAClosingParenthesis'
+		end 'closing'
+
+		return true
+	end 'onlyParenthesesSurround'
 
 	function spansANumericLiteral(first ElementIndex) returns bool
 		let literalAt = self.literalPastItsSign(first)
@@ -93500,7 +93543,7 @@ export type Parser
 	// `is` threw `notAnInfixOperator`, this loop stopped, and the author got a positioned error.
 	function evalConstBinary(stack TopLevelDeclIndexArray, minPrec InfixPrecedence) returns ConstValue throws ConstEvalError
 		let leftStart = self.pos
-		var left = try self.evalConstUnary(stack)
+		var left = try self.evalConstCast(stack)
 
 		while true 'climb'
 			let opIndex = self.pos
@@ -93681,29 +93724,22 @@ export type Parser
 			// ⭐ A leading `-` on a FLOAT LITERAL is part of the literal — a sign flip (`negatedFloatBits`),
 			// NOT `0.0 - x`, which would lose `-0.0`'s sign. This mirrors `parseUnary`'s negated-literal
 			// fold and shares the ONE sign-flip spelling, so `-2.5` means the same in a `let` and a body.
-			// Trailing `as` casts then apply exactly as to a primary (as `parseCast` wraps `parseUnary`).
+			// A trailing `as` applies to the whole negated literal (`evalConstCast` wraps `evalConstUnary`, as
+			// `parseCast` wraps `parseUnary`).
 			if self.at(TokenKind.floatLiteral) 'negatedFloatLiteral'
 				let tok = self.current()
 				self.advance()
-				return try self.applyConstCasts(try self.evalConstFloatLiteral(tok, negated: true))
+				return try self.evalConstFloatLiteral(tok, negated: true)
 			end 'negatedFloatLiteral'
 
-			// ⛔⛔ **THE INT TWIN OF THE ARM ABOVE, AND ITS ABSENCE WAS TWO WRONG ANSWERS ON ONE LINE.**
-			// Without it a negated int literal fell to the general arm below, whose operand is
-			// `evalConstPostfix` — which CONSUMES the trailing `as` casts itself. So `let A = -1 as Narrow`
-			// folded as `-(1 as Narrow)`, and the body's `parseCast`-over-`parseUnary` reads the same text
-			// as `(-1) as Narrow`: **MEASURED, `let A = -1 as int(0 to 100)` compiled clean and produced -1
-			// at top level while the identical cast in a body was E3005**. The second is `intLiteralValue`'s
-			// own: reading the MAGNITUDE first makes `-9223372036854775808` an E2011 overflow on a literal
-			// that is exactly `i64.min`, which is the very trap `parseUnary`'s arm was written for.
-			//
-			// The cast therefore applies to the WHOLE negated literal, which is what `applyConstCasts` here
-			// says and what makes the top-level and body readings one reading.
+			// ⭐ The int twin of the arm above: the literal is read with its sign, because reading the
+			// MAGNITUDE first makes `-9223372036854775808` (exactly `i64.min`) an E2011 overflow, the trap
+			// `parseUnary`'s arm exists for.
 			if self.at(TokenKind.intLiteral) 'negatedIntLiteral'
-				return try self.applyConstCasts(try self.evalConstIntLiteral(true))
+				return try self.evalConstIntLiteral(true)
 			end 'negatedIntLiteral'
 
-			let operand = try self.evalConstPostfix(stack)
+			let operand = try self.evalConstPrimary(stack)
 
 			if not typeClassAdmits(TypeClass.numeric, tag: operand.tag) 'notANumber'
 				throw ConstEvalError.defective(SourceParseError.nonNumericNegation(typeTagName(operand.tag), line: opTok.line, column: opTok.column))
@@ -93731,10 +93767,11 @@ export type Parser
 			return try self.foldConstNot(operand, opTok: opTok)
 		end 'not'
 
-		return try self.evalConstPostfix(stack)
+		return try self.evalConstPrimary(stack)
 	end 'evalConstUnary'
 
-	// A constant primary followed by any trailing `as <Type>` casts. A cast to a ranged-int alias or a
+	// A constant unary operand followed by its `as <Type>` cast, so a cast covers a whole negation as
+	// `parseCast` over `parseUnary` does in a body. A cast to a ranged-int alias or a
 	// primitive is a compile-time NO-OP on the value's bytes (`0 as Integer` is `0`), so the target type
 	// is consumed and the value passes through unchanged — the same shape the emitting path uses for a
 	// numeric range cast. ⚠ NO-OP ON THE BYTES IS NOT UNCHECKED: `applyConstCast` checks the target's
@@ -93743,18 +93780,18 @@ export type Parser
 	// converts nothing) and its RANGE (`checkConstCastRange` — `let X = 256 as Octet` is E3005),
 	// through the same deciders the emitting path uses. The value passing through unchanged is the
 	// CODEGEN, not the verdict.
-	function evalConstPostfix(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
-		return try self.applyConstCasts(try self.evalConstPrimary(stack))
-	end 'evalConstPostfix'
+	function evalConstCast(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
+		let operandStart = self.pos
+		return try self.applyConstCasts(try self.evalConstUnary(stack), operandStart: operandStart)
+	end 'evalConstCast'
 
-	// Consume any trailing `as <Type>` casts on an already-evaluated constant. Split out so the
-	// negated-float-literal path applies the same casts a primary gets (mirroring `parseCast`, which
-	// wraps `parseUnary`'s negated literal in the identical cast loop).
-	function applyConstCasts(value ConstValue) returns ConstValue throws ConstEvalError
+	// It loops only so that a second `as` reaches `applyConstCast`, which refuses a cast of a cast
+	// (E2079).
+	function applyConstCasts(value ConstValue, operandStart ElementIndex) returns ConstValue throws ConstEvalError
 		var result = value
 
 		while self.at(TokenKind.as) 'cast'
-			result = try self.applyConstCast(result)
+			result = try self.applyConstCast(result, operandStart: operandStart)
 		end 'cast'
 
 		return result
@@ -93772,7 +93809,7 @@ export type Parser
 	// two spellings agree. E3010 (`requireConstCastIsNeeded`) needs the alias the constant already
 	// carries, and a literal carries none, so a literal cast is recorded (`noteConstLiteralCast`) for
 	// `checkUnneededLetCasts` to judge against every use of the `let`.
-	function applyConstCast(value ConstValue) returns ConstValue throws ConstEvalError
+	function applyConstCast(value ConstValue, operandStart ElementIndex) returns ConstValue throws ConstEvalError
 		let asTok = self.current()
 		let asIndex = self.pos
 		try self.consumeConstToken(TokenKind.as)
@@ -93796,10 +93833,16 @@ export type Parser
 		// bare cast target, having no range to name.
 		if self.at(TokenKind.identifier) or self.at(TokenKind.bool) 'targetType'
 			let targetTok = try self.consumeConstCastTarget()
+
+			if self.operandIsACast(operandStart, operandEnd: asIndex) 'theOperandIsACast'
+				throw ConstEvalError.defective(castOfACast(asTok, targetName: self.tokenTextFrom(asIndex + 1, endIndex: self.pos)))
+			end 'theOperandIsACast'
+
 			try self.requireConstCastTargetKind(value, targetTok: targetTok, asTok: asTok)
 			try self.requireConstCastIsNeeded(value, targetTok: targetTok, asTok: asTok)
 			try self.checkConstCastRange(value, targetTok: targetTok, asTok: asTok)
 			self.noteConstLiteralCast(value, targetTok: targetTok, asTok: asTok, asIndex: asIndex)
+			self.lastCast = RecordedCast.recorded(operandStart, pastEnd: self.pos)
 			return self.constCastedTo(value, targetTok: targetTok)
 		end 'targetType'
 

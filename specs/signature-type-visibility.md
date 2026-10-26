@@ -1099,8 +1099,13 @@ end 'seed'
 // --- file: b/f.maxon
 typealias Idx = int(0 to 3)
 
+function seed() returns ExitCode
+	return 2
+end 'seed'
+
 module function f(cb Cb) returns ExitCode
-	return cb(7) + ((2 as Idx) as ExitCode)
+	let two = seed() as Idx
+	return cb(7) + (two as ExitCode)
 end 'f'
 
 // --- file: b/run.maxon

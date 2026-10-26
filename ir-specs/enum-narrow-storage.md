@@ -626,8 +626,6 @@ func @main {
 ### u32-backed enum array packs as 4 bytes per element
 Raw values exceed u16.max so the backing must be at least u32.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-
 enum Big
 	small = 100
 	medium = 100000
@@ -637,7 +635,7 @@ end 'Big'
 function main() returns ExitCode
 	let arr = [Big.small, Big.medium, Big.large]
 	let v = try arr.get(0) otherwise Big.small
-	return (v.rawValue as Integer) as ExitCode
+	return v.rawValue as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -754,7 +752,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at enum-rdata-u32-array.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at enum-rdata-u32-array.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -815,7 +813,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at enum-rdata-u32-array.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at enum-rdata-u32-array.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -878,7 +876,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at enum-rdata-u32-array.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at enum-rdata-u32-array.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

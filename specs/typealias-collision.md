@@ -74,9 +74,14 @@ export typealias Score = int(0 to 100)
 export typealias Score = int(0 to 80)
 
 // --- file: app/main.maxon
+function seed() returns ExitCode
+	return 60
+end 'seed'
+
 function main() returns ExitCode
 	let a = 50
-	return (a + ((60 as legacy.Score) as api.Score)) as ExitCode
+	let score = seed() as legacy.Score
+	return (a + (score as api.Score)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -94,9 +99,14 @@ export typealias Score = int(0 to 50)
 export typealias Score = int(0 to 100)
 
 // --- file: app/main.maxon
+function seed() returns ExitCode
+	return 10
+end 'seed'
+
 function main() returns ExitCode
 	let b = 65
-	return (((10 as lib.fmt.Score) as legacy.Score) + b) as ExitCode
+	let score = seed() as lib.fmt.Score
+	return ((score as legacy.Score) + b) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -341,7 +351,8 @@ function seven() returns ExitCode
 end 'seven'
 
 function main() returns ExitCode
-	return ((35 as api.Score) as ExitCode) + run(seven)
+	let score = (seven() * 5) as api.Score
+	return (score as ExitCode) + run(seven)
 end 'main'
 ```
 ```exitcode
@@ -547,7 +558,8 @@ end 'valueOf'
 
 function main() returns ExitCode
 	let p = lib.FullRangeInt.create(7)
-	return valueOf(p) + ((5 as stdlib.FullRangeInt) as ExitCode)
+	let five = (valueOf(p) - 2) as stdlib.FullRangeInt
+	return valueOf(p) + (five as ExitCode)
 end 'main'
 ```
 ```exitcode

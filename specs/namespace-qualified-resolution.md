@@ -101,7 +101,8 @@ end 'seed'
 
 function main() returns ExitCode
 	let wide = seed()
-	return (wide + ((5 as legacy.Score) as api.Score)) as ExitCode
+	let low = (wide - 45) as legacy.Score
+	return (wide + (low as api.Score)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2359,7 +2360,8 @@ function main() returns ExitCode
 	let p = 3 as stdlib.BytePos
 	let bytes = "hello".toByteArray()
 	let b = try bytes.get(p) otherwise 0
-	return (c + (b as Codepoint) - 100 + ((2 as stdlib.ElementIndex) as Codepoint)) as ExitCode
+	let i = (c - 68) as stdlib.ElementIndex
+	return (c + (b as Codepoint) - 100 + (i as Codepoint)) as ExitCode
 end 'main'
 ```
 ```exitcode

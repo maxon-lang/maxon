@@ -2118,8 +2118,8 @@ typealias RadixDigit = int(0 to 15)
 // `runtime/Word.maxon`'s header, whose `MachineWord` is a `bits(64)` outside `stdlib/` and therefore
 // outside the grep.
 
-// ⭐ **THE TWO-STEP CAST THROUGH THESE IS THE ONE BINDING DOOR THAT MAKES THE DIGIT LOOP'S DIVIDE
-// UNSIGNED, AND BOTH STEPS ARE LOAD-BEARING.** `FullRangeInt` is signed, so `bits(64)` is the only spelling
+// ⭐ **THE TWO CASTS THROUGH THESE ARE WHAT MAKE THE DIGIT LOOP'S DIVIDE UNSIGNED, AND BOTH ARE
+// LOAD-BEARING.** `FullRangeInt` is signed, so `bits(64)` is the only spelling
 // that reinterprets a set bit 63 without a check, and `int(0 to u64.max)` is the only one that then makes
 // `/` and `mod` read the whole pattern as a magnitude. Typed back to `FullRangeInt` anywhere in that loop,
 // every value past `i64.max` renders as its negative — and the divide stops reaching a magic multiply.
@@ -2156,7 +2156,8 @@ end '__int_toStringFormatted'
 // `bits` read as an UNSIGNED 64-bit pattern, written in the base `2 * halfRadix`.
 function __unsignedDigits(bits FullRangeInt, halfRadix HalfRadix, uppercase bool) returns String
 	var text = ""
-	var rest = bits as RenderedPattern as RenderedMagnitude
+	let pattern = bits as RenderedPattern
+	var rest = pattern as RenderedMagnitude
 	let radix = 2 * (halfRadix as RenderedMagnitude)
 
 	for _ in 0 upto __MaxRadixDigits 'place'

@@ -512,11 +512,13 @@ function opaque(n Integer) returns Integer
 end 'opaque'
 
 function throughReturn(n Integer) returns Count
-	return n as Word as Count
+	let pattern = n as Word
+	return pattern as Count
 end 'throughReturn'
 
 function throughBinding(n Integer) returns Count
-	let c = n as Word as Count
+	let pattern = n as Word
+	let c = pattern as Count
 	return c
 end 'throughBinding'
 
@@ -554,7 +556,8 @@ end 'show'
 
 function main() returns ExitCode
 	let laundered = opaque(0) - 3
-	print("{show(laundered as Word as Count)}\n")
+	let pattern = laundered as Word
+	print("{show(pattern as Count)}\n")
 	return 0
 end 'main'
 ```
@@ -720,7 +723,6 @@ The shape any code building a machine word out of bytes has: a loop-carried accu
 computed count, and a last byte at or above 0x80.
 ```maxon
 typealias Word = int(0 to u64.max)
-typealias Fill = int(1 to 7)
 
 function packed(bytes ByteArray) returns Word
 	var word = 0 as Word
@@ -736,7 +738,7 @@ function main() returns ExitCode
 	var bytes = ByteArray.create()
 
 	for i in 1 upto 8 'eachLowByte'
-		bytes.push((i as Fill) as Byte)
+		bytes.push(i as Byte)
 	end 'eachLowByte'
 
 	bytes.push(0xCC as Byte)

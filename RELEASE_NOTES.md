@@ -194,6 +194,9 @@ release's version as its heading when the release is cut.
   Fix: keep what connections share, or what the caller reads after `serve`, in a service the handler holds a
   handle to (`CountingHandler.create(visits.clone())`), declare the handler's fields `let`, and build the
   handler where `serve` is called.
+- A cast whose operand is itself a cast, `x as A as B` or `(x as A) as B`, is E2079.
+  Fix: cast directly to the final type (`x as B`), or, when both steps do work (a range check, then a
+  reinterpretation as `bits(n)`), bind the first: `let a = x as A`, then `a as B`.
 
 ## 0.5.0 — 2026-10-08
 

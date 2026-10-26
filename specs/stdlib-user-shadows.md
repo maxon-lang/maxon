@@ -962,7 +962,7 @@ typealias Small = int(0 to 100)
 
 function main() returns ExitCode
 	let bound = stdlib.Range.create(1, finish: 4)
-	let doubled = bound.map(function(x) gives x + (((x * 1000) as Small) as RangeBound))
+	let doubled = bound.map(function(x) gives (x * 1000) as Small)
 	return Range.make().value() + (doubled.count() as ExitCode)
 end 'main'
 ```
