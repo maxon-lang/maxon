@@ -204,6 +204,10 @@ Both take a **type** and produce a compile-time `Count`.
   called on, or that a `static function`'s call names. A type with no fixed
   element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its
   `count()` instead.
+- `countof(T)` is also a constant in a [top-level initializer](/docs/language/variables/#top-level-variables), alone or folded
+  (`let last = countof(Vec3) - 1`), and the binding is a `Count`. Such a `let` is a compile-time bound inside a
+  function: over `let slots = countof(Vec4)`, `for i in 0 upto slots` proves its counter a
+  [`FixedArray` index](#fixed-arrays-and-proven-indices).
 
 ```maxon
 typealias Int = int(i64.min to i64.max)

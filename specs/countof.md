@@ -797,3 +797,150 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: a-top-level-let-reads-the-count-of-a-type -->
+A file-scope initialiser is a constant, and `countof(T)` of a type that states its count is one, so `let n = countof(P)` is read back as the count with no function around it.
+```maxon
+typealias W = bits(64)
+typealias P = FixedArray with 8 W
+
+let n = countof(P)
+
+function main() returns ExitCode
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: a-top-level-initialiser-folds-countof-in-an-expression -->
+`countof(P)` is an operand of the folded top-level expression exactly as a literal is: `countof(P) - 1` is the last index and `countof(P) * 2` the doubled count.
+```maxon
+typealias W = bits(64)
+typealias P = FixedArray with 8 W
+
+let last = countof(P) - 1
+let doubled = countof(P) * 2
+
+function main() returns ExitCode
+	return (last + doubled) as ExitCode
+end 'main'
+```
+```exitcode
+23
+```
+
+<!-- test: a-top-level-count-bounds-a-counted-loop-over-the-type -->
+A top-level `let` bound to `countof(Vec4)` is a known constant inside a function, so it bounds a counted loop whose counter is proven inside the fixed array: `set` and `get` are written bare.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = FixedArray with 4 Int
+
+let slots = countof(Vec4)
+
+function main() returns ExitCode
+	var v = Vec4.create()
+	for i in 0 upto slots 'fill'
+		v.set(i, value: 5)
+	end 'fill'
+	var total = 0 as Int
+	for i in 0 upto slots 'sum'
+		total = total + v.get(i)
+	end 'sum'
+	return total
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: error.a-top-level-countof-of-a-type-that-states-no-element-count -->
+The refusal a function body gives a countless operand is the one a file-scope initialiser gives, at the same token.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+let n = countof(Int)
+
+function main() returns ExitCode
+	return n
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:9: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
+```
+
+<!-- test: error.a-top-level-countof-of-a-growable-array -->
+A growable `Array` has no count in its type at file scope either.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Ints = Array with Int
+
+let n = countof(Ints)
+
+function main() returns ExitCode
+	return n
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:9: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
+```
+
+<!-- test: error.a-top-level-countof-is-a-count -->
+A file-scope `countof` is a `Count` as it is in a body, so a top-level `let` bound to it adds to another alias only through a cast, and the mismatch is the one `error.countof-is-a-count` reports.
+```maxon
+typealias Small = int(0 to 100)
+typealias Vec3 = FixedArray with 3 Small
+
+let size = countof(Vec3)
+
+function main() returns ExitCode
+	let base = 5 as Small
+	return (base + size) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:15: operator '+' requires both operands to be the same type: 'Small' and 'Count' are different typealiases — cast one side with 'as'
+```
+
+<!-- test: error.a-countof-of-a-type-another-file-hides-is-refused-in-a-body -->
+A type private to another file is not visible to `countof` in a function body.
+```maxon
+// --- file: lib/sizes.maxon
+typealias Int = int(i64.min to i64.max)
+typealias Hidden = FixedArray with 3 Int
+
+function hiddenCount() returns Count
+	return countof(Hidden)
+end 'hiddenCount'
+
+// --- file: lib/main.maxon
+function main() returns ExitCode
+	return (countof(Hidden) + hiddenCount()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3008: lib/<fragment>:12:18: typealias 'Hidden' is not exported
+```
+
+<!-- test: error.a-top-level-countof-of-a-type-another-file-hides-is-refused -->
+The same type named by a file-scope `countof` is refused with the same diagnostic, not a compiler fault.
+```maxon
+// --- file: lib/sizes.maxon
+typealias Int = int(i64.min to i64.max)
+typealias Hidden = FixedArray with 3 Int
+
+function hiddenCount() returns Count
+	return countof(Hidden)
+end 'hiddenCount'
+
+// --- file: lib/main.maxon
+let n = countof(Hidden)
+
+function main() returns ExitCode
+	return (n + hiddenCount()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3008: lib/<fragment>:11:17: typealias 'Hidden' is not exported
+```

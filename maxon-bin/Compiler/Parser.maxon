@@ -19404,7 +19404,7 @@ function tupleTargetNamed(name ByteArray) returns DeclaredTupleTarget
 end 'tupleTargetNamed'
 
 // A verdict rather than a throw, because its two readers act on a hidden name differently: a body
-// records it and parses on (`recordTypeNameVerdict`), while a constant initializer's walk throws it
+// records it and parses on (`settleTypeNameVerdict`), while a constant initializer's walk throws it
 // (`refuseHiddenTypeName`), since that walk's artifact is discarded and a recorded refusal would
 // vanish.
 union TypeNameVerdict
@@ -28647,17 +28647,17 @@ export type Parser
 	end 'readAliasImplementsClause'
 
 	function requireNameableTypeNameAt(index ElementIndex, written ByteArray, anchor Token) throws SourceParseError
-		self.recordTypeNameVerdict(try self.typeNameVerdictAt(index, written: written, anchor: anchor))
+		try self.settleTypeNameVerdict(try self.typeNameVerdictAt(index, written: written, anchor: anchor))
 	end 'requireNameableTypeNameAt'
 
-	function notedTypeChain(declaration ChainType, consumed ElementIndex, anchor Token) returns QualifiedTypeChain
-		self.recordTypeNameVerdict(self.chainTypeVerdict(declaration, anchor: anchor))
+	function notedTypeChain(declaration ChainType, consumed ElementIndex, anchor Token) returns QualifiedTypeChain throws SourceParseError
+		try self.settleTypeNameVerdict(self.chainTypeVerdict(declaration, anchor: anchor))
 		return QualifiedTypeChain.declared(declaration, consumed: consumed)
 	end 'notedTypeChain'
 
 	function resolvedTypeChainAt(headIndex ElementIndex, anchor Token, use ChainUse) returns QualifiedTypeChain throws SourceParseError
 		match self.resolveChainAt(headIndex, use: use) 'chain'
-			declaredType(declaration, consumed) then return self.notedTypeChain(declaration, consumed: consumed, anchor: anchor)
+			declaredType(declaration, consumed) then return try self.notedTypeChain(declaration, consumed: consumed, anchor: anchor)
 			ambiguous(written, candidates) then throw ambiguousTypeNameRefusal(written, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: anchor)
 			unqualified then return QualifiedTypeChain.notQualified
 			value or
@@ -36069,7 +36069,7 @@ export type Parser
 		// denotes: a name written in a type position is a USE whichever way it resolves, and hooking
 		// the arms instead would need one hook per arm and would silently miss the next one added.
 		// It records the SUBSTITUTED name, because that is the declaration a use of `Element` keeps alive.
-		self.recordTypeNameUse(name)
+		self.recordWrittenTypeName(name)
 
 		if qualifierDots == 0 'unqualifiedSpelling'
 			try self.requireTypeSpellingIsNotRawBuffer(tok)
@@ -43092,7 +43092,7 @@ export type Parser
 	//
 	// ⭐ **THE CONVERSION IS THE CAST'S OWN.** `rebrandValue` and `convertValueToDeclaredType` are the doors an
 	// `as` goes through, minus the two records that are about a WRITTEN cast — E3010 (`reportUnneededCast`:
-	// there is no cast here to call unneeded) and the type-name verdict (`recordTypeNameVerdict`: the
+	// there is no cast here to call unneeded) and the type-name verdict (`settleTypeNameVerdict`: the
 	// return type was written in this file, where its visibility was settled at the declaration). A bare
 	// local therefore gets a fresh value rather than an in-place retype (`emitRetaggedCastValue`), because the
 	// same local stays live on other paths under its own identity, and the result carries the declared
@@ -63048,7 +63048,7 @@ export type Parser
 	// `Element` names one thing by construction. `anchor` stays the token a reader is pointed at, which is
 	// still the one they wrote.
 	function requireUnambiguousTypeName(name ByteArray, anchor Token) throws SourceParseError
-		self.recordTypeNameVerdict(try self.bareTypeNameVerdict(name, anchor: anchor))
+		try self.settleTypeNameVerdict(try self.bareTypeNameVerdict(name, anchor: anchor))
 	end 'requireUnambiguousTypeName'
 
 	function bareTypeNameVerdict(name ByteArray, anchor Token) returns TypeNameVerdict throws SourceParseError
@@ -63064,21 +63064,6 @@ export type Parser
 
 		return typeNameVerdictOf(hiding, noun: name, anchor: anchor)
 	end 'bareTypeNameVerdict'
-
-	function recordTypeNameVerdict(verdict TypeNameVerdict)
-		match verdict 'verdict'
-			nameable then return
-			hidden(kind, tier, noun, anchor) then self.recordHiddenTypeName(kind, tier: tier, noun: noun, anchor: anchor)
-		end 'verdict'
-	end 'recordTypeNameVerdict'
-
-	function recordHiddenTypeName(kind HiddenSymbolKind, tier Visibility, noun ByteArray, anchor Token)
-		if self.job.foldsAConstantInitializer 'aDiscardedArtifact'
-			panic("Parser.recordHiddenTypeName: '{String.from(noun)}' at {anchor.line}:{anchor.column} is hidden, and a constant initializer's walk refuses that through `refuseHiddenTypeName` — its artifact is discarded, so a recorded refusal would vanish")
-		end 'aDiscardedArtifact'
-
-		self.artifact.recordHiddenTypeName(hiddenSymbolDiagnostic(kind, noun: String.from(noun), tier: tier, line: anchor.line, column: anchor.column, filePath: self.job.path))
-	end 'recordHiddenTypeName'
 
 	function refuseHiddenTypeName(verdict TypeNameVerdict) throws ConstEvalError
 		try self.requireTypeNameVerdictNameable(verdict) otherwise (err) 'hidden'
@@ -63197,7 +63182,10 @@ export type Parser
 			return
 		end 'aDiscardedArtifact'
 
-		self.recordTypeNameVerdict(verdict)
+		match verdict 'verdict'
+			nameable then return
+			hidden(kind, tier, noun, anchor) then self.artifact.recordHiddenTypeName(hiddenSymbolDiagnostic(kind, noun: String.from(noun), tier: tier, line: anchor.line, column: anchor.column, filePath: self.job.path))
+		end 'verdict'
 	end 'settleTypeNameVerdict'
 
 	function requireNoCallToNothing(qualifier ByteArray) throws SourceParseError
@@ -63444,7 +63432,7 @@ export type Parser
 		let spawned = try self.spawnedTypeAt(self.pos, spawnTok: spawnTok)
 
 		match spawned 'entry'
-			declared(declaration, consumed) then self.recordTypeNameVerdict(self.enterChainType(declaration, consumed: consumed, anchor: self.current()))
+			declared(declaration, consumed) then try self.settleTypeNameVerdict(self.enterChainType(declaration, consumed: consumed, anchor: self.current()))
 			named then break
 		end 'entry'
 
@@ -66921,7 +66909,7 @@ export type Parser
 			// `Set` identifier followed by `from` is a construction, NOT a variable reference (`Set` names no
 			// binding, so the plain path below reports E2004 `Undefined variable 'Set'`). Its element type is
 			// inferred from the literal.
-			self.recordTypeNameVerdict(try self.enterQualifiedTypeHead(TypeNameHeadForm.construction))
+			try self.settleTypeNameVerdict(try self.enterQualifiedTypeHead(TypeNameHeadForm.construction))
 
 			if self.atContainerFromConstruction(FromHeadContainer.set) 'setFromConstruction'
 				return try self.parseSetFromConstruction(func)
@@ -67213,6 +67201,18 @@ export type Parser
 	// instance its call names. A body the count scan did not see gets a positioned refusal rather than
 	// a compiler abort.
 	function parseCountof() returns ValueId throws SourceParseError
+		let operand = try self.parseCountofOperand()
+		let countofTok = operand.0
+		let count = try self.fixedElementCountValue(operand.1, anchor: countofTok)
+
+		if self.constIsKnown(count) 'aStatedCount'
+			return self.retypeAsLibraryAlias(count, aliasName: CountAliasName)
+		end 'aStatedCount'
+
+		return self.emitRetaggedCastValue(count, targetType: self.signatures.libraryAliasType(CountAliasName, into: self.artifact.typeNames), range: SourceRange.ofToken(countofTok))
+	end 'parseCountof'
+
+	function parseCountofOperand() returns (Token, GenericInstanceId) throws SourceParseError
 		let countofTok = try self.consume(TokenKind.countof)
 		try self.consume(TokenKind.leftParen)
 		let operand = resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted), typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: self.job.path)
@@ -67227,17 +67227,25 @@ export type Parser
 		// the id half alone can answer TRUE about an instance this operand is not. That door exists for
 		// exactly this shape and stating the pairing here again would be the same rule written twice.
 		if not self.signatures.isFixedArrayInstanceAt(maxonTypeTag(operand), nameId: typeNameIdOf(operand)) 'noElementCount'
-			throw SourceParseError.unsupported("countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`", line: countofTok.line, column: countofTok.column)
+			throw self.countofStatesNoCount(countofTok)
 		end 'noElementCount'
 
-		let count = try self.fixedElementCountValue(genericInstanceIdOf(operand), anchor: countofTok)
+		return (countofTok, genericInstanceIdOf(operand))
+	end 'parseCountofOperand'
 
-		if self.constIsKnown(count) 'aStatedCount'
-			return self.retypeAsLibraryAlias(count, aliasName: CountAliasName)
-		end 'aStatedCount'
+	function countofStatesNoCount(countofTok Token) returns SourceParseError
+		return SourceParseError.unsupported("countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`", line: countofTok.line, column: countofTok.column)
+	end 'countofStatesNoCount'
 
-		return self.emitRetaggedCastValue(count, targetType: self.signatures.libraryAliasType(CountAliasName, into: self.artifact.typeNames), range: SourceRange.ofToken(countofTok))
-	end 'parseCountof'
+	function evalConstCountof() returns ConstValue throws ConstEvalError
+		let operand = try self.parseCountofOperand() otherwise (err) 'refused'
+			throw ConstEvalError.defective(err)
+		end 'refused'
+
+		let count = try self.signatures.genericInstanceFixedCount(operand.1) otherwise throw ConstEvalError.defective(self.countofStatesNoCount(operand.0))
+
+		return ConstValue.create(count as FullRangeInt, tag: ValueTypeTag.integer, typeName: CountAliasName)
+	end 'evalConstCountof'
 
 	// The count of one sized instance, at the parse: a literal when the instance states one, this
 	// function's own hidden slot when it does not. Two askers and one answer: the `countof(T)`
@@ -80422,7 +80430,7 @@ export type Parser
 	// it, every alias head fell through to **`E2004: Undefined variable 'CharSet'`**.
 	function consumeConstructionHead() returns Token throws SourceParseError
 		let head = try self.readTypeNameHead(TypeNameHeadForm.construction)
-		self.recordTypeNameVerdict(head.verdict)
+		try self.settleTypeNameVerdict(head.verdict)
 
 		if head.identity.equals(head.token.value) 'writtenNameIsItsIdentity'
 			return head.token
@@ -94019,9 +94027,9 @@ export type Parser
 		end 'folded'
 	end 'foldConstUnary'
 
-	// A constant PRIMARY: an integer literal, `true`/`false`, a character literal, a parenthesized
-	// sub-expression, a type-qualified bound (`u16.max`), or a reference to another top-level
-	// constant. Every literal decoder is the one the emitting path uses, so a constant reads a
+	// A constant PRIMARY: an integer or float literal, `true`/`false`, a character literal,
+	// `countof(T)`, a parenthesized sub-expression, a type-qualified bound (`u16.max`), or a reference to
+	// another top-level constant. Every literal decoder is the one the emitting path uses, so a constant reads a
 	// literal exactly as a function body reads it.
 	function evalConstPrimary(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		if self.at(TokenKind.intLiteral) 'intLit'
@@ -94041,6 +94049,10 @@ export type Parser
 		if self.at(TokenKind.charLiteral) 'charLit'
 			return try self.evalConstCharLiteral()
 		end 'charLit'
+
+		if self.at(TokenKind.countof) 'countofExpr'
+			return try self.evalConstCountof()
+		end 'countofExpr'
 
 		if self.at(TokenKind.leftParen) 'group'
 			return try self.evalConstGroup(stack)
