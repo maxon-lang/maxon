@@ -27651,6 +27651,19 @@ export type ProgramSignatures
 		return self.constSlotCheck(self.constSlotTypeOf(self.containerElementType(giid), slotScopeFilePath: elementFilePath), value: value, calls: calls, declName: declName, elementFilePath: elementFilePath)
 	end 'constArrayElementCheck'
 
+	export function tupleLayoutOfElement(giid GenericInstanceId, readerFilePath FilePath) returns DeclaredStruct
+		return self.tupleLayoutOfSlot(self.containerElementType(giid), slotScopeFilePath: readerFilePath)
+	end 'tupleLayoutOfElement'
+
+	export function tupleLayoutOfField(layout StructLayout, index FieldIndex) returns DeclaredStruct
+		return self.tupleLayoutOfSlot(self.fieldTypeOf(layout, index: index, into: self.typeNames), slotScopeFilePath: layout.declFilePath)
+	end 'tupleLayoutOfField'
+
+	function tupleLayoutOfSlot(slot MaxonType, slotScopeFilePath FilePath) returns DeclaredStruct
+		let tuple = try self.tupleLayoutOf(self.declaredSlotType(slot, into: self.typeNames, slotScopeFilePath: slotScopeFilePath)) otherwise return DeclaredStruct.undeclared
+		return DeclaredStruct.declared(tuple)
+	end 'tupleLayoutOfSlot'
+
 	// The ranged alias an array instance's element is, which a constant element's range is checked against.
 	export function arrayElementRangedAlias(giid GenericInstanceId, readerFilePath FilePath) returns DeclaredAlias
 		let element = self.containerElementType(giid)

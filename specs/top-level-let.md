@@ -448,6 +448,134 @@ end 'main'
 test.txt
 ```
 
+<!-- test: a-top-level-array-literal-of-tuples -->
+A module-scope `Alias from [ ... ]` whose elements are tuples reads back each element's fields, as the
+same literal does in a body.
+```maxon
+typealias Word = bits(64)
+typealias Step = (Word, Word)
+typealias Steps = Array with Step
+
+let steps = Steps from [(0, 1), (2, 3)]
+
+function main() returns ExitCode
+	print("{steps.count()}")
+
+	for step in steps 'eachStep'
+		print(" {step.0} {step.1}")
+	end 'eachStep'
+
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 0 1 2 3
+```
+
+<!-- test: a-top-level-array-literal-of-three-tuples -->
+A tuple element of three fields, one of them a string, takes the same module-scope form.
+```maxon
+typealias Index = int(0 to 100)
+typealias Entry = (Index, String, bool)
+typealias Entries = Array with Entry
+
+let entries = Entries from [(1, "one", true), (2, "two", false)]
+
+function main() returns ExitCode
+	print("{entries.count()}")
+
+	for entry in entries 'eachEntry'
+		print(" {entry.0} {entry.1} {entry.2}")
+	end 'eachEntry'
+
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1 one true 2 two false
+```
+
+<!-- test: a-top-level-array-literal-of-nested-tuples -->
+A tuple element that is itself a tuple takes the stated element type's columns in turn.
+```maxon
+typealias Word = bits(64)
+typealias Inner = (Word, Word)
+typealias Outer = (Inner, Word)
+typealias Outers = Array with Outer
+
+let outers = Outers from [((1, 2), 3), ((4, 5), 6)]
+
+function main() returns ExitCode
+	print("{outers.count()}")
+
+	for outer in outers 'eachOuter'
+		print(" {outer.0.0} {outer.0.1} {outer.1}")
+	end 'eachOuter'
+
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1 2 3 4 5 6
+```
+
+<!-- test: a-static-struct-literal-tuple-field -->
+A struct literal's field declared at a tuple type takes a tuple literal in a static initializer.
+```maxon
+typealias Word = bits(64)
+typealias Step = (Word, Word)
+
+type Holder
+	export var step as Step
+
+	static var origin = Holder{step: (7, 9)}
+
+	static function get() returns Holder
+		return Holder.origin
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.get()
+	print("{holder.step.0} {holder.step.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 9
+```
+
+<!-- test: error.a-top-level-tuple-literal-without-a-stated-tuple -->
+A tuple literal where no slot declares a tuple type has no element types to take, and says so.
+```maxon
+typealias Word = bits(64)
+typealias Words = Array with Word
+
+let words = Words from [(0, 1)]
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:25: Unsupported: a tuple literal at a position that declares no tuple type to take its element types from — a top-level initializer builds one only as the element of a typed array literal (`Steps from [(0, 1)]`), as a struct field, or as an element of another tuple literal, each of which states the tuple. Build it inside a function
+```
+
 <!-- test: cross-file-constant-in-initializer -->
 A top-level `let` initializer may reference an exported constant from another file. The declaring
 file here is fed to the compiler LAST, after the file that reads it — resolution is by declaration,

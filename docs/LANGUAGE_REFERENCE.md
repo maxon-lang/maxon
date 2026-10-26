@@ -2930,6 +2930,11 @@ end 'main'
   (see [Static Fields](#static-fields)).
 - A field read off another global (`let n = shared.count`) is **E2015**, and a struct literal at file scope
   is **E3076**; call a factory instead, or declare a static field inside the type.
+- A tuple literal in an initializer takes its element types from a slot that states a tuple type: an
+  element of `ArrayAlias from [...]` whose element type is a tuple (`let steps = Steps from [(0, 1), (2, 3)]`
+  over `typealias Steps = Array with Step` and `typealias Step = (Word, Word)`), a struct literal's field of
+  tuple type (`static var origin = Holder{step: (7, 9)}`), or an element of such a tuple. A tuple literal
+  anywhere else in an initializer is **E2015**; build it inside a function.
 - An initializer cannot name another global, but what it calls may. A `let`'s initializer may not reach a
   module-level `var` that holds a record — a String, an array, a struct, a boxed union — through any function
   it calls (**E3165**, reported at the `var`'s use with its declaration as a note). A `let` is fixed at startup

@@ -92344,10 +92344,19 @@ export type Parser
 
 	// ⭐ **THE VALUE HALF OF AN ARGUMENT, WHICH IS ALSO THE WHOLE OF A FIELD** — the thesis
 	// `ConstFactoryCall` states, made operative: a struct literal's field is a labelled argument minus its
-	// label, so both positions admit one set through one walk. `Outer{inner: Inner.create(7)}` and
+	// label, so both positions admit one set through one walk — save a tuple literal, which only a field
+	// stating its tuple type admits (`evalConstSlotValue`). `Outer{inner: Inner.create(7)}` and
 	// `Pair.create(Pair{a: 1, b: 2})` both fall out of this, in both directions, without either door knowing
 	// the other exists.
 	function evalConstNodeValue(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgumentValue throws ConstEvalError
+		// A tuple with no stated slot type cannot be interned from here: the file artifact that would file
+		// its destructor is never merged for this evaluator's parser. The wording is pinned byte-for-byte by
+		// specs/top-level-let.md.
+		if self.atConstTupleLiteral() 'noSlotToTakeColumnsFrom'
+			let openTok = self.current()
+			throw ConstEvalError.defective(SourceParseError.unsupported("a tuple literal at a position that declares no tuple type to take its element types from — a top-level initializer builds one only as the element of a typed array literal (`Steps from [(0, 1)]`), as a struct field, or as an element of another tuple literal, each of which states the tuple. Build it inside a function", line: openTok.line, column: openTok.column))
+		end 'noSlotToTakeColumnsFrom'
+
 		// ⚠ **THE MAP LITERAL JOINS THE NODE TEST HERE AS WELL AS AT THE INITIALIZER, AND THE SYMMETRY IS THE
 		// POINT rather than a widening taken for its own sake.** This function's own thesis is that an argument,
 		// a field and a whole initializer admit ONE set through ONE walk; a form claimed at the initializer and
@@ -92364,6 +92373,41 @@ export type Parser
 
 		return ConstFactoryArgumentValue.folded(try self.evalConstFoldedValue(stack))
 	end 'evalConstNodeValue'
+
+	function atConstTupleLiteral() returns bool
+		return self.at(TokenKind.leftParen) and self.parenGroupHoldsTopLevelComma(self.pos)
+	end 'atConstTupleLiteral'
+
+	function evalConstSlotValue(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, tuple DeclaredStruct) returns ConstFactoryArgumentValue throws ConstEvalError
+		if self.atConstTupleLiteral() 'aTupleLiteral'
+			match tuple 'slot'
+				declared(layout) then return ConstFactoryArgumentValue.call(try self.evalConstTupleLiteralInto(calls, stack: stack, layout: layout))
+				undeclared then break
+			end 'slot'
+		end 'aTupleLiteral'
+
+		return try self.evalConstNodeValue(calls, stack: stack)
+	end 'evalConstSlotValue'
+
+	function evalConstTupleLiteralInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, layout StructLayout) returns ElementIndex throws ConstEvalError
+		try self.consumeConstToken(TokenKind.leftParen)
+
+		var fields = ConstFactoryArgumentValueArray.create()
+
+		for column in 0 upto layout.fieldCount() 'eachColumn'
+			if column != 0 'afterTheFirst'
+				try self.consumeConstToken(TokenKind.comma)
+			end 'afterTheFirst'
+
+			let columnTok = self.current()
+			let value = try self.evalConstSlotValue(calls, stack: stack, tuple: self.signatures.tupleLayoutOfField(layout, index: column))
+			fields.push(try self.requireConstFieldValueFits(calls, layout: layout, index: column, value: value, fieldTok: columnTok))
+		end 'eachColumn'
+
+		try self.consumeConstToken(TokenKind.rightParen)
+
+		return self.pushConstNode(calls, node: ConstFactoryCall.construct(layout.name, fields: fields))
+	end 'evalConstTupleLiteralInto'
 
 	// ⭐⭐ **`[k0: v0, k1: v1, …]` AS A TOP-LEVEL INITIALIZER — the SAME desugar `parseMapLiteralBody` reads
 	// inside a function, walked into the arena instead of emitted:** `Map.create()` plus one `Map.upsert(k,
@@ -92734,7 +92778,7 @@ export type Parser
 	// refusal is (`evalConstSetMember`), the sibling construction whose container the alias also states.
 	function evalConstElementAtInstance(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, giid GenericInstanceId, typeTok Token) returns ConstFactoryArgumentValue throws ConstEvalError
 		let elemTok = self.current()
-		let value = try self.evalConstNodeValue(calls, stack: stack)
+		let value = try self.evalConstSlotValue(calls, stack: stack, tuple: self.signatures.tupleLayoutOfElement(giid, readerFilePath: self.job.path))
 
 		match self.signatures.constArrayElementCheck(giid, value: value, calls: calls, declName: typeTok.value, elementFilePath: self.job.path) 'verdict'
 			agrees then break
@@ -92781,7 +92825,7 @@ export type Parser
 				throw ConstEvalError.defective(SourceParseError.duplicateFieldInitializer(String.from(layout.name), fieldName: String.from(nameTok.value), line: nameTok.line, column: nameTok.column))
 			end 'duplicate'
 
-			try fields.set(index, value: try self.requireConstFieldValueFits(calls, layout: layout, index: index, value: try self.evalConstNodeValue(calls, stack: stack), fieldTok: nameTok)) otherwise panic("evalConstStructFields: fields.set OOB at {index} — the columns are sized to the layout's field count")
+			try fields.set(index, value: try self.requireConstFieldValueFits(calls, layout: layout, index: index, value: try self.evalConstSlotValue(calls, stack: stack, tuple: self.signatures.tupleLayoutOfField(layout, index: index)), fieldTok: nameTok)) otherwise panic("evalConstStructFields: fields.set OOB at {index} — the columns are sized to the layout's field count")
 			try filled.set(index, value: true) otherwise panic("evalConstStructFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
 
 			self.skipNewlines()
@@ -92876,13 +92920,21 @@ export type Parser
 		match self.signatures.constStructFieldCheck(layout, index: index, value: value, calls: calls, declName: layout.name, elementFilePath: layout.declFilePath) 'verdict'
 			agrees then break
 			widensToFloat then return self.constWidenedToFloat(value)
-			mismatch(got, expected) then throw ConstEvalError.defective(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.field, name: self.fieldNameAt(layout, index: index), owner: SlotOwner.declaredBy(layout.name)), got: got, gotNote: "", expected: expected, expectedNote: "", line: fieldTok.line, column: fieldTok.column))
+			mismatch(got, expected) then throw ConstEvalError.defective(self.constFieldMismatchError(layout, index: index, got: got, expected: expected, fieldTok: fieldTok))
 		end 'verdict'
 
 		try self.requireConstFieldValueInRange(layout, index: index, value: value, fieldTok: fieldTok)
 
 		return value
 	end 'requireConstFieldValueFits'
+
+	function constFieldMismatchError(layout StructLayout, index FieldIndex, got String, expected String, fieldTok Token) returns SourceParseError
+		if isTupleTypeName(layout.name) 'aTupleColumn'
+			return SourceParseError.typeMismatchExpectedGot(expected, got: got, line: fieldTok.line, column: fieldTok.column)
+		end 'aTupleColumn'
+
+		return SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.field, name: self.fieldNameAt(layout, index: index), owner: SlotOwner.declaredBy(layout.name)), got: got, gotNote: "", expected: expected, expectedNote: "", line: fieldTok.line, column: fieldTok.column)
+	end 'constFieldMismatchError'
 
 	// ⭐ **THE RANGE HALF, WHICH THE TAG COMPARISON ABOVE CANNOT SEE** — `Pair{a: 500}` against `var a
 	// as Percent`, where `typealias Percent = int(0 to 100)`. A top-level initializer is not a
