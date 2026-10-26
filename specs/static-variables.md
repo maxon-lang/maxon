@@ -15,7 +15,7 @@ Top-level `var` declarations define mutable module-level variables stored in the
 #### Syntax
 
 ```maxon
-var counter = 0
+var counter = 0 as Count
 export var globalState = false
 ```
 
@@ -28,16 +28,12 @@ export var globalState = false
 
 #### Initializer Requirements
 
-A top-level `let` or `var` initializer is one of:
-- A literal: integer, float, boolean, string, byte string, or array literal
-- Arithmetic and logical operations on constants
-- Another top-level `let`
-- An empty container, or an enum or union case (a case that declares a payload is written with its arguments)
-- A built-in sized type's `.min` / `.max` (`u8.max`)
-- A `Type from "literal"` conversion
-- A call — a free function or a `create()`-style static factory — at the TOP of the initializer, which `__module_init` makes before `main`
-
-Anything else is refused (E2015, E2045) — a field read off another global, or a method call on a value. A struct literal is refused at file scope (E3076); inside a `type` body a static member may be initialized by a struct literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3165, E3078 and E3164, below and in `specs/green-thread-globals.md`.
+A top-level `let` or `var` initializer is any expression a function body accepts, parsed by the body's
+expression parser with the same meaning and the same diagnostics. A scalar binding must have a value known at
+compile time (E2045 names the call that makes it unknown), and a `var` that starts from a bare number is
+E2004. A record whose value is decided at compile time is laid down as read-only data; any other is built by
+`__module_init` before `main`, in dependency order. A struct literal is refused at file scope (E3076); inside a
+`type` body a static member may be initialized by a struct literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3165, E3078 and E3164, below and in `specs/green-thread-globals.md`.
 
 Code a service's message can run touches no module-level `var` and no `static var` (E3143, `specs/green-thread-globals.md`); a program that spawns a service may still declare one that only `main` and its callees use.
 
@@ -56,10 +52,10 @@ Types can have static fields that are shared across all instances. Static fields
 typealias Score = int(i64.min to i64.max)
 
 type Counter
-	static var count = 0       // Mutable static field
-	static let MAX = 100       // Immutable static field
+	static var count = 0 as Score  // Mutable static field
+	static let MAX = 100           // Immutable static field
 
-	export var value as Score  // Instance field
+	export var value as Score      // Instance field
 
 	static function create(value Score) returns Self
 		return Self{value: value}
@@ -353,8 +349,8 @@ error E2015: <fragment>:13:9: Unsupported: a `let` declaration in an `extension`
 
 ### A static member's initializer is the TOP-LEVEL initializer grammar, not a subset of it
 
-Nothing about a static member's initializer is its own: it is read by the one top-level binding reader and
-folded by the one constant evaluator, so every form a file-scope `let`/`var` admits a static member admits,
+Nothing about a static member's initializer is its own: it is read by the body's expression parser, as
+though written inside its type's body, so every form a file-scope `let`/`var` admits a static member admits,
 and every form it refuses a static member refuses in the same words. In particular the initializer is **not
 restricted to literals** — a user static FACTORY CALL is built by `__module_init` before `main` exactly as
 `top-level-factory-globals.md` describes it, and a managed one is released by `__maxon_global_cleanup`
@@ -428,16 +424,39 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3086: <fragment>:8:22: Field 'b' of type 'Pair' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
+error E3086: <fragment>:8:26: Field 'b' of type 'Pair' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
+```
+
+<!-- test: error.struct-literal-missing-field-in-a-static-method -->
+The same literal in a static method's body, reported at the same token, its opening brace.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static function get() returns Pair
+		let origin = Pair{a: 1}
+		return origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3086: <fragment>:9:20: Field 'b' of type 'Pair' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
 ### A struct-literal initializer's field must suit the slot it fills
 
 The tag comparison is what makes the STORE right: a pointer written into a scalar slot reads back as a
-number, and a number written into a managed one is a wild pointer. The range half is the evaluator's own,
-for the reason `top-level-let.md` gives a constant cast — a top-level initializer is not a function, so it
-records no site for the range pass to fold and the compile-time refusal has to be raised where the constant
-is read.
+number, and a number written into a managed one is a wild pointer. The range half is the body's: a constant
+field value outside the field's range is refused at compile time, as the same literal in a function body is.
 
 <!-- test: error.static-struct-literal-field-type-mismatch -->
 ```maxon
@@ -954,8 +973,8 @@ end 'main'
 ```
 
 <!-- test: top-level-array-const-element -->
-An array literal's elements go through the same scalar constant evaluator every other initializer does,
-so a reference to another top-level *scalar* constant — and arithmetic on it — is an element.
+An array literal's elements are body expressions, so a reference to another top-level *scalar* constant —
+and arithmetic on it — is an element.
 ```maxon
 let BASE = 20
 var xs = FullRangeIntArray from [BASE, BASE + 2]
@@ -1056,34 +1075,33 @@ end 'main'
 error E2013: <fragment>:5:2: cannot assign to immutable variable: 'xs'
 ```
 
-<!-- test: error.top-level-array-names-another-global -->
-A managed initializer may not name another managed global, in EITHER declaration order — which is what
-keeps initialization order a non-problem: there is no managed-to-managed dependency to order and no
-managed cycle to detect.
+<!-- test: a-top-level-array-let-names-another-global -->
+A `let` initializer may name another `let` global, as a body's `let b = A` does: `B` reads the same
+array.
 ```maxon
 let A = [1, 2]
 let B = A
 
 function main() returns ExitCode
-	return 0
+	return ((try B.get(0) otherwise 0) + (try B.get(1) otherwise 0)) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2004: <fragment>:3:9: Undefined constant 'A'
+```exitcode
+3
 ```
 
-<!-- test: error.top-level-array-names-another-global-forward -->
-The same, written the other way round.
+<!-- test: a-top-level-array-let-names-another-global-forward -->
+The same, written the other way round: declaration order does not matter.
 ```maxon
 let B = A
 let A = [1, 2]
 
 function main() returns ExitCode
-	return 0
+	return ((try B.get(0) otherwise 0) + (try B.get(1) otherwise 0)) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2004: <fragment>:2:9: Undefined constant 'A'
+```exitcode
+3
 ```
 
 <!-- test: error.top-level-let-array-var-alias -->
@@ -1982,9 +2000,8 @@ error E3078: <fragment>:18:3: cannot assign a value, which may share storage wit
 ```
 
 <!-- test: error.top-level-array-empty -->
-An empty array literal has no element to infer a type from, so it is refused — and the advice is the
-same one a function body's `[]` gets, because a top-level `<Alias>.create()` names the element type
-the brackets could not.
+An empty array literal has no element to infer a type from, so it is refused with the diagnostic a
+function body's `[]` gets (`arrays/multi-line-literal-empty-still-rejected`).
 ```maxon
 var items = []
 
@@ -1993,7 +2010,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:13: Unsupported: an empty array literal `[]` as a top-level initializer — its element type cannot be inferred; name it with a generic alias and its factory instead (`typealias Ints = Array with Integer` + `var xs = Ints.create()`)
+error E2015: <fragment>:2:13: Unsupported: an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array
 ```
 
 <!-- test: error.top-level-array-mixed-elements -->
@@ -2010,19 +2027,30 @@ end 'main'
 error E3005: <fragment>:2:14: argument type mismatch for 'value': expected 'int', got 'String'
 ```
 
-<!-- test: error.top-level-array-bool-element -->
-A bool element folds perfectly well and is still refused: stored, it would build an `Array with Integer`
-of 1s and 0s, which is not the type the program wrote. A literal in a function body refuses a bool
-element too, so the top level accepts no more than a body does.
+<!-- test: a-body-array-bool-element -->
+```maxon
+function main() returns ExitCode
+	var flags = [true, false]
+	flags.push(true)
+	return flags.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: top-level-array-bool-element -->
+A top-level array literal of `bool` elements is what a body's is.
 ```maxon
 var flags = [true, false]
 
 function main() returns ExitCode
-	return 0
+	flags.push(true)
+	return flags.count()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:2:14: Unsupported: a top-level array literal element of type 'bool' — a constant array's elements are integers or String literals
+```exitcode
+3
 ```
 
 <!-- test: top-level-var-string-literal -->
@@ -3410,26 +3438,14 @@ error E2015: <fragment>:8:21: Unsupported: returning a read of a `let`-declared 
 
 ### `<Type> from "…"` AS A TOP-LEVEL INITIALIZER
 
-⛔⛔ **THE CONST EVALUATOR READS THIS SHAPE, OR IT ANSWERS ABOUT A CONSTANT NOBODY WROTE.**
-The compiler's own `Compiler/Project.maxon:381` is `export let CompilerOwnedDeclFilePath = FilePath from ""`.
-Unrecognised, the scalar walk would read the bare `FilePath` as a reference to another top-level `let` — its
-only other reading of an identifier — and answer **E2004 `Undefined constant 'FilePath'`**. That is the
-SAME misattribution the struct-literal and factory-call arms beside it exist to prevent, and it would
-cost four errors: the declaration plus the three files that read the name it declares.
+The compiler's own `Compiler/Project.maxon` declares `export let CompilerOwnedDeclFilePath = FilePath from ""`.
+The initializer is the body's `FilePath from ""`: a call to the type's own `init` static, which
+`__module_init` makes before `main` as it does for `Database.create(…)`.
 
-⭐ **IT IS RECORDED AS THE CALL IT ALREADY IS.** The body form calls the type's own `init` static, so
-nothing new is evaluated: the walk states WHICH function to call and WHAT to pass it, and `__module_init`
-builds the record before `main` exactly as it does for `Database.create(…)`.
-
-⛔⛔ **AND THE CONFORMANCE IS CHECKED HERE.** The body
-spelling's conformance is decided by `checkLiteralInitConformance`, which walks `project.literalInitSites`
-— a store the REAL PARSE fills and the const evaluator cannot reach. So a top-level construction this arm
-did not check would be checked by nobody. **With the check absent, a `type Tag` with an `init` static
-and NO `implements InitableFromStringLiteral` compiles and RUNS**, where the required answer is
-`E3005 Type 'Tag' does not conform to InitableFromStringLiteral`. A silent acceptance is the costly
-direction. The arm asks the SAME predicate through the SAME pair, reading the sweep's own
-store — the substitution `sweptConformanceIndex`'s header exists for — and reports the same code with the
-same sentence.
+⛔⛔ **AND THE CONFORMANCE IS CHECKED.** **A `type Tag` with an `init` static and NO
+`implements InitableFromStringLiteral`** is `E3005 Type 'Tag' does not conform to InitableFromStringLiteral`
+at file scope, with the code and sentence the body spelling gets. A silent acceptance is the costly
+direction: the record would be built by a type that never declared it can be.
 
 <!-- test: a-top-level-let-built-by-a-string-literal-init -->
 Both a `""` and a non-empty literal, so the argument is carried and not merely accepted.
@@ -3511,13 +3527,14 @@ tables written as array literals.
 ⚠ **THE NUMBER ALONE IS A WRONG ANSWER ABOUT IT, WHICH IS THE WHOLE OF WHY THIS IS NOT A ONE-LINE FOLD.**
 A constant folded to a bare `integer` cannot be passed where the enum is declared —
 `argument type mismatch for 'r': expected 'Reg', got 'int'`. So the fold is tagged `named` and carries the
-enum's SPELLING, which then rides the whole chain a constant travels: `ConstValue` → `TopLevelConstant`
-→ `ConstEvalOutcome` → `TopLevelConstantLookup` → the use site. Each of those arms is WIDENED rather than
+enum's declared layout NAME — its identity, not a spelling a file wrote — which then rides the whole chain a
+constant travels: `ConstValue` → `TopLevelConstant` → `ConstEvalOutcome` → `TopLevelConstantLookup` → the
+use site. Each of those arms is WIDENED rather than
 joined by a parallel one: a folded enum case is not a second kind of scalar constant, it is a scalar
 constant that names its type.
 
-⚠ **BYTES, NOT AN INTERNED ID.** Ids are minted per PARSER; the evaluator is a throwaway parser built per
-declaration and the use site is a third one, so an id minted during the fold means nothing where it is
+⚠ **BYTES, NOT AN INTERNED ID.** Ids are minted per PARSER; the constant is folded by a throwaway parser
+built per declaration and the use site is a third one, so an id minted during the fold means nothing where it is
 read. The reader interns the bytes into its own table — `fieldTypeOf(…, into:)`'s discipline.
 
 ⚠ **AND THE USE SITE EMITS THROUGH `emitEnumTagLiteral`, THE DOOR THE BODY SPELLING TAKES**: the value is
@@ -3848,9 +3865,9 @@ error E3129: <fragment>:14:9: the payload binding 'n' cannot be honoured: case '
 
 <!-- test: error.a-case-the-union-does-not-declare-is-still-refused -->
 ⛔ **THE BOUNDARY THAT REMAINS.** Admitting a boxed union's cases does not admit any member name at all:
-`noSuchCase` is not a case of `Boxed`, so both arms decline it and the constant evaluator reports it where
-the author wrote it (E3034, *unknown enum case*). This refusal is a RULE, which is the whole reason it is the one
-kept as the control.
+`noSuchCase` is not a case of `Boxed`, so it is reported where the author wrote it with the diagnostic a body
+gives (E3034, *unknown union case*). This refusal is a RULE, which is the whole reason it is the one kept as the
+control.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3869,7 +3886,28 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:20: Unsupported: `Boxed.noSuchCase` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+error E3034: <fragment>:9:20: unknown union case: 'noSuchCase'
+```
+
+<!-- test: error.a-case-the-union-does-not-declare-is-refused-in-a-body -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Boxed
+	plain
+	withPayload(n Integer)
+end 'Boxed'
+
+function main() returns ExitCode
+	let stillRefused = Boxed.noSuchCase
+	return match stillRefused 'k'
+		plain gives 0
+		withPayload(n) gives n as ExitCode
+	end 'k'
+end 'main'
+```
+```maxoncstderr
+error E3034: <fragment>:10:21: unknown union case: 'noSuchCase'
 ```
 
 ### AN ARRAY LITERAL OF ENUM CASES
@@ -3880,7 +3918,7 @@ this is the same fact one level down — `let calleeSavedOrder = [X64Register.rb
 register tables, plus the lexer's 256-entry `charClassTable`.
 
 ⚠ **THE ELEMENT CARRIES THE ENUM'S NAME AND THE KIND DOES NOT, which is not an arbitrary split.** The KIND
-says which FAMILY the array belongs to; the enum's spelling lives on the ELEMENT because that is where the
+says which FAMILY the array belongs to; the enum's name lives on the ELEMENT because that is where the
 walk has it. `constArrayValueType` reads it off element 0 — the first element fixes the instance — and the
 homogeneity test compares the name as well as the kind.
 
@@ -4360,11 +4398,11 @@ end 'main'
 5
 ```
 
-⭐⭐ **A CONSTANT'S TAG IS NOT ITS IDENTITY, AND THE FOLD IS THE ONLY DOOR LEFT TO SAY SO.** `named` covers
-every declared `enum` AND every boxed `union`; `genericInstance` covers every container. A slot check that
-compared only the tag admitted a `Status` case into a `Colour` field and a `Map` box into an `Array` field —
-and a construction that FOLDS has no call site left for the real parse to blame, so nothing downstream ever
-raised the mismatch. Both cases below are `E3005`, at the argument the author wrote.
+⭐⭐ **A CONSTANT'S TAG IS NOT ITS IDENTITY.** `named` covers every declared `enum` AND every boxed `union`;
+`genericInstance` covers every container. A slot check that compared only the tag would admit a `Status` case
+into a `Colour` field and a `Map` box into an `Array` field. Both cases below are `E3005`, reported where and
+as the same call in a function body reports it — at the factory's name — and each is followed by that body
+twin.
 
 <!-- test: error.const-fold-union-case-into-enum-field -->
 ```maxon
@@ -4396,7 +4434,39 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:11: argument type mismatch for 'c': expected 'Colour', got 'Status'
+error E3005: <fragment>:23:17: argument type mismatch for 'c': expected 'Colour', got 'Status'
+```
+
+<!-- test: error.union-case-into-enum-field-in-a-function-body -->
+```maxon
+typealias Num = int(0 to 1000)
+
+enum Colour
+	red
+	green
+end 'Colour'
+
+union Status
+	idle
+	busy(n Num)
+end 'Status'
+
+type Mixed
+	export var c as Colour
+	export var n as Num
+
+	static function create(c Colour, n Num) returns Mixed
+		return Self{c: c, n: n}
+	end 'create'
+end 'Mixed'
+
+function main() returns ExitCode
+	let Bad = Mixed.create(Status.idle, n: 4)
+	return Bad.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:24:18: argument type mismatch for 'c': expected 'Colour', got 'Status'
 ```
 
 The container half of the same rule. A `Map`'s box and an `Array`'s record are both `genericInstance`, and
@@ -4424,7 +4494,30 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:9: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'
+error E3005: <fragment>:14:16: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'
+```
+
+<!-- test: error.map-into-array-field-in-a-function-body -->
+```maxon
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+typealias Counts = Map with (String, Num)
+
+type Holder
+	export var xs as NumArray
+
+	static function create(xs NumArray) returns Holder
+		return Self{xs: xs}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let H = Holder.create(Counts.create())
+	return H.xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:17: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'
 ```
 
 <!-- test: error.let-global-alias-receives-a-self-writing-container-method-on-a-field -->
@@ -5042,4 +5135,26 @@ end 'main'
 ```stdout
 1
 1
+```
+
+<!-- test: a-top-level-character-is-a-record-slot-a-var-can-reassign -->
+A character initializer is the expression a body would write, so the global holds a `Character` record: a `let`
+is read as it was built, and a `var`'s slot takes a new character.
+```maxon
+var c = 'x'
+let d = 'é'
+
+function main() returns ExitCode
+	print("{c}{d}\n")
+	c = 'y'
+	print("{c}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+xé
+y
 ```

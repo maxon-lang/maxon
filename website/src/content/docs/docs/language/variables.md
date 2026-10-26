@@ -217,23 +217,32 @@ end 'main'
 ```
 
 - `var` declares module state any function in the file can reassign; `let` declares a constant.
-- An initializer is a literal, a constant expression, an enum case, an array or dictionary literal,
-  `Type from "literal"` or `ArrayAlias from [...]`, a static factory call (`let shared = Cache.create()`), a
-  free function call that returns a record or a function value (`let shared = makeCache()`), or a function
-  name (`let step = countdown`). The type at the head may be qualified (`lib.Cache.create()`). A free function
-  call returning a scalar, and any other call, is **E2045** (`Function calls are not allowed in global
-  variable initializers`).
+- An initializer is any expression a function body accepts, with the same meaning, the same types and the
+  same diagnostics: literals, arithmetic, casts, enum and union cases, array, map and tuple literals,
+  `Type from "literal"`, `ArrayAlias from [...]`, factory and function calls (`let shared = Cache.create()`,
+  `let shared = makeCache()`, `lib.Cache.create()`), a function name (`let step = countdown`), and another
+  top-level `let`, declared before or after it, in this file or one it can see (`let B = A`).
+- A binding that holds a scalar — a number, a `bool` or an enum case — is a compile-time
+  constant, inlined at every use. Its initializer must have a value known at compile time, as a body knows
+  `2 * WIDTH` or `sqrt(4.0)`; a call that makes it unknown is **E2045** (`Function calls are not allowed in
+  global variable initializers`, naming the call). A derived constant keeps its operands' typealias, as in a
+  body: with `let a = 5 as Small`, `let s = a + a` is a `Small`. A `var` whose initializer is a bare number
+  is **E2004**; state its type (`var count = 0 as Tally`).
 - A call in an initializer names its function as a call in a function body does: a name nothing declares is
   **E3004**, one the file cannot see is **E3008** (**E3088** for a `module` one), and one several directories
-  declare is **E3095**. That one diagnostic covers every read and assignment of the binding; a tuple
-  assignment naming the binding is **E2015** as well.
+  declare is **E3095**. That one diagnostic covers every read and assignment of the binding. A tuple
+  assignment naming a module-level binding is **E2015**; assign the element to a local and store that.
 - Every initializer runs **before `main`**, once, in dependency order, whether or not anything reads the
   binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
-  compile time is image data, laid down in read-only memory with nothing to run; anything else runs in the
-  program's `__module_init` before `main`. A static field follows the same rules
-  (see [Static Fields](/docs/language/composite-types/#static-fields)).
-- A field read off another global (`let n = shared.count`) is **E2015**, and a struct literal at file scope
-  is **E3076**; call a factory instead, or declare a static field inside the type.
+  compile time — a scalar, a string or byte-string literal, a constant array literal, an empty container, a
+  payload-free union case, or a record built from constants — is image data, laid down in read-only memory
+  with nothing to run; any other record is built by the program's `__module_init` before `main`. A static
+  field follows the same rules (see [Static Fields](/docs/language/composite-types/#static-fields)).
+- A struct literal at file scope is **E3076**; call a factory instead, or declare a static field inside the
+  type.
+- An initializer whose value has an interface type is **E2015**: an interface value is two words, a value
+  and its witness, and a global holds one. Return a concrete type from the initializer, or hold the interface
+  in a function's local.
 - A tuple literal is accepted in an initializer wherever a function body accepts one, with the same type.
   `let pair = (1, "one")` is a tuple of the types its elements have; a slot that states a tuple type —
   an element of `ArrayAlias from [...]` (`let steps = Steps from [(0, 1), (2, 3)]` over
@@ -241,7 +250,7 @@ end 'main'
   (`static var origin = Holder{step: (7, 9)}`), a factory parameter, a union payload, or an element of another
   tuple — gives each element that slot's type. A tuple literal inside extra parentheses is the same tuple, and a
   `var` born from a tuple of bare numbers is refused as it is in a body.
-- An initializer cannot name another global, but what it calls may. A `let`'s initializer may not reach a
+- A `let`'s initializer may not reach a
   module-level `var` that holds a record — a String, an array, a struct, a boxed union — through any function
   it calls (**E3165**, reported at the `var`'s use with its declaration as a note). A `let` is fixed at startup
   and may not hold what a `var` owns, and what the initializer keeps is not followed, so reading only a number

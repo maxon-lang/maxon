@@ -476,8 +476,8 @@ end 'main'
 ```
 
 <!-- test: a-reserved-space-files-top-level-constant-may-name-its-own-entry-as-a-value -->
-The same exemption for a top-level constant: its initializer is read by the constant evaluator, which
-judges it with the declaring file's own privileges, so `Builtins.maxon` may name its own entry there too.
+The same exemption for a top-level constant: its initializer is parsed with the declaring file's own
+privileges, so `Builtins.maxon` may name its own entry there too.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 export typealias OverlayTriple = int(0 to 100)

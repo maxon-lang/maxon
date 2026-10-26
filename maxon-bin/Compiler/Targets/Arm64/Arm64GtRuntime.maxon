@@ -82,7 +82,7 @@ let Arm64GtRegistersPerPair = 2
 // ⭐ Enforce the cross-tier byte-match. Called at chunk-build time, so an async compile for arm64 panics
 // the moment the two sides disagree.
 function assertArm64GtFrameConsistent(target Target)
-	let savedBytes = (arm64GtSavedPairCount() as FullRangeInt) * Arm64GtPairBytes
+	let savedBytes = (arm64GtSavedPairCount() as FullRangeInt) * (Arm64GtPairBytes as FullRangeInt)
 	let declared = gtSavedRegisterBytes(target)
 
 	if savedBytes != declared 'drift'
@@ -134,10 +134,10 @@ function buildArm64GtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	emitArm64GtSavedBlock(asm, gtReg: Arm64GtSwitchFromReg, direction: Arm64GtBlockDirection.push)
 
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64GtSwitchSpScratch))
-	arm64EmitStoreWord64At(asm, src: Arm64GtSwitchSpScratch, base: Arm64GtSwitchFromReg, byteOffset: GtOffSp)
+	arm64EmitStoreWord64At(asm, src: Arm64GtSwitchSpScratch, base: Arm64GtSwitchFromReg, byteOffset: GtOffSp as MachineWord)
 	emitArm64GtCarryLastError(asm, gtReg: Arm64GtSwitchFromReg, os: target.os, direction: GtLastErrorDirection.intoGt)
 
-	arm64EmitLoadWord64At(asm, dest: Arm64GtSwitchSpScratch, base: Arm64GtSwitchToReg, byteOffset: GtOffSp)
+	arm64EmitLoadWord64At(asm, dest: Arm64GtSwitchSpScratch, base: Arm64GtSwitchToReg, byteOffset: GtOffSp as MachineWord)
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64GtSwitchSpScratch))
 	emitArm64GtCarryLastError(asm, gtReg: Arm64GtSwitchToReg, os: target.os, direction: GtLastErrorDirection.fromGt)
 
@@ -165,8 +165,8 @@ function emitArm64GtCopyThreadLastError(asm Arm64RuntimeAsm, gtReg Arm64Register
 	arm64LinuxEmitSlotBlockBase(asm, dest: Arm64GtErrnoSlotReg)
 
 	match direction 'direction'
-		intoGt then emitArm64GtMoveWord(asm, fromBase: Arm64GtErrnoSlotReg, fromOffset: Arm64GtAddressedWord, toBase: gtReg, toOffset: GtOffLastError)
-		fromGt then emitArm64GtMoveWord(asm, fromBase: gtReg, fromOffset: GtOffLastError, toBase: Arm64GtErrnoSlotReg, toOffset: Arm64GtAddressedWord)
+		intoGt then emitArm64GtMoveWord(asm, fromBase: Arm64GtErrnoSlotReg, fromOffset: Arm64GtAddressedWord, toBase: gtReg, toOffset: GtOffLastError as MachineWord)
+		fromGt then emitArm64GtMoveWord(asm, fromBase: gtReg, fromOffset: GtOffLastError as MachineWord, toBase: Arm64GtErrnoSlotReg, toOffset: Arm64GtAddressedWord)
 	end 'direction'
 end 'emitArm64GtCopyThreadLastError'
 
@@ -185,7 +185,7 @@ enum Arm64GtBlockDirection
 end 'Arm64GtBlockDirection'
 
 function emitArm64GtSavedBlock(asm Arm64RuntimeAsm, gtReg Arm64Register, direction Arm64GtBlockDirection)
-	if GtOffSavedPc != GtOffFp + SpillSlotBytes 'frameRecordPairLayout'
+	if GtOffSavedPc != GtOffFp + (SpillSlotBytes as ByteOffset) 'frameRecordPairLayout'
 		panic("emitArm64GtSavedBlock: GtOffSavedPc ({GtOffSavedPc}) is not the word after GtOffFp ({GtOffFp}), so the x29/x30 pair at GtOffFp does not carry the saved pc")
 	end 'frameRecordPairLayout'
 
@@ -195,7 +195,7 @@ function emitArm64GtSavedBlock(asm Arm64RuntimeAsm, gtReg Arm64Register, directi
 
 	for i in 0 upto pairs.count() 'eachPair'
 		let pair = try pairs.get(i) otherwise panic("emitArm64GtSavedBlock: index derived from count is in range")
-		let byteOffset = (GtOffSavedRegs + (i as FullRangeInt) * Arm64GtPairBytes) as MachineWord
+		let byteOffset = (GtOffSavedRegs + (i as ByteOffset) * (Arm64GtPairBytes as ByteOffset)) as MachineWord
 		emitArm64GtSavedPair(asm, gtReg: gtReg, pair: pair, byteOffset: byteOffset, direction: direction)
 	end 'eachPair'
 end 'emitArm64GtSavedBlock'
@@ -287,8 +287,8 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 
 	arm64EmitMovRuntimeReg(asm, dest: Arm64GtTrampGtReg, src: Arm64GtSwitchToReg)
-	arm64EmitLoadWord64At(asm, dest: Arm64GtTrampArgBufReg, base: Arm64GtTrampGtReg, byteOffset: GtOffArgBuf)
-	arm64EmitLoadWord64At(asm, dest: Arm64GtTrampFuncPtrReg, base: Arm64GtTrampGtReg, byteOffset: GtOffFuncPtr)
+	arm64EmitLoadWord64At(asm, dest: Arm64GtTrampArgBufReg, base: Arm64GtTrampGtReg, byteOffset: GtOffArgBuf as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64GtTrampFuncPtrReg, base: Arm64GtTrampGtReg, byteOffset: GtOffFuncPtr as MachineWord)
 
 	// Every argument slot into its ABI argument register. The callee reads only the slots it declared; the
 	// rest are the argument buffer's slab zeros in unread registers, which is why there is no arity to
@@ -298,8 +298,8 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	end 'args'
 
 	arm64EmitBranchLinkReg(asm.code, reg: arm64RuntimeReg(Arm64GtTrampFuncPtrReg))
-	arm64EmitStoreWord64At(asm, src: Arm64IntReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffResult)
-	arm64EmitStoreWord64At(asm, src: Arm64FlagReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffThrew)
+	arm64EmitStoreWord64At(asm, src: Arm64IntReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffResult as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64FlagReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffThrew as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64GtTrampFuncPtrReg, value: GtStatus.completed.rawValue as MachineWord)
 
 	// ⛔⛔ **`STLR`, NOT `STR` — THIS IS THE PUBLICATION, AND THE TWO STORES ABOVE ARE WHAT IT
@@ -318,11 +318,11 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	//
 	// ⚠ **THE ARG-BUFFER REGISTER IS THE SCRATCH**: `STLR` has no displacement field, so the field address
 	// must be materialised, and that register's last read was the argument-marshalling loop far above.
-	arm64EmitStoreReleaseWord64At(asm, src: Arm64GtTrampFuncPtrReg, base: Arm64GtTrampGtReg, byteOffset: GtOffStatus, scratch: Arm64GtTrampArgBufReg)
+	arm64EmitStoreReleaseWord64At(asm, src: Arm64GtTrampFuncPtrReg, base: Arm64GtTrampGtReg, byteOffset: GtOffStatus as Imm32, scratch: Arm64GtTrampArgBufReg)
 
 	// __gt_context_switch(from = gt, to = gt.waiter) — never returns; the strand runner that switched this thread
 	// in set its waiter first.
-	arm64EmitLoadWord64At(asm, dest: Arm64GtSwitchToReg, base: Arm64GtTrampGtReg, byteOffset: GtOffWaiter)
+	arm64EmitLoadWord64At(asm, dest: Arm64GtSwitchToReg, base: Arm64GtTrampGtReg, byteOffset: GtOffWaiter as MachineWord)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64GtSwitchFromReg, src: Arm64GtTrampGtReg)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtContextSwitchName)
 	arm64EmitBrk(asm.code)
@@ -366,11 +366,11 @@ end 'emitArm64LoadCurrentGtOrBail'
 // a stack the green thread owns. Past both bails `scratch` holds the stack's top and `gt` its size. UNSIGNED
 // compares: these are addresses. The twin of `X64GtRuntime.emitGtBailUnlessOnItsOwnStack`.
 module function emitArm64GtBailUnlessOnItsOwnStack(asm Arm64RuntimeAsm, gt Arm64Register, scratch Arm64Register, addr Arm64Register, onOsStack BlockId, elsewhere BlockId)
-	arm64EmitLoadWord64At(asm, dest: scratch, base: gt, byteOffset: GtOffStackBase)
+	arm64EmitLoadWord64At(asm, dest: scratch, base: gt, byteOffset: GtOffStackBase as MachineWord)
 	arm64EmitCbzTo(asm, reg: scratch, label: onOsStack)
 	arm64EmitCmpRuntimeReg(asm, lhs: addr, rhs: scratch)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: elsewhere)
-	arm64EmitLoadWord64At(asm, dest: gt, base: gt, byteOffset: GtOffStackSize)
+	arm64EmitLoadWord64At(asm, dest: gt, base: gt, byteOffset: GtOffStackSize as MachineWord)
 	arm64EmitAddRuntimeReg(asm, dest: scratch, lhs: scratch, rhs: gt)
 	arm64EmitCmpRuntimeReg(asm, lhs: addr, rhs: scratch)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: elsewhere)
@@ -532,8 +532,8 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	// new_size = old_size doubled until it holds `need`. The ceiling is tested ahead of the fit, so the loop ends
 	// even on a `need` no stack could hold, and a refusal comes BEFORE anything is allocated. A `need` within
 	// old_size returns without growing, for the reason x64's `buildGtMorestackChunk` gives.
-	arm64EmitLoadWord64At(asm, dest: Arm64MoreOldBaseReg, base: Arm64MoreGtReg, byteOffset: GtOffStackBase)
-	arm64EmitLoadWord64At(asm, dest: Arm64MoreOldSizeReg, base: Arm64MoreGtReg, byteOffset: GtOffStackSize)
+	arm64EmitLoadWord64At(asm, dest: Arm64MoreOldBaseReg, base: Arm64MoreGtReg, byteOffset: GtOffStackBase as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64MoreOldSizeReg, base: Arm64MoreGtReg, byteOffset: GtOffStackSize as MachineWord)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreTempB, lhs: Arm64MoreOldBaseReg, rhs: Arm64MoreOldSizeReg)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64MoreTempB, lhs: Arm64MoreTempB, rhs: Arm64MorestackEntryProjectedSpReg)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreTempB, base: Arm64MoreTempB, imm: gtStackGuardHeight(target) as Imm32)
@@ -561,8 +561,8 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	// chunk never writes — and move it. Writing the two words of a RUNNING thread is harmless: nothing reads them
 	// until its next switch-out overwrites both.
 	arm64GtLoadSp(asm, dest: Arm64MoreTempA, byteOffset: Arm64MorestackEntrySpSlot)
-	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffSp)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x29, base: Arm64MoreGtReg, byteOffset: GtOffFp)
+	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffSp as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x29, base: Arm64MoreGtReg, byteOffset: GtOffFp as MachineWord)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocGtReg, src: Arm64MoreGtReg)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocNewBaseReg, src: Arm64MoreNewBaseReg)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocNewSizeReg, src: Arm64MoreNewSizeReg)
@@ -571,13 +571,13 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	// Step 6: both stack marks (`GtStackMarksOfAGrow`) — the size was chosen now, and the thread has grown — and
 	// the rebased live x29 goes to its saved slot so the restore below hands it back.
 	arm64EmitMovRuntimeImm(asm, dest: Arm64MoreTempA, value: GtStackMarksOfAGrow as MachineWord)
-	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffStackMarks)
-	arm64EmitLoadWord64At(asm, dest: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffFp)
+	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffStackMarks as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffFp as MachineWord)
 	arm64GtStoreSp(asm, src: Arm64MoreTempA, byteOffset: arm64RegisterBlockSlot(Arm64MorestackSaveBase, index: arm64MorestackLiveFpIndex(savedGprs)))
 
 	// Step 7: tear down and return onto the RELOCATED stack, at the rebased `gt.sp`, read BEFORE the register
 	// restores because the GT's register is one of the registers those restores overwrite.
-	arm64EmitLoadWord64At(asm, dest: Arm64MoreSpReg, base: Arm64MoreGtReg, byteOffset: GtOffSp)
+	arm64EmitLoadWord64At(asm, dest: Arm64MoreSpReg, base: Arm64MoreGtReg, byteOffset: GtOffSp as MachineWord)
 
 	asm.placeLabel(returning)
 	emitArm64RegisterBlock(asm, gprs: savedGprs, fps: arm64FpArgRegisters, base: Arm64MorestackSaveBase, direction: Arm64GtBlockDirection.pop)
@@ -707,8 +707,8 @@ function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	let copyLoop = asm.newLabel()
 	let copyDone = asm.newLabel()
 
-	arm64EmitLoadWord64At(asm, dest: Arm64RelocOldBaseReg, base: Arm64RelocGtReg, byteOffset: GtOffStackBase)
-	arm64EmitLoadWord64At(asm, dest: Arm64RelocOldSizeReg, base: Arm64RelocGtReg, byteOffset: GtOffStackSize)
+	arm64EmitLoadWord64At(asm, dest: Arm64RelocOldBaseReg, base: Arm64RelocGtReg, byteOffset: GtOffStackBase as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64RelocOldSizeReg, base: Arm64RelocGtReg, byteOffset: GtOffStackSize as MachineWord)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64RelocOldTopReg, lhs: Arm64RelocOldBaseReg, rhs: Arm64RelocOldSizeReg)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64RelocNewHighReg, lhs: Arm64RelocNewBaseReg, rhs: Arm64RelocNewSizeReg)
 
@@ -718,7 +718,7 @@ function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
 
 	// Copy `[gt.sp, old_top)` word by word — `gt.sp` is 16-aligned and the top a page boundary, so the region is a
 	// whole number of words. AArch64 has no string instruction.
-	arm64EmitLoadWord64At(asm, dest: Arm64RelocSrcReg, base: Arm64RelocGtReg, byteOffset: GtOffSp)
+	arm64EmitLoadWord64At(asm, dest: Arm64RelocSrcReg, base: Arm64RelocGtReg, byteOffset: GtOffSp as MachineWord)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64RelocNewLowReg, lhs: Arm64RelocSrcReg, rhs: Arm64RelocOffsetReg)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocDstReg, src: Arm64RelocNewLowReg)
 
@@ -731,15 +731,15 @@ function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	arm64EmitAddRuntimeImm(asm, dest: Arm64RelocDstReg, base: Arm64RelocDstReg, imm: SpillSlotBytes as Imm32)
 	arm64EmitBranchTo(asm, label: copyLoop)
 	asm.placeLabel(copyDone)
-	arm64EmitStoreWord64At(asm, src: Arm64RelocNewLowReg, base: Arm64RelocGtReg, byteOffset: GtOffSp)
+	arm64EmitStoreWord64At(asm, src: Arm64RelocNewLowReg, base: Arm64RelocGtReg, byteOffset: GtOffSp as MachineWord)
 
 	// `gt.fp` rebased in place, then the chain from it.
-	emitArm64RelocateRebaseWord(asm, reg: Arm64RelocWalkReg, base: Arm64RelocGtReg, byteOffset: GtOffFp)
+	emitArm64RelocateRebaseWord(asm, reg: Arm64RelocWalkReg, base: Arm64RelocGtReg, byteOffset: GtOffFp as MachineWord)
 	emitArm64RelocateChainWalk(asm)
 
 	// The GT's own view of its stack. There is no TIB pair on this lane (this file's header, item 1).
-	arm64EmitStoreWord64At(asm, src: Arm64RelocNewBaseReg, base: Arm64RelocGtReg, byteOffset: GtOffStackBase)
-	arm64EmitStoreWord64At(asm, src: Arm64RelocNewSizeReg, base: Arm64RelocGtReg, byteOffset: GtOffStackSize)
+	arm64EmitStoreWord64At(asm, src: Arm64RelocNewBaseReg, base: Arm64RelocGtReg, byteOffset: GtOffStackBase as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64RelocNewSizeReg, base: Arm64RelocGtReg, byteOffset: GtOffStackSize as MachineWord)
 
 	// ⚠ A preemption request `__sysmon` stored into the guard word meanwhile is overwritten here and lost; x64's
 	// twin carries why that is accepted.
@@ -756,9 +756,9 @@ end 'buildArm64GtStackRelocateChunk'
 // The guard word of the GT in `gt` set to its stack's base plus the guard height — where every stack the thread
 // runs on starts it.
 function emitArm64GtGuardWordRestore(asm Arm64RuntimeAsm, gt Arm64Register, scratch Arm64Register, target Target)
-	arm64EmitLoadWord64At(asm, dest: scratch, base: gt, byteOffset: GtOffStackBase)
+	arm64EmitLoadWord64At(asm, dest: scratch, base: gt, byteOffset: GtOffStackBase as MachineWord)
 	arm64EmitAddRuntimeImm(asm, dest: scratch, base: scratch, imm: gtStackGuardHeight(target) as Imm32)
-	arm64EmitStoreWord64At(asm, src: scratch, base: gt, byteOffset: GtOffStackGuard)
+	arm64EmitStoreWord64At(asm, src: scratch, base: gt, byteOffset: GtOffStackGuard as MachineWord)
 end 'emitArm64GtGuardWordRestore'
 
 // `__gt_stack_relocate` keeps nothing in its frame but the record.
@@ -870,7 +870,7 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 	// projected = SP - (frameBytes + margin + the cold path's own cell); enough room (>= gt.stackGuard) → skip.
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64MorestackEntrySysTopReg))
 	arm64EmitAddSubImmWide(asm.code, opcode: Arm64OpSubImm, rd: arm64RuntimeReg(Arm64MorestackEntrySysTopReg), rn: arm64RuntimeReg(Arm64MorestackEntrySysTopReg), imm: ((frameBytes + (margin as StackSize) + Arm64GuardSaveBytes) as MachineWord))
-	arm64EmitLoadWord64At(asm, dest: Arm64GuardScratchReg, base: Arm64MorestackEntryGtReg, byteOffset: GtOffStackGuard)
+	arm64EmitLoadWord64At(asm, dest: Arm64GuardScratchReg, base: Arm64MorestackEntryGtReg, byteOffset: GtOffStackGuard as MachineWord)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64MorestackEntrySysTopReg, rhs: Arm64GuardScratchReg)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: skip)
 
@@ -906,7 +906,7 @@ end 'emitArm64GtStackGuard'
 
 // Branch to `unlessRequested` when the guard word of the GT in x11 holds anything but a preemption request.
 function emitArm64BranchUnlessPreemptRequest(asm Arm64RuntimeAsm, scratch Arm64Register, unlessRequested BlockId)
-	arm64EmitLoadWord64At(asm, dest: scratch, base: Arm64MorestackEntryGtReg, byteOffset: GtOffStackGuard)
+	arm64EmitLoadWord64At(asm, dest: scratch, base: Arm64MorestackEntryGtReg, byteOffset: GtOffStackGuard as MachineWord)
 	arm64EmitCmpRuntimeImm(asm, reg: scratch, imm: GtStackGuardPreempt as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: unlessRequested)
 end 'emitArm64BranchUnlessPreemptRequest'
@@ -1275,7 +1275,7 @@ end 'arm64AsyncPreemptBlockBytes'
 // `__gt_async_preempt_park` RUNS**: the pair of words the injection pushed, and the trampoline's own block.
 // A `bl` pushes nothing on this ISA, so there is no third term.
 export function arm64GtAsyncPreemptStackBytes() returns StackSize
-	return (Arm64GtPairBytes as StackSize) + arm64AsyncPreemptBlockBytes()
+	return Arm64GtPairBytes + arm64AsyncPreemptBlockBytes()
 end 'arm64GtAsyncPreemptStackBytes'
 
 // `__gt_async_preempt` — see `SchedRuntime.AsyncPreemptName`. NOT a normal call: the signal handler entered
@@ -1307,7 +1307,7 @@ function buildArm64GtAsyncPreemptChunk() returns FunctionCodeChunk
 	// rest of the file, and the interrupted x30 sits at the block's top.
 	arm64GtLoadSp(asm, dest: Arm64AsyncPreemptResumeReg, byteOffset: arm64AsyncPreemptResumePcSlot())
 	arm64GtLoadSp(asm, dest: Arm64Register.x30, byteOffset: blockBytes as MachineWord)
-	arm64EmitStackFree(asm.code, amount: blockBytes + (Arm64GtPairBytes as StackSize))
+	arm64EmitStackFree(asm.code, amount: blockBytes + Arm64GtPairBytes)
 	arm64EmitBranchReg(asm.code, reg: arm64RuntimeReg(Arm64AsyncPreemptResumeReg))
 
 	var chunk = asm.finishChunk(AsyncPreemptName)

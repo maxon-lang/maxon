@@ -9,46 +9,37 @@ category: language
 ## Documentation
 
 A top-level binding may be initialized by a **user static factory call** —
-`var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create())`. It is the one
-initializer form that is not a fold: nothing is evaluated at compile time, and the record is built
-before `main` by `__module_init`, which materializes each argument and then makes an ordinary call.
+`var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create())`. The initializer is
+parsed by the body's expression parser into an initializer function, and — unless the record is decided at
+compile time and laid down as image data — `__module_init` calls it before `main` and stores its result in
+the binding's slot, so the call, its arguments and their drops are the
+ones the same expression gets in a function body.
 
 `map-struct-bytearray.md` is the canonical spec that admits the form. This file pins the six rules
 that form has to obey and that its own programs cannot reach, because all of its arguments are
 consumed and all of its declarations are in one file:
 
-**1. A generic-instance alias goes through the CONTAINER door, and that door serves a DECLARED generic
-by CALLING the `create()` static the program wrote.** `typealias IntBox = Box with Count` is claimed by
-that door whether `Box` is a builtin container (`Array` / `Set` / `List` / `FixedArray`) or an ordinary
-declared generic, and the two differ in exactly one thing: a builtin's `create` is a runtime entry that
-must be handed the strides and column destructors it cannot look up, while a declared generic's builds
-its own fields from its own declaration and is handed nothing. So one description — a callee and a
-stamp list — covers both, and a declared generic's stamp list is empty.
+**1. A generic-instance alias's `create()` is the static the program wrote.** `typealias IntBox = Box
+with Count` names either a builtin container (`Array` / `Set` / `List` / `FixedArray`) or an ordinary
+declared generic. A builtin's `create` is a runtime entry handed the strides and column destructors it
+cannot look up; a declared generic's builds its own fields from its own declaration. A generic's
+`create()` also carries a layout descriptor and one witness per `where` constraint, sourced at the CALL
+SITE from the call's RESULT for a `Self`-returning static — the emitted call is the one the identical
+`IntBox.create()` inside a function lowers to.
 
-The hidden dictionary arguments are NOT part of that description and are not synthesized here: a
-generic's `create()` carries a layout descriptor and one witness per `where` constraint, and both are
-sourced at the CALL SITE from the call's RESULT for a `Self`-returning static. The record
-`__module_init` mints is typed as the INSTANCE, so the lowering threads them unasked — the emitted call
-is the one the identical `IntBox.create()` inside a function lowers to.
+**A file-scope `IntBox.create(...)` is checked as the same call in a function body is:** a `create` the
+generic does not declare is an undefined function (E3004), one the declaring file cannot name is E3008,
+one returning a scalar makes the initializer a non-constant scalar (E2045), and its arguments are passed
+as a body's are.
 
-**Three things about a declared `create()` are therefore checked at the declaration**, because each is a
-premise that emitted call rests on: it must EXIST (or the call names no symbol), it must be NAMEABLE
-from the declaring file (rule 3 below applies to it for rule 3's reason), and it must return `Self` (or
-the result is minted as a record the callee never built, and dropped at exit). Arguments are refused
-separately: what this door describes is an instance's EMPTY record, which is what lets one description
-serve a global's own slot AND a factory ARGUMENT.
+**2. An argument the callee only BORROWS is still the initializer's to free.** The initializer's call
+materializes an argument as an owned temporary and drops it after the call unless the callee consumed
+it, as a body's call site does. Getting this wrong is a leak on a program with no error in it — which
+the exit-101 memory gate is what catches.
 
-**2. An argument the callee only BORROWS is still the initializer's to free.** A body's call site
-materializes an argument as an owned temporary and drops it at the end of the statement unless the
-callee consumed it. `__module_init` has no statement to end, so the drop is emitted right after the
-call, for exactly the arguments the callee's consume bits say it did not take. Getting this wrong is
-a leak on a program with no error in it — which the exit-101 memory gate is what catches.
-
-**3. The METHOD's visibility is checked, not only the type's.** `__module_init` is a function no file
-wrote, so the pass that checks a call's visibility exempts every call it makes; the check therefore
-belongs to the initializer's own walk, where the declaring file of the BINDING is known exactly. It
-reports the same codes a call in a function body gets: E3008 for a file-private callee, E3088 for a
-module-scoped one.
+**3. The METHOD's visibility is checked, not only the type's.** The initializer is parsed in the
+declaring file of the BINDING, so it reports the same codes a call in a function body gets: E3008 for a
+file-private callee, E3088 for a module-scoped one.
 
 **4. A factory in a LISTED STDLIB MODULE is REACHED by the initializer.** Every pre-elimination pass
 skips a stdlib function the program cannot reach (`LibraryFacts.unreachable`), and that reachability
@@ -127,8 +118,7 @@ end 'main'
 ```
 
 <!-- test: error.user-generic-instance-with-no-create-at-file-scope -->
-`create()` is the name this door emits, so a generic that declares none is refused at the alias the
-author wrote rather than at a symbol the backend cannot resolve.
+A generic that declares no `create()` has none to call, at file scope as in a function body.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -149,13 +139,36 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:14:9: Unsupported: a top-level `IntBox.create()` — `IntBox` instantiates the generic `Box`, which declares no `create()` static, so `__module_init` has nothing to call before `main`. Give `Box` one, or build the value inside a function
+error E3004: <fragment>:14:16: call to undefined function 'Box.create'
 ```
 
-<!-- test: error.user-generic-instance-create-not-returning-self-at-file-scope -->
-The slot holds the INSTANCE, and a generic's layout descriptor and witnesses are read off what its
-`create()` hands back — so a `create` returning anything else would mint a record the callee never
-built and decref it at exit. Refused at the declaration instead.
+<!-- test: error.user-generic-instance-with-no-create-in-a-function-body -->
+The same call in a function body.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function make() returns Self
+		return Self{n: 9}
+	end 'make'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+function main() returns ExitCode
+	let b = IntBox.create()
+	return b.n
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:15:17: call to undefined function 'Box.create'
+```
+
+<!-- test: error.user-generic-instance-create-returning-a-scalar-at-file-scope-is-not-a-constant -->
+A `create` that returns a `Count` makes the initializer a scalar call, which a file-scope binding
+cannot hold.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -176,14 +189,36 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:14:9: Unsupported: a top-level `IntBox.create()` — `Box.create` does not return `Self`, and a global declared this way holds the INSTANCE its alias names. A generic's layout descriptor and witnesses are read off what its `create()` hands back, so only a `Self`-returning one can build `IntBox`. Build the value inside a function
+error E2045: <fragment>:14:16: Function calls are not allowed in global variable initializers; 'create()' is not a constant expression
 ```
 
-<!-- test: error.arguments-to-a-generic-instance-create-at-file-scope -->
-What this door describes is an instance's EMPTY record, which is what lets one description serve a
-global's own slot and a factory ARGUMENT alike. An argument has nowhere to travel in it, and the
-initializer form that does carry arguments types its slot from the callee's DECLARED return — the
-BASE for a generic, not this instance.
+<!-- test: user-generic-instance-create-returning-a-scalar-in-a-function-body -->
+The same call in a function body binds the `Count` it returns.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function create() returns Count
+		return 5
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+function main() returns ExitCode
+	let b = IntBox.create()
+	return b as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: arguments-to-a-generic-instance-create-at-file-scope -->
+`IntBox.create(9)` builds a populated instance before `main`, as the same call in a function body
+does.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -203,8 +238,31 @@ function main() returns ExitCode
 	return b.n
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:14:23: Unsupported: arguments to `IntBox.create()` in a top-level initializer — a global declared through a generic-instance alias holds the EMPTY record that alias's `create()` builds, and that is the whole of what its slot description carries. Build a populated one inside a function
+```exitcode
+9
+```
+
+<!-- test: arguments-to-a-generic-instance-create-in-a-function-body -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+function main() returns ExitCode
+	let b = IntBox.create(9)
+	return b.n
+end 'main'
+```
+```exitcode
+9
 ```
 
 <!-- test: user-generic-instance-factory-in-a-function -->
@@ -286,7 +344,33 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: bin/<fragment>:16:9: function 'Box.create' is not exported
+error E3008: bin/<fragment>:16:16: function 'Box.create' is not exported
+```
+
+<!-- test: error.cross-file-file-private-generic-create-in-a-function-body -->
+The byte-identical call in a function body, reported at the same token.
+```maxon
+// --- file: api/box.maxon
+export typealias Count = int(0 to u64.max)
+
+export type Box uses T
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+export typealias IntBox = Box with Count
+
+// --- file: bin/main.maxon
+function main() returns ExitCode
+	let b = IntBox.create()
+	return b.n
+end 'main'
+```
+```maxoncstderr
+error E3008: bin/<fragment>:17:17: function 'Box.create' is not exported
 ```
 
 <!-- test: consumed-and-borrowed-arguments-in-one-call -->
@@ -570,11 +654,8 @@ end 'main'
 hi there
 ```
 
-<!-- test: error.factory-returning-a-generic-alias -->
-The other half of the refusal below, pinned rather than asserted: a generic-instance alias keeps the
-bare type name as its type for the union's reason, so it gets the union's sentence. Its own base
-generic is refused one screen up for a DIFFERENT reason (rule 1, the container registry), which is why
-both refusals exist.
+<!-- test: factory-returning-a-generic-alias -->
+A factory returning a generic-instance alias builds the global before `main`.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -600,19 +681,41 @@ function main() returns ExitCode
 	return a.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:20:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'NumBox', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead
+```exitcode
+7
 ```
 
-<!-- test: error.factory-returning-a-boxed-union -->
-A boxed union is a record — a heap pointer, a one-word slot, and a drop the router already handles —
-but it is the one record rule 5's normalization cannot reach, because a union value carries the bare
-type NAME as its type deliberately: that is what a `match` reads it by. What is missing is not the
-slot's WIDTH but a concrete type for the two SYNTHESIZED functions to access the slot through: user
-code bridges a declared name to a storage type at every field and every global read, and the
-initializer and cleanup this form generates have no such bridge. So it is refused at the declaration,
-where the author can see it, rather than panicking three passes later. A generic alias is refused by
-the same sentence; a TUPLE alias is not — see the two tuple cases above, which run.
+<!-- test: factory-returning-a-generic-alias-in-a-function-body -->
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box uses T
+	export var n as Num
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+typealias NumBox = Box with Num
+
+type Maker
+	static function build() returns NumBox
+		return NumBox.create()
+	end 'build'
+end 'Maker'
+
+function main() returns ExitCode
+	let a = Maker.build()
+	return a.n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: factory-returning-a-boxed-union -->
+A factory returning a boxed union builds the global before `main`, and `match` reads its case.
 ```maxon
 union Shape
 	circle(r Integer)
@@ -635,8 +738,34 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E2015: <fragment>:13:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'Shape', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead
+```exitcode
+7
+```
+
+<!-- test: factory-returning-a-boxed-union-in-a-function-body -->
+```maxon
+union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+type Maker
+	static function build() returns Shape
+		return Shape.circle(7)
+	end 'build'
+end 'Maker'
+
+function main() returns ExitCode
+	let a = Maker.build()
+	match a 'kind'
+		circle(r) then return r
+		square(s) then return s
+	end 'kind'
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+7
 ```
 
 <!-- test: error.cross-file-file-private-factory -->
@@ -662,7 +791,29 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: bin/<fragment>:13:10: function 'Database.create' is not exported
+error E3008: bin/<fragment>:13:19: function 'Database.create' is not exported
+```
+
+<!-- test: error.cross-file-file-private-factory-in-a-function-body -->
+```maxon
+// --- file: api/db.maxon
+export type Database
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Database'
+
+typealias Integer = int(i64.min to i64.max)
+// --- file: bin/main.maxon
+function main() returns ExitCode
+	let db = Database.create()
+	return db.n
+end 'main'
+```
+```maxoncstderr
+error E3008: bin/<fragment>:14:20: function 'Database.create' is not exported
 ```
 
 <!-- test: error.cross-file-module-scoped-factory -->
@@ -687,7 +838,29 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: bin/<fragment>:13:10: function 'Database.create' is module-scoped and not visible from this directory
+error E3088: bin/<fragment>:13:19: function 'Database.create' is module-scoped and not visible from this directory
+```
+
+<!-- test: error.cross-file-module-scoped-factory-in-a-function-body -->
+```maxon
+// --- file: api/db.maxon
+export type Database
+	export var n as Integer
+
+	module static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Database'
+
+typealias Integer = int(i64.min to i64.max)
+// --- file: bin/main.maxon
+function main() returns ExitCode
+	let db = Database.create()
+	return db.n
+end 'main'
+```
+```maxoncstderr
+error E3088: bin/<fragment>:14:20: function 'Database.create' is module-scoped and not visible from this directory
 ```
 
 <!-- test: stdlib-factory-reached-from-the-initializer -->
@@ -708,13 +881,11 @@ end 'main'
 
 <!-- test: stdlib-factory-with-arguments-reached-from-the-initializer -->
 The same edge with a record ARGUMENT and a struct result: `BuildConfig.create` is reached only from
-this initializer, and the `Array with String` built for `sources` is materialized, borrowed and freed
+this initializer, and the `StringArray` built for `sources` is materialized, borrowed and freed
 inside `__module_init` — so the exit-101 gate is asserting the argument cleanup on a callee whose body
 the compiler had to be told to lower.
 ```maxon
-typealias Sources = Array with String
-
-var cfg = BuildConfig.create(Sources.create(), output: "app.exe", debug_info: false)
+var cfg = BuildConfig.create(StringArray.create(), output: "app.exe", debug_info: false)
 
 function main() returns ExitCode
 	return cfg.sources.count() as ExitCode
@@ -752,4 +923,104 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: error.a-factory-returning-an-interface-cannot-fill-a-global -->
+An interface-typed value is the fat pointer `(value, witness)`, and a global's slot is one machine word, so a
+file-scope binding built by a factory that returns an interface is refused at the binding rather than
+panicking where the global is later read.
+```maxon
+typealias Side = int(0 to 100)
+
+interface Shape
+	function area() returns Side
+end 'Shape'
+
+type Square implements Shape
+	let side as Side
+
+	function area() returns Side
+		return side
+	end 'area'
+
+	static function create(side Side) returns Square
+		return Square{side: side}
+	end 'create'
+
+	static function shape() returns Shape
+		return Square.create(7)
+	end 'shape'
+end 'Square'
+
+let g = Square.shape()
+
+function main() returns ExitCode
+	return g.area() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:24:9: Unsupported: a top-level binding declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a global's slot is one machine word, with nowhere to hold the witness half. Return a concrete type from the initializer, or hold the interface in a LOCAL of a function, which carries its witness as a second value
+```
+
+<!-- test: a-factory-returning-an-interface-is-held-by-a-local -->
+The same factory in a function body: a local is a second SSA value, so it carries the witness.
+```maxon
+typealias Side = int(0 to 100)
+
+interface Shape
+	function area() returns Side
+end 'Shape'
+
+type Square implements Shape
+	let side as Side
+
+	function area() returns Side
+		return side
+	end 'area'
+
+	static function create(side Side) returns Square
+		return Square{side: side}
+	end 'create'
+
+	static function shape() returns Shape
+		return Square.create(7)
+	end 'shape'
+end 'Square'
+
+function main() returns ExitCode
+	let g = Square.shape()
+	return g.area() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.a-factory-returning-an-enum-at-file-scope-is-not-a-constant -->
+An enum is a `named` scalar, so a factory returning one makes the initializer a non-constant scalar, as a
+factory returning a ranged alias does.
+```maxon
+enum Color
+	red
+	green
+end 'Color'
+
+type Maker
+	static function color() returns Color
+		return Color.green
+	end 'color'
+end 'Maker'
+
+var g = Maker.color()
+
+function main() returns ExitCode
+	if g == Color.green 'isGreen'
+		return 4
+	end 'isGreen'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:13:15: Function calls are not allowed in global variable initializers; 'color()' is not a constant expression
 ```

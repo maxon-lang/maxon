@@ -49,12 +49,9 @@
 // behaviour is what the spec asks for: "the call still runs even when the slot is dead … keeps the call
 // but drops the slot" (:31).
 //
-// Today the compiler cannot even reach that case — a top-level initializer is a CONSTANT (a call in one is
-// E2045), so every op `__module_init` emits for a global is compiler-synthesized allocation with no
-// user-visible effect, and dropping the whole run is exactly dropping the slot. The obligation lands the
-// day an initializer may call: the call belongs to `ModuleInit.initialRecordOf`, which is where "what
-// does this global's record cost to build?" is answered, and it must keep emitting the call while this
-// file goes on dropping the slot.
+// A record initializer runs the program's own code in its `__global_init.<label>` function, and
+// `ModuleInit.initialRecordOf` keeps emitting that call (a global whose initializer calls is kept alive by
+// `contributesStorage`) while this file drops only the slot.
 //
 // ⭐⭐ **ONE REACHABILITY TERM, AND IT IS SCOPED TO STDLIB SOURCE FOR THE SAME REASON EVERY OTHER
 // PRE-ELIMINATION PASS SCOPES IT THERE.** The spec says "never read or written by any REACHABLE

@@ -1101,8 +1101,8 @@ end 'main'
 ```
 
 <!-- test: inline-records.a-module-level-var-whose-factory-is-not-folded -->
-A factory the constant evaluator cannot fold — its body computes, and one argument rides a declared
-default — leaves the binding to `__module_init`, which RUNS the call before `main`. An inline record's
+A factory whose result is not decided at compile time — its body computes, and one argument rides a
+declared default — leaves the binding to `__module_init`, which RUNS the call before `main`. An inline record's
 slot is still one 8-byte word holding the VALUE, so the stored word reads back, a whole new value
 assigned over it is a scalar store, and nothing is allocated or released either side of `main`.
 ```maxon
@@ -1155,4 +1155,30 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: inline-records.a-module-level-factory-handed-another-inline-record-for-a-field -->
+A field declared at a ranged alias handed a whole inline record at file scope is the argument mismatch a
+function body gets, E3005, not a constant folded from the other record's word.
+```maxon
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+let inner = Pair.create(1, hi: 2)
+let outer = Pair.create(inner, hi: 3)
+
+function main() returns ExitCode
+	return 0 if outer.hi == 3 else 1
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/inline-records/inline-records.a-module-level-factory-handed-another-inline-record-for-a-field.maxon:14:18: argument type mismatch for 'lo': expected 'Half', got 'Pair'
 ```

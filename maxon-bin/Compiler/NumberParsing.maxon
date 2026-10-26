@@ -89,7 +89,7 @@ let FloatSignBit = i64.min as FullRangeInt
 // Everything BELOW the sign bit — the exponent and the significand together. DERIVED from
 // `FloatSignBit` rather than spelled `i64.max`, so the two cannot come to disagree about where the
 // boundary is.
-let FloatMagnitudeMask = (not FloatSignBit) as FullRangeInt
+let FloatMagnitudeMask = not FloatSignBit
 
 // The magnitude of ±infinity: a saturated exponent with a zero significand. It is the BOUNDARY of the
 // NaN space rather than a member of it — every larger magnitude has a non-zero significand under a
@@ -99,7 +99,7 @@ let FloatInfinityMagnitude = 0x7FF0000000000000
 // `-<float>` — the bits of a double's negation. THE one spelling of a float's sign flip at COMPILE
 // time, shared by the declaration sweep (a field default has no code to emit into and must be a NUMBER
 // by the time the layout is hashed), the range-bound reader, the expression parser's negated-literal
-// fold (`Parser.parseNegatedFloatLiteral`), the const evaluator's `-K` and `TypeRules.foldFloatUnaryOp`.
+// fold (`Parser.parseNegatedFloatLiteral`) and `TypeRules.foldFloatUnaryOp`.
 // A body's `-x` over a non-literal is the same flip at RUN time, `MaxonUnaryOp.fneg` — so a zero keeps
 // its sign either way.
 module function negatedFloatBits(bits FullRangeInt) returns FullRangeInt

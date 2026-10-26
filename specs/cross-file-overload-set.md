@@ -550,12 +550,43 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:19:9: function 'Rec.create' is not exported
+error E3008: <fragment>:19:13: function 'Rec.create' is not exported
 ```
 
-<!-- test: error.a-global-initializer-call-to-a-set-whose-every-member-is-hidden-is-refused-once -->
-Every `create` of `Rec` is file-private to `types.maxon`, so `main.maxon` can name none of them and its
-initializer's call is refused once, as the written name, not again as the member the choice binds.
+<!-- test: error.a-member-only-a-hidden-overload-serves-is-refused-in-a-function-body -->
+The same call in a function body, which reports it at the same token, the member's name.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias Count = int(0 to 100) implements Integer
+
+export type Rec
+	export var v as Integer
+
+	static function create(n Count) returns Self
+		return Self{v: n}
+	end 'create'
+
+	export static function create(s String) returns Self
+		return Self{v: s.byteLength() as Integer}
+	end 'create'
+end 'Rec'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var y = Rec.create(7 as Count)
+	print("{y.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:20:14: function 'Rec.create' is not exported
+```
+
+<!-- test: error.a-global-initializer-call-to-a-set-whose-every-member-is-hidden-is-refused -->
+Every `create` of `Rec` is file-private to `types.maxon`, so `main.maxon` can name none of them, and its
+initializer's call is refused at the member's name with the diagnostics the same call in a function body
+gets.
 ```maxon
 // --- file: types.maxon
 export typealias Integer = int(0 to 100000)
@@ -582,7 +613,39 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:19:9: function 'Rec.create' is not exported
+error E3007: <fragment>:19:13: Ambiguous overload for 'create': multiple overloads match. Candidates: (n Count), (n Integer)
+error E3008: <fragment>:19:13: function 'Rec.create' is not exported
+```
+
+<!-- test: error.a-function-body-call-to-a-set-whose-every-member-is-hidden-is-refused -->
+The same call in a function body.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias Count = int(0 to 100) implements Integer
+
+export type Rec
+	export var v as Integer
+
+	static function create(n Count) returns Self
+		return Self{v: n}
+	end 'create'
+
+	static function create(n Integer) returns Self
+		return Self{v: n + 1000}
+	end 'create'
+end 'Rec'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var y = Rec.create(7 as Count)
+	print("{y.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3007: <fragment>:20:14: Ambiguous overload for 'create': multiple overloads match. Candidates: (n Count), (n Integer)
+error E3008: <fragment>:20:14: function 'Rec.create' is not exported
 ```
 
 <!-- test: a-defaulted-parameter-of-a-factory-in-another-file-fills-in-a-global-initializer -->
@@ -1082,7 +1145,40 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:23:9: function 'pick' is not exported
+error E3008: <fragment>:23:9: function 'pick(Integer)' is not exported
+```
+
+<!-- test: error.a-function-body-call-to-a-name-only-hidden-cross-file-overloads-carry -->
+The same call in a function body.
+```maxon
+// --- file: a.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+function pick(x Integer) returns Integer
+	return x
+end 'pick'
+
+export function useA() returns Integer
+	return pick(1)
+end 'useA'
+
+// --- file: b.maxon
+function pick(s String) returns Integer
+	return s.byteLength() as Integer
+end 'pick'
+
+export function useB() returns Integer
+	return pick("ab")
+end 'useB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let g = pick(3)
+	return (g + useA() + useB()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:24:10: function 'pick(Integer)' is not exported
 ```
 
 <!-- test: a-generic-function-named-like-a-math-builtin-is-the-one-called -->

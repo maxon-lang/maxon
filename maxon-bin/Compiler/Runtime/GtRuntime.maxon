@@ -84,7 +84,7 @@ export let PointerFieldBytes = 8
 // `GtOffAwaiter` — Go's `hchan.lock`. The two roles never fall on one record.
 let GtOffRecordLock = 0
 
-let GtRecordLockBytes = RecursiveLockBytes
+let GtRecordLockBytes = RecursiveLockBytes as ByteOffset
 
 export let GtOffStackBase = GtOffRecordLock + GtRecordLockBytes  // low address of the GT's stack (0 for an M's scheduler context, a reply cell and a free record that kept none)
 
@@ -1121,7 +1121,7 @@ let RunProcessSpawnFailedCaseName = b"spawnFailed"
 // encoding a source `throw E.case` uses (`LowerMaxonToStd.lowerThrowError`), so the `otherwise (e)` decode
 // (`e = flag - bias`, `parseOtherwiseBlock`) needs no third copy of the bias. `0` is reserved by the bias for
 // "no error in flight".
-let RunProcessSpawnFailedOrdinal = 0 as FullRangeInt
+let RunProcessSpawnFailedOrdinal = 0
 
 // The R10 error-flag VALUE the throw emits and a successful `runProcess` clears — the ordinal biased by the
 // one `ErrorFlagOrdinalBias` (never a second literal, so the runtime encode cannot drift from the parser decode),
@@ -2503,7 +2503,7 @@ typealias GtFieldArray = Array with GtField
 function gtFieldRoster() returns GtFieldArray
 	var fields = GtFieldArray.create()
 
-	fields.push(GtField.create("GtOffRecordLock", offset: GtOffRecordLock, width: GtRecordLockBytes as ByteOffset, rule: GtFieldRule.keptAcrossReuse))
+	fields.push(GtField.create("GtOffRecordLock", offset: GtOffRecordLock, width: GtRecordLockBytes, rule: GtFieldRule.keptAcrossReuse))
 	fields.push(GtField.create("GtOffStackBase", offset: GtOffStackBase, width: PointerFieldBytes, rule: GtFieldRule.setByFreeGet))
 	fields.push(GtField.create("GtOffStackSize", offset: GtOffStackSize, width: PointerFieldBytes, rule: GtFieldRule.setByFreeGet))
 	fields.push(GtField.create("GtOffStackGuard", offset: GtOffStackGuard, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
@@ -2608,7 +2608,7 @@ function requireGtRecordLayout()
 		panic("requireGtRecordLayout: the stack guard word is at offset {GtOffStackGuard}, past the {i8.max} a signed disp8 reaches, which the x64 prologue guard's compare is encoded with")
 	end 'guardReachesX64Disp8'
 
-	if not arm64ByteOffsetFitsScaledImm12(GtOffStackGuard, scale: Arm64SlotScale) 'guardReachesArm64Imm12'
+	if not arm64ByteOffsetFitsScaledImm12(GtOffStackGuard as MachineWord, scale: Arm64SlotScale) 'guardReachesArm64Imm12'
 		panic("requireGtRecordLayout: the stack guard word is at offset {GtOffStackGuard}, which has no scaled imm12 form for the arm64 prologue guard's ldr")
 	end 'guardReachesArm64Imm12'
 end 'requireGtRecordLayout'
@@ -2882,7 +2882,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	// pointing it at the inline region makes the buffer part of the struct — one allocation, one
 	// lifetime, one free.
 	let argInlineOffConst = ids.mint()
-	module.appendOp(initBlock, op: StdOp.const(argInlineOffConst, value: GtOffArgInline, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.const(argInlineOffConst, value: GtOffArgInline as FullRangeInt, valueType: StdType.i64))
 	let argInlinePtr = ids.mint()
 	module.appendOp(initBlock, op: StdOp.binOp(argInlinePtr, lhs: gt, rhs: argInlineOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argInlinePtr, valueType: StdType.i64))
@@ -3219,7 +3219,7 @@ function emitGtRequireRunnable(module StdModule, func IrFunction, cur IrBlock, g
 end 'emitGtRequireRunnable'
 
 function emitGtCasStatus(module StdModule, block IrBlock, gt ValueId, from GtStatus, to GtStatus, ids ValueMinter) returns ValueId
-	return emitCasField(module, block: block, record: gt, offset: GtOffStatus as ByteOffset, expected: emitConst(module, block: block, value: from.rawValue, ids: ids), replacement: emitConst(module, block: block, value: to.rawValue, ids: ids), ids: ids)
+	return emitCasField(module, block: block, record: gt, offset: GtOffStatus, expected: emitConst(module, block: block, value: from.rawValue, ids: ids), replacement: emitConst(module, block: block, value: to.rawValue, ids: ids), ids: ids)
 end 'emitGtCasStatus'
 
 function emitGtCasWaitingToReady(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
@@ -3246,7 +3246,7 @@ function emitGtRecordLockLeave(module StdModule, block IrBlock, record ValueId, 
 end 'emitGtRecordLockLeave'
 
 function emitGtStrandClaimLost(module StdModule, block IrBlock, owner ValueId, ids ValueMinter) returns ValueId
-	let won = emitCasField(module, block: block, record: owner, offset: GtOffStrandHolder as ByteOffset, expected: emitConst(module, block: block, value: StrandFree, ids: ids), replacement: emitConst(module, block: block, value: StrandHeld, ids: ids), ids: ids)
+	let won = emitCasField(module, block: block, record: owner, offset: GtOffStrandHolder, expected: emitConst(module, block: block, value: StrandFree, ids: ids), replacement: emitConst(module, block: block, value: StrandHeld, ids: ids), ids: ids)
 	return emitCasLost(module, block: block, result: won, ids: ids)
 end 'emitGtStrandClaimLost'
 
@@ -3299,8 +3299,8 @@ end 'GtQueueEnds'
 // the owner itself sits in its strand queue (`GtOffRunqNext`).
 function emitQueueLinkOffset(ends GtQueueEnds) returns ByteOffset
 	return match ends 'ends'
-		globalLabels gives GtOffRunqNext as ByteOffset
-		ownerFields gives GtOffNext as ByteOffset
+		globalLabels gives GtOffRunqNext
+		ownerFields gives GtOffNext
 	end 'ends'
 end 'emitQueueLinkOffset'
 
@@ -5627,7 +5627,7 @@ end 'emitGtPublishCompleted'
 // `gtIsComplete` through a spent handle reads this cell's status and must still find it answered.
 export function emitGtCellScrub(module StdModule, block IrBlock, cell ValueId, ids ValueMinter)
 	let start = emitFieldAddr(module, block: block, record: cell, offset: GtOffStackBase, ids: ids)
-	module.appendOp(block, op: StdOp.memFill(start, byteCountId: emitConst(module, block: block, value: GtCellBytes - GtOffStackBase, ids: ids), value: 0))
+	module.appendOp(block, op: StdOp.memFill(start, byteCountId: emitConst(module, block: block, value: (GtCellBytes - GtOffStackBase) as FullRangeInt, ids: ids), value: 0))
 	emitGtPublishCompleted(module, block: block, gt: cell, ids: ids)
 end 'emitGtCellScrub'
 
@@ -5959,7 +5959,7 @@ function buildGtCellAlloc(module StdModule)
 	emitGtMarkWaiting(module, block: entry, gt: cell, ids: ids)
 	let owner = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffOwner, ids: ids)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffOwner, value: owner)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffReleaser as ByteOffset, value: releaser)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffReleaser, value: releaser)
 
 	emitSchedStepGtLive(module, block: entry, delta: OneMore, ids: ids)
 
@@ -6358,7 +6358,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 	emitBranchCarrying(module, from: readyElsewhere, to: payWake, values: argsOf(emitGtReady(module, block: readyElsewhere, gt: awaiter, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.free, ids: ids)))
 
 	let selecting = emitBin(module, block: selectAwaiter, a: awaiter, b: tag, opcode: StdBinOpcode.sub, ids: ids)
-	let selectClaim = emitCasField(module, block: selectAwaiter, record: selecting, offset: GtOffSelectDone as ByteOffset, expected: emitConst(module, block: selectAwaiter, value: SelectPending, ids: ids), replacement: emitConst(module, block: selectAwaiter, value: SelectReadied, ids: ids), ids: ids)
+	let selectClaim = emitCasField(module, block: selectAwaiter, record: selecting, offset: GtOffSelectDone, expected: emitConst(module, block: selectAwaiter, value: SelectPending, ids: ids), replacement: emitConst(module, block: selectAwaiter, value: SelectReadied, ids: ids), ids: ids)
 	emitGtRecordLockLeave(module, block: selectAwaiter, record: gt, ids: ids)
 	emitBranchOnCasLost(module, block: selectAwaiter, result: selectClaim, lost: stackCheck, won: claimSelect, ids: ids)
 
@@ -7180,7 +7180,7 @@ let GtStackPoolMaxShift = 16 as FullRangeInt
 let GtStackPoolClassCount = GtStackPoolMaxShift - GtStackPoolMinShift + 1
 let GtStackPoolMaxBytes = 1 shl GtStackPoolMaxShift
 let GtStackPoolChunkBytes = 0x100000 as FullRangeInt
-let GtStackPoolWordBytes = 8 as FullRangeInt
+let GtStackPoolWordBytes = 8
 let GtStackPoolCursorOffset = (GtStackPoolClassCount * GtStackPoolWordBytes) as ByteOffset
 let GtStackPoolLimitOffset = (GtStackPoolClassCount * GtStackPoolWordBytes + GtStackPoolWordBytes) as ByteOffset
 let GtStackPoolLockOffset = (GtStackPoolClassCount * GtStackPoolWordBytes + 2 * GtStackPoolWordBytes) as ByteOffset
@@ -7198,7 +7198,7 @@ let GtStackCacheCapacityBytes = 1 shl GtStackCacheCapacityShift
 let GtStackCacheHalfBytes = GtStackCacheCapacityBytes shr 1
 let GtStackCacheMaxShift = GtStackCacheCapacityShift - 1
 let GtStackCacheClassCount = GtStackCacheMaxShift - GtStackPoolMinShift + 1
-let GtStackCacheEntryBytes = 16 as FullRangeInt
+let GtStackCacheEntryBytes = 16
 let GtStackCacheOffHead = 0
 let GtStackCacheOffBytes = 8
 export let GtStackCacheBytes = GtStackCacheClassCount * GtStackCacheEntryBytes

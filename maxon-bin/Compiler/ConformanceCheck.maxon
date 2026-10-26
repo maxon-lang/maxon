@@ -776,11 +776,10 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 	view aliasSites = signatures.instantiationSites()
 
 	// ⭐ **A THIRD PROVENANCE: a literal written at FILE SCOPE.** `var m = [b"if": Info.create(…)]` interns a
-	// `Map with (K, V)` from its first pair exactly as a body's literal does, but the constant evaluator is a
+	// `Map with (K, V)` from its first pair exactly as a body's literal does, but the record probe is a
 	// throwaway `Parser` whose artifact is never committed — so its sites are recorded on the index instead
 	// (`ProgramSignatures.constInferredInstantiationSites`). Without this list a file-scope literal keyed on a
-	// type implementing NEITHER of `Map`'s constraints was admitted in silence, which is the identical hole
-	// `project.inferredInstantiationSites` was added to close one position over.
+	// type implementing NEITHER of `Map`'s constraints is admitted in silence.
 	view constSites = signatures.constInferredInstantiationSites()
 
 	if aliasSites.count() == 0 and project.inferredInstantiationSites.count() == 0 and constSites.count() == 0 'noSites'

@@ -315,5 +315,20 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: other/specs/module-keyword/error.module-let-different-directory.maxon:6:14: Undefined constant 'LIMIT'
+error E2004: other/specs/module-keyword/error.module-let-different-directory.maxon:6:14: Undefined variable 'LIMIT'
+```
+
+<!-- test: error.module-let-different-directory-in-a-body -->
+```maxon
+// --- file: feature/limits.maxon
+module let LIMIT = 21
+
+// --- file: other/main.maxon
+function main() returns ExitCode
+	let double = LIMIT * 2
+	return double
+end 'main'
+```
+```maxoncstderr
+error E2004: other/<fragment>:7:15: Undefined variable 'LIMIT'
 ```

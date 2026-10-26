@@ -464,7 +464,7 @@ function emitMboxWakeParked(module StdModule, func IrFunction, cur IrBlock, mbox
 end 'emitMboxWakeParked'
 
 function emitMboxSendRoot(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter) returns ValueId
-	return emitBin(module, block: block, a: mbox, b: emitConst(module, block: block, value: MboxSendRootBias, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	return emitBin(module, block: block, a: mbox, b: emitConst(module, block: block, value: MboxSendRootBias as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 end 'emitMboxSendRoot'
 
 function emitMboxSendAppend(module StdModule, block IrBlock, root ValueId, sender ValueId, ids ValueMinter)
@@ -491,7 +491,7 @@ end 'emitMboxSendUnlink'
 // an abandon, only the winner readies it, and a loser leaves it alone. Two readies of one thread
 // would run it on two machines at once.
 export function emitMboxClaimSender(module StdModule, block IrBlock, sender ValueId, outcome MboxSendWake, lost IrBlock, won IrBlock, ids ValueMinter)
-	let claim = emitCasField(module, block: block, record: sender, offset: GtOffSendOutcome as ByteOffset, expected: emitConst(module, block: block, value: MboxSendWake.pending.rawValue, ids: ids), replacement: emitConst(module, block: block, value: outcome.rawValue, ids: ids), ids: ids)
+	let claim = emitCasField(module, block: block, record: sender, offset: GtOffSendOutcome, expected: emitConst(module, block: block, value: MboxSendWake.pending.rawValue, ids: ids), replacement: emitConst(module, block: block, value: outcome.rawValue, ids: ids), ids: ids)
 	emitBranchOnCasLost(module, block: block, result: claim, lost: lost, won: won, ids: ids)
 end 'emitMboxClaimSender'
 
@@ -771,8 +771,8 @@ function buildSvcSpawn(module StdModule)
 	// spawner's work runs, which is exactly the property a service must not have.
 	let gt = ids.mint()
 	module.appendOp(entry, op: StdOp.call(gt, callee: GtSpawnGreenName, args: argsOf(loopPtr)))
-	emitStoreField(module, block: entry, record: gt, offset: GtOffArgInline as ByteOffset, value: state)
-	emitStoreField(module, block: entry, record: gt, offset: (GtOffArgInline + GtArgSlotBytes) as ByteOffset, value: mbox)
+	emitStoreField(module, block: entry, record: gt, offset: GtOffArgInline, value: state)
+	emitStoreField(module, block: entry, record: gt, offset: GtOffArgInline + GtArgSlotBytes, value: mbox)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtReadyName, args: argsOf(gt)))
 
 	module.setTerminator(entry, op: StdOp.ret(mbox))
@@ -793,13 +793,13 @@ function buildMboxStaging(module StdModule, bytes ByteOffset)
 	var have = module.addBlock(func, label: b"staginghave", heat: BlockHeat.normal)
 
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
-	let staging = emitLoadField(module, block: entry, record: selfGt, offset: GtOffStaging as ByteOffset, ids: ids)
+	let staging = emitLoadField(module, block: entry, record: selfGt, offset: GtOffStaging, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: staging, pred: StdCmpPred.ne, against: 0, whenTrue: have, whenFalse: carve, ids: ids)
 
 	module.setTerminator(have, op: StdOp.ret(staging))
 
 	let carved = emitSchedCarveLocked(module, block: carve, bytes: bytes as FullRangeInt, caller: CallerMachine.published, ids: ids)
-	emitStoreField(module, block: carve, record: selfGt, offset: GtOffStaging as ByteOffset, value: carved)
+	emitStoreField(module, block: carve, record: selfGt, offset: GtOffStaging, value: carved)
 	module.setTerminator(carve, op: StdOp.ret(carved))
 
 	module.functions.push(func)

@@ -400,7 +400,7 @@ export let MOffSchedulerContext = 0x18 as ByteOffset
 // ⚠ **A STRAY SIGNAL LEFT PENDING** — a signal to the main machine while it was running, or one that landed after
 // the wait it was for had already ended — costs its next wait one extra lap of a loop that re-tests everything.
 // That is a lap, not a lost wakeup.
-let MOffParkEvent = MOffSchedulerContext + (GtStructSize as ByteOffset)
+let MOffParkEvent = MOffSchedulerContext + GtStructSize
 
 // ⭐⭐ **THE `CreateThread` HANDLE OF *THIS* M, AND IT SITS ON THE M FOR CORRECTNESS RATHER THAN TIDINESS.**
 // A P is released at every park and re-taken by whoever `startm` hands it to, so a handle keyed on the
@@ -582,7 +582,7 @@ let MSyscallStateMask = 3
 
 // One generation — the first bit above the state bits, so adding it steps the generation and leaves the state
 // alone, which is the property `MSyscallEnterDelta` is built out of.
-let MSyscallGenStep = 4 as FullRangeInt
+let MSyscallGenStep = 4
 
 // What `entersyscall` adds: a new generation AND the in-call bit, in ONE `lock add`. Stated as the sum of its
 // two terms rather than as `5`, so that widening the state bits moves the delta with them instead of leaving a
@@ -5714,7 +5714,7 @@ function buildGtFreeGet(module StdModule)
 	module.setTerminator(handBack, op: StdOp.ret(ready))
 
 	// A fresh record: carved under the hold every list above was consulted in.
-	let carved = emitGtArenaCarve(module, block: carve, itemBytes: GtStructSize, count: OneMore, ids: ids)
+	let carved = emitGtArenaCarve(module, block: carve, itemBytes: GtStructSize as FullRangeInt, count: OneMore, ids: ids)
 	var registered = emitGtAllGAppend(module, func: func, cur: carve, gt: carved, ids: ids)
 	emitLockWordLeave(module, block: registered, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	emitBranchCarrying(module, from: registered, to: needStack, values: argsOf(carved))
@@ -5755,20 +5755,20 @@ function buildGtCellGet(module StdModule)
 	let p = emitGtFreeAcquire(module, func: func, entry: entry, pool: GtFreePool.cells, recycle: recycle, carve: carveBatch, carveWithoutProc: carveOne, ids: ids)
 	module.setTerminator(recycle, op: StdOp.ret(record))
 
-	let carvedOne = emitGtArenaCarve(module, block: carveOne, itemBytes: GtCellBytes, count: OneMore, ids: ids)
+	let carvedOne = emitGtArenaCarve(module, block: carveOne, itemBytes: GtCellBytes as FullRangeInt, count: OneMore, ids: ids)
 	emitLockWordLeave(module, block: carveOne, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(carveOne, op: StdOp.ret(carvedOne))
 
-	let carvedBatch = emitGtArenaCarve(module, block: carveBatch, itemBytes: GtCellBytes, count: GtCellCarveBatch, ids: ids)
-	let firstSpare = emitBin(module, block: carveBatch, a: carvedBatch, b: emitConst(module, block: carveBatch, value: GtCellBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let lastSpare = emitBin(module, block: carveBatch, a: carvedBatch, b: emitConst(module, block: carveBatch, value: (GtCellCarveBatch - 1) * GtCellBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let carvedBatch = emitGtArenaCarve(module, block: carveBatch, itemBytes: GtCellBytes as FullRangeInt, count: GtCellCarveBatch, ids: ids)
+	let firstSpare = emitBin(module, block: carveBatch, a: carvedBatch, b: emitConst(module, block: carveBatch, value: GtCellBytes as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let lastSpare = emitBin(module, block: carveBatch, a: carvedBatch, b: emitConst(module, block: carveBatch, value: ((GtCellCarveBatch - 1) * GtCellBytes) as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	emitBranchCarrying(module, from: carveBatch, to: chain, values: argsOf(firstSpare))
 
 	let spare = ids.mint()
 	chain.blockArgs.push(IrBlockArg.create(spare, argType: StdType.i64))
 	emitBranchOnCompareValues(module, block: chain, a: spare, pred: StdCmpPred.eq, b: lastSpare, whenTrue: chained, whenFalse: chainStep, ids: ids)
 
-	let nextSpare = emitBin(module, block: chainStep, a: spare, b: emitConst(module, block: chainStep, value: GtCellBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let nextSpare = emitBin(module, block: chainStep, a: spare, b: emitConst(module, block: chainStep, value: GtCellBytes as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: chainStep, record: spare, offset: GtOffNext, value: nextSpare)
 	emitBranchCarrying(module, from: chainStep, to: chain, values: argsOf(nextSpare))
 

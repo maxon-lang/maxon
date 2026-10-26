@@ -2813,9 +2813,9 @@ error E3063: <fragment>:18:11: Ambiguous type name 'StringArray': more than one 
 
 <!-- test: a-top-level-factory-argument-cast-to-a-contested-name-keeps-the-casting-files-alias -->
 ⭐ **A FOLDED CAST ARGUMENT CARRIES THE ALIAS ITS FILE MEANS, NOT THE BARE SPELLING.** `2 as Small` in the
-first file names that file's private `int(0 to 100)` alias; a sibling declares `type Small`. The folded scalar
-is typed through the reading file's identity, so the factory argument is a `Small` of the alias and never the
-sibling's struct.
+second file names that file's private `int(0 to 100)` alias, a subtype of the factory's `Wide` parameter; a
+sibling declares `type Small`. The folded scalar is typed through the reading file's identity, so the factory
+argument is a `Small` of the alias and never the sibling's struct.
 
 ```maxon
 // --- file: a-main.maxon
@@ -2824,12 +2824,13 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: m-alpha.maxon
-typealias Small = int(0 to 100)
+typealias Small = int(0 to 100) implements Wide
+typealias Wide = int(0 to 1000)
 
 type Holder
-	export var n as Small
+	export var n as Wide
 
-	static function create(n Small) returns Holder
+	static function create(n Wide) returns Holder
 		return Self{n: n}
 	end 'create'
 end 'Holder'
@@ -2838,6 +2839,51 @@ let Cell = Holder.create(2 as Small)
 
 export function cellValue() returns ExitCode
 	return Cell.n as ExitCode
+end 'cellValue'
+
+// --- file: n-nominal.maxon
+type Small
+	export var q as Slot
+
+	static function create() returns Small
+		return Self{q: 5}
+	end 'create'
+end 'Small'
+
+typealias Slot = int(0 to 100)
+
+export function nominalQ() returns ExitCode
+	return Small.create().q as ExitCode
+end 'nominalQ'
+```
+```exitcode
+7
+```
+
+<!-- test: a-function-body-factory-argument-cast-to-a-contested-name-keeps-the-casting-files-alias -->
+The same factory call in a function body.
+
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	return cellValue() + nominalQ()
+end 'main'
+
+// --- file: m-alpha.maxon
+typealias Small = int(0 to 100) implements Wide
+typealias Wide = int(0 to 1000)
+
+type Holder
+	export var n as Wide
+
+	static function create(n Wide) returns Holder
+		return Self{n: n}
+	end 'create'
+end 'Holder'
+
+export function cellValue() returns ExitCode
+	let cell = Holder.create(2 as Small)
+	return cell.n as ExitCode
 end 'cellValue'
 
 // --- file: n-nominal.maxon

@@ -448,17 +448,6 @@ export type ConstArrayBlob
 	end 'create'
 end 'ConstArrayBlob'
 
-// ⭐⭐ **THE ONE FACTORY, AND THE REASON IT IS ONE.** A constant array literal has TWO spellings — written in
-// a function body (`Parser.emitConstantArrayBlob`) and written at file scope (`ProgramSignatures.
-// containerRecordOf`) — reaching this from two different element representations, `ValueId`s and folded
-// `ConstArrayElement`s. `specs/codegen-internals.md` pairs those spellings across six cases and requires them
-// to produce IDENTICAL ```RequiredRdata bytes.
-//
-// ⛔ They each composed `(stride, count, bytes)` for themselves until this existed, sharing only the
-// eligibility predicate and the serializer below. That is the shape this repo pays for hardest: a change to
-// one composition is **a wrong answer at the other, not a compile error** — the two spellings would simply
-// lay down different bytes and only a byte-pin would ever say so. Callers now supply the numbers; the
-// composition is here.
 export function constArrayBlobOf(values FullRangeIntArray, stride ElementStride) returns ConstArrayBlob
 	return ConstArrayBlob.create(stride, elementCount: values.count() as FullRangeInt, bytes: constantElementsImage(values, stride: stride))
 end 'constArrayBlobOf'

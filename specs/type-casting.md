@@ -731,6 +731,74 @@ end 'main'
 error E3010: <fragment>:4:19: unneeded cast: the literal 50 already fits every use of 'passMark'
 ```
 
+<!-- test: error.unneeded.literal-top-level-let-read-by-a-function-body-cast -->
+A function body that casts the constant to another alias is a use that takes the plain constant.
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Small = int(0 to 100) implements Wide
+
+let Base = 2 as Wide
+
+function narrow() returns Small
+	return Base as Small
+end 'narrow'
+
+function main() returns ExitCode
+	if narrow() == 2 'two'
+		return 0
+	end 'two'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:5:14: unneeded cast: the literal 2 already fits every use of 'Base'
+```
+
+<!-- test: error.unneeded.literal-top-level-let-read-by-another-top-level-initializer -->
+The same read from a file-scope initializer is a use too.
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Small = int(0 to 100) implements Wide
+
+let Base = 2 as Wide
+let S = Base as Small
+
+function main() returns ExitCode
+	if S == 2 'two'
+		return 0
+	end 'two'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:5:14: unneeded cast: the literal 2 already fits every use of 'Base'
+```
+
+<!-- test: error.unneeded.literal-top-level-let-read-by-a-top-level-factory-argument -->
+A record initializer's read counts the same way: the factory argument takes the plain constant.
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Small = int(0 to 100) implements Wide
+
+type Holder
+	export var n as Small
+
+	static function create(n Small) returns Holder
+		return Self{n: n}
+	end 'create'
+end 'Holder'
+
+let Base = 2 as Wide
+let Cell = Holder.create(Base as Small)
+
+function main() returns ExitCode
+	return Cell.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:13:14: unneeded cast: the literal 2 already fits every use of 'Base'
+```
+
 <!-- test: error.unneeded.literal-let-to-a-full-range-alias-used-as-an-operand -->
 An operand use takes the constant too: the product of two constants is a constant, checked where it lands.
 ```maxon

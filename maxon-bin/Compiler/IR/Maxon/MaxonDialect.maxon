@@ -1438,7 +1438,7 @@ end 'CalleeMint'
 // @generated library-cache begin
 let CacheCasesCalleeMint = [CalleeMint.notMinted, CalleeMint.primitiveStatic, CalleeMint.paramDefaultHelper, CalleeMint.fromConstructionInit, CalleeMint.fieldDefaultHelper, CalleeMint.resolvedTypeQualifier, CalleeMint.rangeOperator]
 
-export function cacheReadCalleeMint(reader LibraryCacheReader) returns CalleeMint throws LibraryCacheDamage
+function cacheReadCalleeMint(reader LibraryCacheReader) returns CalleeMint throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
 
 	return try CacheCasesCalleeMint.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
@@ -1710,8 +1710,8 @@ end 'cacheReadImmortalBoxColumnArray'
 // @generated library-cache end
 
 // ⭐⭐ **ONE BOX OF AN IMAGED RECORD TREE** — the bytes of the box itself, and the slots that address the
-// other boxes and columns beside it. The tree is held FLAT, in an arena a `box` slot indexes, for
-// `ConstFactoryCall`'s reason: the recursion belongs to the WALK, and only the TYPE had to be flattened.
+// other boxes and columns beside it. The tree is held FLAT, in an arena a `box` slot indexes: the
+// recursion belongs to the WALK, and only the TYPE had to be flattened.
 export type ImmortalBoxNode
 	export let bytes as ByteArray
 	export let columns as ImmortalBoxColumnArray
@@ -1807,9 +1807,8 @@ export union MaxonOp
 	// serves them all and the op costs nothing. `immutableArgNameAt` is the one reader and decodes both
 	// shapes.
 	// `defaultedArgs` counts the arguments the compiler supplied from parameter defaults. They are the
-	// trailing run of `args`, because both default fillers append (`Parser.fillArgsFromParamDefaults`, and
-	// `Parser.appendConstFactoryArgDefaults` for a module-scope factory call); `synthesizedArgIndex` and
-	// `synthesizedArgSlots` rely on that. Each carries the label `slotArgLabel` gives its slot, so every
+	// trailing run of `args`, because the default filler appends (`Parser.fillArgsFromParamDefaults`);
+	// `synthesizedArgIndex` and `synthesizedArgSlots` rely on that. Each carries the label `slotArgLabel` gives its slot, so every
 	// label reader places it exactly, a `_` slot included — see `argSlotPosition`.
 	//
 	// `mint` says whether `callee` is bytes the author wrote or a name the compiler minted from a spelling

@@ -221,16 +221,9 @@ end 'main'
 ```
 
 <!-- test: init-from-char-literal-at-module-scope -->
-⭐⭐ **THE SAME CONSTRUCTION AS A TOP-LEVEL INITIALIZER, AND IT IS THE EDGE THE BODY FORM DOES NOT COVER.**
-A module-scope initializer is evaluated by a separate walk that folds constants rather than emitting code, so
-a form the body path claims and that walk does not reads as `E2004 Undefined constant` — a message about a
-constant nobody wrote. Both forms are recognised by one predicate over one `LiteralInitForm`, which is what
-keeps the pair from drifting.
-
-⚠ **A BARE `let c = '€'` AT MODULE SCOPE IS STILL REFUSED, AND PERMANENTLY** — a `Character` is a RECORD and a
-module-scope initializer is a folded constant by definition. Both references refuse it too. What is legal here
-is a CONSTRUCTION: `__module_init` builds the record before `main` runs, exactly as it does for a top-level
-`String`.
+⭐⭐ **THE SAME CONSTRUCTION AS A TOP-LEVEL INITIALIZER.** A module-scope initializer is read by the body's
+expression parser, so the construction is the body's, and `__module_init` builds the record before `main`
+runs.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

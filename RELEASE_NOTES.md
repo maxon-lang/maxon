@@ -201,6 +201,15 @@ release's version as its heading when the release is cut.
   common ancestor (`let t = a + b` over a `Small` and a `Tally`, a comparison, `and`, `or`, `xor` or `mod`)
   is E3005, as it is in a function body.
   Fix: cast one side with `as` (`a + (b as Small)`).
+- A file-scope constant derived from aliased operands carries their typealias, as the same expression does
+  in a function body: with `let a = 5 as Small`, `let s = a + a` is a `Small`, so passing `s` where a
+  `Tally` is required is E3005 and casting it to `Small` again is E3010.
+  Fix: cast with `as` where the other typealias is required (`f(s as Tally)`), and drop a cast to the
+  typealias the constant already carries.
+- A file-scope `let` initialized by a cast literal (`let Base = 2 as Wide`) whose readers include another
+  file-scope initializer that takes the plain constant (`let S = Base as Small`) is E3010, as a read in a
+  function body is.
+  Fix: write the bare literal (`let Base = 2`).
 
 ## 0.5.0 — 2026-10-08
 

@@ -22,30 +22,47 @@ end 'LetCastVerdict'
 
 typealias LetCastVerdictArray = Array with LetCastVerdict
 
-module function checkUnneededLetCasts(project Project, module MaxonModule) throws CompileError
-	var index = LetCastIndexMap.create()
-	var verdicts = LetCastVerdictArray.create()
+type LetCastVerdictBook
+	var index as LetCastIndexMap
+	export var verdicts as LetCastVerdictArray
 
-	for func in module.functions 'eachFunc'
-		for read in func.letCastReads 'eachRead'
+	static function create() returns LetCastVerdictBook
+		return Self{index: LetCastIndexMap.create(), verdicts: LetCastVerdictArray.create()}
+	end 'create'
+
+	function file(reads LetCastReadArray, readerFile FilePath)
+		for read in reads 'eachRead'
 			let identity = read.subject.identity()
 
-			if let position = try index.get(identity) 'aKnownCast'
-				var known = try verdicts.get(position) otherwise panic("checkUnneededLetCasts: verdicts.get OOB at {position} — the index is filed beside the verdict it names")
-				known.note(read, readerFile: func.sourceFilePath)
+			if let position = try self.index.get(identity) 'aKnownCast'
+				var known = try self.verdicts.get(position) otherwise panic("LetCastVerdictBook.file: verdicts.get OOB at {position} — the index is filed beside the verdict it names")
+				known.note(read, readerFile: readerFile)
 				continue
 			end 'aKnownCast'
 
-			var fresh = LetCastVerdict.create(read.subject)
-			fresh.note(read, readerFile: func.sourceFilePath)
-			index.upsert(identity, value: verdicts.count())
-			verdicts.push(fresh)
+			var fresh = LetCastVerdict.create(read.subject.clone())
+			fresh.note(read, readerFile: readerFile)
+			self.index.upsert(identity, value: self.verdicts.count())
+			self.verdicts.push(fresh)
 		end 'eachRead'
+	end 'file'
+end 'LetCastVerdictBook'
+
+module function checkUnneededLetCasts(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
+	var book = LetCastVerdictBook.create()
+
+	for func in module.functions 'eachFunc'
+		book.file(func.letCastReads, readerFile: func.sourceFilePath)
 	end 'eachFunc'
+
+	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
+		let decl = signatures.declAt(i)
+		book.file(decl.letCastReads, readerFile: decl.declFilePath)
+	end 'eachDecl'
 
 	var mentions = MentionIndexMap.create()
 
-	for verdict in verdicts 'eachCast'
+	for verdict in book.verdicts 'eachCast'
 		if not verdict.everyReadClaimed 'aReadNeedsTheAlias'
 			continue
 		end 'aReadNeedsTheAlias'

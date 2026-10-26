@@ -2527,6 +2527,79 @@ end 'main'
 ```
 
 
+<!-- test: error.crossfile-enum-constant-keeps-its-value-in-an-alias-slot-it-does-not-fit -->
+The other road to the same pair of declarations: `b.maxon` EXPORTS a constant of its file-private
+`enum Status`, and `a.maxon`, which means a ranged `int(0 to 5)` by `Status`, reads it. The constant is
+the enum's case — its raw value, 200, decays into an alias slot as any enum's does — and the slot's range
+is `a.maxon`'s own, so storing it into a `Status` is refused at the store, with the value that case holds,
+exactly as `s = Level.big` is when the enum and the alias have two names in one file.
+```maxon
+// --- file: a.maxon
+typealias Status = int(0 to 5)
+
+export function pick() returns ExitCode
+	var s = 1 as Status
+	s = BIG
+	return s as ExitCode
+end 'pick'
+
+// --- file: b.maxon
+enum Status
+	small = 1
+	big = 200
+end 'Status'
+
+export let BIG = Status.big
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return pick()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:2: Value 200 is outside the range of 'Status' (int(0 to 5))
+```
+
+
+<!-- test: crossfile-enum-constant-decays-into-a-wider-alias-slot -->
+The legal half of the case above: a constant of `b.maxon`'s file-private `enum Status` read in `a.maxon`,
+where `Status` means a ranged alias, is still the enum's raw 200 when it lands in an alias slot that
+holds it. `a.maxon`'s own `Status` plays no part in the store — it is a different declaration — so the
+slot's range is `Wide`'s and the value is `b.maxon`'s.
+```maxon
+// --- file: a.maxon
+typealias Status = int(0 to 5)
+typealias Wide = int(0 to 1000)
+
+function seed() returns Status
+	return 3
+end 'seed'
+
+export function widened() returns ExitCode
+	var w = 1 as Wide
+	w = BIG
+
+	return (w as ExitCode) + (seed() as ExitCode)
+end 'widened'
+
+// --- file: b.maxon
+enum Status
+	small = 1
+	big = 200
+end 'Status'
+
+export let BIG = Status.big
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return widened()
+end 'main'
+```
+```exitcode
+203
+```
+
+
 <!-- test: crossfile-return-type-that-is-an-enum-in-its-own-file -->
 ⭐ **A COEXISTING NAME WHOSE DECLARING FILE MEANS AN `enum`, IN A RETURN TYPE.** Nothing in the suite put
 this shape in front of the code: an enum and a union are the two kinds that stay a bare `named` through
@@ -4609,7 +4682,23 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2073: app/<fragment>:6:18: 'LogValue' is a ranged alias and has no member 'boolean'
+error E3004: app/<fragment>:6:18: call to undefined function 'LogValue.boolean'
+```
+
+<!-- test: error.a-member-beside-the-librarys-union-is-refused-on-the-authors-alias-in-a-function-body -->
+The same construction in a function body.
+```maxon
+// --- file: lib/value.maxon
+export typealias LogValue = int(0 to 9)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = LogValue.boolean(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: app/<fragment>:7:19: call to undefined function 'LogValue.boolean'
 ```
 
 <!-- test: error.a-member-beside-the-librarys-payload-carrying-union-is-refused-on-the-authors-alias-at-top-level -->
@@ -4647,7 +4736,23 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2073: app/<fragment>:6:17: 'Console' is a ranged alias and has no member 'stdin'
+error E3004: app/<fragment>:6:17: call to undefined function 'Console.stdin'
+```
+
+<!-- test: error.a-member-beside-the-librarys-type-is-refused-on-the-authors-alias-in-a-function-body -->
+The same call in a function body.
+```maxon
+// --- file: lib/console.maxon
+export typealias Console = int(0 to 9)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let c = Console.stdin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: app/<fragment>:7:18: call to undefined function 'Console.stdin'
 ```
 
 <!-- test: an-interface-requirement-returning-byte-array-beside-a-type-named-its-instance -->

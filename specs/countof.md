@@ -921,6 +921,59 @@ end 'main'
 error E3005: <fragment>:9:15: operator '+' requires both operands to be the same type: 'Small' and 'Count' are different typealiases — cast one side with 'as'
 ```
 
+<!-- test: a-body-countof-is-the-librarys-count-beside-a-user-count -->
+A file's own `typealias Count` is a second type beside the library's, and `countof` answers the library's `Count` whatever the file declares: that `Count` is an `ElementIndex`, so `n - 1` addresses the last slot of the fixed array with no cast, where a value of the file's `Count` would be refused.
+```maxon
+typealias Count = int(0 to 5)
+typealias Item = int(0 to 100)
+typealias V = FixedArray with 3 Item
+
+function clamp(c Count) returns Count
+	return c
+end 'clamp'
+
+function main() returns ExitCode
+	var v = V.create()
+	v.set(2, value: 42)
+	let n = countof(V)
+	print("{clamp(4)}\n")
+	return v.get(n - 1) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+4
+```
+
+<!-- test: a-file-scope-countof-is-the-librarys-count-beside-a-user-count -->
+A file-scope `countof` is the library's `Count` by the declaration's identity, as it is in a body, not whichever `Count` the reading file spells: a top-level `let n = countof(V)` in a file that declares its own `Count` still indexes the fixed array.
+```maxon
+typealias Count = int(0 to 5)
+typealias Item = int(0 to 100)
+typealias V = FixedArray with 3 Item
+
+let n = countof(V)
+
+function clamp(c Count) returns Count
+	return c
+end 'clamp'
+
+function main() returns ExitCode
+	var v = V.create()
+	v.set(2, value: 42)
+	print("{clamp(4)}\n")
+	return v.get(n - 1) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+4
+```
+
 <!-- test: error.a-countof-of-a-type-another-file-hides-is-refused-in-a-body -->
 A type private to another file is not visible to `countof` in a function body.
 ```maxon

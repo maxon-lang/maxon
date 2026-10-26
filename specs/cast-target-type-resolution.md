@@ -41,12 +41,10 @@ every spelling of the type: `Self`, the type's own name (which `parseTypeReferen
 and `n as Point` spelled from OUTSIDE `type Point` — the spelling a user is most likely to write, which
 arrives `named` and is resolved.
 
-⚠ **A cast target is written in TWO places, and both are covered.** A body cast goes through
-`Parser.applyCast`; a top-level `let X = 5 as T` is folded by the const evaluator
-(`Parser.applyConstCast`), which runs inside `queryProgramSignatures.evaluateInitializers` and
-never reaches the parser's expression path at all. Covering only the first would leave
-`let SENTINEL = 5 as Bogus` silently evaporating — half a fact, which is worse than none because
-the half that works makes the other half look tested.
+⚠ **A cast target is written in TWO places, and both are covered.** A body cast and a top-level
+`let X = 5 as T` both go through the body's cast parser, the top-level one while the declaration sweep
+folds the constant (`ProgramSignatures.evaluateInitializers`), before any file's real parse. Covering only the first would leave
+`let SENTINEL = 5 as Bogus` unpinned at the place it is folded.
 
 ## No value is forged through a cast
 
@@ -95,10 +93,9 @@ error E3011: specs/cast-target-type-resolution/error.cast-to-misspelled-alias.ma
 ```
 
 <!-- test: error.top-level-const-cast-to-undeclared-type -->
-THE SECOND CAST SITE. A top-level `let`'s initializer is folded by the const evaluator, which is
-a different walk over different code — `Parser.applyConstCast`, driven from
-`ProgramSignatures.evaluateInitializers` before any file is parsed. It asks the same authority
-and is anchored on the same token, so the two spellings of one mistake report identically.
+THE SECOND CAST SITE. A top-level `let`'s initializer is folded during the declaration sweep
+(`ProgramSignatures.evaluateInitializers`), before any file's real parse, by the body's own cast
+parser, so the two spellings of one mistake report identically.
 ```maxon
 let SENTINEL = 5 as CompletelyMadeUpNameXyz
 

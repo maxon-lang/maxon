@@ -3,13 +3,12 @@
 // and keeps the `funcReturnTypes` registry in sync with the resolved module so SemanticCheck reads
 // resolved types.
 //
-// ⭐ **THE CASCADE BELOW IS `denotedNamedType`, AND IT HAS THREE READERS, NOT ONE.** "What does this
-// name denote?" is asked by this pass (whose `unknown` verdict IS its E3011) AND by the two places a
-// program writes an `as`-cast target — `Parser.applyCast` for a body cast and `Parser.applyConstCast`
-// for a top-level `let`'s. A door that asks nothing accepts anything: `parseTypeReference` hands back
+// ⭐ **THE CASCADE BELOW IS `denotedNamedType`, AND IT HAS TWO READERS, NOT ONE.** "What does this
+// name denote?" is asked by this pass (whose `unknown` verdict IS its E3011) AND by the place a
+// program writes an `as`-cast target — `Parser.applyCast`. A door that asks nothing accepts anything: `parseTypeReference` hands back
 // a bare `MaxonType.named` for every type it cannot answer syntactically, `maxonTypeTag` reads all of
 // them as one tag, and so `5 as CompletelyMadeUpNameXyz` compiles and returns 5. The cure is the ONE
-// list, asked from all three — never a second cascade in the parser, which is this project's
+// list, asked from both — never a second cascade in the parser, which is this project's
 // signature bug (one fact written down twice) aimed at the question where the two copies would look
 // most alike.
 //

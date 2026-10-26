@@ -30,7 +30,6 @@ Each case names the sabotage it catches.
 | `availableUnicodeEscapeText`'s UNTRUNCATED window (`available = whole`) | **0** | 1 | `malformed-escape-full-window` |
 | the `Cn` fall-out for a codepoint in NO supplementary range reading any other category | **0** | 1 | `supplementary-plane-table-bounds` |
 | `CharSet`/`CharacterSet` withdrawn from `isCompilerOwnedTypeName` | **0** | 2 | `charset-alias-is-compiler-owned`, `characterset-name-is-compiler-owned` |
-| the const evaluator's `CharacterSet.<name>(` arm placed ahead of `atConstInitializerCall` | **0** | 2 | `error.characterset-undeclared-static-at-a-top-level-initializer`, `error.characterset-from-at-a-top-level-initializer` |
 
 Two sabotages those three specs already cover well, recorded so the next reader does not re-run them:
 a member set never enrolled as an owned temporary is **31** red, and explicit membership never winning
@@ -560,8 +559,9 @@ end 'main'
 ### Error: an undeclared `CharacterSet` static at a TOP-LEVEL initializer
 
 ⭐ **THE TOP-LEVEL DOOR MUST NOT KEEP A ROSTER OF ITS OWN.** `stdlib/CharacterSet.maxon` declares the
-presets, and the declaration wins at `atConstInitializerCall`, which is asked first. A constant-evaluator arm
-that claimed `CharacterSet.<name>(` ahead of it would be a second transcription of that module, and its
+presets, and a top-level initializer resolves `CharacterSet.<name>(` through those declarations as a body
+does. A top-level arm that claimed `CharacterSet.<name>(` ahead of them would be a second transcription of
+that module, and its
 refusal would assert *"a global `CharacterSet` is one of the eleven predefined sets, whose members the
 compiler holds as data"* — a false claim, and a more confident sentence than the true one the same name gets
 inside a function.
@@ -579,22 +579,37 @@ end 'main'
 error E2073: <fragment>:2:26: 'CharacterSet' has no static method named 'inverted' — the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists
 ```
 
-<!-- test: error.characterset-from-at-a-top-level-initializer -->
-### Error: `CharacterSet.from` — a KEYWORD-named static — at a TOP-LEVEL initializer
+<!-- test: characterset-from-in-a-body -->
+### `CharacterSet.from` — a KEYWORD-named static — in a body and at a TOP-LEVEL initializer
+After a `.`, a keyword is a name, so `CharacterSet.from` is an ordinary static call wherever an expression stands.
+```maxon
+function main() returns ExitCode
+	let custom = CharacterSet.from(CharSet from ['a', 'e'])
+	let r = "aaxyzee".trim(custom)
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+xyz
+```
 
-⚠ **THIS PINS A PROPERTY OF `atConstInitializerCall`, NOT OF THIS TYPE.** That predicate tests the member
-position for `TokenKind.identifier`, and `from` lexes as `TokenKind.from` — so a declared static whose name is
-a keyword is invisible to it and falls to the scalar walk, however ordinary its declaration. `CharacterSet.from`
-is the one such static the corpus ships, which makes it the witness. Widening the member test to
-`tokenCanBeAName` (D8: after a `.`, a keyword IS a name) would admit this form and move this case; that is a
-decision to take deliberately, and this case is what makes it visible rather than silent.
+<!-- test: characterset-from-at-a-top-level-initializer -->
 ```maxon
 let custom = CharacterSet.from(CharSet from ['a', 'e'])
 
 function main() returns ExitCode
+	let r = "aaxyzee".trim(custom)
+	print("{r}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:2:14: Unsupported: `CharacterSet.from` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```exitcode
+0
+```
+```stdout
+xyz
 ```

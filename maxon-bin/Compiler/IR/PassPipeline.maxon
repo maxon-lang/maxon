@@ -796,10 +796,17 @@ export type PassPipeline
 		end 'eachPass'
 	end 'run'
 
-	function reportInitializerCallsAndDeferredNames()
-		checkInitializerCalls(self.project, signatures: self.signatures)
-		reportDeferredNameDiagnostics(self.project, signatures: self.signatures)
-	end 'reportInitializerCallsAndDeferredNames'
+	function semanticCheckThenNonConstantCalls() throws CompileError
+		try semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
+
+		if not projectHasErrors(self.project) 'everyCallWasValid'
+			checkNonConstantCallInitializers(self.project, signatures: self.signatures)
+		end 'everyCallWasValid'
+
+		if not projectHasErrors(self.project) 'nothingWasReported'
+			self.signatures.requireEveryUnvalidatedInitializerReported()
+		end 'nothingWasReported'
+	end 'semanticCheckThenNonConstantCalls'
 
 	// One arm per PassKind. Each reads the incoming module off `self`, runs the
 	// standalone pass algorithm, and writes the result back. The pass algorithms
@@ -817,10 +824,10 @@ export type PassPipeline
 		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
 
 		match pass 'dispatch'
-			reportDeferredNames then self.reportInitializerCallsAndDeferredNames()
+			reportDeferredNames then reportDeferredNameDiagnostics(self.project, signatures: self.signatures)
 			checkSignatureVisibility then checkSignatureVisibility(self.project, module: self.maxonModule, signatures: self.signatures)
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
-			semanticCheck then try semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
+			semanticCheck then try self.semanticCheckThenNonConstantCalls()
 			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
 			reportTargetRefusals then reportTargetRefusals(self.project)
 			lowerMaxonToStd then self.stdModule = try lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)

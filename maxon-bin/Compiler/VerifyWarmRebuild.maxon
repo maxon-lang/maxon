@@ -342,13 +342,13 @@ let ArraySignEditAfter = "let warmRebuildProbeSignArray = [1, u64.max]"
 
 // ⭐ **AND THE SAME EDIT ON A `var` ARRAY, ASSERTING THE OPPOSITE — the `let`/`var` pair one shape up.**
 //
-// A `var` is never imaged (`settleRecordValue` overrules the keyword), so its record is a `.data` slot and
-// every reader emits `globalAddr <label>` + `loadIndirect` whichever elements the literal held: they reach
-// only `__module_init`, rebuilt from the arena whenever the signature query misses. Mixing them would be
-// SOUND and would re-parse the whole program on every keystroke inside any array initializer.
+// A `var` is never imaged (`Parser.probedShape` answers `opaque` for one), so its record is a `.data` slot
+// and every reader emits `globalAddr <label>` + `loadIndirect` whichever elements the literal held: they
+// reach only the declaring file's `__global_init.<label>` function. Mixing them would be SOUND and would
+// re-parse the whole program on every keystroke inside any array initializer.
 //
 // ⚠ **THE SCALAR `var` PROBE ABOVE CANNOT STAND IN FOR THIS ONE.** A scalar `var` and an array `var` hash
-// through DIFFERENT arms (`mixDeclAnswer` and `mixConstArrayRecord`), so a key that mixed an array's
+// through DIFFERENT arms (`mixDeclAnswer` and `mixConstant`'s record arms), so a key that mixed an array's
 // elements unconditionally would pass every other probe in this file, the scalar `var` one included, and
 // silently throw property (b) away for arrays.
 let ArrayGlobalValueEditBefore = "var warmRebuildProbeArrayGlobal = FullRangeIntArray from [1, 2]"
@@ -364,22 +364,21 @@ let WarmRebuildProbeBoxDecl = "typealias WarmRebuildProbeSlot = int(0 to 9)\ntyp
 
 // ⭐ **THE IMAGED-BOX PROBE: the array probe's question at the shape whose record is a STRUCT.**
 //
-// A constant folded from a scalar-argument factory is image data too (`constStructIsImageData`), and it
-// arrives through a different arm: `factoryValue`, whose key carries the ROOT CALLEE and the same empty
-// label. Every read of it emits the box inline (`Parser.emitImageBoxRead` carries the record tree), so
-// `create(1)` becoming `create(2)` moves every reader's `.rdata` while the callee, the name and the label
-// all stand still — and the array probe above says nothing about it, the two arms sharing no term.
+// A constant built by a scalar-argument factory is image data too (`Parser.probedFactoryConstruction`), and
+// it arrives through a different arm: `imagedBox`, whose key carries the box tree. Every read of it emits
+// the box inline (`Parser.emitImageBoxRead` carries the record tree), so `create(1)` becoming `create(2)`
+// moves every reader's `.rdata` while the name and the label stand still — and the array probe above says
+// nothing about it, the two arms sharing no term.
 let StructFieldEditBefore = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(1)"
 let StructFieldEditAfter = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(2)"
 
 // ⭐ **AND THE SAME EDIT ON A `var` BOX, ASSERTING THE OPPOSITE — the array pair's twin, one arm over, and
-// the one probe that can see the `factoryValue` arm's over-mix guard.**
+// the one probe that can see the `storedRecord` arm's over-mix guard.**
 //
-// ⛔ **NEITHER `var` PROBE ABOVE COVERS THIS ARM.** `Parser.constFactoryConstruction` folds `T.create(n)`
-// into a `construct` node without ever consulting mutability, and `settleRecordValue` then gives the `var`
-// storage — so a stored box reaches `mixConstStructRecord` with the SAME root an imaged one has, and only
-// its `hasStorage` branch keeps the slots out of the key. Delete that branch and every other probe here
-// stays green while a keystroke inside any struct global's initializer re-parses the whole program.
+// ⛔ **NEITHER `var` PROBE ABOVE COVERS THIS ARM.** A `var` box settles to `storedRecord`, whose key is its
+// type, brand and label (`mixRecordStorage`), and that is all that keeps the slots out of the key. Mix the
+// construction in and every other probe here stays green while a keystroke inside any struct global's
+// initializer re-parses the whole program.
 let StructGlobalFieldEditBefore = "var warmRebuildProbeStructGlobal = WarmRebuildProbePair.create(1)"
 let StructGlobalFieldEditAfter = "var warmRebuildProbeStructGlobal = WarmRebuildProbePair.create(2)"
 
@@ -654,8 +653,8 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructFieldEditAfter}\n")
 	let structFieldEditMisses = try parseMissesOnRequery(project)
 
-	// Seat the `var` BOX probe, then measure it — the only probe that can see `mixConstStructRecord`'s
-	// stored-side guard, the imaged one above being green with or without it.
+	// Seat the `var` BOX probe, then measure it — the only probe that can see the `storedRecord` arm's
+	// guard, the imaged one above being green with or without it.
 	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructGlobalFieldEditBefore}\n")
 	_ = try parseMissesOnRequery(project)
 

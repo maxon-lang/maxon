@@ -829,22 +829,44 @@ end 'main'
 error E3005: specs/character-ownership/a-character-binding-is-never-retyped-by-an-int.maxon:4:7: type mismatch: 'cannot compare Character with int'
 ```
 
-<!-- test: a-module-level-character-initializer-is-not-a-constant -->
-### A top-level `let` cannot hold a character
-
-A module-scope binding folds to a compile-time constant and a `Character` is a heap-shaped record, so there
-is nothing for the constant evaluator to fold — whatever the character's byte width, the one-byte case
-included.
+<!-- test: a-character-let-in-a-body-holds-a-character -->
+### A `let` holds a character literal of any byte width
 
 ```maxon
-let DASH = '-'
-
 function main() returns ExitCode
+	let dash = '-'
+	let arrow = '→'
+	print("[{dash}] {dash.byteLength()} [{arrow}] {arrow.byteLength()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2004: specs/character-ownership/a-module-level-character-initializer-is-not-a-constant.maxon:2:12: Expected constant expression, got '-'
+```exitcode
+0
+```
+```stdout
+[-] 1 [→] 3
+```
+
+<!-- test: a-module-level-character-initializer-holds-a-character -->
+### A top-level `let` holds a character as a body's `let` does
+
+A module-scope initializer is the expression a body would write, so a character literal binds a `Character`
+there too, whatever its byte width, the one-byte case included.
+
+```maxon
+let DASH = '-'
+let ARROW = '→'
+
+function main() returns ExitCode
+	print("[{DASH}] {DASH.byteLength()} [{ARROW}] {ARROW.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[-] 1 [→] 3
 ```
 
 <!-- test: a-character-range-needs-both-bounds -->

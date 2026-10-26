@@ -3533,7 +3533,30 @@ end 'main'
 error E3116: <fragment>:27:4: 'T.ping' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
 ```
 
-<!-- test: error.a-module-scope-factory-through-a-generic-instance-alias-is-refused -->
+<!-- test: a-body-factory-through-a-generic-instance-alias-is-called -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var item as T
+
+	static function make(item T) returns Self
+		return Self{item: item}
+	end 'make'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let b = IntBox.make(5)
+	return b.item as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-module-scope-factory-through-a-generic-instance-alias-is-called -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3553,8 +3576,8 @@ function main() returns ExitCode
 	return b.item as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:14:16: Unsupported: `IntBox.make` as a top-level initializer — a global container is declared with `create()`, the one static a constant initializer can name; every other method needs the program to be running
+```exitcode
+5
 ```
 
 <!-- test: error.a-type-call-through-a-type-parameter-picks-the-static-requirement-beside-an-instance-of-the-same-name -->
@@ -3746,14 +3769,25 @@ error E2078: <fragment>:3:17: 'String.byteLength' is an instance method, and a m
 
 <!-- test: error.a-primitive-keyword-static-call-at-module-scope-is-refused -->
 ```maxon
-let n = int.fromString("5")
+let n = try int.fromString("5") otherwise 0
 
 function main() returns ExitCode
-	return 0
+	return n as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:13: Unsupported: `int.fromString` as a top-level initializer — it returns 'FullRangeInt', and a global holding a scalar has its value written into the `.data` image, which happens before any code can run. A factory-built global must return a record (a struct, a String or a container)
+error E2045: <fragment>:2:17: Function calls are not allowed in global variable initializers; 'fromString()' is not a constant expression
+```
+
+<!-- test: a-primitive-keyword-static-call-in-a-function-body-is-called -->
+```maxon
+function main() returns ExitCode
+	let n = try int.fromString("5") otherwise 0
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+5
 ```
 
 <!-- test: a-module-binding-named-like-a-primitive-calls-the-binding -->
@@ -3865,7 +3899,7 @@ error E2073: <fragment>:19:15: 'byte' is a directory and has no member 'LIMIT'
 ```
 
 
-<!-- test: error.a-directory-let-read-at-module-scope-through-a-directory-named-like-a-primitive-is-not-a-constant -->
+<!-- test: error.a-directory-let-read-at-module-scope-through-a-directory-named-like-a-primitive-names-the-directory -->
 ```maxon
 // --- file: byte/m.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -3890,7 +3924,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:18:9: Unsupported: `byte.LIMIT` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+error E2073: <fragment>:18:14: 'byte' is a directory and has no member 'LIMIT'
 ```
 
 
@@ -3922,14 +3956,10 @@ error E2004: <fragment>:19:2: Undefined variable 'byte'
 ```
 
 
-<!-- test: error.a-directory-function-read-as-a-value-at-module-scope-through-a-directory-named-like-a-primitive-is-not-a-constant -->
+<!-- test: a-directory-function-read-as-a-value-at-module-scope-through-a-directory-named-like-a-primitive-is-called -->
 ```maxon
 // --- file: byte/m.maxon
 export typealias Integer = int(i64.min to i64.max)
-
-export let LIMIT = 7
-
-export var counter = 1 as Integer
 
 export function ping()
 	print("ping\n")
@@ -3943,11 +3973,15 @@ end 'twice'
 let f = byte.twice
 
 function main() returns ExitCode
-	return 0
+	byte.ping()
+	return f(3) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:18:9: Unsupported: `byte.twice` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```exitcode
+6
+```
+```stdout
+ping
 ```
 
 
@@ -4034,7 +4068,7 @@ error E2073: <fragment>:19:14: 'lib' is a directory and has no member 'LIMIT'
 ```
 
 
-<!-- test: error.a-directory-let-read-at-module-scope-through-an-ordinary-directory-is-not-a-constant -->
+<!-- test: error.a-directory-let-read-at-module-scope-through-an-ordinary-directory-names-the-directory -->
 ```maxon
 // --- file: lib/m.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -4059,7 +4093,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:18:9: Unsupported: `lib.LIMIT` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+error E2073: <fragment>:18:13: 'lib' is a directory and has no member 'LIMIT'
 ```
 
 
@@ -4091,14 +4125,10 @@ error E2004: <fragment>:19:2: Undefined variable 'lib'
 ```
 
 
-<!-- test: error.a-directory-function-read-as-a-value-at-module-scope-through-an-ordinary-directory-is-not-a-constant -->
+<!-- test: a-directory-function-read-as-a-value-at-module-scope-through-an-ordinary-directory-is-called -->
 ```maxon
 // --- file: lib/m.maxon
 export typealias Integer = int(i64.min to i64.max)
-
-export let LIMIT = 7
-
-export var counter = 1 as Integer
 
 export function ping()
 	print("ping\n")
@@ -4112,11 +4142,15 @@ end 'twice'
 let f = lib.twice
 
 function main() returns ExitCode
-	return 0
+	lib.ping()
+	return f(3) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:18:9: Unsupported: `lib.twice` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```exitcode
+6
+```
+```stdout
+ping
 ```
 
 

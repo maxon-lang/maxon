@@ -543,19 +543,12 @@ export typealias RegNum = int(0 to 62) implements ElementIndex
 // read, and `regClassOf` (x64-boundary) is used only where the register is known to be x64's or
 // is an ABI operand below both boundaries (see `regClassOf`).
 //
-// RESPELLED as a literal rather than read off `X64Register.xmm0.rawValue`: a top-level
-// `let` is const-evaluated, and the evaluator does not fold `.rawValue` (E2045, verified —
-// *"Global initializer for 'FirstXmm' is not a constant expression"*). That is a DIFFERENT
-// wall from the one `RegNum`'s bound hits (E2010, a range bound must be a literal), and
-// both end in a respelled number for reasons neither can route around. The enum and this
-// constant must therefore move together, and `assertRegisterFileMatchesEnum` is what makes them.
+// A respelled literal: the enum and this constant must move together, and
+// `assertRegisterFileMatchesEnum` is what makes them.
 let FirstXmmRegisterNumber = 16 as RegNum
 
 // `RegisterFileSize` and `FirstXmmRegisterNumber` are respelled literals; this is what keeps them
-// honest. E2045 forbids reading the enum in their INITIALIZERS, but it binds CONST-EVALUATION of a
-// top-level `let` and nothing else — a function body may interrogate the enum (`allCases`,
-// `fromRawValue`), which is the whole reason a check can exist where a derivation cannot. (Where a
-// derivation CAN exist it is strictly better and there is no assert: see
+// honest. (Where a derivation exists it is strictly better and there is no assert: see
 // `TypeRules.MaxUnguardedShiftCount`.)
 //
 // ⚠ `X64Register.allCases` builds a fresh heap array, so this call costs two allocations per COMPILE,

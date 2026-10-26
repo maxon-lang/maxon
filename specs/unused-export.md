@@ -432,7 +432,7 @@ end 'main'
 
 <!-- test: cross-file-constant-chain-is-a-reference -->
 ⚠ **AND AN INITIALIZER IS A SECOND DOOR.** `FINAL` reads `MIDDLE` from inside a constant initializer,
-which resolves through the const EVALUATOR rather than through a use site. Hooking only the use site
+which is folded during the declaration sweep rather than read at a use site. Hooking only the use site
 would report every link of a cross-file chain as unreferenced.
 ```maxon
 // --- file: app/main.maxon
@@ -454,9 +454,9 @@ export let ROOT = 10
 
 <!-- test: a-type-named-only-in-another-files-const-initializer-is-a-reference -->
 ⚠ **AND A TOP-LEVEL INITIALIZER IS THE SECOND DOOR FOR TYPES TOO.** `app/main.maxon` names `ColumnWidth`
-nowhere but in a constant's initializer, and the real parse SKIPS those tokens — the const evaluator folds
+nowhere but in a constant's initializer, and the real parse SKIPS those tokens — the declaration sweep folds
 them on a throwaway `Parser` whose artifact nobody reads. A file whose every mention of another file's
-alias has that shape is not a non-reader, so the evaluator records the name where it resolves it.
+alias has that shape is not a non-reader, so the sweep records the name where it resolves it.
 ```maxon
 // --- file: api/width.maxon
 export typealias ColumnWidth = int(0 to 128)

@@ -606,7 +606,6 @@ function collectReferences(module MaxonModule, signatures ProgramSignatures, tra
 
 	noteCrossFileConstantReads(signatures, tracked: tracked)
 	noteConstInitializerTypeNames(signatures, tracked: tracked)
-	noteTopLevelInitializerCallees(signatures, tracked: tracked)
 end 'collectReferences'
 
 // A declared signature names types in the DECLARING file — its parameters, its return and its `throws`.
@@ -745,13 +744,13 @@ end 'noteOpReferences'
 // compiles perfectly well once the `export` is dropped, so crediting them would delete three families of
 // correct findings. What earns a credit is a visibility the resolver actually demanded.
 //
-// ⭐⭐ **A NAME SPELLED ONLY IN A TOP-LEVEL INITIALIZER IS INVISIBLE TO THE PARSE.** `readTopLevelBinding`
-// skips an initializer's tokens wholesale — the const evaluator folds them, before any file is parsed, on a
-// transient `Parser` whose artifact is discarded — so `let W = 22 as ColumnWidth` leaves NOTHING in that
-// file's `usedTypeNames`. A file whose every mention of another file's alias has that shape then looks like
-// no reader at all, and E3092 tells the author to drop an `export` the program needs. The evaluator records
-// those names on the index instead (`ProgramSignatures.recordConstInitializerTypeName`), and they are
-// credited here through the same door as the other two.
+// ⭐⭐ **A NAME SPELLED ONLY IN A TOP-LEVEL INITIALIZER IS INVISIBLE TO THE PARSE.** An initializer is parsed
+// before any file is, on a transient `Parser` whose artifact is discarded, so `let W = 22 as ColumnWidth`
+// leaves NOTHING in that file's `usedTypeNames`. A file whose every mention of another file's alias has that
+// shape then looks like no reader at all, and E3092 tells the author to drop an `export` the program needs.
+// The initializer parse records those names on the index instead
+// (`ProgramSignatures.recordConstInitializerTypeName`), and they are credited here through the same door as
+// the other two.
 function collectFileTypeReferences(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
 	for path in userFiles 'eachFile'
 		view artifact = try queryParseOps(project, path: path)
@@ -778,7 +777,7 @@ function noteEachTypeName(signatures ProgramSignatures, tracked TrackedDecls, na
 	end 'eachName'
 end 'noteEachTypeName'
 
-// The type names only a top-level initializer spells, replayed from the log the const evaluator wrote —
+// The type names only a top-level initializer spells, replayed from the log the initializer parses wrote —
 // see `collectFileTypeReferences`'s header for why the parse cannot see them.
 function noteConstInitializerTypeNames(signatures ProgramSignatures, tracked TrackedDecls)
 	for i in 0 upto signatures.constInitializerTypeSiteCount() 'eachSite'
@@ -1301,33 +1300,6 @@ function emitForGlobalTier(project Project, decl TrackedDecl, demandedTier Visib
 		reportPositioned(project, code: ErrorCode.semanticExportableAsModule, message: "exported {decl.noun} '{decl.displayName}' is only referenced inside its declaring module subtree; consider 'module' visibility", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path)
 	end 'onlyItsOwnSubtreeNamesIt'
 end 'emitForGlobalTier'
-
-// ⭐ **A TOP-LEVEL INITIALIZER'S CALLS, ATTRIBUTED TO THE FILE THAT WROTE THEM.** `var a = Outer.build()`
-// is lowered into the synthesized `__module_init`, whose `sourceFilePath` is empty — so the body walk
-// skips it and the call is invisible. Asked per DECLARATION instead, which is what carries the declaring
-// file, rather than off `globalInitCallees()`, whose flat list has lost it. MEASURED on
-// `top-level-factory-globals/factory-returning-a-record-declared-in-another-file`.
-function noteTopLevelInitializerCallees(signatures ProgramSignatures, tracked TrackedDecls)
-	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
-		view decl = signatures.declAt(i)
-		noteOneInitializersCallees(signatures, tracked: tracked, decl: decl)
-	end 'eachDecl'
-end 'noteTopLevelInitializerCallees'
-
-function noteOneInitializersCallees(signatures ProgramSignatures, tracked TrackedDecls, decl TopLevelDecl)
-	match signatures.declInitializerCall(decl) 'initializer'
-		none then return
-		calls(callees, functionValues) then noteEveryInitializerCallee(signatures, tracked: tracked, callees: initializerRootNames(callees, functionValues: functionValues), reader: tracked.fileOf(decl.declFilePath, signatures: signatures))
-		namesFunctions(functionValues) then noteEveryInitializerCallee(signatures, tracked: tracked, callees: functionValues, reader: tracked.fileOf(decl.declFilePath, signatures: signatures))
-	end 'initializer'
-end 'noteOneInitializersCallees'
-
-function noteEveryInitializerCallee(signatures ProgramSignatures, tracked TrackedDecls, callees NameRoster, reader AuditedFile)
-	for callee in callees 'eachCallee'
-		noteFunctionName(signatures, tracked: tracked, name: callee, reader: reader)
-		noteCalleeSignature(signatures, tracked: tracked, callee: callee, reader: reader)
-	end 'eachCallee'
-end 'noteEveryInitializerCallee'
 
 // How a credited name is read: `nominal` names its declaration by itself, and `readIn` is a spelling whose
 // declaration is the one that file means by it.

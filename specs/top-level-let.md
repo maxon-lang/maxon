@@ -10,7 +10,7 @@ category: language
 
 ## Top-Level Let Declarations
 
-Top-level `let` declarations define compile-time constants at module scope. These constants are evaluated at compile time and stored in the executable's read-only data section.
+Top-level `let` declarations bind values at module scope. An initializer is read by the function body's expression parser, so it accepts every expression a body does, with the same meaning. A scalar binding is a compile-time constant inlined at every use; a record whose value is decided at compile time is laid down in the executable's read-only data, and any other record is built by `__module_init` before `main`.
 
 ### Syntax
 
@@ -21,24 +21,23 @@ export let EXPORTED_NAME = expression
 
 ### Features
 
-- **Compile-time evaluation**: Initializers must be constant expressions
-- **Type inference**: Type is inferred from the initializer
-- **Forward references**: Constants can reference other constants declared later in the file
+- **Body expressions**: An initializer is any expression a function body accepts, typed and diagnosed as a body types and diagnoses it
+- **Type inference**: Type is inferred from the initializer, and a derived constant keeps its operands' typealias
+- **Forward references**: Constants can reference other constants declared later in the file, or in another file that exports them
 - **Export support**: Use `export let` to make constants available to other modules
 
 ### Constant Expressions
 
-The following are valid in constant expressions:
-- Literals: integers, floats, booleans, strings, bytes, characters
-- Arithmetic: `+`, `-`, `*`, `/`, `mod`
-- Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
-- Logical: `and`, `or`, `not`
-- Bitwise: `&`, `|`, `^`, `~`, `<<`, `>>`
-- Type casts: `as int`, `as float`, `as bool`
+A scalar binding's initializer must have a value the body parser knows at compile time:
+- Literals: integers, floats, booleans
+- Arithmetic, comparison, logical (`and`, `or`, `not`) and bitwise operators over known values
+- Casts, `countof(T)`, a sized type's `.min` / `.max`, and a builtin over constants (`sqrt(4.0)`)
 - References to other top-level constants
-- Array literals: `[1, 2, 3]` (elements must be constant expressions)
 - Enum member access: `Color.Red`
-- Map literals: `["key": value]` (keys and values must be constant expressions; initialized at runtime)
+
+A call whose value is not known at compile time is **E2045**. Strings, byte strings, characters, arrays,
+maps, tuples and other records are not scalars: a constant one is laid down as read-only data, and any other
+is built before `main`.
 
 ### Examples
 
@@ -53,9 +52,9 @@ let PRIMES = [2, 3, 5, 7, 11]
 
 ### Restrictions
 
-- A call is not a constant expression: an initializer that calls a static factory or a free function
-  returning a record runs in `__module_init` before `main`, and any other call is **E2045**
-- Map literals are supported, but require runtime initialization
+- A call that returns a record runs in `__module_init` before `main`; a call that returns a scalar not
+  known at compile time is **E2045**
+- Initializers that depend on each other in a cycle are **E2012**
 - A top-level `var` is module state rather than a constant: its initializer runs before `main`, and any
   function in the file may reassign it (`docs/LANGUAGE_REFERENCE.md`, *Top-Level Variables*)
 
@@ -198,6 +197,29 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: a-top-level-short-circuit-is-a-constant -->
+`and` and `or` over constants are constants themselves, so they initialize a scalar `var`, whose initializer must be known before `main`.
+```maxon
+let BOTH = true and true
+let EITHER = false or true
+let NEITHER = false and true
+var READY = BOTH and EITHER and not NEITHER
+
+function main() returns ExitCode
+	print("{BOTH} {EITHER} {NEITHER} {READY}\n")
+	READY = false
+	print("{READY}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true true false true
+false
 ```
 
 <!-- test: cast-in-constant -->
@@ -886,8 +908,8 @@ end 'main'
 ```
 
 <!-- test: error.a-top-level-tuple-literal-in-an-array-of-scalars -->
-A tuple literal is a tuple wherever it stands, so an array of `Word` refuses it as it refuses any element of
-another type, naming the tuple type.
+A tuple literal is a tuple wherever it stands, so an array of `Word` refuses it as the same array literal in a
+function body does.
 ```maxon
 typealias Word = bits(64)
 typealias Words = Array with Word
@@ -899,7 +921,52 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:25: 'Words from' requires a int, but its argument is (int, int)
+error E3009: <fragment>:5:25: Cannot cast from struct to int
+```
+
+<!-- test: error.a-tuple-literal-in-an-array-of-scalars-in-a-body -->
+```maxon
+typealias Word = bits(64)
+typealias Words = Array with Word
+
+function main() returns ExitCode
+	let words = Words from [(0, 1)]
+	return words.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:6:26: Cannot cast from struct to int
+```
+
+<!-- test: an-array-of-element-alias-casts-in-a-body -->
+An element cast to the array's own element alias is an element of that type, so `Items from [7 as Item]` builds the array.
+```maxon
+typealias Item = int(0 to 1000)
+typealias Items = Array with Item
+
+function main() returns ExitCode
+	let xs = Items from [7 as Item]
+	return (try xs.get(0) otherwise 0) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-top-level-array-of-element-alias-casts -->
+The same literal at file scope is the same array, read back after `main` starts.
+```maxon
+typealias Item = int(0 to 1000)
+typealias Items = Array with Item
+
+let xs = Items from [7 as Item]
+
+function main() returns ExitCode
+	return (try xs.get(0) otherwise 0) as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: cross-file-constant-in-initializer -->
@@ -1002,7 +1069,26 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: app/specs/top-level-let/error.file-private-constant-cross-file.maxon:10:12: Undefined constant 'SECRET'
+error E2004: app/specs/top-level-let/error.file-private-constant-cross-file.maxon:10:12: Undefined variable 'SECRET'
+```
+
+<!-- test: error.file-private-constant-read-in-a-body-cross-file -->
+```maxon
+// --- file: api/secret.maxon
+let SECRET = 5
+
+export function useSecret() returns ExitCode
+	return SECRET as ExitCode
+end 'useSecret'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let copy = SECRET * 2
+	return copy + useSecret()
+end 'main'
+```
+```maxoncstderr
+error E2004: app/<fragment>:11:13: Undefined variable 'SECRET'
 ```
 
 <!-- test: cross-file-exported-reads-own-private-declared-last -->
@@ -1108,12 +1194,12 @@ export let BVAL = SECRET + 1
 122
 ```
 
-### Error: A runtime-initialized global must consume everything up to the end of its line
+### Error: A global's initializer must consume everything up to the end of its line
 
-A global whose initializer is not constant-foldable is re-parsed later, out of the token region the
-declaration scan marked off, so whatever the expression does not reach must be refused rather than
-abandoned — otherwise `var g = Box.create() zzz` would compile, run, and ignore `zzz`. The
-interpolation body and the captured parameter default follow the same rule.
+A global's initializer is parsed out of the token region the declaration scan marked off, so whatever the
+expression does not reach is refused rather than abandoned — otherwise `var g = Box.create() zzz` would
+compile, run, and ignore `zzz`. The refusal is the one a body's binding gets. The interpolation body and
+the captured parameter default follow the same rule.
 
 <!-- test: error.runtime-init-trailing-tokens -->
 ```maxon
@@ -1134,7 +1220,28 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/top-level-let/error.runtime-init-trailing-tokens.maxon:12:22: Expected 'end of global initializer' but got 'zzz'
+error E2001: specs/top-level-let/error.runtime-init-trailing-tokens.maxon:12:22: unexpected token: 'zzz'
+```
+
+<!-- test: error.a-body-binding-trailing-tokens -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+
+	static function create() returns Self
+		return Self{v: 3}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let g = Box.create() zzz
+	return g.v
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:13:23: unexpected token: 'zzz'
 ```
 
 <!-- test: a-top-level-let-is-initialized-by-a-directory-types-static -->
@@ -1169,6 +1276,29 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: a-parenthesised-qualified-factory-at-file-scope -->
+Parentheses around a directory-qualified factory call are the same call, as they are around an unqualified one.
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export let v as ExitCode
+
+	export static function create(v ExitCode) returns Calc
+		return Calc{v: v}
+	end 'create'
+end 'Calc'
+
+// --- file: main.maxon
+let r = (sub.Calc.create(7))
+
+function main() returns ExitCode
+	return r.v
+end 'main'
+```
+```exitcode
+7
 ```
 
 
@@ -1206,7 +1336,7 @@ type Registry
 		return 4
 	end 'makeSeed'
 
-	export static function value() returns Integer
+	static function value() returns Integer
 		return Registry.seed
 	end 'value'
 end 'Registry'
@@ -1217,6 +1347,30 @@ end 'main'
 ```
 ```maxoncstderr
 error E2045: <fragment>:5:20: Function calls are not allowed in global variable initializers; 'makeSeed()' is not a constant expression
+```
+
+<!-- test: a-static-method-body-calling-a-sibling-static-bare-calls-it -->
+The same bare call in a static method's body calls the sibling.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Registry
+	static function makeSeed() returns Integer
+		return 4
+	end 'makeSeed'
+
+	static function value() returns Integer
+		let seed = makeSeed()
+		return seed
+	end 'value'
+end 'Registry'
+
+function main() returns ExitCode
+	return Registry.value() as ExitCode
+end 'main'
+```
+```exitcode
+4
 ```
 
 <!-- test: error.a-generic-call-in-a-constant-is-not-a-constant -->
@@ -1277,19 +1431,21 @@ error E2045: <fragment>:15:20: Function calls are not allowed in global variable
 ```
 
 
-<!-- test: error.a-builtin-call-past-a-hidden-same-name-declaration-is-not-a-constant -->
+<!-- test: a-builtin-call-past-a-hidden-same-name-declaration-folds-to-a-constant -->
 Another file declares a file-private `sqrt`; from `main.maxon` the bare call means the math builtin, as a
-body call does, so the initializer is refused as a call rather than as a hidden function.
+body call does, and a builtin over a constant is the constant the body knows it to be, so `R` is 2.0.
 ```maxon
 // --- file: main.maxon
 public typealias Real = float(0.0 to 10.0)
-public typealias Digit = int(0 to 9)
 
 let R = sqrt(4.0)
 
 function main() returns ExitCode
-	let d = R as Digit
-	return d as ExitCode
+	if R > useSqrt() 'big'
+		return 1
+	end 'big'
+
+	return 0
 end 'main'
 
 // --- file: a.maxon
@@ -1301,12 +1457,42 @@ export function useSqrt() returns Real
 	return sqrt(1.0)
 end 'useSqrt'
 ```
-```maxoncstderr
-error E2045: <fragment>:6:9: Function calls are not allowed in global variable initializers; 'sqrt()' is not a constant expression
+```exitcode
+1
 ```
 
-<!-- test: error.a-refused-initializer-call-beside-an-unused-typealias-reports-both -->
-A refused initializer call does not hide an unrelated diagnostic in another file.
+<!-- test: a-builtin-call-in-a-function-body-past-a-hidden-same-name-declaration-calls-the-builtin -->
+The same bare call in a function body means the math builtin.
+```maxon
+// --- file: main.maxon
+public typealias Real = float(0.0 to 10.0)
+
+function main() returns ExitCode
+	let r = sqrt(4.0)
+
+	if r > useSqrt() 'big'
+		return 1
+	end 'big'
+
+	return 0
+end 'main'
+
+// --- file: a.maxon
+function sqrt(x Real) returns Real
+	return x
+end 'sqrt'
+
+export function useSqrt() returns Real
+	return sqrt(1.0)
+end 'useSqrt'
+```
+```exitcode
+1
+```
+
+<!-- test: error.a-refused-initializer-call-beside-an-unused-typealias-reports-the-typealias -->
+An unused typealias in another file is reported ahead of an initializer's undefined call, as it is ahead
+of the same call in a function body.
 ```maxon
 // --- file: main.maxon
 let G = nothere(7)
@@ -1319,8 +1505,23 @@ end 'main'
 typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
-error E3004: <fragment>:3:9: call to undefined function 'nothere'
 error E3062: <fragment>:10:11: unused typealias: 'Unused'
+```
+
+<!-- test: error.a-refused-function-body-call-beside-an-unused-typealias-reports-the-typealias -->
+The same call in a function body.
+```maxon
+// --- file: main.maxon
+function main() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'main'
+
+// --- file: other.maxon
+typealias Unused = int(0 to 5)
+```
+```maxoncstderr
+error E3062: <fragment>:9:11: unused typealias: 'Unused'
 ```
 
 <!-- test: error.a-constant-reading-a-refused-call-constant-reports-the-call-once -->
@@ -1351,8 +1552,9 @@ end 'main'
 error E3004: <fragment>:2:9: call to undefined function 'nothere'
 ```
 
-<!-- test: error.a-static-initializer-calling-a-sibling-instance-method-bare-is-not-a-constant -->
-`fresh` is an instance method, so a `static var` initializer calling it bare has no receiver to call it on.
+<!-- test: error.a-static-initializer-calling-a-sibling-instance-method-bare-has-no-receiver -->
+`fresh` is an instance method, so a `static var` initializer calling it bare has no receiver to call it on,
+and is refused as the same call in a static method's body is.
 ```maxon
 typealias Digit = int(0 to 9)
 
@@ -1375,7 +1577,33 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2045: <fragment>:7:22: Function calls are not allowed in global variable initializers; 'fresh()' is not a constant expression
+error E3036: <fragment>:7:22: 'Holder.fresh' expects 1 argument(s) but 0 were provided
+```
+
+<!-- test: error.a-static-method-body-calling-a-sibling-instance-method-bare-has-no-receiver -->
+The same bare call in a static method's body.
+```maxon
+typealias Digit = int(0 to 9)
+
+type Holder
+	export var n as Digit
+
+	function fresh() returns Holder
+		return Holder{n: 1}
+	end 'fresh'
+
+	static function value() returns Digit
+		let shared = fresh()
+		return shared.n
+	end 'value'
+end 'Holder'
+
+function main() returns ExitCode
+	return Holder.value() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:12:16: 'Holder.fresh' expects 1 argument(s) but 0 were provided
 ```
 
 
@@ -1621,9 +1849,10 @@ end 'useLarger'
 error E3008: <fragment>:3:11: function 'larger' is not exported
 ```
 
-<!-- test: error.a-tuple-assignment-to-a-refused-call-var-reports-both -->
+<!-- test: error.a-tuple-assignment-to-a-refused-call-var-reports-the-tuple-assignment -->
 `G`'s initializer is a refused call, and a tuple assignment naming a module `var` is refused whatever
-its value: both are reported.
+its value. The tuple assignment's refusal is reported ahead of the call, as it is when the same call is
+written in a function body.
 ```maxon
 typealias Digit = int(0 to 9)
 
@@ -1641,11 +1870,33 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:12:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
-error E3004: <fragment>:4:9: call to undefined function 'nothere'
 ```
 
-<!-- test: error.a-refused-call-inside-a-record-literal-reports-only-the-call -->
-The refused call sits inside a record literal; the type names written before it still count as used.
+<!-- test: error.a-tuple-assignment-to-a-module-var-beside-a-refused-call-in-a-function-body -->
+The same refused call written in a function body, beside the same tuple assignment.
+```maxon
+typealias Digit = int(0 to 9)
+
+var G = 0 as Digit
+
+function pair() returns (Digit, Digit)
+	return (1 as Digit, 2 as Digit)
+end 'pair'
+
+function main() returns ExitCode
+	let h = nothere(7)
+	var y = 0 as Digit
+	(G, y) = pair()
+	return (y + h) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
+```
+
+<!-- test: error.a-refused-call-inside-a-record-literal-reports-the-call-and-the-cast-before-it -->
+The refused call sits inside a record literal; the cast written before it is still read, so its unneeded
+`as Small` is reported beside the call, as in a function body.
 ```maxon
 typealias Small = int(0 to 9)
 
@@ -1666,6 +1917,31 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:13:36: call to undefined function 'nothere'
+error E3010: <fragment>:13:23: unneeded cast: the literal 1 already fits in 'Small'
+```
+
+<!-- test: error.a-refused-call-inside-a-record-literal-in-a-function-body-reports-the-call-and-the-cast-before-it -->
+The same call in a function body.
+```maxon
+typealias Small = int(0 to 9)
+
+type Pair
+	export var a as Small
+	export var b as Small
+
+	static function create(a Small, b Small) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let g = Pair.create(1 as Small, b: nothere(2))
+	return g.a as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:14:37: call to undefined function 'nothere'
+error E3010: <fragment>:14:24: unneeded cast: the literal 1 already fits in 'Small'
 ```
 
 <!-- test: error.uses-of-a-refused-call-constant-report-the-call-once -->
@@ -1698,15 +1974,16 @@ error E3004: <fragment>:4:9: call to undefined function 'nothere'
 ```
 
 
-<!-- test: error.a-static-initializer-calling-a-function-valued-binding-past-a-sibling-is-not-a-constant -->
+<!-- test: a-static-initializer-calling-a-function-valued-binding-past-a-sibling-calls-the-binding -->
 `make` is a top-level binding holding a function value a call built; a body call `make()` inside `Box`
-calls it, so the initializer means it too and is refused as a call, not folded to the sibling factory.
+calls it, so the initializer calls it too, not the sibling factory: `origin` is `other`'s `3`, not the
+sibling's `7`.
 ```maxon
 typealias Digit = int(0 to 9)
 typealias Maker = function() returns Box
 
 function other() returns Box
-	return Box.make()
+	return Box.three()
 end 'other'
 
 function makerOf() returns Maker
@@ -1724,29 +2001,74 @@ type Box
 		return Box{n: 7}
 	end 'make'
 
+	static function three() returns Box
+		return Box{n: 3}
+	end 'three'
+
 	static function originOf() returns Digit
 		return Box.origin.n
 	end 'originOf'
 end 'Box'
 
 function main() returns ExitCode
-	return Box.originOf() as ExitCode
+	return (Box.originOf() + Box.make().n) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2045: <fragment>:18:22: Function calls are not allowed in global variable initializers; 'make()' is not a constant expression
+```exitcode
+10
 ```
 
-
-<!-- test: error.a-static-initializer-calling-a-function-valued-binding-past-a-sibling-with-a-parameter-is-not-a-constant -->
-The sibling `make` takes a `Digit` the argument does not fit, but the call means the function-valued
-binding, as a body call would, so the refusal is the call's, not the sibling's parameter's.
+<!-- test: a-static-method-body-calling-a-function-valued-binding-past-a-sibling-calls-the-binding -->
+The same call in a static method's body.
 ```maxon
 typealias Digit = int(0 to 9)
 typealias Maker = function() returns Box
 
 function other() returns Box
-	return Box.make(7 as Digit)
+	return Box.three()
+end 'other'
+
+function makerOf() returns Maker
+	return other
+end 'makerOf'
+
+let make = makerOf()
+
+type Box
+	export var n as Digit
+
+	static function make() returns Box
+		return Box{n: 7}
+	end 'make'
+
+	static function three() returns Box
+		return Box{n: 3}
+	end 'three'
+
+	static function originOf() returns Digit
+		let origin = make()
+		return origin.n
+	end 'originOf'
+end 'Box'
+
+function main() returns ExitCode
+	return (Box.originOf() + Box.make().n) as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+
+<!-- test: error.a-static-initializer-calling-a-function-valued-binding-past-a-sibling-with-a-parameter-calls-the-binding -->
+The sibling `make` takes a `Digit` the argument does not fit, but the call means the function-valued
+binding, as a body call does, so the refusal is the binding's arity, not the sibling's parameter's.
+```maxon
+typealias Digit = int(0 to 9)
+typealias Maker = function() returns Box
+
+function other() returns Box
+	return Box.make(7)
 end 'other'
 
 function makerOf() returns Maker
@@ -1774,7 +2096,44 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2045: <fragment>:18:22: Function calls are not allowed in global variable initializers; 'make()' is not a constant expression
+error E3036: <fragment>:18:26: 'Maker' expects 0 argument(s) but 1 were provided
+```
+
+<!-- test: error.a-static-method-body-calling-a-function-valued-binding-past-a-sibling-with-a-parameter -->
+The same call in a static method's body.
+```maxon
+typealias Digit = int(0 to 9)
+typealias Maker = function() returns Box
+
+function other() returns Box
+	return Box.make(7)
+end 'other'
+
+function makerOf() returns Maker
+	return other
+end 'makerOf'
+
+let make = makerOf()
+
+type Box
+	export var n as Digit
+
+	static function make(n Digit) returns Box
+		return Box{n: n}
+	end 'make'
+
+	static function originOf() returns Digit
+		let origin = make(42)
+		return origin.n
+	end 'originOf'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.originOf() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:23:20: 'Maker' expects 0 argument(s) but 1 were provided
 ```
 
 
@@ -1809,7 +2168,39 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:9:27: Value 42 is outside the range of 'Digit' (int(0 to 9))
+error E3005: <fragment>:9:22: Value 42 is outside the range of 'Digit' (int(0 to 9))
+```
+
+<!-- test: error.a-static-method-calling-a-sibling-past-a-same-named-constant-reports-the-siblings-defect -->
+The same call in a static method's body, reported at the same token, the callee's name.
+```maxon
+typealias Digit = int(0 to 9)
+
+let make = 0
+
+type Box
+	export var n as Digit
+
+	static function make(n Digit) returns Box
+		return Box{n: n}
+	end 'make'
+
+	static function originOf() returns Digit
+		let origin = make(42)
+		return origin.n
+	end 'originOf'
+end 'Box'
+
+function main() returns ExitCode
+	if make == 0 'zero'
+		return Box.originOf() as ExitCode
+	end 'zero'
+
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:16: Value 42 is outside the range of 'Digit' (int(0 to 9))
 ```
 
 <!-- test: error.an-undeclared-base-in-a-top-level-initializer-is-an-undefined-variable -->
@@ -1836,4 +2227,98 @@ end 'main'
 ```
 ```maxoncstderr
 error E2004: <fragment>:2:14: Undefined variable 'Nope'
+```
+
+
+<!-- test: error.a-top-level-exit-code-constant-is-refused-where-a-ranged-alias-is-required -->
+A constant cast to `ExitCode` keeps being an `ExitCode` where it is read: handed to a parameter of a ranged alias it
+is refused by name, exactly as the body twin below refuses an `ExitCode` local.
+```maxon
+typealias Small = int(0 to 255)
+
+let FAIL = 3 as ExitCode
+
+function takesSmall(n Small) returns Small
+	return n
+end 'takesSmall'
+
+function main() returns ExitCode
+	return takesSmall(FAIL) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+```
+
+<!-- test: error.an-exit-code-local-is-refused-where-a-ranged-alias-is-required -->
+```maxon
+typealias Small = int(0 to 255)
+
+function takesSmall(n Small) returns Small
+	return n
+end 'takesSmall'
+
+function main() returns ExitCode
+	let fail = 3 as ExitCode
+	return takesSmall(fail) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+```
+
+<!-- test: error.a-constant-derived-from-a-top-level-exit-code-constant-is-refused-where-a-ranged-alias-is-required -->
+Arithmetic over an `ExitCode` constant is an `ExitCode` constant, as it is in a body.
+```maxon
+typealias Small = int(0 to 255)
+
+let FAIL = 3 as ExitCode
+let NEXT = FAIL + 1
+
+function takesSmall(n Small) returns Small
+	return n
+end 'takesSmall'
+
+function main() returns ExitCode
+	return takesSmall(NEXT) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+```
+
+<!-- test: error.a-derived-exit-code-local-is-refused-where-a-ranged-alias-is-required -->
+```maxon
+typealias Small = int(0 to 255)
+
+function takesSmall(n Small) returns Small
+	return n
+end 'takesSmall'
+
+function main() returns ExitCode
+	let fail = 3 as ExitCode
+	let next = fail + 1
+	return takesSmall(next) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+```
+
+<!-- test: a-top-level-exit-code-var-is-reassigned-as-an-exit-code -->
+A module `var` born from an `ExitCode` cast is an `ExitCode` slot, read and written as one.
+```maxon
+var code = 3 as ExitCode
+
+function bump()
+	code = code + 4
+end 'bump'
+
+function main() returns ExitCode
+	bump()
+	return code
+end 'main'
+```
+```exitcode
+7
 ```

@@ -1231,19 +1231,15 @@ trips 0 counts 0 0
 
 ## A map literal at FILE SCOPE
 
-A `[k: v]` written as a top-level `let`/`var` initializer is the same desugar a body's literal is —
-`Map.create()` plus one `Map.upsert(k, value: v)` per pair — emitted by `__module_init` before `main`
-instead of into the function that wrote it. The first pair fixes both columns; every later pair is held
-to them.
+A `[k: v]` written as a top-level `let`/`var` initializer is parsed by the body's expression parser, so it is
+the same desugar a body's literal is — `Map.create()` plus one `Map.upsert(k, value: v)` per pair — in an
+initializer function `__module_init` calls before `main`. The first pair fixes both columns; every later
+pair is held to them, in the words a body's literal gets.
 
-⛔⛔ **BOTH HALVES OF EVERY PAIR ARE KEPT BY THE TABLE, AND `__module_init` MUST THEREFORE RELEASE
-NEITHER.** `Map.upsert` pushes its `key` and its `value` into `Array with Key` / `Array with Value`, which
-is a type-parameter FEED and not a consume bit — so the synthesis' ordinary "the callee only borrowed it,
-drop it after the call" rule is a use-after-free here. With that rule applied the first case below prints
-`0 0` (both lookups missing, the keys having been freed the instant they were stored) and then
-**segfaults**, instead of printing `1 2`. A body's call site takes a real reference at
-the same position and drops the temp at statement end; `__module_init` has no statement, so the two net to
-the same one reference by this frame taking none and releasing none.
+⛔⛔ **BOTH HALVES OF EVERY PAIR ARE KEPT BY THE TABLE.** `Map.upsert` pushes its `key` and its `value` into
+`Array with Key` / `Array with Value`, which is a type-parameter FEED and not a consume bit. Releasing either
+half after the call is a use-after-free: the first case below would print `0 0` (both lookups missing, the
+keys having been freed the instant they were stored) and then **segfault**, where it prints `1 2`.
 
 <!-- test: top-level-literal.managed-value-column -->
 Both columns managed, and the map is read only AFTER `main` has allocated over whatever the init freed —
@@ -1273,8 +1269,8 @@ one/two count 2 churn 64
 ```
 
 <!-- test: top-level-literal.struct-value-column -->
-A value built by a static FACTORY, which is what makes the literal an arena node rather than a fold: the
-record is a call `__module_init` makes, and the `String` it holds is released once, by the map's teardown.
+A value built by a static FACTORY: the record is a call made before `main`, and the `String` it holds is
+released once, by the map's teardown.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1302,10 +1298,20 @@ alternative 2 count 2
 0
 ```
 
+<!-- test: error.body-literal-mixed-value-column -->
+```maxon
+function main() returns ExitCode
+	let m = [b"a": 1, b"b": "two"]
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:3:26: Unsupported: this `Map`'s value is an int — got a 'String' value
+```
+
 <!-- test: error.top-level-literal-mixed-value-column -->
 The first pair fixes both columns. A later pair whose half has another type is refused where it is
-written — the file-scope twin of the body's `parseHashTableColumnArg` refusal, which cannot serve here
-because it reads a `ValueId` and a top-level initializer mints none.
+written, in the words a body's literal gets.
 ```maxon
 var m = [b"a": 1, b"b": "two"]
 
@@ -1314,17 +1320,33 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:25: Unsupported: this `Map`'s value is 'int' — got a 'String' value. A top-level map literal's FIRST pair fixes both columns, and every later pair must match them
+error E2015: <fragment>:2:25: Unsupported: this `Map`'s value is an int — got a 'String' value
 ```
 
-<!-- test: error.top-level-literal-enum-column -->
-⛔ **AN ENUM CASE IS REFUSED AS A FILE-SCOPE COLUMN, AND THE LIMIT IS THE INTERNER.** A payload-free case
-folds to a `named`-tagged scalar carrying its enum's name as BYTES — the constant evaluator is a throwaway
-parser, so an id minted during the fold names nothing where it is read — and a `Map with (K, V)` needs a
-type argument the whole program can name. Admitting it either drops the name (and `m.get(…)` then hands
-back a bare `int` for a program whose every arm is the enum) or keeps this index's id (and
-`SemanticCheck.aggregateNameFor` panics on it). The same literal inside a function is correct, which
-is what the message points at.
+<!-- test: body-literal.enum-value-column -->
+```maxon
+enum Kind
+	one
+	two
+end 'Kind'
+
+function main() returns ExitCode
+	let m = [b"a": Kind.one, b"b": Kind.two]
+	let k = try m.get(b"b") otherwise Kind.one
+	print("{k.name}\n")
+	return m.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+two
+```
+
+<!-- test: top-level-literal.enum-value-column -->
+An enum case is a column value at file scope as it is in a body, and the column is the enum: what `m.get`
+hands back is a `Kind`.
 ```maxon
 enum Kind
 	one
@@ -1334,11 +1356,17 @@ end 'Kind'
 var m = [b"a": Kind.one, b"b": Kind.two]
 
 function main() returns ExitCode
+	m.upsert(b"c", value: Kind.one)
+	let k = try m.get(b"b") otherwise Kind.one
+	print("{k.name}\n")
 	return m.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:7:16: Unsupported: a `Kind` case as a top-level map literal's value — a `Map`'s column type has to be nameable from the whole-program index, and an enum case folded at file scope carries its enum's name as BYTES rather than as an id this tier can put in `Map with (…)`. Build the map inside a function, where the literal's instance is interned from the file's own parse artifact
+```exitcode
+3
+```
+```stdout
+two
 ```
 
 ## A table under insert/remove churn stays flat

@@ -463,8 +463,6 @@ module function libraryReachOf(project Project, module MaxonModule, signatures P
 		initCallees.push(name.clone())
 	end 'eachCheckedPackageFunction'
 
-	let initWitnessInterfaces = signatures.globalInitWitnessInterfaces()
-
 	// Common-case short-circuit. If no op in user code reaches stdlib, no stdlib function is reachable
 	// at all, so an empty reached set is the exact answer and none can be blamed for a substrate. It
 	// is one allocation-free O(ops) scan, without the O(functions) name->index map and reached-array
@@ -472,11 +470,11 @@ module function libraryReachOf(project Project, module MaxonModule, signatures P
 	// per-compile memory cost of loading stdlib source into a program that never touches it, so
 	// skipping it keeps the cost a per-compile constant instead of growing with the user program. It
 	// stays exact: a stdlib function referenced by nothing is reachable from nothing.
-	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces) 'noneReferenced'
+	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
 		return LibraryReach.unreferenced(roster, stdlib: stdlibSet)
 	end 'noneReferenced'
 
-	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces)
+	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
 
 	return LibraryReach.walked(roster, stdlib: stdlibSet, reachable: reachable)
 end 'libraryReachOf'
@@ -843,7 +841,7 @@ end 'classifyLibraryReach'
 // resolution, keys on the real callee, and prunes it there. What this costs is only that
 // `scanRuntimeUsage` may read an unreached sibling overload's body — and only in a program that already
 // calls that stdlib name.
-function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster, initWitnessInterfaces NameRoster) returns FunctionNameSet throws CompileError
+function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
 	var reached = BoolArray.create()
@@ -907,11 +905,6 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	var interfacesSeeded = 0 as ElementIndex
 	var creditedServices = CreditedServiceSet.create()
 	var ownerLedger = ConstrainedOwnerLedger.over(signatures)
-
-	// The interfaces `__module_init` widens into, which it names from no function this walk can reach.
-	for interfaceName in initWitnessInterfaces 'eachInitializerWidening'
-		noteInterfaceName(interfaceName, into: witnessInterfaces, order: witnessInterfaceOrder)
-	end 'eachInitializerWidening'
 
 	while true 'seedRounds'
 		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, creditedServices: creditedServices, ownerLedger: ownerLedger)
@@ -1670,7 +1663,7 @@ end 'markCorpusSlotInitCallees'
 // this asks only "is this bare name a stdlib name?". Those agree EXACTLY, and here is why: a USER callee's
 // own body is scanned by the loop below whatever it goes on to call, a STDLIB callee's bare name is the
 // first overload member's registration name and so is always in `stdlib`, and an undeclared one is refused
-// by the evaluator before it can reach either walk. An under-answer here would file ALL of stdlib
+// (E3004) before it can reach either walk. An under-answer here would file ALL of stdlib
 // unreachable for a program that reaches it — the direction that empties a body the back end then calls —
 // so a new ROOT KIND owes that argument again rather than inheriting it.
 //
@@ -1678,7 +1671,7 @@ end 'markCorpusSlotInitCallees'
 // the short-circuit would file `String.hash` unreachable while its witness table still named it. It is a
 // MARKING on both sides, driven by the pair of predicates this scan asks below and the drain asks of reached
 // code — see `functionDeclaresAWitnessPosition`, which carries the argument in full.
-function userCodeReachesStdlib(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster, initWitnessInterfaces NameRoster) returns bool
+function userCodeReachesStdlib(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster) returns bool
 	// ⭐ **A ROOT THE PRECISE WALK SEEDS IS A CROSSING NO BODY CARRIES, WHICH IS WHY IT CANNOT BE FOUND BY THE
 	// OP SCAN BELOW.** `var sep = FilePath.separator()` reaches stdlib without any function of this module
 	// naming it — the call belongs to `__module_init`, which does not exist yet. Missing it would answer "all
@@ -1694,9 +1687,9 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	// scan below is: with no user edge into stdlib, the reached set IS a subset of user code. Gated on the
 	// corpus actually DECLARING one of the seed's conformances, so an unlisted declaring module leaves this
 	// scan — and every program's answer — exactly as it was.
-	if corpusDeclaresASeededConformance(project, signatures: signatures) and (initWitnessInterfaces.count() > 0 or userCodeDemandsAWitnessTable(module, project: project, signatures: signatures, stdlib: stdlib)) 'widensOrThreadsOne'
+	if corpusDeclaresASeededConformance(project, signatures: signatures) and userCodeDemandsAWitnessTable(module, project: project, signatures: signatures, stdlib: stdlib) 'threadsOne'
 		return true
-	end 'widensOrThreadsOne'
+	end 'threadsOne'
 
 	// ⭐ **AND A SERVICE LOOP IS THE THIRD: `<T>.__loop` calls every handler, and it is built after this scan.**
 	// A user handler's body is scanned below like any other, so what this answers for is a handler that IS

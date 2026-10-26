@@ -55,8 +55,24 @@ let x = 'hel
 lo'
 ```
 ```maxoncstderr
-error E2004: specs/lexer-edge-cases/string-with-newline.maxon:2:9: Expected constant expression, got 'hel
+error E3001: No 'main' function found
+```
+
+<!-- test: string-with-newline-in-a-body -->
+```maxon
+function main() returns ExitCode
+	let x = 'hel
 lo'
+	print("[{x}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[hel
+lo]
 ```
 
 <!-- test: unterminated-escape-eof -->

@@ -109,9 +109,9 @@ end 'main'
 42
 ```
 
-The compile-time evaluator makes the same flip: `-` over a float CONSTANT reference is folded to
-`negatedFloatBits` of it, so a top-level `let` and a body agree about one line of source. (It was
-`0.0 - x` while the body was, and folded `-Zero` to `+0.0`.)
+A top-level `let` folds with the same flip: `-` over a float CONSTANT reference is folded to
+`negatedFloatBits` of it, so a top-level `let` and a body agree about one line of source, and `-Zero` is
+`-0.0`.
 
 <!-- test: const-negation-of-a-float-constant -->
 ```maxon

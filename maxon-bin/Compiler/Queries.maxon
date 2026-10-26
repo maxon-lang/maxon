@@ -842,7 +842,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	let constProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
 
 	// Before `evaluateInitializers`: a top-level constant's initializer can cast to a stdlib-only type
-	// (`stdlib/Builtins.maxon`'s `__FloatSignBit`), so the evaluator must already know which kind of
+	// (`stdlib/Builtins.maxon`'s `__FloatSignBit`), so the initializer fold must already know which kind of
 	// declaration a name is before it runs.
 	signatures.settleCrossKindContests()
 
@@ -877,10 +877,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 
 	// Only now can a swept `named` be told from a declared `type`: the sweep resolves `returns Self`
 	// (and `returns <its own type's name>`) to a `structRef` from the tokens alone, but a foreign name
-	// must stay bare because `structLayouts` is still filling while it reads. Before
-	// `evaluateInitializers` is the only place to settle it, because the constant evaluator copies a
-	// factory's declared return type into the declaration's outcome and a re-tag after this line
-	// cannot reach the copy.
+	// must stay bare because `structLayouts` is still filling while it reads.
 	signatures.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredStruct)
 
 	// Strictly before the fold below: a folded initializer of an inline record IS the packed word, so a
@@ -957,6 +954,10 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	signatures.settleByRefConventions()
 	try foldFixedElementCountNeeds(project, signatures: signatures)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
+
+	// Strictly after the sweep: this probe body-parses calls, which the sweep must not
+	// (`Parser.initializerIsRecordShaped`).
+	signatures.settleRecordInitializers(project.readerAnchors)
 
 	// Every instantiation's compiled and canonical names, for the same "the whole program is known
 	// now" reason: the parse reads both, and each memo behind them is a write, which a per-file
@@ -1276,8 +1277,8 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 	let livesUnderTheLibrary = fileLivesUnderStdlibDirectory(project, signatures: signatures, path: path)
 
 	// Derived here, once, before any file's declarations are folded, so every later reader (the
-	// type-name admission, the sweep's `module`-tier questions, the real parse, the constant
-	// evaluator) reads an index rather than re-deriving a string from a path. ⚠ The anchor is chosen
+	// type-name admission, the sweep's `module`-tier questions, the real parse, the initializer
+	// parses) reads an index rather than re-deriving a string from a path. ⚠ The anchor is chosen
 	// by where the file lives, not by whose it is — see `moduleDirectoryForFile`.
 	let moduleDirectory = moduleDirectoryForFile(project, path: path, tier: namespaceConeOf(project, path: path, livesUnderStdlibDirectory: livesUnderTheLibrary))
 
@@ -1977,7 +1978,7 @@ function reportFailedParse(project Project, path FilePath, error SourceParseErro
 	return salvaged
 end 'reportFailedParse'
 
-module function reportParseFailure(project Project, path FilePath, error SourceParseError, blame LibraryBlame)
+function reportParseFailure(project Project, path FilePath, error SourceParseError, blame LibraryBlame)
 	// The only span in the compiler over which `project.libraryBlame` is set, exactly one reporting
 	// call wide — written where the diagnostic is stored rather than at each of
 	// `parseErrorDiagnostic`'s match arms.
@@ -2526,7 +2527,6 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 	end 'eachArtifactInEmissionOrder'
 
 	let typeNameProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
-	commitConstructedTupleTypes(project, signatures: signatures)
 	commitTypeNameDeclsInPathOrder(project, artifacts: artifacts, pathOrder: pathOrder, signatures: signatures)
 	recordPhase(project, phase: CompilePhase.merge, probe: typeNameProbe)
 
@@ -3371,10 +3371,6 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		unexpectedToken(expected, got, line, column) gives Diagnostic.create(ErrorCode.parserExpectedToken, message: "Expected {expectationDisplayText(expected, keywords: keywords)} but got '{got}'", line: line, column: column, filePath: path)
 		expectedExpression(got, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected expression but got '{got}'", line: line, column: column, filePath: path)
 
-		// The fifth E2004 family (see the registry's `doc`): the initializer parsed fine and is simply
-		// not CONSTANT. Pinned byte-for-byte by `lexer-edge-cases.md`.
-		expectedConstantExpression(got, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected constant expression, got '{got}'", line: line, column: column, filePath: path)
-
 		// A field default whose tokens fit none of the shapes a field takes its type from. Pinned
 		// byte-for-byte by `specs/field-defaults.md`'s refusal cases.
 		uninferrableFieldDefault(line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected default value: a bool or string literal, 'Type.member', 'Type.member(...)', or an expression cast with 'as': 'var name = expr as Type'.", line: line, column: column, filePath: path)
@@ -3393,8 +3389,6 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// spelling is what the reader has to find, and the decoded value does not exist. Pinned
 		// byte-for-byte by `specs/literals.md`'s overflow cases.
 		integerOverflow(literal, line, column) gives Diagnostic.create(ErrorCode.parserLiteralOverflow, message: "Integer literal '{literal}' is outside the range of int ({I64MinBound} to {unsignedScalarText(UnsignedFullUpperPattern)})", line: line, column: column, filePath: path)
-
-		unsignedLiteralWithoutAlias(literal, line, column) gives Diagnostic.create(ErrorCode.parserLiteralOverflow, message: unsignedLiteralWithoutAliasMessage(literal), line: line, column: column, filePath: path)
 
 		// The same code as its integer twin — a literal outside its type's range is one meaning — with a
 		// message naming the right type and limit. `1e400`'s limit is `f64.max`, which no i64 span
@@ -3502,7 +3496,6 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// "shift every bit out".
 		shiftCountNegative(count, line, column) gives Diagnostic.create(ErrorCode.shiftCountNegative, message: "Shift count {count} is negative: a shift distance must be {MinShiftCount} or greater (a count of {ShiftCountBits} or more is legal — it shifts every bit out)", line: line, column: column, filePath: path)
 		comparisonTypeMismatch(left, right, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: 'cannot compare {left} with {right}'", line: line, column: column, filePath: path)
-		literalInitDoesNotConform(typeName, interfaceName, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Type '{typeName}' does not conform to {interfaceName}", line: line, column: column, filePath: path)
 		operatorRequiresConformance(op, typeParamName, interfaceName, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Operator '{op}' requires type parameter '{typeParamName}' to be constrained with 'where {typeParamName} is {interfaceName}'", line: line, column: column, filePath: path)
 		witnessSelfArgNotTypeParam(what, typeParamName, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{what}' on type parameter '{typeParamName}' requires an argument of type '{typeParamName}' (the `Self` its constraint provides), not {got}", line: line, column: column, filePath: path)
 		structEqualsResultNotBool(structName, got, op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Operator '{op}' dispatches '{structName}.equals', which returns '{got}' — an equality operator requires the 'bool' result 'Equatable' declares", line: line, column: column, filePath: path)
@@ -3541,12 +3534,10 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		voidCallResultUsed(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
 		duplicateTopLevelDeclaration(name, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: "duplicate definition of '{name}'", line: line, column: column, filePath: path)
 
-		// The three top-level-constant arms are pinned byte-for-byte by `specs/top-level-let.md`,
+		// The cycle arm is pinned byte-for-byte by `specs/top-level-let.md`,
 		// and both suites compare this stderr exactly.
 		circularConstants(names, line, column) gives Diagnostic.create(ErrorCode.parserCircularDependency, message: "Circular dependency detected among global constants: {names}", line: line, column: column, filePath: path)
 		nonConstantInitializer(name, leftover, line, column) gives Diagnostic.create(ErrorCode.parserNonConstantInitializer, message: "Global initializer for '{name}' is not a constant expression: '{leftover}' cannot be evaluated at compile time", line: line, column: column, filePath: path)
-		undefinedConstant(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Undefined constant '{name}'", line: line, column: column, filePath: path)
-		constantDivisionByZero(op, line, column) gives Diagnostic.create(ErrorCode.parserNonConstantInitializer, message: "'{op}' by zero has no value: a global initializer is folded at compile time, so there is no run time for it to trap in", line: line, column: column, filePath: path)
 
 		// E3103 for a BODY divide whose divisor the compiler holds as 0. Pinned byte-for-byte; both
 		// suites compare this stderr exactly.
@@ -3556,8 +3547,6 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// same words and the same anchor a body cast gets from `InsertRangeChecks`; only the tier that
 		// noticed differs.
 		constantCastOutOfRange(value, aliasName, low, high, isFloat, writtenNegative, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: literalOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, isFloat: isFloat, writtenNegative: writtenNegative, domain: domain), line: line, column: column, filePath: path)
-
-		unneededConstantCast(sourceName, targetName, line, column) gives Diagnostic.create(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(sourceName, targetName: targetName), line: line, column: column, filePath: path)
 
 		// E3005 for a `b"…"` byte the element's declared range does not admit — the same code and range
 		// fact as the arm above, with the OFFSET its subject needs.

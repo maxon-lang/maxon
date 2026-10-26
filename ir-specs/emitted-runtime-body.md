@@ -211,7 +211,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#29
   tryerr#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_64]  ; "panic at FilePath.maxon:354: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_70]  ; "panic at FilePath.maxon:354: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -240,7 +240,7 @@ func @main {
     x64.cmpRegImm32 r13, 1
     x64.jcc above, ifcont#12
   tooShort:
-    x64.leaRegRdata rcx, [rip + __str_rec_65]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_71]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
@@ -279,7 +279,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#17
   tryerr#18:
-    x64.leaRegRdata rcx, [rip + __str_blob_66]  ; "panic at FilePath.maxon:379: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_72]  ; "panic at FilePath.maxon:379: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -312,7 +312,7 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc above, scan#14
   whileexit#15:
-    x64.leaRegRdata rcx, [rip + __str_rec_65]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_71]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r14
@@ -356,7 +356,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_53]  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_60]  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -522,7 +522,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#29
   tryerr#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_63]  ; "panic at FilePath.maxon:354: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_69]  ; "panic at FilePath.maxon:354: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -551,7 +551,7 @@ func @main {
     x64.cmpRegImm32 r13, 1
     x64.jcc above, ifcont#12
   tooShort:
-    x64.leaRegRdata rcx, [rip + __str_rec_64]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_70]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
@@ -590,7 +590,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#17
   tryerr#18:
-    x64.leaRegRdata rcx, [rip + __str_blob_65]  ; "panic at FilePath.maxon:379: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_71]  ; "panic at FilePath.maxon:379: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -623,7 +623,7 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc above, scan#14
   whileexit#15:
-    x64.leaRegRdata rcx, [rip + __str_rec_64]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_70]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r14
@@ -667,7 +667,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_53]  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_60]  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -830,7 +830,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#29
   tryerr#30:
-    arm64.leaRdata x0, __str_blob_63  ; "panic at FilePath.maxon:354: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    arm64.leaRdata x0, __str_blob_69  ; "panic at FilePath.maxon:354: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -857,7 +857,7 @@ func @main {
     arm64.cmp x21, 1
     arm64.b.hi ifcont#12
   tooShort:
-    arm64.leaRdata x0, __str_rec_64  ; ""
+    arm64.leaRdata x0, __str_rec_70  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
@@ -897,7 +897,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#17
   tryerr#18:
-    arm64.leaRdata x0, __str_blob_65  ; "panic at FilePath.maxon:379: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    arm64.leaRdata x0, __str_blob_71  ; "panic at FilePath.maxon:379: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -928,7 +928,7 @@ func @main {
     arm64.cmp x0, 1
     arm64.b.hi scan#14
   whileexit#15:
-    arm64.leaRdata x0, __str_rec_64  ; ""
+    arm64.leaRdata x0, __str_rec_70  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x22
@@ -969,7 +969,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   tryerr#7:
-    arm64.leaRdata x0, __str_blob_53  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
+    arm64.leaRdata x0, __str_blob_60  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1128,7 +1128,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#29
   tryerr#30:
-    arm64.leaRdata x0, __str_blob_63  ; "panic at FilePath.maxon:354: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    arm64.leaRdata x0, __str_blob_69  ; "panic at FilePath.maxon:354: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1155,7 +1155,7 @@ func @main {
     arm64.cmp x21, 1
     arm64.b.hi ifcont#12
   tooShort:
-    arm64.leaRdata x0, __str_rec_64  ; ""
+    arm64.leaRdata x0, __str_rec_70  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
@@ -1195,7 +1195,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#17
   tryerr#18:
-    arm64.leaRdata x0, __str_blob_65  ; "panic at FilePath.maxon:379: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    arm64.leaRdata x0, __str_blob_71  ; "panic at FilePath.maxon:379: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1226,7 +1226,7 @@ func @main {
     arm64.cmp x0, 1
     arm64.b.hi scan#14
   whileexit#15:
-    arm64.leaRdata x0, __str_rec_64  ; ""
+    arm64.leaRdata x0, __str_rec_70  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x22
@@ -1267,7 +1267,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   tryerr#7:
-    arm64.leaRdata x0, __str_blob_53  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
+    arm64.leaRdata x0, __str_blob_60  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -10627,7 +10627,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#29
   tryerr#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_56]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -10654,7 +10654,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#34
   tryerr#35:
-    x64.leaRegRdata rcx, [rip + __str_blob_50]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_57]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -10681,7 +10681,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#41
   tryerr#42:
-    x64.leaRegRdata rcx, [rip + __str_blob_51]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_58]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -11300,7 +11300,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#29
   tryerr#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_56]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -11327,7 +11327,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#34
   tryerr#35:
-    x64.leaRegRdata rcx, [rip + __str_blob_50]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_57]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -11354,7 +11354,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#41
   tryerr#42:
-    x64.leaRegRdata rcx, [rip + __str_blob_51]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_58]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -11974,7 +11974,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#29
   tryerr#30:
-    arm64.leaRdata x0, __str_blob_49  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    arm64.leaRdata x0, __str_blob_56  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -12005,7 +12005,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#34
   tryerr#35:
-    arm64.leaRdata x0, __str_blob_50  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.leaRdata x0, __str_blob_57  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -12036,7 +12036,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#41
   tryerr#42:
-    arm64.leaRdata x0, __str_blob_51  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.leaRdata x0, __str_blob_58  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -12652,7 +12652,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#29
   tryerr#30:
-    arm64.leaRdata x0, __str_blob_49  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    arm64.leaRdata x0, __str_blob_56  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -12683,7 +12683,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#34
   tryerr#35:
-    arm64.leaRdata x0, __str_blob_50  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.leaRdata x0, __str_blob_57  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -12714,7 +12714,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#41
   tryerr#42:
-    arm64.leaRdata x0, __str_blob_51  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.leaRdata x0, __str_blob_58  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1

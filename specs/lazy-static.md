@@ -821,9 +821,8 @@ error E2010: specs/lazy-static/error.struct-literal-initializer-positional-field
 
 ### Error: a static field's initializer must consume everything up to the end of its line
 
-An initializer is its whole token range. A non-constant one folds nothing — all of it is a call `__module_init`
-makes before `main` — so a token left over after that call is refused where it stands rather than ignored, in
-the same words a top-level binding's initializer gets (`specs/top-level-let.md`).
+An initializer is its whole token range, so a token left over after the expression is refused where it stands
+rather than ignored, in the words a body's binding gets (`specs/top-level-let.md`).
 
 <!-- test: error.static-field-init-trailing-tokens -->
 ```maxon
@@ -850,5 +849,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/lazy-static/error.static-field-init-trailing-tokens.maxon:13:30: Expected 'end of global initializer' but got 'zzz'
+error E2001: specs/lazy-static/error.static-field-init-trailing-tokens.maxon:13:30: unexpected token: 'zzz'
 ```

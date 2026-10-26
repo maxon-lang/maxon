@@ -1719,12 +1719,11 @@ end 'main'
 error E3005: specs/ranged-typealias/error.written-negative-returned-into-unsigned-full-alias.maxon:5:2: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
 ```
 
-⛔ **THE TOP-LEVEL `let` DOOR REACHES THE SAME VERDICT BY A DIFFERENT ROUTE, FOR EVERY RANGE — not
-just the unsigned ones.** A constant evaluator that bound a trailing `as` to the OPERAND of a unary
-minus (`-(1 as Narrow)`) where a body binds it to the whole negated literal (`(-1) as Narrow`) would
-compile **`let A = -1 as int(0 to 100)` clean and produce -1** while the identical cast inside a
-function is E3005. A negated int literal is ONE literal in the evaluator, exactly as a negated FLOAT
-literal is and exactly as it is in a body.
+⛔ **THE TOP-LEVEL `let` DOOR REACHES THE SAME VERDICT, FOR EVERY RANGE — not just the unsigned ones.**
+A top-level initializer is parsed by the body's expression parser, which binds a trailing `as` to the
+whole negated literal (`(-1) as Narrow`). Binding it to the OPERAND of the unary minus (`-(1 as Narrow)`)
+would compile **`let A = -1 as int(0 to 100)` clean and produce -1** while the identical cast inside a
+function is E3005.
 
 <!-- test: error.written-negative-in-a-top-level-let -->
 ```maxon
@@ -3838,11 +3837,10 @@ error E3005: specs/ranged-typealias/error.cast-to-bare-int.maxon:6:15: Cannot ca
 ```
 
 <!-- test: error.top-level-const-cast-to-bare-int -->
-⭐ **THE SECOND CAST DOOR.** A top-level `let`'s initializer never reaches the expression path — it is
-folded by the const evaluator, a different walk over different code. A body cast that refused the bare
-keyword while the const walk accepted it as an "identity cast" would compile this exact program and
-refuse the identical cast inside a function: one mistake with two verdicts, decided by nothing but where
-the `let` was written. Both doors ask the same question and give the same sentence at the same anchor.
+⭐ **THE SECOND CAST DOOR.** A top-level `let`'s initializer is folded during the declaration sweep, by the
+body's expression parser. A top-level door that accepted the bare keyword as an "identity cast" would
+compile this exact program and refuse the identical cast inside a function: one mistake with two verdicts,
+decided by nothing but where the `let` was written. Both doors give the same sentence at the same anchor.
 ```maxon
 let SENTINEL = 5 as int
 

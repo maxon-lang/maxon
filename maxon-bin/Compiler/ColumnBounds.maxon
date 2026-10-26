@@ -55,6 +55,68 @@ export union ColumnBounds
 	end 'joinedFloats'
 end 'ColumnBounds'
 
+// @generated library-cache begin
+module function cacheWriteColumnBounds(writer LibraryCacheWriter, value ColumnBounds)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unknown then break
+		integers(a0, a1) then cacheWriteColumnBoundsIntegers(writer, a0: a0, a1: a1)
+		unsignedIntegers(a0, a1) then cacheWriteColumnBoundsUnsignedIntegers(writer, a0: a0, a1: a1)
+		floats(a0, a1) then cacheWriteColumnBoundsFloats(writer, a0: a0, a1: a1)
+	end 'payload'
+end 'cacheWriteColumnBounds'
+
+function cacheWriteColumnBoundsIntegers(writer LibraryCacheWriter, a0 FullRangeInt, a1 FullRangeInt)
+	writer.signed(a0 as CacheSigned)
+	writer.signed(a1 as CacheSigned)
+end 'cacheWriteColumnBoundsIntegers'
+
+function cacheWriteColumnBoundsUnsignedIntegers(writer LibraryCacheWriter, a0 FullRangeInt, a1 FullRangeInt)
+	writer.signed(a0 as CacheSigned)
+	writer.signed(a1 as CacheSigned)
+end 'cacheWriteColumnBoundsUnsignedIntegers'
+
+function cacheWriteColumnBoundsFloats(writer LibraryCacheWriter, a0 FullRangeInt, a1 FullRangeInt)
+	writer.signed(a0 as CacheSigned)
+	writer.signed(a1 as CacheSigned)
+end 'cacheWriteColumnBoundsFloats'
+
+module function cacheReadColumnBounds(reader LibraryCacheReader) returns ColumnBounds throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ColumnBounds.unknown
+		1 gives try cacheReadColumnBoundsIntegers(reader)
+		2 gives try cacheReadColumnBoundsUnsignedIntegers(reader)
+		3 gives try cacheReadColumnBoundsFloats(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadColumnBounds'
+
+function cacheReadColumnBoundsIntegers(reader LibraryCacheReader) returns ColumnBounds throws LibraryCacheDamage
+	let a0 = (try reader.signed()) as FullRangeInt
+	let a1 = (try reader.signed()) as FullRangeInt
+
+	return ColumnBounds.integers(a0, high: a1)
+end 'cacheReadColumnBoundsIntegers'
+
+function cacheReadColumnBoundsUnsignedIntegers(reader LibraryCacheReader) returns ColumnBounds throws LibraryCacheDamage
+	let a0 = (try reader.signed()) as FullRangeInt
+	let a1 = (try reader.signed()) as FullRangeInt
+
+	return ColumnBounds.unsignedIntegers(a0, high: a1)
+end 'cacheReadColumnBoundsUnsignedIntegers'
+
+function cacheReadColumnBoundsFloats(reader LibraryCacheReader) returns ColumnBounds throws LibraryCacheDamage
+	let a0 = (try reader.signed()) as FullRangeInt
+	let a1 = (try reader.signed()) as FullRangeInt
+
+	return ColumnBounds.floats(a0, high: a1)
+end 'cacheReadColumnBoundsFloats'
+
+// @generated library-cache end
+
 let UnsignedOrderFlip = i64.min
 
 function unsignedMinimum(a FullRangeInt, b FullRangeInt) returns FullRangeInt

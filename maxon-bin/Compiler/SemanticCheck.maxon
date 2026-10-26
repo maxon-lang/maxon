@@ -123,7 +123,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	checkArgumentOverlaps(project, module: module, funcNames: funcNames)
 	try requireStillWanted(project)
 
-	try checkUnneededLetCasts(project, module: module)
+	try checkUnneededLetCasts(project, module: module, signatures: signatures)
 	try requireStillWanted(project)
 
 	// E3100: a green thread awaited more than once on a single flow path.
@@ -3816,6 +3816,10 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 			return
 		end 'aGenericCallWaitingOnADeferredArgument'
 
+		if signatures.bindingInitializerIsRefused(callee, readerFilePath: filePath) 'aCallThroughABindingWhoseInitializerIsRefused'
+			return
+		end 'aCallThroughABindingWhoseInitializerIsRefused'
+
 		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: undefinedFunctionMessage(String.from(noun)), line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'unknownFn'
@@ -3929,6 +3933,12 @@ function reportAmbiguousCall(project Project, callee ByteArray, candidates NameR
 	reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareFunctionNameMessage(String.from(callee), candidates: renderAmbiguousCandidates(candidates), use: FunctionNameUse.call), line: callRange.line, column: callRange.column, filePath: filePath)
 end 'reportAmbiguousCall'
 
+module function checkNonConstantCallInitializers(project Project, signatures ProgramSignatures)
+	for site in signatures.nonConstantCallInitializers() 'eachSite'
+		reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{String.from(site.callee)}()' is not a constant expression", line: site.line, column: site.column, filePath: site.filePath)
+	end 'eachSite'
+end 'checkNonConstantCallInitializers'
+
 function undefinedFunctionMessage(name String) returns String
 	return "call to undefined function '{name}'"
 end 'undefinedFunctionMessage'
@@ -3936,70 +3946,6 @@ end 'undefinedFunctionMessage'
 module function reservedFunctionUndefinedMessage(name String, reason ReservedCalleeReason) returns String
 	return "{undefinedFunctionMessage(name)}: {reservedNameReason(name, reason: reason)}"
 end 'reservedFunctionUndefinedMessage'
-
-module function checkInitializerCalls(project Project, signatures ProgramSignatures)
-	for site in signatures.initializerCalls() 'eachSite'
-		match site 'site'
-			foldable then requireInitializerCalleeIsNameable(project, signatures: signatures, site: site)
-			provisional(_, written, defect, _, _) then confirmProvisionalInitializerCall(project, signatures: signatures, site: site, written: written, defect: defect)
-			unclaimed(_, enclosingTypeName, mayUseReserved, _, _) then refuseInitializerCall(project, signatures: signatures, site: site, enclosingTypeName: enclosingTypeName, mayUseReserved: mayUseReserved)
-		end 'site'
-	end 'eachSite'
-end 'checkInitializerCalls'
-
-// The binding is asked first: a function-typed one is what the call binds, and the carried defect then
-// belongs to a declaration the call never reaches.
-function confirmProvisionalInitializerCall(project Project, signatures ProgramSignatures, site InitializerCallSite, written ByteArray, defect CarriedDefect)
-	if signatures.functionTypedBindingVisibleFrom(written, readerFilePath: site.readerFilePath(), into: signatures.indexTypeNames()) 'theBindingIsCalled'
-		reportNotAConstantCall(project, site: site, written: written)
-		return
-	end 'theBindingIsCalled'
-
-	match defect 'defect'
-		carried(error) then reportParseFailure(project, path: site.readerFilePath(), error: error, blame: LibraryBlame.unblamed)
-		none then requireInitializerCalleeIsNameable(project, signatures: signatures, site: site)
-	end 'defect'
-end 'confirmProvisionalInitializerCall'
-
-function requireInitializerCalleeIsNameable(project Project, signatures ProgramSignatures, site InitializerCallSite)
-	match signatures.calleeVisibilityFrom(site.callee(), readerFilePath: site.readerFilePath()) 'visibility'
-		visible then return
-		hidden(tier) then reportDiagnostic(project, diagnostic: hiddenSymbolDiagnostic(HiddenSymbolKind.functionDeclaration, noun: registrationNameDisplay(site.callee(), signatures: signatures), tier: tier, line: site.range().line, column: site.range().column, filePath: site.readerFilePath()))
-	end 'visibility'
-end 'requireInitializerCalleeIsNameable'
-
-function refuseInitializerCall(project Project, signatures ProgramSignatures, site InitializerCallSite, enclosingTypeName ByteArray, mayUseReserved bool)
-	match signatures.bareCallKindFrom(site.callee(), readerFilePath: site.readerFilePath(), enclosingTypeName: enclosingTypeName, mayUseReserved: mayUseReserved, bindings: BindingTypes.settled(signatures.indexTypeNames())) 'kind'
-		topLevelBinding or
-		staticSibling or
-		instanceSibling or
-		genericTemplate or
-		declaredVisible or
-		builtin then reportNotAConstantCall(project, site: site, written: site.callee())
-		ambiguous then reportAmbiguousInitializerCall(project, signatures: signatures, site: site)
-		declaredHidden then requireInitializerCalleeIsNameable(project, signatures: signatures, site: site)
-		reserved or
-		undeclared then reportUndefinedInitializerCall(project, site: site)
-	end 'kind'
-end 'refuseInitializerCall'
-
-function reportNotAConstantCall(project Project, site InitializerCallSite, written ByteArray)
-	reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{String.from(written)}()' is not a constant expression", line: site.range().line, column: site.range().column, filePath: site.readerFilePath())
-end 'reportNotAConstantCall'
-
-function reportAmbiguousInitializerCall(project Project, signatures ProgramSignatures, site InitializerCallSite)
-	match signatures.resolveFunctionName(site.callee(), readerFilePath: site.readerFilePath()) 'resolution'
-		ambiguous(candidates) then reportAmbiguousCall(project, callee: site.callee(), candidates: candidates, callRange: site.range(), filePath: site.readerFilePath())
-		declaration or
-		undeclared then panic("reportAmbiguousInitializerCall: '{String.from(site.callee())}' classified as ambiguous from {site.readerFilePath().toString()}, and the resolver the classifier asks answers a single declaration or none")
-	end 'resolution'
-end 'reportAmbiguousInitializerCall'
-
-function reportUndefinedInitializerCall(project Project, site InitializerCallSite)
-	let reason = reservedCalleeReasonOf(site.callee())
-	let message = undefinedFunctionMessage(String.from(site.callee())) if reason == ReservedCalleeReason.notReserved else reservedFunctionUndefinedMessage(String.from(site.callee()), reason: reason)
-	reportPositioned(project, code: ErrorCode.callUnknownFunction, message: message, line: site.range().line, column: site.range().column, filePath: site.readerFilePath())
-end 'reportUndefinedInitializerCall'
 
 // Where an author's function name was written: the three doors E3095 refuses an ambiguous bare name at.
 export enum FunctionNameUse
@@ -4057,9 +4003,8 @@ export enum HiddenSymbolKind
 end 'HiddenSymbolKind'
 
 // The code and the sentence a hidden symbol is refused with — one producer for every position a
-// hidden name can be written in. A call in a function body reaches it from `validateCall` above,
-// off `FunctionNameIndex`, and a call in a top-level initializer from `checkInitializerCalls`, off the
-// sweep's declarations; a read or store of a hidden static member reaches it from
+// hidden name can be written in. A call in a function body or a top-level initializer reaches it from
+// `validateCall` above, off `FunctionNameIndex`; a read or store of a hidden static member reaches it from
 // `Queries.parseErrorDiagnostic`'s `symbolNotVisible` arm, because the parse decides it. Several askers,
 // one wording, so a static and a function cannot come to disagree about what `module` means.
 //

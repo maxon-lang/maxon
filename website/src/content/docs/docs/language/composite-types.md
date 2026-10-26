@@ -172,8 +172,11 @@ end 'main'
 
 - A static field needs an initializer. Assigning to a `static let` is **E2013**; naming a static the type
   does not declare is **E2073**.
-- An initializer may be a literal, a factory call (`static var shared = Cache.create()`), a literal of the
-  enclosing type, or an array literal. A literal of *another* type is **E3076** — call its factory.
+- An initializer is any expression a function body accepts, read as though written inside the type's body:
+  a literal, a factory call (`static var shared = Cache.create()`), an array literal, or a struct literal of
+  the enclosing type. A struct literal of *another* type is **E3076** — call its factory. A scalar static is
+  a compile-time constant, so a call that makes its value unknown is **E2045**, and a `static var` whose
+  initializer is a bare number is **E2004**.
 - **Initializers run before `main`, exactly once**, whether or not the field is ever read, in dependency
   order rather than declaration order: one that reads another static, directly or through a function it
   calls, runs after it. Initializers that depend on each other in a cycle, or one that reads its own field,

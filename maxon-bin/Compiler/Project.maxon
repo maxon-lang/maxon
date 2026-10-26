@@ -1761,7 +1761,7 @@ export union ImmortalRecordKind
 end 'ImmortalRecordKind'
 
 // @generated library-cache begin
-function cacheWriteImmortalRecordKind(writer LibraryCacheWriter, value ImmortalRecordKind)
+module function cacheWriteImmortalRecordKind(writer LibraryCacheWriter, value ImmortalRecordKind)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
@@ -1786,7 +1786,7 @@ function cacheWriteImmortalRecordKindContainerBox(writer LibraryCacheWriter, a0 
 	writer.unsigned(a1 as CacheUnsigned)
 end 'cacheWriteImmortalRecordKindContainerBox'
 
-function cacheReadImmortalRecordKind(reader LibraryCacheReader) returns ImmortalRecordKind throws LibraryCacheDamage
+module function cacheReadImmortalRecordKind(reader LibraryCacheReader) returns ImmortalRecordKind throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
@@ -6782,7 +6782,7 @@ export let InlineManagedFieldName = b"managed"
 // once per program from the query spine — holds them together. It checks the FIELD COUNT as well as
 // the offsets, which this constant could never have implied: a field the fused record has no slot
 // for is discarded at construction in silence (see `Parser.requireFusedWrapperTag`).
-let ManagedMemorySlotCount = 6 as ByteOffset
+let ManagedMemorySlotCount = 6
 let InlineManagedMemoryBytes = ManagedMemorySlotCount * FieldSlotBytes
 
 // ⭐ **THE THREE MARKER INTERFACES, AND WHY THE PREDICATE IS A FUNCTION RATHER THAN A SET LOOKUP.** They are
@@ -8016,11 +8016,10 @@ end 'cacheReadPayloadFieldArrayArray'
 // a field's value may itself be a constant struct, to any depth. An entry cannot hold the ARRAY of its own
 // children — that array's element type would contain itself and Maxon forbids a type that does (E4014,
 // `type 'X' contains a reference cycle`) — so every entry of a case, at every depth, rides in the ONE array
-// `EnumLayout.backingFieldsAt` returns and says which GROUP it belongs to. It is the shape
-// `SignatureIndex.ConstFactoryCall` already uses one directory over, for the identical reason.
+// `EnumLayout.backingFieldsAt` returns and says which GROUP it belongs to.
 export type EnumBackingField
 	// ⭐ **THE FIELD'S NAME AS WRITTEN, OR `EmptySourceText` FOR A POSITIONAL FACTORY ARGUMENT** — the same
-	// "no label here" spelling `Parser.consumeConstArgumentLabel` uses, and it means the same thing: the
+	// "no label here" spelling `Parser.readEnumBackingFieldLabel` returns, and it means the same thing: the
 	// field is the one at THIS entry's `position` in the struct's declaration order, which only the use site
 	// can look up. `Meta{value: 1}` names every field; `OpInfo.create(1, throughput: 1)` names the second.
 	export let name as ByteArray
@@ -9121,7 +9120,7 @@ end 'cacheReadEnumBackingStructDeclared'
 // int" — rendered from the type-name TOKEN the case wrote.
 //
 // ⚠ `structName` is `EmptySourceText` for every backing that names no struct — the "there is no name here"
-// spelling this file already uses for an absent argument label (`Parser.consumeConstArgumentLabel`). The
+// spelling this file already uses for an absent argument label (`EnumBackingField.name`). The
 // `structRecord` arm PANICS on it rather than printing an empty noun, so the one arm that must be handed a
 // name cannot be handed nothing quietly.
 export function enumBackingNoun(backing EnumBacking, backingStruct EnumBackingStruct) returns String
@@ -12748,7 +12747,7 @@ export type Project
 	export let keywords as KeywordTable
 
 	// The anchors of every parser the query layer builds to fold a file into the index — the sweep, the declaration
-	// folds and the constant evaluator. A real parse builds its own (`ParseStaging.parseFile`).
+	// folds and the initializer parses. A real parse builds its own (`ParseStaging.parseFile`).
 	export var readerAnchors as ParserAnchors
 
 	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray) returns Project

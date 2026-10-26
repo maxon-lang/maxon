@@ -487,40 +487,116 @@ function tupleAssignMayFollow(previous TokenKind) returns bool
 	return previous == TokenKind.newline or previous == TokenKind.then
 end 'tupleAssignMayFollow'
 
-// An unterminated group answers the EOF token's index, the one answer at which the token is not a `)`:
-// callers tell a match from malformed source by that, and the real parse reports the source.
-export function matchingRightParen(tokens TokenArray, open ElementIndex) returns ElementIndex
-	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'notAGroup'
-		panic("matchingRightParen: token {open} is not a `(` — a balanced group's extent is meaningful only at its opener")
-	end 'notAGroup'
+type ParenGroupFacts
+	export let close as ElementIndex
+	export let holdsTopLevelComma as bool
 
-	var depth = 0 as NestingDepth
-	var at = open
+	static function create(close ElementIndex, holdsTopLevelComma bool) returns Self
+		return Self{close: close, holdsTopLevelComma: holdsTopLevelComma}
+	end 'create'
+end 'ParenGroupFacts'
 
-	while at < tokens.count() 'walk'
-		let kind = tokenKindAt(tokens, index: at)
+typealias ParenGroupFactsMap = Map with (ElementIndex, ParenGroupFacts)
+typealias OpenParenStack = Array with ElementIndex
+typealias OpenParenCommaFlags = Array with bool
+typealias OpenParenBracketDepths = Array with NestingDepth
 
-		if kind == TokenKind.leftParen 'opens'
-			depth = depth + 1
-		end 'opens' else if kind == TokenKind.rightParen 'closes'
-			depth = depth - 1
+function shiftInnermostBracketDepth(brackets OpenParenBracketDepths, by NestingDepth)
+	let top = brackets.count() - 1
+	let depth = try brackets.get(top) otherwise panic("shiftInnermostBracketDepth: brackets.get OOB at the innermost group {top}")
+	try brackets.set(top, value: depth + by) otherwise panic("shiftInnermostBracketDepth: brackets.set OOB at the innermost group {top}")
+end 'shiftInnermostBracketDepth'
 
-			if depth == 0 'matched'
-				return at
-			end 'matched'
-		end 'closes' else if kind == TokenKind.eof 'unterminated'
-			return at
-		end 'unterminated'
+// Memoized per token stream, and a scan steps over a group it has already filed: the same openers are
+// asked about again and again, and a fresh walk per ask makes the compile superlinear.
+export type ParenGroups
+	var facts as ParenGroupFactsMap
 
-		at = at + 1
-	end 'walk'
+	export static function create() returns ParenGroups
+		return Self{facts: ParenGroupFactsMap.create()}
+	end 'create'
 
-	return tokens.count() as ElementIndex
-end 'matchingRightParen'
+	// An unterminated group answers the EOF token's index, the one answer at which the token is not a `)`:
+	// callers tell a match from malformed source by that, and the real parse reports the source.
+	export function closeOf(tokens TokenArray, open ElementIndex) returns ElementIndex
+		return self.factsAt(tokens, open: open).close
+	end 'closeOf'
+
+	export function holdsTopLevelComma(tokens TokenArray, open ElementIndex) returns bool
+		let group = self.factsAt(tokens, open: open)
+		return group.holdsTopLevelComma and tokenKindAt(tokens, index: group.close) == TokenKind.rightParen
+	end 'holdsTopLevelComma'
+
+	function factsAt(tokens TokenArray, open ElementIndex) returns ParenGroupFacts
+		if not self.facts.contains(open) 'unscanned'
+			self.scanFrom(tokens, open: open)
+		end 'unscanned'
+
+		return try self.facts.get(open) otherwise panic("ParenGroups.factsAt: the scan from token {open} files the group it starts at")
+	end 'factsAt'
+
+	function scanFrom(tokens TokenArray, open ElementIndex)
+		if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'notAGroup'
+			panic("ParenGroups.scanFrom: token {open} is not a `(` — a group's facts are meaningful only at its opener")
+		end 'notAGroup'
+
+		var opens = OpenParenStack.create()
+		var commas = OpenParenCommaFlags.create()
+		var brackets = OpenParenBracketDepths.create()
+		var i = open
+
+		while i < tokens.count() and tokenKindAt(tokens, index: i) != TokenKind.eof 'scan'
+			let kind = tokenKindAt(tokens, index: i)
+
+			if kind == TokenKind.leftParen and i != open and self.facts.contains(i) 'aGroupAlreadyScanned'
+				let known = try self.facts.get(i) otherwise panic("ParenGroups.scanFrom: contains({i}) just answered true")
+
+				if tokenKindAt(tokens, index: known.close) != TokenKind.rightParen 'itRunsToTheEnd'
+					i = known.close
+					break
+				end 'itRunsToTheEnd'
+
+				i = known.close + 1
+				continue
+			end 'aGroupAlreadyScanned'
+
+			if kind == TokenKind.leftParen 'opens'
+				opens.push(i)
+				commas.push(false)
+				brackets.push(0 as NestingDepth)
+			end 'opens' else if kind == TokenKind.rightParen 'closes'
+				let opener = try opens.pop() otherwise panic("ParenGroups.scanFrom: a `)` at token {i} with no open group — the scan stops when its first group closes")
+				let comma = try commas.pop() otherwise panic("ParenGroups.scanFrom: the comma flags run parallel to the open groups")
+				_ = try brackets.pop() otherwise panic("ParenGroups.scanFrom: the bracket depths run parallel to the open groups")
+				self.facts.upsert(opener, value: ParenGroupFacts.create(i, holdsTopLevelComma: comma))
+
+				if opens.isEmpty() 'theFirstGroupClosed'
+					return
+				end 'theFirstGroupClosed'
+			end 'closes' else if tokenKindOpensABracket(kind) 'opensAnotherBracket'
+				shiftInnermostBracketDepth(brackets, by: 1)
+			end 'opensAnotherBracket' else if tokenKindClosesABracket(kind) 'closesAnotherBracket'
+				shiftInnermostBracketDepth(brackets, by: -1)
+			end 'closesAnotherBracket' else if kind == TokenKind.comma 'aComma'
+				let top = brackets.count() - 1
+
+				if (try brackets.get(top) otherwise panic("ParenGroups.scanFrom: brackets.get OOB at the innermost group {top}")) == 0 'atTheGroupsOwnLevel'
+					try commas.set(top, value: true) otherwise panic("ParenGroups.scanFrom: commas.set OOB at the innermost group {top}")
+				end 'atTheGroupsOwnLevel'
+			end 'aComma'
+
+			i = i + 1
+		end 'scan'
+
+		for opener in opens 'eachUnclosedGroup'
+			self.facts.upsert(opener, value: ParenGroupFacts.create(i, holdsTopLevelComma: false))
+		end 'eachUnclosedGroup'
+	end 'scanFrom'
+end 'ParenGroups'
 
 // The one rule for where `view` opens a binding. Both tmLanguage grammars
 // (`vscode-extension/syntaxes/`, `website/src/grammars/`) restate it by hand and nothing checks them.
-function viewOpensABindingAt(tokens TokenArray, index ElementIndex) returns bool
+function viewOpensABindingAt(tokens TokenArray, groups ParenGroups, index ElementIndex) returns bool
 	if not tokenSpellsView(tokens, index: index) or not viewMayFollow(kindBefore(tokens, index: index)) 'notABindingHead'
 		return false
 	end 'notABindingHead'
@@ -535,7 +611,7 @@ function viewOpensABindingAt(tokens TokenArray, index ElementIndex) returns bool
 		return false
 	end 'notADestructure'
 
-	return tokenKindAt(tokens, index: matchingRightParen(tokens, open: index + 1) + 1) == TokenKind.equals
+	return tokenKindAt(tokens, index: groups.closeOf(tokens, open: index + 1) + 1) == TokenKind.equals
 end 'viewOpensABindingAt'
 
 // ⭐⭐ **`( <target> , … ) =` — THE ONE READER OF A TUPLE ASSIGNMENT'S TARGET-LIST SHAPE**
@@ -641,12 +717,13 @@ function retagViewTargets(tokens TokenArray, open ElementIndex, equalsAt Element
 end 'retagViewTargets'
 
 function markViewBindings(tokens TokenArray)
+	var groups = ParenGroups.create()
 	var index = 0 as ElementIndex
 
 	while index < tokens.count() 'eachToken'
 		let kind = tokenKindAt(tokens, index: index)
 
-		if kind == TokenKind.identifier and viewOpensABindingAt(tokens, index: index) 'aBindingHead'
+		if kind == TokenKind.identifier and viewOpensABindingAt(tokens, groups: groups, index: index) 'aBindingHead'
 			retagAsView(tokens, index: index)
 		end 'aBindingHead' else if kind == TokenKind.leftParen and tupleAssignMayFollow(kindBefore(tokens, index: index)) 'aTargetList'
 			let equalsAt = tupleAssignEqualsIn(tokens, open: index)
@@ -857,11 +934,10 @@ end 'expressionOperandDisplayText'
 // REFUTED — canonical writes a multi-word expectation BARE in this very message family:**
 //   `specs/lexer-parser-robustness.md:57,81`  `Unexpected end of input, expected type name`
 //   `specs/lexer-parser-robustness.md:181`    `Unexpected end of input, expected characterliteral`
-// The three quoted PHRASES canonical does carry (`'interpolation end'`, `'end of default value'`,
-// `'end of global initializer'`) are hand-typed literals at three call sites, sitting beside that bare
-// `type name` — the exception, not the rule. What decides the quoting is the PROVENANCE, not the
-// text: a QUOTED expectation names a keyword or operator token's own spelling, and a BARE one does
-// not.
+// The two quoted PHRASES canonical does carry (`'interpolation end'`, `'end of default value'`) are
+// hand-typed literals at two call sites, sitting beside that bare `type name` — the exception, not the
+// rule. What decides the quoting is the PROVENANCE, not the text: a QUOTED expectation names a keyword
+// or operator token's own spelling, and a BARE one does not.
 //
 // ⛔ **THE SPELLING TEST IS THEREFORE `KeywordTable.classify`'s — THE LEXER'S OWN KEYWORD TABLE — AND NOT
 // A LIST OF WORDS.** No property of the TEXT can separate `identifier` from `function`: both are one

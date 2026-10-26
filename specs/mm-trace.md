@@ -465,18 +465,11 @@ end 'main'
 
 <!-- test: a-payload-carrying-union-case-let-still-allocates -->
 ⭐ **THE ROUTING GATE: A PAYLOAD-CARRYING CASE NEVER REACHES THE IMAGING PREDICATE AT ALL, AND THIS IS WHAT
-HOLDS IT THERE.** Both bindings below name cases of ONE union, and they are claimed by different TIERS.
-`Slot.empty` is claimed by `atConstBoxedUnionCase` (arity 0), settles as `boxedUnionValue`, and is image
-data. `Slot.filled(7)` is claimed by `atConstUnionCaseConstruction`, settles as `factoryValue` with a
-`unionCase` root, and its verdict comes from `constStructIsImageData` — whose `mapLiteral to arrayLiteral`
-arm covers that root and answers false. So the box below is built by `__module_init` and released after
-`main`, and the trace names exactly one box.
-
-⛔ **THIS CASE DOES NOT GATE `boxedUnionCaseIsImageData`, AND SAYING IT DID WOULD BE FALSE.** No edit to that
-predicate can lay `filled(7)`'s payload down as a zero — the value never arrives there. What a widened
-`constStructIsImageData` COULD do is admit the `unionCase` root, and then this trace goes empty while the
-program still answers 7 from an image that was never asked to hold a 7. That is the failure this case is
-placed against.
+HOLDS IT THERE.** Both bindings below name cases of ONE union. `Slot.empty` is a payload-free case and is
+image data. `Slot.filled(7)` carries a payload, so the box below is built by `__module_init` and released
+after `main`, and the trace names exactly one box. An imaging rule that admitted the payload-carrying case
+would empty this trace while the program still answered 7 from an image that was never asked to hold a 7.
+That is the failure this case is placed against.
 
 ⚠ **THE REFUSE DIRECTION IS ALREADY PINNED ONE CASE UP**, where `Column` declares `entries(items
 CountArray)`: a rule that read the UNION rather than the case would refuse `Column.unwritten` and turn that

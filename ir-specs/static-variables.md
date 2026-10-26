@@ -416,7 +416,7 @@ func @main {
 ```
 
 <!-- test: data-section-f64-8byte-folded -->
-A FOLDED float initializer lays down the same 8 bytes as the literal: `3.0 + 0.14` produces `3.14`, the strongest proof the constant evaluator produced a NUMBER (folded with the host's f64) and not a summed bit pattern (byte-identical to the literal `3.14`).
+A FOLDED float initializer lays down the same 8 bytes as the literal: `3.0 + 0.14` produces `3.14`, the strongest proof the fold produced a NUMBER (folded with the host's f64) and not a summed bit pattern (byte-identical to the literal `3.14`).
 
 ```maxon
 var pi = (3.0 + 0.14) as FullRangeFloat
@@ -2191,4 +2191,146 @@ func @main {
     arm64.epilogue 32
     arm64.ret
 }
+```
+
+<!-- test: an-inline-record-let-built-by-a-factory-over-constants-is-a-baked-word -->
+An inline record is a word, so a `let` of one built by a factory from constants is that word laid down at
+compile time: it owns no `.data` slot and nothing builds it before `main`. `RequiredData` reads the
+`.data` section back out of the linked binary; the `let` is declared FIRST so a slot it was given would
+sit ahead of `marker` and displace it.
+
+```maxon
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+let origin = Pair.create(1, hi: 2)
+var marker = 42 as FullRangeInt
+
+function main() returns ExitCode
+	if marker != 42 'markerMoved'
+		return 99
+	end 'markerMoved'
+
+	return (origin.lo + origin.hi) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```RequiredData
+i64 42
+```
+
+<!-- test: an-inline-record-var-built-by-a-factory-over-constants-holds-its-word-in-data -->
+A `var` of an inline record keeps its `.data` slot because it can be written, and the slot is laid down
+holding the word the factory builds from constants (`6 shl 32 or 5`), so nothing fills it before `main`.
+
+```maxon
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+var origin = Pair.create(5, hi: 6)
+
+function main() returns ExitCode
+	return (origin.lo + origin.hi) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+```RequiredData
+i64 25769803781
+```
+
+<!-- test: an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data -->
+A heap record holding an inline record is image data when every field is a constant, the inline record's
+word included: the `let` owns no `.data` slot, so `marker` sits at byte 0.
+
+```maxon
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+type Holder
+	export let pair as Pair
+	export let tag as Half
+
+	static function create(pair Pair, tag Half) returns Self
+		return Self{pair: pair, tag: tag}
+	end 'create'
+end 'Holder'
+
+let holder = Holder.create(Pair.create(7, hi: 8), tag: 9)
+var marker = 42 as FullRangeInt
+
+function main() returns ExitCode
+	if marker != 42 'markerMoved'
+		return 99
+	end 'markerMoved'
+
+	return (holder.pair.lo + holder.pair.hi + holder.tag) as ExitCode
+end 'main'
+```
+```exitcode
+24
+```
+```RequiredData
+i64 42
+```
+
+<!-- test: an-inline-record-let-naming-another-inline-record-let-is-a-baked-word -->
+A `let` bound to another inline-record `let` is the same word, so it owns no `.data` slot either.
+
+```maxon
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+let first = Pair.create(3, hi: 4)
+let second = first
+var marker = 42 as FullRangeInt
+
+function main() returns ExitCode
+	if marker != 42 'markerMoved'
+		return 99
+	end 'markerMoved'
+
+	return (second.lo + second.hi) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+```RequiredData
+i64 42
 ```

@@ -69,9 +69,8 @@ let Keyword = b"critsplit"     // one ByteArray for the whole program
 var Buffer = b""
 ```
 
-A module-scope initializer must be constant in its entirety. A method call is not, so
-`let X = "lit".toByteArray()` is rejected (**E2045**) rather than silently folded to a `String` —
-write `let X = b"lit"` instead.
+`let X = "lit".toByteArray()` builds the same array before `main` instead, by a call; `let X = b"lit"`
+needs none.
 
 ## Tests
 
@@ -274,19 +273,41 @@ end 'main'
 2
 ```
 
-<!-- test: byte-string-literal.tobytearray-global-error -->
+<!-- test: byte-string-literal.tobytearray-in-a-body -->
 
-A method call is not a constant expression, so it cannot initialize a global — it is rejected
-rather than silently folded back to a `String`.
+```maxon
+function main() returns ExitCode
+		let b = "critsplit".toByteArray()
+		let first = try b.get(0) otherwise panic("oob")
+		print("{first} {b.count()}\n")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99 9
+```
+
+<!-- test: byte-string-literal.tobytearray-global -->
+
+A method call whose result is a record initializes a global as it initializes a body's `let`: the
+`ByteArray` is built once before `main`.
 ```maxon
 let B = "critsplit".toByteArray()
 
 function main() returns ExitCode
-		return B.count()
+		let first = try B.get(0) otherwise panic("oob")
+		print("{first} {B.count()}\n")
+		return 0
 end 'main'
 ```
-```maxoncstderr
-error E2045: specs/byte-string-literal/byte-string-literal.tobytearray-global-error.maxon:2:20: Global initializer for 'B' is not a constant expression: '.toByteArray()' cannot be evaluated at compile time
+```exitcode
+0
+```
+```stdout
+99 9
 ```
 
 <!-- test: byte-string-literal.field-access -->

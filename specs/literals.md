@@ -292,7 +292,30 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/literals/error.unsigned-literal-into-a-signed-field-of-a-global.maxon:12:26: Value 9223372036854775808 is outside the range of 'Offset' (int(-9223372036854775808 to 9223372036854775807))
+error E3005: specs/literals/error.unsigned-literal-into-a-signed-field-of-a-global.maxon:12:19: Value 9223372036854775808 is outside the range of 'Offset' (int(-9223372036854775808 to 9223372036854775807))
+```
+
+<!-- test: error.unsigned-literal-into-a-signed-field-of-a-local -->
+The same factory call in a function body, reported at the same token, the factory's name.
+```maxon
+typealias Offset = int(i64.min to i64.max)
+
+type Spot
+	export var at as Offset
+
+	static function create(at Offset) returns Self
+		return Self{at: at}
+	end 'create'
+end 'Spot'
+
+function main() returns ExitCode
+	let origin = Spot.create(9223372036854775808)
+	print("{origin.at}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/literals/error.unsigned-literal-into-a-signed-field-of-a-local.maxon:13:20: Value 9223372036854775808 is outside the range of 'Offset' (int(-9223372036854775808 to 9223372036854775807))
 ```
 
 <!-- test: unsigned-literal-to-a-float-alias-stays-positive -->

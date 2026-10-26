@@ -49,7 +49,7 @@ export enum ErrorCode
 	// anything but a ranged typealias is E2003 too.
 	parserExpectedType = "E2003"
 
-	// An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: eight distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; a top-level binding's initializer does not fold to a compile-time constant; a field default names no type; a `var` starts from a bare number; and a `let` starts from a number whose range is unknown.
+	// An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: seven distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; a field default names no type; a `var` starts from a bare number; and a `let` starts from a number whose range is unknown. A top-level or `static` initializer reports them as a function body does.
 	// Every `var` -- local, top-level or `static` -- names its type. One whose initializer is a bare
 	// number (`var x = 0`), arithmetic over bare numbers, a plain `let` constant, or an array, map or
 	// tuple literal of bare numbers with no typed head is refused at the initializer: cast it
@@ -85,7 +85,7 @@ export enum ErrorCode
 	// `typealias Quantity = int(0 to u64.max)`. Into a signed or narrower alias it is E3005.
 	parserLiteralOverflow = "E2011"
 
-	// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is one of several shapes all three compilers report under it -- others are a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other, and a circular typealias ('typealias A = Array with A', or a mutual pair), which describes an infinite type with no finite layout. The list is not a roster to keep exhaustive: what the code means is the cycle, not the construct it was found in.
+	// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is one of several shapes all three compilers report under it -- others are a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other, a cycle among initializers that run before `main` (a `static` reading another, directly or through a function it calls, or reading its own field), and a circular typealias ('typealias A = Array with A', or a mutual pair), which describes an infinite type with no finite layout. The list is not a roster to keep exhaustive: what the code means is the cycle, not the construct it was found in.
 	parserCircularDependency = "E2012"
 
 	// An assignment targets a binding declared 'let', a loop counter, or a field of a `let` tuple. Declare it 'var', or do not reassign it.
@@ -143,11 +143,13 @@ export enum ErrorCode
 	matchMismatchedBlockId = "E2043"
 
 	// A top-level constant's initializer is not a compile-time constant.
-	// A call in a top-level or `static` initializer is reported here when it names a function the file can
-	// see but the initializer cannot hold: a free function or sibling `static` returning a scalar, an
-	// instance method called bare, a generic function, a builtin, or a function-typed binding. A call to a
-	// function that does not exist, that the file cannot see, or that several directories declare is E3004,
-	// E3008 or E3088, or E3095, as in a function body. Make the call inside a function.
+	// A top-level or `static` binding that holds a scalar -- a number, a `bool` or an enum case -- is a
+	// constant inlined at every use, so its initializer must have a value known at compile time, as
+	// `2 * WIDTH` or `sqrt(4.0)` does in a function body. A call whose result is not known there is
+	// reported here, naming it: a free function or sibling `static` returning a scalar, an instance method
+	// called bare, a generic function, or a function-typed binding. A call to a function that does not
+	// exist, that the file cannot see, or that several directories declare is E3004, E3008 or E3088, or
+	// E3095, as in a function body. Make the call inside a function.
 	parserNonConstantInitializer = "E2045"
 
 	// A match over an enum may only carry a 'default' arm if that arm throws.
@@ -1054,8 +1056,7 @@ export enum ErrorCode
 	// its result used, under `try` or `if let … = try`, spawned with `async`, awaited or stored, and in a
 	// top-level or `static` initializer. An enum case refused here is reported once, in the file that
 	// declares the enum, whichever file calls through it. Decided by `ProgramSignatures.resolveFunctionName`;
-	// a call is reported by `SemanticCheck` (`validateCall` in a body, `checkInitializerCalls` in an
-	// initializer), the other two doors by the parser.
+	// a call is reported by `SemanticCheck`, the other two doors by the parser.
 	semanticAmbiguousCrossFileCall = "E3095"
 
 	// `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
@@ -2165,8 +2166,8 @@ export enum ErrorCode
 	// A module-level `let`'s initializer reaches a module-level `var` whose value holds a record. A `let` is fixed
 	// at startup and may not hold what a `var` owns: the `var` may write the record after `main` starts, and in a
 	// program that spawns a service the `let`'s graph could not be marked shared with an owner outside the
-	// `let`s. An initializer cannot name another global, so the `var` is reached through what it calls -- the call
-	// graph once overload resolution has chosen each callee, dispatches included. Refused whether or not the
+	// `let`s. What the initializer calls is followed through the call graph once overload resolution has chosen
+	// each callee, dispatches included. Refused whether or not the
 	// program spawns, and even when only a scalar is read out of the `var`, since what the initializer keeps is
 	// not followed. A scalar `var` owns no record and is not refused. Reported at the `var`'s use; the note is its
 	// declaration. Make the binding a `var`, or build its value without reading the `var`.

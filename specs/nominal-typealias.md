@@ -1662,6 +1662,28 @@ end 'main'
 error E3005: <fragment>:7:12: operator '<' requires both operands to be the same type: 'Small' and 'Tally' are different typealiases — cast one side with 'as'
 ```
 
+<!-- test: error.a-file-scope-sum-carries-its-alias -->
+A file-scope `a + a` over `Small` IS a `Small`, as it is in a body (`error.arithmetic-result-carries-the-alias`), so the constant it binds is refused at a `Tally` parameter.
+```maxon
+typealias Small = int(0 to 100)
+typealias Tally = int(0 to 100)
+
+let a = 5 as Small
+let s = a + a
+
+function f(t Tally) returns ExitCode
+	return t as ExitCode
+end 'f'
+
+function main() returns ExitCode
+	let r = f(s)
+	return r
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:13:10: argument type mismatch for 't': expected 'Tally', got 'Small'
+```
+
 <!-- test: error.arithmetic-result-carries-the-alias -->
 `a + a2` over `Age` IS an `Age`, so it is refused at a `Year` parameter exactly as `a` alone would be.
 ```maxon

@@ -127,20 +127,26 @@ export type ParseJob
 	// Whether this build instruments for code coverage (`Project.coverage`). The parse memo carries a salt
 	// for it, so a warm tree cannot serve an uninstrumented parse to an instrumented build.
 	export let instrumentsCoverage as bool
-	export let foldsAConstantInitializer as bool
+	export let initializerRole as InitializerRole
 
 	export static function create(path FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames NameRoster, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns ParseJob
-		return Self{path: path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, foldsAConstantInitializer: false}
+		return Self{path: path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, initializerRole: InitializerRole.ordinary}
 	end 'create'
 
-	// The job `ProgramSignatures.walkConstInitializer` folds an initializer under: the declaring file's
+	// The job `ProgramSignatures` parses an initializer under, in the role it names: the declaring file's
 	// own, so the initializer is judged by that file's privileges. Coverage and debug locals are cleared
 	// because the fold's ops reach no emitted image. Derived from the stored job rather than from the
 	// project, which would put a `Directory.currentPath()` probe on the per-declaration path.
-	export function forConstantInitializer() returns ParseJob
-		return Self{path: self.path, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, foldsAConstantInitializer: true}
-	end 'forConstantInitializer'
+	export function forInitializerRole(role InitializerRole) returns ParseJob
+		return Self{path: self.path, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, initializerRole: role}
+	end 'forInitializerRole'
 end 'ParseJob'
+
+export enum InitializerRole
+	ordinary
+	sweepFold
+	recordProbe
+end 'InitializerRole'
 
 // What one file's parse answers: its artifact, or the refusal with the blame it carries and what an aborted parse
 // still knows (`Parser.abortedParseArtifact`).
@@ -1935,19 +1941,6 @@ function commitStructTypes(project Project, artifact FileParseArtifact, signatur
 		project.structTypes.upsert(layout.name, value: committedStructLayout(layout, signatures: signatures))
 	end 'each'
 end 'commitStructTypes'
-
-// A tuple a file-scope initializer builds is interned by the initializer evaluator, whose artifact is
-// never merged, so no artifact files its layout. This is the one place it reaches `project.structTypes`;
-// without it `installStructDestructors` has no layout to synthesize the tuple's drop from.
-module function commitConstructedTupleTypes(project Project, signatures ProgramSignatures)
-	for name in signatures.constructedTupleTypeNames() 'each'
-		if project.structTypes.contains(name) 'filedByAnArtifact'
-			continue
-		end 'filedByAnArtifact'
-
-		project.structTypes.upsert(name, value: committedStructLayout(signatures.adoptTupleLayout(name, into: project.typeNames), signatures: signatures))
-	end 'each'
-end 'commitConstructedTupleTypes'
 
 // An inline record's packing is settled from this compile's widths onto a clone, because the
 // layout is the parse artifact's. `MmRuntime.installStructRuntimeEntries` stamps the runtime's

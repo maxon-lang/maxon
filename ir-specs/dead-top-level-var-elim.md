@@ -396,7 +396,7 @@ func @main {
     x64.movRegReg rax, r8
     x64.jmp trycont
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -457,7 +457,7 @@ func @main {
     x64.movRegReg rax, r8
     x64.jmp trycont
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -510,7 +510,7 @@ func @main {
     arm64.b.ne tryerr
     arm64.b trycont
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -565,7 +565,7 @@ func @main {
     arm64.b.ne tryerr
     arm64.b trycont
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

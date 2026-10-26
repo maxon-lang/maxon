@@ -368,7 +368,7 @@ function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatu
 	for i in 0 upto sig.paramCount() 'eachParam'
 		let paramType = try sig.paramTypes.get(i) otherwise panic("asyncReleasePlanFor: paramTypes.get OOB at {i}")
 		let aggregateName = try sig.paramAggregateNames.get(i) otherwise panic("asyncReleasePlanFor: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
-		let offset = (GtOffArgInline + i * GtArgSlotBytes) as ByteOffset
+		let offset = GtOffArgInline + (i as ByteOffset) * GtArgSlotBytes
 
 		if parameterRidesACellIntoASpawn(target.byReference, param: i, paramType: paramType) 'theCoroutinesOwnCell'
 			cellSlots.push(AsyncCellSlot.create(offset, content: asyncCellContentOf(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)))
@@ -421,11 +421,11 @@ end 'asyncResultSlotsOf'
 // the reply cell's `GtOffReplyWitness`. No spawned callee returns one (`tagRidesAsyncGprChannel`).
 function asyncResultSlotsOfType(resultType MaxonType, signatures ProgramSignatures, typeNames TypeNameInterner, aggregateName ByteArray) returns AsyncManagedSlotArray
 	if maxonTypeTag(resultType) != ValueTypeTag.interfaceRef 'aSingleWord'
-		return asyncSlotsAt(GtOffResult as ByteOffset, signatures: signatures, typeNames: typeNames, slotType: resultType, aggregateName: aggregateName)
+		return asyncSlotsAt(GtOffResult, signatures: signatures, typeNames: typeNames, slotType: resultType, aggregateName: aggregateName)
 	end 'aSingleWord'
 
 	var slots = AsyncManagedSlotArray.create()
-	slots.push(AsyncManagedSlot.create(GtOffResult as ByteOffset, drop: FieldDropKind.existential((GtOffReplyWitness - GtOffResult) as ByteOffset)))
+	slots.push(AsyncManagedSlot.create(GtOffResult, drop: FieldDropKind.existential(GtOffReplyWitness - GtOffResult)))
 	return slots
 end 'asyncResultSlotsOfType'
 
@@ -467,7 +467,7 @@ function asyncBoxedErrorSlots(layout EnumLayout, signatures ProgramSignatures, e
 	var slots = AsyncManagedSlotArray.create()
 
 	if layout.isBoxed() 'boxedError'
-		slots.push(AsyncManagedSlot.create(GtOffThrew as ByteOffset, drop: FieldDropKind.direct(signatures.unionBoxDropCallee(errorName))))
+		slots.push(AsyncManagedSlot.create(GtOffThrew, drop: FieldDropKind.direct(signatures.unionBoxDropCallee(errorName))))
 	end 'boxedError'
 
 	return slots
