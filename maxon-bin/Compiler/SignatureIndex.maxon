@@ -3142,6 +3142,18 @@ end 'cacheReadConstFactoryCallArray'
 
 // @generated library-cache end
 
+typealias ConstructedTupleNameSet = Set with ByteArray
+
+function constFoldedBrand(folded ConstFoldedValue) returns ByteArray
+	match folded 'kind'
+		containerCreate(_, brand, _) then return brand
+		scalar or
+		managed or
+		arrayLiteral or
+		boxedUnionCase then return EmptySourceText
+	end 'kind'
+end 'constFoldedBrand'
+
 // The one get-or-panic over a fold-tier call arena. An id is minted by the walk that pushed the call it
 // names (`Parser.evalConstFactoryCallInto`) and travels only inside the arena it was minted from, so a miss
 // is an arena the walk and its readers disagree about rather than anything a program can write.
@@ -26998,6 +27010,50 @@ export type ProgramSignatures
 		end 'eachField'
 	end 'appendFieldInterfacesOf'
 
+	export function constructedTupleTypeNames() returns NameRoster
+		var names = NameRoster.create()
+		var seen = ConstructedTupleNameSet.create()
+
+		for i in 0 upto self.settledDeclarations().decls.count() 'each'
+			match self.declAt(i).outcome 'state'
+				pending or
+				evaluating or
+				value or
+				failed or
+				poisoned or
+				managedValue or
+				arrayValue or
+				containerValue or
+				boxedUnionValue then continue
+				factoryValue(calls, _, _) then self.appendConstructedTupleNames(names, seen: seen, calls: calls)
+			end 'state'
+		end 'each'
+
+		return names
+	end 'constructedTupleTypeNames'
+
+	function appendConstructedTupleNames(names NameRoster, seen ConstructedTupleNameSet, calls ConstFactoryCallArray)
+		for call in calls 'eachNode'
+			match call 'node'
+				construct(typeName, _) then self.appendConstructedTupleName(names, seen: seen, typeName: typeName)
+				call or
+				mapLiteral or
+				unionCase or
+				arrayLiteral or
+				functionValue then continue
+			end 'node'
+		end 'eachNode'
+	end 'appendConstructedTupleNames'
+
+	function appendConstructedTupleName(names NameRoster, seen ConstructedTupleNameSet, typeName ByteArray)
+		if not isTupleTypeName(typeName) or seen.contains(typeName) 'nothingToAdd'
+			return
+		end 'nothingToAdd'
+
+		seen.insert(typeName.clone())
+		names.push(typeName.clone())
+	end 'appendConstructedTupleName'
+
 	// ⭐ **WHAT THE CORPUS SLOT `label` NAMES CALLS**, or nothing when `label` names no corpus slot or one
 	// initialized by no call. The half of the root set `globalInitCallees` deliberately does not carry; see
 	// there. Answering with the SHARED EMPTY for the overwhelmingly common miss keeps this allocation-free at
@@ -27712,6 +27768,16 @@ export type ProgramSignatures
 		return self.tupleLayoutOfSlot(self.fieldTypeOf(layout, index: index, into: self.typeNames), slotScopeFilePath: layout.declFilePath)
 	end 'tupleLayoutOfField'
 
+	export function tupleLayoutOfPayload(layout EnumLayout, field PayloadField) returns DeclaredStruct
+		return self.tupleLayoutOfSlot(self.payloadTypeOf(field, layout: layout, into: self.typeNames), slotScopeFilePath: layout.declFilePath)
+	end 'tupleLayoutOfPayload'
+
+	export function tupleLayoutDeclaredAtParam(callee ByteArray, sourceIndex ParamCount, label ByteArray, readerFilePath FilePath) returns DeclaredStruct
+		let name = try self.tupleTypeNameDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: readerFilePath) otherwise return DeclaredStruct.undeclared
+		let tuple = try self.tupleLayoutNamed(name) otherwise return DeclaredStruct.undeclared
+		return DeclaredStruct.declared(tuple)
+	end 'tupleLayoutDeclaredAtParam'
+
 	function tupleLayoutOfSlot(slot MaxonType, slotScopeFilePath FilePath) returns DeclaredStruct
 		let tuple = try self.tupleLayoutOf(self.declaredSlotType(slot, into: self.typeNames, slotScopeFilePath: slotScopeFilePath)) otherwise return DeclaredStruct.undeclared
 		return DeclaredStruct.declared(tuple)
@@ -27865,15 +27931,64 @@ export type ProgramSignatures
 		end 'form'
 	end 'constFieldSlotTypeOfForm'
 
+	export function constColumnBrand(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, column MaxonType) returns ByteArray
+		if maxonTypeTag(column) != ValueTypeTag.genericInstance 'carriesNoInstanceBrand'
+			return EmptySourceText
+		end 'carriesNoInstanceBrand'
+
+		return match value 'value'
+			call(id) gives self.constCallColumnBrand(factoryCallAt(calls, id: id))
+			folded(folded) gives constFoldedBrand(folded)
+		end 'value'
+	end 'constColumnBrand'
+
+	function constCallColumnBrand(call ConstFactoryCall) returns ByteArray
+		return match call 'node'
+			call(callee, _, _) gives self.callResultBrand(callee)
+			construct or
+			mapLiteral or
+			unionCase or
+			arrayLiteral or
+			functionValue gives EmptySourceText
+		end 'node'
+	end 'constCallColumnBrand'
+
+	// The one brand rule for a call's result, read by a body's `Parser.brandCallResult` and a file-scope
+	// tuple's `constColumnBrand` alike: were they to differ, a file-scope tuple and a body tuple over the
+	// same value would be two tuple types.
+	//
+	// The spelling is resolved in the callee's declaring file: read in the caller's, a caller that declares
+	// its own alias of that name would take the result as its own brand. `FuncSignature.returnBrand` cannot
+	// serve, because a caller's parse sees only its own file's signatures.
+	export function callResultBrand(callee ByteArray) returns ByteArray
+		let aliasName = try self.returnAliasNameOf(callee) otherwise return EmptySourceText
+
+		if self.returnNamesInnerAlias(callee, aliasName: aliasName) 'anInnerAliasBrandsNothing'
+			return EmptySourceText
+		end 'anInnerAliasBrandsNothing'
+
+		return self.authorsAliasBrand(aliasName, readerFilePath: self.recordedReturnDeclFileOf(callee))
+	end 'callResultBrand'
+
+	// A COMPILER-RESERVED spelling (`__ManagedMemory`, the buffer surface of a byte array) brands nothing:
+	// it is a surface the compiler registers over an author's instance, not a type the author declared.
+	export function authorsAliasBrand(spelled ByteArray, readerFilePath FilePath) returns ByteArray
+		if isCompilerReservedName(spelled) 'notAnAuthorsAlias'
+			return EmptySourceText
+		end 'notAnAuthorsAlias'
+
+		return self.genericBrandOfWritten(spelled, readerFilePath: readerFilePath)
+	end 'authorsAliasBrand'
+
 	// The type one arena VALUE is minted at — a nested node's result, or what the constant folded to. It is
-	// `globalInitValue`'s type half asked on its own, because the two askers run at PARSE time where no record
+	// `globalInitValue`'s type half asked on its own, because its askers run at PARSE time where no record
 	// may be built yet: `globalRecordOf` interns stamps and resolves drop callees, work that belongs to the
 	// synthesis and would be thrown away here.
 	//
-	// ⭐ **THE TWO ASKERS ARE A STRUCT LITERAL'S FIELD AND A MAP LITERAL'S COLUMN**, which is why it wears the
-	// arena's noun and not the field's: a top-level `[k: v]` fixes its `Map with (K, V)` instance from the
-	// TYPES of its first pair, and deriving those a second way would let the instance a literal is interned at
-	// and the type its values are minted at disagree.
+	// It is asked for a struct literal's field and for a column of a map, tuple or record-array literal,
+	// which is why it wears the arena's noun and not the field's: a top-level `[k: v]` fixes its `Map with
+	// (K, V)` instance from the TYPES of its first pair, and deriving those a second way would let the
+	// instance a literal is interned at and the type its values are minted at disagree.
 	export function constNodeValueType(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns MaxonType
 		return match value 'value'
 			call(id) gives self.constFactoryCallResultType(factoryCallAt(calls, id: id), name: declName)

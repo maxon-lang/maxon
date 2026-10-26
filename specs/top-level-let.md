@@ -560,8 +560,334 @@ end 'main'
 7 9
 ```
 
-<!-- test: error.a-top-level-tuple-literal-without-a-stated-tuple -->
-A tuple literal where no slot declares a tuple type has no element types to take, and says so.
+<!-- test: a-top-level-let-of-an-unstated-tuple -->
+A module-scope `let` whose initializer is a tuple literal takes the tuple type the literal states, as `let t = (1, 2)`
+does in a body, and two such constants of one type share it.
+```maxon
+let first = (1, 2)
+let second = (30, 40)
+
+function main() returns ExitCode
+	print("{first.0} {first.1} {second.0} {second.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2 30 40
+```
+
+<!-- test: a-top-level-let-of-an-unstated-tuple-that-owns-a-string -->
+A tuple constant with a `String` column is built before `main` and released after it, through the destructor
+the tuple type owes, exactly as the same literal is in a body.
+```maxon
+typealias Num = int(0 to 1000)
+
+let named = (7, "seven")
+var other = ("a", "b", 3 as Num)
+
+function main() returns ExitCode
+	print("{named.0} {named.1} {other.0}{other.1} {other.2}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 seven ab 3
+```
+
+<!-- test: error.a-top-level-var-of-an-unstated-tuple-of-bare-numbers -->
+A module-scope `var` born from a tuple of bare numbers is refused as it is in a body.
+```maxon
+var point = (10, 20)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:2:13: A var cannot start from a bare number: write 'var name = expr as Type'.
+```
+
+<!-- test: a-top-level-let-of-an-unstated-tuple-holding-an-empty-container -->
+A column that is an empty container built by its alias keeps the alias in the tuple's identity, as it does in a body.
+```maxon
+typealias Item = int(0 to 1000)
+typealias Items = Array with Item
+
+let held = (Items.create(), "held")
+
+function main() returns ExitCode
+	print("{held.0.count()} {held.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 held
+```
+
+<!-- test: a-top-level-let-of-an-unstated-tuple-holding-a-construction-by-its-alias -->
+A column built by its alias's `from` keeps the alias in the tuple's identity, as it does in a body, so the constant and
+a body-built tuple over the same construction are one type and share an array.
+```maxon
+typealias Item = int(0 to 1000)
+typealias Items = Array with Item
+
+let held = (Items from [7], "held")
+
+function main() returns ExitCode
+	let fresh = (Items from [7, 8], "fresh")
+	let both = [fresh, held.clone()]
+
+	for pair in both 'eachPair'
+		print("{pair.0.count()} {pair.1}\n")
+	end 'eachPair'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 fresh
+1 held
+```
+
+<!-- test: a-top-level-let-of-an-unstated-nested-tuple -->
+A tuple whose element is a tuple states both types, with no alias written anywhere.
+```maxon
+let nested = ((1, "one"), (2, 3))
+
+function main() returns ExitCode
+	print("{nested.0.0} {nested.0.1} {nested.1.0} {nested.1.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 one 2 3
+```
+
+<!-- test: a-tuple-argument-of-a-top-level-factory -->
+A factory parameter declared at a tuple type takes a tuple literal in a file-scope call, as it does in a body.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Step = (Num, String)
+
+type Pair
+	export var step as Step
+
+	static function create(step Step) returns Pair
+		return Pair{step: step}
+	end 'create'
+end 'Pair'
+
+let p = Pair.create((1, "one"))
+
+function main() returns ExitCode
+	print("{p.step.0} {p.step.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 one
+```
+
+<!-- test: a-tuple-argument-written-in-the-factory-signature -->
+The same call when the parameter spells its tuple type inline instead of through an alias.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Pair
+	export var a as Num
+	export var b as Num
+
+	static function create(ends (Num, Num)) returns Pair
+		return Pair{a: ends.0, b: ends.1}
+	end 'create'
+end 'Pair'
+
+let p = Pair.create((5, 6))
+
+function main() returns ExitCode
+	print("{p.a} {p.b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 6
+```
+
+<!-- test: a-tuple-payload-of-a-top-level-union-case -->
+A union case whose payload is a tuple takes a tuple literal in a file-scope construction.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Step = (Num, String)
+
+union Move
+	moved(step Step)
+	still
+end 'Move'
+
+let move = Move.moved((3, "three"))
+
+function main() returns ExitCode
+	match move 'which'
+		moved(step) then print("{step.0} {step.1}\n")
+		still then print("still\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 three
+```
+
+<!-- test: a-tuple-column-of-a-top-level-map -->
+A map literal whose value column is a tuple fixes its columns from the first pair's tuple.
+```maxon
+let table = [1: (2, "two"), 3: (4, "four")]
+
+function main() returns ExitCode
+	view first = try table.get(1) otherwise panic("absent")
+	view second = try table.get(3) otherwise panic("absent")
+	print("{first.0} {first.1} {second.0} {second.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 two 4 four
+```
+
+<!-- test: an-untyped-top-level-array-literal-of-tuples -->
+An array literal of tuple literals with no stated alias is an `Array` of the tuple type its first element states.
+```maxon
+let pairs = [(1, "one"), (2, "two")]
+
+function main() returns ExitCode
+	print("{pairs.count()}")
+
+	for pair in pairs 'eachPair'
+		print(" {pair.0} {pair.1}")
+	end 'eachPair'
+
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1 one 2 two
+```
+
+<!-- test: a-parenthesised-tuple-element-of-a-typed-array-literal -->
+A tuple literal written in extra parentheses is the same tuple in a slot that states one.
+```maxon
+typealias Word = bits(64)
+typealias Step = (Word, Word)
+typealias Steps = Array with Step
+
+let steps = Steps from [((0, 1)), (((2, 3)))]
+
+function main() returns ExitCode
+	print("{steps.count()}")
+
+	for step in steps 'eachStep'
+		print(" {step.0} {step.1}")
+	end 'eachStep'
+
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 0 1 2 3
+```
+
+<!-- test: parenthesised-records-and-tuples-at-file-scope -->
+Redundant parentheses around a factory call, a tuple literal or a tuple column change nothing, and the comma between
+a call's arguments does not make the parentheses around the call a tuple.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Pair
+	export var a as Num
+	export var b as Num
+
+	static function create(a Num, b Num) returns Pair
+		return Pair{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+let grouped = (((Pair.create(1, b: 2))))
+let wrapped = (((((3, "three")))))
+let mixed = ((Pair.create(4, b: 5)), ((6, "six")))
+
+function main() returns ExitCode
+	print("{grouped.a} {grouped.b} {wrapped.0} {wrapped.1} {mixed.0.a} {mixed.0.b} {mixed.1.0} {mixed.1.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2 3 three 4 5 6 six
+```
+
+<!-- test: an-unstated-tuple-constant-declared-in-another-file -->
+A constant whose tuple type no file writes is built by the module init whichever file declares it and whichever
+file reads it, and a second file's own constant of the same type shares the layout.
+```maxon
+// --- file: api/table.maxon
+export let origin = (0, "origin")
+
+// --- file: bin/main.maxon
+let here = (9, "here")
+
+function main() returns ExitCode
+	print("{origin.0} {origin.1} {here.0} {here.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 origin 9 here
+```
+
+<!-- test: error.a-top-level-tuple-literal-in-an-array-of-scalars -->
+A tuple literal is a tuple wherever it stands, so an array of `Word` refuses it as it refuses any element of
+another type, naming the tuple type.
 ```maxon
 typealias Word = bits(64)
 typealias Words = Array with Word
@@ -573,7 +899,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:25: Unsupported: a tuple literal at a position that declares no tuple type to take its element types from — a top-level initializer builds one only as the element of a typed array literal (`Steps from [(0, 1)]`), as a struct field, or as an element of another tuple literal, each of which states the tuple. Build it inside a function
+error E3005: <fragment>:5:25: 'Words from' requires a int, but its argument is (int, int)
 ```
 
 <!-- test: cross-file-constant-in-initializer -->

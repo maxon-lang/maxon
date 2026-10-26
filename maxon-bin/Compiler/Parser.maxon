@@ -3130,6 +3130,33 @@ end 'FiledTupleNameRoster'
 
 let noFiledTupleNames = FiledTupleNameRoster.unwritten
 
+type ParenGroupFacts
+	export let close as ElementIndex
+	export let holdsTopLevelComma as bool
+
+	static function create(close ElementIndex, holdsTopLevelComma bool) returns Self
+		return Self{close: close, holdsTopLevelComma: holdsTopLevelComma}
+	end 'create'
+end 'ParenGroupFacts'
+
+typealias ParenGroupFactsMap = Map with (ElementIndex, ParenGroupFacts)
+typealias OpenParenStack = Array with ElementIndex
+typealias OpenParenCommaFlags = Array with bool
+typealias OpenParenBracketDepths = Array with NestingDepth
+
+union ParenGroupFactsTable
+	unscanned
+	entries(facts ParenGroupFactsMap)
+end 'ParenGroupFactsTable'
+
+let noParenGroupFacts = ParenGroupFactsTable.unscanned
+
+function shiftInnermostBracketDepth(brackets OpenParenBracketDepths, by NestingDepth)
+	let top = brackets.count() - 1
+	let depth = try brackets.get(top) otherwise panic("shiftInnermostBracketDepth: brackets.get OOB at the innermost group {top}")
+	try brackets.set(top, value: depth + by) otherwise panic("shiftInnermostBracketDepth: brackets.set OOB at the innermost group {top}")
+end 'shiftInnermostBracketDepth'
+
 // ⚠⚠ **ONE INTERFACE'S TRANSITIVE WITNESS SLOT LIST, BUILT ONCE PER FILE RATHER THAN ONCE PER
 // DISPATCH SITE, AND THE DIFFERENCE IS A QUADRATIC.** `findWitnessDispatchCandidates` runs at every
 // method call on a constrained type parameter and needs the slot NUMBERING; rebuilding the
@@ -9856,6 +9883,7 @@ end 'calleeMintIsDefaultHelper'
 
 let MaxDeclaredMembers = 65535
 let MaxEnumBackingEntries = 65536
+let TupleLiteralDeclName = b"tuple literal"
 
 function requireMemberCount(count ElementIndex, limit ElementIndex, members String, anchor Token) throws SourceParseError
 	if count <= limit 'withinTheLimit'
@@ -19853,6 +19881,7 @@ export type Parser
 	// NAME is kept, and a tuple type written N times in a file files ONE contribution rather than N identical
 	// ones for `commitStructTypes` to upsert over. Empty for a file with no tuples.
 	var filedTupleNames as FiledTupleNameRoster
+	var parenGroupFacts as ParenGroupFactsTable
 
 	// ⭐ Where each SIZED CONTAINER declared in THIS file begins its member list — the sites
 	// `Queries.foldFixedElementCountNeeds` re-walks once the whole-program index is complete. A field rather
@@ -20317,6 +20346,7 @@ export type Parser
 			interfaceAliasScratch: anchors.interfaceAliases,
 			innerAliasesFromIndex: false,
 			filedTupleNames: noFiledTupleNames,
+			parenGroupFacts: noParenGroupFacts,
 			descriptorScanSites: DescriptorScanSiteArray.create(),
 			siblingReceivers: noSiblingReceivers,
 			siblingReceiverScanType: EnclosingTypeScope.fileScope,
@@ -27851,7 +27881,7 @@ export type Parser
 			value(_, tag, typeName) then try self.requireGlobalVarNotBornFromABareNumber(decl, bare: (tag == ValueTypeTag.integer or tag == ValueTypeTag.float) and typeName.isEmpty())
 			arrayValue(_, element) then try self.requireGlobalVarNotBornFromABareNumber(decl, bare: element == ConstArrayElementKind.integer)
 			containerValue(giid, _, _) then try self.requireGlobalVarNotBornFromABareNumber(decl, bare: self.instanceHoldsBareNumbers(giid))
-			factoryValue(_, _, returnType) then try self.requireGlobalVarNotBornFromABareNumber(decl, bare: maxonTypeTag(returnType) == ValueTypeTag.genericInstance and self.instanceHoldsBareNumbers(genericInstanceIdOf(returnType)))
+			factoryValue(_, _, returnType) then try self.requireGlobalVarNotBornFromABareNumber(decl, bare: self.globalSlotHoldsBareNumbers(returnType))
 			poisoned or
 			managedValue or
 			boxedUnionValue then break
@@ -27860,6 +27890,19 @@ export type Parser
 			evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
+
+	function globalSlotHoldsBareNumbers(slot MaxonType) returns bool
+		if maxonTypeTag(slot) == ValueTypeTag.genericInstance 'anInstance'
+			return self.instanceHoldsBareNumbers(genericInstanceIdOf(slot))
+		end 'anInstance'
+
+		if maxonTypeTag(slot) != ValueTypeTag.structRef 'neitherAContainerNorARecord'
+			return false
+		end 'neitherAContainerNorARecord'
+
+		view name = self.signatures.indexSpaceTypeName(slot)
+		return isTupleTypeName(name) and self.tupleHoldsBareNumbers(name)
+	end 'globalSlotHoldsBareNumbers'
 
 	function requireGlobalVarNotBornFromABareNumber(decl TopLevelDecl, bare bool) throws SourceParseError
 		if decl.mutable and bare 'aBareNumberVar'
@@ -31612,34 +31655,96 @@ export type Parser
 		end 'arity'
 	end 'parenthesizedWithBindsOneTuple'
 
-	// Does the balanced `( … )` opening at `index` hold a comma at ITS OWN level? Nested groups are stepped
-	// over through `matchingRightParen` — the one balanced-extent door — rather than by a second depth
-	// counter, so "which `)` closes this `(`" has one answer. An UNBALANCED group answers false
-	// and leaves the real parse to report it with a position, exactly as `skipBalancedParens` does.
+	// Does the balanced `( … )` opening at `index` hold a comma at ITS OWN level? Every bracket kind is
+	// counted, so the commas of `(Pair{a: 1, b: 2})` and `([1, 2])` do not make the group a tuple. An
+	// UNBALANCED group answers false and leaves the real parse to report it with a position, exactly as
+	// `skipBalancedParens` does.
 	function parenGroupHoldsTopLevelComma(index ElementIndex) returns bool
-		let closeIndex = matchingRightParen(self.tokens, open: index)
+		let facts = self.parenGroupFactsAt(index)
+		return facts.holdsTopLevelComma and self.kindAt(facts.close) == TokenKind.rightParen
+	end 'parenGroupHoldsTopLevelComma'
 
-		if self.kindAt(closeIndex) != TokenKind.rightParen 'unbalanced'
-			return false
-		end 'unbalanced'
+	function parenGroupFactsAt(open ElementIndex) returns ParenGroupFacts
+		var table = self.parenGroupFactsForWrite()
 
-		var i = index + 1
+		if not table.contains(open) 'unscanned'
+			self.scanParenGroupsFrom(open, into: table)
+		end 'unscanned'
 
-		while i < closeIndex 'scan'
-			if self.kindAt(i) == TokenKind.comma 'topLevelComma'
-				return true
-			end 'topLevelComma'
+		return try table.get(open) otherwise panic("Parser.parenGroupFactsAt: the scan from token {open} files the group it starts at")
+	end 'parenGroupFactsAt'
 
-			if self.kindAt(i) == TokenKind.leftParen 'nestedGroup'
-				i = matchingRightParen(self.tokens, open: i) + 1
+	function parenGroupFactsForWrite() returns ParenGroupFactsMap
+		match self.parenGroupFacts 'state'
+			unscanned then break
+			entries(table) then return table
+		end 'state'
+
+		let fresh = ParenGroupFactsMap.create()
+		self.parenGroupFacts = ParenGroupFactsTable.entries(fresh)
+		return fresh
+	end 'parenGroupFactsForWrite'
+
+	// Paren lookahead is asked at every nesting level, so a scan per question is O(n·d) and the compiler
+	// must stay linear. One scan files every group it passes and jumps over a group already filed, so no
+	// order of questions scans a token twice.
+	function scanParenGroupsFrom(open ElementIndex, into ParenGroupFactsMap)
+		if self.kindAt(open) != TokenKind.leftParen 'notAGroup'
+			panic("Parser.scanParenGroupsFrom: token {open} is not a `(` — a group's facts are meaningful only at its opener")
+		end 'notAGroup'
+
+		var opens = OpenParenStack.create()
+		var commas = OpenParenCommaFlags.create()
+		var brackets = OpenParenBracketDepths.create()
+		var i = open
+
+		while self.kindAt(i) != TokenKind.eof 'scan'
+			let kind = self.kindAt(i)
+
+			if kind == TokenKind.leftParen and i != open and into.contains(i) 'aGroupAlreadyScanned'
+				let known = try into.get(i) otherwise panic("Parser.scanParenGroupsFrom: contains({i}) just answered true")
+
+				if self.kindAt(known.close) != TokenKind.rightParen 'itRunsToTheEnd'
+					i = known.close
+					break
+				end 'itRunsToTheEnd'
+
+				i = known.close + 1
 				continue
-			end 'nestedGroup'
+			end 'aGroupAlreadyScanned'
+
+			if kind == TokenKind.leftParen 'opens'
+				opens.push(i)
+				commas.push(false)
+				brackets.push(0 as NestingDepth)
+			end 'opens' else if kind == TokenKind.rightParen 'closes'
+				let opener = try opens.pop() otherwise panic("Parser.scanParenGroupsFrom: a `)` at token {i} with no open group — the scan stops when its first group closes")
+				let comma = try commas.pop() otherwise panic("Parser.scanParenGroupsFrom: the comma flags run parallel to the open groups")
+				_ = try brackets.pop() otherwise panic("Parser.scanParenGroupsFrom: the bracket depths run parallel to the open groups")
+				into.upsert(opener, value: ParenGroupFacts.create(i, holdsTopLevelComma: comma))
+
+				if opens.isEmpty() 'theFirstGroupClosed'
+					return
+				end 'theFirstGroupClosed'
+			end 'closes' else if tokenKindOpensABracket(kind) 'opensAnotherBracket'
+				shiftInnermostBracketDepth(brackets, by: 1)
+			end 'opensAnotherBracket' else if tokenKindClosesABracket(kind) 'closesAnotherBracket'
+				shiftInnermostBracketDepth(brackets, by: -1)
+			end 'closesAnotherBracket' else if kind == TokenKind.comma 'aComma'
+				let top = brackets.count() - 1
+
+				if (try brackets.get(top) otherwise panic("Parser.scanParenGroupsFrom: brackets.get OOB at the innermost group {top}")) == 0 'atTheGroupsOwnLevel'
+					try commas.set(top, value: true) otherwise panic("Parser.scanParenGroupsFrom: commas.set OOB at the innermost group {top}")
+				end 'atTheGroupsOwnLevel'
+			end 'aComma'
 
 			i = i + 1
 		end 'scan'
 
-		return false
-	end 'parenGroupHoldsTopLevelComma'
+		for opener in opens 'eachUnclosedGroup'
+			into.upsert(opener, value: ParenGroupFacts.create(i, holdsTopLevelComma: false))
+		end 'eachUnclosedGroup'
+	end 'scanParenGroupsFrom'
 
 	// ⚖ **A PARENTHESIZED `with (…)` LIST MAY NOT BE LONGER THAN THE INTERFACE'S `uses` ARITY.**
 	// Without this, `implements One with (Integer, Float)` against `interface One uses A` binds
@@ -42490,18 +42595,8 @@ export type Parser
 			return EmptySourceText
 		end 'anInnerAliasBrandsNothing'
 
-		return self.brandOfAuthorsAlias(spelled, readerFilePath: readerFilePath)
+		return self.signatures.authorsAliasBrand(spelled, readerFilePath: readerFilePath)
 	end 'brandOfSpelling'
-
-	// A COMPILER-RESERVED spelling (`__ManagedMemory`, the buffer surface of a byte array) brands nothing:
-	// it is a surface the compiler registers over an author's instance, not a type the author declared.
-	function brandOfAuthorsAlias(spelled ByteArray, readerFilePath FilePath) returns ByteArray
-		if isCompilerReservedName(spelled) 'notAnAuthorsAlias'
-			return EmptySourceText
-		end 'notAnAuthorsAlias'
-
-		return self.signatures.genericBrandOfWritten(spelled, readerFilePath: readerFilePath)
-	end 'brandOfAuthorsAlias'
 
 	// The brand an ELEMENT read out of instance `giid` wears — the alias the instantiation spelled its one
 	// type argument with (`Rows = Array with Row` yields `Row`s). A base with several arguments (`Map`)
@@ -67477,9 +67572,10 @@ export type Parser
 		return MaxonType.structRef(self.artifact.typeNames.intern(tupleName))
 	end 'parseTupleTypeReference'
 
-	// ⭐ **THE ONE DOOR A TUPLE TYPE IS MINTED THROUGH** — a literal, a type annotation, a `typealias` RHS.
-	// It interns the type whole-program (`ProgramSignatures.internTupleType`, which canonicalizes and keys the
-	// layout) and files THIS FILE's own copy of the layout as an artifact contribution, so `mergeArtifact`
+	// ⭐ **THE DOOR A PARSED TUPLE TYPE IS MINTED THROUGH** — a literal, a type annotation, a `typealias` RHS.
+	// It interns the type whole-program through `internedTupleName`, which a file-scope initializer's tuple
+	// shares (its evaluator's artifact is never merged, so `commitConstructedTupleTypes` files that one), and
+	// files THIS FILE's own copy of the layout as an artifact contribution, so `mergeArtifact`
 	// commits it to `project.structTypes` and `installStructDestructors` synthesizes the drop cascade for a
 	// tuple that owns a String. Both registrations happen here, together, because a layout in one and not the
 	// other is what makes the destructor installer ask a question the index cannot answer.
@@ -67490,9 +67586,7 @@ export type Parser
 	// way, a sweep-minted `named` element denotes whichever name the index numbered alike — a record element
 	// classified scalar is stored raw and released at scope exit.
 	function internTupleLayout(elements MaxonTypeArray, brands NameRoster, anchor Token) returns StructLayout throws SourceParseError
-		let name = try self.signatures.internTupleType(elements, written: brands, from: self.artifact.typeNames, slotScopeFilePath: self.job.path) otherwise (rejection) 'rejected'
-			throw self.tupleElementError(rejection, anchor: anchor)
-		end 'rejected'
+		let name = try self.internedTupleName(elements, brands: brands, from: self.artifact.typeNames, anchor: anchor)
 
 		if not self.tupleLayoutIsFiled(name) 'firstMintInThisFile'
 			var filed = self.filedTupleNamesForWrite()
@@ -67502,6 +67596,14 @@ export type Parser
 
 		return self.registeredTupleLayout(name)
 	end 'internTupleLayout'
+
+	function internedTupleName(elements MaxonTypeArray, brands NameRoster, from TypeNameInterner, anchor Token) returns ByteArray throws SourceParseError
+		let name = try self.signatures.internTupleType(elements, written: brands, from: from, slotScopeFilePath: self.job.path) otherwise (rejection) 'rejected'
+			throw self.tupleElementError(rejection, anchor: anchor)
+		end 'rejected'
+
+		return name
+	end 'internedTupleName'
 
 	// Has this file already filed its artifact copy of the tuple layout `name`? A file that has minted no
 	// tuple holds no roster and answers without hashing.
@@ -90302,24 +90404,15 @@ export type Parser
 	// back an `Xs`; `returns Array with Integer` hands back an unbranded instance that fits any brand. It is
 	// `markDeclaredSurface`'s neighbour at the same door and reads the same kind of per-callee fact.
 	//
-	// ⚠ **ONLY HERE IS IT SAFE TO ASK WHETHER THE SPELLING IS AN ALIAS** — the sweep that answers that is
-	// complete, which is why `returnAliasSpelling` below records the token's text and asks nothing.
-	//
-	// The spelling is resolved in the callee's declaring file: read in the caller's, a caller that declares
-	// its own alias of that name would take the result as its own brand. `FuncSignature.returnBrand` cannot
-	// serve, because a caller's parse sees only its own file's signatures.
+	// ⚠ **WHETHER THE SPELLING IS AN ALIAS IS UNANSWERABLE DURING THE DECLARATION SWEEP**, which is why
+	// `returnAliasSpelling` below records the token's text and asks nothing; a body and a file-scope
+	// initializer both run after the sweep and the generic-alias contest settle.
 	function brandCallResult(result ValueId, callee ByteArray)
 		if self.tagOf(result) != ValueTypeTag.genericInstance 'theResultIsNotAnInstance'
 			return
 		end 'theResultIsNotAnInstance'
 
-		if let aliasName = try self.signatures.returnAliasNameOf(callee) 'theClauseNamedAnAlias'
-			if self.signatures.returnNamesInnerAlias(callee, aliasName: aliasName) 'anInnerAliasBrandsNothing'
-				return
-			end 'anInnerAliasBrandsNothing'
-
-			self.brandValue(result, brand: self.brandOfAuthorsAlias(aliasName, readerFilePath: self.signatures.recordedReturnDeclFileOf(callee)))
-		end 'theClauseNamedAnAlias'
+		self.brandValue(result, brand: self.signatures.callResultBrand(callee))
 	end 'brandCallResult'
 
 	// ⭐⭐ **THE TYPE NAME THE `returns` CLAUSE WROTE, bare or directory-qualified — the CALL RESULT's half of
@@ -91880,6 +91973,14 @@ export type Parser
 			return try self.evalConstStructConstructionInto(calls, stack: stack)
 		end 'structLiteral'
 
+		if self.atConstTupleLiteral() 'tupleLiteral'
+			return try self.evalConstTupleLiteralInto(calls, stack: stack, tuple: DeclaredStruct.undeclared)
+		end 'tupleLiteral'
+
+		if self.atConstGroupedNode() 'groupedNode'
+			return try self.evalConstGroupedNodeInto(calls, stack: stack, nested: nested)
+		end 'groupedNode'
+
 		if self.atContainerFromConstruction(FromHeadContainer.array) 'arrayFrom'
 			return (try self.evalConstArrayFromInto(calls, stack: stack)).1
 		end 'arrayFrom'
@@ -91929,7 +92030,7 @@ export type Parser
 			end 'literal'
 		end 'bracketedLiteral'
 
-		return self.atConstUnionCaseConstruction() or self.atConstInitializerCall() or self.atConstStructConstruction() or self.atContainerFromConstruction(FromHeadContainer.array) or self.atConstFunctionReference()
+		return self.atConstUnionCaseConstruction() or self.atConstInitializerCall() or self.atConstStructConstruction() or self.atContainerFromConstruction(FromHeadContainer.array) or self.atConstFunctionReference() or self.atConstTupleLiteral() or self.atConstGroupedNode()
 	end 'atConstNodeInitializer'
 
 	function atConstFunctionReference() returns bool
@@ -92094,12 +92195,12 @@ export type Parser
 
 		if not self.at(TokenKind.rightParen) 'hasArguments'
 			argTokens.push(self.current())
-			args.push(try self.evalConstFactoryArgument(calls, stack: stack))
+			args.push(try self.evalConstFactoryArgument(calls, stack: stack, callee: callee, sourceIndex: 0))
 
 			while self.at(TokenKind.comma) 'moreArguments'
 				try self.consumeConstToken(TokenKind.comma)
 				argTokens.push(self.current())
-				args.push(try self.evalConstFactoryArgument(calls, stack: stack))
+				args.push(try self.evalConstFactoryArgument(calls, stack: stack, callee: callee, sourceIndex: args.count() as ParamCount))
 			end 'moreArguments'
 		end 'hasArguments'
 
@@ -92403,27 +92504,19 @@ export type Parser
 	// call appends itself to the initializer's `ConstFactoryCallArray` and this argument keeps only its
 	// INDEX — and an integer names a call without the type naming itself. The recursion that remains is the
 	// WALK's, which the language has never had a problem with; only the TYPE had to be flattened.
-	function evalConstFactoryArgument(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgument throws ConstEvalError
+	function evalConstFactoryArgument(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, callee ConstInitializerCallee, sourceIndex ParamCount) returns ConstFactoryArgument throws ConstEvalError
 		let label = self.consumeConstArgumentLabel()
+		view tuple = self.signatures.tupleLayoutDeclaredAtParam(callee.name, sourceIndex: sourceIndex, label: label, readerFilePath: self.job.path)
 
-		return ConstFactoryArgument.create(label, value: try self.evalConstNodeValue(calls, stack: stack))
+		return ConstFactoryArgument.create(label, value: try self.evalConstSlotValue(calls, stack: stack, tuple: tuple))
 	end 'evalConstFactoryArgument'
 
 	// ⭐ **THE VALUE HALF OF AN ARGUMENT, WHICH IS ALSO THE WHOLE OF A FIELD** — the thesis
 	// `ConstFactoryCall` states, made operative: a struct literal's field is a labelled argument minus its
-	// label, so both positions admit one set through one walk — save a tuple literal, which only a field
-	// stating its tuple type admits (`evalConstSlotValue`). `Outer{inner: Inner.create(7)}` and
+	// label, so both positions admit one set through one walk. `Outer{inner: Inner.create(7)}` and
 	// `Pair.create(Pair{a: 1, b: 2})` both fall out of this, in both directions, without either door knowing
 	// the other exists.
 	function evalConstNodeValue(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgumentValue throws ConstEvalError
-		// A tuple with no stated slot type cannot be interned from here: the file artifact that would file
-		// its destructor is never merged for this evaluator's parser. The wording is pinned byte-for-byte by
-		// specs/top-level-let.md.
-		if self.atConstTupleLiteral() 'noSlotToTakeColumnsFrom'
-			let openTok = self.current()
-			throw ConstEvalError.defective(SourceParseError.unsupported("a tuple literal at a position that declares no tuple type to take its element types from — a top-level initializer builds one only as the element of a typed array literal (`Steps from [(0, 1)]`), as a struct field, or as an element of another tuple literal, each of which states the tuple. Build it inside a function", line: openTok.line, column: openTok.column))
-		end 'noSlotToTakeColumnsFrom'
-
 		// ⚠ **THE MAP LITERAL JOINS THE NODE TEST HERE AS WELL AS AT THE INITIALIZER, AND THE SYMMETRY IS THE
 		// POINT rather than a widening taken for its own sake.** This function's own thesis is that an argument,
 		// a field and a whole initializer admit ONE set through ONE walk; a form claimed at the initializer and
@@ -92442,23 +92535,100 @@ export type Parser
 	end 'evalConstNodeValue'
 
 	function atConstTupleLiteral() returns bool
-		return self.at(TokenKind.leftParen) and self.parenGroupHoldsTopLevelComma(self.pos)
+		if not self.at(TokenKind.leftParen) 'notAGroup'
+			return false
+		end 'notAGroup'
+
+		return self.parenGroupHoldsTopLevelComma(self.constParenCore(self.pos))
 	end 'atConstTupleLiteral'
+
+	function constParenCore(open ElementIndex) returns ElementIndex
+		var core = open
+
+		while self.parenGroupWrapsOneGroup(core) 'peel'
+			core = core + 1
+		end 'peel'
+
+		return core
+	end 'constParenCore'
+
+	function parenGroupWrapsOneGroup(open ElementIndex) returns bool
+		let facts = self.parenGroupFactsAt(open)
+		let inner = open + 1
+
+		if facts.holdsTopLevelComma or self.kindAt(inner) != TokenKind.leftParen 'holdsMoreThanAGroup'
+			return false
+		end 'holdsMoreThanAGroup'
+
+		return self.parenGroupFactsAt(inner).close + 1 == facts.close
+	end 'parenGroupWrapsOneGroup'
+
+	function atConstGroupedNode() returns bool
+		if not self.at(TokenKind.leftParen) 'notAGroup'
+			return false
+		end 'notAGroup'
+
+		let open = self.pos
+		let core = self.constParenCore(open)
+
+		// Content led by a `(` that `constParenCore` could not peel has tokens after its first group, so it
+		// is never one whole node, and asking `atConstNodeInitializer` about it re-enters this lookahead.
+		if self.parenGroupHoldsTopLevelComma(core) or self.kindAt(core + 1) == TokenKind.leftParen 'notOneNode'
+			return false
+		end 'notOneNode'
+
+		self.pos = core + 1
+		let wrapsANode = self.atConstNodeInitializer()
+		self.pos = open
+
+		return wrapsANode
+	end 'atConstGroupedNode'
+
+	function evalConstGroupedNodeInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, nested bool) returns ElementIndex throws ConstEvalError
+		let layers = self.constParenCore(self.pos) - self.pos + 1
+		try self.consumeConstTokens(TokenKind.leftParen, count: layers)
+		let grouped = try self.evalConstInitializerNodeInto(calls, stack: stack, nested: nested)
+		try self.consumeConstTokens(TokenKind.rightParen, count: layers)
+
+		return grouped
+	end 'evalConstGroupedNodeInto'
+
+	function consumeConstTokens(kind TokenKind, count ElementIndex) throws ConstEvalError
+		var remaining = count
+
+		while remaining > 0 'eachToken'
+			try self.consumeConstToken(kind)
+			remaining = remaining - 1
+		end 'eachToken'
+	end 'consumeConstTokens'
 
 	function evalConstSlotValue(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, tuple DeclaredStruct) returns ConstFactoryArgumentValue throws ConstEvalError
 		if self.atConstTupleLiteral() 'aTupleLiteral'
-			match tuple 'slot'
-				declared(layout) then return ConstFactoryArgumentValue.call(try self.evalConstTupleLiteralInto(calls, stack: stack, layout: layout))
-				undeclared then break
-			end 'slot'
+			return ConstFactoryArgumentValue.call(try self.evalConstTupleLiteralInto(calls, stack: stack, tuple: tuple))
 		end 'aTupleLiteral'
 
 		return try self.evalConstNodeValue(calls, stack: stack)
 	end 'evalConstSlotValue'
 
-	function evalConstTupleLiteralInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, layout StructLayout) returns ElementIndex throws ConstEvalError
-		try self.consumeConstToken(TokenKind.leftParen)
+	function evalConstTupleLiteralInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, tuple DeclaredStruct) returns ElementIndex throws ConstEvalError
+		let core = self.constParenCore(self.pos)
+		let wrappers = core - self.pos
+		let openTok = self.tokenAt(core)
+		try self.consumeConstTokens(TokenKind.leftParen, count: wrappers + 1)
+		let built = try self.evalConstTupleColumnsInto(calls, stack: stack, tuple: tuple, openTok: openTok)
+		try self.consumeConstTokens(TokenKind.rightParen, count: wrappers)
 
+		return built
+	end 'evalConstTupleLiteralInto'
+
+	function evalConstTupleColumnsInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, tuple DeclaredStruct, openTok Token) returns ElementIndex throws ConstEvalError
+		match tuple 'slot'
+			declared(layout) then return try self.evalConstDeclaredTupleColumnsInto(calls, stack: stack, layout: layout)
+			undeclared then return try self.evalConstInferredTupleColumnsInto(calls, stack: stack, openTok: openTok)
+		end 'slot'
+	end 'evalConstTupleColumnsInto'
+
+	function evalConstDeclaredTupleColumnsInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, layout StructLayout) returns ElementIndex throws ConstEvalError
 		var fields = ConstFactoryArgumentValueArray.create()
 
 		for column in 0 upto layout.fieldCount() 'eachColumn'
@@ -92474,7 +92644,39 @@ export type Parser
 		try self.consumeConstToken(TokenKind.rightParen)
 
 		return self.pushConstNode(calls, node: ConstFactoryCall.construct(layout.name, fields: fields))
-	end 'evalConstTupleLiteralInto'
+	end 'evalConstDeclaredTupleColumnsInto'
+
+	function evalConstInferredTupleColumnsInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, openTok Token) returns ElementIndex throws ConstEvalError
+		var values = ConstFactoryArgumentValueArray.create()
+		var columnTypes = MaxonTypeArray.create()
+		var columnBrands = NameRoster.create()
+
+		while true 'eachColumn'
+			let value = try self.evalConstNodeValue(calls, stack: stack)
+			let columnType = self.signatures.constNodeValueType(value, calls: calls, declName: TupleLiteralDeclName, elementFilePath: self.job.path)
+			columnTypes.push(columnType)
+			columnBrands.push(self.signatures.constColumnBrand(value, calls: calls, column: columnType))
+			values.push(value)
+
+			if not self.at(TokenKind.comma) 'lastColumn'
+				break
+			end 'lastColumn'
+
+			try self.consumeConstToken(TokenKind.comma)
+		end 'eachColumn'
+
+		try self.consumeConstToken(TokenKind.rightParen)
+
+		try requireMemberCount(values.count(), limit: MaxDeclaredMembers, members: "tuple elements", anchor: openTok) otherwise (err) 'tooManyColumns'
+			throw ConstEvalError.defective(err)
+		end 'tooManyColumns'
+
+		let name = try self.internedTupleName(columnTypes, brands: columnBrands, from: self.signatures.typeNameTable(), anchor: openTok) otherwise (err) 'rejectedColumn'
+			throw ConstEvalError.defective(err)
+		end 'rejectedColumn'
+
+		return self.pushConstNode(calls, node: ConstFactoryCall.construct(name, fields: values))
+	end 'evalConstInferredTupleColumnsInto'
 
 	// ⭐⭐ **`[k0: v0, k1: v1, …]` AS A TOP-LEVEL INITIALIZER — the SAME desugar `parseMapLiteralBody` reads
 	// inside a function, walked into the arena instead of emitted:** `Map.create()` plus one `Map.upsert(k,
@@ -92731,7 +92933,7 @@ export type Parser
 			end 'duplicate'
 
 			let valueTok = self.current()
-			try payloads.set(slot, value: try self.requireConstPayloadValueFits(calls, layout: layout, declared: declared, slot: slot, value: try self.evalConstNodeValue(calls, stack: stack), valueTok: valueTok)) otherwise panic("evalConstPayloadArgs: payloads.set OOB at slot {slot} — the columns are sized to the case's arity")
+			try payloads.set(slot, value: try self.requireConstPayloadValueFits(calls, layout: layout, declared: declared, slot: slot, value: try self.evalConstSlotValue(calls, stack: stack, tuple: self.constPayloadTupleTarget(layout, declared: declared, slot: slot)), valueTok: valueTok)) otherwise panic("evalConstPayloadArgs: payloads.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try filled.set(slot, value: true) otherwise panic("evalConstPayloadArgs: filled.set OOB at slot {slot} — the columns are sized to the case's arity")
 
 			argIndex = argIndex + 1
@@ -92745,6 +92947,11 @@ export type Parser
 
 		try self.consumeConstToken(TokenKind.rightParen)
 	end 'evalConstPayloadArgs'
+
+	function constPayloadTupleTarget(layout EnumLayout, declared PayloadFieldArray, slot PayloadSlotIndex) returns DeclaredStruct
+		let field = try declared.get(slot) otherwise panic("constPayloadTupleTarget: declared.get OOB at slot {slot} — payloadSlotFor returns an in-range slot")
+		return self.signatures.tupleLayoutOfPayload(layout, field: field)
+	end 'constPayloadTupleTarget'
 
 	// ⭐⭐ **MAY THIS CONSTANT FILL THIS PAYLOAD SLOT?** — `requireConstFieldValueFits` for a case, and the same
 	// division of labour: the VERDICT is the index's, because both halves of the comparison resolve against its
@@ -92850,7 +93057,7 @@ export type Parser
 		match self.signatures.constArrayElementCheck(giid, value: value, calls: calls, declName: typeTok.value, elementFilePath: self.job.path) 'verdict'
 			agrees then break
 			widensToFloat then return self.constWidenedToFloat(value)
-			mismatch(_, expected) then throw ConstEvalError.defective(SourceParseError.builtinOperandType("{String.from(typeTok.value)} from", required: expected, got: tokenDisplayText(elemTok), line: elemTok.line, column: elemTok.column))
+			mismatch(got, expected) then throw ConstEvalError.defective(SourceParseError.builtinOperandType("{String.from(typeTok.value)} from", required: expected, got: got, line: elemTok.line, column: elemTok.column))
 		end 'verdict'
 
 		match constScalarOf(value) 'scalar'

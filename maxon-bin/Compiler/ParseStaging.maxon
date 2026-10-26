@@ -1936,6 +1936,19 @@ function commitStructTypes(project Project, artifact FileParseArtifact, signatur
 	end 'each'
 end 'commitStructTypes'
 
+// A tuple a file-scope initializer builds is interned by the initializer evaluator, whose artifact is
+// never merged, so no artifact files its layout. This is the one place it reaches `project.structTypes`;
+// without it `installStructDestructors` has no layout to synthesize the tuple's drop from.
+module function commitConstructedTupleTypes(project Project, signatures ProgramSignatures)
+	for name in signatures.constructedTupleTypeNames() 'each'
+		if project.structTypes.contains(name) 'filedByAnArtifact'
+			continue
+		end 'filedByAnArtifact'
+
+		project.structTypes.upsert(name, value: committedStructLayout(signatures.adoptTupleLayout(name, into: project.typeNames), signatures: signatures))
+	end 'each'
+end 'commitConstructedTupleTypes'
+
 // An inline record's packing is settled from this compile's widths onto a clone, because the
 // layout is the parse artifact's. `MmRuntime.installStructRuntimeEntries` stamps the runtime's
 // entries off `project.structTypes`, and left unsettled it answers a box's `sizeBytes()` for a

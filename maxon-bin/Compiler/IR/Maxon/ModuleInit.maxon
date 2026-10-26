@@ -591,7 +591,7 @@ function builtStructBox(fn SynthesizedFunction, sizeBytes ByteOffset, fields Glo
 
 	for field in fields 'eachField'
 		let value = materializedValue(fn, value: field.value, valueType: field.valueType, calls: calls, site: site)
-		fn.emit(MaxonOp.storeIndirect(box, offset: field.offset, value: value, valueType: field.storageType), site: site)
+		fn.emit(MaxonOp.storeIndirect(box, offset: field.offset, value: value, valueType: fn.projectScopedType(field.storageType)), site: site)
 
 		match field.slot 'slot'
 			oneWord then continue
@@ -895,6 +895,18 @@ export type SynthesizedFunction
 		var signatures = try queryProgramSignatures(self.project) otherwise panic("ModuleInit.projectScopedNameId: queryProgramSignatures failed while synthesizing a module initializer — it is computed and memoized before the pipeline runs, so it cannot fail fresh here")
 		return self.project.typeNames.intern(signatures.indexSpaceTypeName(maxonTypeOfTag(tag, nameId: nameId)))
 	end 'projectScopedNameId'
+
+	// For an op operand type the merged module reads, which speaks `project.typeNames`: an index-space id
+	// left raw names whichever type the project numbered alike, or none at all, and `foreignNameOf` panics.
+	export function projectScopedType(indexSpace MaxonType) returns MaxonType
+		let tag = maxonTypeTag(indexSpace)
+
+		if not tagNamesAnIndexInternedType(tag) 'carriesNoNameToCross'
+			return indexSpace
+		end 'carriesNoNameToCross'
+
+		return maxonTypeOfTag(tag, nameId: self.projectScopedNameId(tag, nameId: typeNameIdOf(indexSpace)))
+	end 'projectScopedType'
 
 	// ⭐ **THE ADDRESS OF A MANAGED GLOBAL'S `.data` SLOT** — `globalAddr <label>`, minted as a pointer
 	// (`Parser.emitGlobalAddr`'s twin on this carrier). BOTH synthesized functions open every global with
