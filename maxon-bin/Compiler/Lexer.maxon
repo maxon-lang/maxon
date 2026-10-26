@@ -497,6 +497,14 @@ type ParenGroupFacts
 end 'ParenGroupFacts'
 
 typealias ParenGroupFactsMap = Map with (ElementIndex, ParenGroupFacts)
+
+union ParenGroupFactsTable
+	unscanned
+	entries(facts ParenGroupFactsMap)
+end 'ParenGroupFactsTable'
+
+let noParenGroupFacts = ParenGroupFactsTable.unscanned
+
 typealias OpenParenStack = Array with ElementIndex
 typealias OpenParenCommaFlags = Array with bool
 typealias OpenParenBracketDepths = Array with NestingDepth
@@ -510,10 +518,10 @@ end 'shiftInnermostBracketDepth'
 // Memoized per token stream, and a scan steps over a group it has already filed: the same openers are
 // asked about again and again, and a fresh walk per ask makes the compile superlinear.
 export type ParenGroups
-	var facts as ParenGroupFactsMap
+	var table as ParenGroupFactsTable
 
 	export static function create() returns ParenGroups
-		return Self{facts: ParenGroupFactsMap.create()}
+		return Self{table: noParenGroupFacts}
 	end 'create'
 
 	// An unterminated group answers the EOF token's index, the one answer at which the token is not a `)`:
@@ -528,14 +536,27 @@ export type ParenGroups
 	end 'holdsTopLevelComma'
 
 	function factsAt(tokens TokenArray, open ElementIndex) returns ParenGroupFacts
-		if not self.facts.contains(open) 'unscanned'
-			self.scanFrom(tokens, open: open)
+		var facts = self.factsForWrite()
+
+		if not facts.contains(open) 'unscanned'
+			self.scanFrom(tokens, open: open, into: facts)
 		end 'unscanned'
 
-		return try self.facts.get(open) otherwise panic("ParenGroups.factsAt: the scan from token {open} files the group it starts at")
+		return try facts.get(open) otherwise panic("ParenGroups.factsAt: the scan from token {open} files the group it starts at")
 	end 'factsAt'
 
-	function scanFrom(tokens TokenArray, open ElementIndex)
+	function factsForWrite() returns ParenGroupFactsMap
+		match self.table 'state'
+			unscanned then break
+			entries(facts) then return facts
+		end 'state'
+
+		let fresh = ParenGroupFactsMap.create()
+		self.table = ParenGroupFactsTable.entries(fresh)
+		return fresh
+	end 'factsForWrite'
+
+	function scanFrom(tokens TokenArray, open ElementIndex, into ParenGroupFactsMap)
 		if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'notAGroup'
 			panic("ParenGroups.scanFrom: token {open} is not a `(` — a group's facts are meaningful only at its opener")
 		end 'notAGroup'
@@ -548,8 +569,8 @@ export type ParenGroups
 		while i < tokens.count() and tokenKindAt(tokens, index: i) != TokenKind.eof 'scan'
 			let kind = tokenKindAt(tokens, index: i)
 
-			if kind == TokenKind.leftParen and i != open and self.facts.contains(i) 'aGroupAlreadyScanned'
-				let known = try self.facts.get(i) otherwise panic("ParenGroups.scanFrom: contains({i}) just answered true")
+			if kind == TokenKind.leftParen and i != open and into.contains(i) 'aGroupAlreadyScanned'
+				let known = try into.get(i) otherwise panic("ParenGroups.scanFrom: contains({i}) just answered true")
 
 				if tokenKindAt(tokens, index: known.close) != TokenKind.rightParen 'itRunsToTheEnd'
 					i = known.close
@@ -568,7 +589,7 @@ export type ParenGroups
 				let opener = try opens.pop() otherwise panic("ParenGroups.scanFrom: a `)` at token {i} with no open group — the scan stops when its first group closes")
 				let comma = try commas.pop() otherwise panic("ParenGroups.scanFrom: the comma flags run parallel to the open groups")
 				_ = try brackets.pop() otherwise panic("ParenGroups.scanFrom: the bracket depths run parallel to the open groups")
-				self.facts.upsert(opener, value: ParenGroupFacts.create(i, holdsTopLevelComma: comma))
+				into.upsert(opener, value: ParenGroupFacts.create(i, holdsTopLevelComma: comma))
 
 				if opens.isEmpty() 'theFirstGroupClosed'
 					return
@@ -589,7 +610,7 @@ export type ParenGroups
 		end 'scan'
 
 		for opener in opens 'eachUnclosedGroup'
-			self.facts.upsert(opener, value: ParenGroupFacts.create(i, holdsTopLevelComma: false))
+			into.upsert(opener, value: ParenGroupFacts.create(i, holdsTopLevelComma: false))
 		end 'eachUnclosedGroup'
 	end 'scanFrom'
 end 'ParenGroups'
