@@ -1577,7 +1577,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:7:22: 'Holder.fresh' expects 1 argument(s) but 0 were provided
+error E3193: <fragment>:7:22: 'fresh' is an instance method of 'Holder' and needs a receiver: call it on a value, such as 'value.fresh(...)', or make it `static`
 ```
 
 <!-- test: error.a-static-method-body-calling-a-sibling-instance-method-bare-has-no-receiver -->
@@ -1603,7 +1603,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:12:16: 'Holder.fresh' expects 1 argument(s) but 0 were provided
+error E3193: <fragment>:12:16: 'fresh' is an instance method of 'Holder' and needs a receiver: call it on a value, such as 'value.fresh(...)', or make it `static`
 ```
 
 

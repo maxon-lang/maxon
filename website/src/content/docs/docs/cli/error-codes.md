@@ -875,6 +875,10 @@ A function throws a service send's error, `<Service>.<message>.sendError`, from 
 
 `sendTimeout:` is reserved on every message call: it is how many milliseconds the send waits for room in a full mailbox before it fails `mailboxFull`, and it stays with the send. Reported at a `spawn` whose service declares a message with a parameter named `sendTimeout`, and at a `sendTimeout:` argument with another argument after it. Rename the parameter, or move `sendTimeout:` to the end of the argument list.
 
+### E3193 — `semanticInstanceMethodCalledWithoutReceiver`
+
+An instance method is called with no value to call it on: a bare call to a sibling instance method from a `static` method, a file-scope initializer or a `static var` initializer, none of which has a `self`, or `Type.method()` with an empty argument list. Call it on a value, `value.method(…)`, or pass the value as the first argument, `Type.method(value, …)`; or declare the method `static` if it uses no instance state.
+
 ## Intermediate Representation (E4xxx)
 
 IR generation.

@@ -4735,9 +4735,14 @@ end 'BarePrimitiveVoice'
 // The receiver a call carries, if any. A union rather than a `ValueId` plus a bool, and rather
 // than a reserved id: `ValueId` has no empty value and a sentinel would be READ as a real argument
 // by everything downstream (`retVoid` exists in the Maxon dialect for precisely this reason).
-// `none` is every free and static call; `value` is an instance method's receiver.
+// `none`: the call writes no receiver, so an instance method's receiver can only be its first written
+// argument (`Type.method(value)`), and E3193 refuses it only with no arguments. `unavailable`: an
+// instance sibling called bare where no `self` exists, refused as E3193 whatever its arguments, since
+// a first argument there is never the receiver. `value` is an instance method's receiver.
 union ReceiverArg
 	none
+
+	unavailable
 
 	// `immutableName` is the E3159 blame name for the receiver AS AN ARGUMENT — `unblamed` when it may
 	// be written through. It rides the receiver because `parseCallNamed` prepends the receiver at
@@ -9983,6 +9988,12 @@ end 'staticRequirementMessage'
 function staticRequirementCalled(written String, typeTok Token, memberTok Token) returns SourceParseError
 	return SourceParseError.registryRefused(ErrorCode.semanticStaticRequirementNotDispatchable, explanation: staticRequirementMessage(written, reach: StaticRequirementReach.typeParameter(String.from(typeTok.value))), line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
 end 'staticRequirementCalled'
+
+function instanceMethodCalledWithoutReceiver(typeName String, methodTok Token) returns SourceParseError
+	let method = String.from(methodTok.value)
+
+	return SourceParseError.registryRefused(ErrorCode.semanticInstanceMethodCalledWithoutReceiver, explanation: "'{method}' is an instance method of '{typeName}' and needs a receiver: call it on a value, such as 'value.{method}(...)', or make it `static`", line: methodTok.line, column: methodTok.column, note: DiagnosticNote.none)
+end 'instanceMethodCalledWithoutReceiver'
 
 function paramOwnerAdmitsCapabilities(owner ParamDefaultOwner) returns bool
 	return match owner 'owner'
@@ -92102,15 +92113,13 @@ export type Parser
 	// The receiver a bare call to the sibling `name` carries. An INSTANCE method gets the enclosing `self`
 	// prepended at parameter 0 — resolved EXACTLY as an explicit `self.name(…)` resolves it, so the two spellings
 	// emit byte-identical calls in every context. A `static` sibling gets none. Two contexts make the self
-	// resolution more than a plain scope read, and BOTH are shared with the explicit path so they cannot drift:
+	// resolution more than a plain scope read:
 	//   • inside a CLOSURE, `self` is a CAPTURE — the receiver comes out of the env block, through the very
 	//     door `parseSelfPrimary` resolves it through, so `doubled()` and `self.doubled()` still emit the
 	//     same call from inside a closure body as they do outside one;
-	//   • in a `static` method there is no `self` at all, so the resolve fails and the sibling resolves
-	//     receiver-less, failing the arity check on the hidden `self` parameter (E3036) — the same rejection the
-	//     oracle gives ("missing argument for parameter 'self'"). That fallback is why this door swallows
-	//     `requireReceiverValue`'s E2001 rather than propagating it: "there is no instance" is not an error
-	//     HERE, it is the answer, and the arity check words it in terms of the call the author actually wrote.
+	//   • in a `static` method, a file-scope initializer or a `static var` initializer there is no `self`
+	//     at all, so this answers `unavailable` and `parseCallNamed` refuses the call as E3193 before the
+	//     arity check, which would count the hidden `self` parameter as the missing argument.
 	// The caller (`parseCall`) has already established `name` IS a sibling (`isImplicitSelfMethod`), so the map
 	// is built and this `ensureSiblingReceivers` is a memo hit.
 	function implicitSelfReceiver(name ByteArray, anchor Token) returns ReceiverArg throws SourceParseError
@@ -92125,18 +92134,29 @@ export type Parser
 		// ⚠ DECIDE EXISTENCE WITHOUT THE THROWING RESOLVER. `requireReceiverValue` fails for two structurally
 		// different reasons — there is no receiver at all (a static function), and the receiver exists but is
 		// only reachable through a NON-IMMEDIATE enclosing frame (the nested-capture refusal, general to
-		// every capture). A blanket `otherwise` would catch both and turn the second into `none`, so a
-		// sibling call from a doubly-nested closure would report the arity error `'T.helper' expects 1 argument(s)
-		// but 0 were provided` — the receiver counted as the missing argument — instead of the honest
+		// every capture). A blanket `otherwise` would catch both, so a sibling call from a doubly-nested
+		// closure would be refused as E3193, an instance method with no receiver, instead of the honest
 		// "unsupported nested capture".
 		if not self.nameBindsOrIsCaptured(SelfParamName) 'noReceiver'
-			return ReceiverArg.none
+			return ReceiverArg.unavailable
 		end 'noReceiver'
 
 		// The anchor IS the callee token here — an implicit-self sibling call writes no receiver, so the
 		// only token either half of the call can point at is the name the author wrote.
 		return ReceiverArg.value(try self.requireReceiverValue(anchor), immutableName: WriteBlame.unblamed, anchor: anchor)
 	end 'implicitSelfReceiver'
+
+	function requireInstanceMethodHasAReceiver(callee ByteArray, anchor Token, firstArgumentMayBeTheReceiver bool) throws SourceParseError
+		if firstArgumentMayBeTheReceiver or self.signatures.calleeReceiverOf(callee) != CalleeReceiver.takesReceiver 'hasAReceiverOrNeedsNone'
+			return
+		end 'hasAReceiverOrNeedsNone'
+
+		match self.signatures.functionDeclaringType(callee) 'declaring'
+			method(typeName) then throw instanceMethodCalledWithoutReceiver(String.from(typeName), methodTok: anchor)
+			freeFunction or
+			undeclared then panic("requireInstanceMethodHasAReceiver: '{String.from(callee)}' takes a receiver, so a type declares it")
+		end 'declaring'
+	end 'requireInstanceMethodHasAReceiver'
 
 	// Populate `siblingReceivers` (the members of the DECLARATION BEING PARSED, bare name -> takesReceiver)
 	// unless it is already built for this type. It is not the whole sibling set — a method declared by another
@@ -92404,22 +92424,20 @@ export type Parser
 		// may be labelled is asked of the first parameter after the receiver — the receiver is not
 		// something the user wrote and must not shift what they did.
 		//
-		// ⚠ **IT DOES DISTURB THE ARITY COUNTS, AND THIS IS THE ONE PLACE THAT CAN SAY SO.** Every E3036
-		// against a method now counts the receiver on BOTH sides, so both numbers are one higher than
-		// anything the source wrote: `a.add()` — zero arguments written — reports *"'Adder.add' expects 2
-		// argument(s) but 1 were provided"* (measured). The count is internally consistent and the
-		// program is correctly refused; the numbers are just not the user's. Every method call is
-		// affected, through both callers — `parseMethodCall`'s `a.add()` and `parseQualifiedCall`'s
-		// receiverless `Adder.add(5)` — which is exactly why the note lives HERE, at the prepend that
-		// causes it, rather than being written once per caller and drifting. The honest fix is a
-		// diagnostic that speaks in the SOURCE's arity, and no corpus case covers one — so it is
-		// recorded, not invented here.
+		// ⚠ **IT DOES DISTURB THE ARITY COUNTS, AND THIS IS THE ONE PLACE THAT CAN SAY SO.** An E3036
+		// against a call whose receiver is prepended here counts the receiver on BOTH sides, so both
+		// numbers are one higher than anything the source wrote: `a.add()` — zero arguments written —
+		// reports *"'Adder.add' expects 2 argument(s) but 1 were provided"*. The count is internally
+		// consistent and the program is correctly refused; the numbers are just not the user's. A call
+		// with no receiver at all is refused as E3193 before it reaches this count
+		// (`requireInstanceMethodHasAReceiver`).
 		//
 		// Its span is the receiver EXPRESSION's OWN anchor (`acc`, or the `self` keyword), which is the
 		// token a diagnostic about the receiver has to point at — and it is the receiver's rather than this
 		// function's `anchor` because a method call anchors the CALL at the method name. See `ReceiverArg`.
 		match receiver 'prependReceiver'
-			none then break
+			none or
+			unavailable then break
 			value(id, immutableName, receiverTok) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: id, label: EmptySourceText, range: SourceRange.ofToken(receiverTok), immutableName: immutableName, anchorIndex: self.pos)
 		end 'prependReceiver'
 
@@ -92436,6 +92454,12 @@ export type Parser
 		let places = try self.parseCallArgs(func, target: CallArgTarget.callee(callee), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee, shadowedByADeclaration: shadowedByADeclaration), constructorInstance: constructorInstance)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		match receiver 'receiverless'
+			value then break
+			none then try self.requireInstanceMethodHasAReceiver(callee, anchor: anchor, firstArgumentMayBeTheReceiver: not args.isEmpty())
+			unavailable then try self.requireInstanceMethodHasAReceiver(callee, anchor: anchor, firstArgumentMayBeTheReceiver: false)
+		end 'receiverless'
 
 		// ⭐⭐ **THE BARE-NAME BUILTINS, AND THEY ARE ONLY REACHED WHEN NO VISIBLE DECLARATION HAS THE
 		// NAME.** A bare builtin has no declaration, so nothing downstream could ever notice that a user's

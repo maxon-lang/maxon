@@ -6035,8 +6035,8 @@ end 'main'
 held 42 long enough for a heap record 3
 ```
 
-<!-- test: error.an-instance-method-named-statically-without-its-receiver-is-an-arity-error -->
-An instance method called as `Adder.bump()` carries no receiver argument, and the call is refused as a wrong argument count.
+<!-- test: error.an-instance-method-named-statically-without-its-receiver-is-refused -->
+An instance method called as `Adder.bump()` carries no receiver argument, and the call is refused as an instance method without a receiver.
 ```maxon
 type Adder
 	export var total as Count
@@ -6056,11 +6056,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:15:8: 'Adder.bump' expects 2 argument(s) but 0 were provided
+error E3193: <fragment>:15:8: 'bump' is an instance method of 'Adder' and needs a receiver: call it on a value, such as 'value.bump(...)', or make it `static`
 ```
 
-<!-- test: error.an-instance-method-named-through-an-instance-alias-without-its-receiver-is-an-arity-error -->
-The same call through an instance alias, where the call already names an instance, is refused as a wrong argument count and not typed through it.
+<!-- test: error.an-instance-method-named-through-an-instance-alias-without-its-receiver-is-refused -->
+The same call through an instance alias, where the call already names an instance, is refused as an instance method without a receiver and not typed through it.
 ```maxon
 type Box uses T
 	export var v as T
@@ -6083,7 +6083,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:17:19: 'Box.widen' expects 2 argument(s) but 0 were provided
+error E3193: <fragment>:17:19: 'widen' is an instance method of 'Box' and needs a receiver: call it on a value, such as 'value.widen(...)', or make it `static`
 ```
 
 <!-- test: an-implicit-self-helper-returning-a-bare-generic-name-is-typed-like-a-call-on-self -->

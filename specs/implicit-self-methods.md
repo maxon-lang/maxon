@@ -23,8 +23,8 @@ as a bare field name resolves to `self.<field>`.
 
 A bare name that is not a method of the enclosing type stays a free/direct call
 (`E3004` when it names nothing declared). A `static` method has no `self`, so a
-bare call there to an **instance** sibling has no receiver to prepend and fails
-the arity check on the hidden `self` parameter (`E3036`).
+bare call there to an **instance** sibling has no receiver to prepend and is
+refused as an instance method without a receiver (`E3193`).
 
 ## Tests
 
@@ -391,8 +391,7 @@ end 'main'
 
 <!-- test: error.instance-sibling-bare-called-in-static -->
 A bare call to an INSTANCE sibling from a STATIC method has no `self` to prepend,
-so it resolves receiver-less and fails the arity check on the hidden `self`
-parameter (`E3036`).
+so it is refused as an instance method without a receiver (`E3193`).
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -418,5 +417,36 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:17:10: 'Maker.bump' expects 1 argument(s) but 0 were provided
+error E3193: <fragment>:17:10: 'bump' is an instance method of 'Maker' and needs a receiver: call it on a value, such as 'value.bump(...)', or make it `static`
+```
+
+<!-- test: error.instance-sibling-bare-called-with-arguments-in-static -->
+The same call with an argument is refused the same way: a static method has no receiver for the argument to
+stand in for, so the argument is not read as one.
+```maxon
+
+typealias Level = int(0 to 9)
+
+type Maker
+	export var n as Level
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump(by Level) returns Level
+		return by
+	end 'bump'
+
+	static function build() returns Level
+		return bump(1)
+	end 'build'
+end 'Maker'
+
+function main() returns ExitCode
+	return Maker.build()
+end 'main'
+```
+```maxoncstderr
+error E3193: <fragment>:17:10: 'bump' is an instance method of 'Maker' and needs a receiver: call it on a value, such as 'value.bump(...)', or make it `static`
 ```

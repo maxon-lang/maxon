@@ -210,6 +210,10 @@ release's version as its heading when the release is cut.
   file-scope initializer that takes the plain constant (`let S = Base as Small`) is E3010, as a read in a
   function body is.
   Fix: write the bare literal (`let Base = 2`).
+- A bare call to an instance method of the enclosing type from a `static` method, a file-scope initializer
+  or a `static var` initializer is E3193, with or without arguments: a first argument there is never the
+  receiver (`bump(m)` with `m` a `Maker` no longer fills `self`).
+  Fix: call it on a value (`m.bump()`) or pass the receiver explicitly (`Maker.bump(m)`).
 
 ## 0.5.0 — 2026-10-08
 

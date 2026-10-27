@@ -143,6 +143,10 @@ A `static function` belongs to the type rather than an instance. It has no `self
 | Receiver | `self` (implicit) | none |
 | Call | `value.name()` | `Type.name()` |
 
+An instance method called with no receiver is [E3193](/docs/cli/error-codes/#e3193--semanticinstancemethodcalledwithoutreceiver):
+a bare call to it from a static method, a file-scope initializer or a `static var` initializer, or
+`Type.name()` with no arguments. `Type.name(value, …)` calls it on `value`.
+
 A type may declare a static and an instance method with the same name, in its body or in an `extension` of
 it; `Type.name()` calls the static one and `value.name()` the instance one. An `extension` member with the
 name and kind of a member the type's own body declares is
