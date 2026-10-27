@@ -38996,18 +38996,27 @@ export type ProgramSignatures
 		return DeclaredEnum.declared(layout)
 	end 'enumInAnyFile'
 
-	// ⭐ **IS `name` A FLOAT-BACKED ENUM — one whose i64 tag is an f64's IEEE-754 BIT PATTERN?** THE
-	// question every site that consumes an enum value as a NUMBER asks, so it is stated here once rather
-	// than at each of them. A name nothing declares as an enum answers `false`: this is asked of every
-	// `named`-tagged value in the program, and "there is no such enum" is not this predicate's to report.
+	// The tag of the number behind a `named` value as `readerFilePath` reads it: `structRef` for a union,
+	// `float` for a float-backed enum, `named` for anything else, including a name an alias answers for
+	// in that file. A name nothing declares as an enum answers `named`: this is asked of every `named` value
+	// in the program, and "there is no such enum" is not this answer's to report.
 	//
-	// ⚠ **ANSWERED OVER `enumTypes` DIRECTLY, NOT THROUGH `enumOf` ABOVE, AND THAT IS `valueIsUnion`'s
-	// MEASURED REASON** — `enumOf` boxes a `DeclaredEnum`, a heap object even for `undeclared`, and this
-	// runs for BOTH operands of every binary operator and every comparison and for every interpolation hole.
-	export function enumIsFloatBacked(name ByteArray) returns bool
-		let layout = try self.settledDeclarations().enumTypes.get(name) otherwise return false
-		return layout.backing == EnumBacking.float
-	end 'enumIsFloatBacked'
+	// ⚠ Read from `enumTypes` directly, not through `enumFor`, which boxes a `DeclaredEnum` — a heap object
+	// even for `undeclared` — on a path that runs for both operands of every binary operator and
+	// comparison and for every interpolation hole.
+	export function enumOperandTagFor(name ByteArray, readerFilePath FilePath) returns ValueTypeTag
+		if self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'anotherDeclarationAnswersHere'
+			return ValueTypeTag.named
+		end 'anotherDeclarationAnswersHere'
+
+		let layout = try self.settledDeclarations().enumTypes.get(name) otherwise return ValueTypeTag.named
+
+		if layout.isUnion 'aUnion'
+			return ValueTypeTag.structRef
+		end 'aUnion'
+
+		return ValueTypeTag.float if layout.backing == EnumBacking.float else ValueTypeTag.named
+	end 'enumOperandTagFor'
 
 	// ⭐⭐ **WHICH DECLARATION FORM MINTED `name` — the ONE name→FORM answer, so a new form is a COMPILE ERROR
 	// at every door that classifies a name instead of a coverage gap nothing reports.**

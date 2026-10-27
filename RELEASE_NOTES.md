@@ -230,6 +230,11 @@ release's version as its heading when the release is cut.
   declared before `static function getValue()`, a bare `getValue()` in an instance method is
   `self.getValue()`.
   Fix: write `Box.getValue()`, qualified by the type's name, where the static method is meant.
+- A `union` value is refused as an operand of an arithmetic, bitwise or shift operator, of unary `-` or
+  `not`, and as a condition, as a struct is: `n + Shape.empty` is E2004
+  (`Cannot operate on int and Shape`).
+  Fix: read the union with `match`, or its tag with `.ordinal` or `.rawValue`; declare an `enum` where the
+  values are meant to be numbers.
 
 ## 0.5.0 — 2026-10-08
 

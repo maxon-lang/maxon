@@ -2939,6 +2939,91 @@ end 'main'
 ```
 
 
+<!-- test: crossfile-ranged-alias-against-a-float-backed-enum-arithmetic -->
+The operand rule asks the same question of an arithmetic operator: `a.maxon`'s `W` is an integer alias, so
+`w * 2` multiplies integers, `w / 2` divides them and `w < 4` compares them. Decoding `w` as the other
+file's float-backed enum would turn each into arithmetic on a double's bit pattern. `b.maxon`'s `W` is the
+enum, whose cases are decoded before the operator runs: `W.light + W.heavy` is `4.0`.
+```maxon
+// --- file: a.maxon
+typealias W = int(0 to 5)
+
+export function goA() returns ExitCode
+	let w = 3 as W
+	print("{w * 2} {w / 2} {w < 4}\n")
+	return 0
+end 'goA'
+
+// --- file: b.maxon
+enum W
+	light = 1.5
+	heavy = 2.5
+end 'W'
+
+export function fromB() returns ExitCode
+	print("{W.light + W.heavy} {W.light * 2} {W.light < W.heavy}\n")
+	return 0
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	_ = goA()
+	_ = fromB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 1 true
+4.0 3.0 true
+```
+
+
+<!-- test: error.crossfile-ranged-alias-beside-a-float-backed-enum-is-not-a-float -->
+⭐ **A NAME HELD BY A RANGED ALIAS IN ONE FILE AND A FLOAT-BACKED ENUM IN ANOTHER IS AN INTEGER IN THE FIRST.**
+`b.maxon`'s file-private `enum W` is float-backed and `a.maxon`'s `W` is `int(0 to 5)`, so `3 as W` in
+`a.maxon` is an integer that no `float` parameter accepts. Were the value read as the other file's enum, the
+argument would pass as a double's bit pattern and print `1.5e-323`. The enum's own file still passes it.
+```maxon
+// --- file: a.maxon
+typealias W = int(0 to 5)
+export typealias Real = float(f64.min to f64.max)
+
+export function takesFloat(f Real) returns Real
+	return f
+end 'takesFloat'
+
+export function goA() returns ExitCode
+	let w = 3 as W
+	print("{takesFloat(w)}\n")
+	return 0
+end 'goA'
+
+// --- file: b.maxon
+enum W
+	light = 1.5
+	heavy = 2.5
+end 'W'
+
+export function fromB() returns ExitCode
+	print("{takesFloat(W.heavy)}\n")
+	return 0
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	_ = goA()
+	_ = fromB()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: argument type mismatch for 'f': expected 'Real', got 'W'
+```
+
+
 <!-- test: error.crossfile-a-private-alias-beside-a-visible-export-is-ambiguous-in-its-own-file -->
 ⭐ **A FILE'S OWN PRIVATE ALIAS DOES NOT WIN OVER ANOTHER FILE'S VISIBLE EXPORT OF THE SAME NAME.**
 `b.maxon`'s `export union Container` is visible in `a.maxon`, which declares a file-private

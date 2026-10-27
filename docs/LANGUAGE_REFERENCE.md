@@ -2582,6 +2582,10 @@ Inspecting a union through `match` means that adding a case later flags every pl
 to do with it. For the same reason unions are not automatically `Equatable` or `Hashable`; a union may
 still declare `implements Equatable` with its own `equals` method and call it explicitly.
 
+A union value is not a number: an arithmetic, bitwise or shift operator, unary `-` or `not` refuses a union
+operand (**E2004** `Cannot operate on Shape and int`, or **E3005**), and so do a condition and a counted
+`for` range bound. Read the case through `match`, or its tag through `.ordinal` or `.rawValue`.
+
 ### Union Properties
 
 A union value has `.name`, `.ordinal` and `.rawValue`, and a union type has `Type.allCaseNames` and

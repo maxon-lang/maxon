@@ -53835,7 +53835,7 @@ export type Parser
 	// Both bounds are asked, each anchored on its own half — the START on the source's first token, the
 	// END on the `to`/`upto`, so a mixed range names the side that is wrong.
 	function requireCountableRangeBound(bound ValueId, anchor Token) throws SourceParseError
-		if tagIsIntegral(self.tagOf(bound)) 'countable'
+		if tagIsIntegral(self.numberTagOf(bound)) 'countable'
 			return
 		end 'countable'
 
@@ -58603,29 +58603,20 @@ export type Parser
 	end 'declaredEnumOfType'
 
 	// Is `value` a `union` value — a `named(X)` whose type is a declared `union`? The E3066 gate
-	// (`emitCompare`), keyed on the SAME `enumMatchFor` a `match` reads its scrutinee's enum through,
-	// so "is this a union?" is answered in one place for both. A payload-free ENUM is `false` (its
-	// value is a plain tag that `==` may compare); only `isUnion` is a union.
+	// (`emitCompare`). A payload-free ENUM is `false` (its value is a plain tag that `==` may compare);
+	// only `isUnion` is a union. The `named` test is what tells a union from a struct, which
+	// `numberTagOf` also answers `structRef` for.
 	//
-	// ⚠ **THE TAG PRE-CHECK IS A HOT-PATH ALLOCATION GUARD, NOT A TIDY EARLY RETURN.** This runs for
-	// BOTH operands of EVERY comparison in the program, and `enumMatchFor` returns a `DeclaredEnum` —
-	// a Maxon union VALUE, which is a heap object for its `undeclared` case as much as any other. So
-	// calling it for an `int`/`bool` operand (the overwhelming majority) would allocate two throwaway
-	// `DeclaredEnum.undeclared` boxes per compare, scaling with the program: scale-test charged
-	// exactly that (+1,257 allocs on rung 0, doubling per rung). A value can only be a union if its
-	// tag is `named`, and that test is a scalar column read that allocates nothing.
+	// ⚠ **ANSWERED THROUGH `numberTagOf`, NEVER THROUGH `enumMatchFor`, AS A HOT-PATH ALLOCATION GUARD.**
+	// This runs for BOTH operands of EVERY comparison in the program, and `enumMatchFor` returns a
+	// `DeclaredEnum` — a Maxon union VALUE, which is a heap object for its `undeclared` case as much as
+	// any other. So asking it of an `int`/`bool` operand (the overwhelming majority) would allocate two
+	// throwaway `DeclaredEnum.undeclared` boxes per compare, scaling with the program: scale-test
+	// charged exactly that (+1,257 allocs on rung 0, doubling per rung). A value can only be a union if
+	// its tag is `named`, and that test is a scalar column read that allocates nothing. `numberTagOf`
+	// then reads the registry's layout through `enumOperandTagFor`, which boxes no `DeclaredEnum`.
 	function valueIsUnion(value ValueId) returns bool
-		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
-			return false
-		end 'notNamed'
-
-		view decl = self.enumMatchFor(value)
-
-		if not enumMatchIsDeclared(decl) 'notEnum'
-			return false
-		end 'notEnum'
-
-		return requireEnumLayout(decl).isUnion
+		return self.tagOf(value) == ValueTypeTag.named and self.numberTagOf(value) == ValueTypeTag.structRef
 	end 'valueIsUnion'
 
 	// Is `value` a payload-bearing (HEAP-BOXED) enum/union — a `named(X)` whose layout `isBoxed`?
@@ -65410,26 +65401,29 @@ export type Parser
 	// ⭐ **THE TAG OF THE NUMBER BEHIND A VALUE — the question every OPERAND RULE asks, and the one
 	// `tagOf` cannot answer for a float-backed enum.** The value's own tag is `named` and its register file
 	// is a GPR, both truthfully; what the rule needs to know is the DOMAIN the operator will work in, and
-	// for a float-backed enum that is `float`.
+	// for a float-backed enum that is `float`. A union has no number behind it, so it answers `structRef`
+	// and every operand rule refuses it as it refuses a struct; `tagOf`'s `named` would admit a union's
+	// tag or box address as an integer.
 	//
 	// ⚠ **IT IS SPLIT FROM `floatBehindEnumValue` SO THE RULE CAN BE ASKED WITHOUT EMITTING** — a refused
 	// program must leave no ops behind (`emitShift`'s header), and a decode placed before the verdict would
 	// leave a stray `bitsToFloat` in the block of every program rejected for its operands. Same split, same
 	// reason, as `rangedAliasResolvedTag` beside `promoteToFloat`.
 	function numberTagOf(value ValueId) returns ValueTypeTag
-		return ValueTypeTag.float if self.valueIsFloatBackedEnum(value) else self.tagOf(value)
-	end 'numberTagOf'
+		let tag = self.tagOf(value)
 
-	// Is `value` a FLOAT-BACKED enum's value — `valueIsUnion`'s twin, differing only in the layout fact it
-	// reads. The `named` pre-check is that function's measured hot-path guard, kept for the identical
-	// reason: this is asked of both operands of every binary operator and of every interpolation hole, and
-	// a scalar column read allocates nothing where a registry probe on an `int` would.
-	function valueIsFloatBackedEnum(value ValueId) returns bool
-		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
-			return false
+		if tag != ValueTypeTag.named 'notNamed'
+			return tag
 		end 'notNamed'
 
-		return self.signatures.enumIsFloatBacked(self.valueTypeName(value))
+		return self.signatures.enumOperandTagFor(self.valueTypeName(value), readerFilePath: self.job.path)
+	end 'numberTagOf'
+
+	// Is `value` a FLOAT-BACKED enum's value — `valueIsUnion`'s twin, answered through `numberTagOf` for the
+	// same allocation reason: the `named` test is what tells it from a plain `float`, which `numberTagOf`
+	// also answers `float` for.
+	function valueIsFloatBackedEnum(value ValueId) returns bool
+		return self.tagOf(value) == ValueTypeTag.named and self.numberTagOf(value) == ValueTypeTag.float
 	end 'valueIsFloatBackedEnum'
 
 	// Append a `unaryOp` op over one SSA value; return the ValueId it defines. The source
@@ -72971,8 +72965,8 @@ export type Parser
 		// first two.
 		//
 		// ⚠⚠ **RECORDED HERE AND NOT AT `enumMatchFor`, WHICH IS THE WIDER DOOR — AND THE DIFFERENCE IS
-		// MEASURED, NOT ARGUED.** That one also answers for a drop cascade (`decrefCalleeFor`), a compare
-		// operand (`valueIsUnion`) and a refused cast (`requireCastSourceIsNotEnum`) — none of them a
+		// MEASURED, NOT ARGUED.** That one also answers for a drop cascade (`decrefCalleeFor`) and a
+		// refused cast (`requireCastSourceIsNotEnum`) — none of them a
 		// source-level reach. Crediting the drop is exactly the callee-RETURN-type credit `noteCalleeSignature`
 		// refuses by name. MEASURED by putting the credit there and rebuilding:
 		// `unused-export/error.unused-exported-union-nothing-outside-reaches` went RED — "expected a compile
@@ -77294,7 +77288,7 @@ export type Parser
 	function parseBuiltinIntegerArg(func IrFunction, paramName ByteArray, methodTok Token) returns ValueId throws SourceParseError
 		let value = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
-		if not tagIsIntegral(self.tagOf(value)) 'notInteger'
+		if not tagIsIntegral(self.numberTagOf(value)) 'notInteger'
 			throw SourceParseError.builtinArgumentType(String.from(paramName), expected: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(value), line: methodTok.line, column: methodTok.column)
 		end 'notInteger'
 
@@ -77543,12 +77537,16 @@ export type Parser
 	// A scalar prints its class word (`'int'`), never its alias: `SemanticCheck.paramDisplayName` owns that
 	// rule, and `valueDisplayTypeName` is the door that prints the alias.
 	function kindWordOf(tag ValueTypeTag, nameId TypeNameId, brand ByteArray) returns String
-		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance 'anAggregate'
+		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance or self.nameIdIsAnEnumOrUnion(tag, nameId: nameId) 'anAggregate'
 			return self.brandedDisplayTypeName(tag, nameId: nameId, brand: brand)
 		end 'anAggregate'
 
 		return typeTagName(tag)
 	end 'kindWordOf'
+
+	function nameIdIsAnEnumOrUnion(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.named and self.signatures.containsEnumFor(self.internedName(nameId), readerFilePath: self.job.path)
+	end 'nameIdIsAnEnumOrUnion'
 
 	// The SOURCE-LEVEL TYPE RULES the parser enforces — what an operator's operands may be, and
 	// when two types agree — live in TypeRules.maxon, NOT here. They are shared with SemanticCheck
@@ -92503,7 +92501,7 @@ export type Parser
 				// same fact `parseBuiltinIntegerArg`'s header measured at the six signature-checked builtin doors
 				// and the same one the `readStdin` arm below asks; a third spelling of one question is how a
 				// door comes to disagree with its neighbours.
-				if not tagIsIntegral(self.tagOf(index)) 'notAnIndex'
+				if not tagIsIntegral(self.numberTagOf(index)) 'notAnIndex'
 					throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWord(index), line: anchor.line, column: anchor.column)
 				end 'notAnIndex'
 
@@ -92525,7 +92523,7 @@ export type Parser
 				// (`E3005 … expected 'int', got 'int'`, a refusal that names one type twice). A byte budget is
 				// exactly the sort of value a corpus spells with an alias, so the wide predicate is the correct
 				// one here rather than the lenient one.
-				if not tagIsIntegral(self.tagOf(maxBytes)) 'notAByteCount'
+				if not tagIsIntegral(self.numberTagOf(maxBytes)) 'notAByteCount'
 					throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWord(maxBytes), line: anchor.line, column: anchor.column)
 				end 'notAByteCount'
 
@@ -93828,7 +93826,7 @@ export type Parser
 
 		let index = try self.parseValueExpression(func)
 
-		if not tagIsIntegral(self.tagOf(index)) 'notAnIndex'
+		if not tagIsIntegral(self.numberTagOf(index)) 'notAnIndex'
 			throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWord(index), line: indexTok.line, column: indexTok.column)
 		end 'notAnIndex'
 
@@ -94081,7 +94079,7 @@ export type Parser
 		// everything by deferral — so a handle of a type nobody has settled reached the emit unrefused.
 		// It is also the one predicate `requireIntrinsicArgs` asks one family over, which is what stops
 		// the two doors of one question from drifting.
-		if not tagIsIntegral(self.tagOf(handle)) 'notAnInt'
+		if not tagIsIntegral(self.numberTagOf(handle)) 'notAnInt'
 			throw SourceParseError.builtinOperandType(String.from(builtinName), required: "integer", got: self.valueKindWord(handle), line: calleeTok.line, column: calleeTok.column)
 		end 'notAnInt'
 
@@ -94211,7 +94209,7 @@ export type Parser
 	// case any spec pins today. Unifying the `SourceParseError.builtinOperandType` voice moves every
 	// `__Builtins.*` and `subp*` refusal at once, and four spec files pin the current wording.
 	function requireIntrinsicMachineWordArg(arg ValueId, callee ByteArray, calleeTok Token) throws SourceParseError
-		if not tagIsIntegral(self.tagOf(arg)) 'notAMachineWord'
+		if not tagIsIntegral(self.numberTagOf(arg)) 'notAMachineWord'
 			throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAMachineWord'
 	end 'requireIntrinsicMachineWordArg'

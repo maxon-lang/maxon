@@ -6566,10 +6566,11 @@ type MaxonToStdLowering
 	end 'argConvertsAsUnsigned'
 
 	// Is `value` a FLOAT-BACKED enum's — the question `floatDomainCrossingOp` picks its conversion by. The
-	// Maxon-tier twin of `Parser.valueIsFloatBackedEnum`, reading the very columns that parser published,
-	// so the two tiers cannot come to disagree about which values carry an encoded double.
+	// Maxon-tier twin of `Parser.valueIsFloatBackedEnum`, reading the very columns that parser published
+	// and asking `enumOperandTagFor` with the reading file, as `Parser.numberTagOf` does, so the two tiers
+	// cannot come to disagree about which values carry an encoded double.
 	//
-	// A name id that is not an enum's answers `false` through `enumIsFloatBacked`; an UNKNOWN id cannot
+	// A name id that is not an enum's answers `false` through `enumOperandTagFor`; an UNKNOWN id cannot
 	// happen for a `named` value (the parser mints every one of them from this interner) and so panics
 	// rather than being read as "not an enum", which would silently restore the widening.
 	function argIsFloatBackedEnum(value ValueId) returns bool
@@ -6579,7 +6580,7 @@ type MaxonToStdLowering
 
 		let nameId = try self.valueNameIds.get(value) otherwise panic("argIsFloatBackedEnum: value v{value} has no recorded type name — the two type columns are minted in lockstep by Parser.mintValue")
 		let name = try self.typeNames.nameOf(nameId) otherwise panic("argIsFloatBackedEnum: type-name id {nameId} is not in the whole-program interner — every `named` tag is minted with an id folded into it")
-		return self.signatures.enumIsFloatBacked(name)
+		return self.signatures.enumOperandTagFor(name, readerFilePath: self.currentSourceFilePath) == ValueTypeTag.float
 	end 'argIsFloatBackedEnum'
 
 	// The operand and result ValueIds pass through verbatim. The trapping division family becomes its
