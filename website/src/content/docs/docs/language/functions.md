@@ -189,8 +189,13 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A call that more than one overload matches is **E3007** (`Ambiguous overload`), and so is a `spawn` or an
-  `async` call that does. The message lists each tied overload's parameters as its declaration writes
+- Each argument ranks the overloads it fits: a parameter declared with the argument's own alias ranks
+  first, a parameter whose type is exactly the argument's next, and a parameter the argument widens to
+  (an int at a `float`) last. The call binds the overload whose arguments rank highest in total, so
+  beside `create(n Count)` and `create(n Integer)`, `create(7 as Count)` binds `Count`.
+- A call that more than one overload matches equally is **E3007** (`Ambiguous overload`) — two
+  overloads each preferred at a different argument, for one — and so is a `spawn` or an `async` call
+  that does. The message lists each tied overload's parameters as its declaration writes
   them (`Candidates: (b BlockId), (v VarId)`). A first argument
   is labelled only at a defaulted parameter, and overloads of one name that declare defaults must agree
   on their parameters, so two single-parameter overloads of the same type cannot be told apart.

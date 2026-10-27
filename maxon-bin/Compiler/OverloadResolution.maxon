@@ -1,11 +1,14 @@
-// Wide enough for `ExactArgScore` at every parameter of the widest signature the ABI admits.
-typealias OverloadArgScore = int(0 to 128)
+// Wide enough for `SameAliasArgScore` at every parameter of the widest signature the ABI admits.
+typealias OverloadArgScore = int(0 to 192)
 
 typealias OverloadArgScoreArray = Array with OverloadArgScore
 
-// A candidate scores `ExactArgScore` per argument whose tag matches its parameter's exactly and
-// `WideningArgScore` per argument that merely coerces legally (an int at a `float`, an int at an `ExitCode`).
-// The numbers only have to ORDER the candidates.
+// A candidate scores `SameAliasArgScore` per argument whose alias is its parameter's own alias,
+// `ExactArgScore` per argument whose tag matches its parameter's exactly and `WideningArgScore` per
+// argument that merely coerces legally (an int at a `float`, an int at an `ExitCode`). The numbers
+// only have to ORDER the candidates; that order is the language rule, stated under "Function
+// Overloads" in `docs/LANGUAGE_REFERENCE.md`.
+let SameAliasArgScore = 3
 let ExactArgScore = 2
 let WideningArgScore = 1
 
@@ -452,7 +455,7 @@ module function overloadArgFit(signatures ProgramSignatures, interner TypeNameIn
 			return OverloadArgFit.widening
 		end 'aggregateMismatch'
 
-		if argTag == ValueTypeTag.named and not expected.isEmpty() and got.equals(expected) 'theSameRangedAlias'
+		if valueTagWearsAnAlias(argTag, nameId: view.nameId) and not expected.isEmpty() and got.equals(expected) 'theSameRangedAlias'
 			return OverloadArgFit.sameAlias
 		end 'theSameRangedAlias'
 	end 'aggregateComparable'
@@ -476,6 +479,16 @@ function declaredRangeIsNarrowed(range DeclaredRange) returns bool
 		narrowed gives true
 	end 'range'
 end 'declaredRangeIsNarrowed'
+
+function argScoreOf(fit OverloadArgFit) returns OverloadArgScore
+	return match fit 'fit'
+		sameAlias gives SameAliasArgScore as OverloadArgScore
+		exact or
+		byValue gives ExactArgScore as OverloadArgScore
+		widening gives WideningArgScore as OverloadArgScore
+		incompatible panic("argScoreOf: an incompatible argument ends the candidate's scoring before it is scored")
+	end 'fit'
+end 'argScoreOf'
 
 function overloadSlottedFit(signatures ProgramSignatures, interner TypeNameInterner, call OverloadCallFacts, candidate OverloadCandidate, views OverloadArgArray, argAt ParamCountArray, placed BoolArray) returns OverloadFit
 	let instance = candidateInstance(candidate, views: views, argAt: argAt, staticInstance: call.staticInstance)
@@ -503,7 +516,7 @@ function overloadSlottedFit(signatures ProgramSignatures, interner TypeNameInter
 			return sharedIncompatibleFit
 		end 'refused'
 
-		score = score + (WideningArgScore if fit == OverloadArgFit.sameAlias or fit == OverloadArgFit.widening else ExactArgScore)
+		score = score + argScoreOf(fit)
 
 		if fit == OverloadArgFit.widening 'aCoercedArgument'
 			standing = OverloadStanding.coerced

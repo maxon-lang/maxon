@@ -15,6 +15,10 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- A call whose argument wears an alias binds the overload declared over that alias, even where another
+  overload takes the argument's primitive type exactly: beside `f(n Small)` and `f(n Integer)`,
+  `f(x as Small)` binds `f(n Small)`.
+  Fix: cast the argument to the parameter type of the overload you want, such as `f(x as Integer)`.
 - `Vector` is renamed `FixedArray`, and its iterator typealias `Vector.VectorIter` is
   `FixedArray.FixedArrayIter`; `Vector with 3 Int` is an unknown type (E2010).
   Fix: rename `Vector` to `FixedArray` and `VectorIter` to `FixedArrayIter`.

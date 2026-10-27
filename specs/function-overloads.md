@@ -3172,6 +3172,85 @@ end 'main'
 2
 ```
 
+<!-- test: function-overloads.a-call-with-a-count-argument-picks-the-count-overload-over-the-integer-one -->
+<!-- process: own -->
+`Count` implements `Integer`, so a `Count` argument fits both members, and the member declared over `Count` itself is the nearer one: the call binds it rather than tying. `create(n Count)` returns `7`, `create(n Integer)` would return `1007`, so exit code `7` is the `Count` member.
+```maxon
+typealias Integer = int(0 to 100000)
+typealias Count = int(0 to 100) implements Integer
+
+type Rec
+	export var v as Integer
+
+	static function create(n Count) returns Self
+		return Self{v: n}
+	end 'create'
+
+	static function create(n Integer) returns Self
+		return Self{v: n + 1000}
+	end 'create'
+end 'Rec'
+
+function main() returns ExitCode
+	let y = Rec.create(7 as Count)
+	return y.v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: function-overloads.a-call-with-a-float-alias-argument-picks-the-member-over-that-alias-rather-than-its-ancestor -->
+<!-- process: own -->
+The same ranking for a float alias: `Fine` implements `Coarse`, and a `Fine` argument binds the member declared over `Fine`.
+```maxon
+typealias Coarse = float(0.0 to 100.0)
+typealias Fine = float(0.0 to 1.0) implements Coarse
+
+function rank(x Coarse) returns ExitCode
+	_ = x
+	return 2
+end 'rank'
+
+function rank(x Fine) returns ExitCode
+	_ = x
+	return 1
+end 'rank'
+
+function main() returns ExitCode
+	return rank(0.5 as Fine)
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: function-overloads.a-call-with-an-aliased-argument-picks-the-member-over-that-alias-over-an-int-member -->
+<!-- process: own -->
+An argument's own alias outranks an exact primitive fit: `Integer` admits every `int`, so a `Small` argument fits it as an `int`, and the call still binds the member declared over `Small`. Exit code `1` is the `Small` member.
+```maxon
+typealias Small = int(0 to 10)
+typealias Integer = int(i64.min to i64.max)
+
+function f(n Small) returns ExitCode
+	_ = n
+	return 1
+end 'f'
+
+function f(n Integer) returns ExitCode
+	_ = n
+	return 2
+end 'f'
+
+function main() returns ExitCode
+	let x = 5 as Small
+	return f(x)
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: function-overloads.a-float-alias-parameter-takes-a-float-and-leaves-an-integer-to-the-other-member -->
 <!-- process: own -->
 A float alias parameter is read the same way from the declaration and from the argument: `0.5` binds `Ratio`, `3` binds the `Count` member.

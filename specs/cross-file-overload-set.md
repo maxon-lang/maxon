@@ -613,7 +613,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3007: <fragment>:19:13: Ambiguous overload for 'create': multiple overloads match. Candidates: (n Count), (n Integer)
 error E3008: <fragment>:19:13: function 'Rec.create' is not exported
 ```
 
@@ -644,7 +643,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3007: <fragment>:20:14: Ambiguous overload for 'create': multiple overloads match. Candidates: (n Count), (n Integer)
 error E3008: <fragment>:20:14: function 'Rec.create' is not exported
 ```
 
