@@ -76,9 +76,10 @@ typealias ParamShadowDepth = int(0 to u64.max)
 // One `ParamShadowDepth` per parameter of the body `Parser.scanBodyFacts` is walking.
 typealias ParamShadowColumn = Array with ParamShadowDepth
 
-// How many `[` are open around a token — inside one, a NEWLINE belongs to the top-level initializer
-// rather than ending it (see `initializerEndIndex`). A separate alias from `BlockDepth` because it
-// counts a different thing: an array literal opens no block, and a block keyword opens no bracket.
+// How many brackets are open around a token — inside one, a NEWLINE belongs to the top-level
+// initializer rather than ending it (see `initializerEndIndexIn`). A separate alias from `BlockDepth`
+// because it counts a different thing: an array literal opens no block, and a block keyword opens no
+// bracket.
 typealias BracketDepth = int(0 to u64.max)
 typealias BracketDepthArray = Array with BracketDepth
 
@@ -678,6 +679,11 @@ export union SourceParseError implements Error
 	// E3005 (a type mismatch: the function's declared result is nothing, and `<expr>`
 	// is not nothing), positioned at the `return`.
 	returnValueFromVoid(name String, line LineNumber, column ColumnNumber)
+
+	// A `return` inside a file-scope or `static` initializer, which has no function of the author's
+	// to leave. Renders as E2080, naming `binding` as the source declares it, positioned at the
+	// `return`.
+	returnInInitializer(binding String, line LineNumber, column ColumnNumber)
 
 	// A BARE `return` inside a function that DOES declare a return type — a path that
 	// leaves the function with no value to return. Renders as E3013, the same code as
@@ -4132,7 +4138,7 @@ type PendingDefaultHelper
 	export let exprStart as ElementIndex
 
 	// The token the CAPTURE skipped to — the `,`/`)` that ends a parameter default (`expressionEndFrom`),
-	// the line end that ends a field one (`initializerEndIndex`). The drain parses one expression from
+	// the line end that ends a field one (`initializerEndIndexIn`). The drain parses one expression from
 	// `exprStart` and must arrive exactly here: the capture already decided where the author's default
 	// ends, so any gap between the two is text the author wrote and the compiler was about to ignore.
 	// Recorded rather than recomputed at the drain — a second walk is a second answer, and this file has
@@ -9821,6 +9827,15 @@ function tokenKindIn(tokens TokenArray, index ElementIndex) returns TokenKind
 	return (try tokens.get(index) otherwise panic("tokenKindIn: index below count just checked but tokens.get({index}) failed")).kind
 end 'tokenKindIn'
 
+// One past the last token of a top-level initializer: an initializer runs to the END OF ITS LINE.
+// Maxon has no statement terminator, so the newline IS the boundary.
+//
+// ⚠ **EXCEPT INSIDE A BRACKET.** The lexer drops the layout inside `(`, `[` and `{` but keeps the
+// newlines of a `match` or block-form `otherwise` written there (`Lexer.dropBracketedLayout`), so such
+// a block reaches this scan with newlines in it; the depth counter keeps them inside the initializer.
+//
+// It cannot run away: `tokenKindIn` answers `eof` past the end of the token array, so
+// an unterminated last line — or an unclosed bracket — stops at the file's end rather than walking off it.
 function initializerEndIndexIn(tokens TokenArray, start ElementIndex) returns ElementIndex
 	var i = start
 	var depth = 0 as BracketDepth
@@ -10182,8 +10197,6 @@ function shortCircuitLabel(takesRhsWhenTrue bool) returns ByteArray
 
 	return b"orrhs"
 end 'shortCircuitLabel'
-
-let ConstInitializerFunctionName = b"__const_initializer"
 
 type ShortCircuitRhs
 	export let rhsId as BlockId
@@ -19763,6 +19776,7 @@ export type Parser
 	var closureShapes as FunctionValueShapeMap
 	var imageNotes as ImageNoteMap
 	var constInitializerEnd as ElementIndex
+	var initializerBinding as ByteArray
 	var instanceViewAliasAt as InstanceViewAliasIndexMap
 	var functionHoldings as FunctionHoldingAnswers
 	var imageableVerdicts as ImageableVerdictMap
@@ -20103,6 +20117,7 @@ export type Parser
 			closureShapes: FunctionValueShapeMap.create(),
 			imageNotes: ImageNoteMap.create(),
 			constInitializerEnd: 0,
+			initializerBinding: EmptySourceText.clone(),
 			instanceViewAliasAt: InstanceViewAliasIndexMap.create(),
 			functionHoldings: FunctionHoldingAnswers.create(),
 			imageableVerdicts: ImageableVerdictMap.create(),
@@ -23162,7 +23177,7 @@ export type Parser
 			return eq
 		end 'noDefault'
 
-		let regionEnd = self.initializerEndIndex(eq + 1)
+		let regionEnd = initializerEndIndexIn(self.tokens, start: eq + 1)
 		let helperName = fieldDefaultHelperName(typeName, fieldName: fieldName)
 		let scan = self.scanFixedElementCountIn(eq + 1, regionEnd: regionEnd)
 
@@ -26896,7 +26911,7 @@ export type Parser
 		end 'annotated'
 
 		let equalsTok = self.current()
-		let defaultEnd = self.initializerEndIndex(self.pos + 1)
+		let defaultEnd = initializerEndIndexIn(self.tokens, start: self.pos + 1)
 		try self.consume(TokenKind.equals)
 
 		let defaultStart = self.pos
@@ -27609,6 +27624,7 @@ export type Parser
 	function parseGlobalInitializer(decl TopLevelDecl, valueType MaxonType) throws SourceParseError
 		let resume = self.pos
 		let name = self.signatures.initializerFunctionNameOf(decl)
+		self.initializerBinding = decl.name.clone()
 		self.pos = decl.initStart
 		let anchor = self.current()
 		let unresolved = maxonTypeTag(valueType) == ValueTypeTag.unresolved
@@ -28162,7 +28178,7 @@ export type Parser
 		try self.consume(TokenKind.equals)
 
 		let initStart = self.pos
-		let initEnd = self.initializerEndIndex(initStart)
+		let initEnd = initializerEndIndexIn(self.tokens, start: initStart)
 		self.pos = initEnd
 
 		// ⭐ **THE SCOPE IS READ OFF THE QUALIFIER, HERE, WHERE IT IS A PARAMETER** — the caller states which
@@ -28189,19 +28205,6 @@ export type Parser
 			typeBody(typeName) gives qualifiedMethodName(typeName, methodName: nameTok.value)
 		end 'qualifier'
 	end 'declaredBindingName'
-
-	// One past the last token of a top-level initializer: an initializer runs to the END OF ITS LINE.
-	// Maxon has no statement terminator, so the newline IS the boundary.
-	//
-	// ⚠ **EXCEPT INSIDE A BRACKET.** The lexer drops the layout inside `(`, `[` and `{` but keeps the
-	// newlines of a `match` or block-form `otherwise` written there (`Lexer.dropBracketedLayout`), so such
-	// a block reaches this scan with newlines in it; the depth counter keeps them inside the initializer.
-	//
-	// It cannot run away: `kindAt` answers `eof` past the end of the token array (see `tokenAt`), so
-	// an unterminated last line — or an unclosed bracket — stops at the file's end rather than walking off it.
-	function initializerEndIndex(start ElementIndex) returns ElementIndex
-		return initializerEndIndexIn(self.tokens, start: start)
-	end 'initializerEndIndex'
 
 	// Parse a ranged typealias declaration: `typealias <Name> = int(<low> to|upto <high>)` or
 	// `typealias <Name> = float(<low> to <high>)`. Nearly every real Maxon file opens with one —
@@ -42601,6 +42604,10 @@ export type Parser
 	function parseReturnStatement(func IrFunction, block IrBlock) throws SourceParseError
 		let retTok = try self.consume(TokenKind.return)
 		let bare = self.statementEndsAt(self.pos)
+
+		if isInitializerFunctionName(func.name) 'noFunctionToLeave'
+			throw SourceParseError.returnInInitializer(String.from(self.initializerBinding), line: retTok.line, column: retTok.column)
+		end 'noFunctionToLeave'
 
 		if maxonReturnTypeIsVoid(func.maxonReturnType) 'voidFunction'
 			if not bare 'valueFromVoid'
@@ -80794,7 +80801,7 @@ export type Parser
 			return
 		end 'fitsTheSlot'
 
-		throw SourceParseError.unsupported("`{String.from(self.signatures.genericInstanceBaseName(giid))}` holds one machine word per {ContainerElementColumnNoun}, so its {ContainerElementColumnNoun} must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(elementType))}' {ContainerElementColumnNoun} does not fit that slot", line: tok.line, column: tok.column)
+		throw SourceParseError.unsupported("`{String.from(self.signatures.genericInstanceBaseName(giid))}` holds one machine word per {ContainerElementColumnNoun}, so its {ContainerElementColumnNoun} must be a managed type or an integral one — a '{self.signatures.typeDisplayName(elementType)}' {ContainerElementColumnNoun} does not fit that slot", line: tok.line, column: tok.column)
 	end 'requireListElementType'
 
 	// ⭐⭐ **THERE IS NO SYNTHESIZED `List` SURFACE.** `stdlib/List.maxon` declares
@@ -91120,6 +91127,7 @@ export type Parser
 	function seatInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray)
 		self.pos = decl.initStart
 		self.constInitializerEnd = decl.initEnd
+		self.initializerBinding = decl.name.clone()
 		self.constEvalStack = stack
 		self.seatInDeclaringTypeBody(decl)
 	end 'seatInitializer'

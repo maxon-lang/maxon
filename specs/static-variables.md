@@ -5222,3 +5222,67 @@ end 'main'
 ```stdout
 quiet? next
 ```
+
+<!-- test: error.a-return-in-a-handler-block-of-a-static-let-names-the-initializer -->
+```maxon
+enum ParseError implements Error
+	bad
+end 'ParseError'
+
+function parse(n Count) returns Count throws ParseError
+	if n > 5 'big'
+		throw ParseError.bad
+	end 'big'
+	return n
+end 'parse'
+
+type Config
+	static let LEVEL = try parse(3) otherwise (e) 'h'
+		return 3
+	end 'h'
+end 'Config'
+
+function main() returns ExitCode
+	print("{Config.LEVEL}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2080: <fragment>:15:3: `return` has no function to leave in the initializer of 'Config.LEVEL' — end a handler there with `panic(…)`, or give the `try` a fallback value with `otherwise <expr>`
+```
+
+<!-- test: error.a-return-in-a-handler-block-of-a-static-record-let-names-the-initializer -->
+```maxon
+enum ParseError implements Error
+	bad
+end 'ParseError'
+
+type Config
+	export let level as Count
+
+	static function create(level Count) returns Config
+		return Self{level: level}
+	end 'create'
+end 'Config'
+
+function makeConfig(n Count) returns Config throws ParseError
+	if n > 5 'big'
+		throw ParseError.bad
+	end 'big'
+	return Config.create(n)
+end 'makeConfig'
+
+type Settings
+	static let CONFIG = try makeConfig(3) otherwise (e) 'h'
+		return Config.create(4)
+	end 'h'
+end 'Settings'
+
+function main() returns ExitCode
+	print("{Settings.CONFIG.level}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2080: <fragment>:23:3: `return` has no function to leave in the initializer of 'Settings.CONFIG' — end a handler there with `panic(…)`, or give the `try` a fallback value with `otherwise <expr>`
+```

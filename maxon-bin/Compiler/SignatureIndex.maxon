@@ -2414,10 +2414,27 @@ union ProbedImage
 end 'ProbedImage'
 
 let GlobalInitializerPrefix = b"__global_init."
+export let ConstInitializerFunctionName = b"__const_initializer"
 
 export function isGlobalInitializerName(name ByteArray) returns bool
 	return bytesStartWith(name, prefix: GlobalInitializerPrefix)
 end 'isGlobalInitializerName'
+
+export function isInitializerFunctionName(name ByteArray) returns bool
+	return name.equals(ConstInitializerFunctionName) or isGlobalInitializerName(name)
+end 'isInitializerFunctionName'
+
+function globalInitializerBindingOf(name ByteArray) returns String
+	let label = try name.slice(GlobalInitializerPrefix.count(), endIndex: name.count()) otherwise panic("globalInitializerBindingOf: '{String.from(name)}' is not a '{String.from(GlobalInitializerPrefix)}' name — only a name isGlobalInitializerName admitted may be asked")
+	let dataLabelPrefix = DataLabelPrefix.toByteArray()
+
+	if bytesStartWith(label, prefix: dataLabelPrefix) 'aDataLabel'
+		let labelled = try label.slice(dataLabelPrefix.count(), endIndex: label.count()) otherwise panic("globalInitializerBindingOf: '{String.from(label)}' starts with '{DataLabelPrefix}' and cannot be shorter than it")
+		return try String.from(labelled).split(DataLabelDisambiguator).get(0) otherwise panic("globalInitializerBindingOf: splitting '{String.from(labelled)}' produced no segment")
+	end 'aDataLabel'
+
+	return try String.from(label).split(FileScopedKeySeparator).last() otherwise panic("globalInitializerBindingOf: splitting '{String.from(label)}' produced no segment")
+end 'globalInitializerBindingOf'
 
 function globalInitializerName(label ByteArray) returns ByteArray
 	return "{String.from(GlobalInitializerPrefix)}{String.from(label)}".toByteArray()
@@ -32509,9 +32526,8 @@ export type ProgramSignatures
 		return false
 	end 'slotOwnsASlotOfKind'
 
-	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`) — for the one message that has to
-	// say WHICH element type it is refusing (E3106, `Parser.requireArrayResizeHasZeroElement`). It lives here
-	// because `typeNames` is this index's own interner and is not the parser's to reach into; the parser holds
+	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`). It lives here because
+	// `typeNames` is this index's own interner and is not the parser's to reach into; the parser holds
 	// a per-FILE interner, and an element type id from `containerElementType` belongs to this one.
 	export function arrayElementDisplayName(id GenericInstanceId) returns String
 		return self.typeDisplayName(self.containerElementType(id))
@@ -43346,6 +43362,14 @@ export type ProgramSignatures
 	end 'liftedFunctionHostOf'
 
 	export function sourceNameOfFunction(name ByteArray) returns String
+		if isGlobalInitializerName(name) 'aGlobalInitializer'
+			return "initializer of {globalInitializerBindingOf(name)}"
+		end 'aGlobalInitializer'
+
+		if name.equals(ConstInitializerFunctionName) 'aConstInitializer'
+			return "initializer"
+		end 'aConstInitializer'
+
 		let host = self.liftedFunctionHostOf(name)
 		let lifted = try name.slice(host.count(), endIndex: name.count()) otherwise panic("sourceNameOfFunction: '{String.from(host)}' is a prefix of '{String.from(name)}' and cannot reach past its end")
 

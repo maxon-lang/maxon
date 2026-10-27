@@ -247,6 +247,10 @@ A method is named without its call where a value is wanted: `apply(Ops.twice, x:
 
 A cast's operand is itself a cast: `x as A as B`, or `(x as A) as B` through any parentheses. Cast directly to the final type, `x as B`. When both steps do work, such as a range check followed by a reinterpretation as a `bits(n)` pattern, bind the first result: `let a = x as A`, then `a as B`.
 
+### E2080 — `returnInInitializer`
+
+A `return` is written in a top-level or `static` binding's initializer, as in a handler block: `let LEVEL = try parse(3) otherwise (e) 'h'`, then `return 3`. An initializer is not a function, so `return` has nothing to leave. End the handler with `panic(…)`, or give the `try` a fallback value: `let LEVEL = try parse(3) otherwise 3`.
+
 ## Semantic Analysis (E3xxx)
 
 Type checking, borrowing, visibility, declaration lookup.

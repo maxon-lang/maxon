@@ -222,6 +222,8 @@ end 'main'
   `Type from "literal"`, `ArrayAlias from [...]`, factory and function calls (`let shared = Cache.create()`,
   `let shared = makeCache()`, `lib.Cache.create()`), a function name (`let step = countdown`), and another
   top-level `let`, declared before or after it, in this file or one it can see (`let B = A`).
+- An initializer is outside every function, so a `return` in it is **E2080**, naming the binding. A handler
+  block in an initializer ends in `panic(…)`; to fall back to a value, write `try f() otherwise <expr>`.
 - A binding that holds a scalar — a number, a `bool` or an enum case — is a compile-time
   constant, inlined at every use. Its initializer must have a value known at compile time, as a body knows
   `2 * WIDTH` or `sqrt(4.0)`; a call that makes it unknown is **E2045** (`Function calls are not allowed in

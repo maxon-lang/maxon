@@ -184,7 +184,9 @@ function strictDigit(text String) returns Amount throws AppError
 end 'strictDigit'
 ```
 
-Each statement follows its usual rules: `break` and `continue` need a loop, `throw` needs a `throws` clause.
+Each statement follows its usual rules: `break` and `continue` need a loop, `throw` needs a `throws` clause,
+and `return` needs an enclosing function (see [Top-Level Variables](/docs/language/variables/#top-level-variables) for a handler in an
+initializer).
 
 ### Block Handler
 
