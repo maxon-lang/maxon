@@ -48,9 +48,9 @@ reported by the parser, where the type is known.
 `struct-ordering-is-not-an-equals-dispatch` cases:
 
 * **A struct with NO `equals` at all.** There is no synthesized structural equality, so `a == b` is refused
-  with `E3005 cannot compare struct with struct` — a clean, positioned refusal rather than a wrong answer. If
+  with `E3005 cannot compare Box with Box` — a clean, positioned refusal rather than a wrong answer. If
   structural equality is ever added, the case goes red at exactly the right line.
-* **Ordering on a struct.** Refused with the same `E3005 cannot compare struct with struct`.
+* **Ordering on a struct.** Refused with the same `E3005 cannot compare Box with Box`.
 
 ## Tests
 
@@ -143,7 +143,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:15:7: type mismatch: 'cannot compare struct with struct'
+error E3005: <fragment>:15:7: type mismatch: 'cannot compare Box with Box'
 ```
 
 <!-- test: error.comparing-two-generic-instances-without-equals-is-refused -->
@@ -195,7 +195,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:19:7: type mismatch: 'cannot compare struct with struct'
+error E3005: <fragment>:19:7: type mismatch: 'cannot compare Box with Box'
 ```
 
 <!-- test: error.struct-equality-requires-a-bool-equals -->

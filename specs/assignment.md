@@ -367,7 +367,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/assignment/error.retype-struct-to-int-errors.maxon:15:2: cannot assign a value of type 'struct' to variable 'n', which holds 'int'
+error E3005: specs/assignment/error.retype-struct-to-int-errors.maxon:15:2: cannot assign a value of type 'Point' to variable 'n', which holds 'int'
 ```
 
 <!-- test: error.retype-struct-field-errors -->

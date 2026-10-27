@@ -2284,7 +2284,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:19:12: Cannot operate on struct and int
+error E2004: <fragment>:19:12: Cannot operate on Point and int
 ```
 
 <!-- test: opaque-field-read-of-a-generic-alias-argument-is-that-instance -->

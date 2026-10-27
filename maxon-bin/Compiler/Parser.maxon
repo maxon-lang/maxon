@@ -27223,7 +27223,7 @@ export type Parser
 			return
 		end 'indexStillBuilding'
 
-		try self.requireAssignable(nameTok, value: given.tag, valueNameId: UnnamedTypeId, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, placeOwner: owner, voice: SlotMismatchVoice.assignedPlace)
+		try self.requireAssignable(nameTok, value: given.tag, valueNameId: UnnamedTypeId, valueBrandId: UnnamedTypeId, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, placeOwner: owner, voice: SlotMismatchVoice.assignedPlace)
 	end 'requireFieldDefaultType'
 
 	// The literal a field default is, as the SAME tagged pair a folded top-level constant is — its
@@ -37385,7 +37385,7 @@ export type Parser
 		// an `int` there is none to force. See the `heapAnnotationOnNonRecord` union arm for why the
 		// admissible set is `valueIsManagedHeap`'s rather than the narrower "struct literals".
 		if heapAnnotated and not self.valueIsManagedHeap(value) 'annotatedNonRecord'
-			throw SourceParseError.heapAnnotationOnNonRecord(String.from(nameTok.value), tag: typeTagName(self.tagOf(value)), line: nameTok.line, column: nameTok.column)
+			throw SourceParseError.heapAnnotationOnNonRecord(String.from(nameTok.value), tag: self.valueKindWord(value), line: nameTok.line, column: nameTok.column)
 		end 'annotatedNonRecord'
 
 		// WHOSE storage did the initializer reach into — `let u = t` (the binding itself) or `let u = t.x`
@@ -38803,7 +38803,7 @@ export type Parser
 		end 'aDeferredCallResult'
 
 		if not tagNamesADeclaredType(self.tagOf(value)) or not self.valueTypeNameIsATuple(value) 'notATuple'
-			throw SourceParseError.unsupported("{patternSubject} of a '{typeTagName(self.tagOf(value))}' {sourceNoun} (only a TUPLE can be destructured — {needsClause})", line: keywordTok.line, column: keywordTok.column)
+			throw SourceParseError.unsupported("{patternSubject} of a '{self.valueKindWord(value)}' {sourceNoun} (only a TUPLE can be destructured — {needsClause})", line: keywordTok.line, column: keywordTok.column)
 		end 'notATuple'
 
 		return DestructuredSource.tuple(self.registeredTupleLayout(self.valueTypeName(value)))
@@ -40703,7 +40703,7 @@ export type Parser
 	// whose voice quotes no place at all — a cost that grows with the corpus.
 	function assignableValue(nameTok Token, value ValueId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner SlotOwner, voice SlotMismatchVoice) returns ValueId throws SourceParseError
 		let got = self.tagOf(value)
-		try self.requireAssignable(nameTok, value: got, valueNameId: self.valueNameId(value), declared: declared, declaredNameId: declaredNameId, door: door, placeOwner: placeOwner, voice: voice)
+		try self.requireAssignable(nameTok, value: got, valueNameId: self.valueNameId(value), valueBrandId: self.brandIdOf(value), declared: declared, declaredNameId: declaredNameId, door: door, placeOwner: placeOwner, voice: voice)
 		self.admitUnsignedLiteralIntoSlot(value, slot: declared, slotNameId: declaredNameId)
 
 		if isFunctionTypeDoor(declared, got: got) 'functionTypeDoor'
@@ -40723,10 +40723,10 @@ export type Parser
 	// parse-time CONSTANT rather than an SSA value (a struct field's literal default), which pays the
 	// widening the verdict licenses in the constant's own representation. Every site holding a VALUE asks
 	// `assignableValue` — this plus that conversion, in one call, so the two halves cannot come apart.
-	function requireAssignable(nameTok Token, value ValueTypeTag, valueNameId TypeNameId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner SlotOwner, voice SlotMismatchVoice) throws SourceParseError
+	function requireAssignable(nameTok Token, value ValueTypeTag, valueNameId TypeNameId, valueBrandId TypeNameId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner SlotOwner, voice SlotMismatchVoice) throws SourceParseError
 		match checkDeclaredType(value, declared: declared) 'declared'
 			ok then break
-			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.kindWordOf(value, nameId: valueNameId), gotNote: "", gotTag: value, resolvedExpected: typeTagName(declared), expectedNote: "", declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.kindWordOf(value, nameId: valueNameId, brand: self.internedName(valueBrandId)), gotNote: "", gotTag: value, resolvedExpected: typeTagName(declared), expectedNote: "", declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 
 			// A FUNCTION VALUE into a NON-function place — the spec's specific E3005 ("cannot
@@ -45253,7 +45253,7 @@ export type Parser
 		end 'aDeferredResult'
 
 		if resultUsed and tagIsFloat(self.tagOf(otherwiseValue)) != tagIsFloat(self.tagOf(result)) 'typeMismatch'
-			try self.refuseOtherwiseMismatch(typeTagName(self.tagOf(otherwiseValue)), expectedType: typeTagName(self.tagOf(result)), fallback: otherwiseValue, tryTok: tryTok)
+			try self.refuseOtherwiseMismatch(self.valueKindWord(otherwiseValue), expectedType: self.valueKindWord(result), fallback: otherwiseValue, tryTok: tryTok)
 			return
 		end 'typeMismatch'
 
@@ -45279,7 +45279,7 @@ export type Parser
 		// would have the phi's drop decref an integer as a String pointer. A borrowed fallback of the
 		// right type is promoted at the merge rather than refused.
 		if self.valueIsOwnedHeap(result) and self.tagOf(otherwiseValue) != self.tagOf(result) 'managedOtherwiseTypeMismatch'
-			try self.refuseOtherwiseMismatch(typeTagName(self.tagOf(otherwiseValue)), expectedType: typeTagName(self.tagOf(result)), fallback: otherwiseValue, tryTok: tryTok)
+			try self.refuseOtherwiseMismatch(self.valueKindWord(otherwiseValue), expectedType: self.valueKindWord(result), fallback: otherwiseValue, tryTok: tryTok)
 		end 'managedOtherwiseTypeMismatch'
 	end 'requireOtherwiseMatchesResult'
 
@@ -58560,21 +58560,20 @@ export type Parser
 	// `refuseCasePatternOverAScalar`'s, as in `emitPatternValue`.
 	function decodeScalarPatternBound(scrut ValueId) returns FullRangeInt throws SourceParseError
 		let firstTok = self.current()
-		let scrutTag = self.tagOf(scrut)
 
 		if self.at(TokenKind.stringLiteral) 'stringPattern'
-			throw SourceParseError.matchPatternTypeMismatch("String", scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
+			throw SourceParseError.matchPatternTypeMismatch("String", scrutineeType: self.valueKindWord(scrut), line: firstTok.line, column: firstTok.column)
 		end 'stringPattern'
 
 		if self.at(TokenKind.floatLiteral) 'floatPattern'
-			throw SourceParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.float), scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
+			throw SourceParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.float), scrutineeType: self.valueKindWord(scrut), line: firstTok.line, column: firstTok.column)
 		end 'floatPattern'
 
 		if self.at(TokenKind.minus) 'negated'
 			try self.consume(TokenKind.minus)
 
 			if self.at(TokenKind.floatLiteral) 'negFloat'
-				throw SourceParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.float), scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
+				throw SourceParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.float), scrutineeType: self.valueKindWord(scrut), line: firstTok.line, column: firstTok.column)
 			end 'negFloat'
 
 			if not self.at(TokenKind.intLiteral) 'nonNumeric'
@@ -58584,25 +58583,25 @@ export type Parser
 
 			let intTok = try self.consume(TokenKind.intLiteral)
 			let value = try self.intLiteralValue(intTok, negated: true)
-			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrutTag: scrutTag, patternTok: firstTok)
+			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrut: scrut, patternTok: firstTok)
 		end 'negated'
 
 		if self.at(TokenKind.intLiteral) 'intPattern'
 			let intTok = try self.consume(TokenKind.intLiteral)
 			let value = try self.intLiteralValue(intTok, negated: false)
-			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrutTag: scrutTag, patternTok: firstTok)
+			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrut: scrut, patternTok: firstTok)
 		end 'intPattern'
 
 		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolPattern'
 			let value = 1 as FullRangeInt if self.at(TokenKind.true) else 0 as FullRangeInt
 			self.advance()
-			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.boolean, scrutTag: scrutTag, patternTok: firstTok)
+			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.boolean, scrut: scrut, patternTok: firstTok)
 		end 'boolPattern'
 
 		if self.at(TokenKind.charLiteral) 'charPattern'
 			let charTok = try self.consume(TokenKind.charLiteral)
-			let value = try self.decodeCharPatternValue(charTok, scrutTag: scrutTag)
-			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrutTag: scrutTag, patternTok: firstTok)
+			let value = try self.decodeCharPatternValue(charTok, scrut: scrut)
+			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrut: scrut, patternTok: firstTok)
 		end 'charPattern'
 
 		if self.at(TokenKind.identifier) 'enumCasePattern'
@@ -58653,9 +58652,9 @@ export type Parser
 	// A pattern bound must be comparable to the scrutinee — the interval twin of `checkPatternType`,
 	// asked over a decoded value + its tag rather than an emitted ValueId, so the failure is the same
 	// match-specific E2028.
-	function checkScalarPatternBound(value FullRangeInt, valTag ValueTypeTag, scrutTag ValueTypeTag, patternTok Token) returns FullRangeInt throws SourceParseError
-		if not comparableOperands(scrutTag, right: valTag) 'mismatch'
-			throw SourceParseError.matchPatternTypeMismatch(typeTagName(valTag), scrutineeType: typeTagName(scrutTag), line: patternTok.line, column: patternTok.column)
+	function checkScalarPatternBound(value FullRangeInt, valTag ValueTypeTag, scrut ValueId, patternTok Token) returns FullRangeInt throws SourceParseError
+		if not comparableOperands(self.tagOf(scrut), right: valTag) 'mismatch'
+			throw SourceParseError.matchPatternTypeMismatch(typeTagName(valTag), scrutineeType: self.valueKindWord(scrut), line: patternTok.line, column: patternTok.column)
 		end 'mismatch'
 
 		return value
@@ -63095,7 +63094,7 @@ export type Parser
 			let operandTag = self.numberTagOf(operand)
 
 			if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
-				throw SourceParseError.nonNumericNegation(self.kindWordOf(operandTag, nameId: self.valueNameId(operand)), line: opTok.line, column: opTok.column)
+				throw SourceParseError.nonNumericNegation(self.valueKindWordAt(operand, tag: operandTag), line: opTok.line, column: opTok.column)
 			end 'notANumber'
 
 			// The DECODE is paid only past that refusal, for `emitBinOp`'s stated reason: a rejected
@@ -63163,7 +63162,7 @@ export type Parser
 			match notOperatorFor(operandTag) 'which'
 				op(kind, resultTag) then return self.emitNot(operand, op: kind, resultTag: resultTag, opTok: opTok)
 				unknownOperandType then return try self.deferredResultOrRefusal(SourceParseError.notOnUnknownType(opTok.line, column: opTok.column), value: operand)
-				nonIntegralOperand then throw SourceParseError.nonIntegralOperands(opTok.kind.rawValue, operand: self.kindWordOf(operandTag, nameId: self.valueNameId(operand)), line: opTok.line, column: opTok.column)
+				nonIntegralOperand then throw SourceParseError.nonIntegralOperands(opTok.kind.rawValue, operand: self.valueKindWordAt(operand, tag: operandTag), line: opTok.line, column: opTok.column)
 			end 'which'
 		end 'not'
 
@@ -65648,8 +65647,8 @@ export type Parser
 		// `stdlib/String.maxon:947-964`'s `equals`/`compare` read `charIdx` and never `bytePosition`, so
 		// this follows a stated rule rather than taking a shortcut. Handled at the TOP, beside the
 		// byte-record arm and before every rule below, because those rules would answer WRONGLY rather
-		// than not at all: two `structRef`s reach `comparableOperands`, which refuses them ("cannot
-		// compare struct with struct") — so `idx2 == s.endIndex()`, the commonest thing there is to do
+		// than not at all: two `structRef`s reach `comparableOperands`, which refuses them — so
+		// `idx2 == s.endIndex()`, the commonest thing there is to do
 		// with an index and the one `string-type/find` pins, would be a type error against a perfectly
 		// good program.
 		//
@@ -65704,8 +65703,8 @@ export type Parser
 		end 'typeParamComparison'
 
 		// ⭐⭐ **`a == b` ON TWO VALUES OF ONE USER STRUCT DISPATCHES ITS OWN `equals`.**
-		// Without this, `comparableOperands` would refuse the pair — *"cannot compare struct with struct"* — for a
-		// program the oracle compiles and runs; `specs/filepath.md`'s `filepath-equality` /
+		// Without this, `comparableOperands` would refuse the pair for a program the oracle compiles and
+		// runs; `specs/filepath.md`'s `filepath-equality` /
 		// `filepath-inequality` are the corpus cases that reach it, and `FilePath.equals` is the
 		// `equals` they mean to run (case-insensitive on Windows, so a POINTER compare or a memberwise one
 		// would both be the WRONG ANSWER, not merely a different one).
@@ -65796,7 +65795,7 @@ export type Parser
 		let rightNumberTag = rightTag if identityEquality else self.numberTagOf(rhs)
 
 		if not comparableOperands(leftNumberTag, right: rightNumberTag) 'mismatch'
-			throw SourceParseError.comparisonTypeMismatch(typeTagName(leftNumberTag), right: typeTagName(rightNumberTag), line: opTok.line, column: opTok.column)
+			throw SourceParseError.comparisonTypeMismatch(self.valueKindWordAt(lhs, tag: leftNumberTag), right: self.valueKindWordAt(rhs, tag: rightNumberTag), line: opTok.line, column: opTok.column)
 		end 'mismatch'
 
 		// ⭐ **A COMPARISON IS A QUESTION ABOUT TWO VALUES OF ONE TYPE**, so the nominal rule binds it exactly
@@ -66058,7 +66057,7 @@ export type Parser
 		let resultTag = self.tagOf(verdict)
 
 		if comparisonIsEquality(op) and resultTag != ValueTypeTag.boolean 'equalsResultNotBool'
-			throw SourceParseError.structEqualsResultNotBool(String.from(structName), got: typeTagName(resultTag), op: comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
+			throw SourceParseError.structEqualsResultNotBool(String.from(structName), got: self.valueKindWord(verdict), op: comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
 		end 'equalsResultNotBool'
 
 		return match op 'op'
@@ -67955,10 +67954,10 @@ export type Parser
 	// why it reaches `charLiteralCodepoint` directly instead of through `integerizedOperand`.
 	//
 	// ⚠ **THE INTERVAL PLAN IS ONLY EVER BUILT FOR AN INTEGER-LIKE SCRUTINEE** (`matchUsesIntervalPlan`), so
-	// `scrutTag` here is an `int`/`bool`/`ExitCode`/ranged-alias and never a `character`. A `match` over a
+	// `scrut` here is an `int`/`bool`/`ExitCode`/ranged-alias and never a `character`. A `match` over a
 	// CHARACTER scrutinee keeps the linear compare chain, whose bounds come from `emitPatternValue` and whose
 	// compares are `emitCompare`'s — which is what makes a Character range arm work at all.
-	function decodeCharPatternValue(tok Token, scrutTag ValueTypeTag) returns FullRangeInt throws SourceParseError
+	function decodeCharPatternValue(tok Token, scrut ValueId) returns FullRangeInt throws SourceParseError
 		match try self.charLiteralCodepoint(tok) 'converted'
 			codepoint(value) then return value
 
@@ -67968,7 +67967,7 @@ export type Parser
 			// scrutinee is that an `int` and a `Character` do not compare, exactly as a `String` pattern against
 			// an `int` does not (`decodeScalarPatternBound`'s own string arm, one screen up, says it in the same
 			// words).
-			cluster then throw SourceParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.character), scrutineeType: typeTagName(scrutTag), line: tok.line, column: tok.column)
+			cluster then throw SourceParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.character), scrutineeType: self.valueKindWord(scrut), line: tok.line, column: tok.column)
 		end 'converted'
 	end 'decodeCharPatternValue'
 
@@ -68420,7 +68419,7 @@ export type Parser
 		// ⚠ NAMES WHAT IS UNSUPPORTED, NOT WHAT IS SUPPORTED. A message enumerating the handled types goes
 		// stale every time an arm is added above — which is exactly how its predecessor came to promise
 		// float and struct interpolation as future work while both arms sat directly above it.
-		throw SourceParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — no conversion to text exists for it", line: exprTok.line, column: exprTok.column)
+		throw SourceParseError.unsupported("interpolating a value of type '{self.valueKindWord(exprVal)}' — no conversion to text exists for it", line: exprTok.line, column: exprTok.column)
 	end 'materializeInterpExpr'
 
 	// ⭐⭐ **RENDER AN INTEGER — FORMATTED OR PLAIN — AND IT IS THE ENUM ARM'S `rawNumber` ANSWER TOO.**
@@ -70278,9 +70277,9 @@ export type Parser
 	// and a box allocated without the enrolment simply leaks (exit 101).
 	// ⭐⭐ **BUILD A FUSED WRAPPER'S RECORD — `String{managed: X, singleByteGraphemesFlag: F}` and
 	// `Character{managed: X}` (THE ENVELOPE COLLAPSE).** The result IS the 56-byte byte record, so its
-	// value tag is `string`/`character` and NOT `structRef`: that is the whole of what avoids
-	// `E3005 Cannot return 'struct' from function declared to return 'String'` at `stdlib/String.maxon:115`,
-	// and it is not a cast — a corpus `String` and the compiler's builtin `String` are one type with one layout,
+	// value tag is `string`/`character` and NOT `structRef`: that is the whole of what keeps
+	// `String.from`'s return (`stdlib/String.maxon`) from an E3005 mismatch against `String`, and it is
+	// not a cast — a corpus `String` and the compiler's builtin `String` are one type with one layout,
 	// which is what convergence MEANS.
 	//
 	// ⚠ **THE FLAG IS OPTIONAL AND ITS ABSENCE IS `Character`'s CASE, NOT AN ERROR.** `type Character`
@@ -75033,7 +75032,7 @@ export type Parser
 			// already one of the first two: an `Array`/`Set`/`Map` value is a
 			// `genericInstance`, a `StringIndex` and a `CharacterSet` are `structRef`s. A sentence that
 			// enumerates nothing cannot go stale when a container is retired or added.
-			throw SourceParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here", line: memberTok.line, column: memberTok.column)
+			throw SourceParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{self.valueKindWord(recv.value)}' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here", line: memberTok.line, column: memberTok.column)
 		end 'notAStruct'
 
 		// ⚠ **AN AGGREGATE-TYPED SELF-FIELD ALIAS IS REFUSED HERE ONLY WHEN NO VALUE OF ITS TYPE COULD EXIST**
@@ -77642,10 +77641,9 @@ export type Parser
 		return PairedDisplays.create(self.signatures.tupleDisplayNoted(gotShown, identity: gotIdentity, otherShown: declaredShown, otherIdentity: declaredIdentity), gotNote: gotNote, declared: self.signatures.tupleDisplayNoted(declaredShown, identity: declaredIdentity, otherShown: gotShown, otherIdentity: gotIdentity), declaredNote: declaredNote)
 	end 'pairedDisplays'
 
-	// How a value's type is SPELLED in a diagnostic — its tag, resolved through the DISPLAY name behind it.
-	// EVERY parser diagnostic that names a VALUE's type reads it (the builtin-argument rules, the assignment
-	// and return voices, the `otherwise` and match-arm merges); written out it was the same four-call chain
-	// each time, and each copy was free to reach for the identity instead.
+	// How a value's type is SPELLED in a diagnostic, its alias included — its tag, resolved through the
+	// DISPLAY name behind it. A diagnostic naming only the value's kind asks `valueKindWord` instead; both
+	// render a struct through `brandedDisplayTypeName`, so neither reaches for the identity.
 	//
 	// A BRANDED value prints its brand: `Xs` and `Ys` share a gid, and the brand is the type the value IS.
 	// SemanticCheck's half is `valueTypeDisplayName`, and the two must agree or one message would quote the
@@ -77655,15 +77653,20 @@ export type Parser
 	end 'valueDisplayTypeName'
 
 	function valueKindWord(value ValueId) returns String
-		return self.kindWordOf(self.tagOf(value), nameId: self.valueNameId(value))
+		return self.valueKindWordAt(value, tag: self.tagOf(value))
 	end 'valueKindWord'
 
-	// A tag cannot tell a tuple from a struct, so a diagnostic that names a value's kind with
-	// `typeTagName` reports a tuple as `struct`.
-	function kindWordOf(tag ValueTypeTag, nameId TypeNameId) returns String
-		if tag == ValueTypeTag.structRef and internedNameIsATupleTypeName(self.artifact.typeNames, id: nameId) 'aTuple'
-			return self.displayTypeNameOf(tag, nameId: nameId)
-		end 'aTuple'
+	// `tag` is the tag the rule judged (a `numberTagOf` answer), so a float-backed enum prints `float`.
+	function valueKindWordAt(value ValueId, tag ValueTypeTag) returns String
+		return self.kindWordOf(tag, nameId: self.valueNameId(value), brand: self.brandOf(value))
+	end 'valueKindWordAt'
+
+	// A scalar prints its class word (`'int'`), never its alias: `SemanticCheck.paramDisplayName` owns that
+	// rule, and `valueDisplayTypeName` is the door that prints the alias.
+	function kindWordOf(tag ValueTypeTag, nameId TypeNameId, brand ByteArray) returns String
+		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance 'anAggregate'
+			return self.brandedDisplayTypeName(tag, nameId: nameId, brand: brand)
+		end 'anAggregate'
 
 		return typeTagName(tag)
 	end 'kindWordOf'
@@ -77679,8 +77682,8 @@ export type Parser
 	// and this is a fork. Both branches `throw` INLINE rather than returning a `SourceParseError` for the caller to
 	// throw, which is the shape that leaks two allocations under the emitted refcount runtime.
 	function raiseNonNumericOperands(opTok Token, left ValueTypeTag, leftValue ValueId, right ValueTypeTag, rightValue ValueId) throws SourceParseError
-		let leftWord = self.kindWordOf(left, nameId: self.valueNameId(leftValue))
-		let rightWord = self.kindWordOf(right, nameId: self.valueNameId(rightValue))
+		let leftWord = self.valueKindWordAt(leftValue, tag: left)
+		let rightWord = self.valueKindWordAt(rightValue, tag: right)
 
 		if left == right and leftWord.equals(rightWord) 'oneTypeOnBothSides'
 			throw SourceParseError.undefinedOperatorForType(opTok.kind.rawValue, typeName: leftWord, line: opTok.line, column: opTok.column)
@@ -77691,7 +77694,7 @@ export type Parser
 
 	function nonIntegralOperandWord(left ValueTypeTag, leftValue ValueId, right ValueTypeTag, rightValue ValueId) returns String
 		let offending = nonIntegralOperandOf(left, right: right)
-		return self.kindWordOf(offending, nameId: self.valueNameId(leftValue if offending == left else rightValue))
+		return self.valueKindWordAt(leftValue if offending == left else rightValue, tag: offending)
 	end 'nonIntegralOperandWord'
 
 	// The binary-operand rule, RAISED. **Both paths a word operator can take come through it** —
@@ -93647,7 +93650,7 @@ export type Parser
 		let operandTag = self.tagOf(operand)
 
 		if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
-			throw SourceParseError.builtinOperandType(String.from(name), required: "number", got: self.kindWordOf(operandTag, nameId: self.valueNameId(operand)), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandType(String.from(name), required: "number", got: self.valueKindWordAt(operand, tag: operandTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notANumber'
 
 		return operand
@@ -93712,7 +93715,7 @@ export type Parser
 		let operandTag = self.floatResolvedTag(self.tagOf(operand), nameId: self.valueNameId(operand))
 
 		if not tagIsFloat(operandTag) 'notAFloat'
-			throw SourceParseError.builtinOperandType(String.from(BuiltinsFloatToBitsName), required: typeTagName(ValueTypeTag.float), got: self.kindWordOf(operandTag, nameId: self.valueNameId(operand)), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandType(String.from(BuiltinsFloatToBitsName), required: typeTagName(ValueTypeTag.float), got: self.valueKindWordAt(operand, tag: operandTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notAFloat'
 
 		return self.retypeAsLibraryAlias(self.emitUnaryOp(operand, op: MaxonUnaryOp.floatToBits, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(calleeTok)), aliasName: FullRangeIntAliasName)
@@ -93747,7 +93750,7 @@ export type Parser
 		let operandTag = self.rangedAliasResolvedTag(self.tagOf(operand), nameId: self.valueNameId(operand))
 
 		if not tagIsInteger(operandTag) 'notAnInteger'
-			throw SourceParseError.builtinOperandType(String.from(BuiltinsBitsToFloatName), required: typeTagName(ValueTypeTag.integer), got: self.kindWordOf(operandTag, nameId: self.valueNameId(operand)), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandType(String.from(BuiltinsBitsToFloatName), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWordAt(operand, tag: operandTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notAnInteger'
 
 		return self.emitFullRangeFloatBits(operand, range: SourceRange.ofToken(calleeTok))
@@ -94086,7 +94089,7 @@ export type Parser
 		let argTag = self.tagOf(arg)
 
 		if not typeClassAdmits(TypeClass.numeric, tag: argTag) or tagIsFloat(argTag) 'notAnInt'
-			throw SourceParseError.builtinOperandType(String.from(BuiltinsSleepName), required: "integer", got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandType(String.from(BuiltinsSleepName), required: "integer", got: self.valueKindWord(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAnInt'
 
 		// The intrinsic returns nothing, so using its result is using a value that is not there — the same
@@ -94186,7 +94189,7 @@ export type Parser
 		let argTag = self.tagOf(commandLine)
 
 		if not tagIsText(argTag) 'notAString'
-			throw SourceParseError.builtinOperandType(String.from(builtinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandType(String.from(builtinName), required: typeTagName(ValueTypeTag.string), got: self.valueKindWord(commandLine), line: calleeTok.line, column: calleeTok.column)
 		end 'notAString'
 
 		var callArgs = ValueIdArray.create()
@@ -94242,7 +94245,7 @@ export type Parser
 		let lineTag = self.tagOf(line)
 
 		if not tagIsText(lineTag) 'notAString'
-			throw SourceParseError.builtinOperandType(String.from(SubpWriteLineBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(lineTag), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandType(String.from(SubpWriteLineBuiltinName), required: typeTagName(ValueTypeTag.string), got: self.valueKindWord(line), line: calleeTok.line, column: calleeTok.column)
 		end 'notAString'
 
 		var callArgs = ValueIdArray.create()
@@ -95861,7 +95864,7 @@ export type Parser
 			typeParameter or
 			genericInstance or
 			interfaceRef or
-			cstring then throw SourceParseError.genericArgumentKindUnsupported(functionName, paramName: paramName, typeName: typeTagName(tag), line: anchor.line, column: anchor.column)
+			cstring then throw SourceParseError.genericArgumentKindUnsupported(functionName, paramName: paramName, typeName: self.valueKindWord(value), line: anchor.line, column: anchor.column)
 		end 'tag'
 	end 'genericArgumentOf'
 

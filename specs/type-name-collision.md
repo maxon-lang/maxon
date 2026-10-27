@@ -2368,8 +2368,7 @@ the two coexist because no file sees both. `lib/main.maxon` declares NEITHER, an
 RECORD `fromB` hands it has to be read as `lib/b.maxon`'s `Widget` — a name folded whole-program, or resolved
 in the caller's scope, would give `lib/main.maxon` the integer meaning and dereference a record through it.
 
-Read with the caller's file it would be **`E3005: Cannot return 'struct' from function declared to return
-'int'`**, and through the field read below it would dereference the integer as a record — **exit 139,
+Read with the caller's file it would be **a false `E3005` return-type mismatch**, and through the field read below it would dereference the integer as a record — **exit 139,
 clean compile, no diagnostic.**
 
 ⚠ A file-private type may not be named in a signature another file calls (E3167), so the file whose meaning is private reads its own name INSIDE the body and hands the boundary an `ExitCode`. The contested pair is unchanged: one name, two files, two meanings.

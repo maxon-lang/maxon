@@ -65,7 +65,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/invalid-cast/error.struct-to-int.maxon:15:14: Cannot cast from struct to int
+error E3009: specs/invalid-cast/error.struct-to-int.maxon:15:14: Cannot cast from Point to int
 ```
 
 <!-- test: error.struct-to-string -->
@@ -87,7 +87,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/invalid-cast/error.struct-to-string.maxon:14:14: Cannot cast from struct to String
+error E3009: specs/invalid-cast/error.struct-to-string.maxon:14:14: Cannot cast from Point to String
 ```
 
 <!-- test: error.function-to-int -->

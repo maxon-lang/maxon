@@ -24,13 +24,11 @@ exist rather than a new roster: a promise is not an `Integer`, so every position
 already knows how to say no. **The roster of refusals is DERIVED, not enumerated** — which is the point.
 There is no list to keep in step with the language.
 
-⚠ **ON THE SPELLINGS IN THESE DIAGNOSTICS.** Two are the compiler's existing renderings rather than
-anything this rule chose, and both are worth knowing. A refusal taken at the TAG arm prints the tag word
-(`struct`), because at that point the check has compared classes and not names. And an instance no
-`typealias` spells renders by its type ARGUMENT's range — `Promise with int(…)` and not `Promise with
-Integer` — which is what `rangeRenderedInstanceName` does for every alias-less instance, on the ground that
-the alias is exactly the thing that was ambiguous. Declare `typealias IntPromise = Promise with Integer` and
-the diagnostics say `IntPromise`.
+⚠ **ON THE SPELLINGS IN THESE DIAGNOSTICS.** An instance no `typealias` spells renders by its type
+ARGUMENT's range, not by an alias of that argument, on the ground that the alias is exactly the thing that
+was ambiguous: the primitive's full range prints as the bare primitive (`Promise with int`), and a narrower
+range prints as that range. Declare `typealias IntPromise = Promise with Integer` and the diagnostics say
+`IntPromise`.
 
 A promise converts to no `int`. Its result arrives through `await`, and **`p.isComplete()`** (see
 `promise-peek.md`) asks whether it has finished without consuming it. The handle word under a promise,
@@ -62,7 +60,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:3: Cannot return 'struct' from function declared to return 'Integer'
+error E3005: <fragment>:10:3: Cannot return 'Promise with int' from function declared to return 'Integer'
 ```
 
 <!-- test: promise-typing.error.arithmetic-on-a-promise -->
@@ -83,7 +81,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:11:18: Cannot operate on struct and int
+error E2004: <fragment>:11:18: Cannot operate on Promise with int and int
 ```
 
 <!-- test: promise-typing.error.a-promise-in-an-integer-parameter -->
@@ -107,7 +105,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:15:10: argument type mismatch for 'n': expected 'Integer', got 'Promise with int(-9223372036854775808 to 9223372036854775807)'
+error E3005: <fragment>:15:10: argument type mismatch for 'n': expected 'Integer', got 'Promise with int'
 ```
 
 <!-- test: promise-typing.error.clone-a-promise -->
@@ -131,7 +129,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3141: <fragment>:11:16: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with int(-9223372036854775808 to 9223372036854775807)` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+error E3141: <fragment>:11:16: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with int` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
 ```
 
 <!-- test: promise-typing.error.clone-a-map-of-promises -->

@@ -869,7 +869,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/inline-records/inline-records.no-equals-is-still-refused.maxon:16:7: type mismatch: 'cannot compare struct with struct'
+error E3005: specs/inline-records/inline-records.no-equals-is-still-refused.maxon:16:7: type mismatch: 'cannot compare Pair with Pair'
 ```
 
 <!-- test: inline-records.as-an-existential -->

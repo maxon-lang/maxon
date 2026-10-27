@@ -8790,7 +8790,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:13: argument type mismatch for 'value': expected 'Integer', got 'Promise with int(-9223372036854775808 to 9223372036854775807)'
+error E3005: <fragment>:23:13: argument type mismatch for 'value': expected 'Integer', got 'Promise with int'
 ```
 
 <!-- test: error.a-handle-of-another-service-is-refused -->
@@ -11686,7 +11686,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:15:2: Cannot return 'struct' from function declared to return 'Integer'
+error E3005: <fragment>:15:2: Cannot return 'Promise with int' from function declared to return 'Integer'
 ```
 
 <!-- test: error.arithmetic-on-a-reply -->
@@ -11715,7 +11715,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2004: <fragment>:17:17: Cannot operate on struct and int
+error E2004: <fragment>:17:17: Cannot operate on Promise with int and int
 ```
 
 <!-- test: error.a-reply-in-an-integer-parameter -->
@@ -11745,7 +11745,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:20:9: argument type mismatch for 'n': expected 'Integer', got 'Promise with int(-9223372036854775808 to 9223372036854775807)'
+error E3005: <fragment>:20:9: argument type mismatch for 'n': expected 'Integer', got 'Promise with int'
 ```
 
 <!-- test: error.clone-a-reply -->
@@ -11776,7 +11776,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3141: <fragment>:17:15: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with int(-9223372036854775808 to 9223372036854775807)` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+error E3141: <fragment>:17:15: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with int` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
 ```
 
 <!-- test: a-reply-inner-compiles-in-the-library-tier -->

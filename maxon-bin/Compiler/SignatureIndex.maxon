@@ -14894,45 +14894,16 @@ end 'shapeQualifiedAliasName'
 // so it wears `CompilerMintSeparator` and is never shown to anyone. This one is DISPLAY: it goes
 // into diagnostics, so it must read like a type and must not carry a separator no author has ever seen.
 // Neither can serve as the other, and a single spelling would have to fail at one of the two jobs.
-export function rangeSourceSpelling(underlying MaxonType, low FullRangeInt, high FullRangeInt) returns ByteArray
-	let unsignedDomain = rangeIsUnsignedDomain(low, high: high)
-	return "{rangedAliasUnderlyingName(underlying)}({boundText(low, unsignedDomain: unsignedDomain)} to {boundText(high, unsignedDomain: unsignedDomain)})".toByteArray()
+export function rangeSourceSpelling(alias RangedTypeAlias) returns ByteArray
+	let primitive = rangedAliasUnderlyingName(alias.underlying)
+	let isFloat = maxonTypeTag(alias.underlying) == ValueTypeTag.float
+
+	if rangeIsThePrimitivesOwn(alias.low, high: alias.high, isFloat: isFloat) 'thePrimitiveItself'
+		return primitive.toByteArray()
+	end 'thePrimitiveItself'
+
+	return rangedAliasRangeDisplay(alias.low, high: alias.high, isFloat: isFloat, domain: alias.domain).toByteArray()
 end 'rangeSourceSpelling'
-
-// ⭐⭐ **WHICH DOMAIN'S NUMBER IS THIS BOUND? — DETERMINED, NOT GUESSED.** Bounds ride as the RAW 64-bit
-// pattern (`RangedTypeAlias`'s header), so `u64.max` and `-1` are the SAME BITS and a signed render prints
-// `int(0 to -1)` for `int(0 to u64.max)` — a wrong answer in a diagnostic, and the one this function exists
-// to prevent.
-//
-// ⭐ **A NON-NEGATIVE `low` WITH A RAW-NEGATIVE `high` HAS EXACTLY ONE READING THAT IS A RANGE AT ALL.** Read
-// signed, `0 to -1` is EMPTY, and no declaration means that — `Parser`'s own note on `int(18446744073709551615
-// to -2)` calls such a range one "which no value can satisfy". So the unsigned reading is not the likelier of
-// two, it is the only one under which the program that declared it is legal. Where `low` is itself negative
-// the whole range is signed and both bounds render that way.
-//
-// ⚠ This is the third door to resolve that ambiguity and the three deliberately lean different ways, each
-// toward what its own answer is used for: `rangedAliasStorageBytes` takes the WIDEST slot, `rangeHoldsEveryByte`
-// REFUSES, and this one reads the range as its author must have meant it. A shared answer would have to be
-// wrong for two of them.
-function rangeIsUnsignedDomain(low FullRangeInt, high FullRangeInt) returns bool
-	return low >= 0 and high < 0
-end 'rangeIsUnsignedDomain'
-
-// One bound as text. The unsigned reading is obtained by HOLDING the value in a `int(0 to u64.max)` binding
-// rather than by any arithmetic: interpolation renders a value in its DECLARED range's domain, which is the
-// mechanism that already makes `"{w}"` print `18446744073709551615` for a `w` of that type.
-function boundText(bound FullRangeInt, unsignedDomain bool) returns String
-	if unsignedDomain 'readAsAnUnsignedDomainBound'
-		let asUnsigned = bound as UnsignedRangeBound
-		return "{asUnsigned}"
-	end 'readAsAnUnsignedDomainBound'
-
-	return "{bound}"
-end 'boundText'
-
-// The unsigned domain a bound is rendered through — see `boundText`, whose whole method is the declared type
-// of this binding.
-typealias UnsignedRangeBound = bits(64)
 
 // The `int`/`float` keyword a ranged alias is declared over, spelled as the source writes it. Only those two
 // forms can reach here: nothing but a `typealias <name> = int(…)`/`float(…)` builds a
@@ -34551,10 +34522,9 @@ export type ProgramSignatures
 	// ⚠ **EXPORTED FOR THE PARSER'S READ DOOR AS WELL AS THIS FILE'S REWRITE.** A CALL SITE
 	// repairs the callee's swept return type (`Parser.repairSweptType`), and that repair is scoped by the
 	// same rule the rewrite below applies — the SLOT's declaring file. Read with the CALLER's file instead,
-	// a coexisting name gave a callee's return two meanings: **MEASURED**, `fromA() returns Widget` over a
-	// file-private ranged alias, called from a third file that declares neither, was
-	// `E3005 Cannot return 'struct' from function declared to return 'int'` — and through a field read it
-	// dereferenced the integer 3 as a record, exit **139** on a clean compile.
+	// a coexisting name gives a callee's return two meanings: `fromA() returns Widget` over a file-private
+	// ranged alias, called from a third file that declares neither, is a false E3005 — and through a field
+	// read an integer is dereferenced as a record.
 	export function recordedReturnDeclFileOf(callee ByteArray) returns FilePath
 		return try self.settledDeclarations().funcReturnDeclFiles.get(callee) otherwise CompilerOwnedDeclFilePath
 	end 'recordedReturnDeclFileOf'
@@ -36642,8 +36612,8 @@ export type ProgramSignatures
 		return self.writtenInstanceTextOver(self.instanceNameStem(id), args: names)
 	end 'renderedInstanceWith'
 
-	// One argument as a reader sees it. `asRange` renders a ranged alias as its RANGE (the whole point -- its
-	// NAME is what the merge made ambiguous) and `asWritten` as the source spells it; a declaration's mint
+	// One argument as a reader sees it. `asRange` renders a ranged alias as its RANGE, through
+	// `rangeSourceSpelling` (the whole point -- its NAME is what the merge made ambiguous) and `asWritten` as the source spells it; a declaration's mint
 	// reads as that declaration's source spelling either way. A nested instance recurses through the display
 	// door, and anything else keeps the spelling `mangleTypeArg` gives it.
 	function displayedTypeArgName(arg MaxonType, spelling InstanceArgSpelling) returns ByteArray

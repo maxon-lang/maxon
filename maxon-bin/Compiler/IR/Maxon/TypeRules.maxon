@@ -832,11 +832,9 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// overload set whose members disagree about whether they return a value at all.
 		void gives "void"
 
-		// ⚠ It names the KIND, not the type: `return p` from an `ExitCode` function reports "got
-		// 'struct'" rather than "got 'Point'". A tag is a scalar and carries no
-		// name (see this file's header on why every rule is stated over one), so the name is not
-		// here to print. It arrives with the `valueNameIds` publication that `TypeClass.structRef`
-		// already names as its own fix — one change, two things it repairs.
+		// It names the KIND, not the type: a tag is a scalar and carries no name (see this file's
+		// header on why every rule is stated over one). A diagnostic naming a VALUE asks
+		// `Parser.kindWordOf`, which holds the value's name and prints `Point`.
 		structRef gives "struct"
 
 		// The `String` builtin — a String type error names `String` (`E3005: operator '+' is not defined
@@ -1821,16 +1819,20 @@ end 'floatOrderKey'
 // compares would REJECT ordinary values. `float(f32.min to f32.max)` is deliberately NOT full: an f64
 // outside the f32 span is exactly the narrowing its guard must reject.
 function rangeIsFull(low FullRangeInt, high FullRangeInt, isFloat bool) returns bool
+	if rangeIsThePrimitivesOwn(low, high: high, isFloat: isFloat) 'thePrimitivesOwn'
+		return true
+	end 'thePrimitivesOwn'
+
+	return not isFloat and low == 0 and high == UnsignedFullUpperPattern
+end 'rangeIsFull'
+
+export function rangeIsThePrimitivesOwn(low FullRangeInt, high FullRangeInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return low == F64MinBound and high == F64MaxBound
 	end 'float'
 
-	if low == i64.min and high == i64.max 'signedFull'
-		return true
-	end 'signedFull'
-
-	return low == 0 and high == UnsignedFullUpperPattern
-end 'rangeIsFull'
+	return low == i64.min and high == i64.max
+end 'rangeIsThePrimitivesOwn'
 
 // **THE UNSIGNED-TOPPED SHAPE** — a range whose upper is above `i64.max` (riding as a negative
 // pattern) over a non-negative low bound: `int(0 to u64.max)`, `int(5 to u64.max)`. THE one place
@@ -2268,14 +2270,17 @@ end 'rawByteWriteSlotDomainMessage'
 // `low`/`high` at all for a `bool` or an enum ordinal, which is why its parser picks the shape and calls
 // this for the one shape that has bounds (`Parser.slotElementDisplay`).
 export function rangedAliasValueSetDisplay(aliasName String, low FullRangeInt, high FullRangeInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
-	// ⚠ A RAW-PATTERN ALIAS SPELLS ITS WIDTH, because its bounds are not what the author wrote:
-	// `bits(64)`'s value set renders as `int(0 to 18446744073709551615)`, a declaration nobody typed —
-	// the same reason the name is spelled as SOURCE spells it.
-	return match domain 'domain'
-		pattern(width) gives "'{sourceSpelledAliasText(aliasName.toByteArray())}' (bits({width}))"
-		quantity gives "'{sourceSpelledAliasText(aliasName.toByteArray())}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
-	end 'domain'
+	return "'{sourceSpelledAliasText(aliasName.toByteArray())}' ({rangedAliasRangeDisplay(low, high: high, isFloat: isFloat, domain: domain)})"
 end 'rangedAliasValueSetDisplay'
+
+// ⚠ A RAW-PATTERN ALIAS SPELLS ITS WIDTH, because its bounds are not what the author wrote:
+// `bits(64)`'s value set renders as `int(0 to 18446744073709551615)`, a declaration nobody typed.
+export function rangedAliasRangeDisplay(low FullRangeInt, high FullRangeInt, isFloat bool, domain RangedAliasDomain) returns String
+	return match domain 'domain'
+		pattern(width) gives "bits({width})"
+		quantity gives formatRangeDisplay(low, high: high, isFloat: isFloat)
+	end 'domain'
+end 'rangedAliasRangeDisplay'
 
 // ⚠⚠ **AN UNSIGNED UPPER BOUND IS SPELLED HERE AND NOWHERE BELOW.** Rendering ANY `-1` as
 // `18446744073709551615` is the same one-shape mistake a sign test makes in `rangeNeedsUpperCheck`:

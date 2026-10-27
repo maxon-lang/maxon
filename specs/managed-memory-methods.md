@@ -2262,7 +2262,7 @@ like any other member call's and the arity check refuses it. Both spellings, sid
 ⛔⛔ **AN APPARENT DISAGREEMENT BETWEEN THE TWO IS TWO DIFFERENT PROGRAMS, AND THE TRAP IS GENERAL.** With an
 `as ExitCode` on the ARRAY probe alone, `Array` appears to *resolve* `arr.create()` and fail later at
 `E3009`, against a user type's `E3036`. The `E3009` comes from the cast: `return p.make() as
-ExitCode` is `E3009: Cannot cast from struct to int` too, on the nose. A cast error is a `ParseError`, which
+ExitCode` is an `E3009` cast refusal too. A cast error is a `ParseError`, which
 stops the file before the pipeline and discards its artifact diagnostics, so it PRE-EMPTS the semantic arity
 check — such a comparison measures the cast, not the dispatch.
 
