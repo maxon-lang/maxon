@@ -2689,7 +2689,7 @@ a second bind on the same port: bindFailed
 <!-- test: http-tls.a-silent-client-does-not-delay-another-clients-request -->
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
-`HttpServer.serve` serves each connection in its own coroutine, so a client that connects to a TLS server and never sends its ClientHello holds only its own connection: a request made beside it is answered within the client's budget, long before the server's handshake deadline would end the silent connection, and `serve` goes on until `close()`.
+`HttpServer.serve` serves each connection in its own coroutine, so a client that connects to a TLS server and never sends its ClientHello holds only its own connection: with no handshake deadline, so that nothing but the client's own `close()` can end the silent connection, a request made beside it is still answered, and `serve` goes on until `close()`.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -2814,8 +2814,6 @@ let clientLeafHex = "3082016b30820111a00302010202016e300a06082a8648ce3d040302301
 let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420fd7e8e00621840dac0226ea921c19c18e46a79d944d6a3308b3f64cf009d82da"
 let verificationTime = 1767225600
 
-let ClientBudgetMs = 1500
-
 type AnswerHandler implements HttpHandler
 	static function create() returns AnswerHandler
 		return AnswerHandler{}
@@ -2834,27 +2832,27 @@ function serveAnswers(server HttpServer) returns HttpServeEnd
 	return server.serve(AnswerHandler.create())
 end 'serveAnswers'
 
-function fetchWithin(url String, options TlsClientOptions) returns String
-	var limits = HttpClientLimits.create()
-
-	limits.timeoutMs = ClientBudgetMs
-
+function fetchOnce(url String, options TlsClientOptions) returns String
 	let request = try HttpRequest.create(HttpMethod.get, url: url) otherwise return "bad-url"
 
-	let response = try HttpClient.send(request, limits: limits, tls: options) otherwise (error) 'failed'
+	let response = try HttpClient.send(request, tls: options) otherwise (error) 'failed'
 		return "error {describeHttp(error)}"
 	end 'failed'
 
 	return "{response.statusCode().number()} [{response.body()}]"
-end 'fetchWithin'
+end 'fetchOnce'
 
 function main() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+	var options = serverOptions()
+
+	options.setHandshakeDeadline(0)
+
+	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return 1
 	let peer = async serveAnswers(server)
 	let port = server.port()
 	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise return 2
 
-	print("a request beside a silent client: {fetchWithin("https://localhost:{port}/after", options: clientOptions())}\n")
+	print("a request beside a silent client: {fetchOnce("https://localhost:{port}/after", options: clientOptions())}\n")
 
 	silent.close()
 	server.close()
