@@ -177,3 +177,145 @@ end 'main'
 ```stdout
 3 5 0 add
 ```
+
+
+## `.rawValue` and `.ordinal` are plain numbers
+
+A scalar-backed union value is not a number — the operators refuse it as they refuse a struct — but what
+`.rawValue` and `.ordinal` read out of it is a plain value of the backing's type, which every operator takes.
+
+<!-- test: int-backed-union-rawvalue-takes-every-integer-operator -->
+`.rawValue` of an int-backed union is an `int`: it adds, subtracts, multiplies, divides, takes a remainder,
+masks and shifts, and it is an argument to an `int` parameter.
+```maxon
+union Status
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'Status'
+
+function twice(n FullRangeInt) returns FullRangeInt
+	return n * 2
+end 'twice'
+
+function main() returns ExitCode
+	let s = Status.notFound
+	let n = s.rawValue
+	print("{n + 1} {n - 400} {n * 2} {n / 4} {n mod 100} {n and 7} {n shr 2} {twice(s.rawValue)}\n")
+	return ((s.rawValue - 400) * 2 + (n and 7)) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+```stdout
+405 4 808 101 4 4 101 808
+```
+
+<!-- test: int-backed-union-rawvalue-through-a-parameter -->
+The raw value of a union that arrives as a parameter, not as a constant case, is read the same way.
+```maxon
+union Status
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'Status'
+
+function bucket(s Status) returns FullRangeInt
+	return s.rawValue / 100 + (s.ordinal as FullRangeInt)
+end 'bucket'
+
+function main() returns ExitCode
+	return bucket(Status.serverError) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: float-backed-union-rawvalue-takes-every-float-operator -->
+`.rawValue` of a float-backed union is a `float`, decoded from the case's bits: it takes float arithmetic and
+is an argument to a `float` parameter.
+```maxon
+union Weight
+	light = 2.5
+	heavy = 4.0
+end 'Weight'
+
+function half(x FullRangeFloat) returns FullRangeFloat
+	return x / 2.0
+end 'half'
+
+function main() returns ExitCode
+	let w = Weight.light
+	let h = Weight.heavy
+	print("{w.rawValue + h.rawValue} {w.rawValue * 2} {w.rawValue - 1.0} {half(h.rawValue)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6.5 5.0 1.5 2.0
+```
+
+<!-- test: int-backed-enum-rawvalue-takes-every-integer-operator -->
+The enum control: `.rawValue` of an int-backed enum and the enum value itself both take integer operators.
+```maxon
+enum Status
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.notFound
+	let n = s.rawValue
+	print("{n + 1} {n - 400} {n * 2} {n / 4} {n mod 100} {n and 7} {n shr 2}\n")
+	return ((s.rawValue - 400) * 2 + (n and 7)) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+```stdout
+405 4 808 101 4 4 101
+```
+
+<!-- test: error.an-int-backed-union-value-is-not-an-operand -->
+A scalar-backed union is representationally an enum, but its VALUE is not a number: it is refused as an
+operand, and the raw value it carries is read with `.rawValue`.
+```maxon
+union Status
+	ok = 200
+	notFound = 404
+end 'Status'
+
+function main() returns ExitCode
+	let n = 3
+	let m = n + Status.ok
+	return m as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:9:12: Cannot operate on int and Status
+```
+
+<!-- test: error.a-float-backed-union-value-is-not-an-operand -->
+The refusal is the same for a float-backed union, whose value is not a float either.
+```maxon
+union Weight
+	light = 2.5
+	heavy = 4.0
+end 'Weight'
+
+function main() returns ExitCode
+	let total = Weight.light + 1.0
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:8:27: Cannot operate on Weight and float
+```

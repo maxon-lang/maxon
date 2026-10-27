@@ -101416,7 +101416,7 @@ export type Parser
 			return self.notedEnumAccessorRead(self.typedAsOrdinal(try self.emitEnumCaseConstantSelect(layout, tag: tag, column: EnumCaseConstant.declarationIndex, anchor: memberTok, range: range), layout: layout), member: memberTok, tag: tag, isACaseTest: true)
 		end 'renumberedCases'
 
-		return self.notedEnumAccessorRead(self.typedAsOrdinal(try self.enumTagAsANumber(tag, anchor: memberTok, range: range), layout: layout), member: memberTok, tag: tag, isACaseTest: true)
+		return self.notedEnumAccessorRead(self.typedAsOrdinal(self.enumTagAsANumber(tag, anchor: memberTok, range: range), layout: layout), member: memberTok, tag: tag, isACaseTest: true)
 	end 'emitEnumInstanceAccessor'
 
 	function typedAsOrdinal(number ValueId, layout EnumLayout) returns ValueId
@@ -101510,11 +101510,11 @@ export type Parser
 	// what is asked.
 	//
 	// ⭐⭐ **THE `+ 0` IS THE MEANING RATHER THAN A TRICK FOR PRODUCING IT.** An enum value IS its tag
-	// (`parseEnumLiteral`), so under the accessor's guard the answer and the value are the same 64 bits — and
-	// `s + 0` is already a legal Maxon expression whose result the language types `integer`
-	// (`TypeRules.arithResultTag`, a `named` operand being `TypeClass.numeric`). So this emits exactly the IR
-	// the equivalent source expression does, and gets its result type from the one rule that types every
-	// other arithmetic result rather than from an assertion here.
+	// (`parseEnumLiteral`), so under the accessor's guard the answer and the value are the same 64 bits, and
+	// `+ 0` gets its result type from the one rule that types every other arithmetic result
+	// (`TypeRules.arithResultTag`) rather than from an assertion here. It is emitted past the operand rule:
+	// the tag is read out as a number, not used as an operand, and a union's tag is one the operand rule
+	// refuses (`numberTagOf`).
 	//
 	// ⚠ **THE FRESH VALUE IS THE POINT, AND HANDING BACK THE RECEIVER'S OWN `ValueId` WAS MEASURED WRONG.**
 	// It looks free — same bits, no instruction — but the receiver's value is tagged `named(LocalStatus)`,
@@ -101527,14 +101527,16 @@ export type Parser
 	//
 	// Two readers: `.ordinal` where the tags ARE the declaration indices, and `.rawValue` where the tag IS
 	// the raw value and the backing is integral — the same obligation, which is why it is one function.
-	function enumTagAsANumber(tag ValueId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
-		if self.tagOf(tag) == ValueTypeTag.integer 'tagIsAlreadyANumber'
+	function enumTagAsANumber(tag ValueId, anchor Token, range SourceRange) returns ValueId
+		let tagTag = self.tagOf(tag)
+
+		if tagTag == ValueTypeTag.integer 'tagIsAlreadyANumber'
 			return tag
 		end 'tagIsAlreadyANumber'
 
 		let zero = self.emitLiteral(EnumOrdinalTagOffset, valueType: MaxonType.integer, range: range)
 
-		return try self.emitBinOp(tag, rhs: zero, op: MaxonBinOp.add, opTok: anchor)
+		return self.emitBinOpOverCheckedOperands(tag, rhs: zero, op: MaxonBinOp.add, leftTag: tagTag, rightTag: ValueTypeTag.integer, opTok: anchor, operandAlias: self.operandAliasOf(tag))
 	end 'enumTagAsANumber'
 
 	// ⭐⭐ **`s.rawValue` — THE ONE ACCESSOR WHOSE RESULT TYPE THE *BACKING* DECIDES**, which is why it has a
@@ -101570,7 +101572,7 @@ export type Parser
 			// `unresolved` is a declaration with no cases (`requireEnumBacking` is its only door), which
 			// cannot be read from; its raw value would be its declaration index, as for `integer`.
 			integer or
-			unresolved then return self.typedAsRawInteger(try self.enumTagAsANumber(tag, anchor: anchor, range: range), layout: layout)
+			unresolved then return self.typedAsRawInteger(self.enumTagAsANumber(tag, anchor: anchor, range: range), layout: layout)
 			float then return self.emitFullRangeFloatBits(tag, range: range)
 			character then break
 			string then return try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.declaredRawValue, valueType: MaxonType.string, anchor: anchor, range: range)
