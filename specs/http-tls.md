@@ -1864,7 +1864,7 @@ ended: closed closed
 <!-- test: http-tls.stalled-handshakes-are-bounded -->
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
-A server that accepts the connection and never answers the ClientHello makes `HttpClient.send` throw `timedOut` once `HttpClientLimits.timeoutMs` has passed. A client that connects to the TLS server and sends nothing holds `accept` for the handshake deadline, after which the server serves the next request. The accept deadline ends `serve` as `acceptDeadlinePassed`; a stalled handshake before it does not.
+A server that accepts the connection and never answers the ClientHello makes `HttpClient.send` throw `timedOut` once `HttpClientLimits.timeoutMs` has passed, and the server sees the client leave. A client that connects to the TLS server and sends nothing holds only its own connection: with no handshake deadline, so that nothing but the client's own `close()` can end it, the server serves the next request beside it. The accept deadline, set once that request is answered, ends `serve` as `acceptDeadlinePassed`; a stalled handshake before it does not.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -2026,18 +2026,18 @@ function fetch(method HttpMethod, url String, body String, options TlsClientOpti
 	return "{response.statusCode().number()} connection={connection} [{response.body()}]"
 end 'fetch'
 
-let HeldMs = 5000
 let ClientBudgetMs = 600
 let RequestBytes = 65536
+let AcceptWindowMs = 100
 
 function holdOpen(listener TcpListener) returns String
 	let connection = try listener.accept() otherwise return "accept failed"
 
-	_ = try connection.recv(RequestBytes) otherwise return "nothing arrived"
-
-	sleep(HeldMs)
-
-	return "held"
+	while true 'held'
+		_ = try connection.recv(RequestBytes) otherwise (cause) 'left'
+			return cause.name
+		end 'left'
+	end 'held'
 end 'holdOpen'
 
 function stalledServer() returns ExitCode
@@ -2048,15 +2048,12 @@ function stalledServer() returns ExitCode
 
 	limits.timeoutMs = ClientBudgetMs
 
-	let start = Clock.nowMs()
 	let response = try HttpClient.send(request, limits: limits, tls: clientOptions()) otherwise (error) 'failed'
-		let elapsed = Clock.elapsedMs(start)
+		print("a server that never answers the hello: error {describeHttp(error)}\n")
 
-		print("a server that never answers the hello: error {describeHttp(error)} within the budget={elapsed < HeldMs}\n")
+		let left = await peer
 
-		let held = await peer
-
-		print("the peer: {held}\n")
+		print("the peer saw the client leave: {left}\n")
 
 		return 0
 	end 'failed'
@@ -2066,12 +2063,16 @@ function stalledServer() returns ExitCode
 	return 3
 end 'stalledServer'
 
-function stalledClient() returns ExitCode
+function patientServerOptions() returns TlsServerOptions
 	var options = serverOptions()
 
-	options.setHandshakeDeadline(5000)
+	options.setHandshakeDeadline(0)
 
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return 4
+	return options
+end 'patientServerOptions'
+
+function stalledClient() returns ExitCode
+	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: patientServerOptions()) otherwise return 4
 	let peer = async serving(server)
 	let port = server.port()
 	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise return 5
@@ -2088,19 +2089,14 @@ function stalledClient() returns ExitCode
 end 'stalledClient'
 
 function acceptDeadline() returns ExitCode
-	var options = serverOptions()
-
-	options.setHandshakeDeadline(5000)
-
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return 6
-
-	try server.setAcceptDeadline(3000) otherwise return 7
-
+	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: patientServerOptions()) otherwise return 6
 	let peer = async serving(server)
 	let port = server.port()
 	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise return 8
 
 	print("a stalled handshake, then a request: {fetch(HttpMethod.get, url: "https://localhost:{port}/after", body: "", options: clientOptions())}\n")
+
+	try server.setAcceptDeadline(AcceptWindowMs) otherwise return 7
 	silent.close()
 
 	let ended = await peer
@@ -2127,8 +2123,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-a server that never answers the hello: error timedOut within the budget=true
-the peer: held
+a server that never answers the hello: error timedOut
+the peer saw the client leave: connectionClosed
 after a client that sends nothing: 200 connection=close [get https://localhost/after?- body=0 tls13 alpn=http/1.1 peers=0]
 ended: closed
 a stalled handshake, then a request: 200 connection=close [get https://localhost/after?- body=0 tls13 alpn=http/1.1 peers=0]

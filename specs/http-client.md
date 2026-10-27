@@ -475,25 +475,21 @@ end 'main'
 <!-- test: http-client.the-client-deadline-covers-the-whole-exchange -->
 <!-- procs: 1 -->
 **`HttpClientLimits.timeoutMs` BOUNDS THE WHOLE EXCHANGE, SO A PEER THAT NEVER ANSWERS ENDS IT WITH
-`timedOut`.** The peer accepts, reads the request and stays silent for far longer than the client's limit: a
-prompt `timedOut` and a peer that saw the client leave is the deadline, and a slow answer with a peer that timed
-out is a client that waits as long as the server does.
+`timedOut`.** The peer accepts and then answers nothing, with no deadline of its own, so only the client's
+leaving can end it: an exchange that returns `timedOut` with the peer seeing the client leave is the deadline,
+and a client that waited for the peer would never return.
 ```maxon
-let SilentMs = 3000
-let PromptMs = 2000
 let ClientLimitMs = 200
 let RequestBytes = 4096
 
 function staySilent(listener TcpListener) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
-	try conn.setReadDeadline(SilentMs) otherwise return "deadline-failed"
 
-	let heard = try conn.recv(RequestBytes) otherwise (e) 'held'
-		return e.name
+	while true 'held'
+		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
+			return e.name
+		end 'left'
 	end 'held'
-
-	return "heard {heard.byteLength()} more bytes"
 end 'staySilent'
 
 function exchangeOver(listener TcpListener) returns ExitCode
@@ -501,10 +497,9 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return 2
 	var limits = HttpClientLimits.create()
 	limits.timeoutMs = ClientLimitMs
-	let start = Clock.nowMs()
 
 	let response = try HttpClient.send(request, limits: limits) otherwise (e) 'failed'
-		print("client={e.name} prompt={Clock.elapsedMs(start) < PromptMs} peer={await peer}\n")
+		print("client={e.name} peer={await peer}\n")
 		return 0
 	end 'failed'
 
@@ -518,7 +513,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-client=timedOut prompt=true peer=connectionClosed
+client=timedOut peer=connectionClosed
 ```
 ```exitcode
 0
