@@ -64,9 +64,12 @@ primitive name no declaration and are asked nothing. A typealias the signature n
 name on its right-hand side read as the alias's own file means it, and a type body's inner typealias is held
 to its own modifier before its right-hand side is walked. A member is held to its own modifier, whatever its
 type's, and an interface's members — its requirements' types included — are held to the interface's. A [service](/docs/language/async/#services--spawn)'s message is
-held to the narrower of its own modifier and its service type's. Naming a narrower type is
-[E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction); the fix is to raise the type to the function's
-tier, or to narrow the function.
+held to the narrower of its own modifier and its service type's. A `module`, `export` or `public`
+binding — a top-level `let` or `var`, or a `static let` or `static var` member — is held to the same rule
+for its type, which is the type its initializer gives it, written or inferred, together with any alias the
+initializer was spelled through (`50 as Small`, `Tallies.create()`). Naming a narrower type is
+[E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration); the fix is to raise the type to the function's
+or binding's tier, or to narrow the function or binding.
 
 ## `export`
 
@@ -90,9 +93,9 @@ nothing outside the declaring file refers to it, the compiler reports **E3092** 
 'geometry.perimeter' is never referenced outside its declaring file`), and when every use is inside the
 declaring directory it suggests `module` (**E3093**). These checks run on every program that otherwise
 compiles, a one-file program included. The entry point, every target a `.maxproj` file declares and every
-task a `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported or `module` signature names is exempt while that function is itself
-referenced from another file: the signature requires the wider tier, so dropping the modifier would only
-trade E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction). Every typealias form —
+task a `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported or `module` signature or binding names is exempt while that function or
+binding is itself referenced from another file: the signature requires the wider tier, so dropping the modifier would only
+trade E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration). Every typealias form —
 ranged, function, generic-instance and tuple — is audited, and a use credits exactly the declaration it
 means, a use reached only through a called function's signature included.
 

@@ -1131,10 +1131,11 @@ end 'main'
 42
 ```
 
-<!-- test: cross-file-exported-cast-to-own-private-alias-declared-last -->
-An exported constant whose initializer casts to a ranged `typealias` PRIVATE to its own declaring
-file folds in the declarer's perspective, resolving that file-private alias — the cast type is
-looked up as the declarer would see it, not the demander. Declaring file fed LAST.
+<!-- test: cross-file-exported-cast-to-own-alias-declared-last -->
+An exported constant whose initializer casts to a ranged `typealias` of its own declaring file folds in
+the declarer's perspective, resolving that file's alias — the cast type is looked up as the declarer
+would see it, not the demander. The alias is `export` because a constant's type may not be less visible
+than the constant (E3167). Declaring file fed LAST.
 ```maxon
 // --- file: app/main.maxon
 let VALUE = BASE
@@ -1144,18 +1145,18 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: api/base.maxon
-typealias Small = int(0 to 100)
+export typealias Small = int(0 to 100)
 export let BASE = 21 as Small
 ```
 ```exitcode
 21
 ```
 
-<!-- test: cross-file-exported-cast-to-own-private-alias-declared-first -->
+<!-- test: cross-file-exported-cast-to-own-alias-declared-first -->
 The same program with the declaring file fed FIRST — the same executable either way.
 ```maxon
 // --- file: api/base.maxon
-typealias Small = int(0 to 100)
+export typealias Small = int(0 to 100)
 export let BASE = 21 as Small
 
 // --- file: app/main.maxon

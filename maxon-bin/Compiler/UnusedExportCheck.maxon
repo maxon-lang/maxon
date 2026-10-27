@@ -579,7 +579,7 @@ function seedBindings(signatures ProgramSignatures, tracked TrackedDecls)
 			continue
 		end 'compilerOwned'
 
-		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedBinding, key: decl.name, displayName: String.from(decl.name), noun: "variable" if decl.mutable else "constant", visibility: decl.visibility, declFile: tracked.fileOf(decl.declFilePath, signatures: signatures), nameLine: decl.nameLine, nameColumn: decl.nameColumn, isAlias: false))
+		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedBinding, key: decl.name, displayName: String.from(decl.name), noun: subjectNoun(bindingSubjectKind(decl.mutable)), visibility: decl.visibility, declFile: tracked.fileOf(decl.declFilePath, signatures: signatures), nameLine: decl.nameLine, nameColumn: decl.nameColumn, isAlias: false))
 	end 'eachDecl'
 end 'seedBindings'
 
@@ -1173,14 +1173,13 @@ typealias DemandedTierMap = Map with (ByteArray, Visibility)
 
 // The widest tier any REACHED signature demands of each type DECLARATION, keyed by name and declaring file
 // so two declarations of one name are demanded apart. A demand is `checkSignatureVisibility`'s
-// record that some function's signature names the type and so needs it at the tier E3167 judges that
-// function at; it is reached when the demanding function is itself referenced from outside the type's
-// declaring file, since a function nothing outside reaches is an `export` the author may drop, and
-// crediting the type off it would
-// suppress the finding that says so.
+// record that some function's signature or binding's type names the type and so needs it at the tier
+// E3167 judges that declaration at; it is reached when the demanding declaration is itself referenced
+// from outside the type's declaring file, since a declaration nothing outside reaches is an `export` the
+// author may drop, and crediting the type off it would suppress the finding that says so.
 //
 // `Visibility.file` is the "no reached demand" value and no demand can carry it — the pass never judges a
-// file-private function.
+// file-private function or binding.
 function reachedSignatureDemands(project Project, tracked TrackedDecls) returns DemandedTierMap
 	var demanded = DemandedTierMap.create()
 
@@ -1202,8 +1201,14 @@ function reachedSignatureDemands(project Project, tracked TrackedDecls) returns 
 end 'reachedSignatureDemands'
 
 function demandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) returns bool
-	match splitQualifiedName(demand.demandingFunction) 'split'
-		notQualified then return reachedFromOutsideItsFile(tracked.functionIndex, tracked: tracked, name: demand.demandingFunction)
+	match demand.demandingKind 'kind'
+		constantBinding or
+		variableBinding then return reachedFromOutsideItsFile(tracked.bindingIndex, tracked: tracked, name: demand.demandingName)
+		declaredFunction then break
+	end 'kind'
+
+	match splitQualifiedName(demand.demandingName) 'split'
+		notQualified then return reachedFromOutsideItsFile(tracked.functionIndex, tracked: tracked, name: demand.demandingName)
 		parts(owner, _) then return memberDemandIsReached(tracked, demand: demand, owner: owner)
 	end 'split'
 end 'demandIsReached'
@@ -1216,8 +1221,8 @@ function memberDemandIsReached(tracked TrackedDecls, demand SignatureTypeDemand,
 		return false
 	end 'aMemberCannotWidenItsOwnType'
 
-	if tracked.functionIndex.contains(demand.demandingFunction) 'theMemberIsAuditedItself'
-		return reachedFromOutsideItsFile(tracked.functionIndex, tracked: tracked, name: demand.demandingFunction)
+	if tracked.functionIndex.contains(demand.demandingName) 'theMemberIsAuditedItself'
+		return reachedFromOutsideItsFile(tracked.functionIndex, tracked: tracked, name: demand.demandingName)
 	end 'theMemberIsAuditedItself'
 
 	return reachedFromOutsideItsFile(tracked.typeIndex, tracked: tracked, name: owner)

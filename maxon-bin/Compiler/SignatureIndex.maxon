@@ -2613,6 +2613,15 @@ export union TopLevelGlobalLookup
 	poisoned
 end 'TopLevelGlobalLookup'
 
+export type BindingTypeClaim
+	export let valueType as MaxonType
+	export let brand as ByteArray
+
+	export static function create(valueType MaxonType, brand ByteArray) returns BindingTypeClaim
+		return Self{valueType: valueType, brand: brand}
+	end 'create'
+end 'BindingTypeClaim'
+
 // Which kind of top-level declaration a lookup is asking for. The two are resolved by ONE probe
 // (`declFor`) and are never interchangeable at a use site: an inlined binding materializes its value, a
 // stored one loads from a slot.
@@ -24796,6 +24805,33 @@ export type ProgramSignatures
 		end 'state'
 	end 'immutableMapColumnsOf'
 
+	export function bindingTypeClaimAt(index ElementIndex, into TypeNameInterner) returns BindingTypeClaim throws AbsentError
+		view decl = self.declAt(index)
+
+		match decl.outcome 'state'
+			// ⚠ **A FOLDED ENUM OR UNION CASE IS TAGGED `named`, SO THIS ARM INTERNS INTO `into` TOO.** The
+			// outcome carries the type's BYTES for exactly that reason — the adoption trap the boxed arm below
+			// records, avoided at the source: an id minted in the INDEX's table panics the first door a file's
+			// parse resolves it through (`slotStorageType` on a read, `foreignNameOf` on a store).
+			value(_, tag, typeName) then return BindingTypeClaim.create(constantValueTypeIn(tag, typeName: typeName, into: into), brand: EmptySourceText)
+
+			// ⭐ A MANAGED `var` reads exactly as a scalar one does — the slot is real, it
+			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
+			// and a use of the literal it was initialized from are the same type by construction.
+			managedValue(_, kind) then return BindingTypeClaim.create(self.managedConstValueType(kind, elementFilePath: decl.declFilePath), brand: EmptySourceText)
+
+			storedRecord(valueType, brand, _, _) then return BindingTypeClaim.create(self.adoptType(valueType, into: into), brand: brand)
+			imagedRecord(image) then return BindingTypeClaim.create(self.adoptType(image.valueType, into: into), brand: image.brand)
+			imagedBox(_, _, typeName, tag) then return BindingTypeClaim.create(constantValueTypeIn(tag, typeName: typeName, into: into), brand: EmptySourceText)
+			failed or
+			poisoned or
+			unvalidatedRecord then throw AbsentError.absent
+			deferredRecord or
+			pending or
+			evaluating then panic("ProgramSignatures.bindingTypeClaimAt: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` and `settleRecordInitializers` run to completion before any pass reads a binding's type")
+		end 'state'
+	end 'bindingTypeClaimAt'
+
 	// The `.data` label and TYPE of the global at `index` — everything a load or a store needs to
 	// name it. A var whose initializer failed reads as `notFound` for `resolvedValueOf`'s reason: the
 	// declaration's own diagnostic has already failed the build, and a slot with no value is a slot
@@ -24804,28 +24840,26 @@ export type ProgramSignatures
 		view decl = self.declAt(index)
 
 		match decl.outcome 'state'
-			// ⚠ **A FOLDED ENUM OR UNION CASE IS TAGGED `named`, SO THIS ARM INTERNS INTO `into` TOO.** The
-			// outcome carries the type's BYTES for exactly that reason — the adoption trap the boxed arm below
-			// records, avoided at the source: an id minted in the INDEX's table panics the first door a file's
-			// parse resolves it through (`slotStorageType` on a read, `foreignNameOf` on a store).
-			value(_, tag, typeName) then return TopLevelGlobalLookup.found(self.slotLabelOf(decl), valueType: constantValueTypeIn(tag, typeName: typeName, into: into), brand: EmptySourceText, mutable: decl.mutable)
+			value or
+			managedValue or
+			storedRecord then return self.storedGlobalFound(index, into: into)
 			failed then return TopLevelGlobalLookup.notFound
 			poisoned or
 			unvalidatedRecord then return TopLevelGlobalLookup.poisoned
-
-			// ⭐ A MANAGED `var` reads exactly as a scalar one does — the slot is real, it
-			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
-			// and a use of the literal it was initialized from are the same type by construction.
-			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.slotLabelOf(decl), valueType: self.managedConstValueType(kind, elementFilePath: decl.declFilePath), brand: EmptySourceText, mutable: decl.mutable)
-
-			storedRecord(valueType, brand, _, _) then return TopLevelGlobalLookup.found(self.slotLabelOf(decl), valueType: self.adoptType(valueType, into: into), brand: brand, mutable: decl.mutable)
 			imagedRecord or
 			imagedBox then return TopLevelGlobalLookup.notFound
 			deferredRecord or
 			pending or
-			evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
+			evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` and `settleRecordInitializers` run to completion before any file is parsed")
 		end 'state'
 	end 'resolvedGlobalOf'
+
+	function storedGlobalFound(index ElementIndex, into TypeNameInterner) returns TopLevelGlobalLookup
+		view decl = self.declAt(index)
+		let claim = try self.bindingTypeClaimAt(index, into: into) otherwise panic("ProgramSignatures.storedGlobalFound: '{String.from(decl.name)}' has a slot and a settled value, so `bindingTypeClaimAt` has a type to give it")
+
+		return TopLevelGlobalLookup.found(self.slotLabelOf(decl), valueType: claim.valueType, brand: claim.brand, mutable: decl.mutable)
+	end 'storedGlobalFound'
 
 	// ⭐ **THE `MaxonType` A MANAGED TOP-LEVEL BINDING OF `kind` DENOTES** — the SAME type its literal gives
 	// a value in expression position (`Parser.emitStringLiteral` / `emitByteStringLiteralValue`), stated once

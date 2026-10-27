@@ -47,6 +47,29 @@ then the return type, then the throws clause — anchored at the function NAME:
 error E3167: api/lib.maxon:3:17: exported function 'api.f' names file-private typealias 'ElementIndex' in the type of parameter 'i'
 ```
 
+A `module`, `export` or `public` binding is held to the same rule: a top-level `let` or `var`, and a
+`static let` or `static var` member. Its type is the one its initializer gives it, whether or not the
+binding writes it, and the alias the initializer was spelled through — a cast's `as Small`, or the
+`Tallies` in `Tallies.create()` — is judged with it. The refusal sits at the binding name; a `let` is a
+"constant", a `var` a "variable", and the position is "in its type":
+
+```text
+enum Status
+	big
+	small
+end 'Status'
+
+export let BIG = Status.big   // E3167
+```
+
+```text
+error E3167: api/lib.maxon:6:12: exported constant 'api.BIG' names file-private enum 'Status' in its type
+```
+
+Widen the type to the binding's tier (`export enum Status`), or narrow the binding (`let BIG`). A binding
+read from another file counts as a use of every type it names this way, which keeps an `export` type that
+only an exported binding exposes clear of [E3092](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3092).
+
 ### The library is held to it too
 
 A typealias written in `stdlib/` with no modifier is file-private to the library file it lives in, the
@@ -1274,4 +1297,338 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: aaa/<fragment>:6:17: exported function 'aaa.twice' names file-private typealias 'Op' in the type of parameter 'f'
+```
+
+## A top-level binding is judged by its type
+
+<!-- test: error.an-exported-let-of-a-file-private-enum-type-is-refused -->
+A binding is part of the surface its tier opens, and a reader of `BIG` holds a `Status` it has no spelling for.
+The refusal sits at the binding NAME, in the words a function gets, and the noun is the binding's own — a
+`let` is a "constant" and a `var` a "variable".
+```maxon
+// --- file: api/lib.maxon
+enum Status
+	big
+	small
+end 'Status'
+
+export let BIG = Status.big
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7 if BIG == BIG else 0
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:12: exported constant 'api.BIG' names file-private enum 'Status' in its type
+```
+
+<!-- test: error.a-module-let-of-a-file-private-enum-type-is-refused -->
+The tier word follows the binding's own modifier, as a function's does.
+```maxon
+// --- file: api/lib.maxon
+enum Status
+	big
+	small
+end 'Status'
+
+module let BIG = Status.big
+
+// --- file: api/main.maxon
+function main() returns ExitCode
+	return 7 if BIG == BIG else 0
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:12: module constant 'api.BIG' names file-private enum 'Status' in its type
+```
+
+<!-- test: error.a-public-let-of-a-module-type-is-refused -->
+`public` outranks every other tier, so a `public` binding may not hold even an `export` type, and a `module`
+type is two tiers short. The type here comes from the initializer: `Config.create(7)` is the whole of what
+says what `DEFAULT` holds.
+```maxon
+// --- file: api/config.maxon
+module type Config
+	module var size as ExitCode
+
+	module static function create(size ExitCode) returns Self
+		return Self{size: size}
+	end 'create'
+end 'Config'
+
+public let DEFAULT = Config.create(7)
+
+// --- file: api/main.maxon
+function main() returns ExitCode
+	return DEFAULT.size
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:11:12: public constant 'api.DEFAULT' names module type 'Config' in its type
+```
+
+<!-- test: error.an-exported-var-of-an-inferred-file-private-record-is-refused -->
+No type is written anywhere on the binding: the record is the value of the initializer and nothing else
+names it.
+
+⚠ `SHARED` is read nowhere outside `api/lib.maxon`, which is E3092, and `checkSignatureVisibility` runs ahead of
+`checkUnusedExports` (`PassPipeline.buildMaxonTierPasses`) and the pipeline stops at the first pass that
+reports, so the stderr below is the whole of it. A reader that touched `SHARED.n` would be refused at its own
+use, before this pass runs.
+```maxon
+// --- file: api/lib.maxon
+type Secret
+	export var n as ExitCode
+
+	static function create(n ExitCode) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Secret'
+
+export var SHARED = Secret.create(7)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:11:12: exported variable 'api.SHARED' names file-private type 'Secret' in its type
+```
+
+<!-- test: error.an-export-static-let-of-a-file-private-enum-type-is-refused -->
+A `static let` is a binding with a tier of its own, and the member's own modifier is the bar, not its type's:
+`Holder` is `export` and `Status` is not.
+```maxon
+// --- file: api/lib.maxon
+enum Status
+	big
+	small
+end 'Status'
+
+export type Holder
+	export static let DEFAULT = Status.big
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7 if Holder.DEFAULT == Holder.DEFAULT else 0
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:9:20: exported constant 'api.Holder.DEFAULT' names file-private enum 'Status' in its type
+```
+
+<!-- test: error.an-exported-let-cast-to-a-file-private-alias-is-refused -->
+A constant keeps the alias its initializer was cast to, and the alias is a declaration like any other.
+```maxon
+// --- file: api/lib.maxon
+typealias Small = int(0 to 100)
+
+export let CAP = 50 as Small
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return CAP as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:5:12: exported constant 'api.CAP' names file-private typealias 'Small' in its type
+```
+
+<!-- test: error.an-exported-let-built-through-a-file-private-generic-alias-is-refused -->
+The alias the initializer was spelled through is the binding's own spelling of its type. `Array with ExitCode` is
+nameable by anyone, `Tallies` is not, and the binding is read under that name.
+```maxon
+// --- file: api/lib.maxon
+typealias Tallies = Array with ExitCode
+
+export let EMPTY = Tallies.create()
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return EMPTY.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:5:12: exported constant 'api.EMPTY' names file-private typealias 'Tallies' in its type
+```
+
+<!-- test: an-exported-let-of-an-exported-enum-is-legal -->
+The control for the refusals above: `Status` is `export`, so `BIG` may hold one. The reader names no type —
+`main` matches on the cases — and the type is still credited as needed by `BIG`, so the unused-export
+audit has nothing to say about it.
+```maxon
+// --- file: api/lib.maxon
+export enum Status
+	big
+	small
+end 'Status'
+
+export let BIG = Status.big
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match BIG 'which'
+		big gives 7
+		small gives 1
+	end 'which'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-file-private-let-of-a-file-private-type-is-legal -->
+A binding no narrower than its type is not asked anything: both are file-private, and nothing outside
+`api/lib.maxon` can reach either.
+```maxon
+// --- file: api/lib.maxon
+enum Status
+	big
+	small
+end 'Status'
+
+let BIG = Status.big
+
+export function code() returns ExitCode
+	return match BIG 'which'
+		big gives 7
+		small gives 1
+	end 'which'
+end 'code'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: exported-lets-of-scalar-string-and-array-types-are-legal -->
+Primitives, `String` and a library container name no declaration an author wrote, so no tier is asked of them.
+```maxon
+// --- file: api/lib.maxon
+export let LIMIT = 7
+export let GREETING = "hi"
+export let PRIMES = [2, 3, 5]
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	print("{GREETING}{PRIMES.count()}")
+	return LIMIT
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+hi3
+```
+
+<!-- test: an-inferred-library-type-is-not-judged-as-a-same-named-private-one -->
+`api/lib.maxon` declares a file-private `HeapCensusMode` of its own, beside the library's `public` one. `MODE`
+holds `stdlib.HeapCensusMode.byTag`, so its type is the library's enum: the declaration the initializer
+reached, not whichever `HeapCensusMode` the binding's own file declares.
+```maxon
+// --- file: api/lib.maxon
+enum HeapCensusMode
+	first
+	second
+end 'HeapCensusMode'
+
+function own() returns HeapCensusMode
+	return HeapCensusMode.first
+end 'own'
+
+export let MODE = stdlib.HeapCensusMode.byTag
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match MODE 'which'
+		byTag gives 7
+		bySizeClass gives 1
+	end 'which'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.an-exported-let-of-a-private-enum-beside-the-librarys-is-refused -->
+The pair of the case above: the binding holds the file's own `HeapCensusMode`, and the refusal names the
+file-private declaration the initializer reached.
+```maxon
+// --- file: api/lib.maxon
+enum HeapCensusMode
+	first
+	second
+end 'HeapCensusMode'
+
+export let MODE = HeapCensusMode.first
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:12: exported constant 'api.MODE' names file-private enum 'HeapCensusMode' in its type
+```
+
+<!-- test: a-parameter-naming-the-librarys-type-is-not-judged-as-a-same-named-private-one -->
+A function's parameter type is judged by the declaration it names, the same as a binding's type:
+`stdlib.HeapCensusMode` is the library's `public` enum, and the file-private `HeapCensusMode` beside the
+function is another type.
+```maxon
+// --- file: api/lib.maxon
+enum HeapCensusMode
+	first
+	second
+end 'HeapCensusMode'
+
+function own() returns HeapCensusMode
+	return HeapCensusMode.first
+end 'own'
+
+export function flip(m stdlib.HeapCensusMode) returns stdlib.HeapCensusMode
+	return match m 'which'
+		byTag gives stdlib.HeapCensusMode.bySizeClass
+		bySizeClass gives stdlib.HeapCensusMode.byTag
+	end 'which'
+end 'flip'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match flip(stdlib.HeapCensusMode.bySizeClass) 'which'
+		byTag gives 7
+		bySizeClass gives 1
+	end 'which'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: equal-tiers-are-legal-for-bindings -->
+Equal is enough for a binding too, at both tiers that name a type: `module` beside `module`, `public` beside
+`public`.
+```maxon
+// --- file: api/lib.maxon
+module typealias Slot = int(0 to 100)
+public typealias Score = int(0 to 100)
+
+module let FIRST = 3 as Slot
+public let TOP = 9 as Score
+
+// --- file: api/main.maxon
+function main() returns ExitCode
+	return (FIRST as ExitCode) + (TOP as ExitCode)
+end 'main'
+```
+```exitcode
+12
 ```

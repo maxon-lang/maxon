@@ -1133,7 +1133,8 @@ All declarations are file-private by default. Four tiers exist:
 - **`export`** — visible everywhere in the compilation.
 - **`public`** — visible everywhere, and declared API surface, so it is exempt from the unused-export checks.
 
-A signature may not name a type less visible than the function itself; for that rule the tiers are ordered
+A signature may not name a type less visible than the function itself, nor a top-level or `static`
+`let` or `var` hold a value of a type less visible than the binding; for that rule the tiers are ordered
 default < `module` < `export` < `public`, and naming a narrower type is E3167.
 
 At most one modifier may be written. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `var`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.

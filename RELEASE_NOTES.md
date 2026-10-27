@@ -26,6 +26,13 @@ release's version as its heading when the release is cut.
   type lies inside, or a counted-loop counter between compile-time bounds — cannot throw, so a `try` on it
   is E3055.
   Fix: drop the `try … otherwise` and write the call bare.
+- A `module`, `export` or `public` top-level `let` or `var`, or `static let` or `static var`
+  member, whose type is less visible than the binding is E3167 (`exported constant 'api.BIG' names
+  file-private enum 'Status' in its type`). The type is the one the initializer gives it, inferred or
+  not, and includes the typealias the initializer was spelled through (`50 as Small`,
+  `Tallies.create()`).
+  Fix: widen the type to the binding's tier (`export enum Status`, `export typealias Small`, or
+  `public` for a `public` binding), or narrow the binding (`let BIG` without `export`).
 - A constant `FixedArray` index at or past the size is E3005 at compile time.
   Fix: correct the index, or pass a deliberate out-of-range index through a value computed at run time.
 - A divide or `mod` whose divisor is proven non-zero by a counted loop's bounds or a range computed from

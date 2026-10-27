@@ -369,7 +369,7 @@ All declarations are file-scoped by default. Maxon has four visibility tiers:
 
 At most one modifier may be written. `module` is a contextual keyword, so it can still be used as an identifier in other positions.
 
-A signature may not name a type less visible than the function itself — the tiers order default < `module` < `export` < `public`, and naming a narrower type is **E3167**.
+A signature may not name a type less visible than the function itself, nor a `let` or `var` hold one less visible than the binding — the tiers order default < `module` < `export` < `public`, and naming a narrower type is **E3167**.
 
 ```maxon
 export typealias Score = int(i64.min to i64.max)

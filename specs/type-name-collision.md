@@ -2528,23 +2528,24 @@ end 'main'
 
 
 <!-- test: error.crossfile-enum-constant-keeps-its-value-in-an-alias-slot-it-does-not-fit -->
-The other road to the same pair of declarations: `b.maxon` EXPORTS a constant of its file-private
-`enum Status`, and `a.maxon`, which means a ranged `int(0 to 5)` by `Status`, reads it. The constant is
-the enum's case — its raw value, 200, decays into an alias slot as any enum's does — and the slot's range
-is `a.maxon`'s own, so storing it into a `Status` is refused at the store, with the value that case holds,
-exactly as `s = Level.big` is when the enum and the alias have two names in one file.
+The other road to a constant of an enum: `b.maxon` EXPORTS a constant of its own `export enum Status` —
+a constant may not be more visible than its type (E3167), so the enum is as visible as the constant — and
+`a.maxon` reads it. The constant is the enum's case — its raw value, 200, decays into an alias slot as any
+enum's does — and the slot's range is `a.maxon`'s own, so storing it into a `Narrow` is refused at the
+store, with the value that case holds, exactly as `s = Level.big` is when the enum and the alias are
+declared in one file.
 ```maxon
 // --- file: a.maxon
-typealias Status = int(0 to 5)
+typealias Narrow = int(0 to 5)
 
 export function pick() returns ExitCode
-	var s = 1 as Status
+	var s = 1 as Narrow
 	s = BIG
 	return s as ExitCode
 end 'pick'
 
 // --- file: b.maxon
-enum Status
+export enum Status
 	small = 1
 	big = 200
 end 'Status'
@@ -2557,21 +2558,20 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:2: Value 200 is outside the range of 'Status' (int(0 to 5))
+error E3005: <fragment>:7:2: Value 200 is outside the range of 'Narrow' (int(0 to 5))
 ```
 
 
 <!-- test: crossfile-enum-constant-decays-into-a-wider-alias-slot -->
-The legal half of the case above: a constant of `b.maxon`'s file-private `enum Status` read in `a.maxon`,
-where `Status` means a ranged alias, is still the enum's raw 200 when it lands in an alias slot that
-holds it. `a.maxon`'s own `Status` plays no part in the store — it is a different declaration — so the
-slot's range is `Wide`'s and the value is `b.maxon`'s.
+The legal half of the case above: a constant of `b.maxon`'s `export enum Status` read in `a.maxon` is still
+the enum's raw 200 when it lands in an alias slot that holds it. `a.maxon`'s own `Narrow` plays no part in
+the store, so the slot's range is `Wide`'s and the value is `b.maxon`'s.
 ```maxon
 // --- file: a.maxon
-typealias Status = int(0 to 5)
+typealias Narrow = int(0 to 5)
 typealias Wide = int(0 to 1000)
 
-function seed() returns Status
+function seed() returns Narrow
 	return 3
 end 'seed'
 
@@ -2583,7 +2583,7 @@ export function widened() returns ExitCode
 end 'widened'
 
 // --- file: b.maxon
-enum Status
+export enum Status
 	small = 1
 	big = 200
 end 'Status'

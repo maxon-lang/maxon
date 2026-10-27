@@ -7,31 +7,50 @@ union SignatureSpelling
 	inDeclaringFile
 end 'SignatureSpelling'
 
+export enum SignatureSubjectKind
+	declaredFunction
+	constantBinding
+	variableBinding
+end 'SignatureSubjectKind'
+
+module function bindingSubjectKind(mutable bool) returns SignatureSubjectKind
+	return SignatureSubjectKind.variableBinding if mutable else SignatureSubjectKind.constantBinding
+end 'bindingSubjectKind'
+
+module function subjectNoun(kind SignatureSubjectKind) returns String
+	return match kind 'kind'
+		declaredFunction gives "function"
+		constantBinding gives "constant"
+		variableBinding gives "variable"
+	end 'kind'
+end 'subjectNoun'
+
 type SignatureSubject
+	export let kind as SignatureSubjectKind
 	export let spelling as SignatureSpelling
 	export let tier as Visibility
 	export let readerFilePath as FilePath
 
-	// Where E3167 is reported: the function's own file, kept by `readingFrom` while `readerFilePath` moves
-	// into each alias the walk passes through.
+	// Where E3167 is reported: the declaration's own file, kept by `readingFrom` while `readerFilePath`
+	// moves into each alias the walk passes through.
 	export let reportFilePath as FilePath
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
 	export let enclosing as EnclosingType
 	export let declaredName as ByteArray
 
-	static function create(spelling SignatureSpelling, tier Visibility, readerFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, enclosing EnclosingType, declaredName ByteArray) returns SignatureSubject
-		return Self{spelling: spelling, tier: tier, readerFilePath: readerFilePath, reportFilePath: readerFilePath, nameLine: nameLine, nameColumn: nameColumn, enclosing: enclosing, declaredName: declaredName}
+	static function create(spelling SignatureSpelling, tier Visibility, readerFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, enclosing EnclosingType, declaredName ByteArray, kind SignatureSubjectKind) returns SignatureSubject
+		return Self{kind: kind, spelling: spelling, tier: tier, readerFilePath: readerFilePath, reportFilePath: readerFilePath, nameLine: nameLine, nameColumn: nameColumn, enclosing: enclosing, declaredName: declaredName}
 	end 'create'
 
 	function readingFrom(declFilePath FilePath) returns SignatureSubject
-		return Self{spelling: self.spelling, tier: self.tier, readerFilePath: declFilePath, reportFilePath: self.reportFilePath, nameLine: self.nameLine, nameColumn: self.nameColumn, enclosing: EnclosingType.none, declaredName: self.declaredName}
+		return Self{kind: self.kind, spelling: self.spelling, tier: self.tier, readerFilePath: declFilePath, reportFilePath: self.reportFilePath, nameLine: self.nameLine, nameColumn: self.nameColumn, enclosing: EnclosingType.none, declaredName: self.declaredName}
 	end 'readingFrom'
 
 	function seenKey(name ByteArray) returns ByteArray
-		if self.readerFilePath.equals(self.reportFilePath) 'theFunctionsOwnFile'
+		if self.readerFilePath.equals(self.reportFilePath) 'theSubjectsOwnFile'
 			return name
-		end 'theFunctionsOwnFile'
+		end 'theSubjectsOwnFile'
 
 		return fileScopedDeclKey("{ReadingFileSeenPrefix}{String.from(name)}".toByteArray(), declFilePath: self.readerFilePath)
 	end 'seenKey'
@@ -55,6 +74,7 @@ union SignaturePosition
 	parameter(let name ByteArray)
 	returnType
 	throwsClause
+	bindingType
 end 'SignaturePosition'
 
 function positionText(where SignaturePosition) returns String
@@ -62,6 +82,7 @@ function positionText(where SignaturePosition) returns String
 		parameter(name) gives "in the type of parameter '{String.from(name)}'"
 		returnType gives "in its return type"
 		throwsClause gives "in its throws clause"
+		bindingType gives "in its type"
 	end 'position'
 end 'positionText'
 
@@ -89,10 +110,36 @@ module function checkSignatureVisibility(project Project, module MaxonModule, si
 	end 'eachFunc'
 
 	checkInterfaceRequirements(project, signatures: signatures)
+	checkDeclaredBindings(project, signatures: signatures)
 end 'checkSignatureVisibility'
 
+function checkDeclaredBindings(project Project, signatures ProgramSignatures)
+	var bindingTypeNames = signatures.indexTypeNames()
+
+	for index in 0 upto signatures.topLevelDeclCount() 'eachBinding'
+		view decl = signatures.declAt(index)
+
+		if decl.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateBinding'
+			continue
+		end 'noTypeCanBeNarrowerThanAFilePrivateBinding'
+
+		if isSynthesizedName(decl.name) 'noBindingAnAuthorWrote'
+			continue
+		end 'noBindingAnAuthorWrote'
+
+		let claim = try signatures.bindingTypeClaimAt(index, into: bindingTypeNames) otherwise continue
+		let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: decl.visibility, readerFilePath: decl.declFilePath, nameLine: decl.nameLine, nameColumn: decl.nameColumn, enclosing: enclosingTypeOf(decl.name), declaredName: decl.name, kind: bindingSubjectKind(decl.mutable))
+		var seen = ReportedTypeNameSet.create()
+		walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.bindingType, declared: claim.valueType, typeNames: bindingTypeNames, seen: seen)
+
+		if not claim.brand.isEmpty() 'theInitializerSpelledAnAlias'
+			walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.bindingType, name: claim.brand, seen: seen)
+		end 'theInitializerSpelledAnAlias'
+	end 'eachBinding'
+end 'checkDeclaredBindings'
+
 // An interface requirement is no `IrFunction` — it has no body and belongs to no module — so the walk
-// above cannot reach one. It is reached through the declaration site instead, at the tier the interface
+// over `module.functions` cannot reach one. It is reached through the declaration site instead, at the tier the interface
 // itself was written with.
 function checkInterfaceRequirements(project Project, signatures ProgramSignatures)
 	view interfaces = signatures.interfaceMap()
@@ -118,7 +165,7 @@ function checkEveryRequirement(project Project, signatures ProgramSignatures, si
 end 'checkEveryRequirement'
 
 function checkOneRequirement(project Project, signatures ProgramSignatures, site InterfaceDeclSite, name ByteArray, method InterfaceMethodSig)
-	let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: site.visibility, readerFilePath: site.path, nameLine: method.nameLine, nameColumn: method.nameColumn, enclosing: EnclosingType.named(name), declaredName: qualifiedMethodName(name, methodName: method.name))
+	let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: site.visibility, readerFilePath: site.path, nameLine: method.nameLine, nameColumn: method.nameColumn, enclosing: EnclosingType.named(name), declaredName: qualifiedMethodName(name, methodName: method.name), kind: SignatureSubjectKind.declaredFunction)
 
 	for position in 0 upto method.paramNames.count() 'eachParam'
 		let paramName = try method.paramNames.get(position) otherwise panic("checkOneRequirement: paramNames.get OOB at {position} inside its own `upto` bound")
@@ -171,7 +218,7 @@ function checkDeclaredSignature(project Project, signatures ProgramSignatures, f
 	end 'noDeclaredSignatureToWalk'
 
 	view sig = try project.funcSignatures.get(func.name) otherwise panic("checkSignatureVisibility: contains({String.from(func.name)}) is true on the line above but get failed")
-	let subject = SignatureSubject.create(SignatureSpelling.callee, tier: tier, readerFilePath: func.sourceFilePath, nameLine: func.nameLine, nameColumn: func.nameColumn, enclosing: enclosingTypeOf(func.name), declaredName: func.name)
+	let subject = SignatureSubject.create(SignatureSpelling.callee, tier: tier, readerFilePath: func.sourceFilePath, nameLine: func.nameLine, nameColumn: func.nameColumn, enclosing: enclosingTypeOf(func.name), declaredName: func.name, kind: SignatureSubjectKind.declaredFunction)
 
 	checkParameterTypes(project, signatures: signatures, subject: subject, sig: sig)
 	checkReturnType(project, signatures: signatures, subject: subject, returned: func.maxonReturnType, sig: sig)
@@ -313,13 +360,13 @@ function judgeDeclaredType(project Project, signatures ProgramSignatures, subjec
 	seen.insert(declarationKey)
 
 	if not isInner 'aFileScopeDeclarationTheAuditTracks'
-		project.signatureTypeDemands.push(SignatureTypeDemand.create(subject.declaredName, demandingTier: subject.tier, typeName: base, declFilePath: declFilePath))
+		project.signatureTypeDemands.push(SignatureTypeDemand.create(subject.declaredName, demandingKind: subject.kind, demandingTier: subject.tier, typeName: base, declFilePath: declFilePath))
 	end 'aFileScopeDeclarationTheAuditTracks'
 
-	if not tierIsAtLeastAsVisible(visibility, floor: subject.tier) 'narrowerThanTheFunctionThatNamesIt'
-		reportPositioned(project, code: ErrorCode.semanticSignatureTypeLessVisibleThanFunction, message: "{visibilityTierWord(subject.tier)} function '{subjectDisplay(signatures, subject: subject)}' names {visibilityTierWord(visibility)} {declaredTypeNoun(kind)} '{sourceSpelledAliasText(base if isInner else name)}' {positionText(where)}", line: subject.nameLine, column: subject.nameColumn, filePath: subject.reportFilePath)
+	if not tierIsAtLeastAsVisible(visibility, floor: subject.tier) 'narrowerThanTheDeclarationThatNamesIt'
+		reportPositioned(project, code: ErrorCode.semanticSignatureTypeLessVisibleThanDeclaration, message: "{visibilityTierWord(subject.tier)} {subjectNoun(subject.kind)} '{subjectDisplay(signatures, subject: subject)}' names {visibilityTierWord(visibility)} {declaredTypeNoun(kind)} '{sourceSpelledAliasText(base if isInner else name)}' {positionText(where)}", line: subject.nameLine, column: subject.nameColumn, filePath: subject.reportFilePath)
 		return
-	end 'narrowerThanTheFunctionThatNamesIt'
+	end 'narrowerThanTheDeclarationThatNamesIt'
 
 	walkThroughAlias(project, signatures: signatures, subject: subject, where: where, name: name, kind: kind, declFilePath: declFilePath, seen: seen)
 end 'judgeDeclaredType'

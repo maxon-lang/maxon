@@ -320,7 +320,7 @@ end 'main'
   **E3136**. A service cannot send to itself.
 - **A message is as visible as its service, and no more.** Its `export` makes it a message rather than
   widening it past the type, so the types its signature names need only the service type's visibility
-  ([E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction)): a file-private service's messages may name
+  ([E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration)): a file-private service's messages may name
   file-private types.
 - **Shutdown.** `h.shutdown()` closes the mailbox: the messages already queued still run, and then the
   service stops. Every later send fails with `serviceStopped`. It always succeeds, on a full mailbox too.

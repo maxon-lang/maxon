@@ -367,7 +367,7 @@ end 'main'
 <!-- test: public-var-not-flagged -->
 ```maxon
 // --- file: api/counter.maxon
-export typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 public var unusedCounter = 99 as Integer
 
