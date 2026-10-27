@@ -7142,7 +7142,7 @@ reads: 1
 ```
 
 <!-- test: tls-stream.a-silent-client-does-not-delay-another-clients-echo -->
-`accept` returns once the TCP connection is accepted and the handshake runs on the stream's first use, so a server that accepts in a loop and serves each stream on its own green thread is not held up by a client that connects and says nothing: the second client's echo completes while the first connection is still waiting for its ClientHello, and that connection's handshake then fails on its own when the client goes away.
+`accept` returns once the TCP connection is accepted and the handshake runs on the stream's first use, so a server that accepts in a loop and serves each stream on its own green thread is not held up by a client that connects and says nothing: with no handshake deadline, so that nothing but the silent client's own `close()` can end its connection, the second client's echo still completes while the first connection is waiting for its ClientHello, and that connection's handshake then fails on its own when the client goes away.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -7222,7 +7222,13 @@ function trustedClient(rootHex String) returns TlsClientOptions
 	return options
 end 'trustedClient'
 
-let EchoBudgetMs = 1500
+function patientServer(identity TlsIdentity) returns TlsServerOptions
+	var options = trustedServer(identity)
+
+	options.setHandshakeDeadline(0)
+
+	return options
+end 'patientServer'
 
 function echoOne(stream TlsStream) returns String
 	let heard = try stream.recv(1024) otherwise (error) 'unheard'
@@ -7257,7 +7263,7 @@ function acceptTwo(listener TlsListener) returns String
 end 'acceptTwo'
 
 function dial(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options, deadlineMs: EchoBudgetMs) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -7275,7 +7281,7 @@ function dial(options TlsClientOptions, port NetworkPort) returns String
 end 'dial'
 
 function main() returns ExitCode
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: patientServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 	let server = async acceptTwo(listener)
 	let silent = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
 

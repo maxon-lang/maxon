@@ -303,28 +303,26 @@ status=200 body=hi host-line-ok=true
 **A RESPONSE WITH A `Content-Length` ENDS AT THAT LENGTH, NOT AT THE CLOSE.** A caller that asks for
 `Connection: keep-alive` gets a server that keeps the connection open after answering, so a client reading to
 the close would wait as long as the server holds it. The peer here answers, then holds the connection open until
-the client leaves or `HeldOpenMs` passes: a prompt answer and a peer that saw the client close are what a client
-reading by the length produces, and a slow answer with a peer that timed out is what reading to the close does.
+the client leaves, with no deadline of its own: a client reading by the length answers and leaves, so the peer
+sees the close, and one reading to the close would wait for a peer that waits for it, until its own deadline
+ended the exchange with `timedOut`.
 
 ⚠ **A `HEAD` RESPONSE HAS NO BODY WHATEVER ITS `Content-Length` SAYS.** The length describes the body a `GET`
 would have received (RFC 9112 section 6.3), so a client that waited for those bytes would wait for the close
 here too.
 ```maxon
-let HeldOpenMs = 3000
-let PromptMs = 2000
 let RequestBytes = 4096
 
 function answerAndHold(listener TcpListener, answer String) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
 	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send(answer) otherwise return "send-failed"
-	try conn.setReadDeadline(HeldOpenMs) otherwise return "deadline-failed"
 
-	let heard = try conn.recv(RequestBytes) otherwise (e) 'held'
-		return e.name
+	while true 'held'
+		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
+			return e.name
+		end 'left'
 	end 'held'
-
-	return "heard {heard.byteLength()} more bytes"
 end 'answerAndHold'
 
 function fetch(port NetworkPort, method HttpMethod) returns String
@@ -340,12 +338,10 @@ end 'fetch'
 
 function exchange(listener TcpListener, method HttpMethod, answer String) returns String
 	let peer = async answerAndHold(listener, answer: answer)
-	let start = Clock.nowMs()
 	let got = fetch(listener.port(), method: method)
-	let tookMs = Clock.elapsedMs(start)
 	let held = await peer
 
-	return "{got} prompt={tookMs < PromptMs} peer={held}"
+	return "{got} peer={held}"
 end 'exchange'
 
 function main() returns ExitCode
@@ -357,8 +353,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-get=200 [hello] prompt=true peer=connectionClosed
-head=200 [] prompt=true peer=connectionClosed
+get=200 [hello] peer=connectionClosed
+head=200 [] peer=connectionClosed
 ```
 ```exitcode
 0
@@ -588,11 +584,11 @@ close-delimited-at-the-cap=[0123456789] peer=answered
 **A `Transfer-Encoding: chunked` BODY IS DECODED, AND IT ENDS AT THE LAST CHUNK.** Each chunk is a hex size, any
 extensions after a `;` ignored, the data and a CRLF; a zero size ends the body, and the trailer fields after it
 are read and discarded. `Transfer-Encoding` overrides a `Content-Length` sent beside it (RFC 9112 section 6.3),
-so the length says nothing about the body. The peer holds the connection open after a kept-alive answer, so a
-client that read to the close would be slow; a size that is not hex is an invalid response, answered promptly.
+so the length says nothing about the body. The peer holds the connection open after a kept-alive answer until the
+client leaves, with no deadline of its own, so a client that read to the close would wait for a peer that waits for
+it, until its own deadline ended the exchange with `timedOut`; a size that is not hex is an invalid response, and the
+client leaves at once.
 ```maxon
-let HeldOpenMs = 3000
-let PromptMs = 2000
 let RequestBytes = 4096
 
 function answer(listener TcpListener, reply String, hold bool) returns String
@@ -605,13 +601,11 @@ function answer(listener TcpListener, reply String, hold bool) returns String
 		return "closed"
 	end 'closing'
 
-	try conn.setReadDeadline(HeldOpenMs) otherwise return "deadline-failed"
-
-	let heard = try conn.recv(RequestBytes) otherwise (e) 'held'
-		return e.name
+	while true 'held'
+		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
+			return e.name
+		end 'left'
 	end 'held'
-
-	return "heard {heard.byteLength()} more bytes"
 end 'answer'
 
 function fetch(port NetworkPort) returns String
@@ -627,12 +621,10 @@ end 'fetch'
 
 function exchange(listener TcpListener, reply String, hold bool) returns String
 	let peer = async answer(listener, reply: reply, hold: hold)
-	let start = Clock.nowMs()
 	let got = fetch(listener.port())
-	let tookMs = Clock.elapsedMs(start)
 	let held = await peer
 
-	return "{got} prompt={tookMs < PromptMs} peer={held}"
+	return "{got} peer={held}"
 end 'exchange'
 
 function main() returns ExitCode
@@ -650,13 +642,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-chunked=200 [hello world] prompt=true peer=closed
-chunked-with-length=200 [hello world] prompt=true peer=closed
-chunked-kept-alive=200 [hello world] prompt=true peer=connectionClosed
-chunked-with-an-empty-element=200 [hello world] prompt=true peer=connectionClosed
-bad-size=invalidResponse prompt=true peer=connectionClosed
-blank-before-an-extension=200 [hello] prompt=true peer=connectionClosed
-text-after-the-size=invalidResponse prompt=true peer=connectionClosed
+chunked=200 [hello world] peer=closed
+chunked-with-length=200 [hello world] peer=closed
+chunked-kept-alive=200 [hello world] peer=connectionClosed
+chunked-with-an-empty-element=200 [hello world] peer=connectionClosed
+bad-size=invalidResponse peer=connectionClosed
+blank-before-an-extension=200 [hello] peer=connectionClosed
+text-after-the-size=invalidResponse peer=connectionClosed
 ```
 ```exitcode
 0
@@ -721,24 +713,21 @@ nine=invalidResponse peer=answered
 <!-- procs: 1 -->
 **A `101 Switching Protocols` IS NOT AN INTERIM RESPONSE TO THIS CLIENT, AND IT IS REFUSED.** After a 101 the
 connection speaks another protocol, which this client does not, so reading on for a final HTTP response would
-wait on bytes that never come. The peer holds the connection open after the 101: a prompt `invalidResponse` and
-a peer that saw the client leave is the refusal, and a slow answer with a peer that timed out is the hang.
+wait on bytes that never come. The peer holds the connection open after the 101, with no deadline of its own, until
+the client leaves: `invalidResponse` with a peer that saw the client leave is the refusal, and a client that read
+on would wait for a peer that waits for it, until its own deadline ended the exchange with `timedOut`.
 ```maxon
-let HeldOpenMs = 3000
-let PromptMs = 2000
 let RequestBytes = 4096
 
 function switchAndHold(listener TcpListener) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
 	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n") otherwise return "send-failed"
-	try conn.setReadDeadline(HeldOpenMs) otherwise return "deadline-failed"
-
-	let heard = try conn.recv(RequestBytes) otherwise (e) 'held'
-		return e.name
+	while true 'held'
+		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
+			return e.name
+		end 'left'
 	end 'held'
-
-	return "heard {heard.byteLength()} more bytes"
 end 'switchAndHold'
 
 function exchangeOver(listener TcpListener) returns ExitCode
@@ -748,10 +737,8 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	request.setHeader("Connection", value: "Upgrade")
 	request.setHeader("Upgrade", value: "websocket")
 
-	let start = Clock.nowMs()
-
 	let outcome = try HttpClient.send(request) otherwise (e) 'refused'
-		print("client={e.name} prompt={Clock.elapsedMs(start) < PromptMs} peer={await peer}\n")
+		print("client={e.name} peer={await peer}\n")
 		return 0
 	end 'refused'
 
@@ -765,7 +752,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-client=invalidResponse prompt=true peer=connectionClosed
+client=invalidResponse peer=connectionClosed
 ```
 ```exitcode
 0
@@ -1048,26 +1035,28 @@ interleaved, and that the request's failure still reaches `try await`.
 
 <!-- test: http-client.async-trace-interleave -->
 <!-- AsyncTrace -->
+<!-- procs: 1 -->
 ⭐⭐ **A TRACE CASE AND A LIVE HOST ARE INCOMPATIBLE.** A trace pins an INTERLEAVING, and a live host makes
-that interleaving a function of somebody else's latency. So the peer is a listener this program binds on
-`127.0.0.1`, at a port the kernel picks, and the case needs no `--network`. `async-tcp.md` keeps the same
-separation: its `AsyncTrace` cases carry no `network: live`, and its `network: live` case carries no trace.
+that interleaving a function of somebody else's latency. So the target is a port this program binds on
+`127.0.0.1`, at a port the kernel picks, and closes before the dial, so the kernel refuses the connection
+with no live host and the case needs no `--network`. `async-tcp.md` keeps the same separation: its
+`AsyncTrace` cases carry no `network: live`, and its `network: live` case carries no trace.
 
-⚠ **THE LISTENER NEVER ACCEPTS, BECAUSE A PARKED ACCEPT RACES THE DIAL.** One loopback handshake readies
-both the accept and the connect, and the poller reports the two in either order. Unaccepted, the connection
-completes into the backlog, so the dial and the request's send still complete, and closing the listener
-resets it, which ends the request with an error.
+⚠ **THE DIAL IS REFUSED, BECAUSE A REQUEST THAT REACHED A PEER WOULD HAVE MORE PARKS THAN ANYTHING ORDERS.**
+Once a dial completes the HTTP task parks again for its send and its receive, and ending that request takes
+a second party, a timer or a closing listener, whose lines would land among those parks wherever the machine
+happened to run them. A refused dial ends the HTTP task at the connect's resume, so its last traced line is
+that resume and nothing else is running to meet it. `async-tcp.md`'s `trace-send-and-recv` pins the send and
+receive pairs on one thread, where no other line can arrive between them.
 
-⚠ **THE `sleep` IS THE HANDOVER, AND IT IS A MARGIN, NOT A SYNCHRONIZATION.** It parks `main` on a timer
-rather than requeueing it, so the HTTP task runs alone until it is waiting for a response. Nothing orders the
-close after the request's send except `settleMs`: an HTTP task stalled for longer than that would meet the
-reset before it waits for a response, and pin a different trace.
+⚠ **THE `sleep` COMES LAST, BECAUSE NOTHING ORDERS A TIMER AGAINST A POLLER.** `main` sleeps after
+`try await` has returned, with every other thread finished, so its `sleep_yield`/`sleep_resume` pair is
+ordered by `main` alone.
 
 Both addresses are literals, which wait on no resolver, so the bind does not park and the HTTP connect
 parks once, for the dial.
 ```maxon
-// Far longer than a loopback connect and send, which is all the HTTP task does before it waits.
-let settleMs = 200
+let napMs = 1
 
 function doHttp(port NetworkPort) returns ExitCode throws HttpError
 	let response = try HttpClient.get("http://127.0.0.1:{port}/get")
@@ -1087,14 +1076,17 @@ end 'doFileIo'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	let fileTask = async doFileIo()
-	let httpTask = async doHttp(listener.port())
-	let fileResult = await fileTask
+	let port = listener.port()
 
-	sleep(settleMs)
 	listener.close()
 
+	let fileTask = async doFileIo()
+	let httpTask = async doHttp(port)
+	let fileResult = await fileTask
 	let httpResult = try await httpTask otherwise 99
+
+	sleep(napMs)
+
 	return httpResult + fileResult
 end 'main'
 ```
@@ -1102,24 +1094,18 @@ end 'main'
 99
 ```
 ```stderr
+io_yield #0 [net_close]
+io_resume #0 [net_close]
 spawn #1
 spawn #2
 io_yield #1 [file_exists]
 io_yield #2 [net_connect]
 io_resume #1 [file_exists]
 await #1 [yield]
-sleep_yield #0
 io_resume #2 [net_connect]
-io_yield #2 [net_send]
-io_resume #2 [net_send]
-io_yield #2 [net_recv]
-io_resume #2 [net_recv]
-sleep_resume #0
-io_yield #0 [net_close]
-io_resume #0 [net_close]
-io_yield #2 [net_close]
-io_resume #2 [net_close]
 try_await #2 [yield]
+sleep_yield #0
+sleep_resume #0
 ```
 
 ### Response Headers

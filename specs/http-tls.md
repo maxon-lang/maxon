@@ -1541,8 +1541,6 @@ function plainBytesHeard(port NetworkPort) returns String
 	var client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect failed"
 	let padding = filler()
 
-	try client.setReadDeadline(5000) otherwise return "deadline refused"
-
 	_ = try client.send("GET / HTTP/1.1\r\nHost: x\r\n\r\n") otherwise (error) 'headUnsent'
 		return "send {error.name}"
 	end 'headUnsent'

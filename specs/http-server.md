@@ -459,8 +459,6 @@ status=200 body=first second=alreadyResponded
 <!-- test: http-server.an-accept-deadline-ends-serve -->
 <!-- procs: 1 -->
 ```maxon
-let promptMs = 3000
-
 type EchoPathHandler implements HttpHandler
 	let label as String
 
@@ -485,9 +483,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 	let handler = EchoPathHandler.create("echo")
 	try server.setAcceptDeadline(300) otherwise return 2
 
-	let start = Clock.nowMs()
 	let idle = server.serve(handler.clone())
-	let tookMs = Clock.elapsedMs(start)
 
 	try server.setAcceptDeadline(0) otherwise return 3
 	let peer = async serveUntilClosed(server, handler: handler)
@@ -495,7 +491,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 	server.close()
 	let ended = await peer
 
-	print("idle={idle.name} prompt={tookMs < promptMs} body={response.body()} ended={ended.name}\n")
+	print("idle={idle.name} body={response.body()} ended={ended.name}\n")
 
 	return 0
 end 'exchangeOver'
@@ -506,7 +502,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-idle=acceptDeadlinePassed prompt=true body=echo/again ended=closed
+idle=acceptDeadlinePassed body=echo/again ended=closed
 ```
 ```exitcode
 0
@@ -755,7 +751,8 @@ status=501 served=1
 
 ⛔ **THE SECOND ACCEPT IS THE ASSERTION.** A read deadline that took the LISTENER down with the silent
 connection would answer 408 exactly as this does and serve nobody afterwards, so the case opens a second
-connection and requires a real answer on it.
+connection and requires a real answer on it. The deadline belongs to the silent connection alone: the server
+lifts it before the second accept, so the second request is not racing a clock of its own.
 
 <!-- test: http-server.a-silent-client-answers-408-and-serves-on -->
 <!-- procs: 1 -->
@@ -782,6 +779,10 @@ end 'saySilence'
 function serveTwo(server HttpServer) returns Served
 	var refused = try server.accept() otherwise (e) 'timedOut'
 		print("accept threw {e.name}\n")
+
+		var patient = HttpServerLimits.create()
+		patient.readDeadlineMs = 0
+		server.setLimits(patient)
 
 		var exchange = try server.accept() otherwise return 1
 		try exchange.respondWith(StatusCode.ok, body: "second", contentType: "text/plain") otherwise return 2
@@ -1817,12 +1818,15 @@ refused=400 next=200 body=after ended=closed
 
 <!-- test: http-server.a-408-reaches-a-peer-that-is-still-sending -->
 <!-- procs: 1 -->
+The peer sends the start of a request and then one byte of an endless header at a time, looking for an answer after
+each, so the head is never completed and the peer's loop ends only on an answer: a 408 it reads is one that reached a
+peer still sending. The connection is open before the server accepts it, so the read deadline counts from a
+connection that is ready to send, not from a dial.
 ```maxon
 let ReadDeadlineMs = 500
 let TrickleIntervalMs = 100
-let PromptMs = 3000
 let ReadBufferBytes = 4096
-let TrickledHead = "GET /slow HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Pad: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n"
+let HeadStart = "GET /slow HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Pad: "
 
 function acceptedAs(server HttpServer) returns String
 	var exchange = try server.accept() otherwise (e) 'refused'
@@ -1840,16 +1844,13 @@ function statusCodeOf(answer String) returns String
 	return try firstLine.split(" ").get(1) otherwise "no-status-code"
 end 'statusCodeOf'
 
-function trickle(port NetworkPort) returns String
-	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
-	let bytes = TrickledHead.toByteArray()
+function trickle(client TcpClient) returns String
+	_ = try client.send(HeadStart) otherwise return "send-failed"
 
-	for b in bytes 'eachByte'
-		var one = ByteArray.create()
-		one.push(b)
-		_ = try client.send(String.from(one)) otherwise return "send-failed"
+	while true 'trickling'
 		sleep(TrickleIntervalMs)
 
+		_ = try client.send("a") otherwise return "send-failed"
 		try client.setReadDeadline(1) otherwise return "deadline-failed"
 
 		if let answer = try client.recv(ReadBufferBytes) 'answered'
@@ -1861,24 +1862,17 @@ function trickle(port NetworkPort) returns String
 				return e.name
 			end 'gone'
 		end 'notYet'
-	end 'eachByte'
-
-	try client.setReadDeadline(0) otherwise return "deadline-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
-	client.close()
-
-	return statusCodeOf(answer)
+	end 'trickling'
 end 'trickle'
 
 function exchangeOver(listening HttpServer) returns ExitCode
+	let client = try TcpClient.connect("127.0.0.1", port: listening.port()) otherwise return 2
 	let peer = async acceptedAs(listening)
-	let start = Clock.nowMs()
-	let status = trickle(listening.port())
-	let tookMs = Clock.elapsedMs(start)
+	let status = trickle(client)
 	let accepted = await peer
 	listening.close()
 
-	print("status={status} accept={accepted} prompt={tookMs < PromptMs}\n")
+	print("status={status} accept={accepted}\n")
 
 	return 0
 end 'exchangeOver'
@@ -1892,7 +1886,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-status=408 accept=readTimedOut prompt=true
+status=408 accept=readTimedOut
 ```
 ```exitcode
 0
@@ -2050,17 +2044,20 @@ status=200 accept=served body=2048
 
 ### A peer that never reads is abandoned at the write deadline
 
-⚠ **ON EVERY SOCKET LANE, x64-windows INCLUDED.** The answer is 64 MiB and the peer reads none of it, so the
+⚠ **ON EVERY SOCKET LANE, x64-windows INCLUDED.** The answer is 64 MiB and the peer reads one byte of it, so the
 send cannot finish: a polled lane parks on a send buffer that never drains, and on x64-windows the response is
 one overlapped `WSASend` that does not complete while the peer's window stays shut. Either way the write
 deadline is what ends it, and the handler is told the answer could not be sent.
+
+⚠ **THE PEER'S ONE BYTE IS THE HANDOVER.** It arrives only once the server has accepted the connection, read the
+request and begun the answer, so closing the listener after it cannot beat the accept; `serve` returns once the
+connection it took has finished, which is when the write deadline has ended the send.
 
 <!-- test: http-server.a-peer-that-never-reads-is-abandoned-at-the-write-deadline -->
 <!-- procs: 1 -->
 ```maxon
 let WriteDeadlineMs = 500
 let AnswerBytes = 67108864
-let PeerSilenceMs = 8000
 
 type BigAnswerHandler implements HttpHandler
 	let answer as String
@@ -2100,7 +2097,7 @@ function exchangeOver(listening HttpServer) returns ExitCode
 
 	let client = try TcpClient.connect("127.0.0.1", port: listening.port()) otherwise return 2
 	_ = try client.send("GET /big HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n") otherwise return 3
-	sleep(PeerSilenceMs)
+	_ = try client.recv(1) otherwise return 4
 
 	listening.close()
 	let ended = await peer
@@ -2481,11 +2478,8 @@ accept=served /first answered=true
 
 <!-- test: http-server.a-silent-client-does-not-delay-another-request -->
 <!-- procs: 1 -->
-`serve` reads each connection's request in its own coroutine, so a client that connects and sends nothing holds only its own connection until the read deadline answers it 408: a request made beside it is answered within the client's budget, well inside that deadline.
+`serve` reads each connection's request in its own coroutine, so a client that connects and sends nothing holds only its own connection: with no read deadline, so that nothing but the silent client's own `close()` can end its connection, a request made beside it is still answered, and `serve` goes on until `close()`.
 ```maxon
-let ClientBudgetMs = 1500
-let SilentReadDeadlineMs = 5000
-
 type AnswerHandler implements HttpHandler
 	static function create() returns AnswerHandler
 		return AnswerHandler{}
@@ -2508,18 +2502,14 @@ function main() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	var limits = HttpServerLimits.create()
 
-	limits.readDeadlineMs = SilentReadDeadlineMs
+	limits.readDeadlineMs = 0
 	server.setLimits(limits)
 
 	let port = server.port()
 	let peer = async serveAnswers(server)
 	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise return 2
-	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{port}/after") otherwise return 3
-	var clientLimits = HttpClientLimits.create()
 
-	clientLimits.timeoutMs = ClientBudgetMs
-
-	let response = try HttpClient.send(request, limits: clientLimits) otherwise (error) 'failed'
+	let response = try HttpClient.get("http://127.0.0.1:{port}/after") otherwise (error) 'failed'
 		print("a request beside a silent client: error {error.name}\n")
 
 		silent.close()
@@ -2551,16 +2541,15 @@ ended: closed
 <!-- test: http-server.a-handler-that-computes-does-not-delay-another-connection -->
 <!-- procs: 4 -->
 `serve` gives each accepted connection a green thread of its own, so a handler that computes for a long stretch without
-waiting holds only its own connection. The `/spin` handler tells a `Gate` service it has begun and then loops on the
-clock for `SpinMs`; the prober for `/quick` polls the gate and sends its request only once the handler is inside that
-loop, so the case does not depend on how long anything takes to start. A request made beside the loop is answered
-within a budget well under the loop's length.
+waiting holds only its own connection. The `/spin` handler tells a `Gate` service it has begun and then loops, reading a
+`ReleaseCell`, until `main` publishes it; the prober for `/quick` polls the gate and sends its request only once the
+handler is inside that loop, so the case does not depend on how long anything takes to start. `main` publishes the
+release only after the `/quick` answer is in hand, so the answer is one given while the loop was still running: a
+server that served connections one at a time could not give it, and would never end.
 ```maxon
-typealias Millis = int(0 to 1000000)
 typealias Turns = int(0 to u64.max)
+typealias ReleaseCell = SharedValue with bool
 
-let SpinMs = 1500
-let QuickBudgetMs = 1000
 let GatePollMs = 2
 
 type Gate
@@ -2581,19 +2570,19 @@ end 'Gate'
 
 type SpinHandler implements HttpHandler
 	let gate as Gate.handle
+	let released as ReleaseCell
 
-	static function create(gate Gate.handle) returns SpinHandler
-		return SpinHandler{gate: gate}
+	static function create(gate Gate.handle, released ReleaseCell) returns SpinHandler
+		return SpinHandler{gate: gate, released: released}
 	end 'create'
 
 	function handle(exchange HttpExchange) throws HttpServerError
 		if exchange.request().url().path() == "/spin" 'spin'
 			try gate.enter() otherwise panic("the gate is open")
 
-			let start = Clock.nowMs()
 			var turns = 0 as Turns
 
-			while Clock.elapsedMs(start) < SpinMs 'busy'
+			while turns == 0 or not released.current() 'busy'
 				turns = turns + 1
 			end 'busy'
 
@@ -2615,44 +2604,46 @@ type Prober
 		return Prober{gate: gate}
 	end 'create'
 
-	export function fetch(port NetworkPort, path String) returns Millis
-		return self.timedGet(port, path: path)
+	export function fetch(port NetworkPort, path String) returns bool
+		return self.answered(port, path: path)
 	end 'fetch'
 
-	export function fetchOnceEntered(port NetworkPort, path String) returns Millis
-		while not (try await gate.hasEntered() otherwise return 999998) 'waiting'
+	export function fetchOnceEntered(port NetworkPort, path String) returns bool
+		while not (try await gate.hasEntered() otherwise return false) 'waiting'
 			sleep(GatePollMs)
 		end 'waiting'
 
-		return self.timedGet(port, path: path)
+		return self.answered(port, path: path)
 	end 'fetchOnceEntered'
 
-	function timedGet(port NetworkPort, path String) returns Millis
-		let start = Clock.nowMs()
+	function answered(port NetworkPort, path String) returns bool
+		let response = try HttpClient.get("http://127.0.0.1:{port}{path}") otherwise return false
 
-		_ = try HttpClient.get("http://127.0.0.1:{port}{path}") otherwise return 999999
-
-		return Clock.elapsedMs(start) as Millis
-	end 'timedGet'
+		return response.statusCode().number() == StatusCode.ok.number()
+	end 'answered'
 end 'Prober'
 
-function serving(server HttpServer, gate Gate.handle) returns HttpServeEnd
-	return server.serve(SpinHandler.create(gate.clone()))
+function serving(server HttpServer, gate Gate.handle, released ReleaseCell) returns HttpServeEnd
+	return server.serve(SpinHandler.create(gate.clone(), released: released.clone()))
 end 'serving'
 
 function main() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	let port = server.port()
 	let gate = spawn Gate.create()
-	let peer = async serving(server, gate: gate.clone())
+	let released = ReleaseCell.create(false)
+	let peer = async serving(server, gate: gate.clone(), released: released.clone())
 	let first = spawn Prober.create(gate.clone())
 	let second = spawn Prober.create(gate.clone())
 	let slow = try first.fetch(port, path: "/spin") otherwise return 2
 	let quick = try second.fetchOnceEntered(port, path: "/quick") otherwise return 3
-	let quickMs = await quick
-	let slowMs = await slow
+	let quickAnswered = await quick
 
-	print("quick answered within budget: {quickMs < QuickBudgetMs}, spin held its own connection: {slowMs >= SpinMs}\n")
+	released.publish(true)
+
+	let slowAnswered = await slow
+
+	print("quick answered beside the loop: {quickAnswered}, spin answered once released: {slowAnswered}\n")
 	server.close()
 	print("ended: {(await peer).name}\n")
 
@@ -2661,7 +2652,7 @@ end 'main'
 ```
 ```stdout
 spun true
-quick answered within budget: true, spin held its own connection: true
+quick answered beside the loop: true, spin answered once released: true
 ended: closed
 ```
 ```exitcode

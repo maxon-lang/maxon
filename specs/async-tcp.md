@@ -139,6 +139,50 @@ io_yield #0 [net_close]
 io_resume #0 [net_close]
 ```
 
+<!-- test: async-tcp.trace-send-and-recv -->
+<!-- AsyncTrace -->
+<!-- procs: 1 -->
+Verify that an accept, a send and a receive each park under their own operation name. One thread plays both
+ends of the connection, one call after another, so every line is ordered by the program text: a second thread
+would add lines that land wherever the poller wakes it. The listener is the program's own, on a literal
+address, so the bind does not park and the dial parks once.
+```maxon
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let server = try listener.accept() otherwise return 3
+
+	_ = try client.send("ping") otherwise return 4
+
+	let heard = try server.recv(16) otherwise return 5
+
+	if heard == "ping" 'echoed'
+		return 0
+	end 'echoed'
+
+	return 6
+end 'main'
+```
+```exitcode
+0
+```
+```stderr
+io_yield #1 [net_connect]
+io_resume #1 [net_connect]
+io_yield #1 [net_accept]
+io_resume #1 [net_accept]
+io_yield #1 [net_send]
+io_resume #1 [net_send]
+io_yield #1 [net_recv]
+io_resume #1 [net_recv]
+io_yield #1 [net_close]
+io_resume #1 [net_close]
+io_yield #1 [net_close]
+io_resume #1 [net_close]
+io_yield #1 [net_close]
+io_resume #1 [net_close]
+```
+
 <!-- test: async-tcp.echo -->
 <!-- network: live -->
 ```maxon
