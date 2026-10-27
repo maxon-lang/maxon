@@ -19,37 +19,37 @@ is closed, not when the last child that could have held a copy of it exits.
 
 <!-- test: socket-inheritance.an-accepted-socket-closes-while-a-spawned-child-lives -->
 <!-- unsupported-targets: wasm32-wasi -->
-The server accepts a connection, spawns a child that lives for three seconds, then closes the accepted
-socket. The client, reading to the end of the connection, must see that end well inside the child's
-lifetime: a child holding a copy of the accepted socket would keep the connection open until it exits.
+The server accepts a connection, spawns a child that lives until the server closes the child's standard
+input, then closes the accepted socket. The client, reading to the end of the connection, must see that end
+while the child is still alive: the child leaves only after the client has been heard from, so a child
+holding a copy of the accepted socket would keep the connection open for ever, and the case would not finish.
 ```maxon
-let ChildLifetimeMs = 3000
-let PromptEndMs = 1500
+function waitingChild() returns ExitCode
+	var stdin = Console.stdin()
 
-function sleepingChild() returns ExitCode
-	sleep(ChildLifetimeMs)
-	return 0
-end 'sleepingChild'
+	_ = try stdin.readLine() otherwise return 0
 
-function readsItsEndPromptly(port NetworkPort) returns bool
+	return 1
+end 'waitingChild'
+
+function readsItsEnd(port NetworkPort) returns bool
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
-	let started = Clock.nowMs()
 	let heard = try client.recv(64) otherwise (e) 'ended'
-		return e == NetworkError.connectionClosed and Clock.elapsedMs(started) < PromptEndMs
+		return e == NetworkError.connectionClosed
 	end 'ended'
 
 	print("unexpected bytes '{heard}'\n")
 	return false
-end 'readsItsEndPromptly'
+end 'readsItsEnd'
 
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'iAmTheChild'
-		return sleepingChild()
+		return waitingChild()
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 3
-	let reader = async readsItsEndPromptly(listener.port())
+	let reader = async readsItsEnd(listener.port())
 	let conn = try listener.accept() otherwise return 4
 
 	var argv = StringArray.create()
@@ -57,16 +57,19 @@ function main() returns ExitCode
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise return 5
 	conn.close()
 
-	let endedPromptly = await reader
+	let ended = await reader
+
+	child.closeStdin()
+
 	let code = try child.wait() otherwise return 6
 	child.release()
 
-	print("ended-promptly={endedPromptly} child={code}\n")
+	print("ended={ended} child={code}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-ended-promptly=true child=0
+ended=true child=0
 ```
 ```exitcode
 0
@@ -75,17 +78,17 @@ ended-promptly=true child=0
 <!-- test: socket-inheritance.a-connected-socket-closes-while-a-spawned-child-lives -->
 <!-- unsupported-targets: wasm32-wasi -->
 The mirror of the case above, for the socket `TcpClient.connect` creates rather than the one `accept`
-answers. The server spawns a child that lives for three seconds and signals the client, which closes its
-socket; the server, reading to the end of the connection, must see that end well inside the child's
-lifetime.
+answers. The server spawns a child that lives until the server closes the child's standard input and signals
+the client, which closes its socket; the server, reading to the end of the connection, must see that end while
+the child is still alive, because the server closes the child's input only after it has seen that end.
 ```maxon
-let ChildLifetimeMs = 3000
-let PromptEndMs = 1500
+function waitingChild() returns ExitCode
+	var stdin = Console.stdin()
 
-function sleepingChild() returns ExitCode
-	sleep(ChildLifetimeMs)
-	return 0
-end 'sleepingChild'
+	_ = try stdin.readLine() otherwise return 0
+
+	return 1
+end 'waitingChild'
 
 function closesOnSignal(port NetworkPort) returns bool
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
@@ -95,19 +98,18 @@ function closesOnSignal(port NetworkPort) returns bool
 	return signal == "!"
 end 'closesOnSignal'
 
-function readsItsEndPromptly(conn TcpClient) returns bool
-	let started = Clock.nowMs()
+function readsItsEnd(conn TcpClient) returns bool
 	let heard = try conn.recv(64) otherwise (e) 'ended'
-		return e == NetworkError.connectionClosed and Clock.elapsedMs(started) < PromptEndMs
+		return e == NetworkError.connectionClosed
 	end 'ended'
 
 	print("unexpected bytes '{heard}'\n")
 	return false
-end 'readsItsEndPromptly'
+end 'readsItsEnd'
 
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'iAmTheChild'
-		return sleepingChild()
+		return waitingChild()
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
@@ -120,17 +122,20 @@ function main() returns ExitCode
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise return 5
 	_ = try conn.send("!") otherwise return 6
 
-	let endedPromptly = readsItsEndPromptly(conn)
+	let ended = readsItsEnd(conn)
 	let signalled = await closer
+
+	child.closeStdin()
+
 	let code = try child.wait() otherwise return 7
 	child.release()
 
-	print("signalled={signalled} ended-promptly={endedPromptly} child={code}\n")
+	print("signalled={signalled} ended={ended} child={code}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-signalled=true ended-promptly=true child=0
+signalled=true ended=true child=0
 ```
 ```exitcode
 0

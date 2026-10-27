@@ -516,10 +516,12 @@ end 'main'
 <!-- test: streaming-subprocess.drop-reader-then-reread -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A streaming reader is DROPPED mid-read, then the SAME handle is re-read and must still work. `reader(h)` runs
-`subpReadLine(h)` in an `async` GT; the child (`ping -n 3` then `echo hi`) delays ~2 s, so the reader parks on
-the overlapped read with no data. `dropIt` sleeps 200 ms (the reader is parked) then returns, DROPPING the
-un-awaited promise. Because the read pipe is TABLE-owned (not the GT's), the drop cancels the READ and must
-NOT close the pipe — so the follow-up `subpReadLine(h)` on the same handle re-issues a fresh read and gets
+`subpReadLine(h)` in an `async` GT; the child (`set /p` then `echo hi`) writes nothing until the parent sends
+it a line, so the reader parks on the overlapped read with no data however slow the host is. `dropIt` sleeps
+200 ms to give the reader its turn (a sleep that is too short only weakens the case: the child cannot write
+before the parent releases it) then returns, DROPPING the un-awaited promise. Because the read pipe is
+TABLE-owned (not the GT's), the drop cancels the READ and must NOT close the pipe — so once the parent has
+released the child, the follow-up `subpReadLine(h)` on the same handle re-issues a fresh read and gets
 `hi\r\n` (4 bytes), and `subpRelease` is the sole pipe-closer (no double-close). A drop that closed the shared
 pipe would make this return 0 (EOF forever).
 ```maxon
@@ -535,8 +537,14 @@ function dropIt(h FullRangeInt) returns Integer
 end 'dropIt'
 
 function main() returns ExitCode
-	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let h = subpSpawn("cmd /c set /p released=& echo hi")
 	_ = dropIt(h)
+
+	let released = subpWriteLine(h, line: "go")
+	if released != 0 'broken'
+		return 9
+	end 'broken'
+
 	let line = subpReadLine(h)
 	let n = line.byteLength()
 	_ = subpWait(h)
@@ -552,8 +560,9 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: streaming-subprocess.release-while-parked-then-reuse-slot -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `subpRelease(h)` runs while an `async` reader is still PARKED on `h`, and the freed slot is then immediately
-reused by a new `subpSpawn` — the new handle must read correctly. The reader parks on the slow child
-(`ping -n 3` then `echo hi`); `subpRelease(h)` frees the slot out from under it; `subpSpawn` reuses that index
+reused by a new `subpSpawn` — the new handle must read correctly. The reader parks on a child that writes
+nothing until it is sent a line (`set /p` then `echo hi`) and is never sent one, so it stays parked however slow
+the host is; `subpRelease(h)` frees the slot out from under it; `subpSpawn` reuses that index
 for `h2` and BUMPS the slot generation. When the stale reader resumes it sees the generation changed, returns an
 empty line (0) and writes NOTHING back — so `h2` still reads `second\r\n` (8 bytes). Returns `n2*10 + rn` =
 8×10 + 0 = 80. Without the generation guard the stale reader would stamp its EOF into `h2`'s stream and
@@ -565,7 +574,7 @@ function reader(h FullRangeInt) returns Integer
 end 'reader'
 
 function main() returns ExitCode
-	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let h = subpSpawn("cmd /c set /p released=& echo hi")
 	let r = async reader(h)
 	sleep(300)
 	subpRelease(h)
@@ -721,15 +730,22 @@ means the green thread published itself on a poll descriptor and nothing else ca
 
 ⚠ **THE WINDOW BRACKETS THE READ AND NOT THE SPAWN.** `subpSpawn` is `SyscallClass.blocking` and has
 parks of its own that have nothing to do with this subject, so the reading opens after the child exists.
-The child sleeps about a second before writing, which is what guarantees the read finds nothing ready and
-has to wait — a read satisfied inline completes without ever reaching the poller, correctly, and would
-witness nothing.
+The child writes nothing until it is sent a line, and `main` is the one that sends it, from a coroutine that
+runs only once the read has parked `main`: that is what guarantees the read finds nothing ready and has to wait
+however slow the host is — a read satisfied inline completes without ever reaching the poller, correctly, and
+would witness nothing.
 ```maxon
+function release(h FullRangeInt) returns FullRangeInt
+	return subpWriteLine(h, line: "go")
+end 'release'
+
 function main() returns ExitCode
-	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let h = subpSpawn("cmd /c set /p released=& echo hi")
 	let before = Scheduler.counters().netpollBlocks
+	let releaser = async release(h)
 	let line = subpReadLine(h)
 	let parks = Scheduler.counters().netpollBlocks - before
+	_ = await releaser
 	let n = line.byteLength()
 	_ = subpWait(h)
 	subpRelease(h)
@@ -753,9 +769,12 @@ answers `ERROR_IO_PENDING` at once and the thread parks on the completion port, 
 must not be wrapped in the syscall bracket. The synchronous `ReadFile` that reads standard input shares the
 function but not the import slot, and stays bracketed.
 
-The child delays about two seconds (`ping -n 3`), so the read is certainly outstanding when the scheduler
-runs out of other work, and the window brackets `subpReadLine` alone so the spawn's own retake falls outside
-it. Both witnesses are EXACTLY ZERO: a bracketed call, however short, is one `__sysmon` takes the only
+The child delays about two seconds (`ping -n 3`), so on a host that issues the read promptly the read is
+outstanding when the scheduler runs out of other work. A host stalled for longer finds the line already there
+and completes the read inline, which brackets nothing and retakes nothing either, so the delay can only
+weaken the case and never fail it. The child is not released by the parent because a parent write inside the
+window would be a bracketed call of its own. The window brackets `subpReadLine` alone so the spawn's own
+retake falls outside it. Both witnesses are EXACTLY ZERO: a bracketed call, however short, is one `__sysmon` takes the only
 processor out of whenever two of its laps land inside it, and a tolerance would admit that arrangement.
 ```maxon
 function main() returns ExitCode

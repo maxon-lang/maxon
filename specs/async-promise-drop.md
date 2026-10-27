@@ -532,7 +532,8 @@ program can produce.
 ⚠ **THE PROMISE MUST BE BOUND AND THE SLEEP IS WHAT PUTS THE DROP AFTER THE PARK.** `_ = async reader(h)`
 discards at its own statement, before the coroutine has run, and takes the never-ran arm instead. The
 `isComplete()` peek adds `0`, which is that thread saying it was still parked when `dropWhileParked`
-returned and dropped it.
+returned and dropped it. The child writes nothing until `main` sends it a line, which it does only after the
+drop, so the read cannot have completed however slow the host is.
 ```maxon
 function reader(h FullRangeInt, tag Integer) returns Integer
 	let held = "held-{tag}"
@@ -547,8 +548,9 @@ function dropWhileParked(h FullRangeInt) returns Integer
 end 'dropWhileParked'
 
 function main() returns ExitCode
-	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let h = subpSpawn("cmd /c set /p released=& echo hi")
 	let parked = dropWhileParked(h)
+	_ = subpWriteLine(h, line: "go")
 	_ = subpWait(h)
 	subpRelease(h)
 	return (42 + parked) as ExitCode

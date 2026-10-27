@@ -1641,13 +1641,10 @@ first=500 second=200 body=remembered ended=closed
 <!-- procs: 1 -->
 <!-- unsupported-targets: wasm32-wasi -->
 ```maxon
-typealias PollRound = int(0 to 500)
-
 let ResetPath = "/reset"
 let RequestReadFlag = "http-throw-after-reset.read"
 let PeerResetFlag = "http-throw-after-reset.reset"
 let FaultReportedFlag = "http-throw-after-reset.faulted"
-let PollRounds = 500 as PollRound
 let PollIntervalMs = 20
 
 type ResetHandler implements HttpHandler
@@ -1657,7 +1654,7 @@ type ResetHandler implements HttpHandler
 
 	function handle(exchange HttpExchange) throws HttpServerError
 		raiseFlag(RequestReadFlag)
-		_ = awaitFlag(PeerResetFlag)
+		awaitFlag(PeerResetFlag)
 
 		throw HttpServerError.malformedRequest
 	end 'handle'
@@ -1682,16 +1679,10 @@ function lowerFlag(name String)
 	end 'raised'
 end 'lowerFlag'
 
-function awaitFlag(name String) returns bool
-	for _ in 0 upto PollRounds 'poll'
-		if File.exists(flagPath(name)) 'raised'
-			return true
-		end 'raised'
-
+function awaitFlag(name String)
+	while not File.exists(flagPath(name)) 'poll'
 		sleep(PollIntervalMs)
 	end 'poll'
-
-	return false
 end 'awaitFlag'
 
 function sendThenReset(port NetworkPort) returns bool
@@ -1722,7 +1713,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveUntilClosed(server, handler: ResetHandler.create())
 	let reset = sendThenReset(server.port())
 	raiseFlag(PeerResetFlag)
-	let reported = awaitFlag(FaultReportedFlag)
+	awaitFlag(FaultReportedFlag)
 
 	server.close()
 	let ended = await peer
@@ -1730,7 +1721,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 	lowerFlag(RequestReadFlag)
 	lowerFlag(PeerResetFlag)
 	lowerFlag(FaultReportedFlag)
-	print("reset={reset} reported={reported} ended={ended.name}\n")
+	print("reset={reset} ended={ended.name}\n")
 
 	return 0
 end 'exchangeOver'
@@ -1746,7 +1737,7 @@ end 'main'
 ```
 ```stdout
 faulted GET /reset failed with malformedRequest, and the 500 sent in its place could not be sent
-reset=true reported=true ended=closed
+reset=true ended=closed
 ```
 ```exitcode
 0

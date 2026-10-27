@@ -474,12 +474,20 @@ end 'main'
 `timedOut`.** The peer accepts and then answers nothing, with no deadline of its own, so only the client's
 leaving can end it: an exchange that returns `timedOut` with the peer seeing the client leave is the deadline,
 and a client that waited for the peer would never return.
+
+⚠ **THE DEADLINE MAY EXPIRE IN ANY PHASE, SO THE PEER'S ACCEPT IS ENDED BY THE CLIENT'S RETURN.** A client that
+times out before its connection is made leaves nothing for the peer to accept, and a peer waiting in `accept`
+for ever would hang the case. `exchangeOver` closes the listener once the client has returned, which ends an
+accept that nothing will ever answer and leaves an accepted connection alone: a client that dialled leaves a
+peer reading until the client's socket closes, so a client that kept its socket open still hangs the case.
+Either end is the peer released by the client's return, and which one a run takes is the dial's business and
+not the property.
 ```maxon
 let ClientLimitMs = 200
 let RequestBytes = 4096
 
 function staySilent(listener TcpListener) returns String
-	let conn = try listener.accept() otherwise return "accept-failed"
+	let conn = try listener.accept() otherwise return "unaccepted"
 
 	while true 'held'
 		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
@@ -488,18 +496,27 @@ function staySilent(listener TcpListener) returns String
 	end 'held'
 end 'staySilent'
 
+function clientOutcome(request HttpRequest, limits HttpClientLimits) returns String
+	let response = try HttpClient.send(request, limits: limits) otherwise (e) 'failed'
+		return "client={e.name}"
+	end 'failed'
+
+	return "client=answered {response.statusCode().number()}"
+end 'clientOutcome'
+
 function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async staySilent(listener)
 	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return 2
 	var limits = HttpClientLimits.create()
 	limits.timeoutMs = ClientLimitMs
 
-	let response = try HttpClient.send(request, limits: limits) otherwise (e) 'failed'
-		print("client={e.name} peer={await peer}\n")
-		return 0
-	end 'failed'
+	let outcome = clientOutcome(request, limits: limits)
 
-	print("client=answered {response.statusCode().number()} peer={await peer}\n")
+	listener.close()
+
+	let ended = await peer
+
+	print("{outcome} peer-released={ended == "connectionClosed" or ended == "unaccepted"}\n")
 	return 0
 end 'exchangeOver'
 
@@ -509,7 +526,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-client=timedOut peer=connectionClosed
+client=timedOut peer-released=true
 ```
 ```exitcode
 0
