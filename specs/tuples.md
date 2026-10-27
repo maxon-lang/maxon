@@ -1606,9 +1606,10 @@ error E3005: <fragment>:14:2: Cannot return '((int, Int), Int)' from function de
 ```
 
 <!-- test: error.a-tuple-over-a-contested-alias-is-named-in-source-form -->
-`pkg/lib.maxon` and `pkg/main.maxon` each declare a file-private `Bytes` over a `Byte` of their own, so a
-`(Bytes, String)` from one file is not a `(Bytes, String)` of the other. The refusal names each tuple's
-element in source form.
+`pkg/lib.maxon` and `pkg/main.maxon` each declare a file-private `Bytes` over a `Byte` of their own, and
+`Holder.pair` is a `(Bytes, String)` of `pkg/lib.maxon`'s. An exported field cannot be typed by a
+file-private alias, even as a tuple's element, so the field is refused before `pkg/main.maxon`'s own
+`Bytes` is ever asked about it.
 ```maxon
 // --- file: pkg/lib.maxon
 typealias Byte = int(0 to 1000)
@@ -1637,7 +1638,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:25:9: argument type mismatch for 'p': expected '(Bytes (declared in pkg/main.maxon), String)', got '(Bytes (declared in pkg/lib.maxon), String)'
+error E3167: pkg/<fragment>:6:13: exported field 'pkg.Holder.pair' names file-private typealias 'Bytes' in its type
 ```
 
 ### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors
@@ -3106,7 +3107,7 @@ end 'main'
 ```
 
 <!-- test: error.two-tuples-differing-only-by-the-file-an-alias-brand-comes-from-name-each-one -->
-`pkg/lib.maxon` and `pkg/main.maxon` each declare a file-private `Xs` over one and the same instance, so a `(Xs, Item)` from one file is not a `(Xs, Item)` of the other even though the arrays are one record. The refusal says which file each brand was declared in.
+`pkg/lib.maxon` and `pkg/main.maxon` each declare a file-private `Xs` over one and the same instance, and `Holder.pair` is a `(Xs, Item)` of `pkg/lib.maxon`'s. An exported field cannot be typed by a file-private alias, even as a tuple's element, so the field is refused before `pkg/main.maxon`'s own `Xs` is ever asked about it.
 ```maxon
 // --- file: pkg/item.maxon
 export typealias Item = int(0 to 100)
@@ -3134,7 +3135,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:24:9: argument type mismatch for 'p': expected '(Xs (declared in pkg/main.maxon), Item (declared in pkg/item.maxon))', got '(Xs (declared in pkg/lib.maxon), Item (declared in pkg/item.maxon))'
+error E3167: pkg/<fragment>:8:13: exported field 'pkg.Holder.pair' names file-private typealias 'Xs' in its type
 ```
 
 <!-- test: error.two-tuples-differing-only-by-brand-name-the-brands -->

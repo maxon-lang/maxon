@@ -845,9 +845,9 @@ not chosen.
 <!-- test: error.a-contested-alias-is-qualified-by-its-namespace -->
 ### Claimants in different modules: the NAMESPACE is the qualifier
 `api/lib.maxon` and `app/main.maxon` each declare a file-private `Bytes` over their own `Byte`, and those
-are two element types. Neither file sees the other's declaration, so the value crosses through a FIELD,
-which `Holder.items` types by its declaring file. The namespaces `api` and `app` are distinct, so they are
-what an author recognizes and what the refusal quotes.
+are two element types. Neither file sees the other's declaration, so a value of one could reach the other
+only through an exported surface, and the field `Holder.items` is such a surface: E3167 refuses it, naming
+the field by its namespace `api` and the alias as `api/lib.maxon` wrote it.
 ```maxon
 // --- file: api/lib.maxon
 typealias Byte = int(0 to 1000)
@@ -876,24 +876,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: app/<fragment>:25:9: argument type mismatch for 'b': expected 'app.Bytes', got 'api.Bytes'
+error E3167: api/<fragment>:7:22: exported field 'api.Holder.items' names file-private typealias 'Bytes' in its type
 ```
 
 <!-- test: error.a-contested-alias-in-one-module-is-qualified-by-its-file -->
-### Claimants in ONE module: the file is a NOTE, not part of the name
-The same contest with both declarations in `pkg/`, where a namespace-qualified spelling would render
-`expected 'pkg.Bytes'` on both sides — the contentless refusal. The name therefore stays the bare
-source spelling the author wrote, and the declaring file arrives beside it as a parenthesised note.
-
-A file path joined INTO the name would be the same contentless refusal one level down: this runner
-normalizes every staged file's name to the `<fragment>` token and keeps only its directory
-(`FragmentPathMapping`), so a spelling built from both claimants' paths reads `'pkg/<fragment>.Bytes'`
-on both sides whatever the compiler emitted.
-
-Both declarations are file-private, which is what lets two files of one directory hold one name, and
-the value crosses through `Holder.items` exactly as in the case above. The bare name alone would read
-`expected 'Bytes', got 'Bytes'`, and the namespace tier would read `'pkg.Bytes'` on both sides. Both fail
-this expectation.
+### Claimants in ONE module: the refusal still names the field and the alias as written
+The same contest with both declarations in `pkg/`. Both declarations are file-private, which is what lets
+two files of one directory hold one name, and `Holder.items` would be the only way a `pkg/lib.maxon`
+value could reach `pkg/main.maxon`. E3167 refuses the field at its declaration, so the two `Bytes` never
+meet in an argument check.
 ```maxon
 // --- file: pkg/lib.maxon
 typealias Byte = int(0 to 1000)
@@ -922,7 +913,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:25:9: argument type mismatch for 'b': expected 'Bytes' (declared in pkg/main.maxon), got 'Bytes' (declared in pkg/lib.maxon)
+error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bytes' in its type
 ```
 
 <!-- test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller -->

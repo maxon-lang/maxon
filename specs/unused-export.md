@@ -497,10 +497,8 @@ end 'main'
 a qualified callee is what makes that a reference.
 ```maxon
 // --- file: api/shapes.maxon
-typealias Integer = int(i64.min to i64.max)
-
 export type UsedPoint
-	export var x as Integer
+	export var x as ExitCode
 
 	export static function origin() returns UsedPoint
 		return UsedPoint{x: 4}
@@ -746,37 +744,43 @@ end 'main'
 ```
 
 <!-- test: error.unused-exported-element-nothing-outside-reaches -->
-⭐⭐ **THE DISCRIMINATING CONTROL FOR THE TWO CASES ABOVE.** One line differs from
-`cross-file-element-member-access-is-a-reference` — the loop counts instead of reading `it.n` — and the
-verdict flips back. Nothing outside `api/store.maxon` reaches INTO an `Item`, so nothing outside needs it
+⭐⭐ **THE DISCRIMINATING CONTROL FOR THE TWO CASES ABOVE.** The count happens inside `api/store.maxon`
+instead of `app/main.maxon` reading `it.n`, and the verdict flips back. Nothing outside `api/store.maxon` reaches INTO an `Item`, so nothing outside needs it
 visible, and the finding is correct. Crediting every type merely REACHABLE from one a file names would
 delete this diagnostic and the three families beside it (a user generic's argument, a function alias's
 signature, a tuple alias's elements).
 
-⚠ **BOTH FACTORIES ARE FILE-PRIVATE, AND THAT IS LOAD-BEARING.** A signature is asked for its types, and
-the answer is a reference to each of them: an `export` on `Holder.create` would name `ItemArray` — and
-`Item` through it — from the very file the audit is asking about, and the finding would disappear into the
-demand the signature rule makes. Both factories are reached only from `makeHolder`, beside them.
+⚠ **`items`, `ItemArray` AND BOTH FACTORIES ARE FILE-PRIVATE, AND THAT IS LOAD-BEARING.** An exported field
+or signature naming `ItemArray` would demand it, and `Item` through it, at `export` (E3167), so the finding
+would disappear into the demand the signature rule makes. Nothing exported names an `Item`.
 ```maxon
 // --- file: api/store.maxon
-typealias Integer = int(i64.min to i64.max)
-
 export type Item
-	export let n as Integer
+	export let n as ExitCode
 
-	static function create(n Integer) returns Self
+	static function create(n ExitCode) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Item'
 
-export typealias ItemArray = Array with Item
+typealias ItemArray = Array with Item
 
 export type Holder
-	export let items as ItemArray
+	let items as ItemArray
 
 	static function create(items ItemArray) returns Self
 		return Self{items: items}
 	end 'create'
+
+	export function total() returns ExitCode
+		var t = 0 as ExitCode
+
+		for _ in self.items 'each'
+			t = t + 1
+		end 'each'
+
+		return t
+	end 'total'
 end 'Holder'
 
 export function makeHolder() returns Holder
@@ -786,23 +790,12 @@ export function makeHolder() returns Holder
 end 'makeHolder'
 
 // --- file: app/main.maxon
-typealias Count = int(i64.min to i64.max)
-
-function total(h Holder) returns Count
-	var t = 0 as Count
-	for _ in h.items 'each'
-		t = t + 1
-	end 'each'
-
-	return t
-end 'total'
-
 function main() returns ExitCode
-	return total(makeHolder())
+	return makeHolder().total()
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:13: exported type 'Item' is never referenced outside its declaring file
+error E3092: api/<fragment>:3:13: exported type 'Item' is never referenced outside its declaring file
 ```
 
 <!-- test: error.unused-exported-union-nothing-outside-reaches -->
@@ -974,10 +967,8 @@ export function clampish(v Wide) returns Wide
 end 'clampish'
 
 // --- file: records/types.maxon
-typealias Integer = int(i64.min to i64.max)
-
 export type Holder
-	export var n as Integer
+	export var n as ExitCode
 
 	export static function make() returns Holder
 		return Holder{n: 7}
@@ -985,7 +976,7 @@ export type Holder
 end 'Holder'
 
 export type Victim
-	export var q as Integer
+	export var q as ExitCode
 
 	export static function make() returns Victim
 		return Victim{q: 1}
@@ -993,18 +984,16 @@ export type Victim
 end 'Victim'
 
 // --- file: use/main.maxon
-typealias Integer = int(i64.min to i64.max)
-
-function read(h Holder) returns Integer
+function read(h Holder) returns ExitCode
 	return h.n
 end 'read'
 
 function main() returns ExitCode
-	return read(Holder.make()) + (clampish(0) as Integer)
+	return read(Holder.make()) + (clampish(0) as ExitCode)
 end 'main'
 ```
 ```maxoncstderr
-error E3092: records/<fragment>:22:13: exported type 'Victim' is never referenced outside its declaring file
+error E3092: records/<fragment>:20:13: exported type 'Victim' is never referenced outside its declaring file
 ```
 
 ## A one-file program is audited like any other

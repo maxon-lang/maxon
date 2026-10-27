@@ -66,9 +66,45 @@ export let BIG = Status.big   // E3167
 error E3167: api/lib.maxon:6:12: exported constant 'api.BIG' names file-private enum 'Status' in its type
 ```
 
-Widen the type to the binding's tier (`export enum Status`), or narrow the binding (`let BIG`). A binding
-read from another file counts as a use of every type it names this way, which keeps an `export` type that
-only an exported binding exposes clear of [E3092](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3092).
+Widen the type to the binding's tier (`export enum Status`), or narrow the binding (`let BIG`).
+
+Every other surface a declaration exposes is held to the same rule, with its own noun and position:
+
+| surface | noun | position | its tier |
+|---------|------|----------|----------|
+| an instance field | `field` | `in its type` | the narrower of the field's own modifier and its type's |
+| a union case's payload | `union case` | `in the type of payload 'name'` | the union's |
+| a typealias | `typealias` | `in its target` | the alias's |
+| an `implements` clause, with its `with` arguments | `type`, `enum` or `union` | `in its implements clause` | the declaration's |
+| a type's `where` clause | `type` | `in its where clause` | the type's |
+| a generic function's or an extension's `where` clause | `function` | `in its where clause` | the function's |
+| an `extends` clause | `interface` | `in its extends clause` | the interface's |
+| a struct-backed enum's backing record | `enum` | `in its backing record` | the enum's |
+
+An unmarked field is private to its type and is asked nothing. A field or payload is reported at the type it
+writes, every other surface at the declaration's name:
+
+```text
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export type Holder
+	export var mode as Mode   // E3167
+end 'Holder'
+```
+
+```text
+error E3167: api/lib.maxon:7:21: exported field 'api.Holder.mode' names file-private enum 'Mode' in its type
+```
+
+A service's `handle` is its service's tier, so a surface naming `Worker.handle` names `Worker`.
+
+A surface reached from another file counts as a use of every type it names this way, and so does a surface
+of a type that is itself so used: a field of a type only an exported function returns credits the field's
+type. That keeps an `export` type that only an exported surface exposes clear of
+[E3092](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3092).
 
 ### The library is held to it too
 
@@ -241,6 +277,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: api/<fragment>:11:17: exported function 'api.all' names file-private type 'Secret' in its return type
+error E3167: api/<fragment>:9:18: exported typealias 'api.SecretArray' names file-private type 'Secret' in its target
 ```
 
 <!-- test: error.a-tuple-element-counts -->
@@ -297,6 +334,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: api/<fragment>:13:17: exported function 'api.wrap' names file-private type 'Box' in its return type
+error E3167: api/<fragment>:11:18: exported typealias 'api.IntBox' names file-private type 'Box' in its target
 ```
 
 <!-- test: error.a-method-outranks-its-parameter-type -->
@@ -437,6 +475,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names file-private typealias 'Secret' in the type of parameter 'xs'
+error E3167: api/<fragment>:4:18: exported typealias 'api.Secrets' names file-private typealias 'Secret' in its target
 ```
 
 <!-- test: error.an-interface-inner-alias-over-a-file-private-type-is-refused -->
@@ -1044,6 +1083,7 @@ end 'main'
 ```maxoncstderr
 error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
 error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'b'
+error E3167: pkg/<fragment>:12:18: exported typealias 'pkg.Handler' names file-private typealias 'StringArray' in its target
 ```
 
 <!-- test: error.an-alias-walked-from-another-file-judges-its-components-in-its-own-file -->
@@ -1070,6 +1110,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: pkg/<fragment>:8:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
+error E3167: pkg/<fragment>:5:18: exported typealias 'pkg.Handler' names file-private typealias 'StringArray' in its target
 ```
 
 <!-- test: error.a-function-alias-over-a-file-private-instance-element-is-refused -->
@@ -1096,53 +1137,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: api/<fragment>:8:17: exported function 'api.f' names file-private typealias 'Secrets' in the type of parameter 'cb'
-```
-
-<!-- test: an-alias-walked-from-another-file-is-not-judged-by-the-readers-same-named-alias -->
-`Cb` is declared in `a/idx.maxon`, whose `Idx` is `module`. `b/f.maxon` cannot see that `Idx` and declares a
-file-private `Idx` of its own. `f` is `module` and reaches `Cb`'s `Idx`, which is `a/`'s `module` alias, so the
-tiers are equal and `f` is legal; `b/f.maxon`'s file-private `Idx` is never asked. `7` is outside `b/f.maxon`'s
-`Idx` and inside `a/`'s.
-```maxon
-// --- file: a/idx.maxon
-module typealias Idx = int(0 to 9)
-
-export typealias Cb = function(Idx) returns ExitCode
-
-// --- file: a/more.maxon
-function first() returns Idx
-	return 1
-end 'first'
-
-export function seed() returns ExitCode
-	let i = first()
-	return i as ExitCode
-end 'seed'
-
-// --- file: b/f.maxon
-typealias Idx = int(0 to 3)
-
-function seed() returns ExitCode
-	return 2
-end 'seed'
-
-module function f(cb Cb) returns ExitCode
-	let two = seed() as Idx
-	return cb(7) + (two as ExitCode)
-end 'f'
-
-// --- file: b/run.maxon
-export function run() returns ExitCode
-	return f(function(i) gives i as ExitCode)
-end 'run'
-
-// --- file: main.maxon
-function main() returns ExitCode
-	return run() + seed()
-end 'main'
-```
-```exitcode
-10
+error E3167: api/<fragment>:6:18: exported typealias 'api.Cb' names file-private typealias 'Secrets' in its target
 ```
 
 <!-- test: error.a-file-private-tuple-alias-in-an-exported-signature-is-refused -->
@@ -1631,4 +1626,1249 @@ end 'main'
 ```
 ```exitcode
 12
+```
+
+## Every other surface that names a type is judged by its type
+
+A type's members and clauses are part of the surface its tier opens, exactly as a function's signature or a
+binding's type is. The refusal is E3167 in the words a function gets, with the noun and the position of the
+surface:
+
+| surface | noun | position | its tier |
+|---------|------|----------|----------|
+| an instance field | `field` | `in its type` | the field's own modifier, bounded by its type's |
+| a union case's payload | `union case` | `in the type of payload 'name'` | the union's |
+| a typealias | `typealias` | `in its target` | the alias's |
+| an `implements` clause, with its `with` arguments | `type`, `enum` or `union` | `in its implements clause` | the declaration's |
+| a `where` constraint | `type` | `in its where clause` | the declaration's |
+| an `extends` clause | `interface` | `in its extends clause` | the interface's |
+
+<!-- test: error.an-exported-field-of-a-file-private-enum-type-is-refused -->
+A field reachable from outside hands its readers a `Mode` they have no spelling for. The refusal sits at the
+type the field names, and the field is called by its qualified name.
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export type Holder
+	export var mode as Mode
+
+	export static function create() returns Holder
+		return Holder{mode: Mode.fast}
+	end 'create'
+
+	export function code() returns ExitCode
+		return match self.mode 'which'
+			fast gives 7
+			slow gives 1
+		end 'which'
+	end 'code'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().code()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:9:21: exported field 'api.Holder.mode' names file-private enum 'Mode' in its type
+```
+
+<!-- test: error.an-exported-field-of-a-module-enum-type-is-refused -->
+`module` is one tier short of `export`, and the tier word follows the type.
+```maxon
+// --- file: api/lib.maxon
+module enum Mode
+	fast
+	slow
+end 'Mode'
+
+export type Holder
+	export var mode as Mode
+
+	export static function create() returns Holder
+		return Holder{mode: Mode.fast}
+	end 'create'
+
+	export function code() returns ExitCode
+		return match self.mode 'which'
+			fast gives 7
+			slow gives 1
+		end 'which'
+	end 'code'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().code()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:9:21: exported field 'api.Holder.mode' names module enum 'Mode' in its type
+```
+
+<!-- test: error.an-exported-field-typed-by-a-tuple-of-a-file-private-alias-is-refused -->
+A field's type is judged as a parameter's is, so a tuple spelled over a file-private alias is refused at the field: the element's alias is a declaration like any other.
+```maxon
+// --- file: api/lib.maxon
+typealias Scores = Array with ExitCode
+
+export type Holder
+	export var pair as (Scores, ExitCode)
+
+	export static function create() returns Holder
+		return Holder{pair: (Scores.create(), 7)}
+	end 'create'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().pair.1
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:5:13: exported field 'api.Holder.pair' names file-private typealias 'Scores' in its type
+```
+
+<!-- test: error.an-exported-field-typed-by-a-tuple-of-a-contested-file-private-alias-is-refused -->
+Two files declaring one `Scores` over one instance make it a contested name, and the field is still judged at the alias its own file wrote.
+```maxon
+// --- file: api/lib.maxon
+typealias Scores = Array with ExitCode
+
+export type Holder
+	export var pair as (Scores, ExitCode)
+
+	export static function create() returns Holder
+		return Holder{pair: (Scores.create(), 7)}
+	end 'create'
+end 'Holder'
+
+// --- file: app/main.maxon
+typealias Scores = Array with ExitCode
+
+function tally(scores Scores) returns ExitCode
+	return scores.count() as ExitCode
+end 'tally'
+
+function main() returns ExitCode
+	return tally(Scores.create()) + Holder.create().pair.1
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:5:13: exported field 'api.Holder.pair' names file-private typealias 'Scores' in its type
+```
+
+<!-- test: error.an-exported-field-typed-by-a-contested-file-private-generic-alias-is-refused -->
+The same contest without a tuple: the field names `Scores` directly, and `Scores` is declared in both files over one instance.
+```maxon
+// --- file: api/lib.maxon
+typealias Scores = Array with ExitCode
+
+export type Holder
+	export var scores as Scores
+
+	export static function create() returns Holder
+		return Holder{scores: Scores.create()}
+	end 'create'
+end 'Holder'
+
+// --- file: app/main.maxon
+typealias Scores = Array with ExitCode
+
+function tally(scores Scores) returns ExitCode
+	return scores.count() as ExitCode
+end 'tally'
+
+function main() returns ExitCode
+	return tally(Scores.create()) + Holder.create().scores.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:6:23: exported field 'api.Holder.scores' names file-private typealias 'Scores' in its type
+```
+
+<!-- test: error.a-module-field-is-judged-at-its-own-modifier -->
+⭐ **A FIELD'S OWN MODIFIER IS THE TIER, NOT ITS TYPE'S.** `Holder` is `export` and `mode` is `module`, so the
+field is held to `module`, and a file-private `Mode` is below it.
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export type Holder
+	module var mode as Mode
+
+	export static function create() returns Holder
+		return Holder{mode: Mode.fast}
+	end 'create'
+
+	export function code() returns ExitCode
+		return match self.mode 'which'
+			fast gives 7
+			slow gives 1
+		end 'which'
+	end 'code'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().code()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:9:21: module field 'api.Holder.mode' names file-private enum 'Mode' in its type
+```
+
+<!-- test: a-module-field-of-an-exported-type-may-name-a-module-enum -->
+The control: the field is `module`, `Mode` is `module`, and `Holder` is `export`. Nothing outside `api/` can read
+`mode`, so nothing outside needs to name `Mode`. `Mode` is not named outside `lib.maxon` at all — the field's
+demand is what keeps it from E3094.
+```maxon
+// --- file: api/lib.maxon
+module enum Mode
+	fast
+	slow
+end 'Mode'
+
+export type Holder
+	module var mode as Mode
+
+	export static function create() returns Holder
+		return Holder{mode: Mode.fast}
+	end 'create'
+end 'Holder'
+
+// --- file: api/other.maxon
+export function modeCode(h Holder) returns ExitCode
+	return match h.mode 'which'
+		fast gives 7
+		slow gives 1
+	end 'which'
+end 'modeCode'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return modeCode(Holder.create())
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: an-export-field-of-a-module-type-is-bounded-by-the-type -->
+The other half of the bound: `Holder` is `module`, so its `export` field reaches no further than `module`, and a
+`module` `Mode` is enough.
+```maxon
+// --- file: api/lib.maxon
+module enum Mode
+	fast
+	slow
+end 'Mode'
+
+module type Holder
+	export var mode as Mode
+
+	module static function create() returns Holder
+		return Holder{mode: Mode.fast}
+	end 'create'
+end 'Holder'
+
+// --- file: api/main.maxon
+function main() returns ExitCode
+	let h = Holder.create()
+
+	return match h.mode 'which'
+		fast gives 7
+		slow gives 1
+	end 'which'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: an-exported-field-of-an-exported-enum-is-legal -->
+Equal tiers. The reader names no type, and `Mode` is credited as needed by `mode`, so the unused-export audit
+has nothing to say about it.
+```maxon
+// --- file: api/lib.maxon
+export enum Mode
+	fast
+	slow
+end 'Mode'
+
+export type Holder
+	export var mode as Mode
+
+	export static function create() returns Holder
+		return Holder{mode: Mode.fast}
+	end 'create'
+
+	export function code() returns ExitCode
+		return match self.mode 'which'
+			fast gives 7
+			slow gives 1
+		end 'which'
+	end 'code'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: an-unmarked-field-of-an-exported-type-may-name-a-file-private-enum -->
+An unmarked field is private to its type, so no caller can read it and nothing is owed a spelling of its type.
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export type Holder
+	var mode as Mode
+
+	export static function create() returns Holder
+		return Holder{mode: Mode.fast}
+	end 'create'
+
+	export function code() returns ExitCode
+		return match self.mode 'which'
+			fast gives 7
+			slow gives 1
+		end 'which'
+	end 'code'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: an-export-field-of-a-file-private-type-may-name-a-file-private-enum -->
+A file-private type bounds its `export` field to file-private, so the field and the enum sit at one tier.
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+type Holder
+	export var mode as Mode
+
+	static function create() returns Holder
+		return Holder{mode: Mode.fast}
+	end 'create'
+end 'Holder'
+
+export function code() returns ExitCode
+	let h = Holder.create()
+
+	return match h.mode 'which'
+		fast gives 7
+		slow gives 1
+	end 'which'
+end 'code'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.an-exported-union-case-payload-of-a-file-private-enum-type-is-refused -->
+A payload is read by whoever matches the union, so it is held to the union's tier. The union writes no modifier
+on a case, and the refusal sits at the payload's type.
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export union Result
+	ok(v Mode)
+	failed
+end 'Result'
+
+export function sample() returns Result
+	return Result.ok(Mode.fast)
+end 'sample'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match sample() 'which'
+		ok(v) gives 7 if v == v else 0
+		failed gives 1
+	end 'which'
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:9:7: exported union case 'api.Result.ok' names file-private enum 'Mode' in the type of payload 'v'
+```
+
+<!-- test: error.an-exported-union-case-payload-of-a-module-enum-type-is-refused -->
+```maxon
+// --- file: api/lib.maxon
+module enum Mode
+	fast
+	slow
+end 'Mode'
+
+export union Result
+	ok(v Mode)
+	failed
+end 'Result'
+
+export function sample() returns Result
+	return Result.ok(Mode.fast)
+end 'sample'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match sample() 'which'
+		ok(v) gives 7 if v == v else 0
+		failed gives 1
+	end 'which'
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:9:7: exported union case 'api.Result.ok' names module enum 'Mode' in the type of payload 'v'
+```
+
+<!-- test: an-exported-union-case-payload-of-an-exported-enum-is-legal -->
+Equal tiers, and `Mode` is named by the payload alone.
+```maxon
+// --- file: api/lib.maxon
+export enum Mode
+	fast
+	slow
+end 'Mode'
+
+export union Result
+	ok(v Mode)
+	failed
+end 'Result'
+
+export function sample() returns Result
+	return Result.ok(Mode.fast)
+end 'sample'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match sample() 'which'
+		ok(v) gives 7 if v == v else 0
+		failed gives 1
+	end 'which'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-file-private-union-case-payload-may-name-a-file-private-enum -->
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+union Result
+	ok(v Mode)
+	failed
+end 'Result'
+
+export function code() returns ExitCode
+	return match Result.ok(Mode.fast) 'which'
+		ok(v) gives 7 if v == v else 0
+		failed gives 1
+	end 'which'
+end 'code'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.an-exported-generic-alias-over-a-file-private-enum-is-refused -->
+An alias is nameable wherever its tier reaches, and so is what it stands for. The refusal sits at the alias NAME.
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export typealias ModeArray = Array with Mode
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:18: exported typealias 'api.ModeArray' names file-private enum 'Mode' in its target
+```
+
+<!-- test: error.an-exported-generic-alias-over-a-module-enum-is-refused -->
+```maxon
+// --- file: api/lib.maxon
+module enum Mode
+	fast
+	slow
+end 'Mode'
+
+export typealias ModeArray = Array with Mode
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:18: exported typealias 'api.ModeArray' names module enum 'Mode' in its target
+```
+
+<!-- test: error.an-exported-function-alias-over-a-file-private-enum-is-refused -->
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export typealias Chooser = function(Mode) returns ExitCode
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:18: exported typealias 'api.Chooser' names file-private enum 'Mode' in its target
+```
+
+<!-- test: error.an-exported-tuple-alias-over-a-file-private-enum-is-refused -->
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export typealias ModePair = (Mode, Mode)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:18: exported typealias 'api.ModePair' names file-private enum 'Mode' in its target
+```
+
+<!-- test: an-exported-generic-alias-over-an-exported-enum-is-legal -->
+Equal tiers; `Mode` is named by the alias alone, which the reader uses.
+```maxon
+// --- file: api/lib.maxon
+export enum Mode
+	fast
+	slow
+end 'Mode'
+
+export typealias ModeArray = Array with Mode
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	var modes = ModeArray.create()
+	return (modes.count() as ExitCode) + 7
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-module-alias-over-a-module-enum-is-legal -->
+```maxon
+// --- file: api/lib.maxon
+module enum Mode
+	fast
+	slow
+end 'Mode'
+
+module typealias ModeArray = Array with Mode
+
+// --- file: api/main.maxon
+function main() returns ExitCode
+	var modes = ModeArray.create()
+	return (modes.count() as ExitCode) + 7
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-file-private-alias-over-a-file-private-enum-is-legal -->
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+typealias ModeArray = Array with Mode
+
+export function code() returns ExitCode
+	var modes = ModeArray.create()
+	return (modes.count() as ExitCode) + 7
+end 'code'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.an-exported-type-implementing-a-file-private-interface-is-refused -->
+Whoever can name `Holder` can ask what it implements. The refusal sits at the type NAME.
+```maxon
+// --- file: api/lib.maxon
+interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+export type Holder implements Marker
+	export function code() returns ExitCode
+		return 7
+	end 'code'
+
+	export static function create() returns Holder
+		return Holder{}
+	end 'create'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().code()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:13: exported type 'api.Holder' names file-private interface 'Marker' in its implements clause
+```
+
+<!-- test: error.an-exported-type-implementing-a-module-interface-is-refused -->
+```maxon
+// --- file: api/lib.maxon
+module interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+export type Holder implements Marker
+	export function code() returns ExitCode
+		return 7
+	end 'code'
+
+	export static function create() returns Holder
+		return Holder{}
+	end 'create'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().code()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:13: exported type 'api.Holder' names module interface 'Marker' in its implements clause
+```
+
+<!-- test: error.an-exported-type-binding-a-file-private-enum-in-its-implements-clause-is-refused -->
+The `with` arguments of a conformance are named types of the declaration.
+```maxon
+// --- file: api/lib.maxon
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+export interface Source uses Element
+	function next() returns Element
+end 'Source'
+
+export type Holder implements Source with Mode
+	function next() returns Mode
+		return Mode.fast
+	end 'next'
+
+	export static function create() returns Holder
+		return Holder{}
+	end 'create'
+
+	export function code() returns ExitCode
+		return match self.next() 'which'
+			fast gives 7
+			slow gives 1
+		end 'which'
+	end 'code'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().code()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:12:13: exported type 'api.Holder' names file-private enum 'Mode' in its implements clause
+```
+
+<!-- test: error.an-exported-enum-implementing-a-file-private-interface-is-refused -->
+```maxon
+// --- file: api/lib.maxon
+interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+export enum Mode implements Marker
+	fast
+	slow
+
+	export function code() returns ExitCode
+		return 7
+	end 'code'
+end 'Mode'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Mode.fast.code()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:13: exported enum 'api.Mode' names file-private interface 'Marker' in its implements clause
+```
+
+<!-- test: error.an-exported-type-constrained-by-a-file-private-interface-is-refused -->
+A `where` constraint is a requirement every user of `Box` has to satisfy, so the interface it names has to be
+nameable wherever `Box` is.
+```maxon
+// --- file: api/lib.maxon
+interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+export type Box uses T where T is Marker
+	let item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:13: exported type 'api.Box' names file-private interface 'Marker' in its where clause
+```
+
+<!-- test: error.an-exported-interface-extending-a-file-private-interface-is-refused -->
+```maxon
+// --- file: api/lib.maxon
+interface Inner
+	function code() returns ExitCode
+end 'Inner'
+
+export interface Outer extends Inner
+	function more() returns ExitCode
+end 'Outer'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:18: exported interface 'api.Outer' names file-private interface 'Inner' in its extends clause
+```
+
+<!-- test: an-exported-type-implementing-an-exported-interface-is-legal -->
+Equal tiers, and the interface is named by the clause and by the reader.
+```maxon
+// --- file: api/lib.maxon
+export interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+export type Holder implements Marker
+	export function code() returns ExitCode
+		return 7
+	end 'code'
+
+	export static function create() returns Holder
+		return Holder{}
+	end 'create'
+end 'Holder'
+
+// --- file: app/main.maxon
+function report(m Marker) returns ExitCode
+	return m.code()
+end 'report'
+
+function main() returns ExitCode
+	return report(Holder.create())
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: an-exported-type-implementing-with-an-exported-enum-is-legal -->
+```maxon
+// --- file: api/lib.maxon
+export enum Mode
+	fast
+	slow
+end 'Mode'
+
+export interface Source uses Element
+	function next() returns Element
+end 'Source'
+
+export type Holder implements Source with Mode
+	function next() returns Mode
+		return Mode.fast
+	end 'next'
+
+	export static function create() returns Holder
+		return Holder{}
+	end 'create'
+
+	export function code() returns ExitCode
+		return match self.next() 'which'
+			fast gives 7
+			slow gives 1
+		end 'which'
+	end 'code'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Holder.create().code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-file-private-type-may-implement-a-file-private-interface -->
+```maxon
+// --- file: api/lib.maxon
+interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+type Holder implements Marker
+	function code() returns ExitCode
+		return 7
+	end 'code'
+
+	static function create() returns Holder
+		return Holder{}
+	end 'create'
+end 'Holder'
+
+export function code() returns ExitCode
+	return Holder.create().code()
+end 'code'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: an-exported-type-constrained-by-an-exported-interface-is-legal -->
+```maxon
+// --- file: api/lib.maxon
+export interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+export type Box uses T where T is Marker
+	let item as T
+
+	export function run() returns ExitCode
+		return self.item.code()
+	end 'run'
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+// --- file: app/main.maxon
+type Item implements Marker
+	function code() returns ExitCode
+		return 7
+	end 'code'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Item'
+
+typealias ItemBox = Box with Item
+
+function main() returns ExitCode
+	return ItemBox.create(Item.create()).run()
+end 'main'
+```
+```exitcode
+7
+```
+<!-- test: an-exported-interface-extending-an-exported-interface-is-legal -->
+```maxon
+// --- file: api/lib.maxon
+export interface Inner
+	function code() returns ExitCode
+end 'Inner'
+
+export interface Outer extends Inner
+	function more() returns ExitCode
+end 'Outer'
+
+// --- file: app/main.maxon
+function use(o Outer) returns ExitCode
+	return o.code() + o.more()
+end 'use'
+
+function main() returns ExitCode
+	return 7
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.an-exported-interface-requirement-names-a-module-type -->
+An interface requirement takes the interface's tier (see above), and the module tier is judged the same way.
+```maxon
+// --- file: api/lib.maxon
+module typealias Count = int(0 to 100)
+
+export interface Sized
+	function size() returns Count
+end 'Sized'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:6:11: exported function 'api.Sized.size' names module typealias 'Count' in its return type
+```
+
+<!-- test: error.an-exported-enum-backed-by-a-file-private-record-is-refused -->
+A struct-backed enum hands out its record through `rawValue`, so the record is part of the enum's surface and
+is held to the enum's tier. The refusal sits at the enum NAME.
+```maxon
+// --- file: api/lib.maxon
+type OpMeta
+	export let latency as ExitCode
+end 'OpMeta'
+
+export enum Instruction
+	add = OpMeta{latency: 1}
+	load = OpMeta{latency: 4}
+end 'Instruction'
+
+export function latency(op Instruction) returns ExitCode
+	return op.rawValue.latency
+end 'latency'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return latency(Instruction.load)
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:13: exported enum 'api.Instruction' names file-private type 'OpMeta' in its backing record
+```
+
+<!-- test: an-exported-enum-backed-by-an-exported-record-is-legal -->
+Equal tiers, and `OpMeta` is named by the enum's backing alone.
+```maxon
+// --- file: api/lib.maxon
+export type OpMeta
+	export let latency as ExitCode
+end 'OpMeta'
+
+export enum Instruction
+	add = OpMeta{latency: 1}
+	load = OpMeta{latency: 4}
+end 'Instruction'
+
+export function latency(op Instruction) returns ExitCode
+	return op.rawValue.latency
+end 'latency'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return latency(Instruction.load)
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.an-exported-alias-over-a-file-private-services-handle-is-refused -->
+A service's handle is the service's own tier, so an alias naming `Worker.handle` names `Worker`.
+```maxon
+// --- file: api/lib.maxon
+type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function run() returns ExitCode
+		return 7
+	end 'run'
+end 'Worker'
+
+export typealias WorkerArray = Array with Worker.handle
+
+export function start() returns ExitCode
+	let h = spawn Worker.create()
+	return try await h.run() otherwise 0
+end 'start'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return start()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:13:18: exported typealias 'api.WorkerArray' names file-private type 'Worker.handle' in its target
+```
+
+<!-- test: an-exported-alias-over-an-exported-services-handle-credits-the-service -->
+The control, and the reason the demand is filed against `Worker` and not against its `handle`: nothing outside
+`api/lib.maxon` names `Worker`, and the audit would call it unused if the alias's demand did not reach it.
+```maxon
+// --- file: api/lib.maxon
+export type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function run() returns ExitCode
+		return 7
+	end 'run'
+end 'Worker'
+
+export typealias WorkerArray = Array with Worker.handle
+
+export function start() returns ExitCode
+	let h = spawn Worker.create()
+	return try await h.run() otherwise 0
+end 'start'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	var workers = WorkerArray.create()
+	return start() + (workers.count() as ExitCode)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-type-reached-only-through-a-chain-of-aliases-is-credited -->
+⭐ **A DEMAND IS CREDITED THROUGH A DEMANDER THAT IS ITSELF ONLY CREDITED.** The reader names `ItemRows` and
+nothing else. `ItemRows` demands `ItemArray` at `export`, and `ItemArray` demands `Item` at `export`; neither
+is named outside `api/lib.maxon`, and neither is unused.
+```maxon
+// --- file: api/lib.maxon
+export type Item
+	export let n as ExitCode
+
+	export static function create(n ExitCode) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+export typealias ItemArray = Array with Item
+export typealias ItemRows = Array with ItemArray
+
+export function seed() returns ExitCode
+	return Item.create(7).n
+end 'seed'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	var rows = ItemRows.create()
+	return seed() + (rows.count() as ExitCode)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-type-reached-only-through-a-chain-of-fields-is-credited -->
+The reader names `Root` and nothing else. `Root.middle` demands `Middle` at `export`, and `Middle.leaf` demands
+`Leaf` at `export`. `Leaf` and `Middle` are declared before the types whose fields name them.
+```maxon
+// --- file: api/lib.maxon
+export type Leaf
+	export let n as ExitCode
+
+	static function create(n ExitCode) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Leaf'
+
+export type Middle
+	export let leaf as Leaf
+
+	static function create(leaf Leaf) returns Self
+		return Self{leaf: leaf}
+	end 'create'
+end 'Middle'
+
+export type Root
+	export let middle as Middle
+
+	export static function make() returns Root
+		return Root{middle: Middle.create(Leaf.create(7))}
+	end 'make'
+
+	export function total() returns ExitCode
+		return self.middle.leaf.n
+	end 'total'
+end 'Root'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Root.make().total()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.an-exported-generic-function-constrained-by-a-file-private-interface-is-refused -->
+A generic function's `where` constraint is a requirement every caller has to meet, so the interface it names is
+held to the function's tier. The refusal sits at the function name.
+```maxon
+// --- file: api/lib.maxon
+interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+export function bigger(a T, b T) uses T returns T where T is Marker
+	return a if a.code() > b.code() else b
+end 'bigger'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:17: exported function 'api.bigger' names file-private interface 'Marker' in its where clause
+```
+
+<!-- test: an-exported-generic-function-constrained-by-an-exported-interface-is-legal -->
+```maxon
+// --- file: api/lib.maxon
+export interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+export function bigger(a T, b T) uses T returns T where T is Marker
+	return a if a.code() > b.code() else b
+end 'bigger'
+
+// --- file: app/main.maxon
+type Item implements Marker
+	let n as ExitCode
+
+	function code() returns ExitCode
+		return self.n
+	end 'code'
+
+	static function create(n ExitCode) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+function main() returns ExitCode
+	return bigger(Item.create(3), b: Item.create(7)).code()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.an-exported-extension-method-constrained-by-a-file-private-interface-is-refused -->
+The conditional extension's `where` clause is part of every method's contract: only a conformer of `Marker` has
+the method, so whoever can call it has to be able to name `Marker`.
+```maxon
+// --- file: api/lib.maxon
+interface Marker
+	function code() returns ExitCode
+end 'Marker'
+
+extension Array where Element is Marker
+	export function total() returns ExitCode
+		var sum = 0 as ExitCode
+
+		for item in self 'each'
+			sum = sum + item.code()
+		end 'each'
+
+		return sum
+	end 'total'
+end 'Array'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:18: exported function 'api.Array.total' names file-private interface 'Marker' in its where clause
 ```

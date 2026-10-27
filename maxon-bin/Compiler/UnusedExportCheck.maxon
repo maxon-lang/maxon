@@ -37,8 +37,8 @@
 // caller exists at all.
 //
 // ⛔ **THE SECOND EXEMPTION IS A SIGNATURE DEMAND, AND IT IS PER DECLARATION RATHER THAN BY PATH** — see
-// `reachedSignatureDemands`. A type that E3167 requires an exported or `module` function to be able to
-// name is credited at the tier E3167 judges that function at, so this pass and E3167 cannot contradict each other on one
+// `reachedSignatureDemands`. A type that E3167 requires an exported or `module` surface to be able to
+// name is credited at the tier E3167 judges that surface at, so this pass and E3167 cannot contradict each other on one
 // program.
 //
 // ⚠ **WHAT IS STILL AUDITED IN `stdlib/`: its `module` declarations.**
@@ -1173,37 +1173,136 @@ typealias DemandedTierMap = Map with (ByteArray, Visibility)
 
 // The widest tier any REACHED signature demands of each type DECLARATION, keyed by name and declaring file
 // so two declarations of one name are demanded apart. A demand is `checkSignatureVisibility`'s
-// record that some function's signature or binding's type names the type and so needs it at the tier
-// E3167 judges that declaration at; it is reached when the demanding declaration is itself referenced
-// from outside the type's declaring file, since a declaration nothing outside reaches is an `export` the
-// author may drop, and crediting the type off it would suppress the finding that says so.
+// record that some declaration's surface names the type and so needs it at the tier E3167 judges that
+// surface at; it is reached when the demanding declaration is itself referenced from outside the type's
+// declaring file, since a declaration nothing outside reaches is an `export` the author may drop, and
+// crediting the type off it would suppress the finding that says so.
+//
+// A demand whose declaration is not reached still holds once its OWNER type is credited at the demand's
+// tier: a field of a type that only an exported signature names is read through that signature. Such a
+// demand waits on its owner and is re-asked only when a credit widens that owner. A credit widens a
+// declaration at most once per tier, so each demand is asked a bounded number of times and crediting stays
+// linear in the demands, where re-sweeping every demand until nothing changes is quadratic in a chain of
+// types that expose each other.
 //
 // `Visibility.file` is the "no reached demand" value and no demand can carry it — the pass never judges a
-// file-private function or binding.
+// file-private surface.
 function reachedSignatureDemands(project Project, tracked TrackedDecls) returns DemandedTierMap
 	var demanded = DemandedTierMap.create()
+	var awaiting = DemandsAwaitingOwnerMap.create()
+	var widened = SignatureTypeDemandArray.create()
 
 	for demand in project.signatureTypeDemands 'eachDemand'
-		let key = fileScopedDeclKey(demand.typeName, declFilePath: demand.declFilePath)
-
-		if tierIsAtLeastAsVisible(try demanded.get(key) otherwise Visibility.file, floor: demand.demandingTier) 'aWiderDemandIsAlreadyHeld'
-			continue
-		end 'aWiderDemandIsAlreadyHeld'
-
-		if not demandIsReached(tracked, demand: demand) 'itsDemanderIsReachedInItsOwnFileAlone'
-			continue
-		end 'itsDemanderIsReachedInItsOwnFileAlone'
-
-		demanded.upsert(key, value: demand.demandingTier)
+		if demandIsReached(tracked, demand: demand) 'itsDemanderIsReachedFromOutside'
+			creditDemand(demand, demanded: demanded, widened: widened)
+		end 'itsDemanderIsReachedFromOutside' else 'itsDemanderAwaitsItsOwner'
+			awaitOwnerCredit(demand, awaiting: awaiting)
+		end 'itsDemanderAwaitsItsOwner'
 	end 'eachDemand'
+
+	var next = 0 as ElementIndex
+
+	while next < widened.count() 'untilNoCreditWidensAnOwner'
+		let owner = (try widened.get(next) otherwise panic("reachedSignatureDemands: widened.get OOB at {next} inside its own count")).typeName
+		next = next + 1
+		var waiting = try awaiting.get(owner) otherwise continue
+		var stillWaiting = SignatureTypeDemandArray.create()
+
+		for demand in waiting 'eachWaiting'
+			if ownerIsCredited(tracked, demand: demand, owner: owner, demanded: demanded) 'itsOwnerIsNowCredited'
+				creditDemand(demand, demanded: demanded, widened: widened)
+			end 'itsOwnerIsNowCredited' else 'itsOwnerIsStillShort'
+				stillWaiting.push(demand)
+			end 'itsOwnerIsStillShort'
+		end 'eachWaiting'
+
+		awaiting.upsert(owner.clone(), value: stillWaiting)
+	end 'untilNoCreditWidensAnOwner'
 
 	return demanded
 end 'reachedSignatureDemands'
+
+typealias DemandsAwaitingOwnerMap = Map with (ByteArray, SignatureTypeDemandArray)
+
+function creditDemand(demand SignatureTypeDemand, demanded DemandedTierMap, widened SignatureTypeDemandArray)
+	let key = fileScopedDeclKey(demand.typeName, declFilePath: demand.declFilePath)
+
+	if tierIsAtLeastAsVisible(try demanded.get(key) otherwise Visibility.file, floor: demand.demandingTier) 'aWiderDemandIsAlreadyHeld'
+		return
+	end 'aWiderDemandIsAlreadyHeld'
+
+	demanded.upsert(key, value: demand.demandingTier)
+	widened.push(demand)
+end 'creditDemand'
+
+union DemandingOwner
+	none
+	named(let name ByteArray)
+end 'DemandingOwner'
+
+function demandingOwnerOf(demand SignatureTypeDemand) returns DemandingOwner
+	match demand.demandingKind 'kind'
+		constantBinding or
+		variableBinding then return DemandingOwner.none
+		structDeclaration or
+		enumDeclaration or
+		unionDeclaration or
+		interfaceDeclaration or
+		aliasDeclaration then return DemandingOwner.named(demand.demandingName)
+		instanceField or
+		unionCase then return DemandingOwner.named(ownerOfMemberDemand(demand))
+		declaredFunction then break
+	end 'kind'
+
+	return match splitQualifiedName(demand.demandingName) 'split'
+		notQualified gives DemandingOwner.none
+		parts(owner, _) gives DemandingOwner.named(owner)
+	end 'split'
+end 'demandingOwnerOf'
+
+function awaitOwnerCredit(demand SignatureTypeDemand, awaiting DemandsAwaitingOwnerMap)
+	match demandingOwnerOf(demand) 'owner'
+		none then return
+		named(owner) then awaitCreditOf(owner, demand: demand, awaiting: awaiting)
+	end 'owner'
+end 'awaitOwnerCredit'
+
+function awaitCreditOf(owner ByteArray, demand SignatureTypeDemand, awaiting DemandsAwaitingOwnerMap)
+	if owner.equals(demand.typeName) 'aTypeCannotWidenItself'
+		return
+	end 'aTypeCannotWidenItself'
+
+	var waiting = try awaiting.get(owner) otherwise SignatureTypeDemandArray.create()
+	waiting.push(demand)
+	awaiting.upsert(owner.clone(), value: waiting)
+end 'awaitCreditOf'
+
+function ownerIsCredited(tracked TrackedDecls, demand SignatureTypeDemand, owner ByteArray, demanded DemandedTierMap) returns bool
+	let claimants = try tracked.typeIndex.get(owner) otherwise return false
+
+	for at in claimants 'eachClaimant'
+		let claimant = tracked.at(at)
+		let held = try demanded.get(fileScopedDeclKey(claimant.key, declFilePath: claimant.declFile.path)) otherwise Visibility.file
+
+		if tierIsAtLeastAsVisible(held, floor: demand.demandingTier) 'aReachedSignatureAsksAsMuchOfIt'
+			return true
+		end 'aReachedSignatureAsksAsMuchOfIt'
+	end 'eachClaimant'
+
+	return false
+end 'ownerIsCredited'
 
 function demandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) returns bool
 	match demand.demandingKind 'kind'
 		constantBinding or
 		variableBinding then return reachedFromOutsideItsFile(tracked.bindingIndex, tracked: tracked, name: demand.demandingName)
+		structDeclaration or
+		enumDeclaration or
+		unionDeclaration or
+		interfaceDeclaration or
+		aliasDeclaration then return declarationDemandIsReached(tracked, demand: demand)
+		instanceField or
+		unionCase then return memberDemandIsReached(tracked, demand: demand, owner: ownerOfMemberDemand(demand))
 		declaredFunction then break
 	end 'kind'
 
@@ -1212,6 +1311,21 @@ function demandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) retur
 		parts(owner, _) then return memberDemandIsReached(tracked, demand: demand, owner: owner)
 	end 'split'
 end 'demandIsReached'
+
+function ownerOfMemberDemand(demand SignatureTypeDemand) returns ByteArray
+	return match splitQualifiedName(demand.demandingName) 'split'
+		parts(owner, _) gives owner
+		default panic("ownerOfMemberDemand: the {demand.demandingKind.name} '{String.from(demand.demandingName)}' carries no owner — `memberSubject` names every field and union case 'Owner.member'")
+	end 'split'
+end 'ownerOfMemberDemand'
+
+function declarationDemandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) returns bool
+	if demand.demandingName.equals(demand.typeName) 'aDeclarationCannotWidenItself'
+		return false
+	end 'aDeclarationCannotWidenItself'
+
+	return reachedFromOutsideItsFile(tracked.typeIndex, tracked: tracked, name: demand.demandingName)
+end 'declarationDemandIsReached'
 
 // A method's OWNER TYPE stands in for it: this audit records no reference against a method at all — the
 // type owns the finding — so asking the member's own reach would answer false for every member demand and

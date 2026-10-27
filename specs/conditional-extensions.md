@@ -385,10 +385,10 @@ end 'Holder'
 // --- file: packed.maxon
 typealias Bag = Array with Byte
 
-export type Packed implements Holder with Bag
+type Packed implements Holder with Bag
 	let tag as ExitCode
 
-	export static function create() returns Packed
+	static function create() returns Packed
 		return Packed{tag: 0}
 	end 'create'
 
@@ -397,6 +397,10 @@ export type Packed implements Holder with Bag
 	end 'get'
 end 'Packed'
 
+export function packedWitnessed() returns ExitCode
+	return Packed.create().witnessed()
+end 'packedWitnessed'
+
 // --- file: loose.maxon
 type Opaque
 	let tag as ExitCode
@@ -404,10 +408,10 @@ end 'Opaque'
 
 typealias Bag = Array with Opaque
 
-export type Loose implements Holder with Bag
+type Loose implements Holder with Bag
 	let tag as ExitCode
 
-	export static function create() returns Loose
+	static function create() returns Loose
 		return Loose{tag: 0}
 	end 'create'
 
@@ -415,15 +419,18 @@ export type Loose implements Holder with Bag
 		return Bag.create()
 	end 'get'
 
-	export function size() returns ExitCode
+	function size() returns ExitCode
 		return self.get().count() as ExitCode
 	end 'size'
 end 'Loose'
 
+export function looseSize() returns ExitCode
+	return Loose.create().size()
+end 'looseSize'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let loose = Loose.create()
-	return Packed.create().witnessed() + loose.size()
+	return packedWitnessed() + looseSize()
 end 'main'
 ```
 ```exitcode
@@ -457,10 +464,10 @@ end 'Holder'
 // --- file: packed.maxon
 typealias Bag = Array with Byte
 
-export type Packed implements Holder with Bag
+type Packed implements Holder with Bag
 	let tag as ExitCode
 
-	export static function create() returns Packed
+	static function create() returns Packed
 		return Packed{tag: 0}
 	end 'create'
 
@@ -469,6 +476,10 @@ export type Packed implements Holder with Bag
 	end 'get'
 end 'Packed'
 
+export function packedWeight() returns ExitCode
+	return Packed.create().weigh(Bag from [1, 2, 3])
+end 'packedWeight'
+
 // --- file: loose.maxon
 type Opaque
 	let tag as ExitCode
@@ -476,10 +487,10 @@ end 'Opaque'
 
 typealias Bag = Array with Opaque
 
-export type Loose implements Holder with Bag
+type Loose implements Holder with Bag
 	let tag as ExitCode
 
-	export static function create() returns Loose
+	static function create() returns Loose
 		return Loose{tag: 0}
 	end 'create'
 
@@ -487,15 +498,18 @@ export type Loose implements Holder with Bag
 		return Bag.create()
 	end 'get'
 
-	export function size() returns ExitCode
+	function size() returns ExitCode
 		return self.get().count() as ExitCode
 	end 'size'
 end 'Loose'
 
+export function looseSize() returns ExitCode
+	return Loose.create().size()
+end 'looseSize'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let loose = Loose.create()
-	return Packed.create().weigh(ByteArray from [1, 2, 3]) + loose.size()
+	return packedWeight() + looseSize()
 end 'main'
 ```
 ```exitcode

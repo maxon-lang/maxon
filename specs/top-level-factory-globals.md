@@ -511,7 +511,7 @@ export type Inner
 	end 'make'
 end 'Inner'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: api/outer.maxon
 export type Outer
 	export static function build() returns Inner
@@ -782,7 +782,7 @@ export type Database
 	end 'create'
 end 'Database'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: bin/main.maxon
 var db = Database.create()
 
@@ -805,7 +805,7 @@ export type Database
 	end 'create'
 end 'Database'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: bin/main.maxon
 function main() returns ExitCode
 	let db = Database.create()
@@ -829,7 +829,7 @@ export type Database
 	end 'create'
 end 'Database'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: bin/main.maxon
 var db = Database.create()
 
@@ -852,7 +852,7 @@ export type Database
 	end 'create'
 end 'Database'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: bin/main.maxon
 function main() returns ExitCode
 	let db = Database.create()

@@ -489,7 +489,7 @@ Instance methods can call sibling instance methods by bare name — the compiler
 outside `Point` is **E3014**. An unmarked method or static member is private to the *file*, like a top-level
 declaration, so `main` above may call `Point.create` — but another file may not (**E3008**). Mark a member
 `export` (or `public`) when another file uses it; an `export` nothing outside its file uses is **E3092**, and an
-exported signature may not name a less visible typealias (**E3167**) — see [Visibility](#visibility).
+exported signature or field may not name a less visible type (**E3167**) — see [Visibility](#visibility).
 
 **A struct literal is legal only inside the type's own methods (E3076).** `Point{x: 1.5, y: 2.5}` written
 anywhere else is an error, however public the fields are — external callers go through a static factory, so
@@ -1133,9 +1133,11 @@ All declarations are file-private by default. Four tiers exist:
 - **`export`** — visible everywhere in the compilation.
 - **`public`** — visible everywhere, and declared API surface, so it is exempt from the unused-export checks.
 
-A signature may not name a type less visible than the function itself, nor a top-level or `static`
-`let` or `var` hold a value of a type less visible than the binding; for that rule the tiers are ordered
-default < `module` < `export` < `public`, and naming a narrower type is E3167.
+No surface a declaration exposes may name a type less visible than the declaration: a function's signature
+and `where` clause, a top-level or `static` `let` or `var`'s type, a marked field's type, a union case's
+payloads, a typealias's target, an `implements`, `where` or `extends` clause, and an enum's backing record.
+For that rule the tiers are ordered default < `module` < `export` < `public`, and naming a narrower type is
+E3167.
 
 At most one modifier may be written. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `var`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.
 

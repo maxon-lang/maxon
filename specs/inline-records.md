@@ -1062,11 +1062,11 @@ export function widest(v ExitCode) returns ExitCode
 end 'widest'
 
 // --- file: packed/packed.maxon
-typealias Wide = int(0 to u32.max)
+module typealias Wide = int(0 to u32.max)
 
 export type Packed
-	export let lo as Wide
-	export let hi as Wide
+	module let lo as Wide
+	module let hi as Wide
 
 	export static function create(lo Count, hi Count) returns Self
 		return Self{lo: lo as Wide, hi: hi as Wide}
@@ -1077,10 +1077,7 @@ export function packedSize() returns ExitCode
 	return sizeof(Packed)
 end 'packedSize'
 
-// --- file: main.maxon
-function main() returns ExitCode
-	let p = Packed.create(4294967295, hi: 7)
-
+export function packedFault(p Packed) returns ExitCode
 	if p.lo != 4294967295 'lo'
 		return 1
 	end 'lo'
@@ -1088,6 +1085,19 @@ function main() returns ExitCode
 	if p.hi != 7 'hi'
 		return 2
 	end 'hi'
+
+	return 0
+end 'packedFault'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let p = Packed.create(4294967295, hi: 7)
+
+	let fault = packedFault(p)
+
+	if fault != 0 'fault'
+		return fault
+	end 'fault'
 
 	if widest(100) != 99 'wide'
 		return 3

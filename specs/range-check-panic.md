@@ -476,8 +476,8 @@ end 'tiny'
 0
 ```
 
-<!-- test: range-check-panic.field-store-checks-the-fields-own-alias -->
-A literal stored to a field is checked against the alias the field was declared with, not a same-named alias of the storing file. Both aliases are file-private, so each file sees one `Item`.
+<!-- test: range-check-panic.error.an-exported-field-of-a-file-private-alias-is-refused -->
+Two file-private `Item` aliases coexist in one directory. A literal stored to `Box.item` from another file would have to be checked against the alias the field was declared with, and the field is refused where it is declared: an exported field cannot be typed by a file-private alias.
 ```maxon
 // --- file: a.maxon
 typealias Item = int(0 to 255)
@@ -503,8 +503,8 @@ function main() returns ExitCode
   return 1
 end 'main'
 ```
-```exitcode
-250
+```maxoncstderr
+error E3167: <fragment>:6:22: exported field 'Box.item' names file-private typealias 'Item' in its type
 ```
 
 <!-- test: range-check-panic.witness-literal-argument-to-a-base-interfaces-associated-type -->

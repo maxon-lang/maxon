@@ -67,9 +67,15 @@ type's, and an interface's members — its requirements' types included — are 
 held to the narrower of its own modifier and its service type's. A `module`, `export` or `public`
 binding — a top-level `let` or `var`, or a `static let` or `static var` member — is held to the same rule
 for its type, which is the type its initializer gives it, written or inferred, together with any alias the
-initializer was spelled through (`50 as Small`, `Tallies.create()`). Naming a narrower type is
-[E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration); the fix is to raise the type to the function's
-or binding's tier, or to narrow the function or binding.
+initializer was spelled through (`50 as Small`, `Tallies.create()`). Every other surface a declaration exposes
+is held to the same rule: an instance field at the narrower of its own modifier and its type's (an unmarked
+field is private to its type and asked nothing), a union case's payloads at the union's tier, a typealias's
+target, an `implements` clause and its `with` arguments, a type's, generic function's or extension's `where`
+clause, an interface's `extends` clause, and a [struct-backed](/docs/language/enums-unions/#struct-backed-enums) enum's backing record. A
+service's `handle` is its service's tier. Naming a narrower type is
+[E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration) (`exported field 'api.Holder.mode' names
+file-private enum 'Mode' in its type`); the fix is to raise the type to the surface's tier, or to narrow the
+surface.
 
 ## `export`
 
@@ -93,9 +99,11 @@ nothing outside the declaring file refers to it, the compiler reports **E3092** 
 'geometry.perimeter' is never referenced outside its declaring file`), and when every use is inside the
 declaring directory it suggests `module` (**E3093**). These checks run on every program that otherwise
 compiles, a one-file program included. The entry point, every target a `.maxproj` file declares and every
-task a `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported or `module` signature or binding names is exempt while that function or
-binding is itself referenced from another file: the signature requires the wider tier, so dropping the modifier would only
-trade E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration). Every typealias form —
+task a `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported or
+`module` surface names — a signature, a binding, a field, a payload, a typealias's target or a clause — is
+exempt while that declaration is itself referenced from another file, or while the type owning the surface is
+itself exempt at that tier: the surface requires the wider tier, so dropping the modifier would only trade
+E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration). Every typealias form —
 ranged, function, generic-instance and tuple — is audited, and a use credits exactly the declaration it
 means, a use reached only through a called function's signature included.
 

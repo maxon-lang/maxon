@@ -2733,8 +2733,8 @@ end 'main'
 3
 ```
 
-<!-- test: an-instance-alias-written-in-another-file-types-the-result-by-that-file -->
-An interface instance written in the interface's file keeps that file's `Level` when a file with its own `Level` calls through it. Both aliases are file-private, so each file sees one `Level`.
+<!-- test: error.an-exported-conformance-with-a-file-private-alias-is-refused -->
+An interface instance written in the interface's file names that file's file-private `Level`. `Tick` binds the interface's `Element` to it in its `implements` clause and `LevelCursor` is the alias of the instance, and neither may be exported over a file-private alias, so a file with its own `Level` can never call through them.
 ```maxon
 // --- file: a.maxon
 typealias Level = int(0 to 100)
@@ -2772,8 +2772,9 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```exitcode
-7
+```maxoncstderr
+error E3167: <fragment>:9:13: exported type 'Tick' names file-private typealias 'Level' in its implements clause
+error E3167: <fragment>:21:18: exported typealias 'LevelCursor' names file-private typealias 'Level' in its target
 ```
 
 <!-- test: error.associated-return-bound-to-a-generic-instance -->

@@ -521,7 +521,7 @@ module extension Sorter
 end 'Sorter'
 
 // --- file: zzz_consumer.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module type Sorter uses Element
 	module var stub as Integer

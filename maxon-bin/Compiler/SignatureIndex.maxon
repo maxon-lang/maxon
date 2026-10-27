@@ -837,7 +837,7 @@ end 'cacheReadNameInFileArray'
 
 // @generated library-cache end
 
-typealias TopLevelDeclIndexMap = Map with (ByteArray, ElementIndex)
+module typealias TopLevelDeclIndexMap = Map with (ByteArray, ElementIndex)
 
 // @generated library-cache begin
 function cacheWriteTopLevelDeclIndexMap(writer LibraryCacheWriter, value TopLevelDeclIndexMap)
@@ -1173,7 +1173,7 @@ end 'cacheReadMapLiteralColumnsColumns'
 //
 // ⚠ A `ProgramSignatures` is built ONCE per compile, so what the spelled state buys here is the removed
 // dependence rather than an allocation.
-union GenericAliasContestTable
+module union GenericAliasContestTable
 	unwritten
 	entries(byName ContestedGenericAliasMap)
 end 'GenericAliasContestTable'
@@ -1213,7 +1213,7 @@ end 'cacheReadGenericAliasContestTableEntries'
 let noGenericAliasContests = GenericAliasContestTable.unwritten
 
 // The alias names a SECOND declaration disagrees with — `settleGenericAliasContest`'s gate.
-union DisagreeingAliasNameRoster
+module union DisagreeingAliasNameRoster
 	unwritten
 	entries(names DisagreeingAliasNameSet)
 end 'DisagreeingAliasNameRoster'
@@ -1253,7 +1253,7 @@ end 'cacheReadDisagreeingAliasNameRosterEntries'
 let noDisagreeingAliasNames = DisagreeingAliasNameRoster.unwritten
 
 // The names several KINDS of declaration hold at once.
-union CrossKindContestTable
+module union CrossKindContestTable
 	unwritten
 	entries(byName CrossKindContestMap)
 end 'CrossKindContestTable'
@@ -1631,7 +1631,7 @@ export union ManagedGlobalInitializer
 	initializerFunction(let callee ByteArray)
 end 'ManagedGlobalInitializer'
 
-module union ManagedGlobalRecord
+export union ManagedGlobalRecord
 	stringRecord(let bytes ByteArray)
 	constArrayRecord(elementSize ElementStride, elementCount FullRangeInt, let bytes ByteArray)
 end 'ManagedGlobalRecord'
@@ -2663,7 +2663,7 @@ end 'DeclKind'
 // varies between them, named here so the registry SCAN (match base name, bounds-guard the arg) lives in one
 // place (`instanceWithTypeArgKind`) and a fix to the loop or the bound cannot reach one gate and silently
 // miss the others.
-enum TypeArgInstantiationKind
+export enum TypeArgInstantiationKind
 	// The box MOVES the argument in and the caller may not reuse it (`typeArgIsOwned`): a String, an owning
 	// struct, a boxed union, a managed generic instance — the managed-field DROP and the reassign's
 	// descriptor-gated old-value drop.
@@ -3103,7 +3103,7 @@ export type HeldRecordKinds
 	end 'overlaps'
 end 'HeldRecordKinds'
 
-module typealias HeldRecordKindSet = Set with ByteArray
+export typealias HeldRecordKindSet = Set with ByteArray
 
 typealias RecordKindVerdicts = Map with (ByteArray, bool)
 
@@ -5393,7 +5393,7 @@ end 'cacheReadByRefBareNameSet'
 
 // @generated library-cache end
 
-typealias BareNameSet = Set with ByteArray
+module typealias BareNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteBareNameSet(writer LibraryCacheWriter, value BareNameSet)
@@ -6170,7 +6170,7 @@ export let sharedNoOpaqueParams = OpaqueParamInfo.create(NameRoster.create(), po
 // full). A name whose declarations do NOT all publish that one shape is unanswerable and is
 // refused here — including the case that is not an overload set at all, one `function f` written in two files,
 // which is E3006 and is reported only once every file has parsed.
-typealias DisagreeingParamDefaultNameSet = Set with ByteArray
+module typealias DisagreeingParamDefaultNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteDisagreeingParamDefaultNameSet(writer LibraryCacheWriter, value DisagreeingParamDefaultNameSet)
@@ -6208,8 +6208,8 @@ end 'cacheReadDisagreeingParamDefaultNameSet'
 // take, which excludes it on arity. On the same shape (`g(a Num)` beside `g(a Num, b Num = 5)`, called
 // `g(1)`) the ONE-parameter member is selected, so a fill-then-resolve that silently selected the
 // defaulted member would be a wrong answer rather than a missing refusal.
-typealias FunctionDeclarationCount = int(1 to u32.max)
-typealias FunctionDeclarationCountMap = Map with (ByteArray, FunctionDeclarationCount)
+module typealias FunctionDeclarationCount = int(1 to u32.max)
+module typealias FunctionDeclarationCountMap = Map with (ByteArray, FunctionDeclarationCount)
 
 // @generated library-cache begin
 function cacheWriteFunctionDeclarationCountMap(writer LibraryCacheWriter, value FunctionDeclarationCountMap)
@@ -6305,7 +6305,7 @@ end 'cacheReadFuncThrowsMap'
 // duplicate definition of 'Boom'`, MEASURED), and the whole throws mechanism downstream is name-keyed on the
 // same terms: `Parser.tryErrorEnumType` interns the clause's name and `ProgramSignatures.enumOf` looks the
 // layout up by it. A finer comparison here would be finer than what it is compared FOR.
-typealias DisagreeingThrowsNameSet = Set with ByteArray
+module typealias DisagreeingThrowsNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteDisagreeingThrowsNameSet(writer LibraryCacheWriter, value DisagreeingThrowsNameSet)
@@ -6396,7 +6396,7 @@ export type SweptBodyFactEntry
 end 'SweptBodyFactEntry'
 
 export typealias SweptBodyFactEntryArray = Array with SweptBodyFactEntry
-typealias DeclaredBodyFactNameSet = Set with ByteArray
+module typealias DeclaredBodyFactNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteDeclaredBodyFactNameSet(writer LibraryCacheWriter, value DeclaredBodyFactNameSet)
@@ -6607,7 +6607,7 @@ end 'cacheReadFreshReturnForwardArray'
 
 // One forwarding declaration: every call must reach a fresh declaration, since the claim is universal over the
 // body's returns. The declaring file decides which declaration an unqualified call names.
-type FreshReturnForwardingDeclaration
+module type FreshReturnForwardingDeclaration
 	export let forwards as FreshReturnForwardArray
 	export let declFilePath as FilePath
 
@@ -6637,7 +6637,7 @@ end 'FreshReturnForwardingDeclaration'
 
 // Declaration key → its forwarding declarations. Per DECLARATION because `everyDeclarationOfThisNamePublishes`
 // compares a published tally against the declaration count, so each overload that forwards publishes on its own.
-typealias FreshReturnForwardingDeclarations = Array with FreshReturnForwardingDeclaration
+module typealias FreshReturnForwardingDeclarations = Array with FreshReturnForwardingDeclaration
 
 // @generated library-cache begin
 function cacheWriteFreshReturnForwardingDeclarations(writer LibraryCacheWriter, value FreshReturnForwardingDeclarations)
@@ -6663,7 +6663,7 @@ end 'cacheReadFreshReturnForwardingDeclarations'
 
 // @generated library-cache end
 
-typealias FreshReturnForwardMap = Map with (ByteArray, FreshReturnForwardingDeclarations)
+module typealias FreshReturnForwardMap = Map with (ByteArray, FreshReturnForwardingDeclarations)
 
 // @generated library-cache begin
 function cacheWriteFreshReturnForwardMap(writer LibraryCacheWriter, value FreshReturnForwardMap)
@@ -6759,7 +6759,7 @@ typealias StoreCandidateArray = Array with StoreCandidate
 
 // The `<T>.handle` names one program mints — see `ProgramSignatures.serviceHandleOwners`. Keyed by NAME
 // for `DisagreeingThrowsNameSet`'s reason: a companion has a nominal identity and nothing finer to compare.
-typealias ServiceHandleOwnerMap = Map with (ByteArray, readonly ByteArray)
+module typealias ServiceHandleOwnerMap = Map with (ByteArray, readonly ByteArray)
 
 // @generated library-cache begin
 function cacheWriteServiceHandleOwnerMap(writer LibraryCacheWriter, value ServiceHandleOwnerMap)
@@ -6897,7 +6897,7 @@ export typealias ByRefConventionArray = Array with ByRefConvention
 
 export let allByValueConvention = ByRefConvention.of(ByRefDeclarationArray.create())
 
-typealias DeclarationSitesByKeyMap = Map with (ByteArray, NameRoster)
+module typealias DeclarationSitesByKeyMap = Map with (ByteArray, NameRoster)
 
 // @generated library-cache begin
 function cacheWriteDeclarationSitesByKeyMap(writer LibraryCacheWriter, value DeclarationSitesByKeyMap)
@@ -7458,7 +7458,7 @@ union ConformerCloneBlame
 	conformer(let name ByteArray)
 end 'ConformerCloneBlame'
 
-type CascadeWalkBreak
+export type CascadeWalkBreak
 	export let reached as bool
 	export let depth as ElementIndex
 
@@ -10252,7 +10252,7 @@ end 'cacheReadGenericAliasMap'
 // ⚠ Keyed by the path STRING and deliberately NOT by `FilePath`, for `RangedAliasByDeclaringFile`'s
 // measured reason: `FilePath.hash` case-folds on Windows and so ALLOCATES A STRING PER PROBE. The two
 // structures also keep ONE notion of "the same file" between them by using one key type.
-typealias GenericAliasByDeclaringFile = Map with (String, GenericInstanceId)
+module typealias GenericAliasByDeclaringFile = Map with (String, GenericInstanceId)
 
 // @generated library-cache begin
 function cacheWriteGenericAliasByDeclaringFile(writer LibraryCacheWriter, value GenericAliasByDeclaringFile)
@@ -10287,7 +10287,7 @@ typealias GenericAliasSpellingBitsMap = Map with (GenericInstanceId, DeclaredSur
 // declaring file. EMPTY for every program in the corpus — see
 // `ProgramSignatures.settleGenericAliasContest` for why that emptiness is what keeps every interned
 // instance and every mangled symbol where it was.
-typealias ContestedGenericAliasMap = Map with (ByteArray, GenericAliasByDeclaringFile)
+module typealias ContestedGenericAliasMap = Map with (ByteArray, GenericAliasByDeclaringFile)
 
 // @generated library-cache begin
 function cacheWriteContestedGenericAliasMap(writer LibraryCacheWriter, value ContestedGenericAliasMap)
@@ -10323,7 +10323,7 @@ end 'cacheReadContestedGenericAliasMap'
 // the names MORE THAN ONE declaration mentions. The two are the same shape because they are the same kind of
 // answer narrowing the same walk, and the outer one is what makes the whole contest free: a name only ONE
 // declaration mentions cannot disagree with anything, whatever any scoping does to it.
-typealias DisagreeingAliasNameSet = Set with ByteArray
+module typealias DisagreeingAliasNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteDisagreeingAliasNameSet(writer LibraryCacheWriter, value DisagreeingAliasNameSet)
@@ -10437,7 +10437,7 @@ export enum FormAliasKind
 	tuple
 end 'FormAliasKind'
 
-typealias GenericAliasMintTable = Map with (ByteArray, MintByDeclaringFile)
+module typealias GenericAliasMintTable = Map with (ByteArray, MintByDeclaringFile)
 
 // @generated library-cache begin
 function cacheWriteGenericAliasMintTable(writer LibraryCacheWriter, value GenericAliasMintTable)
@@ -10874,7 +10874,7 @@ end 'ScopedGenericAliasDecl'
 // declaration: `ProgramSignatures.scopedTupleAlias` keys on the file and tiers on the visibility, and
 // `settleCrossKindContests` needs both, for exactly the entries the name is read out of. A parallel map is a
 // second place for one of them to go missing.
-module type DeclaredTupleAlias
+export type DeclaredTupleAlias
 	export let tupleName as ByteArray
 	export let claim as TypeNameClaim
 
@@ -10986,7 +10986,7 @@ end 'cacheReadMultiplyDeclaredTupleAliasMap'
 
 // ⭐ A type name ⇒ every declaration that holds it, when more than one KIND does. See
 // `ProgramSignatures.settleCrossKindContests`.
-typealias CrossKindContestMap = Map with (ByteArray, readonly TypeNameClaimArray)
+module typealias CrossKindContestMap = Map with (ByteArray, readonly TypeNameClaimArray)
 
 // @generated library-cache begin
 function cacheWriteCrossKindContestMap(writer LibraryCacheWriter, value CrossKindContestMap)
@@ -11013,7 +11013,7 @@ end 'cacheReadCrossKindContestMap'
 
 // @generated library-cache end
 
-typealias TypeNameClaimLog = Map with (ByteArray, TypeNameClaimArray)
+module typealias TypeNameClaimLog = Map with (ByteArray, TypeNameClaimArray)
 
 // @generated library-cache begin
 function cacheWriteTypeNameClaimLog(writer LibraryCacheWriter, value TypeNameClaimLog)
@@ -11040,7 +11040,7 @@ end 'cacheReadTypeNameClaimLog'
 
 // @generated library-cache end
 
-typealias TypeNameClaimsByKey = Map with (ByteArray, readonly TypeNameClaimArray)
+module typealias TypeNameClaimsByKey = Map with (ByteArray, readonly TypeNameClaimArray)
 
 // @generated library-cache begin
 function cacheWriteTypeNameClaimsByKey(writer LibraryCacheWriter, value TypeNameClaimsByKey)
@@ -11067,7 +11067,7 @@ end 'cacheReadTypeNameClaimsByKey'
 
 // @generated library-cache end
 
-union TypeNameClaimIndex
+module union TypeNameClaimIndex
 	unsettled
 	settled(byName TypeNameClaimsByKey)
 end 'TypeNameClaimIndex'
@@ -11269,7 +11269,7 @@ export typealias CursorFieldIndexArray = Array with FieldIndex
 // alike — the filter `Parser.managedTopLevelBaseAt` asks before it will build a file-scoped
 // key. See `ProgramSignatures.managedTopLevelNames` for why the answer has to be a name and not a
 // bool.
-typealias ManagedTopLevelNameSet = Set with ByteArray
+module typealias ManagedTopLevelNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteManagedTopLevelNameSet(writer LibraryCacheWriter, value ManagedTopLevelNameSet)
@@ -11297,7 +11297,7 @@ end 'cacheReadManagedTopLevelNameSet'
 // What each CORPUS-declared slot's initializer calls, keyed by that slot's `.data` label. Keyed by LABEL
 // rather than by arena index because the ONE site that reads it holds a label and a reachability worklist at
 // once (`StdlibSource.markCorpusSlotInitCallees`), and nothing else.
-typealias SlotInitCalleeMap = Map with (ByteArray, readonly NameRoster)
+export typealias SlotInitCalleeMap = Map with (ByteArray, readonly NameRoster)
 
 // @generated library-cache begin
 function cacheWriteSlotInitCalleeMap(writer LibraryCacheWriter, value SlotInitCalleeMap)
@@ -11332,7 +11332,7 @@ let sharedEmptySlotInitCallees = NameRoster.create()
 // Function name ⇒ the pre-erasure `__ManagedMemory` SPELLING of its declared return type — the
 // door `Parser.emitCall` asks before it marks a call's result. See `ProgramSignatures.declaredReturnSurfaces`
 // for why only a NON-PLAIN surface gets an entry.
-typealias DeclaredReturnSurfaceMap = Map with (ByteArray, readonly DeclaredSurface)
+module typealias DeclaredReturnSurfaceMap = Map with (ByteArray, readonly DeclaredSurface)
 
 // @generated library-cache begin
 function cacheWriteDeclaredReturnSurfaceMap(writer LibraryCacheWriter, value DeclaredReturnSurfaceMap)
@@ -11365,7 +11365,7 @@ end 'cacheReadDeclaredReturnSurfaceMap'
 // BUFFERS?" is answered through. It has to be keyed on the ALIAS NAME and can never be keyed on the
 // `GenericInstanceId`: `Array with __ManagedMemory` and `Array with ByteArray` intern to the SAME
 // instance, which is the whole reason the question survives.
-typealias BufferElementAliasNameSet = Set with ByteArray
+module typealias BufferElementAliasNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteBufferElementAliasNameSet(writer LibraryCacheWriter, value BufferElementAliasNameSet)
@@ -11392,7 +11392,7 @@ end 'cacheReadBufferElementAliasNameSet'
 
 // The `<Conformer>.<method>` keys of the extension-publication columns — see
 // `ProgramSignatures.extensionPublishedMethods` for what each set means and why one cannot serve for both.
-typealias ExtensionMethodNameSet = Set with ByteArray
+module typealias ExtensionMethodNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteExtensionMethodNameSet(writer LibraryCacheWriter, value ExtensionMethodNameSet)
@@ -11504,7 +11504,7 @@ end 'extensionMemberKindKey'
 
 // The `<Conformer>.<member>` keys of every PER-INSTANCE nested `typealias` an `extension` body declares —
 // see `ProgramSignatures.extensionInnerAliasMembers`.
-typealias ExtensionInnerAliasNameSet = Set with ByteArray
+module typealias ExtensionInnerAliasNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteExtensionInnerAliasNameSet(writer LibraryCacheWriter, value ExtensionInnerAliasNameSet)
@@ -11531,7 +11531,7 @@ end 'cacheReadExtensionInnerAliasNameSet'
 
 // The `<Type>.<member>` keys of every function `typealias` a `type`/`extension` body declares — see
 // `ProgramSignatures.nestedFunctionAliasMembers`.
-typealias NestedFunctionAliasNameSet = Set with ByteArray
+module typealias NestedFunctionAliasNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteNestedFunctionAliasNameSet(writer LibraryCacheWriter, value NestedFunctionAliasNameSet)
@@ -11556,7 +11556,7 @@ end 'cacheReadNestedFunctionAliasNameSet'
 
 // @generated library-cache end
 
-typealias AliasImplementsParentMap = Map with (ByteArray, AliasImplementsClause)
+module typealias AliasImplementsParentMap = Map with (ByteArray, AliasImplementsClause)
 
 // @generated library-cache begin
 function cacheWriteAliasImplementsParentMap(writer LibraryCacheWriter, value AliasImplementsParentMap)
@@ -11583,7 +11583,7 @@ end 'cacheReadAliasImplementsParentMap'
 
 // @generated library-cache end
 
-typealias AliasImplementsVerdictMap = Map with (ByteArray, AliasImplementsVerdict)
+module typealias AliasImplementsVerdictMap = Map with (ByteArray, AliasImplementsVerdict)
 
 // @generated library-cache begin
 function cacheWriteAliasImplementsVerdictMap(writer LibraryCacheWriter, value AliasImplementsVerdictMap)
@@ -11657,7 +11657,7 @@ end 'DroppedSignatureLookup'
 
 // `<Type>.<method>` (or a free function's registration name) ⇒ the declaration whose signature the sweep
 // dropped — see `ProgramSignatures.droppedSignatures`.
-typealias DroppedSignatureMap = Map with (ByteArray, DroppedSignature)
+module typealias DroppedSignatureMap = Map with (ByteArray, DroppedSignature)
 
 // @generated library-cache begin
 function cacheWriteDroppedSignatureMap(writer LibraryCacheWriter, value DroppedSignatureMap)
@@ -11686,7 +11686,7 @@ end 'cacheReadDroppedSignatureMap'
 
 // The `<Type>.<method>` SOURCE names a `static` member and an INSTANCE member both wear — see
 // `ProgramSignatures.staticInstanceContests`.
-typealias StaticInstanceContestNameSet = Set with ByteArray
+module typealias StaticInstanceContestNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteStaticInstanceContestNameSet(writer LibraryCacheWriter, value StaticInstanceContestNameSet)
@@ -11716,7 +11716,7 @@ end 'cacheReadStaticInstanceContestNameSet'
 // count: two `extension` declarations in ONE file are the per-file overload registry's business
 // (`Parser.overloadRegistrationNameFor` sees both), and counting would read that legal, already-working case
 // as a contest. See `ProgramSignatures.contestedExtensionMethods`.
-typealias ExtensionMethodDeclFileMap = Map with (ByteArray, FilePath)
+module typealias ExtensionMethodDeclFileMap = Map with (ByteArray, FilePath)
 
 // @generated library-cache begin
 function cacheWriteExtensionMethodDeclFileMap(writer LibraryCacheWriter, value ExtensionMethodDeclFileMap)
@@ -11743,7 +11743,7 @@ end 'cacheReadExtensionMethodDeclFileMap'
 
 // @generated library-cache end
 
-type InterfaceExtensionMember
+module type InterfaceExtensionMember
 	export let conformer as ByteArray
 	export let interfaceName as ByteArray
 
@@ -11771,7 +11771,7 @@ type InterfaceExtensionMember
 	// @generated library-cache end
 end 'InterfaceExtensionMember'
 
-typealias InterfaceExtensionMemberMap = Map with (ByteArray, InterfaceExtensionMember)
+module typealias InterfaceExtensionMemberMap = Map with (ByteArray, InterfaceExtensionMember)
 
 // @generated library-cache begin
 function cacheWriteInterfaceExtensionMemberMap(writer LibraryCacheWriter, value InterfaceExtensionMemberMap)
@@ -11803,7 +11803,7 @@ end 'cacheReadInterfaceExtensionMemberMap'
 // the membership question it answers — "was this alias used in its OWN file?" — is a file's. See
 // `ProgramSignatures.constInitializerTypeNames`, and `constInitializerTypeSites` for the ordered log of
 // the same names that the cross-file question walks.
-typealias ConstInitializerTypeNameSet = Set with ByteArray
+module typealias ConstInitializerTypeNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteConstInitializerTypeNameSet(writer LibraryCacheWriter, value ConstInitializerTypeNameSet)
@@ -11829,7 +11829,7 @@ end 'cacheReadConstInitializerTypeNameSet'
 // @generated library-cache end
 
 // The SIMPLE (unqualified) names of methods, keyed by nothing else.
-typealias MethodNameSet = Set with ByteArray
+module typealias MethodNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteMethodNameSet(writer LibraryCacheWriter, value MethodNameSet)
@@ -11912,7 +11912,7 @@ end 'parameterReachKey'
 // `ProgramSignatures.userDeclaredTypeNames` and `stdlibDeclaredTypeNames`. They hold the same KIND of fact
 // about two different sets of files, and a second alias over `Set with ByteArray` would only invite the two
 // to be described as different things.
-typealias DeclaredTypeNameSet = Set with ByteArray
+module typealias DeclaredTypeNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteDeclaredTypeNameSet(writer LibraryCacheWriter, value DeclaredTypeNameSet)
@@ -11938,7 +11938,7 @@ end 'cacheReadDeclaredTypeNameSet'
 // @generated library-cache end
 
 // The head names the program's `<Name> from […]` constructions write (`ProgramSignatures.fromHeadNames`).
-typealias FromHeadNameSet = Set with ByteArray
+module typealias FromHeadNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteFromHeadNameSet(writer LibraryCacheWriter, value FromHeadNameSet)
@@ -11991,7 +11991,7 @@ export type TopLevelBindingSite
 	// @generated library-cache end
 end 'TopLevelBindingSite'
 
-typealias TopLevelBindingSiteArray = Array with TopLevelBindingSite
+module typealias TopLevelBindingSiteArray = Array with TopLevelBindingSite
 
 // @generated library-cache begin
 function cacheWriteTopLevelBindingSiteArray(writer LibraryCacheWriter, value TopLevelBindingSiteArray)
@@ -12017,7 +12017,7 @@ end 'cacheReadTopLevelBindingSiteArray'
 
 // @generated library-cache end
 
-typealias TopLevelBindingSiteMap = Map with (ByteArray, TopLevelBindingSiteArray)
+module typealias TopLevelBindingSiteMap = Map with (ByteArray, TopLevelBindingSiteArray)
 
 // @generated library-cache begin
 function cacheWriteTopLevelBindingSiteMap(writer LibraryCacheWriter, value TopLevelBindingSiteMap)
@@ -13117,7 +13117,7 @@ end 'cacheReadGenericAliasEntryArray'
 
 // @generated library-cache end
 
-typealias GenericAliasDeclIndexArray = Array with ElementIndex
+module typealias GenericAliasDeclIndexArray = Array with ElementIndex
 
 // @generated library-cache begin
 function cacheWriteGenericAliasDeclIndexArray(writer LibraryCacheWriter, value GenericAliasDeclIndexArray)
@@ -13143,7 +13143,7 @@ end 'cacheReadGenericAliasDeclIndexArray'
 
 // @generated library-cache end
 
-typealias GenericAliasDeclIndexMap = Map with (ByteArray, GenericAliasDeclIndexArray)
+module typealias GenericAliasDeclIndexMap = Map with (ByteArray, GenericAliasDeclIndexArray)
 
 // @generated library-cache begin
 function cacheWriteGenericAliasDeclIndexMap(writer LibraryCacheWriter, value GenericAliasDeclIndexMap)
@@ -13697,7 +13697,7 @@ end 'cacheReadInterfaceDeclSiteArray'
 
 // @generated library-cache end
 
-typealias InterfaceDeclSiteIndexMap = Map with (ByteArray, ElementIndex)
+module typealias InterfaceDeclSiteIndexMap = Map with (ByteArray, ElementIndex)
 
 // @generated library-cache begin
 function cacheWriteInterfaceDeclSiteIndexMap(writer LibraryCacheWriter, value InterfaceDeclSiteIndexMap)
@@ -14254,7 +14254,7 @@ end 'cacheReadExtensionInnerAliasSiteMap'
 // all" (`interfaceHoldsAnAssociatedType`), which a per-interface key answers with one probe and no join; a
 // joined key would allocate a String per table per position to ask a question whose answer is almost always
 // no.
-typealias AssociatedTypeHoldingMap = Map with (ByteArray, AssociatedHoldingArray)
+module typealias AssociatedTypeHoldingMap = Map with (ByteArray, AssociatedHoldingArray)
 
 // @generated library-cache begin
 function cacheWriteAssociatedTypeHoldingMap(writer LibraryCacheWriter, value AssociatedTypeHoldingMap)
@@ -14281,7 +14281,7 @@ end 'cacheReadAssociatedTypeHoldingMap'
 
 // @generated library-cache end
 
-union AssociatedHolding
+module union AssociatedHolding
 	unheld
 	heldAt(let interfaceName ByteArray)
 
@@ -14332,7 +14332,7 @@ end 'cacheReadAssociatedHoldingHeldAt'
 
 // @generated library-cache end
 
-typealias AssociatedHoldingArray = Array with AssociatedHolding
+module typealias AssociatedHoldingArray = Array with AssociatedHolding
 
 // @generated library-cache begin
 function cacheWriteAssociatedHoldingArray(writer LibraryCacheWriter, value AssociatedHoldingArray)
@@ -15153,7 +15153,7 @@ end 'sourceSpelledAliasName'
 // "linear in the graph" a fact about this walk rather than a hope.
 typealias StructNameSet = Set with ByteArray
 
-typealias DeclTokenStreamMap = Map with (String, DeclTokenStream)
+module typealias DeclTokenStreamMap = Map with (String, DeclTokenStream)
 
 export typealias RespelledTokenStartSet = Set with ByteOffset
 
@@ -15178,7 +15178,7 @@ end 'DeclTokenStream'
 // ⭐⭐ **WHICH FILE DECLARED A FUNCTION WHOSE RETURN TYPE IS STILL A BARE `named`** — see
 // `ProgramSignatures.funcReturnDeclFiles`. Only those: every other recorded return type is already
 // concrete and there is no name left in it for a later reader to resolve as ITS file means.
-typealias FuncReturnDeclFileMap = Map with (ByteArray, FilePath)
+module typealias FuncReturnDeclFileMap = Map with (ByteArray, FilePath)
 
 // @generated library-cache begin
 function cacheWriteFuncReturnDeclFileMap(writer LibraryCacheWriter, value FuncReturnDeclFileMap)
@@ -15259,7 +15259,7 @@ export type FunctionDeclSite
 	// @generated library-cache end
 end 'FunctionDeclSite'
 
-typealias FunctionDeclSiteMap = Map with (ByteArray, FunctionDeclSite)
+module typealias FunctionDeclSiteMap = Map with (ByteArray, FunctionDeclSite)
 
 // @generated library-cache begin
 function cacheWriteFunctionDeclSiteMap(writer LibraryCacheWriter, value FunctionDeclSiteMap)
@@ -15423,7 +15423,7 @@ end 'cacheReadOverloadedDeclArray'
 // @generated library-cache end
 
 typealias OverloadedDeclArrayArray = Array with OverloadedDeclArray
-typealias OverloadedDeclMap = Map with (ByteArray, OverloadedDeclArray)
+module typealias OverloadedDeclMap = Map with (ByteArray, OverloadedDeclArray)
 
 // @generated library-cache begin
 function cacheWriteOverloadedDeclMap(writer LibraryCacheWriter, value OverloadedDeclMap)
@@ -15478,7 +15478,7 @@ end 'returnTypeNamesAType'
 
 // Every FREE function's namespace-qualified spelling. See
 // `ProgramSignatures.namespaceQualifiedFunctions`.
-typealias NamespaceQualifiedFunctionSet = Set with ByteArray
+module typealias NamespaceQualifiedFunctionSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteNamespaceQualifiedFunctionSet(writer LibraryCacheWriter, value NamespaceQualifiedFunctionSet)
@@ -15505,7 +15505,7 @@ end 'cacheReadNamespaceQualifiedFunctionSet'
 
 // Bare free-function name ⇒ the module directory of the file that FIRST declared it. See
 // `ProgramSignatures.freeFunctionDirectories`.
-typealias FreeFunctionDirectoryMap = Map with (ByteArray, String)
+module typealias FreeFunctionDirectoryMap = Map with (ByteArray, String)
 
 // @generated library-cache begin
 function cacheWriteFreeFunctionDirectoryMap(writer LibraryCacheWriter, value FreeFunctionDirectoryMap)
@@ -15534,7 +15534,7 @@ end 'cacheReadFreeFunctionDirectoryMap'
 
 // Bare free-function name ⇒ every namespace-qualified spelling of it, for the names more than one
 // DIRECTORY declares. See `ProgramSignatures.contestedFreeFunctions`.
-typealias ContestedFreeFunctionMap = Map with (ByteArray, NameRoster)
+module typealias ContestedFreeFunctionMap = Map with (ByteArray, NameRoster)
 
 // @generated library-cache begin
 function cacheWriteContestedFreeFunctionMap(writer LibraryCacheWriter, value ContestedFreeFunctionMap)
@@ -15564,7 +15564,7 @@ end 'cacheReadContestedFreeFunctionMap'
 // Every REGISTRATION name a contested free function was filed under — the same strings
 // `ContestedFreeFunctionMap`'s values hold, indexed the way the CALL DOOR asks for them. See
 // `ProgramSignatures.contestedRegistrationNames`.
-typealias ContestedRegistrationNameSet = Set with ByteArray
+module typealias ContestedRegistrationNameSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteContestedRegistrationNameSet(writer LibraryCacheWriter, value ContestedRegistrationNameSet)
@@ -15592,7 +15592,7 @@ end 'cacheReadContestedRegistrationNameSet'
 // Free-function registration base (`freeFunctionRegistrationName`) ⇒ the file that FIRST declared it, and
 // the bases a SECOND file of the same directory went on to declare. See
 // `ProgramSignatures.freeFunctionDeclFiles` / `crossFileOverloadedFreeFunctions`.
-typealias FreeFunctionDeclFileMap = Map with (ByteArray, FilePath)
+module typealias FreeFunctionDeclFileMap = Map with (ByteArray, FilePath)
 
 // @generated library-cache begin
 function cacheWriteFreeFunctionDeclFileMap(writer LibraryCacheWriter, value FreeFunctionDeclFileMap)
@@ -15619,7 +15619,7 @@ end 'cacheReadFreeFunctionDeclFileMap'
 
 // @generated library-cache end
 
-typealias CrossFileOverloadedFreeFunctionSet = Set with ByteArray
+module typealias CrossFileOverloadedFreeFunctionSet = Set with ByteArray
 
 // @generated library-cache begin
 function cacheWriteCrossFileOverloadedFreeFunctionSet(writer LibraryCacheWriter, value CrossFileOverloadedFreeFunctionSet)
@@ -15842,7 +15842,7 @@ module type MisclosedBlockSite
 	// @generated library-cache end
 end 'MisclosedBlockSite'
 
-typealias MisclosedBlockSiteArray = Array with MisclosedBlockSite
+module typealias MisclosedBlockSiteArray = Array with MisclosedBlockSite
 
 // @generated library-cache begin
 function cacheWriteMisclosedBlockSiteArray(writer LibraryCacheWriter, value MisclosedBlockSiteArray)
@@ -44724,7 +44724,7 @@ end 'IndexJournal'
 // `args` index the signature index's interner, past its baseline for a name the parse interned itself
 // (`LocalInstanceMints.typeNames`), and a `genericInstance` argument is a baseline id or an earlier row's
 // band id.
-type LocalInstanceRow
+export type LocalInstanceRow
 	export let baseId as TypeNameId
 	export let args as MaxonTypeArray
 	export let shape as InstanceShape
@@ -44795,7 +44795,7 @@ type ParseBandInstances
 end 'ParseBandInstances'
 
 // One `substitutedInstanceOrigins` edge a parse wrote.
-type SubstitutionOrigin
+export type SubstitutionOrigin
 	export let instance as GenericInstanceId
 	export let through as GenericInstanceId
 
@@ -44850,7 +44850,7 @@ end 'cacheReadSubstitutionOriginArray'
 // @generated library-cache end
 
 // One `typealias <name> = (<elements>)` a parse recorded.
-type TupleAliasRecord
+export type TupleAliasRecord
 	export let name as ByteArray
 	export let alias as DeclaredTupleAlias
 
@@ -45199,7 +45199,7 @@ end 'requireInlineManagedFieldFirst'
 // ============================================================================================
 
 // One question about the rows every parse mints. See `ProgramSignatures.rowSetAnswer`.
-union RowSetQuery
+export union RowSetQuery
 	typeArgKind(param TypeParamId, kind TypeArgInstantiationKind)
 	dropDiverges(let typeName ByteArray, index FieldIndex, let sharedCallee ByteArray)
 end 'RowSetQuery'
@@ -45346,7 +45346,7 @@ function rowSetAnswerIsAffirmative(answer RowSetAnswer) returns bool
 end 'rowSetAnswerIsAffirmative'
 
 // One question a parse asked, and its answer over every row the parse minted.
-type RowSetRecord
+export type RowSetRecord
 	export let query as RowSetQuery
 	export let answer as RowSetAnswer
 
@@ -45374,7 +45374,7 @@ type RowSetRecord
 	// @generated library-cache end
 end 'RowSetRecord'
 
-typealias RowSetRecordMap = Map with (ByteArray, RowSetRecord)
+export typealias RowSetRecordMap = Map with (ByteArray, RowSetRecord)
 
 // @generated library-cache begin
 function cacheWriteRowSetRecordMap(writer LibraryCacheWriter, value RowSetRecordMap)

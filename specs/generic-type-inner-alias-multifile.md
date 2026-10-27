@@ -31,7 +31,7 @@ end 'Item'
 export typealias ItemArray = Array with Item
 
 export type GenericModule uses Op
-	typealias OpArray = Array with Op
+	export typealias OpArray = Array with Op
 
 	export var ops as OpArray
 	export var items as ItemArray
@@ -100,7 +100,7 @@ end 'Item'
 export typealias ItemArray = Array with Item
 
 export type GenericModule uses Op
-	typealias OpArray = Array with Op
+	export typealias OpArray = Array with Op
 
 	export var ops as OpArray
 	export var items as ItemArray

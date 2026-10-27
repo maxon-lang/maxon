@@ -761,7 +761,7 @@ and resolves to `lib/shared.maxon`'s `module` declaration — the only one it is
 `lib`'s `Slots`, means its own `int(0 to 100)`.
 ```maxon
 // --- file: lib/shared.maxon
-typealias Elem = int(1000 to 2000)
+module typealias Elem = int(1000 to 2000)
 module typealias Slots = Array with Elem
 
 // --- file: priv.maxon
@@ -1135,17 +1135,21 @@ typealias Bag = Array with Num
 typealias Pair = (Bag, Num)
 
 public type Keeper
-	export var p as Pair
+	var p as Pair
+
 	export static function make() returns Self
 		var b = Bag.create()
 		b.push(7)
 		return Self{p: (b, 1)}
 	end 'make'
+
+	function first() returns Num
+		return try self.p.0.get(0) otherwise 0
+	end 'first'
 end 'Keeper'
 
 export function useA() returns Num
-	var k = Keeper.make()
-	return try k.p.0.get(0) otherwise 0
+	return Keeper.make().first()
 end 'useA'
 
 // --- file: bother.maxon
@@ -1258,17 +1262,21 @@ typealias Bag = Array with String
 typealias Pair = (Bag, int)
 
 public type Holder
-	export var q as Pair
+	var q as Pair
+
 	export static function make() returns Self
 		var b = Bag.create()
 		b.push("xy")
 		return Self{q: (b, 1)}
 	end 'make'
+
+	function first() returns String
+		return try self.q.0.get(0) otherwise ""
+	end 'first'
 end 'Holder'
 
 export function useB() returns Integer
-	let h = Holder.make()
-	return (try h.q.0.get(0) otherwise "").count()
+	return Holder.make().first().count()
 end 'useB'
 
 export typealias Integer = int(i64.min to i64.max)
@@ -1283,17 +1291,21 @@ typealias Bag = Array with Num
 typealias Pair = (Bag, int)
 
 public type Keeper
-	export var p as Pair
+	var p as Pair
+
 	export static function make() returns Self
 		var b = Bag.create()
 		b.push(7)
 		return Self{p: (b, 1)}
 	end 'make'
+
+	function first() returns Num
+		return try self.p.0.get(0) otherwise 0
+	end 'first'
 end 'Keeper'
 
 export function useA() returns Integer
-	var k = Keeper.make()
-	return (try k.p.0.get(0) otherwise 0)
+	return Keeper.make().first()
 end 'useA'
 ```
 ```exitcode
@@ -2298,7 +2310,8 @@ end 'main'
 43
 ```
 
-<!-- test: a-dispatch-reads-the-instance-argument-as-its-declaring-file-wrote-it -->
+<!-- test: error.an-exported-interface-instance-over-a-file-private-argument-is-refused -->
+`lib/b.maxon` and `app/main.maxon` each declare a file-private `Measure` and `Items`, and `ItemsSource` is `Source with Items` of `lib/b.maxon`'s. An exported alias and an exported function cannot name a file-private alias, so both are refused and no dispatch through `ItemsSource` reaches `app/main.maxon`'s own `Items`.
 ```maxon
 // --- file: lib/b.maxon
 typealias Measure = int(0 to 1000)
@@ -2341,11 +2354,13 @@ function main() returns ExitCode
 	return ((first - 450) as ExitCode) + (one as ExitCode)
 end 'main'
 ```
-```exitcode
-51
+```maxoncstderr
+error E3167: lib/<fragment>:24:17: exported function 'lib.makeSource' names file-private typealias 'Items' in its return type
+error E3167: lib/<fragment>:22:18: exported typealias 'lib.ItemsSource' names file-private typealias 'Items' in its target
 ```
 
-<!-- test: an-array-literal-stored-into-another-files-field-builds-that-files-instance -->
+<!-- test: error.an-array-literal-stored-into-another-files-field-is-refused-at-the-field -->
+`lib/bag.maxon` and `app/main.maxon` each declare a file-private `Measure` and `Items`. `Bag.items` is typed by `lib/bag.maxon`'s `Items`, and an exported field cannot be typed by a file-private alias, so no array literal can be stored into it from another file.
 ```maxon
 // --- file: lib/bag.maxon
 typealias Measure = int(0 to 1000)
@@ -2377,8 +2392,8 @@ function main() returns ExitCode
 	return b.second() + (one as ExitCode)
 end 'main'
 ```
-```exitcode
-26
+```maxoncstderr
+error E3167: lib/<fragment>:7:22: exported field 'lib.Bag.items' names file-private typealias 'Items' in its type
 ```
 
 <!-- test: two-readers-in-two-directories-each-instantiate-their-own-directorys-alias -->

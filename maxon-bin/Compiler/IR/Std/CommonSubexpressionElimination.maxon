@@ -380,13 +380,13 @@ typealias CseBucketIndexColumn = Array with ElementIndex
 // The number of buckets, which is a DIVISOR and so is typed to exclude zero — `mod` by a
 // possibly-zero value is E3057, and a runtime guard for a count that cannot be zero would be a check
 // nothing can fail.
-typealias CseBucketCount = int(1 to u64.max)
+module typealias CseBucketCount = int(1 to u64.max)
 typealias CseKeyPart = bits(64)
 
 // How many calls a dominator path has walked past — the reuse barrier `CseExpressionTable.noteCall`
 // counts. Only EQUALITY of two of these is ever asked, so the count itself never has to be right in
 // absolute terms; it has to be the same number at two points exactly when no call separates them.
-typealias CallBarrierCount = int(0 to u64.max)
+module typealias CallBarrierCount = int(0 to u64.max)
 typealias CallBarrierCountColumn = Array with CallBarrierCount
 
 // The mutable state one run of the pass carries: the expression table and the three records every op is
@@ -412,7 +412,7 @@ end 'CseScratch'
 // The answer to one table probe, written into a caller-owned record rather than returned as a union,
 // for `StdFoldableDef`'s measured reason: a payload-bearing union heap-boxes EVERY case including the
 // payload-free one, and this sits on a path walked once per arithmetic op in the module.
-type CseLookup
+module type CseLookup
 	var hit as bool
 
 	// Meaningless until `hit` says otherwise, and not readable as a sentinel — ValueId 0 is a real
@@ -462,7 +462,7 @@ end 'CseLookup'
 // sibling subtree never sees them. The rollback is EXACT rather than approximate because a new entry
 // always goes to the FRONT of its bucket's chain: undoing them newest-first restores each bucket head
 // to what it was, with no per-bucket bookkeeping and no clearing pass over the value space.
-type CseExpressionTable
+module type CseExpressionTable
 	// TWO COLUMNS for one map, exactly as `ConstValueMap` is: "is there a bucket here" and "where its
 	// chain starts". A single column would need an index that means "empty", and every entry index
 	// is a real entry.

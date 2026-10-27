@@ -33,6 +33,13 @@ release's version as its heading when the release is cut.
   `Tallies.create()`).
   Fix: widen the type to the binding's tier (`export enum Status`, `export typealias Small`, or
   `public` for a `public` binding), or narrow the binding (`let BIG` without `export`).
+- Every other surface a declaration exposes is held to E3167 too: an instance field marked `module`,
+  `export` or `public` (at the narrower of its own and its type's tier), a union case's payloads, a
+  typealias's target, an `implements` clause and its `with` arguments, a type's or generic function's
+  `where` clause, an interface's `extends` clause, and a struct-backed enum's backing record
+  (`exported field 'api.Holder.mode' names file-private enum 'Mode' in its type`).
+  Fix: widen the named type to the surface's tier (`export enum Mode`), or narrow the surface (drop the
+  `export` from `export var mode as Mode`).
 - A constant `FixedArray` index at or past the size is E3005 at compile time.
   Fix: correct the index, or pass a deliberate out-of-range index through a value computed at run time.
 - A divide or `mod` whose divisor is proven non-zero by a counted loop's bounds or a range computed from

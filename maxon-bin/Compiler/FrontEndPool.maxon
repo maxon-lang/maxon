@@ -43,7 +43,7 @@ export typealias FrontEndRetirees = WorkerRetirees with FrontEndWorker.handle
 // At most one: the worker state an in-process front end works with.
 typealias FrontEndWorkerStateArray = Array with FrontEndWorkerState
 
-typealias FrontEndWorkArray = Array with FrontEndWork
+export typealias FrontEndWorkArray = Array with FrontEndWork
 typealias FrontEndOutcomeArray = Array with FrontEndOutcome
 typealias ParseQueryArray = Array with ParseQuery
 
@@ -69,7 +69,7 @@ function compilePhaseOfStage(stage FrontEndStage) returns CompilePhase
 end 'compilePhaseOfStage'
 
 // What one file's lex answers: the raw stream and the `#if`-resolved one, or the refusal that stopped either.
-module union LexOutcome
+export union LexOutcome
 	lexed(let tokens TokenArray, let active TokenArray)
 	directiveFailed(let tokens TokenArray, error DirectiveError)
 	lexFailed(error LexerError)
@@ -94,13 +94,13 @@ module union LexOutcome
 end 'LexOutcome'
 
 // One file's work for a worker: its bytes to lex, or what its parse reads beside the worker's index.
-union FrontEndWork
+export union FrontEndWork
 	lex(content String)
 	parse(let job ParseJob, let tokens TokenArray, let overrides RowSetOverrideTable)
 end 'FrontEndWork'
 
 // What one file's work answered.
-union FrontEndOutcome
+export union FrontEndOutcome
 	lexed(outcome LexOutcome)
 	parsed(outcome FileParseOutcome)
 end 'FrontEndOutcome'
@@ -108,7 +108,7 @@ end 'FrontEndOutcome'
 // One file's work on its way to a worker, in a one-slot holder the worker pops. The work lives as long as a
 // message argument does — until the reply is sent — and the reply holds slices of its bytes and tokens, so work
 // the argument still held would be a second owner of what the reply carries.
-type FrontEndJob
+export type FrontEndJob
 	export var holder as FrontEndWorkArray
 
 	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what makes a call to one of these the argument of a send (E3138).
@@ -137,7 +137,7 @@ type FrontEndJob
 end 'FrontEndJob'
 
 // A reply's value is a record, never a union (E3140), so the outcome travels in one.
-type FrontEndReply
+export type FrontEndReply
 	export var outcome as FrontEndOutcome
 
 	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what lets a reply carry one of these (E3137).
@@ -147,7 +147,7 @@ type FrontEndReply
 end 'FrontEndReply'
 
 // Everything one worker spent, as a record nothing else holds (a reply moves).
-type FrontEndWorkerReport
+export type FrontEndWorkerReport
 	export var costs as PoolPhaseCosts
 
 	static function of(costs PoolPhaseCosts) returns FrontEndWorkerReport
@@ -159,7 +159,7 @@ end 'FrontEndWorkerReport'
 //
 // ⚠ **IT IS HANDED `cpu`, `os` AND THE FLAG, NOT THE PROJECT'S `ConditionFacts`**, for `BackendWorker`'s reason:
 // a `spawn`'s factory arguments are MOVED, and the project keeps its `Target` for the rest of the compile.
-type FrontEndWorker
+export type FrontEndWorker
 	var state as FrontEndWorkerState
 
 	static function create(cpu CpuArch, os Os, debugStream bool) returns Self

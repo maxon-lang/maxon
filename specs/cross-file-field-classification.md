@@ -287,9 +287,10 @@ end 'main'
 42
 ```
 
-<!-- test: crossfile-same-alias-name-declared-in-two-files -->
+<!-- test: error.crossfile-same-alias-name-declared-in-two-files -->
 Two file-private `typealias`es of one name coexist in one directory, so two files may each declare
-`Num`. The field's type is the one the STRUCT's own file declares, and a temporary read still copies it.
+`Num`. `Gate.n` is typed by the STRUCT's own file's `Num`, and an exported field cannot be typed by a
+file-private alias, so the field is refused where it is declared.
 ```maxon
 // --- file: gate.maxon
 typealias Num = int(0 to 1000)
@@ -313,8 +314,8 @@ function main() returns ExitCode
 	return Gate.twice(21).n
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3167: <fragment>:6:18: exported field 'Gate.n' names file-private typealias 'Num' in its type
 ```
 
 <!-- test: crossfile-float-alias-field-off-a-temporary -->
@@ -323,7 +324,7 @@ layout column the classifier reads still holds the bare name — so it travels t
 int alias does and must reach the same `false`.
 ```maxon
 // --- file: scale.maxon
-typealias Weight = float(0.0 to 1000.0)
+export typealias Weight = float(0.0 to 1000.0)
 
 export type Scale
 	export var w as Weight
@@ -347,8 +348,8 @@ A FUNCTION-typed field is a code pointer — an i64 stored inline that owns no h
 skips it and the read copies it. Declared in a sibling file it is the same scalar.
 ```maxon
 // --- file: holder.maxon
-typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
+export typealias Integer = int(i64.min to i64.max)
+export typealias UnaryOp = function(Integer) returns Integer
 
 function inc(v Integer) returns Integer
 	return v + 1
@@ -494,8 +495,8 @@ end 'main'
 in a sibling file, whose record and buffer the box owns.
 ```maxon
 // --- file: bag.maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+export typealias Integer = int(i64.min to i64.max)
+export typealias IntArray = Array with Integer
 
 export type Bag
 	export var items as IntArray
@@ -529,7 +530,7 @@ export function seed() returns Integer
 end 'seed'
 
 // --- file: bag.maxon
-typealias IntArray = Array with Integer
+export typealias IntArray = Array with Integer
 
 export type Bag
 	export var items as IntArray
@@ -564,7 +565,7 @@ padding: the divergence is structural, not order-sensitive. Both doors ask
 `unionBoxDropCallee(name)`, which answers over the index's own layout and interner.
 ```maxon
 // --- file: bag.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export union Payloaded
 	some(v Num)
@@ -596,7 +597,7 @@ mispairing panics it identically, so the pairing is the drop routing's and not t
 at the guard alone leaves this case red.
 ```maxon
 // --- file: bag.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export union Payloaded
 	some(v Num)
@@ -643,7 +644,7 @@ export type Bag
 	end 'make'
 end 'Bag'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let b = Bag.make()

@@ -181,7 +181,7 @@ end 'main'
 ```
 
 <!-- test: error.two-file-private-function-aliases-of-one-shape-are-two-types -->
-The same two agreeing declarations, and this time a value crosses. `Holder.op` is `pkg/lib.maxon`'s `Step` because that is where the field is written; read in `pkg/main.maxon` and handed to a parameter declared with `pkg/main.maxon`'s own `Step`, it meets a different declaration of the same shape, and is refused.
+The same two agreeing declarations, and this time a value would have to cross. `Holder.op` is `pkg/lib.maxon`'s `Step` because that is where the field is written, and an exported field cannot be typed by a file-private alias, so the field is refused before `pkg/main.maxon`'s own `Step` is ever asked about it.
 ```maxon
 // --- file: pkg/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -207,11 +207,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:22:9: argument type mismatch for 'step': expected 'Step' (declared in pkg/main.maxon), got 'Step' (declared in pkg/lib.maxon)
+error E3167: pkg/<fragment>:7:19: exported field 'pkg.Holder.op' names file-private typealias 'Step' in its type
 ```
 
 <!-- test: error.two-file-private-generic-aliases-of-one-instance-are-two-types -->
-The GENERIC form: both files declare `Bag` over the same instance, `Array with Integer`. The value crosses through `Holder.items` exactly as above and is refused at the parameter declared with the reader's own `Bag`.
+The GENERIC form: both files declare `Bag` over the same instance, `Array with Integer`. `Holder.items` is `pkg/lib.maxon`'s `Bag`, and an exported field cannot be typed by a file-private alias, so the field is refused before `pkg/main.maxon`'s own `Bag` is ever asked about it.
 ```maxon
 // --- file: pkg/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -239,11 +239,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:24:9: argument type mismatch for 'b': expected 'Bag' (declared in pkg/main.maxon), got 'Bag' (declared in pkg/lib.maxon)
+error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bag' in its type
 ```
 
 <!-- test: error.an-element-read-from-another-files-same-instance-alias-is-not-this-files -->
-One level down: `Holder.rows` is a `Rows`, an `Array with Bag` of `pkg/lib.maxon`'s `Bag`, so an element read out of it is that file's `Bag`, and `pkg/main.maxon`'s parameter, declared with its own `Bag` over the same instance, refuses it.
+One level down: `Holder.rows` is a `Rows`, an `Array with Bag` of `pkg/lib.maxon`'s `Bag`. An exported field cannot be typed by a file-private alias, so the field is refused, and no element of it reaches `pkg/main.maxon`'s own `Bag`.
 ```maxon
 // --- file: pkg/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -276,12 +276,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:29:9: argument type mismatch for 'b': expected 'Bag' (declared in pkg/main.maxon), got 'Bag' (declared in pkg/lib.maxon)
+error E3167: pkg/<fragment>:8:21: exported field 'pkg.Holder.rows' names file-private typealias 'Rows' in its type
 ```
 
 <!-- test: error.two-file-private-exit-code-aliases-are-two-types -->
-`ExitCode` is no exception: each file's own declaration is its own type, whatever the name, so
-`pkg/lib.maxon`'s value does not reach `pkg/main.maxon`'s parameter.
+`ExitCode` is no exception: each file's own declaration is its own type, whatever the name, so an exported field typed by `pkg/lib.maxon`'s is refused and its value never reaches `pkg/main.maxon`'s parameter.
 ```maxon
 // --- file: pkg/lib.maxon
 typealias ExitCode = int(0 to 125)
@@ -306,7 +305,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:21:9: argument type mismatch for 'c': expected 'ExitCode' (declared in pkg/main.maxon), got 'ExitCode' (declared in pkg/lib.maxon)
+error E3167: pkg/<fragment>:6:21: exported field 'pkg.Holder.code' names file-private typealias 'ExitCode' in its type
 ```
 
 <!-- test: non-exported-same-name-function-alias-inside-a-generic-instance -->

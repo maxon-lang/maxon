@@ -196,7 +196,7 @@ declaring file is told `E3062: unused typealias: 'IntArray'` and the use site lo
 `error.non-exported-typealias-cross-file` below pins both halves of that refusal.
 ```maxon
 // --- file: api/types.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
@@ -1016,14 +1016,18 @@ type Point implements Comparable
 	end 'compare'
 end 'Point'
 
-export typealias PointArray = Array with Point
+typealias PointArray = Array with Point
 
 export type Points
-	export var items as PointArray
+	var items as PointArray
 
 	export static function make() returns Self
 		return Self{items: [Point.make(3), Point.make(1), Point.make(2)]}
 	end 'make'
+
+	export function sort()
+		self.items.sort()
+	end 'sort'
 
 	export function firstX() returns Integer
 		let first = try self.items.get(0) otherwise panic("empty")
@@ -1034,7 +1038,7 @@ end 'Points'
 // --- file: main.maxon
 function main() returns ExitCode
 	var points = Points.make()
-	points.items.sort()
+	points.sort()
 	print("{points.firstX()}\n")
 	return 0
 end 'main'

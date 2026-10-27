@@ -208,7 +208,7 @@ function tokensSeparateWithASpace(previous TokenKind, next TokenKind) returns bo
 	return not (next == TokenKind.rightParen or next == TokenKind.dot or next == TokenKind.comma or next == TokenKind.leftParen)
 end 'tokensSeparateWithASpace'
 
-type CellHandOver
+export type CellHandOver
 	export let name as ByteArray
 	export let callee as String
 	export let parameter as String
@@ -218,7 +218,7 @@ type CellHandOver
 	end 'create'
 end 'CellHandOver'
 
-typealias CellHandOverArray = Array with CellHandOver
+export typealias CellHandOverArray = Array with CellHandOver
 
 union ElementStoreDestination
 	none
@@ -378,7 +378,7 @@ end 'closureCaptureSourceOf'
 
 // The raw values are spliced into E2001's message, which `specs/if-statements.md`,
 // `specs/match-statements.md` and `specs/test-declaration.md` pin byte-for-byte.
-module enum LineEndingConstruct
+export enum LineEndingConstruct
 	blockLabel = "block label"
 	statement = "statement"
 	matchArm = "match arm"
@@ -4117,7 +4117,7 @@ end 'inferredClosureResultType'
 // is decided, because a parameter list is read before its own registration name can be: the name depends on
 // the parameter TYPES this very list is producing. The seed is not a sentinel — it is the correct answer for
 // every declaration that turns out to be the first of its name.
-union DefaultHelperOwner
+export union DefaultHelperOwner
 	parameter(let sourceName ByteArray, let registrationName ByteArray, paramIndex ParamCount)
 	field(let helperName ByteArray)
 end 'DefaultHelperOwner'
@@ -4129,7 +4129,7 @@ end 'DefaultHelperOwner'
 // ⭐ **ONE LIST FOR BOTH DOORS, because a default value is ONE mechanism.** The drain, the per-function
 // column reset, the `IrFunction` and the end-of-default check are the same for a parameter and a field;
 // only the name and the tier differ, and `DefaultHelperOwner` is exactly those two.
-type PendingDefaultHelper
+export type PendingDefaultHelper
 	// ⚠ **MUTABLE for exactly one write** — `Parser.claimDefaultHelpersForRegistrationName`, which re-points a
 	// parameter default at the registration name its declaration turned out to claim. See `DefaultHelperOwner`
 	// for why the name cannot be known when the parameter list is read.
@@ -4164,7 +4164,7 @@ type PendingDefaultHelper
 	end 'create'
 end 'PendingDefaultHelper'
 
-typealias PendingDefaultHelperArray = Array with PendingDefaultHelper
+export typealias PendingDefaultHelperArray = Array with PendingDefaultHelper
 
 // ⚠ **IT IS A FREE FUNCTION, NOT TWO LINES INSIDE THE WALK, AND THE REASON IS A COMPILER SHAPE RATHER
 // THAN ANYTHING ABOUT DEFAULTS.** Reassigning the walk's own enclosing binding from INSIDE a branch
@@ -13159,13 +13159,13 @@ function freshMoveSiteLists() returns MoveSiteLists
 end 'freshMoveSiteLists'
 
 // What `Parser.valueIsBoxedUnion` found a `named` type to be.
-enum BoxedUnionAnswer
+export enum BoxedUnionAnswer
 	unasked
 	boxed
 	notBoxed
 end 'BoxedUnionAnswer'
 
-typealias BoxedUnionAnswerArray = Array with BoxedUnionAnswer
+export typealias BoxedUnionAnswerArray = Array with BoxedUnionAnswer
 
 // ⭐ **IS A VALUE OF `tag` A SCALAR WHATEVER THE PROGRAM DECLARES?** The parse-time `no` to
 // `ProvenanceTracer.valueTagCarriesProvenance`, which asks the whole program about a `named` type.
@@ -13242,7 +13242,7 @@ type MoveMark
 	end 'awaitingAt'
 end 'MoveMark'
 
-typealias MoveSiteLists = Array with MoveSiteArray
+export typealias MoveSiteLists = Array with MoveSiteArray
 typealias LiteralCommaCount = int(0 to u32.max)
 
 // The doors on either of two paths, each once, as the index of their list in `lists` — a new one only when the
@@ -13896,12 +13896,12 @@ typealias LoopPhiVarArray = Array with LoopPhiVar
 // index below, which is what turns "which bindings does this construct assign?" from a walk of
 // everything in scope into a lookup per name assigned. Ascending position IS declaration order,
 // which is the order every carried set must be returned in (see `assignedBindingsIn`).
-union InnermostMutableVar
+export union InnermostMutableVar
 	none
 	at(position ElementIndex)
 end 'InnermostMutableVar'
 
-typealias MutableVarShadowColumn = Array with InnermostMutableVar
+export typealias MutableVarShadowColumn = Array with InnermostMutableVar
 
 // A construct's carried positions, kept ASCENDING and duplicate-free — the working set
 // `assignedBindingsIn` builds and then reads the bindings off.
@@ -16509,7 +16509,7 @@ end 'MergeConstruct'
 // value whose tag is `float` may hold NO constant (a parameter, a runtime divide) — that is `unknown`, not
 // `float`. Reading the tag to decide how to read the payload would answer `float` for both and hand a
 // caller the unseeded 0 as if it were `+0.0`, which is exactly the sentinel this column exists to refuse.
-enum ConstPayloadDomain
+export enum ConstPayloadDomain
 	// No constant at all: a parameter, a call result, a merge phi, a value whose defining op declined to fold.
 	unknown
 
@@ -17153,7 +17153,6 @@ typealias DispatchIndexArray = Array with ElementIndex
 // point arms — a keyword or bytecode dispatch table, the shape a big `match` IS — Θ(K²). Membership is the
 // only thing asked of it (add, and "have I seen this?"), which is exactly a set's contract.
 typealias SeenPatternValues = Set with FullRangeInt
-typealias RequirementNameSet = Set with ByteArray
 
 typealias NamedSlotIndexArray = Array with ElementIndex
 

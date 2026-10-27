@@ -193,7 +193,7 @@ typealias ReachRowColumn = Array with ReachRow
 // one and stale under any other, so aiming at a new peak is a bump rather than a clear.
 typealias ReachGeneration = int(0 to u64.max)
 typealias ReachStampColumn = OptionalIndexColumn with ReachGeneration
-typealias DefPressureColumn = OptionalIndexColumn with RegCount
+export typealias DefPressureColumn = OptionalIndexColumn with RegCount
 
 let FirstReachGeneration = 0
 
@@ -332,7 +332,7 @@ end 'RegAllocRefusal'
 // the bare `RegAllocRefusal`; the main thread then runs the core AGAIN on the ORIGINAL function — which
 // the worker never mutated, because what it was handed was a copy — and renders from the
 // site that second run fills. A compile that reaches here is failing, so the second run is free.
-module union RefusedAllocation
+export union RefusedAllocation
 	none
 	at(liveness LivenessResult, lineage SplitLineage, peak PressurePeak)
 end 'RefusedAllocation'
@@ -509,7 +509,7 @@ end 'keepsOriginalBeforePeak'
 // HEAP OBJECT, and there is exactly one cut in flight at a time. Minting it where it is USED would be an
 // allocation per split on the pass the scale ladder watches — and two of them, because `chooseVictim`
 // and the mutator each need it. `SplitScratch` holds the one, created once per function.
-type SplitAnchor
+export type SplitAnchor
 	export var blockLocal as ElementIndex
 	export var seq as OpSeq
 	export var placement as SpillPlacement
@@ -952,7 +952,7 @@ end 'SplitEdits'
 // confined value is confined at every op it is live at), so a peak-finder that resolved ties any other
 // way would pick a different op, hence a different victim, hence different code. Anything that
 // re-derives this ranking must reproduce the ORDER — see `peakOutranks`.
-type PeakTree
+export type PeakTree
 	// Doubles as the "no peak in this subtree" marker for `winner`: no block index can equal it.
 	var numBlocks as ElementIndex
 
@@ -3410,7 +3410,7 @@ end 'implicitTouchOf'
 // one, and `SplitScratch` holds the single instance its callers pass down — it is asked per value per
 // dirty block, where a mint would be a heap object per ask. So no caller may hold a span across
 // another `liveAcrossSpanIn` on the same object, which would silently answer about a different block.
-type LiveAcrossSpan
+export type LiveAcrossSpan
 	export var found as bool
 	export var lo as PressureSlot
 	export var hi as PressureSlot
@@ -3670,7 +3670,7 @@ end 'demandBaseOf'
 // Per dirty block, the op positions the victim was live over before the split. A split changes only
 // the victim's and its minted ids' liveness, and those live inside this window plus the ops it
 // spliced, so `refreshConfinedWindow` re-ranks just those ops' confined leaves.
-type SplitWindows
+export type SplitWindows
 	var lo as DenseColumn
 	var hi as DenseColumn
 	var stamp as DenseColumn
@@ -7761,7 +7761,7 @@ end 'killsValueAtPeak'
 // `retargetTo` is the one thing that invalidates them, and `reachableFromPeak` ASSERTS it has been called:
 // serving a row walked from a DIFFERENT peak would flip `killsValueAtPeak`, change the victim's tier,
 // and silently emit a different split.
-type ReachCache
+export type ReachCache
 	var numBlocks as ElementIndex
 
 	// The peak block every live row was walked FROM. `hasPeak` is false until the first `retargetTo`,
