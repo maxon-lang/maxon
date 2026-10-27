@@ -242,6 +242,15 @@ release's version as its heading when the release is cut.
   (`Cannot operate on int and Shape`).
   Fix: read the union with `match`, or its tag with `.ordinal` or `.rawValue`; declare an `enum` where the
   values are meant to be numbers.
+- `TlsClient.connect`'s `deadlineMs` parameter is renamed `dialDeadlineMs` and bounds only the TCP
+  connection, where it used to bound the connection and the handshake each; the handshake is bounded by
+  the new `TlsClientOptions.setHandshakeDeadline(milliseconds)`, 30 seconds by default as
+  `TlsServerOptions` already is, where a client with no `deadlineMs` waited without a limit. A handshake
+  that outlasts it throws `handshakeTimedOut`. `HttpClient` caps the handshake deadline at what is left of
+  the exchange's timeout.
+  Fix: rename `deadlineMs:` to `dialDeadlineMs:` at each `TlsClient.connect` call, and call
+  `options.setHandshakeDeadline(...)` where the old `deadlineMs` also had to bound the handshake (`0` waits
+  without a limit).
 
 ## 0.5.0 — 2026-10-08
 

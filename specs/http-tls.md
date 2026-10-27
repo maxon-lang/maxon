@@ -1594,7 +1594,7 @@ function tlsClientOnThePlainPort() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	var limits = HttpServerLimits.create()
 
-	limits.readDeadlineMs = 500
+	limits.maxHeaderBytes = 64
 	server.setLimits(limits)
 
 	let peer = async serving(server)

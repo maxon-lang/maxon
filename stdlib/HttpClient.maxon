@@ -432,8 +432,9 @@ function secureTransportOver(client TcpClient, target HttpConnectTarget, tls Tls
 
 	try options.setApplicationProtocols([HttpApplicationProtocol]) otherwise panic("HttpClient: `{HttpApplicationProtocol}` is a usable ALPN protocol name")
 
-	let budgetMs = try remainingBudget(start, timeoutMs: timeoutMs)
-	let stream = try TlsClient.over(client, host: target.host, options: options, deadlineMs: budgetMs) otherwise (error) 'refused'
+	options.capHandshakeDeadline(try remainingBudget(start, timeoutMs: timeoutMs))
+
+	let stream = try TlsClient.over(client, host: target.host, options: options) otherwise (error) 'refused'
 		throw clientHandshakeFault(error)
 	end 'refused'
 

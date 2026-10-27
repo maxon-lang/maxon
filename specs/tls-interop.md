@@ -358,7 +358,7 @@ function bound(stream TlsStream) throws TlsError
 end 'bound'
 
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, deadlineMs: probeTimeoutMs) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -743,7 +743,7 @@ function bound(stream TlsStream) throws TlsError
 end 'bound'
 
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, deadlineMs: probeTimeoutMs) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1143,7 +1143,7 @@ function bound(stream TlsStream) throws TlsError
 end 'bound'
 
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, deadlineMs: probeTimeoutMs) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1528,7 +1528,7 @@ function bound(stream TlsStream) throws TlsError
 end 'bound'
 
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, deadlineMs: probeTimeoutMs) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 

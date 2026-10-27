@@ -17,10 +17,12 @@ public type TlsClientOptions
 	var trust as TlsTrust
 	var serverName as TlsServerName
 	var verificationTime as TlsVerificationTime
+	module var handshakeDeadlineMs as SocketDeadlineMs
 
-	/// The system roots, TLS 1.3 and 1.2, the dialled host as the name, no ALPN, no client certificate.
+	/// The system roots, TLS 1.3 and 1.2, the dialled host as the name, no ALPN, no client certificate,
+	/// a 30 s handshake deadline.
 	public static function create() returns TlsClientOptions
-		return Self{settings: TlsClientConfig.defaults(X509VerifyHost.none), trust: TlsTrust.system, serverName: TlsServerName.fromHost, verificationTime: TlsVerificationTime.current}
+		return Self{settings: TlsClientConfig.defaults(X509VerifyHost.none), trust: TlsTrust.system, serverName: TlsServerName.fromHost, verificationTime: TlsVerificationTime.current, handshakeDeadlineMs: DefaultHandshakeDeadlineMs}
 	end 'create'
 
 	/// The DER roots a server chain must end in, in place of the system's.
@@ -61,6 +63,19 @@ public type TlsClientOptions
 		settings.identity = TlsClientIdentity.certified(identity.chain.clone(), key: identity.key.clone())
 	end 'setIdentity'
 
+	/// How long the handshake may take, counted from when `connect` starts it, before `connect` throws
+	/// `handshakeTimedOut`; `0` waits without a deadline. `connect`'s `dialDeadlineMs` bounds the dial.
+	public function setHandshakeDeadline(milliseconds SocketDeadlineMs)
+		handshakeDeadlineMs = milliseconds
+	end 'setHandshakeDeadline'
+
+	// A cap of `0` lifts the deadline instead of tightening it, because `0` means no deadline.
+	module function capHandshakeDeadline(milliseconds SocketDeadlineMs)
+		if handshakeDeadlineMs == NoDeadlineMs or handshakeDeadlineMs > milliseconds 'wider'
+			handshakeDeadlineMs = milliseconds
+		end 'wider'
+	end 'capHandshakeDeadline'
+
 	module function configFor(host String) returns TlsClientConfig
 		var config = settings.clone()
 
@@ -84,22 +99,23 @@ end 'TlsClientOptions'
 
 /// Connects to TLS servers.
 public type TlsClient
-	/// Connect to `host` and run the handshake. `deadlineMs` bounds the connection and the handshake separately; `0` waits
-	/// without a deadline. The dial comes first so a network failure is reported as one even when no roots can be loaded.
-	public static function connect(host String, port NetworkPort, options TlsClientOptions = TlsClientOptions.create(), deadlineMs SocketDeadlineMs = NoDeadlineMs) returns TlsStream throws TlsError
-		let transport = try TcpClient.connect(host, port: port, deadlineMs: deadlineMs) otherwise (failure) 'unreachable'
+	/// Connect to `host` and run the handshake. `dialDeadlineMs` bounds the TCP connection, `0` waiting
+	/// without one; the options' handshake deadline bounds the handshake. The dial comes first so a network
+	/// failure is reported as one even when no roots can be loaded.
+	public static function connect(host String, port NetworkPort, options TlsClientOptions = TlsClientOptions.create(), dialDeadlineMs SocketDeadlineMs = NoDeadlineMs) returns TlsStream throws TlsError
+		let transport = try TcpClient.connect(host, port: port, deadlineMs: dialDeadlineMs) otherwise (failure) 'unreachable'
 			throw tlsNetworkFailure(failure)
 		end 'unreachable'
 
-		return try over(transport, host: host, options: options, deadlineMs: deadlineMs)
+		return try over(transport, host: host, options: options)
 	end 'connect'
 
-	module static function over(transport TcpClient, host String, options TlsClientOptions, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
+	module static function over(transport TcpClient, host String, options TlsClientOptions) returns TlsStream throws TlsError
 		let config = options.configFor(host)
 		var peer = try options.authenticator()
 		let entropy = try TlsClientEntropy.fresh(config) otherwise throw TlsError.entropyUnavailable
 		var endpoint = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise throw TlsError.invalidConfiguration
 
-		return try TlsStream.establish(transport, endpoint: endpoint, peer: peer, deadlineMs: deadlineMs)
+		return try TlsStream.establish(transport, endpoint: endpoint, peer: peer, deadlineMs: options.handshakeDeadlineMs)
 	end 'over'
 end 'TlsClient'

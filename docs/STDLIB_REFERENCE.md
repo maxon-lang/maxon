@@ -2405,7 +2405,7 @@ system's root certificates unless `TlsClientOptions` names others. Available on 
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `TlsClient.connect(host String, port NetworkPort, options TlsClientOptions = TlsClientOptions.create(), deadlineMs SocketDeadlineMs = 0)` | `TlsStream` | `TlsError` | Resolve `host`, connect, handshake. `deadlineMs` bounds the connection and, separately, the handshake: a connection that takes longer throws `timedOut`, a handshake that does throws `handshakeTimedOut`; `0` waits with no deadline. A failure after the connection was made closes it. |
+| `TlsClient.connect(host String, port NetworkPort, options TlsClientOptions = TlsClientOptions.create(), dialDeadlineMs SocketDeadlineMs = 0)` | `TlsStream` | `TlsError` | Resolve `host`, connect, handshake. `dialDeadlineMs` bounds the connection: one that takes longer throws `timedOut`; `0` waits with no deadline. The handshake is bounded by the options' [handshake deadline](#tlsclientoptions), and one that outlasts it throws `handshakeTimedOut`. A failure after the connection was made closes it. |
 
 The name the certificate is verified for, and the server name sent in the ClientHello, is `host`; `setServerName`
 replaces it. An IP address literal is verified against the certificate's IP addresses, and no server name is
@@ -2414,8 +2414,8 @@ sent for it. A client that gets the server's alert, or sends one, throws the mat
 ### TlsClientOptions
 
 `TlsClientOptions.create()` holds the defaults: the system roots, TLS 1.3 and TLS 1.2, no ALPN protocol, no
-client certificate, the server name of the host, the current time. A setter returns nothing and replaces what the
-option held. A configuration that no handshake could use is refused where it is set.
+client certificate, the server name of the host, a 30 s handshake deadline, the current time. A setter returns
+nothing and replaces what the option held. A configuration that no handshake could use is refused where it is set.
 
 | Member | Throws | Description |
 |--------|--------|-------------|
@@ -2425,6 +2425,7 @@ option held. A configuration that no handshake could use is refused where it is 
 | `setProtocols(protocols TlsProtocolArray)` | `TlsError` | The versions to offer, `TlsProtocol.tls13` and `TlsProtocol.tls12`. An empty array is `invalidConfiguration`. |
 | `setApplicationProtocols(names StringArray)` | `TlsError` | The ALPN protocol names to offer, in order. A name of no bytes or of more than 255 is `invalidConfiguration`. |
 | `setIdentity(identity TlsIdentity)` | — | The certificate chain and key to present when the server asks for a client certificate. |
+| `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long the handshake may take, from when `connect` starts it, before `connect` throws `handshakeTimedOut`; `0` waits with no deadline. |
 | `setVerificationTime(seconds UnixSeconds)` | — | The Unix time certificates are checked at, in place of the clock. |
 
 The system roots are read once per process, by the first connection that trusts them, and every later
@@ -2685,10 +2686,11 @@ against the operating system's root certificates, at the current time, unless `t
 | `setServerName(name)` | Verify and send this name in place of the URL's host. |
 | `setIdentity(identity)` | Present this client certificate to a server that asks for one (mutual TLS). |
 | `setProtocols(protocols)` | Offer only these TLS versions. |
+| `setHandshakeDeadline(milliseconds)` | Bound the handshake by this deadline, or by what remains of the timeout when that is sooner. |
 | `setVerificationTime(seconds)` | Check certificates at this Unix time in place of the clock. |
 
-The handshake runs within `HttpClientLimits.timeoutMs` like the rest of the exchange, and a handshake or a read that
-outlasts it throws `HttpError.timedOut`. Every other TLS failure throws `HttpError.tlsFailed(error)`, which
+The handshake's deadline is `tls`'s handshake deadline capped at what remains of `HttpClientLimits.timeoutMs`, and
+a handshake that outlasts it, or a read that outlasts the timeout, throws `HttpError.timedOut`. Every other TLS failure throws `HttpError.tlsFailed(error)`, which
 carries the [`TlsError`](#tlserror): `certificateRejected(reason)` for a chain the client refused (`unknownAuthority`,
 `hostnameMismatch`, `expired`), `protocolError` and `peerAlert` for an alert, `truncated` for a connection that
 ended without close_notify while a response was still being read, which includes a body that ends with the

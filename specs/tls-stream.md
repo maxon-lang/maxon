@@ -4955,7 +4955,7 @@ function holdOpen(silent TcpListener) returns String
 end 'holdOpen'
 
 function dial(port NetworkPort, options TlsClientOptions) returns String
-	_ = try TlsClient.connect("127.0.0.1", port: port, options: options, deadlineMs: 300) otherwise (error) 'refused'
+	_ = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return describe(error)
 	end 'refused'
 
@@ -4978,7 +4978,11 @@ function main() returns ExitCode
 	var silent = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let holder = async holdOpen(silent)
 
-	let dialled = dial(silent.port(), options: trustedClient(rootHex))
+	var impatient = trustedClient(rootHex)
+
+	impatient.setHandshakeDeadline(300)
+
+	let dialled = dial(silent.port(), options: impatient)
 
 	print("client: {dialled}; peer: {await holder}\n")
 
@@ -5832,7 +5836,11 @@ function main() returns ExitCode
 end 'main'
 
 function dialOutcome(port NetworkPort) returns String
-	_ = try TlsClient.connect("127.0.0.1", port: port, options: trustedClient(rootHex), deadlineMs: 300) otherwise (error) 'refused'
+	var impatient = trustedClient(rootHex)
+
+	impatient.setHandshakeDeadline(300)
+
+	_ = try TlsClient.connect("127.0.0.1", port: port, options: impatient) otherwise (error) 'refused'
 		return describeStall(error)
 	end 'refused'
 
