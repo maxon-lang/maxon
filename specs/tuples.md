@@ -3830,3 +3830,50 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:4:25: 'CharSet' requires a Character, but its argument is (int, int)
 ```
+
+<!-- test: multi-line-tuple-literal -->
+A tuple literal may span lines: a line break between its elements is layout.
+```maxon
+function main() returns ExitCode
+	let t = (
+		10,
+		20,
+		12
+	)
+	return t.0 + t.1 + t.2
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: multi-line-tuple-type-and-destructuring -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function sum(t (Integer,
+	Integer)) returns Integer
+	return t.0 + t.1
+end 'sum'
+
+function pair(a Integer,
+	b Integer) returns (
+	Integer,
+	Integer
+)
+	return (a,
+		b)
+end 'pair'
+
+function main() returns ExitCode
+	let (
+		x,
+		y
+	) = pair(3, b: 4)
+	return sum((x,
+		y)) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```

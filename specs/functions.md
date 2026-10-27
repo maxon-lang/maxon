@@ -1678,3 +1678,122 @@ typealias Integer = int(i64.min to i64.max)
 ```maxoncstderr
 error E3037: <fragment>:7:16: 'add' has no parameter named 'zzz'
 ```
+
+<!-- test: multi-line-parameter-list-free-function -->
+A parameter list may span lines: a line break inside the parentheses is layout, as it is inside a call's argument list.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function add(
+	a Integer,
+	b Integer
+) returns Integer
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	let r = add(
+		2,
+		b: 3
+	)
+	return r as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: multi-line-parameter-list-method-and-static -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	var n as Integer
+
+	static function create(
+		n Integer
+	) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function plus(a Integer,
+		b Integer) returns Integer
+		return self.n + a + b
+	end 'plus'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create(
+		10
+	)
+	let r = box.plus(
+		3,
+		b: 4
+	)
+	return r as ExitCode
+end 'main'
+```
+```exitcode
+17
+```
+
+<!-- test: multi-line-parameter-list-with-defaults -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function span(
+	low Integer = 1,
+	high Integer = 10
+) returns Integer
+	return high - low
+end 'span'
+
+function main() returns ExitCode
+	let r = span(
+		high: 4
+	)
+	return r as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: multi-line-parameter-list-interface-requirement -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Scaler
+	function scale(
+		factor Integer,
+		offset Integer
+	) returns Integer
+end 'Scaler'
+
+type Doubler implements Scaler
+	var base as Integer
+
+	static function create() returns Self
+		return Self{base: 2}
+	end 'create'
+
+	function scale(
+		factor Integer,
+		offset Integer
+	) returns Integer
+		return self.base * factor + offset
+	end 'scale'
+end 'Doubler'
+
+function run(s Scaler) returns Integer
+	return s.scale(5, offset: 1)
+end 'run'
+
+function main() returns ExitCode
+	let d = Doubler.create()
+	return run(d) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```

@@ -9,6 +9,27 @@ Maxon statements are newline-delimited: one statement per line, no semicolons. E
 `else`, `while`, `for`, `match`, `try` — opens with a quoted **block label** and closes with `end` and the
 same label. A missing label is **E2042**, and a match whose `end` names a different label is **E2043**.
 
+## Line Breaks Inside Brackets
+
+Inside an open `(`, `[` or `{` a line break ends nothing, and neither does a `///` line: a call, a
+parameter list, a tuple, a parenthesized expression, a case payload or a literal continues to its closer.
+
+```maxon
+let total = add(
+	1,
+	b: 2
+)
+let names = [
+	"alpha",
+	"beta"
+]
+let scaled = (total +
+	1) * 2
+```
+
+A `match` or a labelled `otherwise` handler written inside a bracket keeps its own lines up to its `end`:
+one arm or statement per line, as anywhere else. The condition of a `#if` is written on one line.
+
 ## Expression Statements
 
 A call on its own line is a statement. Its result must be used or explicitly discarded (see

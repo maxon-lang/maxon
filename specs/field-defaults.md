@@ -887,3 +887,53 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/field-defaults/error.a-field-default-above-i64-max-into-a-signed-alias.maxon:8:10: Value 9223372036854775808 is outside the range of 'Offset' (int(-9223372036854775808 to 9223372036854775807))
 ```
+
+### A field default whose call argument is a `match` expression ends at the line holding the call's closing parenthesis
+
+<!-- test: field-defaults.a-match-expression-in-a-call-argument-of-a-field-default -->
+```maxon
+enum Mode
+	quiet
+	loud
+end 'Mode'
+
+type Label
+	var text as String
+
+	static function make(text String, tail String) returns Self
+		return Self{text: "{text}{tail}"}
+	end 'make'
+
+	function read() returns String
+		return self.text
+	end 'read'
+end 'Label'
+
+type Box
+	var label = Label.make(match Mode.loud 'm'
+		quiet gives "quiet"
+		loud gives "loud"
+	end 'm', tail: "!")
+	var after = true
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function describe() returns String
+		return "{self.label.read()} {self.after}"
+	end 'describe'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	print("{b.describe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+loud! true
+```

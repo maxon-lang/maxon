@@ -764,7 +764,7 @@ A block LABEL and a character literal are the same `TokenKind.charLiteral`; only
 them apart. The two forms are NOT disjoint on the token alone: a character literal with methods is a call
 that begins with a charLiteral, and reading this program as a block-form `try` reports **E3059**, *"a
 block-form `try 'label' … end` groups statements and yields no value"* — a diagnostic about a construct it
-does not contain. `tryOpensBlockAt`'s disambiguator is the `.`: a block
+does not contain. `charLiteralOpensTryBlockIn`'s disambiguator is the `.`: a block
 label is always followed by a statement, so the lexer emits a `newline` behind it and never a dot.
 
 ```maxon

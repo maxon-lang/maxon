@@ -7697,3 +7697,54 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:6:20: Value 5000 is outside the range of 'Count' (int(0 to 1000))
 ```
+
+
+<!-- test: multi-line-closure-parameter-list -->
+A closure's parameter list may span lines: a line break inside its parentheses is layout.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let inc = function(
+		x Integer
+	) gives x + 1
+	let r = apply(
+		function(
+			n Integer
+		) gives n * 2,
+		x: 20
+	)
+	return inc(r) as ExitCode
+end 'main'
+```
+```exitcode
+41
+```
+
+<!-- test: multi-line-function-type-alias-parameter-list -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Combine = function(Integer,
+	Integer
+) returns Integer
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function run(f Combine) returns Integer
+	return f(2, 3)
+end 'run'
+
+function main() returns ExitCode
+	return run(add) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```

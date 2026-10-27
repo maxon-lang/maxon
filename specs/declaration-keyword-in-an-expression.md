@@ -50,7 +50,7 @@ is silent. One shape, two failure modes, and the loud one covers a third of the 
 ⚠ **THE CURE IS POSITIONAL, AND IT HAS TO BE.** `functionDeclarationAt` asks
 `declarationBeginsStatement`: a declaration keyword opens a declaration only where a declaration may
 STAND — first on its line, past the `export` / `public` / `module` / `static` modifiers it may carry. It
-is `ifBeginsStatement`'s rule one construct over. **The trigger is the three-token SEQUENCE and not the
+is `ifBeginsStatementIn`'s rule one construct over. **The trigger is the three-token SEQUENCE and not the
 word `and`**, so a cure that named that word, or that taught the sweep to skip parenthesized groups,
 would leave the next spelling of the same mistake live: `or` reaches it, and so does the `if` of an
 inline conditional (`Marker.function if (flag) else Marker.other`). Both are pinned below.

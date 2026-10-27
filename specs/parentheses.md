@@ -65,3 +65,34 @@ end 'main'
 8
 ```
 
+
+
+<!-- test: grouping-parenthesis-split-after-an-operator -->
+A grouping parenthesis may span lines: a line break inside it is layout.
+```maxon
+function main() returns ExitCode
+	let a = 3
+	let x = (a +
+		4) * 2
+	return x
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: grouping-parenthesis-split-before-an-operator -->
+```maxon
+function main() returns ExitCode
+	let a = 3
+	let x = (
+		a
+		+ 4
+	) * (a
+		- 1)
+	return x
+end 'main'
+```
+```exitcode
+14
+```

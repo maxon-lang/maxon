@@ -60,9 +60,10 @@ name; a test's label is its quoted name. Labels on `if`, `else`, `while`, `for`,
 blocks are chosen by you and name the block for `break` and `continue`. A label written after `end` must be
 the block's own label: anything else is **E2008** (`Mismatched end label: expected 'tick', got 'loop'`), and
 **E2043** for a `match`. Only a `test` must write it; on every other block the label after `end` may be
-omitted. Statements end at the end of the line, and a block runs from its label to its `end`. A block
-label, a statement and a match arm each end their line, so the next one starts on a line of its own; a
-token after one on the same line is **E2001**:
+omitted. Statements end at the end of the line, except inside an open `(`, `[` or `{` (see
+[Line Breaks Inside Brackets](#line-breaks-inside-brackets)), and a block runs from its label to its
+`end`. A block label, a statement and a match arm each end their line, so the next one starts on a line
+of its own; a token after one on the same line is **E2001**:
 
 ```maxon
 if ready() 'x' return 1 end 'x'   // error E2001: Expected newline after block label, got 'return'
@@ -3791,6 +3792,27 @@ The collection types and their full method lists are in the [standard library re
 Maxon statements are newline-delimited: one statement per line, no semicolons. Every block — `if`,
 `else`, `while`, `for`, `match`, `try` — opens with a quoted **block label** and closes with `end` and the
 same label. A missing label is **E2042**, and a match whose `end` names a different label is **E2043**.
+
+### Line Breaks Inside Brackets
+
+Inside an open `(`, `[` or `{` a line break ends nothing, and neither does a `///` line: a call, a
+parameter list, a tuple, a parenthesized expression, a case payload or a literal continues to its closer.
+
+```maxon
+let total = add(
+	1,
+	b: 2
+)
+let names = [
+	"alpha",
+	"beta"
+]
+let scaled = (total +
+	1) * 2
+```
+
+A `match` or a labelled `otherwise` handler written inside a bracket keeps its own lines up to its `end`:
+one arm or statement per line, as anywhere else. The condition of a `#if` is written on one line.
 
 ### Expression Statements
 

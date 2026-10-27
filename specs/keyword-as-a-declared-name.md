@@ -318,7 +318,7 @@ operand — which is why the case above reads `from` and `to` freely.
 ⚠ **`otherwise` IS refused, but only in ONE position, and NOT because it was listed** — the refusal set is
 DERIVED by asking `opensBlockAt`/`closesBlockAt` at the cursor, so it answers per program rather than per
 keyword. A bare `otherwise` read as a whole block condition puts the header's label straight after it
-(`while otherwise 'loop'`), which is `otherwiseOpensBlock`'s labelled-handler form — so that one program
+(`while otherwise 'loop'`), which is `otherwiseOpensBlockIn`'s labelled-handler form — so that one program
 is refused with the same E2015, while `acc + otherwise` is not. The derivation is what makes the set
 right without anyone maintaining it; no fixed list of exempt keywords summarises it.
 ```maxon
@@ -419,7 +419,7 @@ test the raw token, not to add a case to the raw test.
 
 <!-- test: a-keyword-named-METHOD-CALL-ending-a-block-HEADER -->
 ⛔ **`opensBlockAt` asks the keyword-as-a-name exclusion ONCE, ahead of every arm, and the `otherwise`
-arm is why.** `otherwiseOpensBlock`'s caught-error handler form is `otherwise ( <ident> ) <label>` — which a
+arm is why.** `otherwiseOpensBlockIn`'s caught-error handler form is `otherwise ( <ident> ) <label>` — which a
 keyword-named METHOD CALL at the end of a block header spells character for character, `.otherwise`
 being a legal member name. An arm that skipped the exclusion would read `while Ops.otherwise(i) 'loop'`
 as opening a second block nothing closes, and the extent scan would run past the loop's `end`:
@@ -758,4 +758,37 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: specs/keyword-as-a-declared-name/error.a-bare-read-of-end-in-a-first-method-is-the-only-diagnostic.maxon:11:21: Unsupported: reading 'end' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `end` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding
+```
+
+
+<!-- test: a-keyword-named-function-call-split-over-lines -->
+A call to a function named by a block keyword takes a split argument list like any other call, at the top level of an expression and nested inside another call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function if(n Integer) returns Integer
+	if n > 4 'big'
+		return 20
+	end 'big'
+	return 1
+end 'if'
+
+function pass(n Integer) returns Integer
+	return n
+end 'pass'
+
+function main() returns ExitCode
+	let a = if(
+		5
+	)
+	let b = pass(
+		if(
+			2
+		)
+	)
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+21
 ```

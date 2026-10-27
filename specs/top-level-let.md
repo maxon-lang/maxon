@@ -2323,3 +2323,152 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: a-match-expression-in-a-call-argument-ends-a-top-level-let-at-its-own-line -->
+The newlines a `match` expression keeps between its arms inside a call's parentheses belong to the initializer: the `let` ends at the line holding the closing parenthesis.
+```maxon
+enum Mode
+	quiet
+	loud
+end 'Mode'
+
+function tag(text String, tail String) returns String
+	return "{text}{tail}"
+end 'tag'
+
+let LABEL = tag(match Mode.loud 'm'
+	quiet gives "quiet"
+	loud gives "loud"
+end 'm', tail: "!")
+let NEXT = "next"
+
+function main() returns ExitCode
+	print("{LABEL} {NEXT}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+loud! next
+```
+
+<!-- test: a-match-expression-in-a-call-argument-ends-a-top-level-var-at-its-own-line -->
+```maxon
+enum Mode
+	quiet
+	loud
+end 'Mode'
+
+function tag(text String, tail String) returns String
+	return "{text}{tail}"
+end 'tag'
+
+var LABEL = tag(match Mode.quiet 'm'
+	quiet gives "quiet"
+	loud gives "loud"
+end 'm', tail: "?")
+var NEXT = "next"
+
+function main() returns ExitCode
+	print("{LABEL} {NEXT}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+quiet? next
+```
+
+<!-- test: a-match-expression-in-a-parenthesised-group-ends-a-top-level-let-at-its-own-line -->
+```maxon
+enum Mode
+	quiet
+	loud
+end 'Mode'
+
+let LABEL = (match Mode.loud 'm'
+	quiet gives "quiet"
+	loud gives "loud"
+end 'm')
+let NEXT = "next"
+
+function main() returns ExitCode
+	print("{LABEL} {NEXT}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+loud next
+```
+
+<!-- test: a-match-expression-in-an-array-element-ends-a-top-level-let-at-its-own-line -->
+```maxon
+enum Mode
+	quiet
+	loud
+end 'Mode'
+
+let LABELS = [match Mode.loud 'm'
+	quiet gives "quiet"
+	loud gives "loud"
+end 'm', "tail"]
+let NEXT = "next"
+
+function main() returns ExitCode
+	for label in LABELS 'each'
+		print("{label}\n")
+	end 'each'
+	print("{NEXT}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+loud
+tail
+next
+```
+
+<!-- test: a-handler-block-otherwise-in-a-call-argument-ends-a-top-level-let-at-its-own-line -->
+```maxon
+enum ParseError implements Error
+	bad
+end 'ParseError'
+
+function parse(n Count) returns Count throws ParseError
+	if n > 5 'big'
+		throw ParseError.bad
+	end 'big'
+	return n
+end 'parse'
+
+function tag(n Count, tail String) returns String
+	return "{n}{tail}"
+end 'tag'
+
+let LABEL = tag(try parse(3) otherwise 'bad'
+	print("recovering\n")
+	panic("unreachable")
+end 'bad', tail: "!")
+let NEXT = "next"
+
+function main() returns ExitCode
+	print("{LABEL} {NEXT}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3! next
+```

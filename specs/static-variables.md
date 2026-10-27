@@ -5158,3 +5158,67 @@ end 'main'
 xé
 y
 ```
+
+### A static member's initializer ends at the line holding the closing bracket of a kept `match` block
+
+<!-- test: a-match-expression-in-a-call-argument-of-a-static-let -->
+```maxon
+enum Mode
+	quiet
+	loud
+end 'Mode'
+
+function tag(text String, tail String) returns String
+	return "{text}{tail}"
+end 'tag'
+
+type Holder
+	static let LABEL = tag(match Mode.loud 'm'
+		quiet gives "quiet"
+		loud gives "loud"
+	end 'm', tail: "!")
+	static let NEXT = "next"
+end 'Holder'
+
+function main() returns ExitCode
+	print("{Holder.LABEL} {Holder.NEXT}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+loud! next
+```
+
+<!-- test: a-match-expression-in-a-call-argument-of-a-static-var -->
+```maxon
+enum Mode
+	quiet
+	loud
+end 'Mode'
+
+function tag(text String, tail String) returns String
+	return "{text}{tail}"
+end 'tag'
+
+type Holder
+	static var LABEL = tag(match Mode.quiet 'm'
+		quiet gives "quiet"
+		loud gives "loud"
+	end 'm', tail: "?")
+	static var NEXT = "next"
+end 'Holder'
+
+function main() returns ExitCode
+	print("{Holder.LABEL} {Holder.NEXT}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+quiet? next
+```

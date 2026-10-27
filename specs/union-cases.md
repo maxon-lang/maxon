@@ -464,3 +464,67 @@ end 'main'
 ```maxoncstderr
 error E2001: <fragment>:4:13: unexpected token: 'int'
 ```
+
+
+<!-- test: multi-line-payload-declaration -->
+A case's payload list may span lines: a line break inside its parentheses is layout.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Reply
+	ok(value Integer,
+		extra Integer)
+	pair(
+		a Integer,
+		b Integer
+	)
+	none
+end 'Reply'
+
+function main() returns ExitCode
+	let r = Reply.pair(
+		4,
+		b: 5
+	)
+	var total = 0 as Integer
+	match r 'show'
+		ok(value, extra) then total = value + extra
+		pair(a, b) then total = a * b
+		none then total = 0
+	end 'show'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: multi-line-payload-declaration-of-a-keyword-named-case -->
+A keyword-named case's payload list spans lines like any other.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Kw
+	while(
+		a Integer,
+		b Integer
+	)
+	if
+end 'Kw'
+
+function main() returns ExitCode
+	let k = Kw.while(
+		6,
+		b: 7
+	)
+	var total = 0 as Integer
+	match k 'show'
+		while(a, b) then total = a * b
+		if then total = 0
+	end 'show'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+42
+```

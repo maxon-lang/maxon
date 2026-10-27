@@ -46,7 +46,7 @@ error E2010: specs/lexer-parser-robustness/truncated-after-function-name.maxon:2
 function main(
 ```
 ```maxoncstderr
-error E2010: specs/lexer-parser-robustness/truncated-mid-param-list.maxon:2:15: Expected identifier but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-mid-param-list.maxon:3:1: Expected identifier but got 'end of file'
 ```
 
 <!-- test: truncated-after-param-name -->
@@ -54,7 +54,7 @@ error E2010: specs/lexer-parser-robustness/truncated-mid-param-list.maxon:2:15: 
 function main(x
 ```
 ```maxoncstderr
-error E2010: specs/lexer-parser-robustness/truncated-after-param-name.maxon:2:16: Expected 'a type' but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-param-name.maxon:3:1: Expected 'a type' but got 'end of file'
 ```
 
 <!-- test: truncated-after-param-colon -->
@@ -142,7 +142,7 @@ function main() returns ExitCode
 	let x = (
 ```
 ```maxoncstderr
-error E2004: specs/lexer-parser-robustness/truncated-after-open-paren.maxon:3:11: Expected expression but got '(empty)'
+error E2004: specs/lexer-parser-robustness/truncated-after-open-paren.maxon:4:1: Expected expression but got 'end of file'
 ```
 
 <!-- test: truncated-after-arg-comma -->
@@ -151,7 +151,7 @@ function main() returns ExitCode
 	let x = f(1,
 ```
 ```maxoncstderr
-error E2053: specs/lexer-parser-robustness/truncated-after-arg-comma.maxon:3:14: the second and later arguments must be named ('name: value')
+error E2053: specs/lexer-parser-robustness/truncated-after-arg-comma.maxon:4:1: the second and later arguments must be named ('name: value')
 ```
 
 <!-- test: truncated-after-open-bracket -->

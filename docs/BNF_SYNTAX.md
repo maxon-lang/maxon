@@ -15,7 +15,7 @@ extended BNF notation.
 | `[ a ]`        | Optional (zero or one)                    |
 | `{ a }`        | Repetition (zero or more)                 |
 | `( a \| b )`   | Grouping                                  |
-| `NEWLINE`      | Required line break                       |
+| `NEWLINE`      | Required line break (outside brackets: §1.10) |
 | `LABEL`        | Character literal used as block label     |
 
 ---
@@ -173,6 +173,17 @@ shebang_line  = '#!' { <any character except newline> } NEWLINE
 
 A `shebang_line` is recognized only when `#!` are the first two bytes of the file; the lexer skips the line
 but keeps its newline, so line numbers are unchanged. `#!` anywhere else is E1009.
+
+### 1.10 Line Breaks Inside Brackets
+
+Between an open `(`, `[` or `{` and its closer the lexer drops every line break and every
+`doc_comment`, so the productions below write no `NEWLINE` inside a bracketed form and any of them may
+be spread over several lines. Two exceptions keep their line breaks:
+
+- a `match_expr`, and an `otherwise_clause` in its block form (`[ '(' IDENTIFIER ')' ] LABEL NEWLINE
+  body 'end' LABEL`), written inside a bracket keep every `NEWLINE` their own productions require, for the
+  statements and blocks nested in them too, up to their closing `'end' LABEL`;
+- the brackets of a `#if` `condition` keep the `NEWLINE` that ends the directive.
 
 ---
 

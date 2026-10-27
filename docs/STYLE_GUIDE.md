@@ -126,13 +126,28 @@ end 'name'
 
 ### With Multiple Parameters
 
-Parameters should be on the same line. If the line is too long, break after the opening parenthesis:
+Parameters should be on the same line:
 
 ```maxon
 function processData(input string, offset int, length int) returns int
 	...
 end 'processData'
 ```
+
+If the line is too long, break after the opening parenthesis, put one parameter on each line, and close
+with `)` on its own line at the declaration's indentation, as `maxon fmt` writes it:
+
+```maxon
+function processData(
+	input string,
+	offset int,
+	length int
+) returns int
+	...
+end 'processData'
+```
+
+A call that is too long for one line breaks the same way.
 
 ### Single Responsibility
 

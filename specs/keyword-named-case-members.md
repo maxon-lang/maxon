@@ -39,13 +39,13 @@ Both shapes are ONE predicate (`keywordIsAName`), because they are one fact:
 
 ⚠ **`Kw.if` and `Kw.else` cannot panic even without the lookbehind, and pinning them is the point.**
 Neither is an unconditional block marker — an `if` opens a block only at STATEMENT START
-(`ifBeginsStatement`), an `else` only after a then-branch's `end` (`elseFollowsBlockEnd`) — and a member
+(`ifBeginsStatementIn`), an `else` only after a then-branch's `end` (`elseFollowsBlockEnd`) — and a member
 name satisfies neither. So they are excluded twice, once **by a position test that has nothing to do with
 being a name.** They are pinned here because a case that passes for an unrelated reason is exactly the case
 a later edit deletes as redundant, and because the lookbehind covers all seven uniformly.
 
 ⚠⚠ **`Kw.otherwise` IS NOT EXCLUDED BY POSITION — only the lookbehind stands between it and a compiler
-PANIC.** An `otherwise` opens a block only in its two handler shapes (`otherwiseOpensBlock`), and one of
+PANIC.** An `otherwise` opens a block only in its two handler shapes (`otherwiseOpensBlockIn`), and one of
 those shapes is `otherwise 'label'`: a member read that ENDS A BLOCK HEADER is followed by that header's
 own block label — so `while k == Kw.otherwise 'loop'` satisfies it exactly, in the same way
 `match Kw.end 'm'` satisfies the labelled-closer shape below. A keyword-named METHOD reaches `.otherwise`
@@ -312,7 +312,7 @@ end 'main'
 <!-- test: handler-case-member-spelling-a-labelled-otherwise-in-a-header -->
 ⚠⚠ **THE THIRD SHAPE** — the exact twin of the `end 'm'` case above, for the OTHER keyword that has a
 labelled block form. A member read `Kw.otherwise` at the end of a block header puts `otherwise`
-immediately before the construct's own block label, which is `otherwiseOpensBlock`'s `otherwise 'label'`
+immediately before the construct's own block label, which is `otherwiseOpensBlockIn`'s `otherwise 'label'`
 form character for character — so read as a keyword, the header would open a second block nothing closes
 and `assertScanAligned` would take the compiler down. A member name satisfies the label form whenever it
 is the header's last token, so no position test excludes it. `opensBlockAt` asks the keyword-as-a-name

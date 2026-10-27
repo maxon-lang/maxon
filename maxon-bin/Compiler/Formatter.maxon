@@ -120,8 +120,9 @@ enum ScopeGrouping
 	// there comes from a comment block or the closing line, never from between two arms.
 	matchArms
 
-	// The interior of a multi-line `[`/`{` literal. NOT grouped: its lines are elements, and forcing
-	// them apart would invent a structure the author did not write. Preserve-with-cap applies instead.
+	// The interior of a multi-line `(`, `[` or `{`. NOT grouped: its lines are elements or arguments,
+	// and forcing them apart would invent a structure the author did not write. Preserve-with-cap
+	// applies instead.
 	literal
 end 'ScopeGrouping'
 
@@ -138,6 +139,28 @@ type GroupFrame
 end 'GroupFrame'
 
 typealias GroupFrameArray = Array with GroupFrame
+
+type RaisedGroup
+	export let depth as Count
+	export let blocksOpen as Count
+
+	// The opener line's flags, restored on the line the closer ends: that line finishes the opener's
+	// statement, so its trailing label opens the block the opener began
+	// (`if pair(` … `) == 12 'hit'`).
+	export let openerLabeled as bool
+	export let openerMatched as bool
+
+	// A declaration header's pending body indent, deferred past a multi-line parameter list to the
+	// line its `)` ends, which stays at the declaration's indentation.
+	export let carriesBody as bool
+	export let bodyGrouping as ScopeGrouping
+
+	static function create(depth Count, blocksOpen Count, openerLabeled bool, openerMatched bool, carriesBody bool, bodyGrouping ScopeGrouping) returns RaisedGroup
+		return Self{depth: depth, blocksOpen: blocksOpen, openerLabeled: openerLabeled, openerMatched: openerMatched, carriesBody: carriesBody, bodyGrouping: bodyGrouping}
+	end 'create'
+end 'RaisedGroup'
+
+typealias RaisedGroupArray = Array with RaisedGroup
 
 // A directory holding this entry is a SEPARATE CHECKOUT — a nested clone (a directory) or a git
 // worktree (a file holding a gitdir pointer). Both spellings are probed; see `prunedSubdirectory`.
@@ -521,6 +544,11 @@ module function kindOpensADeclarationBlock(kind TokenKind) returns bool
 	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.union or kind == TokenKind.enum or kind == TokenKind.interface or kind == TokenKind.extension
 end 'kindOpensADeclarationBlock'
 
+// `function` immediately followed by `(` is a closure literal.
+module function functionKeywordOpensAClosureAt(tokens TokenArray, index ElementIndex) returns bool
+	return tokenKindAt(tokens, index: index + 1) == TokenKind.leftParen
+end 'functionKeywordOpensAClosureAt'
+
 // Keywords that open a block whose body is named by a trailing character literal.
 function labeledBlockOpener(kind TokenKind) returns bool
 	return kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match or kind == TokenKind.then or kind == TokenKind.try
@@ -710,8 +738,11 @@ type FormatState
 	// ⭐ **PUSHED AND POPPED IN LOCKSTEP WITH `indentLevel`** — one frame per open level, and that
 	// lockstep is what makes "which scope is this line in" a single fact. DISTINCT from `blocks`, which
 	// answers the three LAYOUT questions and is pushed at the opener TOKEN rather than at the line
-	// boundary: `#if` and a multi-line literal indent without pushing a block at all.
+	// boundary: `#if` and a multi-line bracket indent without pushing a block at all.
 	var groupFrames as GroupFrameArray
+	var raisedGroups as RaisedGroupArray
+	var groupRaisedOnThisLine as bool
+	var bracketDepth as Count
 	var indentLevel as IndentDepth
 	var atLineStart as bool
 	var newlineRun as NewlineRun
@@ -770,7 +801,7 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(), raisedGroups: RaisedGroupArray.create(), groupRaisedOnThisLine: false, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file with content ends with
@@ -852,6 +883,8 @@ type FormatState
 			self.pendingIndentIncrease = false
 		end 'blockBodyBegins'
 
+		self.groupRaisedOnThisLine = false
+
 		if self.newlineRun == 1 and self.lastEmittedSourceLine > 0 'firstNewline'
 			self.appendTrailingComments(self.lastEmittedSourceLine)
 		end 'firstNewline'
@@ -882,15 +915,30 @@ type FormatState
 			self.emitHeadComments(tok.line)
 		end 'headComments'
 
-		// Set when this line is the TAIL of a block or literal opened on an earlier line. It suppresses
+		// Set when this line is the TAIL of a block or bracket opened on an earlier line. It suppresses
 		// the forced blank at top level: a closing line belongs to the declaration it closes, not to a
 		// new group.
 		var lineIsBlockCloser = false
+		var resumedOpenerLabeled = false
+		var resumedOpenerMatched = false
+		var resumesOpenerLine = false
 
-		if (tok.kind == TokenKind.rightBracket or tok.kind == TokenKind.rightBrace) and self.atLineStart and self.indentLevel > 0 'closesMultiLineLiteral'
+		if tokenKindClosesABracket(tok.kind) and self.innermostBracketIsARaisedGroup() 'closesMultiLineGroup'
+			let group = self.popRaisedGroup()
 			self.dedentOneLevel()
-			lineIsBlockCloser = true
-		end 'closesMultiLineLiteral'
+			resumedOpenerLabeled = group.openerLabeled
+			resumedOpenerMatched = group.openerMatched
+			resumesOpenerLine = true
+			lineIsBlockCloser = self.atLineStart
+
+			if group.carriesBody 'bodyResumes'
+				self.beginBodyAfterThisLine(group.bodyGrouping)
+			end 'bodyResumes'
+		end 'closesMultiLineGroup'
+
+		if tokenKindClosesABracket(tok.kind) and self.bracketDepth > 0 'bracketCloses'
+			self.bracketDepth = self.bracketDepth - 1
+		end 'bracketCloses'
 
 		// `#else` closes the previous branch AND opens the next, so it is not a group of its own either.
 		if (tok.kind == TokenKind.hashElse or tok.kind == TokenKind.hashEndif) and self.indentLevel > 0 'closesDirectiveBranch'
@@ -908,6 +956,11 @@ type FormatState
 			self.lineHasLabeledOpener = false
 			self.lineHasMatch = false
 		end 'lineBegins'
+
+		if resumesOpenerLine 'groupEndsHere'
+			self.lineHasLabeledOpener = resumedOpenerLabeled
+			self.lineHasMatch = resumedOpenerMatched
+		end 'groupEndsHere'
 
 		if closesABlock and self.atLineStart 'closesBlock'
 			if self.indentLevel > 0 'dedent'
@@ -1049,12 +1102,19 @@ type FormatState
 			end 'allDiscarded'
 		end 'maybeAllDiscarded'
 
-		// A `[` or `{` whose matching closer is on a different line opens an indent level.
-		if tok.kind == TokenKind.leftBracket or tok.kind == TokenKind.leftBrace 'maybeMultiLineLiteral'
+		// A `(`, `[` or `{` whose matching closer is on a different line opens an indent level.
+		if tokenKindOpensABracket(tok.kind) 'maybeMultiLineGroup'
+			self.bracketDepth = self.bracketDepth + 1
+
 			if self.closerIsOnAnotherLine(index, tok: tok) 'spansLines'
+				let carriesBody = self.pendingIndentIncrease
+				let bodyGrouping = self.pendingScopeGrouping
+
 				self.beginBodyAfterThisLine(ScopeGrouping.literal)
+				self.raisedGroups.push(RaisedGroup.create(self.bracketDepth, blocksOpen: self.blocks.count(), openerLabeled: self.lineHasLabeledOpener, openerMatched: self.lineHasMatch, carriesBody: carriesBody, bodyGrouping: bodyGrouping))
+				self.groupRaisedOnThisLine = true
 			end 'spansLines'
-		end 'maybeMultiLineLiteral'
+		end 'maybeMultiLineGroup'
 
 		// A conditional branch holds whatever its surroundings hold, so it INHERITS their grouping: a
 		// conditionally-compiled member list is still a member list, a conditionally-compiled statement
@@ -1094,10 +1154,11 @@ type FormatState
 		let openerPositionAllows = wasAtLineStart or priorKind == TokenKind.export or priorKind == TokenKind.public or priorKind == TokenKind.static or prevWasModuleKeyword
 
 		if kindOpensADeclarationBlock(tok.kind) and openerPositionAllows and not self.inMatchBlock() 'labellessOpener'
-			// Inside an interface body a `function` is a bodyless signature and opens nothing.
-			let bodylessSignature = self.inInterfaceBlock() and tok.kind == TokenKind.function
+			// Inside an interface body a `function` is a bodyless signature, and `function(` is a closure
+			// literal; neither opens a body.
+			let opensNoBody = tok.kind == TokenKind.function and (self.inInterfaceBlock() or functionKeywordOpensAClosureAt(self.tokens, index: index))
 
-			if not bodylessSignature 'opensABody'
+			if not opensNoBody 'opensABody'
 				self.blocks.push(blockKindOpenedBy(tok.kind))
 				self.beginBodyAfterThisLine(bodyGroupingOpenedBy(tok.kind))
 			end 'opensABody'
@@ -1108,6 +1169,7 @@ type FormatState
 		if tok.kind == TokenKind.charLiteral and not self.labelFollowsACloser and self.lineHasLabeledOpener 'maybeBlockLabel'
 			if not self.chainsToNextBranch(index) 'opensABlock'
 				self.blocks.push(FormatBlockKind.matchBody if self.lineHasMatch else FormatBlockKind.other)
+				self.adoptRaisedGroupIntoBlock()
 				self.beginBodyAfterThisLine(ScopeGrouping.matchArms if self.lineHasMatch else ScopeGrouping.statements)
 			end 'opensABlock'
 		end 'maybeBlockLabel'
@@ -1468,10 +1530,12 @@ type FormatState
 
 	// The running left context every spacing decision reads. A LINE begins with nothing behind it, so the
 	// operand state resets there rather than carrying the previous line's final token over — which is
-	// what makes a match arm's `default then -1` come out unary.
+	// what makes a match arm's `default then -1` come out unary. A continuation line inside a
+	// multi-line bracket is the exception (`lineContinuesAnExpression`): its leading `+`/`-` is
+	// binary.
 	function notePrevToken(kind TokenKind, value ByteArray, wasAtLineStart bool)
 		self.prevWasDot = self.prevKind == TokenKind.dot
-		let operandBefore = not wasAtLineStart and self.prevProducedValue
+		let operandBefore = (not wasAtLineStart or self.lineContinuesAnExpression()) and self.prevProducedValue
 		self.prevWasUnary = (kind == TokenKind.minus or kind == TokenKind.plus) and not operandBefore
 		self.prevProducedValue = producesValue(kind, operandBefore: operandBefore, keywords: self.keywords)
 		self.prevNamesAFunction = self.prevDeclaresAFunction
@@ -1730,6 +1794,42 @@ type FormatState
 		return at
 	end 'allDiscardedBindingsEndAt'
 
+	// A bracket and a block opened on one line share one indent level, which the block's `end` closes;
+	// left raised, the bracket's closer would dedent a second time.
+	function adoptRaisedGroupIntoBlock()
+		if not self.groupRaisedOnThisLine 'noGroupRaisedHere'
+			return
+		end 'noGroupRaisedHere'
+
+		_ = self.popRaisedGroup()
+		self.groupRaisedOnThisLine = false
+	end 'adoptRaisedGroupIntoBlock'
+
+	function popRaisedGroup() returns RaisedGroup
+		return try self.raisedGroups.pop() otherwise panic("FormatState.popRaisedGroup: no raised group is open — every caller checked the stack first")
+	end 'popRaisedGroup'
+
+	function innermostBracketIsARaisedGroup() returns bool
+		if self.raisedGroups.isEmpty() 'nothingRaised'
+			return false
+		end 'nothingRaised'
+
+		let innermost = try self.raisedGroups.get(self.raisedGroups.count() - 1) otherwise panic("FormatState.innermostBracketIsARaisedGroup: the count is non-zero on the line above")
+
+		return innermost.depth == self.bracketDepth
+	end 'innermostBracketIsARaisedGroup'
+
+	// A line inside a block opened within the group starts a statement, where a leading `-` is unary.
+	function lineContinuesAnExpression() returns bool
+		if not self.innermostBracketIsARaisedGroup() 'noGroupHoldsTheLine'
+			return false
+		end 'noGroupHoldsTheLine'
+
+		let innermost = try self.raisedGroups.get(self.raisedGroups.count() - 1) otherwise panic("FormatState.lineContinuesAnExpression: a group is open on the line above")
+
+		return innermost.blocksOpen == self.blocks.count()
+	end 'lineContinuesAnExpression'
+
 	// Does the bracket or brace at `index` close on a LATER line?
 	//
 	// ⚠ This is an O(n) scan inside the O(n) emit loop, kept rather than replaced by a precomputed
@@ -1741,7 +1841,7 @@ type FormatState
 	// flat zero — the blind spot, not a result. The shape that WOULD bend is many UNMATCHED openers, each
 	// scanning to EOF; `specs/lexer-parser-robustness.md` carries such cases and they are tiny.
 	function closerIsOnAnotherLine(index ElementIndex, tok Token) returns bool
-		let closing = TokenKind.rightBracket if tok.kind == TokenKind.leftBracket else TokenKind.rightBrace
+		let closing = closerOf(tok.kind)
 		var depth = 1 as GroupDepth
 		var at = index + 1
 
@@ -1800,6 +1900,18 @@ type FormatState
 		end 'eachBlank'
 	end 'appendBlanks'
 end 'FormatState'
+
+function closerOf(opener TokenKind) returns TokenKind
+	if opener == TokenKind.leftParen 'parenthesis'
+		return TokenKind.rightParen
+	end 'parenthesis' else if opener == TokenKind.leftBracket 'bracket'
+		return TokenKind.rightBracket
+	end 'bracket' else if opener == TokenKind.leftBrace 'brace'
+		return TokenKind.rightBrace
+	end 'brace'
+
+	panic("closerOf: {opener.rawValue} opens no bracket")
+end 'closerOf'
 
 // The labeled openers a line can BEGIN with that always open a body. `try` and `otherwise` are the two
 // `labeledBlockOpener` admits that can begin a line and open NOTHING — `try f() otherwise panic("…")` is

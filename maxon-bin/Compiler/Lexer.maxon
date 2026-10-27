@@ -394,10 +394,10 @@ end 'cacheEnumTablesAgreeInCompilerLexer'
 // Where a line ENDS is `tokenKindEndsALine`'s to say, which adds EOF.
 //
 // ⚠ It is ONE definition because the readers must agree or a construct means two things: the cursor
-// mover and its lookahead (`Parser.skipNewlines` / `indexPastNewlines`) decide what a program IS, and
-// `arrayLiteralElementCountAt` and the declaration sweep re-derive the same skip while walking the raw
-// stream. A copy that admitted one kind and not the other would have the sweep count a literal element
-// the real parse skipped.
+// mover and its lookahead (`Parser.skipNewlines` / `indexPastNewlines`) decide what a program IS,
+// `dropBracketedLayout` removes the same kinds inside a bracket, and the declaration sweep
+// re-derives the same skip while walking the raw stream. A copy that admitted one kind and not the
+// other would have a walk read a statement where the real parse steps over layout.
 //
 // `module` and not `export`: every reader lives under `Compiler/`.
 module function tokenKindIsSkippedLayout(kind TokenKind) returns bool
@@ -2488,8 +2488,197 @@ export function tokenize(source String, keywords KeywordTable) returns TokenArra
 	end 'emptySource'
 
 	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: false)
-	return try lexer.run()
+
+	return dropBracketedLayout(try lexer.run())
 end 'tokenize'
+
+enum LayoutFrame
+	droppingGroup
+	keptBlock
+end 'LayoutFrame'
+
+typealias LayoutFrameStack = Array with LayoutFrame
+
+function stackTopIs(frames LayoutFrameStack, frame LayoutFrame) returns bool
+	if frames.isEmpty() 'noFrame'
+		return false
+	end 'noFrame'
+
+	return (try frames.get(frames.count() - 1) otherwise panic("stackTopIs: frames.get OOB below the count just read")) == frame
+end 'stackTopIs'
+
+function popLayoutFrame(frames LayoutFrameStack)
+	_ = try frames.pop() otherwise panic("popLayoutFrame: asked with no frame open — every caller checked the stack first")
+end 'popLayoutFrame'
+
+// Is the `if` at `index` a block-opening STATEMENT `if` rather than the `if` of an inline
+// conditional `<t> if <c> else <f>`? A block `if` sits at statement start: the preceding token is
+// a `newline` (a new statement) or an `else` (the `if` of an `else if` chain). A ternary `if`
+// follows an operand, so neither holds. Index 0 has nothing before it and cannot be a ternary, so
+// it counts as statement start.
+module function ifBeginsStatementIn(tokens TokenArray, index ElementIndex) returns bool
+	let prev = kindBefore(tokens, index: index)
+	return prev == TokenKind.newline or prev == TokenKind.else
+end 'ifBeginsStatementIn'
+
+// Does the `otherwise` at `index` begin a BLOCK-form handler — one closed by its own `end`?
+// Two block forms exist: `otherwise 'label' … end` (a bare charLiteral label) and
+// `otherwise (e) 'label' … end` (a caught-error binding). The NON-block forms open nothing:
+// `otherwise ignore`, a fallback VALUE, and the single-statement `return`/`break`/`continue`/
+// `throw`/`panic`. This is `parseOtherwiseHandler`'s split written down a second time (the drift
+// guard keeps them honest), but with ONE extra care it does not need: `otherwise` IS a legal
+// enum case name (`tokenCanBeAName`), so a keyword-spelled match arm `otherwise(x) then` also
+// leads with `otherwise (`. The binding form is told apart by its full SHAPE — `( identifier )`
+// followed by the label charLiteral — which a payload case (`( bindings ) then/gives`, or
+// multi-binding `( a , b )`) never matches. `parseOtherwiseHandler` needs no such check because
+// by the time it runs the leading `try` has already disambiguated the context.
+module function otherwiseOpensBlockIn(tokens TokenArray, index ElementIndex) returns bool
+	let next = tokenKindAt(tokens, index: index + 1)
+
+	if next == TokenKind.charLiteral 'labelForm'
+		return true
+	end 'labelForm'
+
+	return next == TokenKind.leftParen and tokenKindAt(tokens, index: index + 2) == TokenKind.identifier and tokenKindAt(tokens, index: index + 3) == TokenKind.rightParen and tokenKindAt(tokens, index: index + 4) == TokenKind.charLiteral
+end 'otherwiseOpensBlockIn'
+
+// ⭐ **THE BLOCK-FORM `try` — A LABEL AFTER THE KEYWORD, AND A `.` IS WHAT TELLS IT FROM A CHARACTER.**
+// `try 'work' … end 'work'` opens a block. It is the SAME discriminator `parseStatement` routes the two
+// forms on and `parseTry` refuses the block form in expression position by — asked here so the extent scan
+// and the grammar cannot disagree about which `try` owns an `end`. `index` is the token AFTER `try`.
+//
+// ⭐ **THE DISAMBIGUATOR IS THE `.` AND NOTHING ELSE NEEDS TO BE.** A block LABEL is always followed by a
+// STATEMENT, so the lexer has emitted a `newline` behind it; it can never be followed by `.`. A character
+// literal used as a `try` TARGET must be a call, so it is always followed by `.`. One token of lookahead
+// past the label separates them, and a character literal that is NOT a receiver (`try 'A' otherwise 0`)
+// is not a call either — it stays the block form, and `parseTry`'s own refusal names it.
+module function charLiteralOpensTryBlockIn(tokens TokenArray, index ElementIndex) returns bool
+	return tokenKindAt(tokens, index: index) == TokenKind.charLiteral and tokenKindAt(tokens, index: index + 1) != TokenKind.dot
+end 'charLiteralOpensTryBlockIn'
+
+module function keywordSpellsAMatchArmCaseIn(tokens TokenArray, groups ParenGroups, index ElementIndex) returns bool
+	let next = tokenKindAt(tokens, index: index + 1)
+
+	if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
+		return true
+	end 'matchCaseName'
+
+	if next != TokenKind.leftParen 'noPayloadBindingList'
+		return false
+	end 'noPayloadBindingList'
+
+	// Asked of the SHARED paren walk, so a nested group inside the list (or inside a parenthesized
+	// condition this must NOT claim) is matched by the one rule `skipBalancedParens` uses.
+	let separator = tokenKindAt(tokens, index: groups.closeOf(tokens, open: index + 1) + 1)
+
+	return separator == TokenKind.then or separator == TokenKind.gives
+end 'keywordSpellsAMatchArmCaseIn'
+
+function elseFollowsALabelledCloserIn(tokens TokenArray, index ElementIndex) returns bool
+	return index >= 2 and labelledBlockCloserAt(tokens, index: (index - 2) as ElementIndex)
+end 'elseFollowsALabelledCloserIn'
+
+function opensAKeptBlock(tokens TokenArray, groups ParenGroups, index ElementIndex, atStatementLevel bool) returns bool
+	let kind = tokenKindAt(tokens, index: index)
+
+	if not kindSpellsBlockStructure(kind) or kind == TokenKind.end or tokenFollowsAMemberDot(tokens, index: index) or keywordSpellsAMatchArmCaseIn(tokens, groups: groups, index: index) 'notAnOpener'
+		return false
+	end 'notAnOpener'
+
+	if kind == TokenKind.match 'aMatch'
+		return true
+	end 'aMatch'
+
+	if kind == TokenKind.otherwise 'aHandler'
+		return otherwiseOpensBlockIn(tokens, index: index)
+	end 'aHandler'
+
+	if not atStatementLevel 'insideAnExpression'
+		return false
+	end 'insideAnExpression'
+
+	if kind == TokenKind.while or kind == TokenKind.for 'aLoop'
+		return true
+	end 'aLoop'
+
+	if kind == TokenKind.if 'anIf'
+		return ifBeginsStatementIn(tokens, index: index)
+	end 'anIf'
+
+	if kind == TokenKind.try 'aTryBlock'
+		return charLiteralOpensTryBlockIn(tokens, index: index + 1)
+	end 'aTryBlock'
+
+	if kind == TokenKind.else 'anElse'
+		return tokenKindAt(tokens, index: index + 1) != TokenKind.if and elseFollowsALabelledCloserIn(tokens, index: index)
+	end 'anElse'
+
+	panic("opensAKeptBlock: '{kind.rawValue}' spells block structure but no arm here answers for it")
+end 'opensAKeptBlock'
+
+// Layout inside an open `(`, `[` or `{` is dropped here, once, so every parser lookahead reads a
+// bracket's interior as contiguous tokens and no production skips newlines of its own. A `match`
+// or block-form `otherwise` written inside a bracket keeps its newlines, which separate its arms
+// and statements, and its frame closes only at a labelled closer. Brackets on a `#if` line open no
+// frame, so the newline ending the condition survives. `tokenizeWithComments` keeps every layout
+// token: `maxon fmt` reads where the author broke lines.
+function dropBracketedLayout(tokens TokenArray) returns TokenArray
+	var frames = LayoutFrameStack.create()
+	var groups = ParenGroups.create()
+	var kept = TokenArray.create()
+	var dropped = false
+	var inDirectiveCondition = false
+
+	for (iter, tok) in tokens.withIterator() 'eachToken'
+		let index = iter.index()
+
+		if tokenKindIsSkippedLayout(tok.kind) and stackTopIs(frames, frame: LayoutFrame.droppingGroup) 'insideABracket'
+			if not dropped 'firstDrop'
+				dropped = true
+				kept.reserve(tokens.count())
+
+				for earlier in 0 upto index 'copyPrefix'
+					kept.push(try tokens.get(earlier) otherwise panic("dropBracketedLayout: tokens.get OOB below the index being scanned"))
+				end 'copyPrefix'
+			end 'firstDrop'
+
+			continue
+		end 'insideABracket'
+
+		if dropped 'copying'
+			kept.push(tok)
+		end 'copying'
+
+		if tok.kind == TokenKind.newline 'directiveLineEnds'
+			inDirectiveCondition = false
+		end 'directiveLineEnds'
+
+		if tokenKindOpensABracket(tok.kind) and not inDirectiveCondition 'opens'
+			frames.push(LayoutFrame.droppingGroup)
+		end 'opens' else if tokenKindClosesABracket(tok.kind) 'closes'
+			while stackTopIs(frames, frame: LayoutFrame.keptBlock) 'unclosedBlocks'
+				popLayoutFrame(frames)
+			end 'unclosedBlocks'
+
+			if not frames.isEmpty() 'aGroupIsOpen'
+				popLayoutFrame(frames)
+			end 'aGroupIsOpen'
+		end 'closes' else if not frames.isEmpty() and opensAKeptBlock(tokens, groups: groups, index: index, atStatementLevel: stackTopIs(frames, frame: LayoutFrame.keptBlock)) 'aBlockOpens'
+			frames.push(LayoutFrame.keptBlock)
+		end 'aBlockOpens' else if stackTopIs(frames, frame: LayoutFrame.keptBlock) and labelledBlockCloserAt(tokens, index: index) 'aBlockEnds'
+			popLayoutFrame(frames)
+		end 'aBlockEnds' else if tok.kind == TokenKind.hashIf or tok.kind == TokenKind.hashElse or tok.kind == TokenKind.hashEndif 'aDirective'
+			frames.clear()
+			inDirectiveCondition = tok.kind == TokenKind.hashIf
+		end 'aDirective'
+	end 'eachToken'
+
+	if not dropped 'nothingToDrop'
+		return tokens
+	end 'nothingToDrop'
+
+	return kept
+end 'dropBracketedLayout'
 
 export function tokenizeWithComments(source String, keywords KeywordTable) returns LexedSource throws LexerError
 	let bytes = source.toByteArray()
@@ -2586,6 +2775,7 @@ export type KeywordTable
 			b"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with named cases, optional raw values, and methods.", canHaveBlockLabel: false),
 			b"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
 			b"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
+
 			// ⭐ **A REAL LEXER KEYWORD, UNLIKE `module`, AND THAT IS A MEASUREMENT TOO.** `module` cannot be one
 			// because the word is an ordinary identifier 6,537 times in `maxon-bin/` alone (see
 			// `Parser.atModuleModifier`). `public` is used ZERO times as an identifier anywhere in the tree — 45

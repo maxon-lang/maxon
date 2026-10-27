@@ -680,7 +680,12 @@ groups in a scope, and none appears inside a group:
 | an `interface` body | the bodyless signatures | anything else |
 | a function or labeled block body | the statements, `let`/`var` included | every nested block |
 | a `match` body | the arms | — |
-| a multi-line `[`/`{` literal | *(never grouped: your blank lines are kept, at most one in a row)* | — |
+| a multi-line `(`, `[` or `{` | *(your blank lines are kept, at most one in a row)* | — |
+
+A `(`, `[` or `{` whose closer is on a later line indents the lines inside it one level, and a closer
+that begins its line returns to the opener's indentation. After a multi-line parameter list the body is
+indented one level from the declaration. A statement whose brackets span
+lines is followed by a blank line.
 
 A `///` doc comment stays attached to the declaration below it, and two `///` blocks with a blank line
 between them keep it. A whole-line `//` comment attaches too when there is no blank line between them;

@@ -76,9 +76,9 @@ typealias ParamShadowDepth = int(0 to u64.max)
 // One `ParamShadowDepth` per parameter of the body `Parser.scanBodyFacts` is walking.
 typealias ParamShadowColumn = Array with ParamShadowDepth
 
-// How many `[` are open around a token — the depth at which a NEWLINE is layout rather than the end of a
-// top-level initializer (see `initializerEndIndex`). A separate alias from `BlockDepth` because it counts a
-// different thing: an array literal opens no block, and a block keyword opens no bracket.
+// How many `[` are open around a token — inside one, a NEWLINE belongs to the top-level initializer
+// rather than ending it (see `initializerEndIndex`). A separate alias from `BlockDepth` because it
+// counts a different thing: an array literal opens no block, and a block keyword opens no bracket.
 typealias BracketDepth = int(0 to u64.max)
 typealias BracketDepthArray = Array with BracketDepth
 
@@ -4132,7 +4132,7 @@ type PendingDefaultHelper
 	export let exprStart as ElementIndex
 
 	// The token the CAPTURE skipped to — the `,`/`)` that ends a parameter default (`expressionEndFrom`),
-	// the NEWLINE that ends a field one (`fieldDefaultEnd`). The drain parses one expression from
+	// the line end that ends a field one (`initializerEndIndex`). The drain parses one expression from
 	// `exprStart` and must arrive exactly here: the capture already decided where the author's default
 	// ends, so any gap between the two is text the author wrote and the compiler was about to ignore.
 	// Recorded rather than recomputed at the drain — a second walk is a second answer, and this file has
@@ -7365,7 +7365,7 @@ let AssignPatternNeedsClause = "`(x, y) = …` needs a right-hand side that is a
 // travels together because its two consumers each need both and for the same reason: the value is what gets
 // pushed (or collected), and the start index is what `moveElementIntoContainer` reads to decide whether the
 // element was a bare local to poison. Returned as one value rather than left at the two call sites, so the
-// element rule and the newline rule have ONE home — see `parseArrayLiteralTailElement`.
+// element rule has ONE home — see `parseArrayLiteralTailElement`.
 type ArrayLiteralElement
 	export var value as ValueId
 	export let start as ElementIndex
@@ -9832,19 +9832,19 @@ function initializerEndIndexIn(tokens TokenArray, start ElementIndex) returns El
 			break
 		end 'fileEnd'
 
-		if kind == TokenKind.newline and depth == 0 'lineEnd'
+		if tokenKindEndsALine(kind) and depth == 0 'lineEnd'
 			break
 		end 'lineEnd'
 
-		if kind == TokenKind.leftBracket 'openBracket'
+		if tokenKindOpensABracket(kind) 'openBracket'
 			depth = depth + 1
 		end 'openBracket'
 
-		// Guarded, because `BracketDepth` is unsigned: a stray `]` with no `[` before it would wrap the
+		// Guarded, because `BracketDepth` is unsigned: a stray closer with no opener before it would wrap the
 		// counter to its maximum and the scan would swallow the rest of the FILE. Left at 0 it is simply
 		// not a bracket the initializer opened, and the line's own newline still ends the range — which
 		// is what the malformed initializer's diagnostic then names.
-		if kind == TokenKind.rightBracket and depth > 0 'closeBracket'
+		if tokenKindClosesABracket(kind) and depth > 0 'closeBracket'
 			depth = depth - 1
 		end 'closeBracket'
 
@@ -15236,7 +15236,7 @@ end 'TryBlockHandlerShape'
 // would have left the `otherwise` copy silently unable to spell it.
 //
 // ⚠ **THE BLOCK-EXTENT SCAN NEEDS NO SHARE OF THIS, AND THAT IS A PROPERTY RATHER THAN AN OVERSIGHT.**
-// `otherwiseOpensBlock` is a POSITIVE test for the handler's block LABEL — a `charLiteral`, either straight
+// `otherwiseOpensBlockIn` is a POSITIVE test for the handler's block LABEL — a `charLiteral`, either straight
 // after `otherwise` or after `( <name> )` — so every terminal form is excluded by construction, whatever
 // keyword opens it. A roster shared with the scan would be the weaker arrangement: it would have to be
 // extended for a third terminal form, where the label test simply keeps answering. That matters here because
@@ -15551,8 +15551,9 @@ end 'tokenKindIsEnumLiteralBacking'
 // all — a loud drift-guard panic on the first program that nests it, rather than a silent divergence between
 // two spellings of one list. And a kind added HERE without an arm in that chain now hits `opensBlockAt`'s own
 // tail panic, so neither half can be extended alone. Its third reader is `parenGroupCanBeAParameterList`,
-// which needs the same set to tell a parameter list from an arbitrary parenthesized expression.
-function kindSpellsBlockStructure(kind TokenKind) returns bool
+// which needs the same set to tell a parameter list from an arbitrary parenthesized expression, and
+// its fourth is `Lexer.opensAKeptBlock`, whose own tail panic guards the same direction.
+module function kindSpellsBlockStructure(kind TokenKind) returns bool
 	return kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.end or kind == TokenKind.try
 end 'kindSpellsBlockStructure'
 
@@ -15724,7 +15725,7 @@ end 'tokensDeclareGenericFunctionTemplate'
 // keyword either opens the file or follows a `newline`; a keyword standing anywhere else in a line is
 // part of an EXPRESSION, whatever three-token shape it happens to spell.
 //
-// It is `ifBeginsStatement`'s rule one construct over, read the same way and for the same reason: both
+// It is `ifBeginsStatementIn`'s rule one construct over, read the same way and for the same reason: both
 // tell a token that OPENS something from the identically-spelled token that does not, and neither can
 // be answered by looking forward. They differ only in what may precede — an `if` admits an `else` (the
 // `else if` chain), a declaration admits its modifiers.
@@ -22641,7 +22642,7 @@ export type Parser
 				return false
 			end 'unclosedLiteral'
 
-			if tokenKindIsSkippedLayout(self.kindAt(q)) or self.kindAt(q) == TokenKind.comma 'betweenFields'
+			if self.kindAt(q) == TokenKind.comma 'betweenFields'
 				q = q + 1
 				continue
 			end 'betweenFields'
@@ -23161,7 +23162,7 @@ export type Parser
 			return eq
 		end 'noDefault'
 
-		let regionEnd = self.fieldDefaultEnd(eq)
+		let regionEnd = self.initializerEndIndex(eq + 1)
 		let helperName = fieldDefaultHelperName(typeName, fieldName: fieldName)
 		let scan = self.scanFixedElementCountIn(eq + 1, regionEnd: regionEnd)
 
@@ -23403,8 +23404,8 @@ export type Parser
 	//
 	// ⭐ **BOTH SPELLINGS, for `countofOperandIsTheOwnInstanceAt`'s reason** — `Self` and the container's own
 	// name denote the same countless instance, and a check filed against one of them would be narrower than
-	// the fact it is about. Emptiness is deliberately NOT tested: a `{` may be followed by a newline before
-	// its fields, and over-reserving costs one ignored parameter where missing one aborts the compiler.
+	// the fact it is about. Emptiness is deliberately NOT tested: over-reserving costs one ignored
+	// parameter where missing one aborts the compiler.
 	function ownRecordLiteralOfTheSizedContainerAt(headPos ElementIndex) returns bool
 		if not self.enclosedBySizedContainer() 'notTheSizedContainersOwnBody'
 			return false
@@ -26895,7 +26896,7 @@ export type Parser
 		end 'annotated'
 
 		let equalsTok = self.current()
-		let defaultEnd = self.fieldDefaultEnd(self.pos)
+		let defaultEnd = self.initializerEndIndex(self.pos + 1)
 		try self.consume(TokenKind.equals)
 
 		let defaultStart = self.pos
@@ -27106,29 +27107,6 @@ export type Parser
 		let paramName = String.from(self.typeParamDisplayName(typeParamIdOf(fieldType)))
 		throw SourceParseError.unsupported("a default value on field '{String.from(nameTok.value)}' of `type {String.from(layout.name)}`, whose declared type is the type parameter '{paramName}' — a default is produced by a function compiled ONCE from this type's shared body, where '{paramName}' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of '{String.from(layout.name)}'", line: equalsTok.line, column: equalsTok.column)
 	end 'requireDefaultableFieldType'
-
-	// ⭐⭐ **WHERE A FIELD DEFAULT ENDS — AT THE END OF ITS LINE, AND THAT CHOICE IS WHAT MAKES A
-	// TRAILING TOKEN REPORTABLE AT ALL.** `expressionEndFrom` answers the same question for a
-	// PARAMETER, where the terminator is the `,` or `)` the list supplies; a field declaration has no
-	// such punctuation, so the line is the extent. The default region of `var v = 7 as Integer zzz`
-	// therefore ends past `zzz`, and `requireDefaultValueEnded` reports the token the default did not
-	// consume rather than leaving `v` silently initialized to 7.
-	//
-	// ⚠ It counts no brackets, and does not need to: it stops at the FIRST newline whatever the nesting,
-	// which is exactly the rule the language already applies to every other declaration and statement — a
-	// field declaration is one line. A default that wanted to span lines would need a continuation syntax
-	// the language does not have, so there is nothing here to be tolerant of.
-	//
-	// The cursor is AT the `=`; the answer is an index into the token stream, never a cursor move.
-	function fieldDefaultEnd(fromEquals ElementIndex) returns ElementIndex
-		var q = fromEquals + 1
-
-		while not tokenKindEndsALine(self.kindAt(q)) 'scan'
-			q = q + 1
-		end 'scan'
-
-		return q
-	end 'fieldDefaultEnd'
 
 	// ⭐ **IS THE DEFAULT OCCUPYING `[start, regionEnd)` EXACTLY A LITERAL — `5`, `50.0`, `true`, optionally
 	// signed — AND NOTHING ELSE?** THE dispatch between a field default's two forms, asked once per
@@ -27903,7 +27881,6 @@ export type Parser
 		end 'unconditional'
 
 		try self.consume(TokenKind.comma)
-		self.skipNewlines()
 		let labelTok = try self.consume(TokenKind.identifier)
 
 		if not labelTok.value.equals(RegistryReplacingLabel) 'notTheReplacingLabel'
@@ -28216,15 +28193,12 @@ export type Parser
 	// One past the last token of a top-level initializer: an initializer runs to the END OF ITS LINE.
 	// Maxon has no statement terminator, so the newline IS the boundary.
 	//
-	// ⚠ **EXCEPT INSIDE `[…]`, WHERE A NEWLINE IS LAYOUT AND NOT A TERMINATOR.** `var xs = [10,\n\t20]`
-	// is one initializer written on two lines; ending the range at the first newline would hand the
-	// initializer parse `[10,` and report `Expected expression but got 'newline'` against a program the
-	// language accepts. The depth counter is what tells the two newlines apart, and it
-	// is the SAME rule the element walks below apply at their own boundaries (`finishArrayLiteral`) — a
-	// literal's shape must not depend on where its author pressed return.
+	// ⚠ **EXCEPT INSIDE A BRACKET.** The lexer drops the layout inside `(`, `[` and `{` but keeps the
+	// newlines of a `match` or block-form `otherwise` written there (`Lexer.dropBracketedLayout`), so such
+	// a block reaches this scan with newlines in it; the depth counter keeps them inside the initializer.
 	//
 	// It cannot run away: `kindAt` answers `eof` past the end of the token array (see `tokenAt`), so
-	// an unterminated last line — or an unclosed `[` — stops at the file's end rather than walking off it.
+	// an unterminated last line — or an unclosed bracket — stops at the file's end rather than walking off it.
 	function initializerEndIndex(start ElementIndex) returns ElementIndex
 		return initializerEndIndexIn(self.tokens, start: start)
 	end 'initializerEndIndex'
@@ -29970,15 +29944,15 @@ export type Parser
 	// about a parameter has.
 	//
 	// ⚠ **IT IS BLIND TO LAYOUT, AND THE REASON IS THE SAME ONE FOR EVERY KIND OF IT: THE RANGE CANNOT HOLD
-	// ANY.** A function typealias's parameter list may not span lines — a newline there is `E2010 Expected 'a
-	// type' but got 'newline'` — and a `///` after code in the parens is an ordinary comment running to that
-	// same line break. Neither can reach a range this is asked about, so reformatting cannot move the
-	// digest. Whitespace and indentation are not tokens at all.
+	// ANY.** The range lies inside a function type's parentheses, where the lexer drops every
+	// `newline` and `///` (`Lexer.dropBracketedLayout`), so reformatting cannot move the digest.
+	// Whitespace and indentation are not tokens at all.
 	//
 	// ⛔ **DO NOT REST THAT ON "COMMENTS ARE NOT TOKENS", WHICH IS FALSE.** `//` and `/* … */` are dropped by
 	// the lexer, but a `///` leading its line is emitted (the formatter and the LSP read it back), and it
 	// CARRIES TEXT — so a doc comment inside a folded range would change the digest, and the declaration
-	// sweep and the real parse mint identical values only because no legal range contains one.
+	// sweep and the real parse mint identical values only because the lexer drops one inside the
+	// parentheses.
 	//
 	// ⛔⛔ **IT FOLDS TOKEN TEXT AND PUNCTUATORS CARRY NONE, SO A CALLER MUST SUPPLY EVERY SEPARATOR ITSELF.**
 	// `Token.value` is `EmptySourceText` for every punctuator (`Lexer.maxon`: a token whose text is implied by
@@ -36842,10 +36816,10 @@ export type Parser
 		end 'throwStmt' else if form == StatementForm.tryStmt 'tryStmt'
 			// The BLOCK form (`try 'label' … end 'label' otherwise (e) 'h' … end 'h'`) is a statement and
 			// nothing else — it groups statements and yields no value — so it forks HERE, off the same
-			// label lookahead the extent scan reads (`tryOpensBlockAt`, which is also where the label-vs-
+			// label lookahead the extent scan reads (`charLiteralOpensTryBlockIn`, which is also where the label-vs-
 			// character-receiver rule lives). `parseTry` keeps its own refusal of the form for the EXPRESSION
 			// position that still cannot take it.
-			if self.tryOpensBlockAt(self.pos) 'blockForm'
+			if charLiteralOpensTryBlockIn(self.tokens, index: self.pos + 1) 'blockForm'
 				return try self.parseTryBlockStatement(func, block: block)
 			end 'blockForm'
 
@@ -43534,10 +43508,10 @@ export type Parser
 
 		// ⭐ **A BLOCK-FORM `try` REACHING HERE IS IN AN EXPRESSION POSITION**, and that is the only way it
 		// can: `parseStatement` forks the statement spelling to `parseTryBlockStatement` before this routine
-		// is entered (both read the same `tryOpensBlockAt` label lookahead). The construct GROUPS statements
+		// is entered (both read the same `charLiteralOpensTryBlockIn` label lookahead). The construct GROUPS statements
 		// and yields nothing, so there is no value for the enclosing expression to take — the same rule that
 		// makes an `if` a statement and a `<t> if <c> else <f>` the expression spelling.
-		if self.charLiteralOpensTryBlockAt(self.pos) 'blockFormInValuePosition'
+		if charLiteralOpensTryBlockIn(self.tokens, index: self.pos) 'blockFormInValuePosition'
 			throw SourceParseError.errorTypeMismatch("a block-form `try 'label' … end` groups statements and yields no value, so it cannot stand where a value is expected — use a single-statement `try call()` with an `otherwise <value>` fallback", line: tryTok.line, column: tryTok.column)
 		end 'blockFormInValuePosition'
 
@@ -43799,7 +43773,7 @@ export type Parser
 		// ⭐ **`try 'A'.asciiValue() otherwise 0` — A CHARACTER LITERAL RECEIVER, THE FOURTH CASE OF
 		// THE ARGUMENT THE TWO NOTES ABOVE ALREADY MAKE.** `Character.asciiValue()` is the type's one throwing
 		// member, so `try` is the only way a program calls it, and a literal is the receiver the oracle prints
-		// **65** for. `tryOpensBlockAt` tells a block LABEL from a receiver by the `.` behind it, which is also
+		// **65** for. `charLiteralOpensTryBlockIn` tells a block LABEL from a receiver by the `.` behind it, which is also
 		// why nothing here needs to re-ask: a bare `try 'x'` never gets past `parseTry`.
 		if self.at(TokenKind.charLiteral) 'characterLiteralTarget'
 			return try self.parseCharLiteral()
@@ -45786,7 +45760,7 @@ export type Parser
 
 		// Decided from the tokens, before anything is emitted — see the header. `continuesAtElse: false`:
 		// what follows this construct's `end` is an `otherwise`, not an `else`, and `otherwise` opens a
-		// block of its OWN (`otherwiseOpensBlock`) which the scan must not fold into the body's extent.
+		// block of its OWN (`otherwiseOpensBlockIn`) which the scan must not fold into the body's extent.
 		let bodyEndIndex = self.blockStatementEndIndex(tryIndex, continuesAtElse: false)
 		var carried = self.assignedBindingsIn(tryIndex, endIndex: bodyEndIndex)
 
@@ -46080,7 +46054,7 @@ export type Parser
 		end 'noBinding'
 
 		// BOUND: `( <name> )` followed by the LABEL of a block handler, or by the keyword of a terminal one.
-		// All FOUR positions are read, exactly as `otherwiseOpensBlock` reads them for the extent scan — so
+		// All FOUR positions are read, exactly as `otherwiseOpensBlockIn` reads them for the extent scan — so
 		// this classification and that one are looking at the same shape rather than at one offset of it, and
 		// the offsets carry names instead of arithmetic.
 		//
@@ -46098,7 +46072,7 @@ export type Parser
 	end 'requireTryBlockOtherwise'
 
 	// A catching `if`'s `else (e)` and a block-form `try`'s divergent `otherwise (e)` share this.
-	// `parseOtherwiseBinding` cannot: its binding is mandatory. `otherwiseOpensBlock` reads the same
+	// `parseOtherwiseBinding` cannot: its binding is mandatory. `otherwiseOpensBlockIn` reads the same
 	// `( <name> )` by token index, as a lookahead that must answer before the cursor moves.
 	function parseOptionalCaughtErrorBinder(fallbackAnchor Token) returns CaughtErrorBinder throws SourceParseError
 		if not self.at(TokenKind.leftParen) 'noBinder'
@@ -50423,9 +50397,9 @@ export type Parser
 	function operandIsFollowed(position OperandSuccession) returns bool
 		return match position 'position'
 			alwaysFollowed gives true
-			beforeComma gives self.kindAt(self.indexPastNewlines(self.pos)) == TokenKind.comma
-			receiverBeforeArguments gives self.kindAt(self.indexPastNewlines(self.pos)) != TokenKind.rightParen
-			memberReceiverBeforeArguments gives self.memberCallFollows(self.pos) and self.kindAt(self.indexPastNewlines(self.pos + ReceiverDotBeforeArgumentList)) != TokenKind.rightParen
+			beforeComma gives self.kindAt(self.pos) == TokenKind.comma
+			receiverBeforeArguments gives self.kindAt(self.pos) != TokenKind.rightParen
+			memberReceiverBeforeArguments gives self.memberCallFollows(self.pos) and self.kindAt(self.pos + ReceiverDotBeforeArgumentList) != TokenKind.rightParen
 		end 'position'
 	end 'operandIsFollowed'
 
@@ -54190,7 +54164,7 @@ export type Parser
 	// `end`, so the drift guard fires (`let x = a if c else b` inside a loop body is enough). A block
 	// `if`/`else` is told from a ternary one by POSITION:
 	//   • a block `if` is at STATEMENT START — the previous token is a `newline` (a fresh statement)
-	//     or an `else` (an `else if` chain); a ternary `if` follows an operand (`ifBeginsStatement`).
+	//     or an `else` (an `else if` chain); a ternary `if` follows an operand (`ifBeginsStatementIn`).
 	//   • a block `else` closes a then-branch — it follows that branch's `end` and its one optional
 	//     label (`elseFollowsBlockEnd`); a ternary `else` follows the condition operand.
 	// `while` and `for` (statement-only) and `match` (statement OR expression) always close with their
@@ -54201,7 +54175,7 @@ export type Parser
 	// (parseElseBody), and that `if` is the opener whose `end` closes it.
 	//
 	// `otherwise` is the other subtle one: only the BLOCK forms of a `try … otherwise` open a
-	// block (`otherwiseOpensBlock`). The rest (`ignore`, a fallback value, a single-statement
+	// block (`otherwiseOpensBlockIn`). The rest (`ignore`, a fallback value, a single-statement
 	// return/break/continue/throw/panic) open nothing, so counting a bare `otherwise` would
 	// leave an `end` unaccounted for.
 	//
@@ -54228,7 +54202,7 @@ export type Parser
 		// ⭐⭐ **THE KEYWORD-AS-A-NAME EXCLUSION, ONCE, AHEAD OF EVERY ARM — and it is one check rather than
 		// one per arm because the arm that FORGOT it was a reachable compiler PANIC.** Three arms spelled
 		// `not self.keywordIsAName(index)` for themselves and the fourth, `otherwise`, answered purely from
-		// its position test. But `otherwiseOpensBlock`'s caught-error binding form is `otherwise ( <ident> )
+		// its position test. But `otherwiseOpensBlockIn`'s caught-error binding form is `otherwise ( <ident> )
 		// <label>` — which a keyword-named METHOD CALL at the end of a block header spells character for
 		// character. `while Ops.otherwise(i) 'loop'` (`.otherwise` is a legal member name) and
 		// `while k == Kw.otherwise 'loop'` (a keyword-named enum CASE member, legal since
@@ -54249,19 +54223,19 @@ export type Parser
 		end 'alwaysOpens'
 
 		if kind == TokenKind.if 'ifKw'
-			return self.ifBeginsStatement(index)
+			return ifBeginsStatementIn(self.tokens, index: index)
 		end 'ifKw'
 
 		if kind == TokenKind.otherwise 'tryBlock'
-			return self.otherwiseOpensBlock(index)
+			return otherwiseOpensBlockIn(self.tokens, index: index)
 		end 'tryBlock'
 
 		// `try` is the third position-sensitive one: only the BLOCK form spells a LABEL after the keyword, and
 		// a label is told from a character-literal RECEIVER (`try 'A'.asciiValue()`) by the `.` behind it — see
-		// `tryOpensBlockAt`, which owns that rule. It is the same discriminator `parseStatement` routes on,
+		// `charLiteralOpensTryBlockIn`, which owns that rule. It is the same discriminator `parseStatement` routes on,
 		// asked once there rather than restated here.
 		if kind == TokenKind.try 'tryKw'
-			return self.tryOpensBlockAt(index)
+			return charLiteralOpensTryBlockIn(self.tokens, index: index + 1)
 		end 'tryKw'
 
 		if kind == TokenKind.else 'elseKw'
@@ -54296,20 +54270,6 @@ export type Parser
 		return self.kindAt(index) == TokenKind.end and not self.keywordIsAName(index)
 	end 'closesBlockAt'
 
-	// Is the `if` at `index` a block-opening STATEMENT `if` rather than the `if` of an inline
-	// conditional `<t> if <c> else <f>`? A block `if` sits at statement start: the preceding token is
-	// a `newline` (a new statement) or an `else` (the `if` of an `else if` chain). A ternary `if`
-	// follows an operand, so neither holds. Index 0 has nothing before it and cannot be a ternary, so
-	// it counts as statement start.
-	function ifBeginsStatement(index ElementIndex) returns bool
-		if index == 0 'atStart'
-			return true
-		end 'atStart'
-
-		let prev = self.kindAt(index - 1)
-		return prev == TokenKind.newline or prev == TokenKind.else
-	end 'ifBeginsStatement'
-
 	// Does the `else` at `index` close an if/else then-branch (a block `else`) rather than tail an
 	// inline conditional? A block `else` follows the then-branch's `end` and its ONE optional block
 	// label — the backward twin of `elseFollowsEnd` (`end 'x' else` or bare `end else`). A ternary
@@ -54340,53 +54300,6 @@ export type Parser
 
 		return self.closesBlockAt(prev)
 	end 'elseFollowsBlockEnd'
-
-	// Does the `otherwise` at `index` begin a BLOCK-form handler — one closed by its own `end`?
-	// Two block forms exist: `otherwise 'label' … end` (a bare charLiteral label) and
-	// `otherwise (e) 'label' … end` (a caught-error binding). The NON-block forms open nothing:
-	// `otherwise ignore`, a fallback VALUE, and the single-statement `return`/`break`/`continue`/
-	// `throw`/`panic`. This is `parseOtherwiseHandler`'s split written down a second time (the drift
-	// guard keeps them honest), but with ONE extra care it does not need: `otherwise` IS a legal
-	// enum case name (`tokenCanBeAName`), so a keyword-spelled match arm `otherwise(x) then` also
-	// leads with `otherwise (`. The binding form is told apart by its full SHAPE — `( identifier )`
-	// followed by the label charLiteral — which a payload case (`( bindings ) then/gives`, or
-	// multi-binding `( a , b )`) never matches. `parseOtherwiseHandler` needs no such check because
-	// by the time it runs the leading `try` has already disambiguated the context.
-	function otherwiseOpensBlock(index ElementIndex) returns bool
-		let next = self.kindAt(index + 1)
-
-		if next == TokenKind.charLiteral 'labelForm'
-			return true
-		end 'labelForm'
-
-		return next == TokenKind.leftParen and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.rightParen and self.kindAt(index + 4) == TokenKind.charLiteral
-	end 'otherwiseOpensBlock'
-
-	// ⭐ **THE BLOCK-FORM `try` — A LABEL AFTER THE KEYWORD, AND A `.` IS WHAT TELLS IT FROM A CHARACTER.**
-	// `try 'work' … end 'work'` opens a block. It is the SAME discriminator `parseStatement` routes the two
-	// forms on and `parseTry` refuses the block form in expression position by — asked here so the extent scan
-	// and the grammar cannot disagree about which `try` owns an `end`.
-	//
-	// ⚠⚠ **THIS ROUTINE ONCE CLAIMED THE TWO FORMS WERE DISJOINT ON THE TOKEN ALONE — *"no call can begin
-	// with a charLiteral"* — AND THAT WAS FALSE THE MOMENT A CHARACTER LITERAL GREW METHODS.**
-	// `try 'A'.asciiValue() otherwise 0` is a call that begins with one, and MEASURED it was **E3059**,
-	// *"a block-form `try 'label' … end` groups statements and yields no value"* — a diagnostic about a
-	// construct the program does not contain, over a program the oracle runs and prints 65 for.
-	//
-	// ⭐ **THE DISAMBIGUATOR IS THE `.` AND NOTHING ELSE NEEDS TO BE.** A block LABEL is always followed by a
-	// STATEMENT, so the lexer has emitted a `newline` behind it; it can never be followed by `.`. A character
-	// literal used as a `try` TARGET must be a call, so it is always followed by `.`. One token of lookahead
-	// past the label separates them, and a character literal that is NOT a receiver (`try 'A' otherwise 0`)
-	// is not a call either — it stays the block form, and `parseTry`'s own refusal names it.
-	function tryOpensBlockAt(index ElementIndex) returns bool
-		return self.charLiteralOpensTryBlockAt(index + 1)
-	end 'tryOpensBlockAt'
-
-	// The label-vs-receiver test itself, over the token AFTER `try`. Split out because the two askers stand in
-	// different places: the extent scans hold the `try`'s index, and `parseTry` has already consumed it.
-	function charLiteralOpensTryBlockAt(index ElementIndex) returns bool
-		return self.kindAt(index) == TokenKind.charLiteral and self.kindAt(index + 1) != TokenKind.dot
-	end 'charLiteralOpensTryBlockAt'
 
 	// Is the keyword at `index` being used as a NAME rather than as block structure? Read off the memo
 	// `buildBlockExtentIndex`'s walk recorded — see `blockKeywordNames` and `keywordIsANameAt`, which is
@@ -54532,25 +54445,13 @@ export type Parser
 
 		// The two MATCH-ARM shapes, and they are asked only where an arm can stand. Everything below is
 		// position-independent and stays unscoped.
-		if context == NameContext.matchBody 'armShapes'
-			if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
-				return true
-			end 'matchCaseName'
-
-			// ⚠ **A POSITIVE ANSWER ONLY — it must FALL THROUGH to the lookbehind, never answer `false` for
-			// it.** A keyword followed by `(` can equally be a member READ of a keyword-named case that
-			// carries a payload (`Kw.end(20, b: 22)`), which has the `.` before it AND the `(` after it.
-			// Returning the separator test's verdict outright hid the lookbehind from exactly those reads —
-			// measured, mid-review: `if tagOf(Kw.end(20, b: 22)) == 42 'ok'` took `assertScanAligned` down.
-			if next == TokenKind.leftParen 'payloadBindingList'
-				// Asked of the SHARED paren walk, so a nested group inside the list (or inside a parenthesized
-				// condition this must NOT claim) is matched by the one rule `skipBalancedParens` uses.
-				let separator = self.kindAt(self.parenGroups.closeOf(self.tokens, open: index + 1) + 1)
-
-				if separator == TokenKind.then or separator == TokenKind.gives 'armSeparator'
-					return true
-				end 'armSeparator'
-			end 'payloadBindingList'
+		// ⚠ **A POSITIVE ANSWER ONLY — it must FALL THROUGH to the lookbehind, never answer `false` for
+		// it.** A keyword followed by `(` can equally be a member READ of a keyword-named case that
+		// carries a payload (`Kw.end(20, b: 22)`), which has the `.` before it AND the `(` after it.
+		// Returning the separator test's verdict outright hid the lookbehind from exactly those reads —
+		// measured, mid-review: `if tagOf(Kw.end(20, b: 22)) == 42 'ok'` took `assertScanAligned` down.
+		if context == NameContext.matchBody and keywordSpellsAMatchArmCaseIn(self.tokens, groups: self.parenGroups, index: index) 'armShapes'
+			return true
 		end 'armShapes'
 
 		// ⭐ **A LABEL — the OTHER lookahead, and it is a `:`.** `weigh(i, for: 3, match: 4)` labels a
@@ -54810,11 +54711,11 @@ export type Parser
 			// `declaredNameKeywords` ascending (see `recordDeclaredNamesAt`).
 			var declaredThrough = 0 as ElementIndex
 
-			// ⚠ **A MEMBER LIST CANNOT OPEN INSIDE A `( … )`.** No accepted program puts a newline in a
-			// parameter list (E2010), so only MALFORMED source can spell `function f(` newline `enum Idx,
-			// …)` — and an opener pushed for that parameter is never closed, which would turn a clean
-			// diagnostic into an extent-scan panic. `opensBlockAt`'s own kinds need no such guard: none of
-			// them is a legal parameter name.
+			// ⚠ **A MEMBER LIST CANNOT OPEN INSIDE A `( … )`.** The lexer drops a newline there except
+			// in a `match` or block-form `otherwise` (`Lexer.dropBracketedLayout`), so only MALFORMED
+			// source puts `enum Idx` at a statement start inside parentheses — and an opener pushed for
+			// it is never closed, which would turn a clean diagnostic into an extent-scan panic.
+			// `opensBlockAt`'s own kinds need no such guard: none of them is a legal parameter name.
 			var parenDepth = 0 as NestingDepth
 
 			var i = 0 as ElementIndex
@@ -66862,10 +66763,10 @@ export type Parser
 	// (`alwaysOpens`, and `end` closes wherever it stands). The scans run over raw tokens with no scope, so
 	// they cannot know the name is bound; accepted here, the program panics in `assertScanAligned` instead of
 	// compiling. `if` and `else` need no such care and are never refused — their POSITION tests already answer
-	// no for an operand (`ifBeginsStatement`, `elseFollowsBlockEnd`).
+	// no for an operand (`ifBeginsStatementIn`, `elseFollowsBlockEnd`).
 	//
 	// ⚠ **`otherwise` IS REFUSED IN EXACTLY ONE POSITION, AND THE DERIVATION IS WHY THAT COMES OUT RIGHT
-	// WITHOUT ANYONE KNOWING IT.** `otherwiseOpensBlock`'s labelled-handler form is `otherwise 'label'`, and
+	// WITHOUT ANYONE KNOWING IT.** `otherwiseOpensBlockIn`'s labelled-handler form is `otherwise 'label'`, and
 	// a bare `otherwise` read as a WHOLE block condition is followed by that block's own label — so
 	// `while otherwise 'loop'` is refused while `acc + otherwise` compiles. The code asks the scans rather
 	// than consulting a list, so it comes out right with nobody having worked it out. **That is the argument
@@ -69058,7 +68959,6 @@ export type Parser
 		end 'userType'
 
 		try self.consume(TokenKind.leftBrace)
-		self.skipNewlines()
 
 		// ⛔ The literal is the container's EMPTY value and nothing else — a builtin container's record is the
 		// runtime's, with no user-writable field for a `name: value` pair to name. Anchored at the field the
@@ -69073,26 +68973,15 @@ export type Parser
 	end 'parseInnerAliasLiteral'
 
 	// ⭐⭐ **WHERE AN INADMISSIBLE STRUCT LITERAL IS BLAMED: THE TOKEN FOLLOWING THE `{`, NOT THE TYPE
-	// NAME.** The LINE comes off the `{` and the COLUMN off the token after it, for E3072 and E3076
+	// NAME.** The line and the column both come off the token after the `{`, for E3072 and E3076
 	// alike: `let b = Box{v: 5}` blames column 14 (`v`) where `Box` is 10, `let bb = Box{v: 5, w: 6}`
 	// blames 15, and `let e = Empty{}` blames the `}` — which is what says the rule is *the token
 	// after the brace* rather than *the first field label*. `specs/struct-construction-restriction.md`
 	// and `specs/managed-file.md` pin those columns, so it is the acceptance criterion and not a
 	// preference; anchoring at the type name would read better to me, and that is not an argument.
 	//
-	// ⚠ **IT IS THE RAW NEXT TOKEN, AND FOR A MULTI-LINE LITERAL THAT IS THE END-OF-LINE NEWLINE.**
-	// Reading the LINE off the `{` and the COLUMN off the token after it gives the same position on
-	// every input, because a newline is a TOKEN and carries the PRECEDING line's number with the
-	// newline character's own column (`Lexer.newline`), and the parser's advance does not skip it.
-	//
-	// ⛔ **SO DO NOT "ALIGN WITH THE ORACLE" BY SKIPPING TO THE FIRST FIELD ON THE NEXT LINE.**
-	// `indexPastNewlines(self.pos + 1)` is the shape that suggests itself, and it would CREATE a divergence —
-	// on `Point{` at end of line, the commonest spelling of a multi-line literal, which the corpus writes
-	// everywhere.
-	//
-	// ⚠ One unaudited edge, PRE-EXISTING and deliberately not chased here: on CRLF the compiler's newline token
-	// starts at the `\r` (`Action.skipCr`), which is the one column at which these two lexers could disagree.
-	// No pinned case reaches it.
+	// For a multi-line literal the token after the `{` is the first field on the next line: the lexer
+	// drops the layout inside the braces (`Lexer.dropBracketedLayout`).
 	function structLiteralBraceInteriorToken() returns Token
 		// ⛔ **THE PREMISE IS THE ROUTE, NOT THE PAIR OF CALL SITES.** Every caller reached its literal
 		// through `parsePrimary`'s `{`-LOOKAHEAD arm (`peekKind() == leftBrace`), which is what puts the
@@ -69211,12 +69100,6 @@ export type Parser
 	// labels rather than reusing the call's, and `slotCallArgs` is not involved — there is nothing
 	// to reorder, because the label IS the destination.
 	function parseStructLiteralFields(func IrFunction, layout StructLayout, fieldValues ValueIdArray, filled BoolArray, fieldBareLocal BoolArray) throws SourceParseError
-		// A struct literal may span lines — `Self{` then one `field: value` per line (the spec writes big
-		// constructors this way). Newlines are skipped at each field boundary: after the `{` (here), after a
-		// field's value (before the `,`/`}` test), and after the `,` (before the next field name). A single-line
-		// literal has no newline to skip, so its token stream — and its codegen — is unchanged.
-		self.skipNewlines()
-
 		if self.at(TokenKind.rightBrace) 'noFields'
 			return
 		end 'noFields'
@@ -69259,9 +69142,6 @@ export type Parser
 
 			let bareLocal = self.rhsWasBareLocalReference(valueStart)
 
-			// AFTER `rhsWasBareLocalReference` reads `[valueStart, self.pos)` — skipping here first would widen
-			// that window past the single-identifier value and silently mis-decide a managed field's move-in.
-			self.skipNewlines()
 			let held = self.holdStorageReadForStatement(value, kind: HoldKind.listOperand, range: SourceRange.ofToken(nameTok), position: self.literalSuccession(layout, filled: filled, current: index))
 
 			try fieldValues.set(index, value: held) otherwise panic("parseStructLiteralFields: fieldValues.set OOB at {index} — the columns are sized to the layout's field count")
@@ -69273,7 +69153,6 @@ export type Parser
 			end 'endFields'
 
 			try self.consume(TokenKind.comma)
-			self.skipNewlines()
 		end 'fieldLoop'
 	end 'parseStructLiteralFields'
 
@@ -69677,7 +69556,7 @@ export type Parser
 	end 'deferredLiteralRest'
 
 	function skipDeferredPairValue(func IrFunction) throws SourceParseError
-		try self.consumePairSeparator()
+		try self.consume(TokenKind.colon)
 		_ = try self.parseExpression(func, block: self.bodyState.currentBlock)
 	end 'skipDeferredPairValue'
 
@@ -69688,21 +69567,13 @@ export type Parser
 	end 'deferredMapLiteralFromKey'
 
 	function atAnotherLiteralEntry() returns bool throws SourceParseError
-		self.skipNewlines()
-
 		if not self.at(TokenKind.comma) 'theLastEntry'
 			return false
 		end 'theLastEntry'
 
 		try self.consume(TokenKind.comma)
-		self.skipNewlines()
 		return true
 	end 'atAnotherLiteralEntry'
-
-	function consumePairSeparator() throws SourceParseError
-		try self.consume(TokenKind.colon)
-		self.skipNewlines()
-	end 'consumePairSeparator'
 
 	// ⭐ **A MANAGED VALUE MUST BE THE MATCHING HEAP KIND** — the ONE check a struct FIELD and a union
 	// PAYLOAD share: a `String` slot takes a `string`; a `struct` slot takes a `structRef` of the SAME struct
@@ -78024,9 +77895,8 @@ export type Parser
 
 	// `( )` — the empty argument list of a no-argument BUILTIN call, whichever family it belongs to: a String
 	// accessor (`byteLength`, `isEmpty`, `clone`), an array method (`count`, `first`, `pop`, `clear`, …), a
-	// set method, and the two static factories (`IntArray.create()`, `IntSet.create()`). It had four separate
-	// spellings; one home means a builtin's empty argument list is parsed the same way everywhere, and any
-	// future relaxation (a newline inside the parens, say) reaches all of them at once.
+	// set method, and the two static factories (`IntArray.create()`, `IntSet.create()`). One home
+	// means a builtin's empty argument list is parsed the same way everywhere.
 	function consumeEmptyArgList() throws SourceParseError
 		try self.consume(TokenKind.leftParen)
 		try self.consume(TokenKind.rightParen)
@@ -78320,7 +78190,6 @@ export type Parser
 		view slot = self.takeArrayLiteralTargetAt(self.pos)
 		let openTok = try self.consume(TokenKind.leftBracket)
 		let range = SourceRange.ofToken(openTok)
-		self.skipNewlines()
 
 		if self.at(TokenKind.rightBracket) 'empty'
 			throw SourceParseError.unsupported(emptyArrayLiteralMessage(element), line: openTok.line, column: openTok.column)
@@ -78882,11 +78751,6 @@ export type Parser
 	// rather than collecting, and that is the whole difference from `parseCollectedArrayLiteralBody`: a
 	// managed element's move-in is decided from the `[valueStart, self.pos)` window it was written at, which
 	// a collect-then-push walk would have already moved past.
-	//
-	// ⚠ **A NEWLINE IS SKIPPED ONLY AT AN ELEMENT BOUNDARY, and never before `pushArrayLiteralElement`** —
-	// the same two rules `parseStructLiteralFields` states for `{…}`. A skip before the push would widen the
-	// `[valueStart, self.pos)` window `moveElementIntoContainer` reads to decide whether the element was a bare
-	// local, and silently mis-decide a managed element's move-in.
 	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws SourceParseError
 		while try self.atAnotherLiteralEntry() 'moreElements'
 			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
@@ -78925,8 +78789,8 @@ export type Parser
 
 	// One element after the first, and its type match against the literal's instance: the one home of
 	// the element rule, shared by `finishArrayLiteral` (which pushes what it gets) and
-	// `parseCollectedArrayLiteralBody` (which collects it). The separator, and the newline skip that
-	// must follow the push (see `finishArrayLiteral`), are `atAnotherLiteralEntry`'s.
+	// `parseCollectedArrayLiteralBody` (which collects it). The separator is
+	// `atAnotherLiteralEntry`'s.
 	function parseArrayLiteralTailElement(func IrFunction, giid GenericInstanceId) returns ArrayLiteralElement throws SourceParseError
 		let elemTok = self.current()
 		let elemStart = self.pos
@@ -80479,13 +80343,6 @@ export type Parser
 		let range = SourceRange.ofToken(setTok)
 		try self.consume(TokenKind.leftBracket)
 
-		// A BRACKETED LIST MAY BE WRITTEN OVER SEVERAL LINES, and the three skips below are exactly where
-		// `parseArrayLiteral` puts its own — the spelling this arm replaced, so a literal that parsed before the
-		// retirement must parse after it. They are unconditional here, where the array literal's trailing one has
-		// to wait for the element's move-in: nothing on this path reads `rhsWasBareLocalReference`, so there is no
-		// `[valueStart, self.pos)` window a skip could widen.
-		self.skipNewlines()
-
 		// An EMPTY literal names no element, so there is no instance to create — and unlike an array literal,
 		// which has `[]`'s own int default, a set's element must satisfy `Set`'s `where` clause before a
 		// witness can be threaded. The alias form is the spelling that states a key type, so it is what the
@@ -80739,7 +80596,7 @@ export type Parser
 
 		let keyType = try self.literalColumnTypeFor(firstKey, literalKind: MapLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstKeyTok)
 
-		try self.consumePairSeparator()
+		try self.consume(TokenKind.colon)
 		let heldFirstKey = self.holdStorageReadForStatement(firstKey, kind: HoldKind.callOperand, range: SourceRange.ofToken(firstKeyTok), position: OperandSuccession.alwaysFollowed)
 		let firstValueTok = self.current()
 		let firstValue = try self.parseExpression(func, block: self.bodyState.currentBlock)
@@ -80785,7 +80642,7 @@ export type Parser
 				return try self.deferredMapLiteralFromKey(func)
 			end 'aDeferredKey'
 
-			try self.consumePairSeparator()
+			try self.consume(TokenKind.colon)
 			let heldKey = self.holdStorageReadForStatement(key, kind: HoldKind.callOperand, range: SourceRange.ofToken(keyTok), position: OperandSuccession.alwaysFollowed)
 			let valueTok = self.current()
 			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun)
@@ -81458,15 +81315,11 @@ export type Parser
 	end 'parseListFromConstruction'
 
 	// ⭐ **`List from [m0, m1, …]` ONTO THE DECLARED `List`** — the cursor sits on the `[`. Split out from the
-	// head parse for `parseSetMemberList`'s reason: the head decides WHICH construction this is, the body
-	// decides what it builds, and the newline skips a bracketed list needs belong with the body.
+	// head parse for `parseSetMemberList`'s reason: the head decides WHICH construction this is and the body
+	// decides what it builds.
 	function parseListMemberList(func IrFunction, listTok Token) returns ValueId throws SourceParseError
 		let range = SourceRange.ofToken(listTok)
 		try self.consume(TokenKind.leftBracket)
-
-		// A BRACKETED LIST MAY BE WRITTEN OVER SEVERAL LINES — the three skips are `parseArrayLiteral`'s own,
-		// placed where that parser puts them, so a literal that parsed before this rewrite parses after it.
-		self.skipNewlines()
 
 		let statedByAlias = self.namesContainerInstanceAlias(listTok.value, container: FromHeadContainer.list)
 
@@ -81762,15 +81615,9 @@ export type Parser
 				commas = commas + 1
 			end 'topLevelSeparator'
 
-			// Anything between the literal's own `[` and its `]` is an element token — except LAYOUT, which
-			// `finishArrayLiteral` skips at every element boundary, so `[\n]` is as empty as `[]`. Keyed on the
+			// Anything between the literal's own `[` and its `]` is an element token. Keyed on the
 			// OPENER'S INDEX rather than on the bracket kind, so a nested `[` still counts as content.
-			//
-			// ⭐ **THE SKIP IS `tokenKindIsSkippedLayout`'s TO DEFINE, NOT THIS COUNTER'S**: a `///` doc comment
-			// is a token in this lexer and `skipNewlines` steps over it at every element boundary too, so a
-			// counter naming only `newline` would report a non-empty literal for a program the real parse
-			// reads as empty.
-			if i != openIndex and not tokenKindIsSkippedLayout(kind) 'elementToken'
+			if i != openIndex 'elementToken'
 				sawElement = true
 			end 'elementToken'
 
@@ -91715,7 +91562,7 @@ export type Parser
 				continue
 			end 'aText'
 
-			if kind != TokenKind.comma and not tokenKindIsSkippedLayout(kind) 'notATable'
+			if kind != TokenKind.comma 'notATable'
 				return false
 			end 'notATable'
 		end 'eachToken'
@@ -102625,19 +102472,15 @@ export type Parser
 	end 'requireUnambiguousBaseName'
 
 	// Advance the cursor past any newlines — `indexPastNewlines` applied to the cursor, so the MOVER and the
-	// LOOKAHEAD read one definition of "which tokens are layout" rather than two copies of it. Two copies
-	// would not fail loudly if they drifted: a lookahead that disagreed with the mover would silently route
-	// `[10\n]` down a different path from `[10]` (the int fast path settles an element's type off exactly
-	// that question), and a wrong element type is a wrong answer, not a compile error.
+	// LOOKAHEAD read one definition of "which tokens are layout" rather than two copies of it.
 	function skipNewlines()
 		self.pos = self.indexPastNewlines(self.pos)
 	end 'skipNewlines'
 
 	// The first index at or after `index` that the GRAMMAR reads — the LOOKAHEAD form, moving no cursor,
-	// and the one definition `skipNewlines` above is derived from. A lookahead that counted layout as
-	// tokens would answer a question about the source's TYPOGRAPHY where the asker meant one about its
-	// shape: `[10]` and `[10\n]` are the same literal, and the two must not take different paths
-	// through the parser. `tokenAt` answers `eof` past the end, so this terminates.
+	// and the one definition `skipNewlines` above is derived from. The layout it meets lies between
+	// statements, members and arms: inside a bracket the lexer has already dropped it
+	// (`Lexer.dropBracketedLayout`). `tokenAt` answers `eof` past the end, so this terminates.
 	//
 	// ⭐ **WHICH KINDS ARE LAYOUT IS `Lexer.tokenKindIsSkippedLayout`'s TO SAY, NOT THIS LOOP'S** — a `///`
 	// doc comment is a token in this lexer (the formatter round-trips it and the LSP maps a cursor into it)
