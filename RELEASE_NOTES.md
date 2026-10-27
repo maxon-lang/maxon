@@ -225,6 +225,11 @@ release's version as its heading when the release is cut.
   or a `static var` initializer is E3193, with or without arguments: a first argument there is never the
   receiver (`bump(m)` with `m` a `Maker` no longer fills `self`).
   Fix: call it on a value (`m.bump()`) or pass the receiver explicitly (`Maker.bump(m)`).
+- In a type that declares a `static` and an instance method of one name, a bare call from an instance method
+  or its closures calls the instance method, whichever is declared first: with `function getValue()`
+  declared before `static function getValue()`, a bare `getValue()` in an instance method is
+  `self.getValue()`.
+  Fix: write `Box.getValue()`, qualified by the type's name, where the static method is meant.
 
 ## 0.5.0 — 2026-10-08
 

@@ -2884,7 +2884,8 @@ export typealias DescriptorNeedMap = Map with (ByteArray, bool)
 
 // The enclosing type's bare-method-name -> "does it take a receiver?" map (#65 implicit-self resolution).
 // A bare call `foo(…)` inside a method of the type resolves to the sibling method `foo`; the flag decides
-// whether the enclosing `self` is prepended (an instance method) or not (a `static` one). See
+// whether the enclosing `self` is prepended (an instance method) or not (a `static` one), except for a
+// static/instance pair (`Parser.siblingKindOf`). See
 // `Parser.ensureSiblingReceivers`.
 typealias SiblingReceiverMap = Map with (ByteArray, bool)
 
@@ -19630,8 +19631,8 @@ export type Parser
 	// allocates NOTHING. It is the
 	// method set (static and instance) of the DECLARATION being parsed, so `contains` answers "is this
 	// a sibling?" and the value answers "does it take a receiver?" from one source for the members it
-	// carries; a method another declaration of the same type declares is reached through the index
-	// (`isImplicitSelfMethod`).
+	// carries, a static/instance pair excepted (`siblingKindOf`); a method another declaration of the
+	// same type declares is reached through the index (`isImplicitSelfMethod`).
 	var siblingReceivers as SiblingReceiverTable
 
 	// The type `siblingReceivers` was built for — the memo key. Empty until the first lazy build, and compared
@@ -24925,8 +24926,8 @@ export type Parser
 		// base. See there.
 		//
 		// ⚠ **THE NAME COMES FROM `memberRegistrationKey` AND IS NOT COMPOSED HERE.** The sweep files this
-		// declaration's facts under that key and the static call door asks for the same one; three spellings of
-		// "contest ⇒ the static name" would be three chances to disagree about a symbol.
+		// declaration's facts under that key and the static call doors ask for the same one; three spellings
+		// of "contest ⇒ the static name" would be three chances to disagree about a symbol.
 		let registrationBase = self.signatures.memberRegistrationKey(base, takesReceiver: takesReceiver)
 		let contested = self.signatures.isContestedExtensionMethod(base) or self.namesACrossFileOverloadedFreeFunction(nameTok)
 
@@ -92046,8 +92047,8 @@ export type Parser
 	//
 	// ⇒ the walk's miss falls through to the whole-program index, which is the only reader that has every
 	// declaration under one `<Type>.<method>` key however many declarations contributed them. The walk keeps
-	// its PRIORITY: it answers for the declaration the author is looking at, and it is the one that can tell
-	// an interface REQUIREMENT (which the index does not file under the conformer at all) from a method.
+	// its PRIORITY, a static/instance pair excepted (`siblingKindOf`): it answers for the declaration the
+	// author is looking at, and it is the one that can tell an interface REQUIREMENT (which the index does not file under the conformer at all) from a method.
 	//
 	// ⚠ **THE PROBE IS ON THE MISS PATH ONLY**, and that is a cost decision rather than a semantic one: this
 	// is asked at every bare call in the program, the join `qualifiedMethodName` allocates, and inside a type
@@ -92064,7 +92065,13 @@ export type Parser
 		return self.siblingKindOf(name) != SiblingKind.notASibling
 	end 'isImplicitSelfMethod'
 
+	// A static/instance pair is decided before the walk: the walk's map keeps one receiver flag per name,
+	// the last declared, so consulting it would bind a bare call by declaration order.
 	function siblingKindOf(name ByteArray) returns SiblingKind
+		if self.signatures.siblingsArePaired(name, enclosingTypeName: self.enclosingTypeNameOrEmpty()) 'aStaticBesideAnInstanceOfOneName'
+			return SiblingKind.instanceSibling if self.nameBindsOrIsCaptured(SelfParamName) else SiblingKind.staticSibling
+		end 'aStaticBesideAnInstanceOfOneName'
+
 		return self.signatures.siblingKindFrom(name, enclosingTypeName: self.enclosingTypeNameOrEmpty(), walked: self.walkedSiblingOf(name))
 	end 'siblingKindOf'
 
@@ -92169,9 +92176,9 @@ export type Parser
 	// token walk of the type body, so it sees every
 	// sibling regardless of declaration order: a forward reference resolves exactly as a backward one, and
 	// recursion sees the method itself. It is the ONE source of both "is this a sibling?" (`contains`) and
-	// "does it take a receiver?" (the value) FOR THE MEMBERS IT CARRIES, so those two facts cannot drift
-	// apart — and the index behind it is asked for both in the same one place
-	// (`ProgramSignatures.siblingKindFrom`), for that same reason.
+	// "does it take a receiver?" (the value) FOR THE MEMBERS IT CARRIES, a static/instance pair excepted
+	// (`siblingKindOf`), so those two facts cannot drift apart — and the index behind it is asked for
+	// both in the same one place (`ProgramSignatures.siblingKindFrom`), for that same reason.
 	//
 	// ⚠⚠ **AN `enum`/`union` BODY'S MEMBER LIST IS NOT BLOCK STRUCTURE, AND A CASE MAY BE SPELLED WITH A
 	// KEYWORD** — the rule `keywordIsANameAt`'s case-list shape applies to the block-extent walk, and the
@@ -92318,7 +92325,16 @@ export type Parser
 		// enclosing declaration's name, which under a stdlib/user shadow is this compile's own mint.
 		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
 			let receiver = try self.implicitSelfReceiver(calleeTok.value, anchor: calleeTok)
-			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingTypeName(), methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
+
+			let takesReceiver = match receiver 'receiverKind'
+				none gives false
+				unavailable or
+				value gives true
+			end 'receiverKind'
+
+			let registered = self.signatures.memberRegistrationKey(qualifiedMethodName(self.enclosingTypeName(), methodName: calleeTok.value), takesReceiver: takesReceiver)
+
+			return try self.parseCallNamed(func, callee: registered, anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
 		end 'implicitSelfMethod'
 
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and

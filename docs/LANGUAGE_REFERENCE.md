@@ -1273,7 +1273,10 @@ a bare call to it from a static method, a file-scope initializer or a `static va
 `Type.name()` with no arguments. `Type.name(value, …)` calls it on `value`.
 
 A type may declare a static and an instance method with the same name, in its body or in an `extension` of
-it; `Type.name()` calls the static one and `value.name()` the instance one. An `extension` member with the
+it; `Type.name()` calls the static one and `value.name()` the instance one. A bare `name()` calls the
+instance one where `self` is reachable, in an instance method and its closures, and the static one
+everywhere else in the type: in a static method and its closures, and in an initializer. This holds
+whichever of the two is declared first. An `extension` member with the
 name and kind of a member the type's own body declares is
 [E3176](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3176), in any file and for a standard-library type
 too. An [interface extension](#interface-extensions)'s method is a default: a conforming type may declare its
@@ -3194,7 +3197,8 @@ end 'main'
   `pick(String)`, adding the parameter names where only those differ:
   `slice(start Integer, length Integer)`.
 - A type may declare a `static` method and an instance method with the same name and parameters:
-  `Type.name()` calls the static one and `value.name()` the instance one.
+  `Type.name()` calls the static one and `value.name()` the instance one, and a bare `name()` calls the one
+  [Static Methods](#static-methods) names.
 
 ### Parameter Passing
 

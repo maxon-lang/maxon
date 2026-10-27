@@ -16586,7 +16586,8 @@ export type SettledDeclarations
 	// `Counter` while `c.reset()` returns nothing, and one key can hold one of those).
 	//
 	// ⚠ **IT IS THE INSTANCE THAT KEEPS THE BARE KEY**, so every instance call door is untouched and only the
-	// one static door has to ask (`Parser.parseQualifiedCall`).
+	// static call doors have to ask (`Parser.parseQualifiedCall` and `Parser.parseCall`'s implicit-self
+	// arm).
 	//
 	// ✅ **THREE SWEEP FACTS ARE SPLITTABLE ONLY BECAUSE THEIR SCANS FOLD AFTER THE DECLARATION LOOP.** A
 	// `throws` clause, a consume set over a MANAGED parameter and a parameter default are published by the
@@ -19570,7 +19571,8 @@ export type ProgramSignatures
 	// the bare source name for an instance member and for every uncontested declaration in the program, the
 	// STATIC twin for a `static` member an instance member of the same type shares a name with. See
 	// `staticInstanceContests` for what the contest means; the KEY itself is `memberRegistrationKey`'s, asked
-	// here rather than composed, so this routine and the parser's two doors cannot spell one symbol three ways.
+	// here rather than composed, so this routine and the parser's three doors cannot spell one symbol four
+	// ways.
 	//
 	// **THE CONTEST IS DETECTED AT THE SECOND OF THE TWO DECLARATIONS TO FOLD**, because that is the first
 	// moment anything in the program can see both — so the two ORDERS need two different things done, and
@@ -19623,14 +19625,14 @@ export type ProgramSignatures
 	// ⭐⭐⭐ **THE KEY A MEMBER OF `sourceName` WITH THIS RECEIVER-PRESENCE IS FILED UNDER — AND THEREFORE THE
 	// NAME A CALL TO IT MUST ASK FOR. THE ONE COMPOSITION OF THE CONTEST AND THE MINT.**
 	//
-	// Three sites need it and every one of them must produce the SAME BYTES: this index's own `record` (the
+	// Four sites need it and every one of them must produce the SAME BYTES: this index's own `record` (the
 	// sweep key), `Parser.overloadRegistrationNameFor` (the base a declaration claims, and so the emitted
-	// symbol), and `Parser.parseQualifiedCall` (the callee a static call carries). Nothing would make three
-	// spellings of `contest? ⇒ static key : source key` agree, and divergence is not a compile error — it is a
-	// callee whose sweep facts read back from a key nothing wrote: a wrong return type at a parsed call, or a
+	// symbol), `Parser.parseQualifiedCall` (the callee a static call carries) and `Parser.parseCall`'s
+	// implicit-self arm (the callee a bare sibling call carries). Nothing would make four spellings of
+	// `contest? ⇒ static key : source key` agree, and divergence is not a compile error — it is a callee whose sweep facts read back from a key nothing wrote: a wrong return type at a parsed call, or a
 	// backend `call to unknown function` with no position. That is the failure
 	// `Project.paramDefaultHelperName`'s header records from history ("A name derived in one place cannot
-	// disagree with itself"), and it is why the composition lives here rather than at each of the three.
+	// disagree with itself"), and it is why the composition lives here rather than at each of the four.
 	//
 	// ⚠ **AN INSTANCE MEMBER ALWAYS KEEPS THE SOURCE NAME**, contest or not — which is what leaves every
 	// instance call door in the parser untouched, and what makes the static side the only one that has to ask.
@@ -42611,6 +42613,14 @@ export type ProgramSignatures
 			poisoned gives false
 		end 'binding'
 	end 'functionTypedBindingVisibleFrom'
+
+	export function siblingsArePaired(written ByteArray, enclosingTypeName ByteArray) returns bool
+		if enclosingTypeName.isEmpty() or self.settledDeclarations().staticInstanceContests.count() == 0 'nothingToPair'
+			return false
+		end 'nothingToPair'
+
+		return self.isStaticInstanceContest(qualifiedMethodName(enclosingTypeName, methodName: written))
+	end 'siblingsArePaired'
 
 	export function siblingKindFrom(written ByteArray, enclosingTypeName ByteArray, walked WalkedSibling) returns SiblingKind
 		if enclosingTypeName.isEmpty() 'notInATypeBody'

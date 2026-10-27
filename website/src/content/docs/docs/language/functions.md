@@ -209,7 +209,8 @@ end 'main'
   `pick(String)`, adding the parameter names where only those differ:
   `slice(start Integer, length Integer)`.
 - A type may declare a `static` method and an instance method with the same name and parameters:
-  `Type.name()` calls the static one and `value.name()` the instance one.
+  `Type.name()` calls the static one and `value.name()` the instance one, and a bare `name()` calls the one
+  [Static Methods](/docs/language/composite-types/#static-methods) names.
 
 ## Parameter Passing
 

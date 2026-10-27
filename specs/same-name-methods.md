@@ -15,6 +15,9 @@ A type can define both a static method and an instance method with the same name
 
 - `Type.method()` calls the **static** method
 - `instance.method()` calls the **instance** method
+- a bare `method()` calls the **instance** method where `self` is reachable (an instance method and its
+  closures) and the **static** method everywhere else in the type (a static method and its closures, and an
+  initializer), whichever of the two is declared first
 
 ```text
 type Counter
@@ -433,6 +436,331 @@ end 'main'
 ```
 ```maxoncstderr
 error E3057: specs/same-name-methods/error.same-name-methods.throwing-static-names-its-callee.maxon:25:13: throwing function requires try: 'Box.getValue'
+```
+
+<!-- test: same-name-methods.bare-call-in-a-static-method-static-declared-first -->
+A static method has no `self`, so its bare `getValue()` is the static member whichever the type declares first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	static function getValue() returns Integer
+		return 9
+	end 'getValue'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+
+	static function viaStatic() returns Integer
+		return getValue()
+	end 'viaStatic'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(42)
+	print("{Box.viaStatic()} {b.getValue()}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 42
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.bare-call-in-a-static-method-instance-declared-first -->
+The same type with the instance method declared first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+
+	static function getValue() returns Integer
+		return 9
+	end 'getValue'
+
+	static function viaStatic() returns Integer
+		return getValue()
+	end 'viaStatic'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(42)
+	print("{Box.viaStatic()} {b.getValue()}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 42
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.bare-call-in-an-instance-method-static-declared-first -->
+An instance method's bare `getValue()` is `self.getValue()`, the instance member, whichever the type declares first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	static function getValue() returns Integer
+		return 9
+	end 'getValue'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+
+	function viaInstance() returns Integer
+		return getValue()
+	end 'viaInstance'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(42)
+	print("{b.viaInstance()} {Box.getValue()}\n")
+	return 0
+end 'main'
+```
+```stdout
+42 9
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.bare-call-in-an-instance-method-instance-declared-first -->
+The same type with the instance method declared first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+
+	static function getValue() returns Integer
+		return 9
+	end 'getValue'
+
+	function viaInstance() returns Integer
+		return getValue()
+	end 'viaInstance'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(42)
+	print("{b.viaInstance()} {Box.getValue()}\n")
+	return 0
+end 'main'
+```
+```stdout
+42 9
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.bare-call-in-an-instance-method-instance-in-an-extension -->
+The type body declares the static and the bare caller; the instance method of the name is in an extension. The
+bare call is still the instance member.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	static function getValue() returns Integer
+		return 9
+	end 'getValue'
+
+	function viaInstance() returns Integer
+		return getValue()
+	end 'viaInstance'
+end 'Box'
+
+extension Box
+	function getValue() returns Integer
+		return self.value
+	end 'getValue'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(42)
+	print("{b.viaInstance()} {Box.getValue()}\n")
+	return 0
+end 'main'
+```
+```stdout
+42 9
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.bare-call-in-a-static-method-static-in-an-extension -->
+The type body declares the instance method and the bare caller; the static method of the name is in an extension.
+The bare call is the static member.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+
+	static function viaStatic() returns Integer
+		return getValue()
+	end 'viaStatic'
+end 'Box'
+
+extension Box
+	static function getValue() returns Integer
+		return 9
+	end 'getValue'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(42)
+	print("{Box.viaStatic()} {b.getValue()}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 42
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.bare-call-in-a-generic-type-static-declared-first -->
+The same pair in a generic type: a bare `getValue()` is the static member in a static method and the instance
+member in an instance method, and `Type.getValue()` is the static one.
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	var item as T
+	var base as Level
+
+	static function create(item T, b Level) returns Self
+		return Self{item: item, base: b}
+	end 'create'
+
+	static function getValue() returns Level
+		return 9
+	end 'getValue'
+
+	function getValue() returns Level
+		return self.base
+	end 'getValue'
+
+	static function viaStatic() returns Level
+		return getValue()
+	end 'viaStatic'
+
+	function viaInstance() returns Level
+		return getValue()
+	end 'viaInstance'
+end 'Gauge'
+
+typealias LevelGauge = Gauge with Level
+
+function main() returns ExitCode
+	let g = LevelGauge.create(7, b: 42)
+	print("{LevelGauge.viaStatic()} {g.viaInstance()} {LevelGauge.getValue()} {g.getValue()}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 42 9 42
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.bare-call-in-a-generic-type-instance-declared-first -->
+The same generic type with the instance method declared first.
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	var item as T
+	var base as Level
+
+	static function create(item T, b Level) returns Self
+		return Self{item: item, base: b}
+	end 'create'
+
+	function getValue() returns Level
+		return self.base
+	end 'getValue'
+
+	static function getValue() returns Level
+		return 9
+	end 'getValue'
+
+	function viaInstance() returns Level
+		return getValue()
+	end 'viaInstance'
+
+	static function viaStatic() returns Level
+		return getValue()
+	end 'viaStatic'
+end 'Gauge'
+
+typealias LevelGauge = Gauge with Level
+
+function main() returns ExitCode
+	let g = LevelGauge.create(7, b: 42)
+	print("{LevelGauge.viaStatic()} {g.viaInstance()} {LevelGauge.getValue()} {g.getValue()}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 42 9 42
+```
+```exitcode
+0
 ```
 
 <!-- test: same-name-methods.defaults-at-one-slot-instance-first -->
