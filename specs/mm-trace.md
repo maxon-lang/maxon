@@ -564,11 +564,8 @@ case is required to lose.
 **If this trace ever empties, the admission rule has stopped reading mutability** and a program that
 assigns to `MutableFacts` is writing a read-only page.
 
-⚠ **THE BOX COMES FIRST HERE AND LAST IN A BODY, AND THAT IS THE FOLD RATHER THAN THE KEYWORD.**
-`Parser.constFactoryConstruction` folds `Facts.create()` into the construction it stands for whenever that
-construction WOULD image, without ever consulting mutability — so this `var` is built inline by
-`__module_init` (`ModuleInit.builtStructBox`: the box, then one store per slot) and `Facts.create` is
-emitted for nobody. The three records are the same three; only the order in which they are asked for moved.
+The `var` is built by its `__global_init` function calling `Facts.create()`, exactly as a body would: each
+field's array is built before the box that holds them.
 <!-- MmTrace -->
 ```maxon
 typealias Count = int(0 to 1000)
@@ -593,15 +590,15 @@ end 'main'
 0
 ```
 ```mm-trace
-mm_alloc Facts #1 size=16
+mm_alloc ArrayRecord #1 size=48
 mm_alloc ArrayRecord #2 size=48
-mm_alloc ArrayRecord #3 size=48
-mm_decref Facts #1 rc=0
+mm_alloc Facts #3 size=16
+mm_decref Facts #3 rc=0
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
 mm_decref ArrayRecord #2 rc=0
 mm_free ArrayRecord #2
-mm_decref ArrayRecord #3 rc=0
-mm_free ArrayRecord #3
-mm_free Facts #1
+mm_free Facts #3
 ```
 
 <!-- test: module-let-empty-array-as-a-map-miss-fallback-allocates-nothing -->
