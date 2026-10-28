@@ -11891,8 +11891,8 @@ the exit gate alone cannot see the loss.
   it on a timer. The handler then reads `probe.started` and `isComplete()` answering `false`, so `parked=8`
   says every one of the eight coroutines had started and not finished when its handler returned.
 - **The promise is kept in the service's state**, so the one thing that drops it is the shutdown's state drop
-  in `<T>.__loop`'s teardown, with the coroutine still parked: its ten-second timer is far longer than the
-  program runs, so the coroutine cannot finish before the shutdown reaches it.
+  in `<T>.__loop`'s teardown, with the coroutine still parked: its timer is `ForeverMs`, so the coroutine
+  cannot finish before the shutdown reaches it.
 - **The coroutine carries a managed argument**, the `Probe`, which only the coroutine's reclaim releases.
 
 ⛔ **A PROMISE DISCARDED AT ITS OWN STATEMENT BUILDS NONE OF THIS.** `let p = async slowWork(v)` followed by
@@ -11925,6 +11925,10 @@ its teardown. That runner half is also what releases the coroutine's strand refe
 without it the owner's record outlives `<T>.__loop` for ever, which is the second record the sabotage loses
 per round.
 
+The drop can leave another machine blocked in the poller until the deadline it just removed, and that
+machine counts as running, so the exit drain cannot end while it waits. With a `ForeverMs` timer that wait
+never ends; `__sched_break_idle_poller`, which the drop calls once nothing is left pending, breaks it.
+
 ⇒ **the case is the proof.** It pins that a service may be shut down with `async` work in flight and
 the process still terminates cleanly — no 101, no 75, no hang.
 ```maxon
@@ -11932,8 +11936,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
-// Far longer than the program runs: the shutdown's drop cancels the timer, so nothing ever waits it out.
-let WorkSleepMs = 10000
+// The shutdown's drop cancels the timer, so nothing ever waits it out.
+let WorkSleepMs = ForeverMs
 
 type Probe
 	export var started as bool
@@ -11974,6 +11978,158 @@ function main() returns ExitCode
 	for round in 1 to 8 'rounds'
 		let w = spawn Worker.create()
 		parked = parked + (try await w.fire(round) otherwise 0)
+	end 'rounds'
+
+	print("parked={parked}\n")
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+parked=8
+```
+
+<!-- test: a-service-shut-down-with-a-coroutine-parked-on-a-child -->
+<!-- procs: 4 -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+**THE SAME SHUTDOWN, WITH THE COROUTINE PARKED ON A CHILD PROCESS.** The drop takes the poller arm of
+`__gt_promise_drop` (`__np_pd_drop`) instead of the timer arm. The handler yields until
+`Scheduler.counters().netpollBlocks` passes the count the coroutine recorded just before starting the child,
+so `parked=3` says each coroutine was parked on its child when its handler returned. Windows only, because
+the child is `cmd`'s `ping`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+type Probe
+	export var parkedFrom as SchedulerEventCount
+
+	static function create() returns Self
+		return Self{parkedFrom: 0}
+	end 'create'
+end 'Probe'
+
+function waitOnChild(probe Probe) returns Integer
+	probe.parkedFrom = Scheduler.counters().netpollBlocks + 1
+	return try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
+end 'waitOnChild'
+
+function parkedOnChild(probe Probe) returns bool
+	if probe.parkedFrom == 0 'notYet'
+		return false
+	end 'notYet'
+
+	return Scheduler.counters().netpollBlocks >= probe.parkedFrom
+end 'parkedOnChild'
+
+type Worker
+	var pending as IntPromiseArray
+	var probe as Probe
+
+	static function create() returns Self
+		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
+	end 'create'
+
+	export function fire() returns Integer
+		let p = async waitOnChild(self.probe)
+
+		while not parkedOnChild(self.probe) 'untilParked'
+			Scheduler.yield()
+		end 'untilParked'
+
+		let parked = not p.isComplete()
+		self.pending.push(p)
+		return 1 if parked else 0
+	end 'fire'
+end 'Worker'
+
+function main() returns ExitCode
+	var parked = 0 as Integer
+
+	for _ in 1 to 3 'rounds'
+		let w = spawn Worker.create()
+		parked = parked + (try await w.fire() otherwise 0)
+	end 'rounds'
+
+	print("parked={parked}\n")
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+parked=3
+```
+
+<!-- test: a-service-shut-down-with-a-coroutine-parked-in-recv -->
+<!-- procs: 4 -->
+**THE SAME SHUTDOWN, WITH THE COROUTINE PARKED IN A SOCKET READ** that its peer, the service's own
+listener, never answers. On epoll and kqueue the drop takes the poller arm (`__np_pd_drop`). On Windows the
+read has an overlapped request in flight, so the drop cancels it and takes the queued arm instead.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+type Probe
+	export var parkedFrom as SchedulerEventCount
+
+	static function create() returns Self
+		return Self{parkedFrom: 0}
+	end 'create'
+end 'Probe'
+
+function stall(port NetworkPort, probe Probe) returns Integer
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 1
+
+	probe.parkedFrom = Scheduler.counters().netpollBlocks + 1
+	_ = try client.recv(1024) otherwise return 2
+
+	return 0
+end 'stall'
+
+function parkedInRecv(probe Probe) returns bool
+	if probe.parkedFrom == 0 'notYet'
+		return false
+	end 'notYet'
+
+	return Scheduler.counters().netpollBlocks >= probe.parkedFrom
+end 'parkedInRecv'
+
+type Worker
+	var pending as IntPromiseArray
+	var probe as Probe
+	var listener as TcpListener
+
+	static function create() returns Self
+		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("a loopback bind on an ephemeral port succeeds")
+		return Self{pending: IntPromiseArray.create(), probe: Probe.create(), listener: listener}
+	end 'create'
+
+	export function fire() returns Integer
+		let p = async stall(self.listener.port(), probe: self.probe)
+
+		while not parkedInRecv(self.probe) 'untilParked'
+			Scheduler.yield()
+		end 'untilParked'
+
+		let parked = not p.isComplete()
+		self.pending.push(p)
+		return 1 if parked else 0
+	end 'fire'
+end 'Worker'
+
+function main() returns ExitCode
+	var parked = 0 as Integer
+
+	for _ in 1 to 8 'rounds'
+		let w = spawn Worker.create()
+		parked = parked + (try await w.fire() otherwise 0)
 	end 'rounds'
 
 	print("parked={parked}\n")

@@ -6240,6 +6240,8 @@ end 'buildGtPromiseDrop'
 function emitGtRenouncePark(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, cont IrBlock, label ByteArray)
 	var payWake = module.addBlock(func, label: bytesWithSuffix(b"droppedwake", suffix: label), heat: BlockHeat.normal)
 
+	emitSchedBreakIdlePoller(module, block: cur, ids: ids)
+
 	let debt = emitGtReady(module, block: cur, gt: gt, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)
 	emitSchedLockLeave(module, block: cur, ids: ids)
 	emitSchedWakeIfOwed(module, cur: cur, owed: debt, wake: payWake, cont: cont, ids: ids)
@@ -6456,17 +6458,17 @@ function buildGtRunnerDone(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildGtRunnerDone'
 
-// Remove the `(gt, tag)` entry from the timer MIN-HEAP, then branch to `found`. Used by
-// `__gt_promise_drop`'s waiting arm and by the poller's readiness path, whose readiness ends a wait
-// the deadline no longer has to. Keyed on the PAIR, so FINDING the entry is a linear scan: the heap
-// is ordered by `(deadline, seq)` and says nothing about which GT sits where. A thread holds at
-// most one wait of each tag, so the first match removes and stops; a `(gt, tag)` NOT on the timer
-// scans to the end and branches to `missing` untouched.
+// Remove the `(gt, tag)` entry from the timer MIN-HEAP, then branch to `found`. Its callers end a
+// timed wait before its deadline: a promise drop, a readiness, a claimed send. Keyed on the PAIR, so
+// FINDING the entry is a linear scan: the heap is ordered by `(deadline, seq)` and says nothing about
+// which GT sits where. A thread holds at most one wait of each tag, so the first match removes and
+// stops; a `(gt, tag)` NOT on the timer scans to the end and branches to `missing` untouched.
 //
 // ⚠ **THE TAG IS HALF THE KEY AND NOT A FILTER** — see `TimerTagSleep`: a thread holding both a `sleep` and a
 // socket read deadline has two entries, and a gt-keyed scan would take whichever it met first.
 //
-// EXPORTED for `NetpollRuntime`, whose readiness path disarms the deadline of the wait it is ending.
+// A poller blocked until the removed deadline is broken by `emitGtRenouncePark`, not here: this also runs
+// inside `__np_pd_ready_one` → `__np_group_unhook`, unguarded chains x64-linux refuses with E5004.
 //
 // ⭐ **REMOVING FROM THE MIDDLE OF A HEAP NEEDS BOTH DIRECTIONS, AND THIS PICKS THE ONE THAT APPLIES.** The
 // last live entry fills the hole, and from there it may be too EARLY for its new parent or too LATE for its

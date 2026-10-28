@@ -1756,6 +1756,8 @@ export let SchedWakeNetpollerName = b"__sched_wake_netpoller"
 // holding their strand — and is what `multicore-stress/pin-matrix.sh` pins against at one processor.
 let SchedWakePollerName = b"__sched_wake_poller"
 
+let SchedBreakIdlePollerName = b"__sched_break_idle_poller"
+
 // ⭐ `__sched_stop_workers()` — seal the scheduler and JOIN every worker M out. Called once, from
 // `GtRuntime.__gt_drain_at_exit`, on the exit path: set `__sched_shutdown_flag`, signal every MACHINE's own
 // park event so a parked one leaves its `osWaitHandle`, then wait on each worker's thread handle. ⚠ **BOTH
@@ -2557,6 +2559,7 @@ export function installSchedRuntime(module StdModule, target Target)
 	installNetpollRuntime(module, target: target)
 	buildSchedWakeNetpoller(module)
 	buildSchedWakePoller(module)
+	buildSchedBreakIdlePoller(module)
 
 	// ⛔ **GATE SITE 1 OF 4 — see `targetBracketsBlockingSyscalls` for the fork.** None is reachable without the
 	// monitor: `__sched_syscall_regain` from the bracket's exit step, `__sysmon` from its start (gate site 2),
@@ -6997,6 +7000,34 @@ function emitSchedNobodyPolls(module StdModule, block IrBlock, ids ValueMinter) 
 	return emitCompareWithConstant(module, block: block, value: emitLoadAcquireGlobalWord(module, block: block, label: SchedLastPollLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 end 'emitSchedNobodyPolls'
 
+export function emitSchedBreakIdlePoller(module StdModule, block IrBlock, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedBreakIdlePollerName, args: ValueIdArray.create()))
+end 'emitSchedBreakIdlePoller'
+
+// `__sched_lock` held. A machine blocked in the poller waits for the earliest deadline as it was when it
+// entered, and counts as running in `__sched_checkdead`. When a drop removes that entry and leaves nothing
+// pending, the exit drain cannot end until the stale deadline passes, never for `ForeverMs`; the break
+// makes the poller re-read the empty set and go idle.
+function buildSchedBreakIdlePoller(module StdModule)
+	var func = IrFunction.createFromStd(SchedBreakIdlePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var pollerBlocked = module.addBlock(func, label: b"ibpblocked", heat: BlockHeat.normal)
+	var breakIt = module.addBlock(func, label: b"ibpbreak", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"ibpdone", heat: BlockHeat.normal)
+
+	module.setTerminator(entry, op: StdOp.condBranch(emitGtStoresPending(module, block: entry, ids: ids), thenBlockId: doneBlock.id, elseBlockId: pollerBlocked.id))
+	module.setTerminator(pollerBlocked, op: StdOp.condBranch(emitSchedNobodyPolls(module, block: pollerBlocked, ids: ids), thenBlockId: doneBlock.id, elseBlockId: breakIt.id))
+
+	module.appendOp(breakIt, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	module.setTerminator(breakIt, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildSchedBreakIdlePoller'
+
 function emitSchedPollerOwed(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let timerPending = emitCompareWithConstant(module, block: block, value: emitGtLoadTimerWhen(module, block: block, ids: ids), pred: StdCmpPred.ne, against: TimerWhenEmpty, ids: ids)
 	let sourcePending = emitCompareWithConstant(module, block: block, value: emitLoadAcquireGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
@@ -7125,9 +7156,10 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	// it IS visible: a machine running a strand is off the idle list by construction, and the main machine
 	// taking this test is itself off it, which is the `1`.
 	//
-	// ⭐ **NOTHING NEW HAS TO WAKE THE DRAIN FOR IT.** A machine joins the idle list only inside the critical
-	// section that ends with `__sched_checkdead`, which signals the main machine the moment the last one
-	// leaves it with nothing pending.
+	// ⭐ **WHAT WAKES THE DRAIN FOR IT.** A machine joins the idle list only inside the critical section that
+	// ends with `__sched_checkdead`, which signals the main machine the moment the last one leaves it with
+	// nothing pending. A machine blocked in the poller stays off the list until its wait returns, so a promise
+	// drop that empties the pending set under it breaks that wait (`__sched_break_idle_poller`).
 	let running = emitSchedMachinesRunning(module, block: block, ids: ids)
 	let aloneOnTheBox = emitCompareWithConstant(module, block: block, value: running, pred: StdCmpPred.eq, against: 1, ids: ids)
 	let settled = emitBin(module, block: block, a: quiet, b: aloneOnTheBox, opcode: StdBinOpcode.bitAnd, ids: ids)
