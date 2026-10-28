@@ -256,23 +256,26 @@ v=1
 
 <!-- test: sched-park.main-wakes-on-time-behind-a-long-service-await -->
 <!-- procs: 1 -->
-**`main`'s TEN-MILLISECOND SLEEP ENDS IN ABOUT TEN MILLISECONDS** although a service it messaged is awaiting a
-reply that takes a second and a half. Nothing the service waits on lies under `main`.
+**`main`'s TEN-MILLISECOND SLEEP ENDS WHILE A SERVICE IT MESSAGED IS STILL AWAITING A REPLY** that only `main`
+can end. The service polls a flag `main` publishes after its sleep, so a wake that waited for the service would
+wait for ever and the runner would report the case TIMED OUT; no elapsed time is compared to a threshold, so a
+slow host cannot turn the order into a race. Nothing the service waits on lies under `main`'s wake.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-
-// Fifty times the sleep, and a third of the service's: a wake that waits for the service reads far above it.
-let lateMs = 500
+typealias ReleaseCell = SharedValue with bool
 
 type Slow
-	var n as Integer
+	let released as ReleaseCell
 
-	static function create() returns Self
-		return Self{n: 0}
+	static function create(released ReleaseCell) returns Self
+		return Self{released: released}
 	end 'create'
 
 	export function get() returns Integer
-		sleep(1500)
+		while not self.released.current() 'untilReleased'
+			sleep(1)
+		end 'untilReleased'
+
 		return 7
 	end 'get'
 end 'Slow'
@@ -280,8 +283,8 @@ end 'Slow'
 type Middle
 	var s as Slow.handle
 
-	static function create() returns Self
-		return Self{s: spawn Slow.create()}
+	static function create(released ReleaseCell) returns Self
+		return Self{s: spawn Slow.create(released.clone())}
 	end 'create'
 
 	export function go() returns Integer
@@ -291,19 +294,19 @@ type Middle
 end 'Middle'
 
 function main() returns ExitCode
-	let m = spawn Middle.create()
+	let released = ReleaseCell.create(false)
+	let m = spawn Middle.create(released.clone())
 	let r = try m.go() otherwise panic("an open mailbox with room takes the send")
-	let start = Clock.nowMs()
 	sleep(10)
-	let tookMs = Clock.elapsedMs(start) as Integer
-	print("late={tookMs >= lateMs}\n")
+	print("woke\n")
+	released.publish(true)
 	let v = await r
 	print("v={v}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-late=false
+woke
 v=7
 ```
 ```exitcode
@@ -312,8 +315,10 @@ v=7
 
 <!-- test: sched-park.a-service-coroutine-runs-while-its-handler-sleeps -->
 <!-- procs: 1 -->
-**A HANDLER'S COROUTINE OVERLAPS THE HANDLER'S OWN WAIT.** `work` starts `flip`, then sleeps; `flip` is
-finished before the sleep ends, so the non-blocking peek reads 1 and the reply is 42 × 10 + 1.
+**A HANDLER'S COROUTINE OVERLAPS THE HANDLER'S OWN WAIT.** `work` starts `flip`, then sleeps until the
+non-blocking peek reads that `flip` has finished, so the reply is 42 × 10 + 1. The sleep has no bound of its own:
+a coroutine that could not run while its handler slept would leave the handler sleeping for ever, and the runner
+would report the case TIMED OUT, so no sleep has to outlast the host.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -331,8 +336,14 @@ type Handler
 
 	export function work() returns Integer
 		let p = async flip(41)
-		sleep(200)
-		let doneDuringSleep = 1 if p.isComplete() else 0
+		var naps = 0 as Integer
+
+		while not p.isComplete() 'untilFlipped'
+			sleep(1)
+			naps = naps + 1
+		end 'untilFlipped'
+
+		let doneDuringSleep = 1 if naps > 0 else 0
 		let v = await p
 		return v * 10 + doneDuringSleep
 	end 'work'

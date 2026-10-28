@@ -615,70 +615,63 @@ retaken=yes
 <!-- test: an-async-child-wait-leaves-the-sleeping-coroutine-running -->
 <!-- procs: 1 -->
 <!-- unsupported-targets: wasm32-wasi -->
-Two `async` coroutines share one strand: a streaming child's `waitWithTimeout` in the first and a `sleep` in the
-second. The wait parks its coroutine rather than holding the machine, so the sleep ends while the child is
-still running and prints ahead of the wait's return. A wait that held the machine would keep the sleeper from
-starting until the deadline killed the child, because a strand's coroutines run on the one machine that holds it
-and a processor handed off from that machine cannot carry them.
+Two `async` coroutines share one strand: a streaming child's `wait` in the first and a `sleep` in the second.
+The child reads its stdin and exits when the sleeper closes it, which the sleeper does after the sleep ends and
+its line is printed. The wait parks its coroutine rather than holding the machine, so the sleep ends while the
+child is still running and prints ahead of the wait's return. A wait that held the machine would keep the sleeper
+from starting, because a strand's coroutines run on the one machine that holds it and a processor handed off from
+that machine cannot carry them, so the child would never be released and the runner would report the case TIMED
+OUT. No deadline races the sleep, so a slow host cannot reorder the two lines.
 ```maxon
-let deadlineMs = 1500
 let napMs = 300
 
-function spawnLongChild() returns StreamingSubprocess throws SubprocessError
+function spawnHeldChild() returns StreamingSubprocess throws SubprocessError
 	var argv = StringArray.create()
 
 	#if os(Windows)
-		argv.push("-n")
-		argv.push("30")
-		argv.push("127.0.0.1")
-		return try StreamingSubprocess.spawn(Executable.name("ping"), arguments: argv)
+		argv.push("/c")
+		argv.push("set")
+		argv.push("/p")
+		argv.push("released=")
+		return try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: argv)
 	#else
-		argv.push("30")
-		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/sleep"), arguments: argv)
+		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/cat"), arguments: argv)
 	#endif
-end 'spawnLongChild'
+end 'spawnHeldChild'
 
-function endedByItsDeadline(child StreamingSubprocess) returns bool
-	_ = try child.waitWithTimeout(deadlineMs) otherwise (e) 'ended'
-		return match e 'why'
-			timeout gives true
-			executableNotFound or
-				spawnFailed or
-				ioFailed or
-				inputTooLarge or
-				endOfStream gives false
-		end 'why'
-	end 'ended'
+function exitedOnRelease(child StreamingSubprocess) returns bool
+	_ = try child.wait() otherwise return false
 
-	return false
-end 'endedByItsDeadline'
+	return true
+end 'exitedOnRelease'
 
 function outlast(child StreamingSubprocess) returns bool
 	print("W: waiting\n")
 
-	let killed = endedByItsDeadline(child)
+	let exited = exitedOnRelease(child)
 
 	print("W: wait returned\n")
 
-	return killed
+	return exited
 end 'outlast'
 
-function nap() returns bool
+function nap(child StreamingSubprocess) returns bool
 	sleep(napMs)
 	print("S: slept\n")
+	child.closeStdin()
 
 	return true
 end 'nap'
 
 function main() returns ExitCode
-	var child = try spawnLongChild() otherwise return 1
+	var child = try spawnHeldChild() otherwise return 1
 	let watcher = async outlast(child)
-	let napper = async nap()
+	let napper = async nap(child)
 	let slept = await napper
-	let killed = await watcher
+	let exited = await watcher
 
 	child.release()
-	print("slept={slept} killed={killed}\n")
+	print("slept={slept} exited={exited}\n")
 
 	return 0
 end 'main'
@@ -687,7 +680,7 @@ end 'main'
 W: waiting
 S: slept
 W: wait returned
-slept=true killed=true
+slept=true exited=true
 ```
 ```exitcode
 0
@@ -696,44 +689,41 @@ slept=true killed=true
 <!-- test: a-child-wait-parks-instead-of-holding-a-processor -->
 <!-- procs: 1 -->
 <!-- unsupported-targets: wasm32-wasi -->
-A streaming child's `waitWithTimeout` parks its green thread until the child exits or the deadline kills it.
-With one processor, the sentinel's sleep ends while the waiter is parked and prints ahead of the wait's
-return, and `blocked=yes` says the wait really lasted until the deadline rather than returning early.
+A streaming child's `wait` parks its green thread until the child exits. The child reads its stdin and exits
+when `releaseOnReply` closes it, which that coroutine does only once the sentinel has answered, so the sentinel
+must run while the waiter is parked and its line prints ahead of the wait's return. With one processor a wait
+that held it would leave the sentinel unable to run, the child never released, and the runner would report the
+case TIMED OUT. No deadline races the sentinel, so a slow host cannot reorder the two lines.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias SentinelReply = Promise with Integer
 
-let deadlineMs = 1000
-let blockedThresholdMs = 500
-let sentinelSleepMs = 200
-
-function spawnLongChild() returns StreamingSubprocess throws SubprocessError
+function spawnHeldChild() returns StreamingSubprocess throws SubprocessError
 	var argv = StringArray.create()
 
 	#if os(Windows)
-		argv.push("-n")
-		argv.push("30")
-		argv.push("127.0.0.1")
-		return try StreamingSubprocess.spawn(Executable.name("ping"), arguments: argv)
+		argv.push("/c")
+		argv.push("set")
+		argv.push("/p")
+		argv.push("released=")
+		return try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: argv)
 	#else
-		argv.push("30")
-		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/sleep"), arguments: argv)
+		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/cat"), arguments: argv)
 	#endif
-end 'spawnLongChild'
+end 'spawnHeldChild'
 
-function endedByItsDeadline(child StreamingSubprocess) returns bool
-	_ = try child.waitWithTimeout(deadlineMs) otherwise (e) 'ended'
-		return match e 'why'
-			timeout gives true
-			executableNotFound or
-				spawnFailed or
-				ioFailed or
-				inputTooLarge or
-				endOfStream gives false
-		end 'why'
-	end 'ended'
+function exitedOnRelease(child StreamingSubprocess) returns bool
+	_ = try child.wait() otherwise return false
 
-	return false
-end 'endedByItsDeadline'
+	return true
+end 'exitedOnRelease'
+
+function releaseOnReply(child StreamingSubprocess, reply SentinelReply) returns Integer
+	let tail = await reply
+	child.closeStdin()
+
+	return tail
+end 'releaseOnReply'
 
 type Waiter
 	var id as Integer
@@ -743,26 +733,19 @@ type Waiter
 	end 'create'
 
 	export function outlast(sentinel Sentinel.handle) returns Integer
-		var child = try spawnLongChild() otherwise 'noChild'
+		var child = try spawnHeldChild() otherwise 'noChild'
 			return 0
 		end 'noChild'
 
 		print("W: waiting\n")
 		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
-		let start = Clock.nowMs()
-		let killed = endedByItsDeadline(child)
-		let waitedMs = Clock.elapsedMs(start)
+		let releaser = async releaseOnReply(child, reply: tailReply)
+		let exited = exitedOnRelease(child)
 		child.release()
 		print("W: wait returned\n")
 
-		let tail = await tailReply
-		var blocked = "no"
-
-		if waitedMs >= blockedThresholdMs 'blocked'
-			blocked = "yes"
-		end 'blocked'
-
-		print("done sibling={tail} killed={killed} blocked={blocked}\n")
+		let tail = await releaser
+		print("done sibling={tail} exited={exited}\n")
 		return 1
 	end 'outlast'
 end 'Waiter'
@@ -775,7 +758,6 @@ type Sentinel
 	end 'create'
 
 	export function ping() returns Integer
-		sleep(sentinelSleepMs)
 		print("S: sentinel ran\n")
 		return 1
 	end 'ping'
@@ -798,7 +780,7 @@ end 'main'
 W: waiting
 S: sentinel ran
 W: wait returned
-done sibling=1 killed=true blocked=yes
+done sibling=1 exited=true
 ```
 ```exitcode
 0

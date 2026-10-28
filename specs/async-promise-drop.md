@@ -175,13 +175,14 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-timer-drop-cancel -->
-A promise PARKED on a timer is dropped at scope exit. `sleeper` sleeps 200 ms; `fast` completes
+A promise PARKED on a timer is dropped at scope exit. `sleeper` sleeps without end (`ForeverMs`), so only the drop
+can end it and no host stall can run the deadline out before the peek; `fast` completes
 immediately. `await q` parks `main`, and its strand runs its other members FIFO: `sleeper` runs first and parks
 on its timer; `fast` then runs to completion, so `await q` returns 42 while `sleeper` is still parked — the peek
 adds `0`, where a completed thread would add `1`. Scope exit drops `s` — the `waiting` arm removes it from the
 timer store and readies it, so its `sleep` ends early, it runs its body out and its runner reclaims it — with NO
-hang (the 200 ms deadline is never waited on) and NO use-after-free (no timer fire touches the reclaimed
-thread). The live count balances to zero.
+hang (a drop that left the deadline in the store would wait for ever, and the runner would report the case TIMED
+OUT) and NO use-after-free (no timer fire touches the reclaimed thread). The live count balances to zero.
 
 ⚠ **`s` MUST BE BOUND.** `_ = async sleeper()` discards the promise at its own statement, before `main` parks:
 `sleeper` never runs, never arms its timer, and the drop takes the QUEUED arm — a program that exercises
@@ -189,7 +190,7 @@ nothing the `waiting` arm does, and still exits 42.
 ```maxon
 
 function sleeper() returns Integer
-	sleep(200)
+	sleep(ForeverMs)
 	return 99
 end 'sleeper'
 
@@ -213,14 +214,15 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-promise-drop.parked-timer-drop-through-a-rearm -->
 The same deregistration reached through the OTHER door that drops a promise: a RE-ARM rather than scope exit.
-`await q` parks `main`, so the strand runs `sleeper` up to its `sleep(200)` and parks it on the timer; only
+`await q` parks `main`, so the strand runs `sleeper` up to its `sleep(ForeverMs)` and parks it on the timer; only
 THEN does `p = async fast()` renounce it. The `waiting` arm removes it from the store and readies it, so it
-resumes on the stack it is suspended on, runs to completion and is reclaimed by its runner — with no hang (the
-200 ms deadline is never waited on) and no use-after-free.
+resumes on the stack it is suspended on, runs to completion and is reclaimed by its runner — with no hang (a
+sleep without end is ended only by the drop, so a drop that left the deadline in the store would be reported as
+TIMED OUT) and no use-after-free.
 ```maxon
 
 function sleeper() returns Integer
-	sleep(200)
+	sleep(ForeverMs)
 	return 99
 end 'sleeper'
 
@@ -280,12 +282,14 @@ typealias Integer = int(i64.min to i64.max)
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The CHILD twin of the parked-timer case, and the same program one op at a time. `slowProc` spawns a child
-that runs for ~2 s and parks on the poll source that child became; `fast` completes immediately, so `await q`
-returns 42 while `slowProc` is still parked on its child — the `isComplete()` peek adds `0`, which is that
-thread saying so. Scope exit drops `s` — the `waiting` arm takes it off that source and RENOUNCES it, so the
-thread resumes, gives the source back, closes the child's handle (abandon the WAIT, do not kill the child) and
-unwinds its own frame. The abandoned child runs to completion independently; the program exits promptly with 42
-and the live count balances to zero.
+that exits only once a flag file exists and parks on the poll source that child became; `fast` completes
+immediately, so `await q` returns 42 while `slowProc` is still parked on its child — the `isComplete()` peek adds
+`0`, which is that thread saying so, and the child cannot have exited however slow the host is, because `main`
+creates the flag only after `parkAndDrop` has returned and dropped `s`. Scope exit of `parkAndDrop` drops `s` —
+the `waiting` arm takes it off that source and RENOUNCES it, so the thread resumes, gives the source back,
+closes the child's handle (abandon the WAIT, do not kill the child) and unwinds its own frame. The abandoned
+child runs to completion independently, deleting the flag as it leaves; the program exits promptly with 42 and
+the live count balances to zero.
 
 ⚠ **`s` MUST BE BOUND.** `_ = async slowProc()` discards the promise at its own statement, before `main`
 ever parks: `__gt_spawn` → `__gt_ready` → `__gt_promise_drop` run back to back, so `slowProc` never runs,
@@ -297,8 +301,20 @@ names. **That spelling answers 42 by testing nothing.**
 `posix-parked-subprocess-drop-cancel` is this case's sibling on those lanes.
 ```maxon
 
+let flagName = "async-promise-drop-subprocess-drop.flag"
+
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slowProc() returns Integer
-	return try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
+	return try __Builtins.runProcess("cmd /c for /l %i in (1,1,100000) do @if exist {flagName} (del {flagName} & exit 0) else (ping -n 2 127.0.0.1 >nul)") otherwise 99
 end 'slowProc'
 
 function fast() returns Integer
@@ -306,12 +322,19 @@ function fast() returns Integer
 	return 42
 end 'fast'
 
-function main() returns ExitCode
+function parkAndDrop() returns Integer
 	let s = async slowProc()
 	let q = async fast()
 	let r = await q
 	let done = 1 if s.isComplete() else 0
-	return (r + done) as ExitCode
+	return r + done
+end 'parkAndDrop'
+
+function main() returns ExitCode
+	clearFlag()
+	let code = parkAndDrop()
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -322,13 +345,26 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-promise-drop.posix-parked-subprocess-drop-cancel -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
-`parked-subprocess-drop-cancel` on the POSIX lanes, where `/bin/sh -c "sleep 2"` is a child that really does
-outlive the `await`. The road is the same one: a child park is a poll source here too, so the `waiting` arm
-renounces rather than freeing the stack under a suspended thread.
+`parked-subprocess-drop-cancel` on the POSIX lanes, where the child is a `/bin/sh -c` loop that exits only once a
+flag file exists, and so really does outlive the `await` however slow the host is: `main` creates the flag only
+after `parkAndDrop` has returned and dropped `s`. The road is the same one: a child park is a poll source here
+too, so the `waiting` arm renounces rather than freeing the stack under a suspended thread.
 ```maxon
 
+let flagName = "async-promise-drop-posix-subprocess-drop.flag"
+
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slowProc() returns Integer
-	return try __Builtins.runProcess("sleep 2") otherwise 99
+	return try __Builtins.runProcess("while [ ! -f {flagName} ]; do sleep 0.05; done; rm -f {flagName}") otherwise 99
 end 'slowProc'
 
 function fast() returns Integer
@@ -336,12 +372,19 @@ function fast() returns Integer
 	return 42
 end 'fast'
 
-function main() returns ExitCode
+function parkAndDrop() returns Integer
 	let s = async slowProc()
 	let q = async fast()
 	let r = await q
 	let done = 1 if s.isComplete() else 0
-	return (r + done) as ExitCode
+	return r + done
+end 'parkAndDrop'
+
+function main() returns ExitCode
+	clearFlag()
+	let code = parkAndDrop()
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -353,8 +396,9 @@ typealias Integer = int(i64.min to i64.max)
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⭐ **THE DROPPED COROUTINE UNWINDS ITS OWN FRAME, SO THE HEAP ITS LOCALS OWN GOES BACK.** `slowProc` holds
-one interpolated `String` across a park on its child, and `main` drops the promise while it is still parked.
-Renouncing resumes the thread on the source it was waiting on and lets it unwind, which releases that
+one interpolated `String` across a park on its child, and `parkAndDrop` drops the promise while it is still
+parked. The child exits only once a flag file exists, which `main` creates after the drop, so it is still running
+at the drop however slow the host is. Renouncing resumes the thread on the source it was waiting on and lets it unwind, which releases that
 `String`; freeing the parked stack outright strands it, and the leak gate reports that as **exit 101** —
 not a wrong answer, which is why the symptom is an exit code no arithmetic in the program can produce.
 
@@ -364,9 +408,21 @@ answer 42 alike — there is nothing on that stack to strand.
 `posix-parked-subprocess-drop-reclaims-the-frames-heap` is this case on the POSIX lane.
 ```maxon
 
+let flagName = "async-promise-drop-subprocess-heap.flag"
+
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slowProc(tag Integer) returns Integer
 	let held = "held-{tag}"
-	let code = try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
+	let code = try __Builtins.runProcess("cmd /c for /l %i in (1,1,100000) do @if exist {flagName} (del {flagName} & exit 0) else (ping -n 2 127.0.0.1 >nul)") otherwise 99
 	return (code as Integer) + (held.byteLength() as Integer)
 end 'slowProc'
 
@@ -375,12 +431,19 @@ function fast() returns Integer
 	return 42
 end 'fast'
 
-function main() returns ExitCode
+function parkAndDrop() returns Integer
 	let p = async slowProc(1)
 	let q = async fast()
 	let r = await q
 	let done = 1 if p.isComplete() else 0
-	return (r + done) as ExitCode
+	return r + done
+end 'parkAndDrop'
+
+function main() returns ExitCode
+	clearFlag()
+	let code = parkAndDrop()
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -391,8 +454,8 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-promise-drop.posix-parked-subprocess-drop-reclaims-the-frames-heap -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
-The same shape on the POSIX lane, where `/bin/sh -c "sleep 2"` is a child that really does outlive the
-`await`. ⚠ Its sibling above spawns through `cmd /c`, which on this lane fails to exec and returns before
+The same shape on the POSIX lane, where the child is a `/bin/sh -c` loop that exits only once a flag file
+exists, which `main` creates after the drop, so it really does outlive the `await`. ⚠ Its sibling above spawns through `cmd /c`, which on this lane fails to exec and returns before
 anything can park — so this is the case that actually holds a coroutine parked on a child here.
 
 A child park is a poll source on this lane too, so the `waiting` arm renounces the thread and it unwinds its
@@ -400,9 +463,21 @@ own frame, releasing the interpolated `String`. A drop that freed the stack the 
 strand that `String`, and the leak gate would report **exit 101**.
 ```maxon
 
+let flagName = "async-promise-drop-posix-subprocess-heap.flag"
+
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slowProc(tag Integer) returns Integer
 	let held = "held-{tag}"
-	let code = try __Builtins.runProcess("sleep 2") otherwise 99
+	let code = try __Builtins.runProcess("while [ ! -f {flagName} ]; do sleep 0.05; done; rm -f {flagName}") otherwise 99
 	return (code as Integer) + (held.byteLength() as Integer)
 end 'slowProc'
 
@@ -411,12 +486,19 @@ function fast() returns Integer
 	return 42
 end 'fast'
 
-function main() returns ExitCode
+function parkAndDrop() returns Integer
 	let p = async slowProc(1)
 	let q = async fast()
 	let r = await q
 	let done = 1 if p.isComplete() else 0
-	return (r + done) as ExitCode
+	return r + done
+end 'parkAndDrop'
+
+function main() returns ExitCode
+	clearFlag()
+	let code = parkAndDrop()
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -428,12 +510,32 @@ typealias Integer = int(i64.min to i64.max)
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, wasm32-wasi -->
 A dropped promise abandons the child's wait, and the child must still be reaped when it exits. Three coroutines each
-park on a `sleep 1` child and are dropped while it runs; the program then sleeps past every exit and asks `ps` for the
-zombies among its own children.
+park on a child that exits only once a flag file exists, and are dropped while it runs; the program then creates the
+flag and asks `ps` for the children it still has, a zombie among them, until there are none. The wait has no bound: a
+child that is never reaped stays a zombie, and the runner reports the case TIMED OUT. No sleep has to outlast the
+exits.
+
+⚠ **THE COUNT IS OF CHILDREN, NOT ONLY OF ZOMBIES, BECAUSE A CHILD THAT HAS NOT EXITED YET IS NOT A ZOMBIE
+YET.** A count of zombies alone reads `0` just after the flag is created, when no child has left, and says nothing
+about the reaping. Counting every child that is a zombie or still runs the loop reads `0` only once all three have
+exited and been reaped. The pattern `[w]hile` matches the children's command line and not the checker's own, whose
+command line spells it with brackets.
 ```maxon
 
+let flagName = "async-promise-drop-posix-reaped.flag"
+
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slowProc() returns Integer
-	return try __Builtins.runProcess("sleep 1") otherwise 99
+	return try __Builtins.runProcess("while [ ! -f {flagName} ]; do sleep 0.05; done") otherwise 99
 end 'slowProc'
 
 function fast() returns Integer
@@ -441,17 +543,19 @@ function fast() returns Integer
 	return 42
 end 'fast'
 
-function zombieChildren() returns String
+function psCount(condition String) returns String
 	let shell = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a valid path"))
 	var argv = StringArray.create()
 	argv.push("-c")
-	argv.push("ps -A -o ppid=,stat= | awk -v me=$PPID '$1 == me && $2 ~ /^Z/ \{ n++ \} END \{ print n + 0 \}'")
+	argv.push("ps -A -o ppid=,stat=,args= | awk -v me=$PPID '$1 == me && ({condition}) \{ n++ \} END \{ print n + 0 \}'")
 	let result = try Subprocess.run(shell, arguments: argv) otherwise panic("ps could not run")
 	return result.stdout
-end 'zombieChildren'
+end 'psCount'
 
 function main() returns ExitCode
 	var early = 0 as Integer
+
+	clearFlag()
 
 	for _ in 0 upto 3 'drops'
 		let s = async slowProc()
@@ -463,9 +567,15 @@ function main() returns ExitCode
 		end 'finishedEarly'
 	end 'drops'
 
-	sleep(2500)
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+
+	while psCount("$2 ~ /^Z/ || /[w]hile/") != "0\n" 'untilReaped'
+		sleep(20)
+	end 'untilReaped'
+
+	clearFlag()
 	print("early={early}\n")
-	print("zombies={zombieChildren()}")
+	print("zombies={psCount("$2 ~ /^Z/")}")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -482,22 +592,26 @@ zombies=0
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, wasm32-wasi -->
 Sixty children each live about ten milliseconds, and each is cancelled after a different delay, so the cancellations land
-before, during and after the exits. Whichever side of the exit a cancel falls on, the child is reaped, so no zombie is left
-once the last of them has had time to finish.
+before, during and after the exits. Whichever side of the exit a cancel falls on, the child is reaped, so the program asks
+`ps` for the children it still has, a zombie among them, until there are none. The wait has no bound: a child that is never
+reaped stays a zombie, and the runner reports the case TIMED OUT. No sleep has to outlast the exits, and the per-lap delay
+is the experiment's variable and not a margin, since the claim holds on whichever side of an exit a cancel lands. The
+pattern `[s]leep` matches the children's command line and not the checker's own, whose command line spells it with
+brackets.
 ```maxon
 
 function shortProc() returns Integer
 	return try __Builtins.runProcess("sleep 0.01") otherwise 99
 end 'shortProc'
 
-function zombieChildren() returns String
+function psCount(condition String) returns String
 	let shell = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a valid path"))
 	var argv = StringArray.create()
 	argv.push("-c")
-	argv.push("ps -A -o ppid=,stat= | awk -v me=$PPID '$1 == me && $2 ~ /^Z/ \{ n++ \} END \{ print n + 0 \}'")
+	argv.push("ps -A -o ppid=,stat=,args= | awk -v me=$PPID '$1 == me && ({condition}) \{ n++ \} END \{ print n + 0 \}'")
 	let result = try Subprocess.run(shell, arguments: argv) otherwise panic("ps could not run")
 	return result.stdout
-end 'zombieChildren'
+end 'psCount'
 
 function main() returns ExitCode
 	for lap in 0 upto 60 'cancels'
@@ -506,8 +620,11 @@ function main() returns ExitCode
 		p.cancel()
 	end 'cancels'
 
-	sleep(1500)
-	print("zombies={zombieChildren()}")
+	while psCount("$2 ~ /^Z/ || /[s]leep 0.01/") != "0\n" 'untilReaped'
+		sleep(20)
+	end 'untilReaped'
+
+	print("zombies={psCount("$2 ~ /^Z/")}")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -578,10 +695,15 @@ strand runner and never reaches the exit test at all. Dropping from `dropper` re
 WORKER's ring while the main machine is only being woken, so the vulnerable road is the one taken every
 time. Dropping from `main` instead reads green roughly nineteen runs in twenty, which is a gate that cannot
 be trusted rather than a gate that cannot fail.
+
+⚠ **`victim` SLEEPS WITHOUT END, SO THE 200 MS IS A LOWER BOUND AND NOTHING ELSE.** `dropper` parks on its
+timer, and at one processor the strand then runs `victim` to its own park before any timer is looked at, so
+`victim` is parked in its sleep whenever `dropper` wakes. Only the drop can end that sleep, so no stall of the
+host can run its deadline out first, and a slow host only wakes `dropper` later.
 ```maxon
 function victim(tag Integer) returns Integer
 	let held = "held-{tag}"
-	sleep(5000)
+	sleep(ForeverMs)
 	_ = spawnReadLine("cmd /c echo bye")
 	return held.byteLength()
 end 'victim'

@@ -213,13 +213,14 @@ the heap (`Scheduler.yield()` puts them all there before the bracket opens), the
 line by line inside it. Every readiness in that loop, and the child's exit, is a turned-away cancel over a
 NON-EMPTY heap, so the guard is under load rather than under a heap that is trivially short. The twenty
 lines are one length each (`line-a\n`, 7 bytes), so the 140 in the exit code cannot be reached by a short
-read, and the sleepers are awaited afterwards — their own deadlines fire and are popped from the root,
-which is not a scan.
+read. The sleepers sleep without end (`ForeverMs`), so no stall of the host can run a deadline out and empty the
+heap before the window closes; they are never awaited, and their promises are dropped with the array after the
+reading, each drop being a cancel of its own.
 
 ⚠ **`cancelWalked=true` IS THE CONTROL, AND WITHOUT IT `scanned=0` WOULD BE A GATE THAT CANNOT FAIL.** A
 counter that never moved at all would satisfy the first witness perfectly. So the same program then performs
 the ONE cancel in it that really does have an entry to find: `dropAParkedSleeper` drops a promise parked on
-a 2000 ms deadline, in `parked-timer-drop-cancel`'s exact shape — bound to a name, and `await`ing a `fast`
+an unending deadline, in `parked-timer-drop-cancel`'s exact shape — bound to a name, and `await`ing a `fast`
 sibling first so the victim has run and armed its timer (the `isComplete()` peek adds `0`, which is that
 thread saying it is still parked). That cancel walks a heap of nine, so the counter is live, and the `0`
 above is a measurement rather than a silence.
@@ -228,8 +229,11 @@ above is a measurement rather than a silence.
 shape — with a guarded cancel the delta is 0 for any heap length and any number of wakes, so what it
 catches is undeadlined traffic routed back through the scan, at a cost of one heap length per wake.
 ```maxon
+typealias SleeperPromise = Promise with Integer
+typealias SleeperPromiseArray = Array with SleeperPromise
+
 function sleeper() returns Integer
-	sleep(2000)
+	sleep(ForeverMs)
 	return 1
 end 'sleeper'
 
@@ -246,14 +250,12 @@ function dropAParkedSleeper() returns Integer
 end 'dropAParkedSleeper'
 
 function main() returns ExitCode
-	let s1 = async sleeper()
-	let s2 = async sleeper()
-	let s3 = async sleeper()
-	let s4 = async sleeper()
-	let s5 = async sleeper()
-	let s6 = async sleeper()
-	let s7 = async sleeper()
-	let s8 = async sleeper()
+	var sleepers = SleeperPromiseArray.create()
+
+	for _ in 0 upto 8 'parkEach'
+		sleepers.push(async sleeper())
+	end 'parkEach'
+
 	Scheduler.yield()
 
 	let h = subpSpawn("for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done")
@@ -272,16 +274,7 @@ function main() returns ExitCode
 	_ = dropAParkedSleeper()
 	let walked = Scheduler.counters().timerScanSteps - beforeCancel
 
-	_ = await s1
-	_ = await s2
-	_ = await s3
-	_ = await s4
-	_ = await s5
-	_ = await s6
-	_ = await s7
-	_ = await s8
-
-	print("scanned={scanned} cancelWalked={walked > 0}\n")
+	print("scanned={scanned} cancelWalked={walked > 0} parked={sleepers.count()}\n")
 	return total as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -290,7 +283,7 @@ typealias Integer = int(i64.min to i64.max)
 140
 ```
 ```stdout
-scanned=0 cancelWalked=true
+scanned=0 cancelWalked=true parked=8
 ```
 
 <!-- test: streaming-subprocess.eof-latched -->

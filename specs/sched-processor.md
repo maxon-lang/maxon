@@ -312,8 +312,9 @@ withinIdleBound=true
 **THE COUNT FOLLOWS THE PROCESSORS BACK TO THE IDLE LIST.** Four services each do a share of work on
 whatever machines the scheduler starts for them, and every reply is awaited. Once the last worker has found
 nothing to run it releases its processor, so the count settles back at every processor but the main thread's
-— an agreement with `Scheduler.processorCount()`, for the case above's reason. The settling is waited for on a
-bounded budget rather than sampled once: a worker that has just finished a handler is still searching for a
+— an agreement with `Scheduler.processorCount()`, for the case above's reason. The settling is waited for without a
+bound rather than sampled once, so a processor that never comes back is a TIMEOUT and no budget has to outlast the
+host: a worker that has just finished a handler is still searching for a
 moment before it parks, and a single read taken in that moment would report a machine that is about to be idle
 as busy.
 
@@ -329,7 +330,6 @@ typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let shares = 4
-let settleMs = 3000
 
 type Share
 	var id as Integer
@@ -371,9 +371,8 @@ function main() returns ExitCode
 		n = n + 1
 	end 'collect'
 	let everyButMain = (Scheduler.processorCount() as Integer) - 1
-	let settleStart = Clock.nowMs()
 	var settled = false
-	while not settled and (Clock.elapsedMs(settleStart) as Integer) < settleMs 'settle'
+	while not settled 'settle'
 		settled = (Scheduler.counters().idleProcessors as Integer) == everyButMain
 	end 'settle'
 	print("total={total} settled={settled}\n")
@@ -393,18 +392,16 @@ total=2400012 settled=true
 runs again. The machine its wake starts searches and parks within a moment, so polling the count without
 parking again reads every processor but the main thread's idle. Of the two sleeps, the first wake creates that
 machine and the second wakes it off the idle list. A processor either one took and never gave back would leave
-the count short for as long as the poll runs.
+the count short for as long as the poll runs, which has no bound, so the runner reports that case TIMED OUT.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-let settleMs = 3000
 let parkMs = 10
 
 function settledAfterSleep(everyButMain Integer) returns bool
 	sleep(parkMs)
-	let settleStart = Clock.nowMs()
 	var settled = false
-	while not settled and (Clock.elapsedMs(settleStart) as Integer) < settleMs 'settle'
+	while not settled 'settle'
 		settled = (Scheduler.counters().idleProcessors as Integer) == everyButMain
 	end 'settle'
 	return settled

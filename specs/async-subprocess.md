@@ -390,16 +390,30 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-subprocess.interleave-with-sleep -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-A slow child (a ~1 s `ping` delay) and a short (50 ms) sleeper run concurrently. The sleeper's timer fires WHILE
-the child is still running, so the sleeper resumes FIRST — proving the process wait YIELDS (it is bounded by the
-earliest timer, not a blocking wait on the child). Each records its completion order into a global
-(`order = order * 10 + tag`), so `21` proves the sleeper (tag 2) completed before the child thread (tag 1). A wait
-that blocked the single thread on the child would instead produce `12`.
+A slow child and a short (50 ms) sleeper run concurrently. The child exits only once the sleeper has created a
+flag file, which it does after its timer fires, so the sleeper's timer fires WHILE the child is still running and
+the sleeper resumes FIRST — proving the process wait YIELDS (it is bounded by the earliest timer, not a blocking
+wait on the child). Each records its completion order into a global (`order = order * 10 + tag`), so `21` proves
+the sleeper (tag 2) completed before the child thread (tag 1). A wait that blocked the single thread on the child
+would never let the sleeper run, so the child would never see the flag and the runner would report the case TIMED
+OUT; no elapsed time is compared to a threshold, so a slow host cannot reorder the two.
 ```maxon
+let flagName = "async-subprocess-interleave.flag"
+
 var order = 0 as Integer
 
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slow() returns Integer
-	_ = try __Builtins.runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
+	_ = try __Builtins.runProcess("cmd /c for /l %i in (1,1,100000) do @if exist {flagName} (exit 0) else (ping -n 2 127.0.0.1 >nul)") otherwise 99
 	order = order * 10 + 1
 	return 1
 end 'slow'
@@ -407,14 +421,19 @@ end 'slow'
 function fast() returns Integer
 	sleep(50)
 	order = order * 10 + 2
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
 	return 2
 end 'fast'
 
 function main() returns ExitCode
+	clearFlag()
+
 	let p1 = async slow()
 	let p2 = async fast()
 	_ = await p1
 	_ = await p2
+
+	clearFlag()
 	return order as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -426,11 +445,13 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-subprocess.posix-interleave-with-sleep -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
-⭐ **THE CASE THAT PROVES THE PROCESS WAIT YIELDS ON THIS LANE.** A slow child (a one-second `sleep`) and a
-short 50 ms sleeper run concurrently. The sleeper's timer fires WHILE the child is still running, so the
-sleeper resumes FIRST — the wait is bounded by the earliest timer rather than blocking the single M on the
-child. Each records its completion order into a global (`order = order * 10 + tag`), so `21` proves the
-sleeper (tag 2) completed before the child thread (tag 1); a wait that blocked would produce `12`.
+⭐ **THE CASE THAT PROVES THE PROCESS WAIT YIELDS ON THIS LANE.** A slow child and a short 50 ms sleeper run
+concurrently. The child exits only once the sleeper has created a flag file, which it does after its timer
+fires, so the sleeper's timer fires WHILE the child is still running and the sleeper resumes FIRST — the wait is
+bounded by the earliest timer rather than blocking the single M on the child. Each records its completion order
+into a global (`order = order * 10 + tag`), so `21` proves the sleeper (tag 2) completed before the child thread
+(tag 1); a wait that blocked would never let the sleeper run, and the runner would report the case TIMED OUT. No
+elapsed time is compared to a threshold, so a slow host cannot reorder the two.
 
 ⭐ It is worth having here rather than being taken on trust from Windows, because the very same measurement
 on the STREAMING reader answers `12` on this lane: the process wait parks and a pipe read does not
@@ -438,10 +459,22 @@ on the STREAMING reader answers `12` on this lane: the process wait parks and a 
 comes from). So on arm64-macOS this case and its streaming counterpart genuinely disagree, and only a
 measurement can say which way each falls.
 ```maxon
+let flagName = "async-subprocess-interleave.flag"
+
 var order = 0 as Integer
 
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slow() returns Integer
-	_ = try __Builtins.runProcess("sleep 1") otherwise 99
+	_ = try __Builtins.runProcess("while [ ! -f {flagName} ]; do sleep 0.05; done") otherwise 99
 	order = order * 10 + 1
 	return 1
 end 'slow'
@@ -449,14 +482,19 @@ end 'slow'
 function fast() returns Integer
 	sleep(50)
 	order = order * 10 + 2
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
 	return 2
 end 'fast'
 
 function main() returns ExitCode
+	clearFlag()
+
 	let p1 = async slow()
 	let p2 = async fast()
 	_ = await p1
 	_ = await p2
+
+	clearFlag()
 	return order as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -478,6 +516,15 @@ second, so the bound is a small constant and anything near it is the cap still t
 park was on the POLLER at all: a child parked on a store nothing blocks on steps that counter zero times,
 however promptly it is reaped.
 
+⚠ **THE SECOND IS THE CHILD'S AND NOT A RACE.** The child exits only once a flag file exists, and `release`
+creates it a full second after the netpoll count has moved past the mark `main` took before the spawn, so the
+child is parked on the poller for at least that second however slow the host is. The wait for the count has no
+bound: a child wait that never parks on the poller leaves `release` waiting and the runner reports the case TIMED
+OUT. `release` waits by yielding and not by sleeping, because a sleep in that window is a timer wake of its own
+inside the span `quiet=` counts. The span ends at the instant `release` reads `parkWakes`, just before it writes
+the flag: the write and the child's exit are kernel work of their own, and what `quiet=` bounds is the second
+the child was parked.
+
 ⚠ **NEITHER FACT STANDS ALONE.** A quiet second is satisfied by a machine that simply blocked on the
 child and polled nothing; a poller park is satisfied by a poller that parks and then wakes on a period
 anyway. Together they say the wait is ON the poller AND is not bounded by a period of its own.
@@ -494,18 +541,53 @@ let quietWakes = 8
 // A child wait is a park on the poller — at least the one this program makes.
 let pollerParks = 1
 
+let flagName = "async-subprocess-parked-child.flag"
+
+let childRunsMs = 1000
+
+var parkedFrom = 0 as SchedulerEventCount
+
+var wakesAtRelease = 0 as SchedulerEventCount
+
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slow() returns Integer
-	return try __Builtins.runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
+	return try __Builtins.runProcess("cmd /c for /l %i in (1,1,100000) do @if exist {flagName} (exit 0) else (ping -n 2 127.0.0.1 >nul)") otherwise 99
 end 'slow'
 
+function release() returns Integer
+	while Scheduler.counters().netpollBlocks < parkedFrom 'untilChildParked'
+		Scheduler.yield()
+	end 'untilChildParked'
+
+	sleep(childRunsMs)
+	wakesAtRelease = Scheduler.counters().parkWakes
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+	return 0
+end 'release'
+
 function main() returns ExitCode
+	clearFlag()
 	sleep(1)
 	let beforeWakes = Scheduler.counters().parkWakes
 	let beforeParks = Scheduler.counters().netpollBlocks
+	parkedFrom = beforeParks + 1
 	let p = async slow()
+	let r = async release()
 	_ = await p
-	let wakes = Scheduler.counters().parkWakes - beforeWakes
+	_ = await r
+	let wakes = wakesAtRelease - beforeWakes
 	let parks = Scheduler.counters().netpollBlocks - beforeParks
+
+	clearFlag()
 	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
 	return 0
 end 'main'
@@ -525,7 +607,9 @@ quiet=true onpoller=true
 `a-parked-child-costs-no-poll`'s subject on the POSIX lane, where the child joins the poller as a source of
 its own rather than as a handle in a wait array. The same two facts: the second the child runs costs the
 poller a handful of wait returns rather than one per millisecond, and the awaiting green thread is counted
-as suspended ON the poller.
+as suspended ON the poller. The second is the child's and not a race, for the reason that case gives: the
+child exits only once a flag file exists, and `release` creates it a full second after the netpoll count has
+moved past the mark `main` took before the spawn.
 
 ⚠ **THE EXIT CODE IS FIXED AT 0 ON PURPOSE.** What a child answers is `posix-exit-code`'s subject; this
 case is about where its waiter sat, so the two printed facts carry the whole claim and the exit code
@@ -538,18 +622,53 @@ let quietWakes = 8
 // A child wait is a park on the poller — at least the one this program makes.
 let pollerParks = 1
 
+let flagName = "async-subprocess-parked-child.flag"
+
+let childRunsMs = 1000
+
+var parkedFrom = 0 as SchedulerEventCount
+
+var wakesAtRelease = 0 as SchedulerEventCount
+
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slow() returns Integer
-	return try __Builtins.runProcess("sleep 1") otherwise 99
+	return try __Builtins.runProcess("while [ ! -f {flagName} ]; do sleep 0.05; done") otherwise 99
 end 'slow'
 
+function release() returns Integer
+	while Scheduler.counters().netpollBlocks < parkedFrom 'untilChildParked'
+		Scheduler.yield()
+	end 'untilChildParked'
+
+	sleep(childRunsMs)
+	wakesAtRelease = Scheduler.counters().parkWakes
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+	return 0
+end 'release'
+
 function main() returns ExitCode
+	clearFlag()
 	sleep(1)
 	let beforeWakes = Scheduler.counters().parkWakes
 	let beforeParks = Scheduler.counters().netpollBlocks
+	parkedFrom = beforeParks + 1
 	let p = async slow()
+	let r = async release()
 	_ = await p
-	let wakes = Scheduler.counters().parkWakes - beforeWakes
+	_ = await r
+	let wakes = wakesAtRelease - beforeWakes
 	let parks = Scheduler.counters().netpollBlocks - beforeParks
+
+	clearFlag()
 	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
 	return 0
 end 'main'

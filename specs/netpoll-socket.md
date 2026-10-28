@@ -765,6 +765,14 @@ the runner reports it as TIMED OUT rather than as a mismatch. The echo is asked 
 a read on a HEALTHY socket has an answer waiting for it, which is what makes "never returned" mean the strand
 and not the peer.
 
+⚠ **THE OWNER CLOSES ONLY WHEN THE READER IS COUNTED PARKED, AND THE PEER'S OWN PARK IS COUNTED OUT FIRST.** The
+peer also commits to the poller, in its `recv` of this same connection, so a count that moved could be the
+peer's. `echoUntilAnswered` publishes `peerFrom` in the statement before that `recv`, and the owner waits until the
+netpoll count has reached it; only then does the owner start the reader, whose `readNothing` publishes
+`parkedFrom` before its own `recv`, and the owner waits for that count too. Nothing else is alive to commit between
+the two waits. Neither wait has a bound, so a park that never arrives is a TIMEOUT and no sleep has to outlast the
+host.
+
 ⚠⚠ **IT IS A GUARD OVER AN INVARIANT, NOT A REPRODUCTION.** On one strand the readied thread runs at the
 owner’s very next yield, which is inside the second `connect` — before that socket publishes anything — so
 this ordering does not reach the clobber even with the generation test removed, and the case passes either
@@ -781,9 +789,22 @@ lane runs — the descriptor reuse is only how this file reaches it.
 typealias ReadOutcome = int(0 to 3)
 typealias Answered = int(0 to 1)
 
+var peerFrom = 0 as SchedulerEventCount
+var parkedFrom = 0 as SchedulerEventCount
+
+function parkedAt(mark SchedulerEventCount) returns bool
+	if mark == 0 'notYet'
+		return false
+	end 'notYet'
+
+	return Scheduler.counters().netpollBlocks >= mark
+end 'parkedAt'
+
 // Nothing is ever sent on this connection, so this read parks and is still parked when the owner closes.
 function readNothing(client TcpClient) returns ReadOutcome
 	var code = 0 as ReadOutcome
+
+	parkedFrom = Scheduler.counters().netpollBlocks + 1
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -802,6 +823,7 @@ function echoUntilAnswered(listener TcpListener) returns Answered
 
 	while answered == 0 'serving'
 		let conn = try listener.accept() otherwise return 0
+		peerFrom = Scheduler.counters().netpollBlocks + 1
 		let heard = try conn.recv(1024) otherwise continue
 		_ = try conn.send(heard) otherwise return 0
 		answered = 1
@@ -830,8 +852,16 @@ function reuseOver(listener TcpListener) returns ExitCode
 end 'reuseOver'
 
 function reuseItsDescriptor(first TcpClient, port NetworkPort) returns String
+	while not parkedAt(peerFrom) 'untilPeerParked'
+		sleep(1)
+	end 'untilPeerParked'
+
 	let stale = async readNothing(first)
-	sleep(200)
+
+	while not parkedAt(parkedFrom) 'untilReaderParked'
+		sleep(1)
+	end 'untilReaderParked'
+
 	first.close()
 
 	// The lowest free descriptor is the one just closed, so this connection inherits the released record.

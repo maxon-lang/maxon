@@ -1092,18 +1092,39 @@ generation its collect began in and is refused by `__np_pd_wait_any` once its re
 (`netpoll-socket.two-readers-on-one-socket-is-a-named-stop`, exit 107).
 
 ⚠ **THE INTERLEAVING IS EXACT AT ONE PROCESSOR WITHOUT PREEMPTION.** The collector shares `main`'s strand and
-runs only when `main` parks, so `sleep(200)` is the handover: the collector reaches the collect, builds its
-group from a live slot and parks in the wait; `main` wakes, releases the slot from under it, and awaits a
-promise the abort ends before it is settled. The child sleeps two seconds so that no pass of the collect can
-finish before the release — a child that had already exited would be reaped, and the release would find no
-parked collector. `main` prints nothing: a print after the release would never run, and one before it would
-only pin the order the markers already fix.
+runs only when `main` parks, so the handover is a reading: `collector` publishes `parkedFrom` in the statement
+before its collect, the collect reaches its group wait on a live slot and parks on the poller, and `main` yields
+until the netpoll count has reached that mark and only then releases the slot from under it, then awaits a
+promise the abort ends before it is settled. The wait has no bound, so a collector that never parks is a TIMEOUT
+and no sleep has to outlast the host. The Windows collect waits by sleeping a millisecond between passes rather
+than on the poller, so it counts no park: there the mark is the collector's entry, and because the collector
+gives the processor up only by parking in that sleep or by finishing, and the child cannot finish, `main`'s
+resumption is the collector parked. The child holds its stdin open and reads it, and nothing ever writes to
+it, so no pass of the collect can finish before the release however slow the host is — a child that had already
+exited would be reaped, and the release would find no parked collector. `main` prints nothing: a print after
+the release would never run, and one before it would only pin the order the markers already fix.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 // Long enough that the release lands while the collect is parked, well inside the collect's own deadline.
 let collectDeadlineMs = 10000
+
+let holdStdin = 4
+
+var parkedFrom = 0 as SchedulerEventCount
+
+function parkedInCollect() returns bool
+	if parkedFrom == 0 'notYet'
+		return false
+	end 'notYet'
+
+	#if os(Windows)
+	return true
+	#else
+	return Scheduler.counters().netpollBlocks >= parkedFrom
+	#endif
+end 'parkedInCollect'
 
 function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
@@ -1115,6 +1136,8 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function collector(h FullRangeInt) returns ExitCode
+	parkedFrom = Scheduler.counters().netpollBlocks + 1
+
 	let r = __Builtins.subprocessWaitCollect(h, collectDeadlineMs)
 	__Builtins.subprocessResultRelease(r)
 	return 0
@@ -1125,19 +1148,21 @@ function main() returns ExitCode
 	#if os(Windows)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
-	appendToken(argv, token: "ping -n 3 127.0.0.1 > nul")
+	appendToken(argv, token: "set /p released=")
 	let argc = 3
 	#else
-	appendToken(argv, token: "/bin/sleep")
-	appendToken(argv, token: "2")
-	let argc = 2
+	appendToken(argv, token: "/bin/cat")
+	let argc = 1
 	#endif
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, holdStdin, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
 
 	let collecting = async collector(h)
-	sleep(200)
+
+	while not parkedInCollect() 'untilParkedInCollect'
+		Scheduler.yield()
+	end 'untilParkedInCollect'
 
 	// The collector is parked in the group wait on this slot's pipes and child, so this release is the refusal.
 	__Builtins.subprocessReleaseHandle(h)
@@ -1166,15 +1191,34 @@ marks a pipe word. Without the interlock the second collect reaches the group wa
 the first already holds, which is the socket band's double wait (exit 107) reported for a different fault.
 
 The interleaving is the previous case's: at one processor without preemption the first collector runs only
-when `main` parks, so `sleep(200)` hands it the slot and parks it in the wait; the second collector runs at the
-next `sleep(200)`, finds the word taken and stops. The child sleeps two seconds so neither collect can finish
-first. `main` prints nothing.
+when `main` parks, so `main` yields until the netpoll count has reached the mark the first collector published
+before its collect, which is the slot handed over and the collector parked in the wait (on Windows, which waits
+by sleeping a millisecond between passes and counts no park, the mark is the collector's entry and `main`'s
+resumption is the collector parked, as in the previous case); the second collector runs when `main` awaits it,
+finds the word taken and stops. The child holds its stdin open and reads it, and
+nothing ever writes to it, so neither collect can finish first however slow the host is. `main` prints nothing.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 // Long enough that the second collect lands while the first is parked, well inside the collect's own deadline.
 let collectDeadlineMs = 10000
+
+let holdStdin = 4
+
+var parkedFrom = 0 as SchedulerEventCount
+
+function parkedInCollect() returns bool
+	if parkedFrom == 0 'notYet'
+		return false
+	end 'notYet'
+
+	#if os(Windows)
+	return true
+	#else
+	return Scheduler.counters().netpollBlocks >= parkedFrom
+	#endif
+end 'parkedInCollect'
 
 function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
@@ -1186,6 +1230,8 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function collector(h FullRangeInt) returns ExitCode
+	parkedFrom = Scheduler.counters().netpollBlocks + 1
+
 	let r = __Builtins.subprocessWaitCollect(h, collectDeadlineMs)
 	__Builtins.subprocessResultRelease(r)
 	return 0
@@ -1196,23 +1242,24 @@ function main() returns ExitCode
 	#if os(Windows)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
-	appendToken(argv, token: "ping -n 3 127.0.0.1 > nul")
+	appendToken(argv, token: "set /p released=")
 	let argc = 3
 	#else
-	appendToken(argv, token: "/bin/sleep")
-	appendToken(argv, token: "2")
-	let argc = 2
+	appendToken(argv, token: "/bin/cat")
+	let argc = 1
 	#endif
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, holdStdin, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
 
 	let first = async collector(h)
-	sleep(200)
+
+	while not parkedInCollect() 'untilParkedInCollect'
+		Scheduler.yield()
+	end 'untilParkedInCollect'
 
 	// The first collector holds the slot and is parked in its group wait, so this second collect is the refusal.
 	let second = async collector(h)
-	sleep(200)
 
 	let unreachableSecond = await second
 	let unreachableFirst = await first
