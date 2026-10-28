@@ -155,9 +155,16 @@ type RaisedGroup
 	export let carriesBody as bool
 	export let bodyGrouping as ScopeGrouping
 
+	// See `leaveGroupsRaisedOnThisLineWithoutALevel`.
+	export let ownsLevel as bool
+
 	static function create(depth Count, blocksOpen Count, openerLabeled bool, openerMatched bool, carriesBody bool, bodyGrouping ScopeGrouping) returns RaisedGroup
-		return Self{depth: depth, blocksOpen: blocksOpen, openerLabeled: openerLabeled, openerMatched: openerMatched, carriesBody: carriesBody, bodyGrouping: bodyGrouping}
+		return Self{depth: depth, blocksOpen: blocksOpen, openerLabeled: openerLabeled, openerMatched: openerMatched, carriesBody: carriesBody, bodyGrouping: bodyGrouping, ownsLevel: true}
 	end 'create'
+
+	function withoutALevel() returns RaisedGroup
+		return Self{depth: self.depth, blocksOpen: self.blocksOpen, openerLabeled: self.openerLabeled, openerMatched: self.openerMatched, carriesBody: self.carriesBody, bodyGrouping: self.bodyGrouping, ownsLevel: false}
+	end 'withoutALevel'
 end 'RaisedGroup'
 
 typealias RaisedGroupArray = Array with RaisedGroup
@@ -741,7 +748,7 @@ type FormatState
 	// boundary: `#if` and a multi-line bracket indent without pushing a block at all.
 	var groupFrames as GroupFrameArray
 	var raisedGroups as RaisedGroupArray
-	var groupRaisedOnThisLine as bool
+	var groupsRaisedOnThisLine as Count
 	var bracketDepth as Count
 	var indentLevel as IndentDepth
 	var atLineStart as bool
@@ -801,7 +808,7 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(), raisedGroups: RaisedGroupArray.create(), groupRaisedOnThisLine: false, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(), raisedGroups: RaisedGroupArray.create(), groupsRaisedOnThisLine: 0, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file with content ends with
@@ -883,7 +890,7 @@ type FormatState
 			self.pendingIndentIncrease = false
 		end 'blockBodyBegins'
 
-		self.groupRaisedOnThisLine = false
+		self.groupsRaisedOnThisLine = 0
 
 		if self.newlineRun == 1 and self.lastEmittedSourceLine > 0 'firstNewline'
 			self.appendTrailingComments(self.lastEmittedSourceLine)
@@ -925,13 +932,19 @@ type FormatState
 
 		if tokenKindClosesABracket(tok.kind) and self.innermostBracketIsARaisedGroup() 'closesMultiLineGroup'
 			let group = self.popRaisedGroup()
-			self.dedentOneLevel()
+
+			if group.ownsLevel and self.indentLevel > 0 'dedentsItsLevel'
+				self.dedentOneLevel()
+			end 'dedentsItsLevel' else if group.ownsLevel 'strayGroupCloser'
+				self.refuseStrayGroupCloser(tok)
+			end 'strayGroupCloser'
+
 			resumedOpenerLabeled = group.openerLabeled
 			resumedOpenerMatched = group.openerMatched
 			resumesOpenerLine = true
 			lineIsBlockCloser = self.atLineStart
 
-			if group.carriesBody 'bodyResumes'
+			if group.carriesBody and group.ownsLevel 'bodyResumes'
 				self.beginBodyAfterThisLine(group.bodyGrouping)
 			end 'bodyResumes'
 		end 'closesMultiLineGroup'
@@ -976,6 +989,7 @@ type FormatState
 			if self.pendingIndentIncrease 'bodyOpenedOnThisLine'
 				self.pendingIndentIncrease = false
 				self.currentLineOpenedBlock = false
+				self.leaveGroupsRaisedOnThisLineWithoutALevel()
 			end 'bodyOpenedOnThisLine' else if self.indentLevel > 0 'dedentFollowingLines'
 				self.dedentOneLevel()
 			end 'dedentFollowingLines' else 'strayMidLineCloser'
@@ -1112,7 +1126,7 @@ type FormatState
 
 				self.beginBodyAfterThisLine(ScopeGrouping.literal)
 				self.raisedGroups.push(RaisedGroup.create(self.bracketDepth, blocksOpen: self.blocks.count(), openerLabeled: self.lineHasLabeledOpener, openerMatched: self.lineHasMatch, carriesBody: carriesBody, bodyGrouping: bodyGrouping))
-				self.groupRaisedOnThisLine = true
+				self.groupsRaisedOnThisLine = self.groupsRaisedOnThisLine + 1
 			end 'spansLines'
 		end 'maybeMultiLineGroup'
 
@@ -1165,11 +1179,14 @@ type FormatState
 		end 'labellessOpener'
 
 		// A character literal opens a block only when a labeled-block opener appeared earlier on the same
-		// line — never after `break`, `continue`, `return` or an `end` that closed one.
-		if tok.kind == TokenKind.charLiteral and not self.labelFollowsACloser and self.lineHasLabeledOpener 'maybeBlockLabel'
+		// line — never the label `break`, `continue`, `return` or a closing `end` itself carries. A later
+		// opener on that line still opens its block.
+		if tok.kind == TokenKind.charLiteral and self.labelFollowsACloser 'closersOwnLabel'
+			self.labelFollowsACloser = false
+		end 'closersOwnLabel' else if tok.kind == TokenKind.charLiteral and self.lineHasLabeledOpener 'maybeBlockLabel'
 			if not self.chainsToNextBranch(index) 'opensABlock'
 				self.blocks.push(FormatBlockKind.matchBody if self.lineHasMatch else FormatBlockKind.other)
-				self.adoptRaisedGroupIntoBlock()
+				self.leaveGroupsRaisedOnThisLineWithoutALevel()
 				self.beginBodyAfterThisLine(ScopeGrouping.matchArms if self.lineHasMatch else ScopeGrouping.statements)
 			end 'opensABlock'
 		end 'maybeBlockLabel'
@@ -1345,7 +1362,7 @@ type FormatState
 
 			// A continuation line of an `or` pattern chain sits INSIDE the arm it continues, so it is
 			// never a group of its own however the author broke the chain.
-			if self.blankDecisionPending and not lineIsBlockCloser and not self.armContinuation 'decide'
+			if self.blankDecisionPending and not lineIsBlockCloser and not self.armContinuation and not self.lineContinuesAnExpression() 'decide'
 				self.appendBlanks(self.forcedBlanksBefore(thisKey, userHadBlank: userHadBlankBeforeLine))
 			end 'decide'
 
@@ -1617,6 +1634,10 @@ type FormatState
 		self.refuse(FormatRefusal.unbalanced(tok.line, column: tok.column, sentence: "this 'end' closes no block, so the layout of what follows cannot be told"))
 	end 'refuseStrayCloser'
 
+	function refuseStrayGroupCloser(tok Token)
+		self.refuse(FormatRefusal.unbalanced(tok.line, column: tok.column, sentence: "this closing bracket ends a group that holds no indent level, so the layout of what follows cannot be told"))
+	end 'refuseStrayGroupCloser'
+
 	// Balance is judged on `indentLevel` and `groupFrames`, never on `blocks`: `blocks` drifts on
 	// valid sources, so counting it would refuse files that format correctly.
 	function refuseGroupsLeftOpen()
@@ -1794,16 +1815,20 @@ type FormatState
 		return at
 	end 'allDiscardedBindingsEndAt'
 
-	// A bracket and a block opened on one line share one indent level, which the block's `end` closes;
-	// left raised, the bracket's closer would dedent a second time.
-	function adoptRaisedGroupIntoBlock()
-		if not self.groupRaisedOnThisLine 'noGroupRaisedHere'
-			return
-		end 'noGroupRaisedHere'
+	// A bracket and a block opened on one line share one indent level, which the block's `end` closes; a
+	// mid-line `end` that cancels the line's pending indent leaves the level to nobody. Either way each group
+	// raised on the line stays on the stack so its closer still restores the opener line's flags, but owns
+	// no level: a second dedent drives `indentLevel` below zero.
+	function leaveGroupsRaisedOnThisLineWithoutALevel()
+		let first = self.raisedGroups.count() - self.groupsRaisedOnThisLine
 
-		_ = self.popRaisedGroup()
-		self.groupRaisedOnThisLine = false
-	end 'adoptRaisedGroupIntoBlock'
+		for position in first upto self.raisedGroups.count() 'eachGroupRaisedHere'
+			let group = try self.raisedGroups.get(position) otherwise panic("FormatState.leaveGroupsRaisedOnThisLineWithoutALevel: position {position} is below the {self.raisedGroups.count()} raised groups")
+			try self.raisedGroups.set(position, value: group.withoutALevel()) otherwise panic("FormatState.leaveGroupsRaisedOnThisLineWithoutALevel: position {position} is below the {self.raisedGroups.count()} raised groups")
+		end 'eachGroupRaisedHere'
+
+		self.groupsRaisedOnThisLine = 0
+	end 'leaveGroupsRaisedOnThisLineWithoutALevel'
 
 	function popRaisedGroup() returns RaisedGroup
 		return try self.raisedGroups.pop() otherwise panic("FormatState.popRaisedGroup: no raised group is open — every caller checked the stack first")

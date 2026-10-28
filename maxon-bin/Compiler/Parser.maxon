@@ -22100,11 +22100,7 @@ export type Parser
 				// `self`-headed because the SWEEP cannot tell the two apart: `self . <ident> =` is self-identifying,
 				// while a bare `<ident> =` needs the enclosing type's FIELD NAMES, which are not merged into
 				// `self.signatures` when this runs — and marking a local assignment as a feed would enrol a parameter
-				// owned that nothing moves. So the implicit spelling records no feed. MEASURED, that is a FALSE
-				// REJECT and not a memory-safety hole: `emitOpaqueFieldReassign`
-				// demands an owned value at the store and refuses the un-fed parameter cleanly (E2015), where the
-				// `self.`-spelled twin compiles and runs. Widening it needs a sweep-time opaque-field roster — filed,
-				// not built here.
+				// owned that nothing moves. So the implicit spelling records no feed.
 				//
 				// ⚡ Gated on `genericScope` because a feed needs a type-parameter-typed parameter and outside a
 				// generic type there is none (every slot is concrete when `enclosingTypeParams` is empty) — so
@@ -37609,6 +37605,8 @@ export type Parser
 		return writability.namesAnImmutableAggregate(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames)
 	end 'valueIsAnImmutableAggregate'
 
+	// A read out of an overwritable slot or an element is held whatever its root: a parameter root keeps
+	// the box alive, not the field's occupant, so a later store to that field frees what this binding names.
 	function bindingHoldsAStorageRead(value ValueId, boundValue ValueId, sourceReadsAField bool, sourceName SourceBinding) returns bool
 		if self.valueIsOwnedHeap(boundValue) or self.valueNeedsNoHold(value) 'nothingToHold'
 			return false
@@ -37618,7 +37616,7 @@ export type Parser
 			return false
 		end 'ownsNoHeap'
 
-		return valueIsMarked(self.bodyState.elementReads, value: value) or (sourceReadsAField and self.fieldReadRootIsRebindable(sourceName))
+		return self.valueIsAStorageRead(value) or (sourceReadsAField and self.fieldReadRootIsRebindable(sourceName))
 	end 'bindingHoldsAStorageRead'
 
 	function holdBindingRead(value ValueId, name ByteArray, range SourceRange) returns ValueId
@@ -87101,7 +87099,7 @@ export type Parser
 		// Sharing the door rather than re-spelling it is the cure: a re-tag added to `declaredSlotType` now
 		// reaches the WRITE the same day it reaches the READ.
 		if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'opaqueTypeParamField'
-			try self.emitOpaqueFieldReassign(box, layout: layout, index: index, value: value, fieldType: fieldType, argBareLocal: argBareLocal, anchor: anchor, range: range)
+			self.emitOpaqueFieldReassign(box, layout: layout, index: index, value: value, fieldType: fieldType, argBareLocal: argBareLocal, range: range)
 			return
 		end 'opaqueTypeParamField'
 
@@ -87170,18 +87168,19 @@ export type Parser
 	// concrete managed field write. An OWNED new value transfers — `markOpaqueFieldReassignFeed` recorded the
 	// reassigned parameter as a feed, so `bindParameters` enrolled it owned and the concrete call site transferred
 	// it — and a BORROWED one takes its own reference through the descriptor. The field's OLD value
-	// drops ONLY when some instantiation makes it MANAGED: then through the descriptor-gated `__drop_type_param`
+	// drops ONLY when some instantiation owes it a drop (`genericTypeFieldHasManagedInstantiation`):
+	// then through the descriptor-gated `__drop_type_param`
 	// (`emitDecref`'s `typeParameter` arm, which makes the method a layout carrier in lowering's carrier scan;
 	// inert for a trivial instantiation whose `destroyFunc@40` is 0). An ALL-TRIVIAL
 	// field owns no heap, so no drop and no descriptor — the store is byte-identical to a plain store.
 	// An owned value then ALWAYS transfers into the field (a bare-local source is poisoned, E3102 on later use), so
 	// this frame does not also drop it AND the enrolled-owned parameter is never left live to drop at a scope exit
 	// (which would need a descriptor a trivial method does not carry).
-	function emitOpaqueFieldReassign(box ValueId, layout StructLayout, index FieldIndex, value ValueId, fieldType MaxonType, argBareLocal bool, anchor Token, range SourceRange) throws SourceParseError
+	function emitOpaqueFieldReassign(box ValueId, layout StructLayout, index FieldIndex, value ValueId, fieldType MaxonType, argBareLocal bool, range SourceRange)
 		// A borrowed opaque `T` takes a reference through the descriptor's `retainFunc@64`, as a container store
 		// does (`referenceBorrowedOpaqueElement`). The retain and the old-value drop below both read
 		// `genericTypeFieldHasManagedInstantiation`, so a reference is taken exactly where the displaced value
-		// is released; the co-owned-trivial instantiation, which that boundary leaves out, is refused below.
+		// is released.
 		//
 		// ⚠ **BOTH DOORS ASK OWNERSHIP OF THE VALUE AT THE STORE, AND A PARAMETER ANSWERS "OWNED" WHATEVER ITS
 		// CALLER DID — SO ONE METHOD HOP COULD DEFEAT BOTH.** That is closed at the CALLER rather
@@ -87189,26 +87188,6 @@ export type Parser
 		// callee-storage feed position, so the "owned" answer this door reads is TRUE by construction.
 		let owned = self.valueIsOwnedHeap(value)
 		let stored = value if owned else self.referenceBorrowedOpaqueForField(value, fieldType: fieldType, range: range)
-
-		// ⭐ A CO-OWNED TRIVIAL STRUCT instantiation (`Box with Point`) cannot be
-		// reassigned in a shared body: the box CO-OWNS its trivial `T` field (retained at the constructor feed,
-		// dropped by its destructor), but this opaque reassignment has no way to drop the field's OLD co-owned
-		// value — a trivial struct's `__mm_decref` cannot be emitted from the opaque body. Storing the new value
-		// over the old would LEAK it. Rejected cleanly rather than shipping the leak. A managed instantiation
-		// reassigns through the descriptor as before, and a scalar is inert — neither is a co-owned trivial, so
-		// this fires on exactly the co-ownership gap.
-		//
-		// ⚠ **THE REASON IS THE *SITE'S* WIRING, NOT THE DESCRIPTOR'S CONTENTS.** The descriptor's
-		// `destroyFunc@40` is not 0 for a trivial instantiation: it is stamped for every
-		// argument owning a record, co-owned trivial aggregates included, which is what makes the container
-		// column below releasable. What is missing here is the gate BELOW this one: the old-value
-		// drop reads `genericTypeFieldHasManagedInstantiation`, the CONSUME boundary, so a co-owned-trivial
-		// instantiation emits no drop to release it through. Widening that is what would lift this
-		// refusal; it is a separate change with three committed `error.` cases pinning this message, and it is
-		// REPORTED rather than taken here. The refusal is a positioned diagnostic, never a leak.
-		if self.signatures.genericTypeFieldHasCoOwnedTrivialInstantiation(typeParamIdOf(fieldType)) 'coOwnedTrivialReassign'
-			throw SourceParseError.unsupported("reassigning the type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor has no single-value drop for a trivial struct); reassign the field on a concrete instance, or use a managed element type", line: anchor.line, column: anchor.column)
-		end 'coOwnedTrivialReassign'
 
 		// ⛔ **THE RELEASE SITS BETWEEN THE TWO ACQUIRES, AND EACH ORDER IS SAFE FOR ITS OWN REASON.** A
 		// borrowed value's real reference (`referenceBorrowedOpaqueForField`) is emitted ABOVE this decref, so a
@@ -98279,7 +98258,7 @@ export type Parser
 	// ⭐ **TAKE THE SECOND REFERENCE A BORROWED CONCRETE AGGREGATE OWES ITS DURABLE SINK** — the one act both
 	// feed sinks perform, so a third sink cannot inherit half of it. Only a NON-CONSUMED argument reaches
 	// `handleEscapingBorrowFeed` at all (`argIsConsumedAt` diverted every owning one), so what arrives here is
-	// exactly the co-owned trivial class (`typeArgIsCoOwnedTrivial`: a struct box, a trivial generic instance)
+	// exactly the co-owned trivial class (managed, not owned: a struct box, a trivial generic instance)
 	// plus the scalars — and a SCALAR is not a pointer, owns no record and needs nothing, which is what
 	// `valueIsNonTextAggregate` answers `false` for. A byte record cannot arrive: a `String` type argument is
 	// `typeArgIsOwned` and is consumed, never borrowed. An `Array` one CAN, and its reference is the returning

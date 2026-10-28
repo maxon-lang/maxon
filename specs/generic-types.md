@@ -1307,12 +1307,10 @@ xy
 ⭐⭐ **A `Box with N0` whose `N0` owns a String is an OWNING argument, and the CONSUME boundary has to
 say so as loudly as the DROP boundary does.** A generic-instance typealias is in neither `structTypes`
 nor `enumTypes`, so `typeArgIsOwned` must resolve it to its instance rather than look the alias name up
-there — its twin `typeIsManaged` ends in `isGenericAlias(name)` and answers "managed". The pair is read
-as `typeArgIsCoOwnedTrivial = typeIsManaged and not typeArgIsOwned`, so a "not owned" here would classify
-the box CO-OWNED TRIVIAL: every construction would pay an `__mm_incref` plus a destructor call where a
-move is owed, and this program — a shared-body reassign of `Box.value`, which is refused whenever ANY
-instantiation of `Box` is co-owned trivial — would be refused **E2015** "a trivial-struct instantiation
-co-owns the field", said of a box that owns a String, whatever the walk order.
+there — its twin `typeIsManaged` ends in `isGenericAlias(name)` and answers "managed". Managed and not
+owned is the borrowed, feed-retained class, so a "not owned" here would make every construction pay an
+`__mm_incref` plus a destructor call where a move is owed. This program reassigns `Box.value` in a shared
+body and exits 0 whatever the walk order.
 ```maxon
 type S0
 	export var s as String

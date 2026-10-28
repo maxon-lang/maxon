@@ -2669,11 +2669,6 @@ export enum TypeArgInstantiationKind
 	// descriptor-gated old-value drop.
 	consumeMoved
 
-	// The box CO-OWNS a BORROWED trivial struct/instance (`typeIsManaged and not typeArgIsOwned`): the
-	// `__mm_incref`-at-feed + destructor-decref pair, which a shared-body reassign
-	// cannot re-balance and therefore rejects.
-	coOwnedTrivial
-
 	// Not deep-cloneable at all (`not typeSupportsDeepClone`): a compiler-owned aggregate, an existential, or a
 	// generic instance with no per-instance cloner behind it — the opaque-copy front-end reject.
 	uncopyableElement
@@ -2700,7 +2695,7 @@ export enum TypeArgInstantiationKind
 	// one boundary two different questions.** `managedElement` REFUSES, so it must ignore rows that are not
 	// facts about the program; ignoring one there costs a wrong ANSWER. This one EMITS, and its wrong direction
 	// is a USE-AFTER-FREE — a managed instantiation whose row was skipped would leave the borrow unreferenced.
-	// So it reads EVERY row, exactly as `consumeMoved`/`coOwnedTrivial` do.
+	// So it reads EVERY row, exactly as `consumeMoved` does.
 	retainedFeed
 
 	// Is or holds a promise (`sourceCloneVerdictOfType`): the opaque-copy refusal, E3141. Kept apart
@@ -2710,7 +2705,7 @@ export enum TypeArgInstantiationKind
 end 'TypeArgInstantiationKind'
 
 // @generated library-cache begin
-let CacheCasesTypeArgInstantiationKind = [TypeArgInstantiationKind.consumeMoved, TypeArgInstantiationKind.coOwnedTrivial, TypeArgInstantiationKind.uncopyableElement, TypeArgInstantiationKind.managedElement, TypeArgInstantiationKind.retainedFeed, TypeArgInstantiationKind.greenThreadElement]
+let CacheCasesTypeArgInstantiationKind = [TypeArgInstantiationKind.consumeMoved, TypeArgInstantiationKind.uncopyableElement, TypeArgInstantiationKind.managedElement, TypeArgInstantiationKind.retainedFeed, TypeArgInstantiationKind.greenThreadElement]
 
 function cacheReadTypeArgInstantiationKind(reader LibraryCacheReader) returns TypeArgInstantiationKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -2765,7 +2760,6 @@ end 'TypeArgKindMatch'
 function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
 		consumeMoved or
-		coOwnedTrivial or
 		retainedFeed then return false
 		uncopyableElement or
 		managedElement or
@@ -2789,7 +2783,6 @@ end 'kindIsARefusal'
 function kindFollowsADeclarationView(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
 		consumeMoved or
-		coOwnedTrivial or
 		retainedFeed then return true
 		uncopyableElement or
 		managedElement or
@@ -10505,7 +10498,7 @@ end 'WrittenAliasFile'
 
 // Base type-name id ⇒ the instances interned for THAT base — the second index on the instance registry,
 // beside the payload⇒id one above. It exists for the per-instantiation GATES
-// (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`), which ask "does any instance OF
+// (`instanceWithTypeArgKind` and its readers), which ask "does any instance OF
 // THIS BASE classify its argument at `position` as …?". Answering that by walking the whole registry
 // and `.equals`-ing every base name is O(call sites × TOTAL instances), a cost that allocates nothing and so
 // is invisible to `scale-test`'s memory columns. Keyed by base ID rather than base name because the
@@ -30989,18 +30982,17 @@ export type ProgramSignatures
 	// `IrModule.ops`' orphans under `liveOpIndices` are the same shape and the same rule.
 	//
 	// ⚠ **A CLASSIFIER THAT MEETS ONE MUST CONTRIBUTE NOTHING, NOT GUESS.** The two declarations of `Bag`
-	// genuinely differ, and the reader-free classifiers (`typeArgIsOwned`, `typeSupportsDeepClone`,
-	// `typeArgIsCoOwnedTrivial`) are read by disjunctions over instantiations, where the scoped siblings in the
+	// genuinely differ, and the reader-free classifiers (`typeArgIsOwned`, `typeSupportsDeepClone`) are read
+	// by disjunctions over instantiations, where the scoped siblings in the
 	// same bucket already carry the real answers. Each therefore returns ITS OWN identity for "classifies
 	// nothing" — `false` for "nothing is consumed through a spelling no call site can name", `true` for
 	// "nothing is refused for a spelling no copy site can name" — which is the answer the same program written
 	// in ONE file gives, verified both ways.
 	//
-	// ⛔ **THREE DOORS, AND THE THIRD WAS MISSED BECAUSE ITS IDENTITY IS NOT ITS OWN.**
-	// `typeArgIsCoOwnedTrivial` is `typeIsManaged and not typeArgIsOwned`, so guarding only the OWNED half left
-	// it voting `true` — the manufactured CO-OWNED TRIVIAL kind, off a spelling no call site can name. The
-	// identity a caller needs is a property of the FOLD (`anyInstanceTypeArgHasKind` is an OR, so it is
-	// `false`), never of the door's own polarity; see there for the program it wrongly refused.
+	// ⛔ The identity a caller needs is a property of the FOLD (`anyInstanceTypeArgHasKind` is an OR, so it
+	// is `false`), never of a door's own polarity. `typeIsManaged` answers managed of a superseded spelling,
+	// so a door built on it asks `typeArgSpellingIsSuperseded` itself, or the orphan votes a kind no live
+	// instantiation has.
 	//
 	// ⚠ **MEASURED, and it is not hypothetical**: two files declaring `typealias Bag = Array with
 	// <different element>` plus a `typealias BB = Box with Bag` reached `genericAliasInstance`'s refusal from
@@ -31055,9 +31047,8 @@ export type ProgramSignatures
 		return self.namesTheSoleGenericAliasDeclaration(name) and self.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.genericAlias) and not self.typeNameHidingFrom(name, readerFilePath: readerFilePath).isHidden()
 	end 'fileMeansTheSoleGenericAliasDeclaration'
 
-	// ⭐⭐ **THE SAME QUESTION ASKED OF A TYPE RATHER THAN A NAME** — for the one classifier door
-	// that has no `name` in hand because it is a COMPOSITION of two others, `typeArgIsCoOwnedTrivial`. It is
-	// the SAME fact and not a second one: it bottoms out in `genericAliasSpellingIsSuperseded` above, which is
+	// ⭐⭐ **THE SAME QUESTION ASKED OF A TYPE RATHER THAN A NAME** — for a classifier door that holds a
+	// type and no `name`. It is the SAME fact and not a second one: it bottoms out in `genericAliasSpellingIsSuperseded` above, which is
 	// the only reader of `contestedGenericAliases` for this purpose, so a change to what "superseded" means
 	// cannot reach one door and miss the other. A tag that cannot name an alias at all answers `false` without
 	// touching the interner, exactly as `typeArgIsOwned`'s own `tagMayNameAggregate` early-out does.
@@ -38108,8 +38099,7 @@ export type ProgramSignatures
 	// own `p` is still live and dropped once. So the three questions now split three ways on a trivial struct:
 	// NOT consumed (borrowed-and-kept), YES dropped (co-owned via retain), and the retain fills the gap between
 	// them — freed exactly once on every path. A managed argument is BOTH consumed and dropped; a
-	// scalar is neither. (The one construct co-ownership cannot yet balance — a SHARED-body reassignment of a
-	// co-owned trivial field — is rejected at `emitOpaqueFieldReassign` rather than leaked.)
+	// scalar is neither.
 	export function typeArgIsOwned(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
 
@@ -38131,30 +38121,19 @@ export type ProgramSignatures
 		end 'notNamedStruct'
 
 		// ⭐⭐ **RESOLVED THROUGH `denotedAggregateName`, AND IT MUST BE THE SAME RESOLUTION `typeIsManaged`
-		// MAKES.** The two are read TOGETHER: `typeArgIsCoOwnedTrivial` is literally
-		// `typeIsManaged(t) and not typeArgIsOwned(t)`, so a name the two answer about DIFFERENTLY does not
+		// MAKES.** The two are read TOGETHER: managed and not owned is the borrowed, feed-retained class, so a
+		// name the two answer about DIFFERENTLY does not
 		// merely give a coarse answer — it manufactures a kind the type does not have. A tuple typealias
 		// arrives here as a bare `named` for the reason `denotedAggregateName` states (a RAW instance
 		// argument, interned by whichever pass first met `Box with Pair`, and the declaration SWEEP meets it
 		// before the alias's own file is walked whenever the filesystem hands that file over second).
-		//
-		// ⚠ **MEASURED** — `typealias TPair = (Integer, String)` (a tuple that OWNS heap) with
-		// `typealias PairBox = Box with TPair` beside a `Box with String` whose shared body reassigns its
-		// opaque field. Unresolved, `typeIsManaged` says managed while this says not-owned, so
-		// `genericTypeFieldHasCoOwnedTrivialInstantiation` fires and `emitOpaqueFieldReassign` REFUSES
-		// with E2015 — "a trivial-struct instantiation co-owns the field", said of a tuple that owns a
-		// String — on
-		// the exact program the other walk order compiles and runs to exit 0; both false, the reassign
-		// stores over the old value with no drop, a silent leak. The consume boundary and the drop
-		// boundary have to read one name.
 		view name = self.denotedSlotAggregateName(t)
 
 		// ⭐⭐ **A GENERIC-INSTANCE ALIAS ANSWERS AS ITS INSTANCE.** `typealias N0 = Box with S0` mints no
 		// identity of its own, so `structSlots` and `enumTypes` both miss it, while `typeIsManaged`'s own
-		// `named` arm answers `true` for it. The pair is read as `typeArgIsCoOwnedTrivial = typeIsManaged
-		// and not typeArgIsOwned`, so answering `false` here would classify `Box with N0` as a CO-OWNED
-		// TRIVIAL box even though `N0` owns a String through `S0` — an `__mm_incref` plus a destructor
-		// where a MOVE is owed, and a false E2015 on a shared-body reassign.
+		// `named` arm answers `true` for it. Answering `false` here would make `Box with N0` a borrowed,
+		// feed-retained box even though `N0` owns a String through `S0` — an `__mm_incref` plus a destructor
+		// where a MOVE is owed.
 		//
 		// ⭐⭐ **THE FORM COMES FROM `declaredFormOf`, THE ONE name→FORM ANSWER.** A declaration form that
 		// `typeIsManaged` has an arm for and this cascade does not MANUFACTURES A KIND THE TYPE DOES NOT
@@ -38199,13 +38178,13 @@ export type ProgramSignatures
 	end 'typeArgIsOwned'
 
 	// Does ANY interned instance of the type that DECLARES type parameter `param` classify its argument at
-	// that parameter's position as `kind`? The ONE instance-registry read the three
-	// type-parameter-instantiation gates (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`)
-	// delegate to — so the lookup and the `position < args.count()` bound are written once for all three and
-	// cannot drift between them. The per-kind predicate is the only thing that varies, in `typeArgHasKind`.
+	// that parameter's position as `kind`? The ONE instance-registry read every
+	// type-parameter-instantiation gate delegates to — so the lookup and the `position < args.count()` bound
+	// are written once and cannot drift between gates. The per-kind predicate is the only thing that
+	// varies, in `typeArgHasKind`.
 	//
 	// ⭐ **THROUGH THE BY-BASE INDEX, NOT A WHOLE-REGISTRY WALK.** Running
-	// `0 upto genericInstances.count()` and comparing every instance's base NAME makes the three gates
+	// `0 upto genericInstances.count()` and comparing every instance's base NAME makes the gates
 	// O(call sites × TOTAL instances) — a term that allocates nothing (`nameOf` borrows, `.equals` copies
 	// nothing), so no memory instrument can show it. `byBase` is filed by the same `intern` that
 	// assigns the ids, so this visits only THIS base's instances and the gates become O(instances of the
@@ -38359,12 +38338,11 @@ export type ProgramSignatures
 	end 'anyInstanceTypeArgHasKind'
 
 	// The per-kind argument predicate the instance-scan gates read (see `instanceWithTypeArgKind`). Each arm
-	// reads off the SAME `typeArgIsOwned` / `typeArgIsCoOwnedTrivial` / `typeSupportsDeepClone` boundary the
+	// reads off the SAME `typeArgIsOwned` / `typeIsManaged` / `typeSupportsDeepClone` boundary the
 	// corresponding drop, consume or copy site decides on, so a gate and the emission it guards cannot disagree.
 	function typeArgHasKind(t MaxonType, kind TypeArgInstantiationKind) returns bool
 		match kind 'kind'
 			consumeMoved then return self.typeArgIsOwned(t)
-			coOwnedTrivial then return self.typeArgIsCoOwnedTrivial(t)
 			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 			managedElement then return self.typeArgIsManagedElement(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
@@ -38372,19 +38350,14 @@ export type ProgramSignatures
 		end 'kind'
 	end 'typeArgHasKind'
 
-	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER MANAGED?** A
-	// shared generic body reassigns a bare `T` field opaquely; the OLD value's
-	// descriptor-gated drop (`__drop_type_param`) is needed ONLY when some instantiation makes that field
-	// managed (`Box with String`), and is a sound scalar plain store — no drop — when every instantiation is
-	// trivial (`Box with SmallInt`). This is the exact gate that tells a crash-prone managed reassignment (the
-	// old value would be leaked and a borrow double-freed by the box's destructor: `0xC0000005` — rejected until
-	// the single-value drop runtime is installable off the array floor) from an all-trivial one (left to the
-	// unchanged plain store). HOW the instances are found is `instanceWithTypeArgKind`'s business and is
-	// described there once; what this gate adds is the KIND — each instance's argument at `position` read
-	// through the SAME `typeArgIsOwned` boundary the box's own per-field drop gate
-	// (`genericInstanceFieldOwesDrop`) uses, so the reject and the destructor agree on what "managed" means.
+	// The gate on a shared body's reassignment of a bare `T` field: the displaced value's descriptor-gated
+	// drop (`__drop_type_param`) and the borrowed new value's reference. With no instantiation in either
+	// boundary the store is a plain one. It is the consume boundary OR the feed-retain one because a
+	// borrowed trivial struct (`Box with Point`) is co-owned through the feed's retain and is in only the
+	// second. A promise is in only the first: it owes the drop, and the descriptor's `retainFunc@64` is inert
+	// for it (`retainCalleeForProtocol`), since `__mm_retain` on a scheduler slab pointer corrupts a header.
 	export function genericTypeFieldHasManagedInstantiation(param TypeParamId) returns bool
-		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.consumeMoved)
+		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.consumeMoved) or self.typeParamFeedCanOwnAReference(param)
 	end 'genericTypeFieldHasManagedInstantiation'
 
 	// ⭐⭐ **IS GENERIC `typeName` INSTANTIATED IN THE PROGRAM THIS INDEX WAS SETTLED FOR?** The gate
@@ -38441,69 +38414,10 @@ export type ProgramSignatures
 		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.retainedFeed)
 	end 'typeParamFeedCanOwnAReference'
 
-	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER A CO-OWNED
-	// TRIVIAL STRUCT?** A trivial struct/instance argument (`Box with
-	// Point`) is BORROWED at the call site (`typeArgIsOwned` false — the caller keeps it) yet CO-OWNED by the
-	// box (`typeIsManaged` true — `genericInstanceFieldOwesDrop` drops it, balanced by the feed's
-	// `__mm_retain`). That co-ownership is sound for a field set ONCE at construction, but a SHARED-body
-	// REASSIGNMENT of it (`self.saved = next`) has no way to drop the field's OLD co-owned value: the opaque
-	// body cannot emit a trivial struct's `__mm_decref` directly, and the gate the reassign site's drop routes
-	// through (`genericTypeFieldHasManagedInstantiation`) reads the CONSUME boundary, so it does not fire for
-	// this class. So a
-	// reassignment would LEAK the old value. This gate lets `emitOpaqueFieldReassign` REJECT that combination up front rather than ship the
-	// leak — read off the SAME `typeIsManaged`/`typeArgIsOwned` boundaries the drop and the consume decide on,
-	// so the reject fires on exactly the fields the destructor co-owns but the reassign cannot re-balance. A
-	// managed instantiation (`Box with String`, both true) reassigns through the descriptor as before; a scalar
-	// (both false) is inert; only the borrowed-and-dropped trivial struct — the co-ownership gap — is rejected.
-	export function genericTypeFieldHasCoOwnedTrivialInstantiation(param TypeParamId) returns bool
-		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.coOwnedTrivial)
-	end 'genericTypeFieldHasCoOwnedTrivialInstantiation'
-
-	// Is `t` a CO-OWNED TRIVIAL type argument — a heap aggregate the box drops (`typeIsManaged`) but that the
-	// call site borrows rather than consumes (`typeArgIsOwned` false)? The one-type predicate the co-ownership
-	// gates read: the constructor-feed retain fires for exactly this class of argument (a trivial struct or
-	// trivial instance), and the reassign reject refuses it. A String/owning aggregate (`typeArgIsOwned` true)
-	// is consumed, not co-owned-by-retain, and a scalar owns no heap — both answer false.
-	//
-	// ⛔⛔ **AND IT IS THE ONE DOOR WHERE "CLASSIFIES NOTHING" INVERTS, WHICH IS WHY THE SUPERSEDED GUARD HAS TO
-	// BE WRITTEN HERE TOO.** The other two argument classifiers state their own identity directly
-	// — `typeArgIsOwned` answers `false`, `typeSupportsDeepClone` answers `true` so that
-	// `uncopyableElement`'s `not` makes it `false` — and every kind is folded by OR in
-	// `anyInstanceTypeArgHasKind`, so `false` is what "contributes nothing" means for all three. This one is a
-	// COMPOSITION of a GUARDED door and an UNGUARDED one: `typeIsManaged`'s `named` arm ends in
-	// `isGenericAliasInAnyFile(name)` and says MANAGED of a superseded spelling, while `typeArgIsOwned` says NOT
-	// OWNED of it — and `managed and not owned` is `true`. A pre-settle orphan would therefore vote CO-OWNED
-	// TRIVIAL all by itself, which is precisely the manufactured kind to avoid, re-made one
-	// spelling over.
-	//
-	// ⚠ **MEASURED, and it is a WRONG ANSWER rather than a coarse one**: two files declaring
-	// `typealias N0 = Box with S0` / `= Box with S1` over String-owning structs, plus a
-	// `typealias N1 = Box with N0` in each, put the pre-settle `Box with named("N0")` in `Box`'s by-base
-	// bucket. Every LIVE instantiation there answers `typeArgIsOwned` TRUE (so co-owned-trivial FALSE), yet
-	// `v1.swap(…)` was refused **E2015** "a trivial-struct instantiation co-owns the field" off the orphan's
-	// vote alone — while the byte-identical program whose second file spells the same aliases `M0`/`M1`
-	// (nothing contested) compiles and runs to exit 0, and so does the INLINE
-	// `typealias N1 = Box with (Box with S0)` spelling of the contested one. That is the two spellings
-	// disagreeing again, which one type identity forbids.
-	export function typeArgIsCoOwnedTrivial(t MaxonType) returns bool
-		if not self.typeIsManaged(t, from: self.typeNames) 'ownsNoDroppableHeap'
-			return false
-		end 'ownsNoDroppableHeap'
-
-		if self.typeArgSpellingIsSuperseded(t) 'theContestReplacedThisOne'
-			return false
-		end 'theContestReplacedThisOne'
-
-		return not self.typeArgIsOwned(t)
-	end 'typeArgIsCoOwnedTrivial'
-
 	// ⭐⭐ **IS `t` A HEAP AGGREGATE — the boundary a PUBLISHED SLOT is judged by.** A container that
 	// zeroes its slots at birth (`FixedArray.create()`'s `__managed_resize`) publishes a VALUE for a trivial
 	// argument and an ABSENCE for a managed one, so this asks the one question `containerElementIsManaged`
-	// asks of a concrete element — `typeIsManaged` — of an instantiation's argument instead. Nothing is
-	// composed out of the two neighbouring kinds: `consumeMoved or coOwnedTrivial` would spell the same
-	// boundary a second time and be free to drift from `containerElementIsManaged`, which is the door the
-	// CONCRETE half of the same refusal reads.
+	// asks of a concrete element — `typeIsManaged` — of an instantiation's argument instead.
 	//
 	// ⚠ **A SUPERSEDED SPELLING VOTES NOTHING, exactly as it does for the other REFUSING kind**
 	// (`typeSupportsDeepClone`'s `genericAlias` arm, which carries the measurement): these classifiers are
@@ -38537,7 +38451,6 @@ export type ProgramSignatures
 			greenThreadElement then return not self.arrayInstanceIsCopiedByAGenericBody(id)
 
 			consumeMoved or
-			coOwnedTrivial or
 			managedElement or
 			retainedFeed then return false
 		end 'kind'
@@ -38781,10 +38694,9 @@ export type ProgramSignatures
 	// releases. Both read `typeIsManaged` of the substituted argument — that header carries the
 	// measurement.
 	//
-	// A shared-body reassignment of a co-owned trivial field would break this balance (the reassign site's own
-	// drop gate reads the CONSUME boundary, so it does not fire for this class), so
-	// it is REJECTED at the reassign site (`emitOpaqueFieldReassign`) — leaving every field this
-	// drop fires on either construct-only (co-owned once) or managed/scalar (the pre-existing model).
+	// A shared-body reassignment keeps this balance only because its old-value drop
+	// (`genericTypeFieldHasManagedInstantiation`) reads this boundary as well as the CONSUME one; on the
+	// consume boundary alone it would leak every displaced co-owned trivial value.
 	//
 	// ⭐ **IT ASKS THE INSTANCE VIEW FOR *EVERY* FIELD, NOT ONLY FOR AN OPAQUE ONE.** Substituting only
 	// a `typeParameter` field and reading the RAW declared type otherwise is two derivations that agree by
@@ -40182,7 +40094,7 @@ export type ProgramSignatures
 	//
 	// ⛔⛔ **AND IT GATES ON THE *DROP* BOUNDARY (`instanceArgOwesDrop`), NOT ON THE *CONSUME* ONE
 	// (`genericInstanceArgIsOwned`), WHICH IS A SILENT WRONG ANSWER.** The two
-	// questions differ on EXACTLY one class, the co-owned trivial aggregate (`typeArgIsCoOwnedTrivial`: managed,
+	// questions differ on EXACTLY one class, the co-owned trivial aggregate (managed,
 	// not owned) — an all-scalar struct key, a trivial generic instance — and a `destroyFunc@40` read off the
 	// narrow one leaves that class with a **RETAIN AND NO RELEASE**. The two words are stamped from one
 	// descriptor a few lines apart, so two different predicates there means `retainFunc@64`

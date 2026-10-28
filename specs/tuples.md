@@ -1766,8 +1766,7 @@ end 'main'
 ⭐ A shared generic body reassigns its opaque `T` field, and the SAME generic is ALSO instantiated at a tuple
 typealias that OWNS heap (`(Integer, String)`), declared BELOW the instantiation. The reassign gate scans
 every instantiation of `Box` and asks each argument's KIND; the heap-owning tuple must read `consumeMoved`,
-not `coOwnedTrivial`. Read as co-owned-trivial it refused this program outright, and the refusal named a
-"trivial-struct instantiation" that does not exist. `PairBox` is held by a field type so the instantiation is
+since read as borrowed it would be retained at the feed where a move is owed. `PairBox` is held by a field type so the instantiation is
 live without being constructed.
 ```maxon
 type Box uses Element

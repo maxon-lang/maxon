@@ -869,16 +869,16 @@ end 'main'
 0
 ```
 
-<!-- test: error.contested-generic-alias-as-a-type-argument-is-not-a-panic -->
+<!-- test: contested-generic-alias-as-a-type-argument-is-not-a-panic -->
 ⛔ **A generic instance's TYPE ARGUMENT is not a declared SLOT, and `settleGenericAliasContest` rewrites
 slots.** `Box with Bag` is interned once, by whichever pass first met it — the declaration SWEEP, which
 runs before any contest can be known — so its argument stays a bare `named("Bag")`. The settle then
 re-interns each declaration SCOPED, and the registry is append-only, so the pre-settle instance survives
 beside its two scoped replacements and every whole-program walk over `instancesOfBase` still meets it,
 including `isManagedOpaqueTypeParamField` and `noteDestructorUsage`'s opaque-element drop rooting. A
-superseded spelling classifies NOTHING (`genericAliasSpellingIsSuperseded`), so the verdict is the one
-each file's own declarations earn: the co-owned-trivial reassign refusal, identical to the single-file
-program's.
+superseded spelling classifies NOTHING (`genericAliasSpellingIsSuperseded`), so the shared body's
+reassignment drops what each file's own declarations make the box own, identical to the single-file
+program's, and the run exits clean.
 ```maxon
 // --- file: aboxdef.maxon
 export type Box uses T
@@ -900,7 +900,7 @@ export function fromHigh() returns Integer
 	var b = Bag.create()
 	b.push(1500)
 	let box = BB.create(b)
-	return 1
+	return 1 if box.value.count() == 1 else 0
 end 'fromHigh'
 
 export typealias Integer = int(i64.min to i64.max)
@@ -917,8 +917,8 @@ function main() returns ExitCode
 	return fromHigh() - 1
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field 'value' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor has no single-value drop for a trivial struct); reassign the field on a concrete instance, or use a managed element type
+```exitcode
+0
 ```
 
 <!-- test: error.contested-generic-alias-at-the-opaque-copy-gate -->
@@ -1001,12 +1001,10 @@ note: stdlib/Array.maxon:83:32: raised inside the library, on behalf of the cons
 ```
 
 <!-- test: contested-generic-alias-argument-that-owns-heap-is-not-co-owned-trivial -->
-⛔⛔ **A SUPERSEDED SPELLING MUST CLASSIFY NOTHING AT *EVERY* ARGUMENT DOOR, AND THE THIRD DOOR'S
-"NOTHING" IS NOT ITS OWN.** `typeArgIsCoOwnedTrivial` is `typeIsManaged and not
-typeArgIsOwned`, so both halves must ignore the pre-settle `Box with named("N0")` orphan: a vote of
-MANAGED-AND-NOT-OWNED from it would be CO-OWNED TRIVIAL, a kind no live instantiation has, and
-`anyInstanceTypeArgHasKind` is an OR. Every LIVE instantiation of `Box` here OWNS a String, so every
-scoped sibling in the by-base bucket votes not-co-owned, and `v1.swap(…)` runs to exit 0 — as does the
+⛔⛔ **A SUPERSEDED SPELLING MUST CLASSIFY NOTHING AT *EVERY* REFUSING ARGUMENT DOOR.** The pre-settle
+`Box with named("N0")` orphan stays in the by-base bucket, and `anyInstanceTypeArgHasKind` is an OR, so a
+vote from it would be a kind no live instantiation has. Every LIVE instantiation of `Box` here OWNS a
+String, and `v1.swap(…)` runs to exit 0 — as does the
 byte-identical program whose second file spells its aliases `M0`/`M1`, and the INLINE
 `Box with (Box with S0)` spelling of this very program.
 ```maxon
