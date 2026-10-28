@@ -1,0 +1,115 @@
+let FedRunPollMs = 5
+let FedRunKillWaitMs = 1
+let FedRunLineEnd = "\n"
+
+type FedRun
+	var child as StreamingSubprocess
+	var stdout = ""
+	var stderr = ""
+	var fed = false
+	let anchor as String
+	let feed as String
+
+	static function begin(child StreamingSubprocess, anchor String, feed String) returns FedRun
+		return Self{child: child, anchor: anchor, feed: feed}
+	end 'begin'
+
+	function conclude(timeoutMs DurationMs) returns ProcessCapture throws SubprocessError
+		let status = try self.runToExit(timeoutMs) otherwise (e) 'unfinished'
+			self.child.release()
+			throw e
+		end 'unfinished'
+
+		self.drainRemaining()
+		self.child.release()
+
+		return ProcessCapture.create(status.code() as ExitCodeValue, stdout: self.stdout, stderr: self.stderr)
+	end 'conclude'
+
+	function absorbStdoutLine() returns bool
+		match self.child.tryReadStdoutLine() 'polled'
+			none then return false
+			line(text) then self.noteStdout(text)
+		end 'polled'
+
+		return true
+	end 'absorbStdoutLine'
+
+	function absorbStderrLine() returns bool
+		match self.child.tryReadStderrLine() 'polled'
+			none then return false
+			line(text) then self.stderr.append("{text}{FedRunLineEnd}")
+		end 'polled'
+
+		return true
+	end 'absorbStderrLine'
+
+	function noteStdout(text String)
+		self.stdout.append("{text}{FedRunLineEnd}")
+
+		if self.fed or text != self.anchor 'notTheAnchor'
+			return
+		end 'notTheAnchor'
+
+		// A child that exits without reading has already closed its end, which is the case's outcome to
+		// judge rather than a harness error.
+		try self.child.writeStdinLine(self.feed) otherwise ignore
+		self.child.closeStdin()
+		self.fed = true
+	end 'noteStdout'
+
+	function runToExit(timeoutMs DurationMs) returns TerminationStatus throws SubprocessError
+		let start = Clock.nowMs()
+
+		while true 'pump'
+			let outMoved = self.absorbStdoutLine()
+			let errMoved = self.absorbStderrLine()
+
+			if outMoved or errMoved 'moved'
+				continue
+			end 'moved'
+
+			match self.child.pollTermination() 'polled'
+				ended(status) then return status
+				running then try self.restUnlessExpired(start, timeoutMs: timeoutMs)
+			end 'polled'
+		end 'pump'
+
+		panic("FedRun.runToExit: the pump loop leaves only by returning or throwing")
+	end 'runToExit'
+
+	function restUnlessExpired(start InstantMs, timeoutMs DurationMs) throws SubprocessError
+		if Clock.elapsedMs(start) >= timeoutMs 'expired'
+			throw self.endedByDeadline(Clock.elapsedMs(start))
+		end 'expired'
+
+		sleep(FedRunPollMs)
+	end 'restUnlessExpired'
+
+	function endedByDeadline(elapsedMs DurationMs) returns SubprocessError
+		// A wait that times out kills the child's whole process tree, which is how the deadline ends it.
+		_ = try self.child.waitWithTimeout(FedRunKillWaitMs) otherwise 0
+		self.drainRemaining()
+
+		return SubprocessError.timeout(elapsedMs, stdout: self.stdout, stderr: self.stderr)
+	end 'endedByDeadline'
+
+	function drainRemaining()
+		while true 'eachStdoutLine'
+			let text = try self.child.readStdoutLine() otherwise break
+			self.noteStdout(text)
+		end 'eachStdoutLine'
+
+		while true 'eachStderrLine'
+			let text = try self.child.readStderrLine() otherwise break
+			self.stderr.append("{text}{FedRunLineEnd}")
+		end 'eachStderrLine'
+	end 'drainRemaining'
+end 'FedRun'
+
+export function runProcessFedAfter(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs, environment Environment, anchor String, feed String) returns ProcessCapture throws SubprocessError
+	let child = try StreamingSubprocess.spawnWithEnvironment(exe, arguments: argv, workingDirectory: workingDirectory, environment: environment)
+	var run = FedRun.begin(child, anchor: anchor, feed: feed)
+
+	return try run.conclude(timeoutMs)
+end 'runProcessFedAfter'

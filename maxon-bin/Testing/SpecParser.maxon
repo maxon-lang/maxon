@@ -275,8 +275,8 @@ let ProcsMarker = "<!-- procs:"
 let PreemptMarker = "<!-- preempt:"
 
 // ⭐⭐ **WHETHER THIS CASE'S PROGRAM IS GIVEN A STDIN THAT BLOCKS — `<!-- stdin: hold -->` and
-// `<!-- stdin: delayed -->`, the markers that make a real KERNEL WAIT reachable from an ordinary spec
-// case.**
+// `<!-- stdin: after "<line>" -->`, the markers that make a real KERNEL WAIT reachable from an
+// ordinary spec case.**
 //
 // Without one, every case's program is spawned with `InputSource.none`: stdin is the null device, so
 // `Console.stdin().readLine()` returns at once (measured — it THROWS immediately at EOF). That is fine
@@ -291,15 +291,16 @@ let PreemptMarker = "<!-- preempt:"
 // blocks in the kernel exactly as a read on an idle terminal does, until the case's own logic exits or
 // `SpecSpawnTimeoutMs` reaps it.
 //
-// ⭐⭐ **`delayed` EXISTS BECAUSE `hold` ALONE CANNOT CARRY AN EXPECTATION.** MEASURED: the compiler's exit path
-// waits for live green threads, so a program whose reader is parked forever prints its siblings' lines
-// and then simply never exits. ⇒ A `hold` case can only ever end at `SpecSpawnTimeoutMs`, which is a
-// two-minute FAIL that asserts nothing — "it did not finish" is equally what a hang, a crash loop and a
-// deadlock look like. `delayed` ends the wait about a second after the program's FIRST STDOUT BYTE
-// (`runStdinFor`), so the blocking read COMPLETES, the program exits on its own, and the observable becomes
-// what it printed and in what ORDER against whatever ran while it was parked. Anchoring the feed on the
-// program's own output rather than on its spawn is what keeps a slow start from feeding the read before it
-// is entered; a program that never prints is never fed.
+// ⭐⭐ **`after` EXISTS BECAUSE `hold` ALONE CANNOT CARRY AN EXPECTATION.** MEASURED: the compiler's
+// exit path waits for live green threads, so a program whose reader is parked forever prints its
+// siblings' lines and then simply never exits. ⇒ A `hold` case can only ever end at
+// `SpecSpawnTimeoutMs`, which is a two-minute FAIL that asserts nothing — "it did not finish" is
+// equally what a hang, a crash loop and a deadlock look like. `after` ends the wait once the
+// program's stdout shows the named line (`runWithStdin`), so the blocking read COMPLETES, the
+// program exits on its own, and the observable becomes what it printed and in what ORDER against
+// whatever ran while it was parked. Only the harness writes to the pipe, so the order "the named
+// line, THEN the read returns" holds by construction, with no clock in it; a program that never
+// prints the line is never fed.
 //
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A DEFAULT** — `parseNetworkValue` and `parseProcsValue`,
 // which this follows exactly. Reading `<!-- stdin: pipe -->` as "leave the default alone" would hand
@@ -312,7 +313,9 @@ let StdinMarker = "<!-- stdin:"
 
 // The two values `StdinMarker` recognizes, for `NetworkLiveValue`'s reason.
 let StdinHoldValue = "hold"
-let StdinDelayedValue = "delayed"
+let StdinAfterValue = "after"
+
+let QuotedRunPieces = 3
 
 // ⭐⭐ **WHETHER THIS CASE'S PROGRAM MAY RUN BESIDE ANOTHER CASE'S — `<!-- runs: alone -->`.** A program whose
 // peak memory is set by a runtime LIMIT rather than by what it computes — a green thread's stack grown to
@@ -345,7 +348,7 @@ export let TierSubdirectoryPrefix = "stdlib/"
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
 let ArgSeparator = " "
-let ArgQuote = "\""
+let MarkerValueQuote = "\""
 
 // ⭐⭐ **WHAT A MARKER LINE IS — ARBITRARY WHITESPACE AT BOTH ENDS.**
 //
@@ -821,10 +824,10 @@ export union SpecStdin
 	// read BLOCKS in the kernel rather than being answered.
 	held
 
-	// `<!-- stdin: delayed -->`: the same pipe, written to with one line about a second after the program's
-	// first stdout byte and then closed, so a read BLOCKS and then COMPLETES and the program can still exit
-	// on its own.
-	delayed
+	// `<!-- stdin: after "<line>" -->`: the same pipe, written to with one line once the program's
+	// stdout shows `line` and then closed, so a read BLOCKS and then COMPLETES and the program can
+	// still exit on its own.
+	after(line String)
 end 'SpecStdin'
 
 // ⭐ **WHETHER A CASE SHARES THE POOL — see `RunsMarker` for why this is a per-case fact.** It is also the key a
@@ -1559,7 +1562,7 @@ type CaseBuilder
 		end 'program'
 
 		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
-		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
 	end 'build'
 
 	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
@@ -2421,12 +2424,40 @@ function parseStdinValue(opening String, lineIndex ElementIndex, specPath FilePa
 		return SpecStdin.held
 	end 'held'
 
-	if value == StdinDelayedValue 'delayed'
-		return SpecStdin.delayed
-	end 'delayed'
+	match stdinAnchorIn(value) 'reading'
+		anchor(line) then return SpecStdin.after(line)
+		notAnAnchor then break
+	end 'reading'
 
-	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{StdinMarker} {value} -->`, and '{StdinHoldValue}' and '{StdinDelayedValue}' are the only values this marker takes. '{StdinHoldValue}' spawns the program with a stdin pipe nobody ever writes to, so a read BLOCKS in the kernel forever; '{StdinDelayedValue}' writes one line about a second after the program's first stdout byte and closes, so the read blocks and then COMPLETES. An unrecognized value would quietly read as the default stdin, which answers every read at once with EOF — and a case asserting that something blocks would pass without anything having blocked")
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{StdinMarker} {value} -->`, and '{StdinHoldValue}' and '{StdinAfterValue} \"<line>\"' are the only values this marker takes. '{StdinHoldValue}' spawns the program with a stdin pipe nobody ever writes to, so a read BLOCKS in the kernel forever; '{StdinAfterValue} \"<line>\"' writes one line once the program's stdout shows the line between the quotes and closes, so the read blocks and then COMPLETES. An unrecognized value would quietly read as the default stdin, which answers every read at once with EOF — and a case asserting that something blocks would pass without anything having blocked")
 end 'parseStdinValue'
+
+union SpecStdinReading
+	anchor(line String)
+	notAnAnchor
+end 'SpecStdinReading'
+
+function stdinAnchorIn(value String) returns SpecStdinReading
+	if not value.startsWith(StdinAfterValue) 'notAfter'
+		return SpecStdinReading.notAnAnchor
+	end 'notAfter'
+
+	let pieces = value.replaceFirst(StdinAfterValue, with: "").trim().split(MarkerValueQuote)
+
+	if pieces.count() != QuotedRunPieces 'notOneQuotedRun'
+		return SpecStdinReading.notAnAnchor
+	end 'notOneQuotedRun'
+
+	let leading = try pieces.get(0) otherwise panic("SpecParser.stdinAnchorIn: a split of {QuotedRunPieces} pieces has a first")
+	let line = try pieces.get(1) otherwise panic("SpecParser.stdinAnchorIn: a split of {QuotedRunPieces} pieces has a second")
+	let trailing = try pieces.get(2) otherwise panic("SpecParser.stdinAnchorIn: a split of {QuotedRunPieces} pieces has a third")
+
+	if not leading.isEmpty() or line.isEmpty() or not trailing.isEmpty() 'notTheWholeValue'
+		return SpecStdinReading.notAnAnchor
+	end 'notTheWholeValue'
+
+	return SpecStdinReading.anchor(line)
+end 'stdinAnchorIn'
 
 // The arguments an `<!-- Args: … -->` marker names, in order — its value split into the argv the
 // program is spawned with. `<!-- Args: -5.5 -->` is ONE argument, `-5.5`: a value beginning with `-`
@@ -2466,7 +2497,7 @@ function parseProgramArgs(opening String) returns ProgramArgArray
 
 	while at < length 'eachCharacter'
 		let ch = payload.slice(pos, length: 1)
-		let isQuote = ch == ArgQuote
+		let isQuote = ch == MarkerValueQuote
 		let isSeparator = not inQuotes and ch == ArgSeparator
 
 		// Advanced ONCE, before the branches: both the next segment's start and the next character's

@@ -1,0 +1,15 @@
+let StdinAfterSpecName = "stdin-after"
+
+test 'a stdin after marker feeds the program only once its stdout shows the named line'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: StdinAfterSpecName, testNames: ["stdin-after.fed-only-after-the-line", "stdin-after.line-never-printed"], broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a stdin after marker feeds the program only once its stdout shows the named line")
+end 'a stdin after marker feeds the program only once its stdout shows the named line'

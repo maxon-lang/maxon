@@ -298,43 +298,34 @@ let GuestBaseShellName = "R"
 
 // ⭐⭐ **THE `<!-- stdin: … -->` MARKER, CARRIED INTO THE BATCH — because a facility the direct-spawn
 // path honours and the batch path drops is a WRONG ANSWER, not a missing feature.**
-// `spawnExecution` hands each child an `InputSource` built by `runStdinFor`; the batch execs its
+// `spawnExecution` hands each child the stdin `runWithStdin` builds; the batch execs its
 // binaries from a shell, so the same three shapes are built out of a redirection instead. One token
 // per arm, dispatched by a `case` in the script, so a fourth arm cannot be added to `SpecStdin`
 // without this table failing to compile.
-//
-// ⛔ **MEASURED: without this, the three `sched-syscall-handoff` cases carrying `stdin: delayed` read EOF
-// at once on x64-linux** — `read=0` where the case pins `read=5`, and the sentinel/reader ORDER the case
-// exists to assert flipped with it. A green suite over a facility that was never delivered.
 let BatchStdinClosedToken = "c"
 let BatchStdinHeldToken = "h"
-let BatchStdinDelayedToken = "d"
+let BatchStdinAfterToken = "a"
 
-// The file the delayed line is fed from. Written by the host so the guest reproduces the constant's exact
-// BYTES: `SpecStdinDelayedLine` ends in a newline, and a shell spelling of it would have to re-escape
-// that — a second copy of the one thing the line's own header says must not be lost.
+// The file the fed line is read from. Written by the host so the guest reproduces the line's exact
+// BYTES: it ends in a newline, and a shell spelling of it would have to re-escape that — a second
+// copy of the one thing the line's own header says must not be lost.
 let BatchStdinFileName = "stdin.txt"
 
-// How long a `delayed` case's line is withheld once the program has written its first stdout byte.
-// `InputSource.delayed`'s own wait, in the units a shell `sleep` takes; the two are one fact and the
-// direct path's is the reference.
-let BatchStdinDelaySeconds = 1
-
-// ⭐ **THE `delayed` WRITER WAITS FOR THE PROGRAM'S FIRST STDOUT BYTE BEFORE ITS DELAY STARTS, as the direct
-// path does.** The exec function redirects the program's stdout to a capture file that is empty at
-// dispatch, so "the program has printed" is that file becoming non-empty (`-s`), polled at this interval —
-// a whole second, because a fractional `sleep` is coreutils-only and the guest's shell is not promised it.
-// The writer also releases on the status file: a program that exits without printing must not hold the
-// pipeline open for the whole bound.
+// ⭐ **THE `after` WRITER WAITS FOR THE PROGRAM'S STDOUT CAPTURE TO HOLD THE NAMED LINE.** The exec
+// function redirects the program's stdout to a capture file that is empty at dispatch, so "the
+// program has printed the line" is `grep -x` finding it there, polled at this interval — a whole
+// second, because a fractional `sleep` is coreutils-only and the guest's shell is not promised it.
+// The writer also releases on the status file: a program that exits without printing the line must
+// not hold the pipeline open for the whole bound.
 let BatchStdinReadyPollSeconds = 1
 
-// The poll count that bounds the wait. Mandatory: a `timeout`-killed program never writes its status file,
-// and the pipeline waits for its writer. The bound is `held`'s, so the writer outlives the execution's own
-// deadline by at most its delay.
+// The poll count that bounds the wait. Mandatory: a `timeout`-killed program never writes its
+// status file, and the pipeline waits for its writer. The bound is `held`'s, so the writer outlives
+// the execution's deadline and kill grace by at most one poll.
 let BatchStdinReadyPollLimit = BatchStdinHoldSeconds
 
-// The shell variable the `delayed` writer counts its polls in. One character for `BatchRunFunctionName`'s
-// reason.
+// The shell variable the `after` writer counts its polls in. One character for
+// `BatchRunFunctionName`'s reason.
 let BatchStdinPollShellName = "i"
 
 // How long a `held` case's pipe is kept open. It must OUTLIVE the execution's own deadline, or the case
@@ -342,8 +333,8 @@ let BatchStdinPollShellName = "i"
 // its kill grace rather than picked, and the pipeline it sits in is bounded by the same arithmetic.
 //
 // ⚠ No case in the corpus carries `<!-- stdin: hold -->` today, so this arm is UNEXERCISED. It is written
-// out rather than left to panic because the alternative — a shell that silently gives EOF — is the exact
-// failure the `delayed` arm above records having shipped.
+// out rather than left to panic because the alternative — a shell that silently gives EOF — is the
+// wrong answer the header above `BatchStdinClosedToken` names.
 let BatchStdinHoldSeconds = SpecSpawnTimeoutSeconds + BatchKillGraceSeconds + 1
 
 // The POSIX shell the batch script is handed to, named at its absolute path for `-e`'s reason: the flag
@@ -481,10 +472,17 @@ function batchStdinShellVar() returns String
 	return "${BatchStdinShellName}"
 end 'batchStdinShellVar'
 
-// The `$`-reference to the `delayed` writer's poll counter, derived for the same reason.
+// The `$`-reference to the `after` writer's poll counter, derived for the same reason.
 function batchStdinPollShellVar() returns String
 	return "${BatchStdinPollShellName}"
 end 'batchStdinPollShellVar'
+
+let BatchStdinAnchorShellName = "m"
+
+// The `$`-reference to the line the `after` writer waits for, derived for the same reason.
+function batchStdinAnchorShellVar() returns String
+	return "${BatchStdinAnchorShellName}"
+end 'batchStdinAnchorShellVar'
 
 // The guest's bit bucket. A `closed` case reads EOF at once from it, which is what `InputSource.none`
 // gives the direct-spawn path.
@@ -764,7 +762,7 @@ export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
 // `timeoutMs`, `environment` and `standardInput` default because every spawn but one wants the same
 // value, so the one that differs is the one that states it: `runGuestBatch` for the deadline, since
 // it performs many executions in one spawn, and for the script it hands `orb` on standard input,
-// and the RUN step for the environment (`runEnvironmentFor`) and standard input (`runStdinFor`).
+// and the RUN step for the environment (`runEnvironmentFor`) and standard input (`runWithStdin`).
 export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none) returns ProcessCapture throws SubprocessError
 	var config = Configuration.create(exe)
 	config.arguments = argv
@@ -4347,7 +4345,7 @@ function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTa
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
-	let spawned = try runProcess(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: runWorkingDir, environment: runEnvironmentFor(execution.procs, preempt: execution.preempt), standardInput: runStdinFor(execution.stdin)) otherwise (e) 'runSpawnFailed'
+	let spawned = try runWithStdin(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: runWorkingDir, environment: runEnvironmentFor(execution.procs, preempt: execution.preempt), stdin: execution.stdin) otherwise (e) 'runSpawnFailed'
 		return RunObservation.failed(runFailureReason(e))
 	end 'runSpawnFailed'
 
@@ -4414,14 +4412,13 @@ function runEnvironmentFor(procs SpecProcs, preempt SpecPreempt) returns Environ
 	return Environment.inheritUpdating(overrides)
 end 'runEnvironmentFor'
 
-// ⭐ **WHAT A `<!-- stdin: delayed -->` CASE'S PROGRAM READS.** One line, so a `readLine()` returns and
-// the case can pin its LENGTH (5) as evidence that the read completed rather than being cut short by
-// EOF — a distinction `""` cannot carry, since that is also what a closed pipe gives.
-//
-// The trailing newline is not decoration: a reader looking for a line terminator would otherwise sit
-// through the whole delay and then block AGAIN until the pipe closed, which would make the case's timing
-// a property of the runtime's buffering instead of of the delay.
-let SpecStdinDelayedLine = "hello\n"
+// ⭐ **WHAT A `<!-- stdin: after "…" -->` CASE'S PROGRAM READS.** One line, so a `readLine()`
+// returns and the case can pin its LENGTH (5) as evidence that the read completed rather than being
+// cut short by EOF — a distinction `""` cannot carry, since that is also what a closed pipe gives.
+// The line's terminator is added where it is written (`StreamingSubprocess.writeStdinLine`, and the
+// batch's stdin file), because a reader looking for one would otherwise block AGAIN until the pipe
+// closed.
+let SpecStdinFedWord = "hello"
 
 // ⭐⭐ **WHAT A CASE'S `<!-- stdin: … -->` MARKER MEANS AT THE SPAWN: one descriptor, in one child, and
 // nothing else changed.**
@@ -4432,24 +4429,22 @@ let SpecStdinDelayedLine = "hello\n"
 // and answers at once, `bytes` answers and then closes, and `inherit` would hand the case whatever the
 // suite was launched with, making the result a property of the terminal rather than of the case.
 //
-// `InputSource.delayed` is that same pipe with an end: the runtime holds it open until about a second
-// after the child's FIRST STDOUT BYTE, then writes the line and closes. The child's read therefore blocks
-// in the kernel AND RETURNS, so the program exits on its own and the case pins an answer instead of a
-// timeout — and a program slow to reach its first print is fed no earlier for it, so a case that prints a
-// ready line immediately before its read can pin that the read genuinely blocked. The runtime demands a
-// collected stdout for that anchor, which `spawnExecution` always gives.
+// `after` is that same pipe with an end, written by `runProcessFedAfter` once the child's stdout
+// shows the named line and closed behind it. The child's read therefore blocks in the kernel AND
+// RETURNS, so the program exits on its own and the case pins an answer instead of a timeout. See
+// `StdinMarker` for why the order this pins holds without a clock.
 //
 // ⛔ **IT MAY NOT BE DONE BY LEAVING THE PIPE TO THE PARENT'S OWN STDIN**, for `runEnvironmentFor`'s
 // reason one field over: that would make the answer a property of how the SUITE was invoked — a pipe
 // under CI, a terminal by hand, a closed descriptor under a daemon — and three invocations of the same
 // case would be asserting three different things.
-function runStdinFor(stdin SpecStdin) returns InputSource
+function runWithStdin(exe Executable, argv StringArray, workingDirectory FilePath, environment Environment, stdin SpecStdin) returns ProcessCapture throws SubprocessError
 	return match stdin 's'
-		closed gives InputSource.none
-		held gives InputSource.hold
-		delayed gives InputSource.delayed(SpecStdinDelayedLine)
+		closed gives try runProcess(exe, argv: argv, workingDirectory: workingDirectory, environment: environment, standardInput: InputSource.none)
+		held gives try runProcess(exe, argv: argv, workingDirectory: workingDirectory, environment: environment, standardInput: InputSource.hold)
+		after(line) gives try runProcessFedAfter(exe, argv: argv, workingDirectory: workingDirectory, timeoutMs: SpecSpawnTimeoutMs, environment: environment, anchor: line, feed: SpecStdinFedWord)
 	end 's'
-end 'runStdinFor'
+end 'runWithStdin'
 
 // Whether the one guest entry happened at all. A launch that never got off the ground is not one
 // test's failure — every test the batch was carrying has to be told, in its own record, which is
@@ -4549,11 +4544,11 @@ function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir 
 		discardBatchCaptures(batchDir, key: execution.key)
 	end 'eachExecution'
 
-	// Written unconditionally rather than only when a `delayed` case is in this batch: the file is one
+	// Written unconditionally rather than only when an `after` case is in this batch: the file is one
 	// short line, and a conditional write is a second reading of the same marker that the script's `case`
 	// already reads — two answers that could disagree about whether the file is there.
 	let stdinPath = batchDir.join("{BatchStdinFileName}")
-	try File.writeText(stdinPath, content: SpecStdinDelayedLine) otherwise 'noStdinFile'
+	try File.writeText(stdinPath, content: "{SpecStdinFedWord}\n") otherwise 'noStdinFile'
 		return BatchLaunch.failed("could not write the batch stdin file {stdinPath.toString()}")
 	end 'noStdinFile'
 
@@ -4709,8 +4704,9 @@ function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	out.append("\t{BatchPreemptShellName}=$2\n")
 	out.append("\t{BatchKeyShellName}=$3\n")
 	out.append("\t{BatchStdinShellName}=$4\n")
-	out.append("\t{BatchExeShellName}=$5\n")
-	out.append("\tshift 5\n")
+	out.append("\t{BatchStdinAnchorShellName}=$5\n")
+	out.append("\t{BatchExeShellName}=$6\n")
+	out.append("\tshift 6\n")
 
 	// ⭐ THE CASE'S OWN PROCESSOR COUNT AND PREEMPTION SWITCH, EXPORTED INTO THIS EXECUTION'S ENVIRONMENT AND
 	// NOWHERE ELSE. The function body is a SUBSHELL (see this function's header), so the exports die with the
@@ -4725,11 +4721,11 @@ function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	// ⭐ THE `<!-- stdin: … -->` MARKER, AS A REDIRECTION. `closed` is the null device — the same thing
 	// `InputSource.none` opens, and NOT the batch's own inherited descriptor, which would make every
 	// case's answer a property of how the suite was launched. The other two are pipes whose writer sleeps:
-	// `delayed` waits for the program's stdout capture to grow (or its status file to appear), then sleeps
-	// its delay, delivers the line and closes; `held` never delivers at all.
+	// `after` waits for the program's stdout capture to hold the named line (or its status file to
+	// appear), delivers the line and closes; `held` never delivers at all.
 	out.append("\tcase \"{batchStdinShellVar()}\" in\n")
 	out.append("\t{BatchStdinClosedToken}) {BatchExecFunctionName} \"$a\" \"$o\" \"$e\" \"$c\" \"$@\" < {GuestNullDevice} ;;\n")
-	out.append("\t{BatchStdinDelayedToken}) ( {BatchStdinPollShellName}=0; while [ ! -s \"$o\" ] && [ ! -f \"$c\" ] && [ \"{batchStdinPollShellVar()}\" -lt {BatchStdinReadyPollLimit} ]; do sleep {BatchStdinReadyPollSeconds}; {BatchStdinPollShellName}=$(({BatchStdinPollShellName}+1)); done; sleep {BatchStdinDelaySeconds}; cat \"{guestStdinPath(scratch)}\" ) | {BatchExecFunctionName} \"$a\" \"$o\" \"$e\" \"$c\" \"$@\" ;;\n")
+	out.append("\t{BatchStdinAfterToken}) ( {BatchStdinPollShellName}=0; while ! grep -qxF -- \"{batchStdinAnchorShellVar()}\" \"$o\" 2> {GuestNullDevice} && [ ! -f \"$c\" ] && [ \"{batchStdinPollShellVar()}\" -lt {BatchStdinReadyPollLimit} ]; do sleep {BatchStdinReadyPollSeconds}; {BatchStdinPollShellName}=$(({BatchStdinPollShellName}+1)); done; cat \"{guestStdinPath(scratch)}\" ) | {BatchExecFunctionName} \"$a\" \"$o\" \"$e\" \"$c\" \"$@\" ;;\n")
 	out.append("\t{BatchStdinHeldToken}) sleep {BatchStdinHoldSeconds} | {BatchExecFunctionName} \"$a\" \"$o\" \"$e\" \"$c\" \"$@\" ;;\n")
 	out.append("\tesac\n")
 	out.append("\t[ -f \"$c\" ] || printf %s {BatchTimedOutToken} > \"$c\"\n")
@@ -4792,7 +4788,7 @@ function guestScriptPath(tempDir FilePath) returns String
 	return "{guestSpecTempPrefix(tempDir)}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchScriptName}"
 end 'guestScriptPath'
 
-// The delayed line's file, on the guest side — the twin of `launchBatch`'s `stdinPath`, and a pair
+// The fed line's file, on the guest side — the twin of `launchBatch`'s `stdinPath`, and a pair
 // for the reason `guestCapturePath` and `batchCapturePath` are one: the writer and the reader must
 // name one file.
 function guestStdinPath(scratch String) returns String
@@ -4806,9 +4802,17 @@ function batchStdinToken(stdin SpecStdin) returns String
 	return match stdin 's'
 		closed gives BatchStdinClosedToken
 		held gives BatchStdinHeldToken
-		delayed gives BatchStdinDelayedToken
+		after gives BatchStdinAfterToken
 	end 's'
 end 'batchStdinToken'
+
+function batchStdinAnchor(stdin SpecStdin) returns String
+	return match stdin 's'
+		closed or
+		held gives ""
+		after(line) gives line
+	end 's'
+end 'batchStdinAnchor'
 
 // ⭐ **THE SPEC'S SCRATCH DIRECTORY, NAMED FROM THE CHECKOUT ROOT IN POSIX FORM.** `--cd` is the only
 // argument WSL translates, so every other path the script names is built here: relative to the root the
@@ -4828,7 +4832,7 @@ function guestSpecTempPrefix(tempDir FilePath) returns String
 end 'guestSpecTempPrefix'
 
 // One test's line: the function, the case's processor count, its preemption switch, the binary's own
-// filename, the stdin token, then the case's own `Args:`.
+// filename, the stdin token and the line an `after` token waits for, then the case's own `Args:`.
 //
 // ⭐ THE PROGRAM'S OWN ARGUMENTS GO LAST, exactly as they do behind every other runner
 // (`buildRunCommand`): the shell function forwards whatever follows its own positionals straight to the
@@ -4854,6 +4858,8 @@ function batchCallLine(execution Execution) returns String
 	line.append(shQuoted(execution.key))
 	line.append(" ")
 	line.append(shQuoted(batchStdinToken(execution.stdin)))
+	line.append(" ")
+	line.append(shQuoted(batchStdinAnchor(execution.stdin)))
 	line.append(" ")
 	line.append(shQuoted(execution.exePath.filename()))
 
