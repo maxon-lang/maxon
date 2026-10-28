@@ -621,6 +621,7 @@ typealias Real = float(f64.min to f64.max)
 ```
 
 <!-- test: async-scheduler.gt-recycle-a-reclaimed-struct-serves-the-next-spawn -->
+<!-- procs: 1 -->
 **A GREEN-THREAD STRUCT IS NEVER HANDED BACK TO THE ALLOCATOR WHILE THE SCHEDULER RUNS.** Go keeps its `g`
 records type-stable — freed onto a per-P list and reused, never returned to the heap — because the scheduler
 reads and writes them without holding their owner's lock: sysmon poisons a running thread's stack guard,
@@ -630,7 +631,9 @@ that read land in whatever the slab gave the memory to next.
 
 Two hundred spawn-and-await rounds, one after another: the first spawn has nothing to reuse, and each of the
 other 199 takes the record the round before it gave back. `Scheduler.counters().recycledThreads` counts the
-spawns a free list served.
+spawns a free list served. The case runs at one processor, because a reuse count is exact only while every
+reclaim and every spawn share one processor's list (`gt-recycle-a-hundred-returned-records-serve-the-next-hundred-spawns`
+says why).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -659,15 +662,23 @@ sum=2646700 recycled=199
 ```
 
 <!-- test: async-scheduler.gt-recycle-a-hundred-returned-records-serve-the-next-hundred-spawns -->
+<!-- procs: 1 -->
 **EVERY RECORD GIVEN BACK IS THERE FOR THE NEXT SPAWN.** A hundred threads are all outstanding before any is
 awaited, so no spawn in the first wave can reuse anything, and all hundred records are given back together.
 The free lists are Go's: one per processor, which sheds to one global list when it reaches 64 records and
 refills from it 32 at a time, so the second wave finds the records that `main`'s processor kept and the ones
 it shed.
-Whether a given spawn reuses a record or carves a fresh one can depend on which processor it runs on, and
-that does not reach the compiler's own memory, which `scale-test` measures bit-for-bit: records come from
-the scheduler's own arena, outside the counted allocator. Every one of the second wave's hundred spawns is
-served from a list, so a record lost or freed on the way back reads below 100.
+⛔ **THE CASE RUNS AT ONE PROCESSOR, WHICH IS WHAT MAKES 100 EXACT.** A record is reclaimed onto the list of the
+processor `main` holds at that moment, and `main` does not keep one processor for a run: the system monitor
+preempts a strand that has held its processor for 10 ms of wall time, which a host that holds the process
+off a core reaches in a short program, and a preempted `main` is taken from the global queue by any machine.
+A record on another processor's list is out of a spawn's reach, so at several processors a reuse count can come
+up short with nothing lost. At one processor there is one local list and the global ones, which it sheds to
+and refills from, so every record is reachable.
+Whether a spawn reuses a record or carves a fresh one does not reach the compiler's own memory, which
+`scale-test` measures bit-for-bit: records come from the scheduler's own arena, outside the counted allocator.
+Every one of the second wave's hundred spawns is served from a list, so a record lost or freed on the way back
+reads below 100.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

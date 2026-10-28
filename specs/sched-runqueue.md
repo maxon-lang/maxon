@@ -113,7 +113,8 @@ assertion rather than what narrows it. A global counter is not a channel either:
 a module-level `var` at all (`specs/green-thread-globals.md`, E3143), so every service case below tallies
 in `self` and reports through an awaited reply. The COROUTINE half holds at any count — a strand runs one
 member at a time, on one machine at a time, in its own queue's order at any processor count, so the
-`async` answers below are the answers everywhere. **Work stealing, the head
+`async` answers below are the answers everywhere — except a reuse count (`recycledThreads`), which is a property of one
+processor's free list and is pinned to one. **Work stealing, the head
 CAS under contention and the Dekker
 fence on the ring publish are out of reach from a case pinned to one P**; the multi-processor gate is
 `scripts/multicore-stress/pin-matrix.sh`, which drives the `multicore-stress` programs across
@@ -503,6 +504,7 @@ ran=0
 ```
 
 <!-- test: sched-runqueue.a-spawn-drop-loop-stays-bounded -->
+<!-- procs: 1 -->
 **THE SWEEP'S HALF.** Five thousand coroutines are spawned and dropped while `main` never parks, so the
 strand runner never reaches them, nothing would pop them and the mark alone would leave five thousand
 records alive. Each drop instead sweeps the tombstones off the FRONT of the dropped coroutine's own owner's
@@ -541,6 +543,7 @@ ran=0 recycled=4999
 ```
 
 <!-- test: sched-runqueue.a-drop-that-arrives-after-completion-reclaims -->
+<!-- procs: 1 -->
 **THE RUNNER-FIRST ARRIVAL ORDER.** `p` is never awaited, but while `main` is parked on `await q` its strand
 runs `p` too, so `p` runs to completion and the strand runner's `__gt_runner_done` adds the RUNNER ticket
 while the promise is still live —
@@ -598,6 +601,7 @@ total=4 finished=4 recycled=6
 ```
 
 <!-- test: sched-runqueue.a-drop-of-a-parked-thread-renounces-it -->
+<!-- procs: 1 -->
 **A DROP RENOUNCES A PARKED THREAD; IT DOES NOT FREE IT.** `s` parks on a 200 ms timer and `await f` returns
 long before it fires, so the loop body's scope exit drops a thread that is registered in the timer store. The
 drop takes it out of the store under `__sched_lock` and READIES it: the thread resumes from its `sleep` early,
@@ -684,11 +688,11 @@ total=4 stillParked=4 recycled=6
 <!-- test: sched-runqueue.a-thousand-parked-drops-carve-a-bounded-population -->
 <!-- procs: 4 -->
 **THE PARKED DROP'S RECLAIM, READ AS A POPULATION.** The case above counts reuse, which is exact only while
-every spawn and every reclaim share one processor's free list. A coroutine-only program keeps that at any
-processor count, because only `main`'s machine ever runs; a program whose green threads spread across
-machines does not, since a reclaimed record may wait on another processor's list while a spawn carves a
-fresh one — so there a reuse count can come up short with nothing lost, and a record lost every round can
-hide in that slack. `Scheduler.counters().threadRecordsCarved` is the reading that holds either way: how many
+every spawn and every reclaim share one processor's free list, and it is pinned to one processor for that
+reason. At several processors `main` itself does not keep a list: a preempted `main` goes to the global queue
+and any machine resumes it, and a program whose green threads spread across machines splits further. A
+reclaimed record may then wait on another processor's list while a spawn carves a fresh one — so there a
+reuse count can come up short with nothing lost, and a record lost every round can hide in that slack. `Scheduler.counters().threadRecordsCarved` is the reading that holds either way: how many
 records the scheduler's arena has ever carved. A spawn carves only when its processor's list and the global
 one are both empty, so a runtime that reclaims every dropped sleeper carves no more than the records live at
 once — `main`, this round's sleeper and its finisher — plus fewer than 64 waiting on each other processor's

@@ -256,6 +256,7 @@ streamingWithEnvironment: answered=true took=true gaveBack=true
 ```
 
 <!-- test: runtime-scratch-reclaim.spawn-await-loop-is-bounded -->
+<!-- procs: 1 -->
 **THE GT RECORD ITSELF, AND IT IS RECYCLED RATHER THAN RETURNED.** `__gt_reclaim` puts a finished
 thread's record on its processor's free list (Go's `gfput`), and `__gt_spawn` takes the next one from
 there, zeroed, before it carves a fresh one from the scheduler's record arena (Go's `gfget`). The records
@@ -273,7 +274,8 @@ Eight spawn/await pairs after a warm-up whose struct is already on the list: eve
 by the free list (`Scheduler.counters().recycledThreads` grows by exactly 8), none asks the allocator
 (`HeapStats.rawAllocationsMade()` does not move — a green thread's record comes from the scheduler's arena and its
 stack from `osAllocPages`, and the raw columns count neither), and nothing is left live
-(`HeapStats.rawAllocationsLive()` does not move).
+(`HeapStats.rawAllocationsLive()` does not move). The case runs at one processor: a reuse count is exact only
+while every reclaim and spawn share one processor's list, and a preempted `main` can resume on another.
 ```maxon
 function work(n Integer) returns Integer
 	Scheduler.parallelBoundary()
