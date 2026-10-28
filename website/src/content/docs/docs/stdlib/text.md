@@ -89,6 +89,8 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | `StringIndex.create(charIndex GraphemeIndex, bytePos BytePos)` | `StringIndex` | Build an index from both coordinates. |
 | `charIndex()` | `GraphemeIndex` | Grapheme position. |
 | `bytePos()` | `BytePos` | UTF-8 byte offset. |
+| `equals(other StringIndex)` | `bool` | True when both have the same grapheme index. |
+| `compare(other StringIndex)` | `Ordering` | Orders by grapheme index. |
 
 ```maxon
 function main() returns ExitCode

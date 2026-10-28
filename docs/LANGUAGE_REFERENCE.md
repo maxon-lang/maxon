@@ -499,7 +499,7 @@ end 'main'
 ### Booleans
 
 `bool` has the literals `true` and `false`. Conditions must be `bool` — there is no truthiness, so
-`if count 'x'` is **E3005** (`'if' requires a bool condition, got 'int'`). `bool` and `int` do not mix:
+`if count 'x'` is **E3005** (`'if' requires a bool condition, got 'Count'` for a `Count`). `bool` and `int` do not mix:
 `flag + 1` is **E2004** and comparing a `bool` with an `int` is **E3005**. On `bool` operands, `and` and
 `or` are logical and short-circuit.
 
@@ -639,7 +639,7 @@ A cast takes one step. Where two steps each do work — a range check, then a re
 
 #### Floats to Integers
 
-A float never converts to an integer implicitly (**E3009** `cannot implicitly convert 'float' to 'int'`).
+A float never converts to an integer implicitly (**E3009** `cannot implicitly convert 'float' to 'Count'` for a `Count` destination).
 Choose the rounding explicitly:
 
 | Function | Result | Example |
@@ -764,7 +764,8 @@ end 'main'
 - A value keeps its alias wherever it is held: a local or global initialized by a cast has the cast's alias,
   and each tuple element keeps its own, so `(Tally, Tally)` and `(Score, Score)` are two types. Float
   aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
-  and array elements.
+  and array elements — and a `float` alias value at an `int` alias place is **E3005**, as `Age` at a `Year`
+  place is.
 - Two declarations of one alias name, in two files, are two types too, even over the same range. An
   operator, an argument, a store or a join that mixes them is **E3005** (**E2028** for a join) until one side
   is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds

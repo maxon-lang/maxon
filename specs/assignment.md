@@ -275,7 +275,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/assignment/error.retype-local-errors.maxon:7:2: cannot assign a value of type 'String' to variable 'x', which holds 'int'
+error E3005: specs/assignment/error.retype-local-errors.maxon:7:2: cannot assign a value of type 'String' to variable 'x', which holds 'Integer'
 ```
 
 <!-- test: error.retype-global-errors -->
@@ -296,7 +296,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/assignment/error.retype-global-errors.maxon:8:2: cannot assign a value of type 'String' to global 'g', which holds 'int'
+error E3005: specs/assignment/error.retype-global-errors.maxon:8:2: cannot assign a value of type 'String' to global 'g', which holds 'Integer'
 ```
 
 <!-- test: error.retype-conditional-errors -->
@@ -318,7 +318,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/assignment/error.retype-conditional-errors.maxon:9:3: cannot assign a value of type 'String' to variable 'z', which holds 'int'
+error E3005: specs/assignment/error.retype-conditional-errors.maxon:9:3: cannot assign a value of type 'String' to variable 'z', which holds 'Integer'
 ```
 
 <!-- test: error.retype-in-loop-errors -->
@@ -339,7 +339,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/assignment/error.retype-in-loop-errors.maxon:9:3: cannot assign a value of type 'String' to variable 'acc', which holds 'int'
+error E3005: specs/assignment/error.retype-in-loop-errors.maxon:9:3: cannot assign a value of type 'String' to variable 'acc', which holds 'Integer'
 ```
 
 <!-- test: error.retype-struct-to-int-errors -->
@@ -367,7 +367,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/assignment/error.retype-struct-to-int-errors.maxon:15:2: cannot assign a value of type 'Point' to variable 'n', which holds 'int'
+error E3005: specs/assignment/error.retype-struct-to-int-errors.maxon:15:2: cannot assign a value of type 'Point' to variable 'n', which holds 'Integer'
 ```
 
 <!-- test: error.retype-struct-field-errors -->
@@ -395,7 +395,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/assignment/error.retype-struct-field-errors.maxon:15:4: cannot assign a value of type 'String' to field 'x' of 'Point', which holds 'int'
+error E3005: specs/assignment/error.retype-struct-field-errors.maxon:15:4: cannot assign a value of type 'String' to field 'x' of 'Point', which holds 'Integer'
 ```
 
 ### The type rule — what stays legal

@@ -3601,7 +3601,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:8: cannot assign a value of type 'function' to element 0 of tuple (Wide, Wide), which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: <fragment>:10:8: cannot assign a value of type 'function' to element 0 of tuple (Wide, Wide), which holds 'Wide': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: error.a-tuple-pushed-into-an-array-of-words-names-the-tuple-type -->
@@ -3787,7 +3787,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:2: cannot assign a value of type '(int, int)' to variable 'n', which holds 'int'
+error E3005: <fragment>:7:2: cannot assign a value of type '(int, int)' to variable 'n', which holds 'Integer'
 ```
 
 <!-- test: error.iterating-a-tuple-names-the-tuple-type -->

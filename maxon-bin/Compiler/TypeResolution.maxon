@@ -494,6 +494,7 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 		var alias = try project.functionTypeAliases.get(name) otherwise panic("functionAliasShapesIn: '{String.from(name)}' was read out of the alias registry and is no longer in it")
 		var params = MaxonTypeArray.create()
 		var preErasedNames = NameRoster.create()
+		var spellings = NameRoster.create()
 		var capabilities = ParamCapabilityArray.create()
 
 		for position in 0 upto alias.paramTypes.count() 'eachParam'
@@ -510,6 +511,11 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 			// parse, by the extraction both tiers fill through (`Parser.erasedAggregateNameOf`); a shared
 			// comparison over two different classifications would only make the disagreement a refusal.
 			preErasedNames.push(param.aggregateName)
+
+			match signatures.declaredAliasOfSpelling(param.typeName, readerFilePath: alias.declFilePath) 'rangedSpelling'
+				declared then spellings.push(param.typeName.clone())
+				undeclared then spellings.push(EmptySourceText)
+			end 'rangedSpelling'
 		end 'eachParam'
 
 		let returnType = match maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames) 'storedReturn'
@@ -517,7 +523,7 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 			value(inner) gives MaxonReturnType.value(functionAliasSlotIn(project, signatures: signatures, form: form, t: inner, declFilePath: alias.declFilePath, site: alias.typeSites.returnTypeSite(), declaration: name))
 		end 'storedReturn'
 
-		shapes.upsert(name, value: FunctionShape.create(params, returnType: returnType, paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName, paramCapabilities: capabilities, returnCapability: alias.returnCapability))
+		shapes.upsert(name, value: FunctionShape.create(params, returnType: returnType, paramAggregateNames: preErasedNames, paramDeclaredNames: spellings, returnAggregateName: alias.returnAggregateName, paramCapabilities: capabilities, returnCapability: alias.returnCapability))
 	end 'eachAlias'
 
 	return shapes
@@ -615,7 +621,7 @@ end 'signatureReturnIdentity'
 module function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
-		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, returnAggregateName: signatureReturnIdentity(registry, sig: sig), paramCapabilities: lentParams(sig.paramCount()), returnCapability: sig.returnCapability))
+		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: signatureReturnIdentity(registry, sig: sig), paramCapabilities: lentParams(sig.paramCount()), returnCapability: sig.returnCapability))
 	end 'declaredFn'
 
 	if let aliasShape = try registry.aliasShapes.get(name) 'alias'
@@ -845,6 +851,10 @@ end 'unerasedType'
 export function shapeParamIdentity(shape FunctionShape, index ParamCount) returns ByteArray
 	return try shape.paramAggregateNames.get(index) otherwise panic("shapeParamIdentity: paramAggregateNames.get OOB at {index} below count {shape.paramAggregateNames.count()} — a shape's parameter columns are built in lockstep with its {shape.paramTypes.count()} parameter type(s)")
 end 'shapeParamIdentity'
+
+export function shapeParamSpelling(shape FunctionShape, index ParamCount) returns ByteArray
+	return try shape.paramDeclaredNames.get(index) otherwise panic("shapeParamSpelling: paramDeclaredNames.get OOB at {index} below count {shape.paramDeclaredNames.count()} — a shape's parameter columns are filled in lockstep with paramTypes")
+end 'shapeParamSpelling'
 
 // The pending list a top-level comparison starts from. ONE object for the whole compile and NEVER mutated
 // (`pendingWithPair` builds a fresh array): a nested function type is rare, so the overwhelming majority of comparisons must allocate nothing at all.

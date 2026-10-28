@@ -272,7 +272,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:3:2: argument 'milliseconds': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: <fragment>:3:2: argument 'milliseconds': cannot implicitly convert 'float' to 'Milliseconds': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: async-sleep.rejected-on-wasm -->

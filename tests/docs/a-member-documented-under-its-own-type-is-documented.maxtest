@@ -1,0 +1,33 @@
+test 'a public member documented under its own type or its subsection is documented'
+	var roster = DeclarationRoster.create()
+
+	roster.add(terminatedLines([
+		"public type Gate",
+		"\tpublic function setDeadline(milliseconds Count)",
+		"\tend 'setDeadline'",
+		"end 'Gate'",
+		"public type Door",
+		"\tpublic function setDeadline(milliseconds Count)",
+		"\tend 'setDeadline'",
+		"end 'Door'",
+		"extension Door",
+		"\tpublic function lock()",
+		"\tend 'lock'",
+		"end 'Door'"
+	]), fileName: "Gate.maxon")
+
+	let document = terminatedLines([
+		"# Reference",
+		"## Gate",
+		"| `setDeadline(milliseconds Count)` | How long the gate waits. |",
+		"## Door",
+		"| `Door.create()` | A door. |",
+		"### Timing",
+		"| `setDeadline(milliseconds Count)` | How long the door waits. |",
+		"| `lock()` | Latch the door. |"
+	])
+	let audit = roster.audit(referenceIndexOf(document))
+
+	Expect.equal(audit.declared, expected: 5)
+	Expect.isEmpty(joined(audit.missing, separator: Space))
+end 'a public member documented under its own type or its subsection is documented'

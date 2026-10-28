@@ -256,7 +256,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:8: 'while' requires a bool condition, got 'int'
+error E3005: <fragment>:4:8: 'while' requires a bool condition, got 'Count'
 ```
 
 The diagnostic anchors on the CONDITION, not on the keyword — the message is about the
@@ -295,7 +295,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:2: cannot assign a value of type 'bool' to variable 'x', which holds 'int'
+error E3005: <fragment>:4:2: cannot assign a value of type 'bool' to variable 'x', which holds 'Count'
 ```
 
 <!-- test: assign-int-to-bool-var -->
@@ -321,7 +321,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:3: cannot assign a value of type 'bool' to variable 'x', which holds 'int'
+error E3005: <fragment>:5:3: cannot assign a value of type 'bool' to variable 'x', which holds 'ExitCode'
 ```
 
 <!-- test: laundered-int-into-condition -->
@@ -359,7 +359,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:3: cannot assign a value of type 'bool' to variable 'x', which holds 'int'
+error E3005: <fragment>:7:3: cannot assign a value of type 'bool' to variable 'x', which holds 'ExitCode'
 ```
 
 <!-- test: laundered-bool-into-int-param -->
@@ -379,7 +379,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:3: cannot assign a value of type 'bool' to variable 'x', which holds 'int'
+error E3005: <fragment>:11:3: cannot assign a value of type 'bool' to variable 'x', which holds 'Integer'
 ```
 
 ### …and a reassignment WITHIN the class is fine
@@ -431,7 +431,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:2: Cannot return 'bool' from function declared to return 'int'
+error E3005: <fragment>:6:2: Cannot return 'bool' from function declared to return 'Integer'
 ```
 
 <!-- test: return-int-from-bool-function -->
@@ -551,5 +551,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:4: argument type mismatch for 'value': expected 'int', got 'bool'
+error E3005: <fragment>:7:4: argument type mismatch for 'value': expected 'Byte', got 'bool'
 ```

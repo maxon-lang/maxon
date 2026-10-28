@@ -1,0 +1,25 @@
+test 'a public member spelled Owner.member is documented wherever the document spells it'
+	var roster = DeclarationRoster.create()
+
+	roster.add(terminatedLines([
+		"public type Gate",
+		"\tpublic function setDeadline(milliseconds Count)",
+		"\tend 'setDeadline'",
+		"end 'Gate'",
+		"public type Door",
+		"\tpublic function setDeadline(milliseconds Count)",
+		"\tend 'setDeadline'",
+		"end 'Door'"
+	]), fileName: "Gate.maxon")
+
+	let document = terminatedLines([
+		"# Reference",
+		"## Gate",
+		"| `setDeadline(milliseconds Count)` | How long the gate waits. |",
+		"| `Door.setDeadline(milliseconds Count)` | How long the door waits. |"
+	])
+	let audit = roster.audit(referenceIndexOf(document))
+
+	Expect.equal(audit.declared, expected: 4)
+	Expect.isEmpty(joined(audit.missing, separator: Space))
+end 'a public member spelled Owner.member is documented wherever the document spells it'

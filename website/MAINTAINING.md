@@ -173,7 +173,7 @@ and have no upstream source. The `release-notes` page is written from `RELEASE_N
 - `tests/mcp/reference-documents-the-agent-instructions.maxtest` — the MCP `initialize` result's
   `instructions` are `docs/WRITING_MAXON_CODE.md`'s preamble and its Scripts and scriptlib section;
 - `tests/docs/stdlib-reference-documents-every-public-api.maxtest` — `docs/STDLIB_REFERENCE.md` names
-  every `public` declaration in `stdlib/`.
+  every `public` declaration in `stdlib/`, a `public` member within the section of its owning type.
 
 When writing a source:
 

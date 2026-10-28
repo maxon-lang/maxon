@@ -12,8 +12,13 @@ category: diagnostics
 A diagnostic that names the type of a value names it as the author wrote it: a declared struct by its name
 (`Point`), a generic instance by the alias the value was made through (`Ys` for a value of `typealias Ys =
 Array with Count`, even when `Xs` is another alias of the same instance), a tuple by its tuple type
-(`(int, int)`), a union or enum by its declared name (`Shape`, `Color`), and a scalar by its primitive
-(`int`, `bool`). A union value is not a number, so an arithmetic, bitwise or shift operator, unary `-`,
+(`(int, int)`), a union or enum by its declared name (`Shape`, `Color`), a ranged alias by its alias wherever a
+declaration wrote one (`expected 'Digit', got 'bool'` for a parameter `n Digit`; `declared to return 'Digit'`;
+`which holds 'Digit'`; `cannot implicitly convert 'float' to 'Digit'`; the parameter of a function type
+included), a value that wears a ranged alias by that alias on the other side of the sentence too (`got 'Ratio'`,
+`Cannot return 'Digit' from function declared to return 'bool'`, `Cannot operate on Digit and bool`), and a scalar no declaration gave an alias by its
+primitive (`int`, `bool`). A float alias met by an integer alias is a mismatch between two aliases (E3005), at an
+argument, a return, an assignment, a field and a payload alike. A union value is not a number, so an arithmetic, bitwise or shift operator, unary `-`,
 `not` or a condition refuses it as it refuses a struct (`Cannot operate on Shape and int`); an integer- or
 float-backed enum keeps its numeric operators.
 
@@ -423,7 +428,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: <fragment>:26:10: type mismatch: 'otherwise type 'Point' does not match expected type 'float''
+error E3059: <fragment>:26:10: type mismatch: 'otherwise type 'Point' does not match expected type 'Ratio''
 ```
 
 <!-- test: error.a-match-over-a-branded-instance-names-the-alias-the-value-wears -->
@@ -733,7 +738,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:11:7: Cannot operate on int and Shape
+error E2004: <fragment>:11:7: Cannot operate on Coord and Shape
 ```
 
 <!-- test: error.ordering-a-union-is-refused-for-a-match -->
@@ -820,6 +825,788 @@ end 'main'
 error E3005: <fragment>:12:17: argument type mismatch for 'index': expected 'ElementIndex', got 'Shape'
 ```
 
+<!-- test: error.a-bool-at-a-ranged-alias-parameter-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function f(n Digit) returns Digit
+	return n
+end 'f'
+
+function main() returns ExitCode
+	let d = f(true)
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:10: argument type mismatch for 'n': expected 'Digit', got 'bool'
+```
+
+<!-- test: error.a-bool-at-a-ranged-float-alias-parameter-names-the-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function scale(r Ratio) returns Ratio
+	return r
+end 'scale'
+
+function main() returns ExitCode
+	let r = scale(true)
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:10: argument type mismatch for 'r': expected 'Ratio', got 'bool'
+```
+
+<!-- test: error.a-bool-pushed-onto-an-array-of-a-ranged-alias-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+function main() returns ExitCode
+	var digits = Digits.create()
+	digits.push(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:9: argument type mismatch for 'value': expected 'Digit', got 'bool'
+```
+
+<!-- test: error.an-int-at-a-bool-parameter-names-the-primitive -->
+```maxon
+function check(flag bool) returns bool
+	return flag
+end 'check'
+
+function main() returns ExitCode
+	let ok = check(3)
+	print("{ok}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:11: argument type mismatch for 'flag': expected 'bool', got 'int'
+```
+
+<!-- test: error.a-bool-returned-from-a-ranged-alias-function-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function pick() returns Digit
+	let flag = true
+	return flag
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:2: Cannot return 'bool' from function declared to return 'Digit'
+```
+
+<!-- test: error.a-bool-returned-from-a-ranged-float-alias-function-names-the-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function pick() returns Ratio
+	let flag = true
+	return flag
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:2: Cannot return 'bool' from function declared to return 'Ratio'
+```
+
+<!-- test: error.a-bool-assigned-to-a-ranged-alias-variable-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function main() returns ExitCode
+	var d = 5 as Digit
+	d = true
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:2: cannot assign a value of type 'bool' to variable 'd', which holds 'Digit'
+```
+
+<!-- test: error.a-bool-assigned-to-a-ranged-float-alias-variable-names-the-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	var r = 0.5 as Ratio
+	r = true
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:2: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-bool-assigned-to-a-ranged-alias-field-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Cell
+	export var d as Digit
+
+	static function make() returns Cell
+		return Cell{d: 1}
+	end 'make'
+end 'Cell'
+
+function main() returns ExitCode
+	var c = Cell.make()
+	c.d = true
+	print("{c.d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:4: cannot assign a value of type 'bool' to field 'd' of 'Cell', which holds 'Digit'
+```
+
+<!-- test: error.a-string-assigned-to-a-ranged-float-alias-field-names-the-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+type Cell
+	export var r as Ratio
+
+	static function make() returns Cell
+		return Cell{r: 0.5}
+	end 'make'
+end 'Cell'
+
+function main() returns ExitCode
+	var c = Cell.make()
+	c.r = "s"
+	print("{c.r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:4: cannot assign a value of type 'String' to field 'r' of 'Cell', which holds 'Ratio'
+```
+
+<!-- test: error.a-float-converted-to-a-ranged-alias-argument-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function take(n Digit) returns Digit
+	return n
+end 'take'
+
+function main() returns ExitCode
+	let w = 2.5
+	let d = take(w)
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:10:10: argument 'n': cannot implicitly convert 'float' to 'Digit': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: error.a-float-converted-to-a-ranged-alias-return-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function pick() returns Digit
+	let w = 2.5
+	return w
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:6:2: cannot implicitly convert 'float' to 'Digit': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: error.a-float-converted-to-a-ranged-alias-variable-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function main() returns ExitCode
+	var d = 5 as Digit
+	let w = 2.5
+	d = w
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:7:2: cannot implicitly convert 'float' to 'Digit': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: error.a-function-value-into-a-ranged-alias-variable-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function one() returns Digit
+	return 1
+end 'one'
+
+function main() returns ExitCode
+	var d = 5 as Digit
+	d = one
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:2: cannot assign a value of type 'function' to variable 'd', which holds 'Digit': a function value is only usable where a function type declared with 'typealias' is expected
+```
+
+<!-- test: error.a-bool-passed-through-a-function-type-parameter-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Pick = function(n Digit) returns Digit
+
+function apply(f Pick) returns Digit
+	return f(true)
+end 'apply'
+
+function main() returns ExitCode
+	print("{apply(function(n Digit) gives n)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:10: argument type mismatch for 1: expected 'Digit', got 'bool'
+```
+
+<!-- test: error.a-bool-pushed-onto-an-array-of-a-ranged-float-alias-names-the-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias Ratios = Array with Ratio
+
+function main() returns ExitCode
+	var ratios = Ratios.create()
+	ratios.push(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:9: argument type mismatch for 'value': expected 'Ratio', got 'bool'
+```
+
+<!-- test: error.a-bool-given-to-a-union-payload-of-a-ranged-alias-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+union Mark
+	digit(n Digit)
+	none
+end 'Mark'
+
+function main() returns ExitCode
+	let m = Mark.digit(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:25: type mismatch: 'expected Digit, got bool'
+```
+
+<!-- test: error.a-ratio-local-rebound-from-a-literal-then-a-bool -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	var r = 0.5 as Ratio
+	r = 0.25
+	r = true
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:2: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-local-handed-to-a-callee-then-a-bool -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function bump(r Ratio)
+	r = 0.25
+end 'bump'
+
+function main() returns ExitCode
+	var r = 0.5 as Ratio
+	bump(r)
+	r = true
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-local-after-a-loop-then-a-bool -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	var r = 0.5 as Ratio
+	for i in 0 upto 3 'l'
+		r = 0.25
+	end 'l'
+	r = true
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-local-after-an-if-then-a-bool -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	var r = 0.5 as Ratio
+	let n = 3
+
+	if n > 2 'a'
+		r = 0.25
+	end 'a' else 'b'
+		r = 0.75
+	end 'b'
+
+	r = true
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:2: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-local-from-a-ratio-call-then-a-bool -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function half() returns Ratio
+	return 0.5
+end 'half'
+
+function main() returns ExitCode
+	var r = half()
+	r = true
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:2: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-local-inside-a-loop-then-a-bool -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	var r = 0.5 as Ratio
+	for i in 0 upto 3 'l'
+		r = true
+	end 'l'
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:3: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-value-at-a-digit-argument-is-a-mismatch -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Ratio = float(0.0 to 1.0)
+
+function take(n Digit) returns Digit
+	return n
+end 'take'
+
+function main() returns ExitCode
+	let w = 0.5 as Ratio
+	let d = take(w)
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: argument type mismatch for 'n': expected 'Digit', got 'Ratio'
+```
+
+<!-- test: error.a-ratio-value-assigned-to-a-digit-variable-is-a-mismatch -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	var d = 5 as Digit
+	let w = 0.5 as Ratio
+	d = w
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:2: cannot assign a value of type 'Ratio' to variable 'd', which holds 'Digit'
+```
+
+<!-- test: error.a-ratio-value-at-a-bool-argument-names-the-alias -->
+```maxon
+function take(flag bool) returns bool
+	return flag
+end 'take'
+
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	let w = 0.5 as Ratio
+	let d = take(w)
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:10: argument type mismatch for 'flag': expected 'bool', got 'Ratio'
+```
+
+<!-- test: error.a-bool-at-the-second-parameter-of-a-function-type -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Pick = function(a Digit, n Digit) returns Digit
+
+function apply(f Pick) returns Digit
+	return f(1, true)
+end 'apply'
+
+function main() returns ExitCode
+	print("{apply(function(a Digit, n Digit) gives n)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:10: argument type mismatch for 2: expected 'Digit', got 'bool'
+```
+
+<!-- test: error.a-bool-at-a-ratio-parameter-of-a-function-type -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias PickR = function(r Ratio) returns Ratio
+
+function apply(f PickR) returns Ratio
+	return f(true)
+end 'apply'
+
+function main() returns ExitCode
+	print("{apply(function(r Ratio) gives r)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:10: argument type mismatch for 1: expected 'Ratio', got 'bool'
+```
+
+<!-- test: error.a-named-function-value-called-indirectly -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function g(a Digit, n Digit) returns Digit
+	return n
+end 'g'
+
+function main() returns ExitCode
+	let h = g
+	print("{h(1, true)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:11: argument type mismatch for 2: expected 'Digit', got 'bool'
+```
+
+<!-- test: error.a-default-parameter-direct-call -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function g(a Digit, n Digit, k Digit = 1) returns Digit
+	return n
+end 'g'
+
+function main() returns ExitCode
+	print("{g(1, n: true)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:10: argument type mismatch for 'n': expected 'Digit', got 'bool'
+```
+
+<!-- test: error.a-generic-method-with-a-ranged-parameter -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Box uses T
+	export var item as T
+
+	static function create(v T) returns Self
+		return Self{item: v}
+	end 'create'
+
+	function tag(n Digit) returns Digit
+		return n
+	end 'tag'
+end 'Box'
+
+typealias IntBox = Box with Digit
+
+function main() returns ExitCode
+	var b = IntBox.create(1 as Digit)
+	print("{b.tag(true)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:12: argument type mismatch for 'n': expected 'Digit', got 'bool'
+```
+
+<!-- test: error.a-generic-type-parameter-instantiated-with-an-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Box uses T
+	export var item as T
+
+	static function create(v T) returns Self
+		return Self{item: v}
+	end 'create'
+
+	function put(v T)
+		self.item = v
+	end 'put'
+end 'Box'
+
+typealias RatioBox = Box with Digit
+
+function main() returns ExitCode
+	var b = RatioBox.create(1 as Digit)
+	b.put(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:4: argument type mismatch for 'v': expected 'Digit', got 'bool'
+```
+
+<!-- test: error.a-float-narrowed-into-a-ranged-alias-field -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Cell
+	export var d as Digit
+
+	static function make() returns Cell
+		return Cell{d: 1}
+	end 'make'
+end 'Cell'
+
+function main() returns ExitCode
+	var c = Cell.make()
+	let w = 2.5
+	c.d = w
+	print("{c.d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:15:4: cannot implicitly convert 'float' to 'Digit': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: error.a-digit-local-inside-a-loop-then-a-bool -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function main() returns ExitCode
+	var d = 5 as Digit
+	for i in 0 upto 3 'l'
+		d = true
+	end 'l'
+	print("{d}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:3: cannot assign a value of type 'bool' to variable 'd', which holds 'Digit'
+```
+
+<!-- test: error.a-ratio-parameter-reassigned-a-bool -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function f(r Ratio) returns Ratio
+	r = true
+	return r
+end 'f'
+
+function main() returns ExitCode
+	print("{f(0.5)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:2: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-field-assigned-in-a-method -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+type Cell
+	var r as Ratio
+
+	static function make() returns Cell
+		return Cell{r: 0.5}
+	end 'make'
+
+	function flip()
+		self.r = true
+	end 'flip'
+end 'Cell'
+
+function main() returns ExitCode
+	var c = Cell.make()
+	c.flip()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:8: cannot assign a value of type 'bool' to field 'r' of 'Cell', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-local-captured-by-a-closure-then-a-bool -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	var r = 0.5 as Ratio
+	let f = function() gives r
+	r = true
+	print("{f()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:2: cannot assign a value of type 'bool' to variable 'r', which holds 'Ratio'
+```
+
+<!-- test: error.a-ratio-value-assigned-to-a-bool-variable -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	var b = true
+	let w = 0.5 as Ratio
+	b = w
+	print("{b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:2: cannot assign a value of type 'Ratio' to variable 'b', which holds 'bool'
+```
+
+<!-- test: error.a-digit-value-returned-from-a-bool-function -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function f() returns bool
+	let d = 3 as Digit
+	return d
+end 'f'
+
+function main() returns ExitCode
+	print("{f()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:2: Cannot return 'Digit' from function declared to return 'bool'
+```
+
+<!-- test: error.a-ratio-and-a-bool-on-an-operator-names-the-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function main() returns ExitCode
+	let r = 0.5 as Ratio
+	let flag = true
+	let both = r + flag
+	print("{both}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:7:15: Cannot operate on Ratio and bool
+```
+
+<!-- test: error.comparing-a-ranged-alias-with-a-bool-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function main() returns ExitCode
+	let d = 5 as Digit
+	let flag = true
+	if d == flag 'same'
+		print("same")
+	end 'same'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:7: type mismatch: 'cannot compare Digit with bool'
+```
+
+<!-- test: error.a-ranged-alias-as-a-condition-names-the-alias -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function main() returns ExitCode
+	let d = 5 as Digit
+	if d 'on'
+		print("on")
+	end 'on'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:5: 'if' requires a bool condition, got 'Digit'
+```
+
 <!-- test: error.a-union-cast-to-a-ranged-alias-is-refused -->
 ```maxon
 typealias Coord = int(0 to 1000)
@@ -876,7 +1663,7 @@ end 'main'
 error E3005: <fragment>:9:5: 'if' requires a bool condition, got 'Color'
 ```
 
-<!-- test: error.a-ranged-alias-and-a-bool-on-an-operator-names-int -->
+<!-- test: error.a-ranged-alias-and-a-bool-on-an-operator-names-the-alias -->
 ```maxon
 typealias Coord = int(0 to 1000)
 
@@ -887,7 +1674,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:6:12: Cannot operate on int and bool
+error E2004: <fragment>:6:12: Cannot operate on Coord and bool
 ```
 
 <!-- test: an-integer-enum-keeps-its-numeric-operators -->

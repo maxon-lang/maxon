@@ -1,0 +1,27 @@
+test 'a public member listed in another type section that merely names its owner is undocumented'
+	var roster = DeclarationRoster.create()
+
+	roster.add(terminatedLines([
+		"public type Gate",
+		"\tpublic function setDeadline(milliseconds Count)",
+		"\tend 'setDeadline'",
+		"end 'Gate'",
+		"public type Door",
+		"\tpublic function setDeadline(milliseconds Count)",
+		"\tend 'setDeadline'",
+		"end 'Door'"
+	]), fileName: "Gate.maxon")
+
+	let document = terminatedLines([
+		"# Reference",
+		"## Gate",
+		"A Door is the other half of a Gate.",
+		"| `setDeadline(milliseconds Count)` | How long the gate waits. |",
+		"## Door",
+		"| `Door.create()` | A door. |"
+	])
+	let audit = roster.audit(referenceIndexOf(document))
+
+	Expect.equal(audit.declared, expected: 4)
+	Expect.equal(joined(audit.missing, separator: Space), expected: "Door.setDeadline")
+end 'a public member listed in another type section that merely names its owner is undocumented'

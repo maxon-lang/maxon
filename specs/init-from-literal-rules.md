@@ -252,7 +252,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:19:7: Operator '!=' dispatches 'Box.equals', which returns 'int' — an equality operator requires the 'bool' result 'Equatable' declares
+error E3005: <fragment>:19:7: Operator '!=' dispatches 'Box.equals', which returns 'Count' — an equality operator requires the 'bool' result 'Equatable' declares
 ```
 
 ### `from` reaches a type through its alias

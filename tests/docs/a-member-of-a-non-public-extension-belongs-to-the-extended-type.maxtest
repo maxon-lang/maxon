@@ -1,0 +1,24 @@
+test 'a public member of a non-public extension is owned by the extended type'
+	var roster = DeclarationRoster.create()
+
+	roster.add(terminatedLines([
+		"public type Gate",
+		"end 'Gate'",
+		"extension Gate",
+		"\tpublic function open()",
+		"\tend 'open'",
+		"end 'Gate'"
+	]), fileName: "Gate.maxon")
+
+	let document = terminatedLines([
+		"# Reference",
+		"## Gate",
+		"| `Gate.create()` | A gate. |",
+		"## Door",
+		"| `open()` | Open the door. |"
+	])
+	let audit = roster.audit(referenceIndexOf(document))
+
+	Expect.equal(audit.declared, expected: 2)
+	Expect.equal(joined(audit.missing, separator: Space), expected: "Gate.open")
+end 'a public member of a non-public extension is owned by the extended type'

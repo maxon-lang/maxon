@@ -84,7 +84,8 @@ end 'main'
 - A value keeps its alias wherever it is held: a local or global initialized by a cast has the cast's alias,
   and each tuple element keeps its own, so `(Tally, Tally)` and `(Score, Score)` are two types. Float
   aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
-  and array elements.
+  and array elements — and a `float` alias value at an `int` alias place is **E3005**, as `Age` at a `Year`
+  place is.
 - Two declarations of one alias name, in two files, are two types too, even over the same range. An
   operator, an argument, a store or a join that mixes them is **E3005** (**E2028** for a join) until one side
   is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds

@@ -399,6 +399,8 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | `StringIndex.create(charIndex GraphemeIndex, bytePos BytePos)` | `StringIndex` | Build an index from both coordinates. |
 | `charIndex()` | `GraphemeIndex` | Grapheme position. |
 | `bytePos()` | `BytePos` | UTF-8 byte offset. |
+| `equals(other StringIndex)` | `bool` | True when both have the same grapheme index. |
+| `compare(other StringIndex)` | `Ordering` | Orders by grapheme index. |
 
 ```maxon
 function main() returns ExitCode
@@ -1019,6 +1021,8 @@ implements `BidirectionalIterator with Element` and adds random access:
 throw happened. `IterStep` is unsigned: the direction is the method you call, so a negative step is refused
 at the argument door rather than read as a move the other way.
 
+`ArrayIterator.ElementMemory` is the raw array storage that `create` takes.
+
 ```maxon
 typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
@@ -1054,7 +1058,14 @@ Output: `1 20 40` and `50 -1`.
 | `StringIterator` | `String.createIterator()` | `Character` |
 | `RangeIterator` | `Range`/`OpenRange.createIterator()` | `RangeBound` |
 
-Each has a static `create`, `current()` and `advance()`.
+Each has a static `create`, `current()` and `advance()`. The storage types an iterator's signatures name are
+public aliases of it:
+
+| Iterator | Public aliases |
+|----------|----------------|
+| `ListIterator` | `EManagedList`, the list's raw chain, which `create` takes |
+| `MapIterator` | `Entry`, the `(Key, Value)` pair `current()` returns; `IterKeyArray`, `IterValueArray` and `IterStateArray`, the arrays of keys, values and slot states it scans |
+| `SetIterator` | `IterElementArray` and `IterStateArray`, the arrays of elements and slot states it scans |
 
 ## Interfaces
 
@@ -1392,6 +1403,7 @@ program: a new reader does not see input an earlier one already buffered.
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `Console.stdin()` | `Stdin` | — | The standard-input reader. |
+| `Stdin.create()` | `Stdin` | — | A reader with an empty buffer; `Console.stdin()` returns one. |
 | `Console.stdoutWantsColor()` | `bool` | — | True when standard output is a terminal, `NO_COLOR` is unset and `TERM` is other than `dumb` (compared case-insensitively): output may then carry ANSI escapes. `NO_COLOR` set to any value turns colour off; Windows reads an empty value as unset. `false` on `wasm32-wasi`. |
 | `readLine()` | `String` | `ConsoleError.endOfFile` | The next line without its `\n`; a `\r` before it is removed too. A last line with no terminator is returned, and the call after it throws. |
 | `readBytes(n BytePos)` | `ByteArray` | — | Up to `n` bytes, unchanged. Fewer than `n` only when input ends first; an empty array at the end of input. It reads from the same buffer as `readLine`. |
@@ -1929,6 +1941,16 @@ end 'RunProcessError'
 
 The error the library-tier intrinsic `__Builtins.runProcess` throws when its command names nothing the host
 can start. A program starts processes through `Subprocess`, which reports its failures as `SubprocessError`.
+
+### Spawn records
+
+`SpawnEnvironment` and `StdioRuntimeTriple` are the operands `Subprocess` hands the runtime's spawn contract. A
+program starts processes through `Subprocess` and builds neither.
+
+| Member | Description |
+|--------|-------------|
+| `SpawnEnvironment.create(block String, source EnvSourceValue)` | The environment block and where the child's environment comes from, `EnvSource.parent` or `EnvSource.block`. One value because the two are one decision. Its fields are `block` and `source`. |
+| `StdioRuntimeTriple.create(kind StdioKindValue, data String, limit ByteLimit)` | One stdio stream's kind, its payload and its byte limit. `data` is a path for a `file` stream and empty for a kind that has no payload; `limit` is read only for `collect`. Its fields are `kind`, `data` and `limit`. |
 
 ### StreamingSubprocess
 

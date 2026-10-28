@@ -15826,7 +15826,7 @@ enum MemberList
 end 'MemberList'
 
 // ⭐⭐ **WHICH SENTENCE AN E3005 STORAGE-SLOT MISMATCH IS TOLD IN.** The VERDICT is one rule and this does not
-// touch it (`checkDeclaredType` for a trivial slot, `requireManagedValueMatches` for a managed one, both
+// touch it (`declaredSlotVerdict` for a trivial slot, `requireManagedValueMatches` for a managed one, both
 // shared with every assignment door); what differs is the PLACE the value failed to enter, and the two kinds
 // of place say different TRUE things about themselves.
 //
@@ -33798,23 +33798,6 @@ export type Parser
 		return self.signatures.aliasOrInnerAliasOf(self.signatures.indexSpaceTypeName(indexSpaceType), readerFilePath: self.job.path)
 	end 'declaredAliasOfIndexSpaceType'
 
-	// The ranged-alias name a `(tag, nameId)` pair denotes, else `AbsentError` — the spelling of the
-	// question above for the two readers that want a NAME rather than the alias: the range-check
-	// sites, which store one (`commitRangeChecks`), and the EXPECTED side of an argument refusal
-	// (`declaredSlotDisplayName`), which prints one. It takes the scalar pair rather than a
-	// `MaxonType` because half its callers hold a RESOLVED tag (`floatResolvedTag`) that no written
-	// type carries.
-	function rangedAliasName(tag ValueTypeTag, nameId TypeNameId) returns ByteArray throws AbsentError
-		if tag != ValueTypeTag.named 'notNamed'
-			throw AbsentError.absent
-		end 'notNamed'
-
-		match self.declaredAliasOfNameId(nameId) 'a'
-			declared then return self.internedName(nameId)
-			undeclared then throw AbsentError.absent
-		end 'a'
-	end 'rangedAliasName'
-
 	// Close a function body. `bodyEnd` is the block its last statement left control in;
 	// when that block has no terminator, control can FALL OFF THE END of the function
 	// and the parser must supply what the source did not:
@@ -39189,7 +39172,7 @@ export type Parser
 		// The binding keeps its declared type across a rebind, so `x = 3` into a `var x = 0.0` rebinds to
 		// a widened float. Without the coercion `x == 3.0` on the next line would be refused E3005, and a
 		// rebind inside a loop would feed an i64 and an f64 into one header phi.
-		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, declaredNameId: typeNameIdOf(binding.varType), door: FunctionTypeDoor.variable, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.assignedPlace)
+		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, declaredNameId: typeNameIdOf(self.bindingDeclaredType(binding)), door: FunctionTypeDoor.variable, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.assignedPlace)
 
 		// Reassigning a `var` to the wrong named aggregate — a different struct/union, or an aggregate
 		// where the binding declares a scalar — is a retype the tag check above cannot see
@@ -40727,29 +40710,29 @@ export type Parser
 	// widening the verdict licenses in the constant's own representation. Every site holding a VALUE asks
 	// `assignableValue` — this plus that conversion, in one call, so the two halves cannot come apart.
 	function requireAssignable(nameTok Token, value ValueTypeTag, valueNameId TypeNameId, valueBrandId TypeNameId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner SlotOwner, voice SlotMismatchVoice) throws SourceParseError
-		match checkDeclaredType(value, declared: declared) 'declared'
+		match self.declaredSlotVerdict(value, gotNameId: valueNameId, declared: declared, declaredNameId: declaredNameId) 'declared'
 			ok then break
-			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.kindWordOf(value, nameId: valueNameId, brand: self.internedName(valueBrandId)), gotNote: "", gotTag: value, resolvedExpected: typeTagName(declared), expectedNote: "", declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
-			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.brandedDisplayTypeName(value, nameId: valueNameId, brand: self.internedName(valueBrandId)), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(declared, nameId: declaredNameId, fallback: typeTagName(declared)), expectedNote: "", declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
+			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(self.brandedDisplayTypeName(value, nameId: valueNameId, brand: self.internedName(valueBrandId)), targetType: self.declaredSlotDisplayName(declared, nameId: declaredNameId, fallback: typeTagName(declared)), line: nameTok.line, column: nameTok.column)
 
 			// A FUNCTION VALUE into a NON-function place — the spec's specific E3005 ("cannot
 			// assign a value of type 'function' to {noun} '{name}', which holds '{held}'"). The noun comes
 			// from the DOOR the caller named, so this site and the function-type check word one place alike.
-			functionIntoNonFunction then throw SourceParseError.functionValueIntoNonFunction(functionMisusePlacePhrase(door, name: nameTok.value, owner: placeOwner), heldType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
+			functionIntoNonFunction then throw SourceParseError.functionValueIntoNonFunction(functionMisusePlacePhrase(door, name: nameTok.value, owner: placeOwner), heldType: self.declaredSlotDisplayName(declared, nameId: declaredNameId, fallback: typeTagName(declared)), line: nameTok.line, column: nameTok.column)
 		end 'declared'
 	end 'requireAssignable'
 
 	// ⭐⭐ **THE ONE E3005 A STORAGE-SLOT MISMATCH IS RAISED AS, GIVEN THE VOICE ITS PLACE SPEAKS IN.** Both
-	// verdict doors — the trivial `checkDeclaredType` one above and the managed `requireManagedValueMatches`
+	// verdict doors — the trivial `declaredSlotVerdict` one above and the managed `requireManagedValueMatches`
 	// one — end here, so a container element and a struct field cannot come to explain one rejection two
 	// ways beyond the one difference `SlotMismatchVoice` names. Everything that varies with the voice varies
 	// HERE, in one `match`: which `SourceParseError` variant, which name is quoted, and how the EXPECTED side is
 	// spelled.
 	//
 	// `resolvedExpected` is the assignment voice's answer and arrives already rendered, because the two
-	// verdict doors resolve it differently — a bare tag name where two TAGS disagree (there is no name to
-	// print: the value and the slot are not even the same kind of thing), a NAME where two aggregates of one
-	// tag are told apart — and neither may have that decision taken away from it.
+	// verdict doors resolve it differently — the declared alias, else a bare tag name, where two TAGS
+	// disagree; a NAME where two aggregates of one tag are told apart — and neither may have that decision
+	// taken away from it.
 	//
 	// ⚠ **`assignedPlace` IS THE PLACE THE VALUE WAS ENTERING, AND THE VOICE DECIDES WHETHER THE
 	// SENTENCE QUOTES IT.** The assignment voice does — a local, a global, a field, a union payload
@@ -40767,12 +40750,11 @@ export type Parser
 	// ⚠ **WHEREVER A NAME IS PRINTED AT ALL, BOTH VOICES PRINT `displayTypeNameOf`'s** (user ruling,
 	// 2026-08-04: a diagnostic names a type by the `typealias` the author wrote, never by the compiler's
 	// mint) — so a struct, a union, an interface and a GENERIC INSTANCE read the author's way in either
-	// sentence. The one remaining divergence is the extra probe `declaredSlotDisplayName` makes for the
-	// argument voice, documented there rather than restated here — which is why `gotTag` is threaded down: the
-	// probe's answer depends on what the OTHER half of the sentence turned out to be. A place whose declaration
-	// spelling was recorded (`placeSpelling`) prints that spelling in every voice (`declaredPlaceDisplay`).
-	function slotMismatchError(voice SlotMismatchVoice, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner SlotOwner, placeBrand ByteArray, placeSpelling ByteArray, got String, gotNote String, gotTag ValueTypeTag, resolvedExpected String, expectedNote String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber) returns SourceParseError
-		let placeDisplay = self.declaredPlaceDisplay(placeSpelling, brand: placeBrand, tag: declared, nameId: declaredNameId, gotTag: gotTag)
+	// sentence. A ranged or float alias is named by `declaredSlotDisplayName` in every voice. A place whose
+	// declaration spelling was recorded (`placeSpelling`) prints that spelling in every voice
+	// (`declaredPlaceDisplay`).
+	function slotMismatchError(voice SlotMismatchVoice, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner SlotOwner, placeBrand ByteArray, placeSpelling ByteArray, got String, gotNote String, resolvedExpected String, expectedNote String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber) returns SourceParseError
+		let placeDisplay = self.declaredPlaceDisplay(placeSpelling, brand: placeBrand, tag: declared, nameId: declaredNameId)
 		let slotDisplay = "{placeDisplay}{expectedNote}"
 		let gotDisplay = "{got}{gotNote}"
 		return match voice 'v'
@@ -40791,55 +40773,52 @@ export type Parser
 		end 'v'
 	end 'slotMismatchError'
 
-	function declaredPlaceDisplay(spelling ByteArray, brand ByteArray, tag ValueTypeTag, nameId TypeNameId, gotTag ValueTypeTag) returns String
+	function declaredPlaceDisplay(spelling ByteArray, brand ByteArray, tag ValueTypeTag, nameId TypeNameId) returns String
 		if spelling.isEmpty() and not brand.isEmpty() 'aBrandWithNoRecordedSpelling'
 			return self.signatures.aliasIdentityDisplay(brand)
 		end 'aBrandWithNoRecordedSpelling'
 
-		return self.declaredSpellingDisplay(spelling, tag: tag, nameId: nameId, gotTag: gotTag)
+		return self.declaredSpellingDisplay(spelling, tag: tag, nameId: nameId)
 	end 'declaredPlaceDisplay'
 
-	// A written spelling answers to `declaredSlotDisplayName`'s gate as well: a ranged alias met by a value
-	// whose half of the sentence is a class word prints the class word.
-	function declaredSpellingDisplay(spelling ByteArray, tag ValueTypeTag, nameId TypeNameId, gotTag ValueTypeTag) returns String
-		if spelling.isEmpty() or (self.namesARangedAlias(tag, nameId: nameId) and tagAdmitsNoAggregate(gotTag)) 'noSpellingToQuote'
-			return self.declaredSlotDisplayName(tag, nameId: nameId, gotTag: gotTag)
+	function declaredSpellingDisplay(spelling ByteArray, tag ValueTypeTag, nameId TypeNameId) returns String
+		if spelling.isEmpty() 'noSpellingToQuote'
+			return self.declaredSlotDisplayName(tag, nameId: nameId, fallback: self.displayTypeNameOf(tag, nameId: nameId))
 		end 'noSpellingToQuote'
 
 		return self.signatures.aliasIdentityDisplay(spelling)
 	end 'declaredSpellingDisplay'
 
-	// ⭐ **HOW A DECLARED SLOT'S TYPE IS SPELLED WHERE THE SENTENCE NAMES WHAT WAS *EXPECTED* — the parser's
-	// half of `SemanticCheck.paramDisplayName`, under the same ruling and with the same gate.**
-	// `displayTypeNameOf` already answers for every tag that carries a written name (a struct, an interface, a
-	// registered union/enum, a generic instance's author-written alias). The ONE thing it does not settle is
-	// a RANGED-INT ALIAS, which is exactly what `specs/type-checking.md`'s element cases declare
-	// (`typealias Int = int(i64.min to i64.max)`): its name is right against a type and wrong against a
-	// class word, so a ranged alias is decided here — its name from the alias REGISTRY
-	// (`declaredAliasOfNameId`, through `rangedAliasName`), or the class word `typeTagName` gives.
-	//
-	// ⚠⚠ **AND THE ALIAS IS WORTH PRINTING ONLY WHEN THE OTHER HALF OF THE SENTENCE NAMES A TYPE** —
-	// the rule `SemanticCheck.paramDisplayName` states in full, from the two canonical specs that pin
-	// the SAME shape two ways (`type-checking.md`'s `expected 'Integer', got 'String'` against
-	// `implicit-type-conversion.md`'s `expected 'int', got 'bool'`). **Without the gate,
-	// `arr.push(true)` on an `Array with Integer` says `expected 'Integer', got 'bool'` where
-	// `takesInt(true)` on the identical `x Integer` says `expected 'int'` — one rule, two answers,
-	// decided by which door the value entered. `'int'` is correct at both.** It is the very defect
-	// `SlotMismatchVoice`'s header records one tier down, so the gate belongs on both sides of it.
-	function namesARangedAlias(tag ValueTypeTag, nameId TypeNameId) returns bool
-		try self.rangedAliasName(tag, nameId: nameId) otherwise return false
-		return true
-	end 'namesARangedAlias'
+	function namesADeclaredSlotAlias(tag ValueTypeTag, nameId TypeNameId) returns bool
+		if (tag != ValueTypeTag.named and tag != ValueTypeTag.float) or nameId == UnnamedTypeId 'notASlotAlias'
+			return false
+		end 'notASlotAlias'
 
-	function declaredSlotDisplayName(tag ValueTypeTag, nameId TypeNameId, gotTag ValueTypeTag) returns String
-		let rangedAlias = try self.rangedAliasName(tag, nameId: nameId) otherwise return self.displayTypeNameOf(tag, nameId: nameId)
+		match self.declaredAliasOfNameId(nameId) 'a'
+			declared then return true
+			undeclared then return false
+		end 'a'
+	end 'namesADeclaredSlotAlias'
 
-		if tagAdmitsNoAggregate(gotTag) 'bothHalvesAreClassWords'
-			return typeTagName(tag)
-		end 'bothHalvesAreClassWords'
+	function declaredSlotDisplayName(tag ValueTypeTag, nameId TypeNameId, fallback String) returns String
+		if not self.namesADeclaredSlotAlias(tag, nameId: nameId) 'noAliasToQuote'
+			return fallback
+		end 'noAliasToQuote'
 
-		return String.from(rangedAlias)
+		return self.signatures.aliasIdentityDisplay(self.internedName(nameId))
 	end 'declaredSlotDisplayName'
+
+	// Two declared aliases are two types (LANGUAGE_REFERENCE "Aliases Are Distinct Types"), so a float alias
+	// at an integer alias place is the E3005 mismatch at every door, never the E3009 narrowing.
+	function declaredSlotVerdict(got ValueTypeTag, gotNameId TypeNameId, declared ValueTypeTag, declaredNameId TypeNameId) returns DeclaredTypeMatch
+		let verdict = checkDeclaredType(got, declared: declared)
+
+		if verdict == DeclaredTypeMatch.narrowsFloatToInt and self.namesADeclaredSlotAlias(got, nameId: gotNameId) and self.namesADeclaredSlotAlias(declared, nameId: declaredNameId) 'twoDistinctAliases'
+			return DeclaredTypeMatch.mismatch
+		end 'twoDistinctAliases'
+
+		return verdict
+	end 'declaredSlotVerdict'
 
 	// ⭐⭐ **A DECLARED PLACE THAT CANNOT HOLD A FAT POINTER YET — THE ONE REFUSAL FOR EVERY SUCH PLACE**
 	// An existential is TWO machine words, and it is
@@ -42754,20 +42733,20 @@ export type Parser
 			return
 		end 'existentialReturn'
 
-		// The tag check runs FIRST: a genuine CLASS mismatch (a bool, or a struct, where an int is
-		// declared) keeps its tag-based message, and the aggregate-name check below only NEWLY catches
+		// The tag verdict runs FIRST: a genuine CLASS mismatch (a bool, or a struct, where an int is
+		// declared) is refused by it, and the aggregate-name check below only NEWLY catches
 		// the case the tag check WRONGLY AGREES on — a boxed union returned where a scalar is declared,
 		// where `checkDeclaredType(named, named)` agrees because `ValueTypeTag.named` is overloaded.
-		match checkDeclaredType(retTag, declared: declaredTag) 'declared'
+		match self.declaredSlotVerdict(retTag, gotNameId: self.valueNameId(retVal), declared: declaredTag, declaredNameId: declaredNameId) 'declared'
 			ok then break
-			mismatch then throw returnMismatchError(func, got: self.valueKindWord(retVal), gotNote: "", expected: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId, gotTag: retTag), expectedNote: "", line: anchor.line, column: anchor.column)
-			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
+			mismatch then throw returnMismatchError(func, got: self.valueDisplayTypeName(retVal), gotNote: "", expected: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId), expectedNote: "", line: anchor.line, column: anchor.column)
+			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(self.valueDisplayTypeName(retVal), targetType: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId), line: anchor.line, column: anchor.column)
 
 			// A FUNCTION VALUE returned where a NON-function type is declared — the spec's
 			// specific E3005 ("Cannot return 'function' from function declared to return '{declared}': …").
 			// A function returned from a function-typed return (`return double` from `returns UnaryOp`)
 			// agrees and never reaches this.
-			functionIntoNonFunction then throw SourceParseError.functionValueReturned(typeTagName(declaredTag), line: anchor.line, column: anchor.column)
+			functionIntoNonFunction then throw SourceParseError.functionValueReturned(self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId), line: anchor.line, column: anchor.column)
 		end 'declared'
 
 		// The FUNCTION twin of the aggregate identity check in `admitReturnedAggregate` — a function value
@@ -42876,7 +42855,7 @@ export type Parser
 			return try self.convertValueToDeclaredType(value, sourceTag: retTag, targetType: declaredType, targetAlias: self.declaredAliasOfType(declaredType), opTok: anchor, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: false)
 		end 'twoNamesOverOneScalar'
 
-		let declaredShown = self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId, gotTag: retTag)
+		let declaredShown = self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId)
 		let paired = self.pairedDisplays(value, declaredTag: declaredTag, declaredNameId: declaredNameId, declaredBrand: returnBrand, declaredIdentity: declaredReturnName, declaredShown: declaredShown)
 		try self.refuseUnlessDeferred(returnMismatchError(func, got: paired.got, gotNote: paired.gotNote, expected: paired.declared, expectedNote: paired.declaredNote, line: anchor.line, column: anchor.column), value: value)
 		return value
@@ -69228,7 +69207,7 @@ export type Parser
 		// The SAME verdict-plus-coercion the assignment doors ask, through the `field` door — which is what it always
 		// was, spelled out a second time: the four `DeclaredTypeMatch` arms that stood here were a
 		// character-for-character copy of `requireAssignable`'s, and a rule with two homes drifts.
-		let stored = try self.assignableValue(site.anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, placeOwner: site.owner, voice: SlotMismatchVoice.assignedPlace)
+		let stored = try self.assignableValue(site.anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(self.fieldTypeKeepingAlias(layout, index: index, collapsed: fieldType)), door: FunctionTypeDoor.field, placeOwner: site.owner, voice: SlotMismatchVoice.assignedPlace)
 
 		// ⭐⭐ **AND THE IDENTITY THAT VERDICT CANNOT SEE — the door `parseAssignment` also has
 		// and this one needs.** `assignableValue`'s verdict is tag-based, and a payload-free ENUM field is
@@ -69616,7 +69595,7 @@ export type Parser
 			// answers `got 'struct'` for the very struct the arm below answers `got 'Other'` for — one door,
 			// two sentences, sixty lines apart in `specs/arrays.md`. The sentence is `expected 'String', got
 			// 'Item'`.
-			let mismatch = self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: self.valueDisplayTypeName(value), gotNote: "", gotTag: got, resolvedExpected: typeTagName(wantTag), expectedNote: "", declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			let mismatch = self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: self.valueDisplayTypeName(value), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(wantTag, nameId: typeNameIdOf(storage), fallback: typeTagName(wantTag)), expectedNote: "", declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 
 			try self.refuseUnlessDeferred(mismatch, value: value)
 			return
@@ -69700,7 +69679,7 @@ export type Parser
 		if self.signatures.aggregatesConflict(wantName, expectedTag: wantTag, expectedNameId: typeNameIdOf(storage), expectedBrand: placeBrand, got: gotName, gotTag: got, gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'nameMismatch'
 			let wantShown = self.brandedDisplayTypeName(wantTag, nameId: typeNameIdOf(storage), brand: placeBrand)
 			let paired = self.pairedDisplays(value, declaredTag: wantTag, declaredNameId: typeNameIdOf(storage), declaredBrand: placeBrand, declaredIdentity: wantName, declaredShown: wantShown)
-			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: paired.got, gotNote: paired.gotNote, gotTag: got, resolvedExpected: paired.declared, expectedNote: paired.declaredNote, declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: paired.got, gotNote: paired.gotNote, resolvedExpected: paired.declared, expectedNote: paired.declaredNote, declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 		end 'nameMismatch'
 	end 'requireSlotAggregateIdentity'
 
@@ -72922,15 +72901,15 @@ export type Parser
 			self.recordFunctionTypeDoor(typeNameIdOf(declared), gotNameId: self.functionValueGoverningId(value), door: FunctionTypeDoor.payload, place: FunctionTypeDoorPlace.named(field.name), anchor: caseTok, handedAt: caseTok)
 		end 'functionIntoFunctionPayload'
 
-		match checkDeclaredType(got, declared: declaredTag) 'declared'
+		match self.declaredSlotVerdict(got, gotNameId: self.valueNameId(value), declared: declaredTag, declaredNameId: typeNameIdOf(declaredWithAlias)) 'declared'
 			ok then break
-			mismatch then throw self.slotMismatchError(voice, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.valueDisplayTypeName(value), gotNote: "", gotTag: got, resolvedExpected: typeTagName(declaredTag), expectedNote: "", declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
-			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.valueDisplayTypeName(value), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(declaredTag, nameId: typeNameIdOf(declaredWithAlias), fallback: typeTagName(declaredTag)), expectedNote: "", declared: declaredTag, declaredNameId: typeNameIdOf(declaredWithAlias), line: argTok.line, column: argTok.column)
+			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(self.valueDisplayTypeName(value), targetType: self.declaredSlotDisplayName(declaredTag, nameId: typeNameIdOf(declaredWithAlias), fallback: typeTagName(declaredTag)), line: argTok.line, column: argTok.column)
 
 			// A FUNCTION VALUE into a scalar union PAYLOAD whose declared type is NOT a function — the same
 			// E3005 a function value meeting any other non-function slot earns. A function-ALIAS payload no
 			// longer reaches it: `declaredTag` is `function` there and `checkDeclaredType` answers `ok`.
-			functionIntoNonFunction then throw SourceParseError.functionValueIntoNonFunction("payload '{String.from(field.name)}'", heldType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
+			functionIntoNonFunction then throw SourceParseError.functionValueIntoNonFunction("payload '{String.from(field.name)}'", heldType: self.declaredSlotDisplayName(declaredTag, nameId: typeNameIdOf(declaredWithAlias), fallback: typeTagName(declaredTag)), line: argTok.line, column: argTok.column)
 		end 'declared'
 
 		// ⭐⭐ **AND THE NOMINAL IDENTITY, WHICH `checkDeclaredType` STRUCTURALLY CANNOT ASK — THE SIXTH DOOR
@@ -77540,8 +77519,9 @@ export type Parser
 	end 'pairedDisplays'
 
 	// How a value's type is SPELLED in a diagnostic, its alias included — its tag, resolved through the
-	// DISPLAY name behind it. A diagnostic naming only the value's kind asks `valueKindWord` instead; both
-	// render a struct through `brandedDisplayTypeName`, so neither reaches for the identity.
+	// DISPLAY name behind it. An operand rule asks `valueKindWordAt` instead, which names an int- or
+	// float-backed enum by the tag it judged; both render a struct through `brandedDisplayTypeName`, so
+	// neither reaches for the identity.
 	//
 	// A BRANDED value prints its brand: `Xs` and `Ys` share a gid, and the brand is the type the value IS.
 	// SemanticCheck's half is `valueTypeDisplayName`, and the two must agree or one message would quote the
@@ -77555,19 +77535,16 @@ export type Parser
 	end 'valueKindWord'
 
 	// `tag` is the tag the rule judged (a `numberTagOf` answer), so a float-backed enum prints `float`.
+	// The alias is looked up by the value's own tag, which a ranged int alias's judged tag does not carry.
 	function valueKindWordAt(value ValueId, tag ValueTypeTag) returns String
-		return self.kindWordOf(tag, nameId: self.valueNameId(value), brand: self.brandOf(value))
-	end 'valueKindWordAt'
+		let nameId = self.valueNameId(value)
 
-	// A scalar prints its class word (`'int'`), never its alias: `SemanticCheck.paramDisplayName` owns that
-	// rule, and `valueDisplayTypeName` is the door that prints the alias.
-	function kindWordOf(tag ValueTypeTag, nameId TypeNameId, brand ByteArray) returns String
 		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance or self.nameIdIsAnEnumOrUnion(tag, nameId: nameId) 'anAggregate'
-			return self.brandedDisplayTypeName(tag, nameId: nameId, brand: brand)
+			return self.brandedDisplayTypeName(tag, nameId: nameId, brand: self.brandOf(value))
 		end 'anAggregate'
 
-		return typeTagName(tag)
-	end 'kindWordOf'
+		return self.declaredSlotDisplayName(self.tagOf(value), nameId: nameId, fallback: typeTagName(tag))
+	end 'valueKindWordAt'
 
 	function nameIdIsAnEnumOrUnion(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return tag == ValueTypeTag.named and self.signatures.containsEnumFor(self.internedName(nameId), readerFilePath: self.job.path)
@@ -85438,7 +85415,7 @@ export type Parser
 		// The VOICE is the other axis and is the mutator's own: `push` is a METHOD and its element is that
 		// method's ARGUMENT, so the type refusal is the argument sentence rather than the assignment one.
 		// See `SlotMismatchVoice`, which records what calling `push` a "variable" was measured to say.
-		let stored = try self.assignableValue(anchor, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.containerElementArgument)
+		let stored = try self.assignableValue(anchor, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(self.typeKeepingAlias(self.signatures.containerElementType(giid), collapsed: declared, scopeFilePath: self.job.path)), door: FunctionTypeDoor.field, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.containerElementArgument)
 
 		// An enum is the one aggregate that reaches here: its value is a scalar `named` tag, so
 		// `assignableValue`'s verdict agrees for any two enums. A managed aggregate's identity is the
@@ -91036,7 +91013,9 @@ export type Parser
 
 		var paramNames = NameRoster.create()
 		paramNames.push(ClosureEnvDropParamName)
-		self.publishLiftedBody(drop, returnType: MaxonReturnType.void, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: NameRoster.create(), returnAggregateName: EmptySourceText, returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions, offeredResultAlias: EmptySourceText), anchor: anchor, synthesized: true)
+		var paramDeclaredNames = NameRoster.create()
+		paramDeclaredNames.push(EmptySourceText)
+		self.publishLiftedBody(drop, returnType: MaxonReturnType.void, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: paramDeclaredNames, returnAggregateName: EmptySourceText, returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions, offeredResultAlias: EmptySourceText), anchor: anchor, synthesized: true)
 		self.fileDeferredProvenance(drop)
 
 		self.bodyState = savedBody

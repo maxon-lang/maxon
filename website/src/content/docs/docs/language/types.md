@@ -130,7 +130,7 @@ end 'main'
 ## Booleans
 
 `bool` has the literals `true` and `false`. Conditions must be `bool` — there is no truthiness, so
-`if count 'x'` is **E3005** (`'if' requires a bool condition, got 'int'`). `bool` and `int` do not mix:
+`if count 'x'` is **E3005** (`'if' requires a bool condition, got 'Count'` for a `Count`). `bool` and `int` do not mix:
 `flag + 1` is **E2004** and comparing a `bool` with an `int` is **E3005**. On `bool` operands, `and` and
 `or` are logical and short-circuit.
 
@@ -270,7 +270,7 @@ A cast takes one step. Where two steps each do work — a range check, then a re
 
 ### Floats to Integers
 
-A float never converts to an integer implicitly (**E3009** `cannot implicitly convert 'float' to 'int'`).
+A float never converts to an integer implicitly (**E3009** `cannot implicitly convert 'float' to 'Count'` for a `Count` destination).
 Choose the rounding explicitly:
 
 | Function | Result | Example |

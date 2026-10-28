@@ -240,7 +240,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/cast-target-type-resolution/error.cast-computed-int-to-enum.maxon:16:14: Cannot cast from int to enum 'Color' — an integer is not a case; use 'Color.fromRawValue(raw)', which throws 'noSuchRawValue' for a value no case carries
+error E3009: specs/cast-target-type-resolution/error.cast-computed-int-to-enum.maxon:16:14: Cannot cast from Integer to enum 'Color' — an integer is not a case; use 'Color.fromRawValue(raw)', which throws 'noSuchRawValue' for a value no case carries
 ```
 
 <!-- test: an-enum-comes-from-an-integer-through-from-raw-value -->

@@ -344,7 +344,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/type-casting/error.byte-to-bool.maxon:7:12: Cannot cast from int to bool
+error E3009: specs/type-casting/error.byte-to-bool.maxon:7:12: Cannot cast from Byte to bool
 ```
 
 ### Unneeded Casts (Compile Error E3010)

@@ -408,6 +408,8 @@ implements `BidirectionalIterator with Element` and adds random access:
 throw happened. `IterStep` is unsigned: the direction is the method you call, so a negative step is refused
 at the argument door rather than read as a move the other way.
 
+`ArrayIterator.ElementMemory` is the raw array storage that `create` takes.
+
 ```maxon
 typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
@@ -443,7 +445,14 @@ Output: `1 20 40` and `50 -1`.
 | `StringIterator` | `String.createIterator()` | `Character` |
 | `RangeIterator` | `Range`/`OpenRange.createIterator()` | `RangeBound` |
 
-Each has a static `create`, `current()` and `advance()`.
+Each has a static `create`, `current()` and `advance()`. The storage types an iterator's signatures name are
+public aliases of it:
+
+| Iterator | Public aliases |
+|----------|----------------|
+| `ListIterator` | `EManagedList`, the list's raw chain, which `create` takes |
+| `MapIterator` | `Entry`, the `(Key, Value)` pair `current()` returns; `IterKeyArray`, `IterValueArray` and `IterStateArray`, the arrays of keys, values and slot states it scans |
+| `SetIterator` | `IterElementArray` and `IterStateArray`, the arrays of elements and slot states it scans |
 
 ## Interfaces
 

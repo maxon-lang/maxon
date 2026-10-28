@@ -1,0 +1,453 @@
+let PublicKeyword = "public "
+let ReservedNamePrefix = "__"
+let BlockEndKeyword = "end "
+let WordSeparator = " "
+let FenceMarker = "```"
+let HeadingMarker = "#"
+let MaxHeadingLevel = 6
+let QualifierDot = "."
+let ExtensionKeyword = "extension"
+
+typealias HeadingLevel = int(1 to 6) implements ElementIndex
+
+function blockDeclarationKeywords() returns StringArray
+	return ["function", "type", "enum", "union", "interface", "extension"]
+end 'blockDeclarationKeywords'
+
+function ownerKeywords() returns StringArray
+	return ["type", "enum", "union", "interface", "extension"]
+end 'ownerKeywords'
+
+function lineDeclarationKeywords() returns StringArray
+	return ["typealias", "var", "let"]
+end 'lineDeclarationKeywords'
+
+function leadingModifierWords() returns StringArray
+	return ["public", "export", "module", "static"]
+end 'leadingModifierWords'
+
+type DeclarationHead
+	export let keyword as String
+	export let name as String
+	export let isPublic as bool
+
+	static function create(keyword String, name String, isPublic bool) returns DeclarationHead
+		return Self{keyword: keyword, name: name, isPublic: isPublic}
+	end 'create'
+end 'DeclarationHead'
+
+type PublicDeclaration
+	export let name as String
+	export let owner as String
+	export let fileName as String
+
+	static function create(name String, owner String, fileName String) returns PublicDeclaration
+		return Self{name: name, owner: owner, fileName: fileName}
+	end 'create'
+
+	function label() returns String
+		return self.name if self.owner.isEmpty() else "{self.owner}.{self.name}"
+	end 'label'
+end 'PublicDeclaration'
+
+typealias PublicDeclarationArray = Array with PublicDeclaration
+
+module type ReferenceBlock
+	module let words as StringSet
+	module let ancestors as StringSet
+	module let heading as StringSet
+
+	module static function create(words StringSet, ancestors StringSet, heading StringSet) returns ReferenceBlock
+		return Self{words: words, ancestors: ancestors, heading: heading}
+	end 'create'
+end 'ReferenceBlock'
+
+module typealias ReferenceBlockArray = Array with ReferenceBlock
+
+module type ReferenceIndex
+	module let documented as StringSet
+	module let blocks as ReferenceBlockArray
+	module let qualified as StringSet
+
+	module static function create(documented StringSet, blocks ReferenceBlockArray, qualified StringSet) returns ReferenceIndex
+		return Self{documented: documented, blocks: blocks, qualified: qualified}
+	end 'create'
+end 'ReferenceIndex'
+
+module type SourceAudit
+	module let declared as Count
+	module let missing as StringArray
+	module let report as String
+
+	module static function create(declared Count, missing StringArray, report String) returns SourceAudit
+		return Self{declared: declared, missing: missing, report: report}
+	end 'create'
+end 'SourceAudit'
+
+enum HeadingError implements Error
+	notAHeading
+end 'HeadingError'
+
+type ReferenceIndexBuilder
+	var blocks as ReferenceBlockArray
+	var blockText as String
+	var blockAncestors as String
+	var blockHeading as String
+	var levelHeadings as StringArray
+
+	static function create() returns ReferenceIndexBuilder
+		var levelHeadings = StringArray.create()
+
+		for _ in 0 to MaxHeadingLevel 'eachLevel'
+			levelHeadings.push("")
+		end 'eachLevel'
+
+		return Self{blocks: ReferenceBlockArray.create(), blockText: "", blockAncestors: "", blockHeading: "", levelHeadings: levelHeadings}
+	end 'create'
+
+	function addLine(line String)
+		self.blockText.append("{line}{LineFeed}")
+	end 'addLine'
+
+	function closeBlock()
+		self.blocks.push(ReferenceBlock.create(wordsIn(self.blockText), ancestors: wordsIn(self.blockAncestors), heading: wordsIn(self.blockHeading)))
+	end 'closeBlock'
+
+	function finish(documented StringSet, qualified StringSet) returns ReferenceIndex
+		self.closeBlock()
+
+		return ReferenceIndex.create(documented, blocks: self.blocks.clone(), qualified: qualified)
+	end 'finish'
+
+	function openBlock(level HeadingLevel, heading String)
+		self.closeBlock()
+
+		for deeper in level to MaxHeadingLevel 'eachDeeperLevel'
+			try self.levelHeadings.set(deeper, value: "") otherwise panic("stdlib-reference: level {deeper} is one of the {MaxHeadingLevel + 1} the builder holds")
+		end 'eachDeeperLevel'
+
+		try self.levelHeadings.set(level, value: heading) otherwise panic("stdlib-reference: level {level} is one of the {MaxHeadingLevel + 1} the builder holds")
+
+		self.blockAncestors = joined(self.levelHeadings, separator: LineFeed)
+		self.blockHeading = heading
+		self.blockText = ""
+		self.addLine(heading)
+	end 'openBlock'
+end 'ReferenceIndexBuilder'
+
+function headingLevelOf(line String) returns HeadingLevel throws HeadingError
+	let parts = line.split(WordSeparator)
+
+	if parts.count() < 2 'noText'
+		throw HeadingError.notAHeading
+	end 'noText'
+
+	let marker = try parts.get(0) otherwise panic("stdlib-reference: a split of two or more parts has a first")
+
+	if marker.isEmpty() or marker.count() > MaxHeadingLevel 'notAMarker'
+		throw HeadingError.notAHeading
+	end 'notAMarker'
+
+	for c in marker 'eachMarkerCharacter'
+		if c.toString() != HeadingMarker 'notAHash'
+			throw HeadingError.notAHeading
+		end 'notAHash'
+	end 'eachMarkerCharacter'
+
+	return marker.count() as HeadingLevel
+end 'headingLevelOf'
+
+module function referenceIndexOf(document String) returns ReferenceIndex
+	var builder = ReferenceIndexBuilder.create()
+	var inFence = false
+
+	for line in document.split(LineFeed) 'eachLine'
+		if line.startsWith(FenceMarker) 'fence'
+			inFence = not inFence
+			builder.addLine(line)
+			continue
+		end 'fence'
+
+		if inFence 'insideCode'
+			builder.addLine(line)
+			continue
+		end 'insideCode'
+
+		if let level = try headingLevelOf(line) 'heading'
+			builder.openBlock(level, heading: line)
+		end 'heading' else 'prose'
+			builder.addLine(line)
+		end 'prose'
+	end 'eachLine'
+
+	return builder.finish(wordsIn(document), qualified: qualifiedNamesIn(document))
+end 'referenceIndexOf'
+
+function qualifiedNamesIn(document String) returns StringSet
+	var qualified = StringSet.create()
+	var previous = ""
+	var current = ""
+	var afterDot = false
+
+	for c in document 'eachCharacter'
+		let spelled = c.toString()
+
+		if Ascii.isAlphanumeric(c) or spelled == WordUnderscore 'insideAWord'
+			current.append(spelled)
+			continue
+		end 'insideAWord'
+
+		if current.isEmpty() 'noWordEnds'
+			previous = ""
+			afterDot = false
+			continue
+		end 'noWordEnds'
+
+		if afterDot 'continuesAQualifiedName'
+			qualified.insert("{previous}.{current}")
+		end 'continuesAQualifiedName'
+
+		previous = current.clone()
+		current = ""
+		afterDot = spelled == QualifierDot
+	end 'eachCharacter'
+
+	if afterDot and not current.isEmpty() 'qualifiedAtTheEnd'
+		qualified.insert("{previous}.{current}")
+	end 'qualifiedAtTheEnd'
+
+	return qualified
+end 'qualifiedNamesIn'
+
+function headOf(declaration String, at String) returns DeclarationHead
+	let words = declaration.split(WordSeparator)
+
+	var isPublic = false
+	var keyword = ""
+	var name = ""
+
+	for (iter, word) in words.withIterator() 'eachWord'
+		if leadingModifierWords().contains(word) 'modifier'
+			isPublic = isPublic or word == "public"
+			continue
+		end 'modifier'
+
+		keyword = word
+		name = leadingWord(try words.get(iter.index() + 1) otherwise "")
+
+		break
+	end 'eachWord'
+
+	let opensABlock = blockDeclarationKeywords().contains(keyword)
+
+	if declaration.startsWith(PublicKeyword) and not opensABlock and not lineDeclarationKeywords().contains(keyword) 'unknownShape'
+		panic("stdlib-reference: {at}: `{declaration}` is a public declaration whose keyword `{keyword}` this scanner does not know, so its name cannot be read.")
+	end 'unknownShape'
+
+	if declaration.startsWith(PublicKeyword) and name.isEmpty() 'noName'
+		panic("stdlib-reference: {at}: `{declaration}` is a public declaration with no name after `{keyword}`.")
+	end 'noName'
+
+	return DeclarationHead.create(keyword, name: name, isPublic: isPublic)
+end 'headOf'
+
+function leadingWord(text String) returns String
+	var word = ""
+
+	for c in text 'eachCharacter'
+		let spelled = c.toString()
+
+		if not Ascii.isAlphanumeric(c) and spelled != WordUnderscore 'wordEnds'
+			break
+		end 'wordEnds'
+
+		word.append(spelled)
+	end 'eachCharacter'
+
+	return word
+end 'leadingWord'
+
+function publicDeclarationsIn(source String, fileName String) returns PublicDeclarationArray
+	var declarations = PublicDeclarationArray.create()
+	var reservedScopeEnd = ""
+	var owner = ""
+	var ownerIsPublic = false
+
+	for (iter, rawLine) in source.split(LineFeed).withIterator() 'eachLine'
+		let declaration = rawLine.trim()
+
+		if not reservedScopeEnd.isEmpty() 'insideReservedScope'
+			if declaration == reservedScopeEnd 'scopeCloses'
+				reservedScopeEnd = ""
+			end 'scopeCloses'
+
+			continue
+		end 'insideReservedScope'
+
+		if declaration.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		let head = headOf(declaration, at: "{StdlibDirName}/{fileName}:{iter.index() + 1}")
+		let atColumnZero = not rawLine.startsWith(Tab)
+
+		if atColumnZero and ownerKeywords().contains(head.keyword) 'ownerOpens'
+			owner = head.name
+			ownerIsPublic = head.isPublic or head.keyword == ExtensionKeyword
+		end 'ownerOpens' else if atColumnZero and (blockDeclarationKeywords().contains(head.keyword) or lineDeclarationKeywords().contains(head.keyword)) 'ownerlessDeclaration'
+			owner = ""
+			ownerIsPublic = false
+		end 'ownerlessDeclaration'
+
+		if not declaration.startsWith(PublicKeyword) 'notAPublicDeclaration'
+			continue
+		end 'notAPublicDeclaration'
+
+		if not head.name.startsWith(ReservedNamePrefix) 'surface'
+			declarations.push(PublicDeclaration.create(head.name, owner: owner.clone() if ownerIsPublic and not atColumnZero else "", fileName: fileName))
+		end 'surface' else if blockDeclarationKeywords().contains(head.keyword) 'reservedBlock'
+			reservedScopeEnd = "{BlockEndKeyword}'{head.name}'"
+		end 'reservedBlock'
+	end 'eachLine'
+
+	if not reservedScopeEnd.isEmpty() 'neverClosed'
+		panic("stdlib-reference: {StdlibDirName}/{fileName} never reaches `{reservedScopeEnd}`, so every declaration after its opening was skipped as reserved.")
+	end 'neverClosed'
+
+	return declarations
+end 'publicDeclarationsIn'
+
+
+typealias OwnersByMember = Map with (String, StringArray)
+
+function isDocumented(declaration PublicDeclaration, others StringArray, reference ReferenceIndex) returns bool
+	if not reference.documented.contains(declaration.name) 'nameAbsent'
+		return false
+	end 'nameAbsent'
+
+	if declaration.owner.isEmpty() 'topLevel'
+		return true
+	end 'topLevel'
+
+	if reference.qualified.contains("{declaration.owner}.{declaration.name}") 'spelledWithItsOwner'
+		return true
+	end 'spelledWithItsOwner'
+
+	// The reference is organised by topic, so a member's block need not sit under its owner's heading.
+	for block in reference.blocks 'eachBlock'
+		if not block.words.contains(declaration.name) 'noMention'
+			continue
+		end 'noMention'
+
+		if block.ancestors.contains(declaration.owner) or (block.words.contains(declaration.owner) and not headingNamesAnyOf(block, others: others)) 'underItsOwner'
+			return true
+		end 'underItsOwner'
+	end 'eachBlock'
+
+	return false
+end 'isDocumented'
+
+function headingNamesAnyOf(block ReferenceBlock, others StringArray) returns bool
+	for other in others 'eachOther'
+		if block.heading.contains(other) 'namesAnother'
+			return true
+		end 'namesAnother'
+	end 'eachOther'
+
+	return false
+end 'headingNamesAnyOf'
+
+module type DeclarationRoster
+	var declarations as PublicDeclarationArray
+
+	module static function create() returns DeclarationRoster
+		return Self{declarations: PublicDeclarationArray.create()}
+	end 'create'
+
+	module function add(source String, fileName String)
+		for declaration in publicDeclarationsIn(source, fileName: fileName) 'eachDeclaration'
+			self.declarations.push(declaration)
+		end 'eachDeclaration'
+	end 'add'
+
+	function ownersByMember() returns OwnersByMember
+		var owners = OwnersByMember.create()
+
+		for declaration in self.declarations 'eachDeclaration'
+			if declaration.owner.isEmpty() 'topLevel'
+				continue
+			end 'topLevel'
+
+			var declaring = try owners.get(declaration.name) otherwise StringArray.create()
+
+			if not declaring.contains(declaration.owner) 'newOwner'
+				declaring.push(declaration.owner)
+				owners.upsert(declaration.name, value: declaring)
+			end 'newOwner'
+		end 'eachDeclaration'
+
+		return owners
+	end 'ownersByMember'
+
+	module function audit(reference ReferenceIndex) returns SourceAudit
+		let owners = self.ownersByMember()
+
+		var declared = 0 as Count
+		var missing = StringArray.create()
+		var missingFiles = StringArray.create()
+
+		for declaration in self.declarations 'eachDeclaration'
+			declared = declared + 1
+
+			let others = otherDeclarers(owners, declaration: declaration)
+
+			if not isDocumented(declaration, others: others, reference: reference) and not missing.contains(declaration.label()) 'undocumented'
+				missing.push(declaration.label())
+				missingFiles.push(declaration.fileName)
+			end 'undocumented'
+		end 'eachDeclaration'
+
+		let report = reportByFile(missing, files: missingFiles)
+
+		return SourceAudit.create(declared, missing: missing, report: report)
+	end 'audit'
+end 'DeclarationRoster'
+
+function otherDeclarers(owners OwnersByMember, declaration PublicDeclaration) returns StringArray
+	var others = StringArray.create()
+	let declaring = try owners.get(declaration.name) otherwise return others
+
+	for owner in declaring 'eachOwner'
+		if owner != declaration.owner 'another'
+			others.push(owner)
+		end 'another'
+	end 'eachOwner'
+
+	return others
+end 'otherDeclarers'
+
+function reportByFile(labels StringArray, files StringArray) returns String
+	var distinct = StringArray.create()
+
+	for file in files 'eachFile'
+		if not distinct.contains(file) 'firstSighting'
+			distinct.push(file)
+		end 'firstSighting'
+	end 'eachFile'
+
+	var lines = StringArray.create()
+
+	for file in distinct 'eachDistinctFile'
+		var here = StringArray.create()
+
+		for (iter, label) in labels.withIterator() 'eachLabel'
+			if (try files.get(iter.index()) otherwise panic("stdlib-reference: every label has the file that declares it")) == file 'declaredHere'
+				here.push(label)
+			end 'declaredHere'
+		end 'eachLabel'
+
+		lines.push("{file}: {joined(here, separator: Space)};")
+	end 'eachDistinctFile'
+
+	return joined(lines, separator: Space)
+end 'reportByFile'

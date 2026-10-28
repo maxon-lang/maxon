@@ -1606,7 +1606,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.capturing-closure-in-global-errors.maxon:9:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.capturing-closure-in-global-errors.maxon:9:2: cannot assign a value of type 'function' to global 'handler', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.capturing-closure-in-container -->
@@ -2195,7 +2195,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.maxon:14:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.maxon:14:2: cannot assign a value of type 'function' to global 'handler', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.capturing-closure-in-ternary-used-in-frame -->
@@ -2351,7 +2351,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.function-value-into-int-global-errors.maxon:12:2: cannot assign a value of type 'function' to global 'slot', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-into-int-global-errors.maxon:12:2: cannot assign a value of type 'function' to global 'slot', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.function-value-into-int-local-errors -->
@@ -2372,7 +2372,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.function-value-into-int-local-errors.maxon:11:2: cannot assign a value of type 'function' to variable 'loc', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-into-int-local-errors.maxon:11:2: cannot assign a value of type 'function' to variable 'loc', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.capturing-closure-into-int-local-errors -->
@@ -2389,7 +2389,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.capturing-closure-into-int-local-errors.maxon:8:2: cannot assign a value of type 'function' to variable 'loc', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.capturing-closure-into-int-local-errors.maxon:8:2: cannot assign a value of type 'function' to variable 'loc', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.function-value-returned-as-int-errors -->
@@ -2414,7 +2414,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.function-value-returned-as-int-errors.maxon:10:2: Cannot return 'function' from function declared to return 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-returned-as-int-errors.maxon:10:2: Cannot return 'function' from function declared to return 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.function-value-as-arg-errors -->
@@ -2438,7 +2438,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.function-value-as-arg-errors.maxon:14:9: cannot pass a value of type 'function' as argument 'n', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-as-arg-errors.maxon:14:9: cannot pass a value of type 'function' as argument 'n', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.function-value-into-field-errors -->
@@ -2467,7 +2467,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.function-value-into-field-errors.maxon:19:4: cannot assign a value of type 'function' to field 'slot', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-into-field-errors.maxon:19:4: cannot assign a value of type 'function' to field 'slot', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.throwing-function-as-value-errors -->
@@ -5572,7 +5572,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:10: argument type mismatch for 1: expected 'int', got 'String'
+error E3005: <fragment>:11:10: argument type mismatch for 1: expected 'Integer', got 'String'
 ```
 
 <!-- test: first-class-function.indirect-call-arity-13 -->

@@ -4068,19 +4068,13 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
 		let argId = try args.get(i) otherwise panic("checkIndirectCallArgs: args.get OOB at {i} — the arity check above proved there are at least this many")
 		let paramType = try shape.paramTypes.get(i) otherwise panic("checkIndirectCallArgs: paramTypes.get OOB at {i} — the arity check above proved the counts equal")
 
-		// ⭐ **THE FUNCTION TYPE'S OWN PRE-ERASURE CARRIER, and passing `EmptySourceText` here was a measured
-		// FALSE REFUSAL rather than a missed one.** This site read *"a function TYPE carries no pre-erasure
-		// union/enum identity"* — true until `FunctionShape.paramAggregateNames` existed, stale the moment it
-		// did. With the carrier empty, a `function(Payload)` parameter resolved to bare `integer` and the
-		// aggregate rule refused the only argument it can legally be called with: *"expected 'int', got
-		// 'Payload'"*, a sentence naming the erasure instead of the program.
-		//
-		// `declaredParamName` stays empty and is the one column a `FunctionShape` genuinely does not have: it is
-		// the SPELLING, and a function type gives its parameters no names to spell.
+		// Both pre-erasure columns come off the function TYPE's shape. Without the identity a
+		// `function(Payload)` parameter resolves to bare `integer`, and the aggregate rule refuses the one
+		// argument it can legally be called with (`expected 'int', got 'Payload'`).
 		// ⚠ The CALLEE is this call's own subject, and it is a function VALUE — never `genericInstance`-tagged —
 		// so the shape substitution declines. That is the right answer as well as an honest one: an indirect
 		// call's declared shape is the function TYPE's own, written in no generic body's declaration view.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i as ParamCount), declaredParamName: EmptySourceText, param: ArgumentParameter.unnamed, position: i as ParamCount, argId: argId, callInstanceSubject: CallSubject.heldBy(callee), paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance, overloadRefused: false)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i as ParamCount), declaredParamName: shapeParamSpelling(shape, index: i as ParamCount), param: ArgumentParameter.unnamed, position: i as ParamCount, argId: argId, callInstanceSubject: CallSubject.heldBy(callee), paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance, overloadRefused: false)
 	end 'eachArg'
 
 	view bodies = calls.functionValueBodiesCalledThrough(func, callee: callee)
@@ -6460,12 +6454,9 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// The substituted type argument carries no pre-erasure AGGREGATE of either kind: it is the INSTANCE's own
 		// argument type, read live out of the signature index rather than off a declaration this pass ever saw.
 		//
-		// ⭐ **IT DOES CARRY THE OTHER PRE-ERASURE COLUMN — THE `typealias` THE AUTHOR WROTE — AND PASSING
-		// IT EMPTY WAS A WRONG NOUN.** `paramDisplayName`'s last arm falls back to the tag's class word,
-		// so a refusal at a `Box with Integer` read `expected 'int'` where the concrete `takeInt`-shaped
-		// parameter beside it reads `expected 'Integer'` off `sig.paramDeclaredNames` — one rule spelling
-		// its type two ways by which door the value entered, and the runnable oracle says `Integer`
-		// (`arrays.error.insert-string-into-int-array`).
+		// It does carry the other pre-erasure column, the `typealias` the author wrote, so a refusal at a
+		// `Box with Integer` reads `expected 'Integer'` as the concrete parameter beside it does off
+		// `sig.paramDeclaredNames` (`arrays.error.insert-string-into-int-array`).
 		if checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: substituted, declaredAggregate: EmptySourceText, declaredName: signatures.indexScalarAliasName(substituted), param: ArgumentParameter.named(paramName), position: i as ParamCount, callRange: callRange, filePath: filePath) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
 			return
 		end 'refusedBySubstitutedType'
@@ -6876,7 +6867,7 @@ function functionShapeThroughCallInstance(project Project, func IrFunction, subj
 		return shape
 	end 'theInstanceFixesNothingHere'
 
-	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid), paramCapabilities: shape.paramCapabilities, returnCapability: shape.returnCapability)
+	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, paramDeclaredNames: shape.paramDeclaredNames, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid), paramCapabilities: shape.paramCapabilities, returnCapability: shape.returnCapability)
 end 'functionShapeThroughCallInstance'
 
 // ⭐⭐ **THE IDENTITY OF A SLOT THE INSTANCE JUST FILLED IN — `Parser.erasedAggregateNameOf`'s RULE stated for
@@ -7731,9 +7722,9 @@ end 'existentialStoreWideningPlace'
 // refusal but a WRONG one; `checkIndirectCallArgs` carries the measurement.
 //
 // `declaredParamName` is the OTHER pre-erasure column — the SPELLING an author wrote, read only to PRINT
-// (`FuncSignature.paramDeclaredNames`, user ruling 2026-08-04). Only a direct call has one: a function TYPE
-// names its parameters nowhere, so an indirect call passes `EmptySourceText` and the refusal falls back to the
-// resolved type's own display name.
+// (`FuncSignature.paramDeclaredNames`, user ruling 2026-08-04). An indirect call reads it off the callee's
+// shape (`FunctionShape.paramDeclaredNames`); where it is empty the refusal falls back to the resolved type's
+// own display name.
 //
 // `callInstanceSubject` is the value whose CONCRETE generic instance fixes the callee's declaration-view
 // parameter types — the same subject `checkArgTypes` reads for `paramTypeThroughCallInstance`. Only the
@@ -7831,7 +7822,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same
 			// fault, same reader, so the same explanation: `argMismatchWithOpaqueTail` appends nothing unless the
 			// ARGUMENT is the opaque one, which leaves every nominal-vs-nominal refusal here spelled as before.
-			let expectedDisplay = paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, argNameId: argNameId, readerFilePath: filePath)
+			let expectedDisplay = paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, readerFilePath: filePath)
 			let gotDisplay = valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 			var argSignatures = programSignaturesIn(project, asker: "checkOneArgType")
 			let declaredParamBrandOfCall = declaredBrandOf(declaredParamName, paramTag: paramTag)
@@ -7953,27 +7944,18 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 
 	match verdict 'declared'
 		ok then break
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, argNameId: argNameId, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 
-		// ⚠ **THE TWO ARMS BELOW SPELL THE PARAMETER BY ITS RESOLVED CLASS WORD AND NOT BY ITS DECLARATION,
-		// AND THAT IS THE CANONICAL COROLLARY OF THE DISPLAY RULE RATHER THAN AN EXCEPTION TO IT.** Each is
-		// ONE SENTENCE WITH SEVERAL DOORS, and every other door of each is a place with no parameter to name:
-		// `specs/implicit-type-conversion.md` pins `cannot implicitly convert 'float' to 'int'` at a
-		// `x Integer` PARAMETER and at the return, both field doors, the global and the local, all `'int'`;
-		// `specs/first-class-functions.md` pins `which holds 'int'` at a `loc Integer` LOCAL, a global, a
-		// field and a return. An argument door that answered `'Integer'` alone would make one rule read two
-		// ways by which door the value entered — the defect `SlotMismatchVoice` records one tier down.
-		//
-		// The parameter is still NAMED, unlike the parser's three sites, because the reader's next
+		// The parameter is NAMED here, unlike the parser's three sites, because the reader's next
 		// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
 		// shared verbatim, so the four sites cannot come to explain one rule four ways.
-		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(param, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(declaredTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
+		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(param, position: position)}: {implicitNarrowingMessage(typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath), targetType: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, readerFilePath: filePath))}", line: callRange.line, column: callRange.column, filePath: filePath)
 
 		// A FUNCTION VALUE passed to a NON-function parameter — the argument twin of the parser's
 		// assignment/return sites, sharing `FunctionValueMisuseSuffix` so all four explain one rule one
 		// way. (Reached only through the whole-program signature the parser cannot see, which is why the
 		// rule's argument arm lives here rather than at the call site.)
-		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(param, position: position)}, which holds '{typeTagName(declaredTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
+		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(param, position: position)}, which holds '{paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, readerFilePath: filePath)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
 	end 'declared'
 
 	return verdict
@@ -8071,26 +8053,7 @@ end 'promiseResultDisplayIn'
 //
 // ⚠ The instance arm comes FIRST and reads the type rather than `aggregate`, because for a generic instance
 // `aggregate` holds the canonical identity (`Array_Integer`) and the author wrote `IntegerArray`.
-//
-// ⭐⭐ **THE RANGED-ALIAS ARM IS THE ONE THAT ASKS ABOUT THE *ARGUMENT*, AND THE CANONICAL CORPUS IS WHY.**
-// Two canonical specs pin the SAME shape — a scalar argument at a parameter declared `x Integer`, over
-// `typealias Integer = int(i64.min to i64.max)` — and they pin DIFFERENT spellings:
-//
-//   • `specs/type-checking.md`           `expected 'Integer', got 'String'`   (and `'Integer', got 'Point'`)
-//   • `specs/implicit-type-conversion.md` `expected 'int',     got 'bool'`
-//
-// They are not in conflict; they are one rule seen from two sides: the declared source name is printed
-// when the ARGUMENT is a struct/enum kind, while a bare primitive argument falls through to the
-// conversion path, which prints the class word. **A declared alias is worth printing
-// when the other half of the sentence NAMES a type; when both halves are class words, naming one side
-// `Integer` claims a nominal disagreement where the mismatch is purely one of class.** `tagAdmitsNoAggregate`
-// is exactly that question and is already the compiler's one answer to it.
-//
-// ⚠ The gate is on THIS arm alone. The arms above it keep answering unconditionally because their
-// fallback is useless: `typeTagName(genericInstance)` is the bare word `struct`, so `expected 'IntegerArray',
-// got 'int'` (`specs/type-checking.md`, an `int` argument — a tag that admits no aggregate) would degrade to
-// `expected 'struct'`. The ranged arm's fallback is `int`, which is the type.
-function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTypeTag, aggregate ByteArray, declaredName ByteArray, argTag ValueTypeTag, argNameId TypeNameId, readerFilePath FilePath) returns String
+function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTypeTag, aggregate ByteArray, declaredName ByteArray, readerFilePath FilePath) returns String
 	if paramTag == ValueTypeTag.genericInstance 'genericInstance'
 		return brandedTypeDisplayName(project, tag: paramTag, nameId: typeNameIdOf(paramType), brand: declaredName, readerFilePath: readerFilePath)
 	end 'genericInstance'
@@ -8099,18 +8062,17 @@ function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTy
 		return String.from(declaredName)
 	end 'aWrittenTupleType'
 
-	// A ranged alias's identity is a NAME, not an aggregate, and is printed only where the declaration spelled
-	// it (`declaredName`): a function TYPE's parameter is a class word (`fn(int) returns int`), and an
-	// argument refused there reads `expected 'int'`.
+	// A ranged alias's identity is a NAME, not an aggregate, and is printed from the spelling its declaration
+	// wrote (`declaredName`).
 	if not aggregate.isEmpty() and not programSignaturesIn(project, asker: "paramDisplayName").isRangedAliasIdentity(aggregate) 'nominal'
 		return programSignaturesIn(project, asker: "paramDisplayName").displayNameOfAggregate(paramTag, aggregate: aggregate)
 	end 'nominal'
 
-	if not declaredName.isEmpty() and (not tagAdmitsNoAggregate(argTag) or valueTagWearsAnAlias(argTag, nameId: argNameId)) 'declaredAliasAgainstANamedArgument'
+	if not declaredName.isEmpty() 'declaredAlias'
 		return programSignaturesIn(project, asker: "paramDisplayName").aliasIdentityDisplay(declaredName)
-	end 'declaredAliasAgainstANamedArgument'
+	end 'declaredAlias'
 
-	return typeTagName(paramTag)
+	return typeDisplayName(project, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: readerFilePath)
 end 'paramDisplayName'
 
 // Report a per-ARGUMENT call error anchored on the offending argument's own source

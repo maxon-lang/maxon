@@ -627,7 +627,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/error-handling/error.otherwise-type-mismatch.maxon:15:12: type mismatch: 'otherwise type 'float' does not match expected type 'int''
+error E3059: specs/error-handling/error.otherwise-type-mismatch.maxon:15:12: type mismatch: 'otherwise type 'float' does not match expected type 'Integer''
 ```
 
 <!-- test: error.void-try-otherwise-value -->

@@ -6,19 +6,17 @@
 // `excludedSources` names; `stdlib/helpers/` is not descended into, because nothing there is the
 // library's surface — it holds the implementations the top-level files call.
 //
-// A name is documented when it appears in the document as a whole word — a run of letters, digits and
-// `_` — anywhere, prose or code.
+// A top-level name, or a member of a type that is not `public`, is documented when it appears in the
+// document as a whole word — a run of letters, digits and `_` — anywhere, prose or code. A `public` member
+// of a `public` type, or of any extension (owned by the extended type), is documented when the document
+// spells `Owner.member`, or when its name sits in a heading-delimited block whose heading chain names the
+// owner, or whose text names the owner under a heading that names no other type declaring that member: a
+// member of another type spelled the same does not document it. `StdlibRoster.maxon` holds the scanner.
 //
 // ⛔ A `public` LINE WHOSE NAME CANNOT BE READ PANICS, naming its file and line: a declaration shape the
 // scanner does not know would otherwise drop out of the roster and read as documented.
 
 let StdlibReferenceDocument = "docs/STDLIB_REFERENCE.md"
-
-let PublicKeyword = "public "
-let StaticKeyword = "static "
-let ReservedNamePrefix = "__"
-let BlockEndKeyword = "end "
-let WordSeparator = " "
 
 // Top-level sources that are not the library's surface, one reason each.
 function excludedSources() returns StringArray
@@ -28,139 +26,24 @@ function excludedSources() returns StringArray
 	]
 end 'excludedSources'
 
-// The keywords a `public` declaration's name follows. A line naming none of them is a shape this scanner
-// does not know, and panics. The first list opens a block closed by `end '<name>'`; the second does not.
-function blockDeclarationKeywords() returns StringArray
-	return ["function", "type", "enum", "union", "interface", "extension"]
-end 'blockDeclarationKeywords'
-
-function lineDeclarationKeywords() returns StringArray
-	return ["typealias", "var", "let"]
-end 'lineDeclarationKeywords'
-
-// One `public` line, read.
-type PublicDeclaration
-	export let name as String
-	export let opensABlock as bool
-
-	static function create(name String, opensABlock bool) returns PublicDeclaration
-		return Self{name: name, opensABlock: opensABlock}
-	end 'create'
-end 'PublicDeclaration'
-
 test 'the stdlib reference names every public declaration'
-	let documentPath = try FilePath.from(StdlibReferenceDocument) otherwise panic("stdlib-reference: '{StdlibReferenceDocument}' is not a spellable path")
-	let document = fileText(documentPath)
-	let documented = wordsIn(document)
+	let reference = referenceIndexOf(checkoutDocumentText(StdlibReferenceDocument))
 
-	let stdlib = fixtureDir(StdlibDirName)
-	let entries = listing(stdlib)
+	var roster = DeclarationRoster.create()
 
-	var declared = 0 as Count
-	var missing = StringArray.create()
-	var missingByFile = StringArray.create()
-
-	for entry in entries 'eachEntry'
+	for entry in listing(fixtureDir(StdlibDirName)) 'eachEntry'
 		let fileName = entry.filename()
 
 		if Directory.isDirectory(entry) or not fileName.endsWith(MaxonSourceSuffix) or excludedSources().contains(fileName) 'notASurfaceSource'
 			continue
 		end 'notASurfaceSource'
 
-		let source = fileText(entry)
-
-		var missingHere = StringArray.create()
-
-		for name in publicNamesIn(withoutCarriageReturns(source), fileName: fileName) 'eachName'
-			declared = declared + 1
-
-			if not documented.contains(name) and not missing.contains(name) 'undocumented'
-				missing.push(name)
-				missingHere.push(name)
-			end 'undocumented'
-		end 'eachName'
-
-		if missingHere.count() > 0 'fileOwesNames'
-			missingByFile.push("{fileName}: {joined(missingHere, separator: Space)};")
-		end 'fileOwesNames'
+		roster.add(withoutCarriageReturns(fileText(entry)), fileName: fileName)
 	end 'eachEntry'
 
-	Expect.isTrue(declared > 0, message: "no public declaration was read out of '{StdlibDirName}', so the comparison below would be vacuous.")
-	Expect.isEmpty(joined(missing, separator: Space), message: "{StdlibReferenceDocument} does not name these public stdlib declarations, by the file declaring each: {joined(missingByFile, separator: Space)}")
+	let audit = roster.audit(reference)
+
+	Expect.isTrue(audit.declared > 0, message: "no public declaration was read out of '{StdlibDirName}', so the comparison below would be vacuous.")
+	Expect.isEmpty(joined(audit.missing, separator: Space), message: "{StdlibReferenceDocument} does not name these public stdlib declarations, by the file declaring each: {audit.report}")
 end 'the stdlib reference names every public declaration'
 
-// The name each `public` declaration line in `source` declares. A name in the reserved band, and everything
-// declared inside one, is left out: the band is compiler machinery author code cannot call or name.
-function publicNamesIn(source String, fileName String) returns StringArray
-	var names = StringArray.create()
-	var reservedScopeEnd = ""
-
-	for (iter, line) in source.split(LineFeed).withIterator() 'eachLine'
-		let declaration = line.trim()
-
-		if not reservedScopeEnd.isEmpty() 'insideReservedScope'
-			if declaration == reservedScopeEnd 'scopeCloses'
-				reservedScopeEnd = ""
-			end 'scopeCloses'
-
-			continue
-		end 'insideReservedScope'
-
-		if not declaration.startsWith(PublicKeyword) 'notAPublicDeclaration'
-			continue
-		end 'notAPublicDeclaration'
-
-		let read = readDeclaration(declaration, at: "{StdlibDirName}/{fileName}:{iter.index() + 1}")
-
-		if not read.name.startsWith(ReservedNamePrefix) 'surface'
-			names.push(read.name)
-		end 'surface' else if read.opensABlock 'reservedBlock'
-			reservedScopeEnd = "{BlockEndKeyword}'{read.name}'"
-		end 'reservedBlock'
-	end 'eachLine'
-
-	if not reservedScopeEnd.isEmpty() 'neverClosed'
-		panic("stdlib-reference: {StdlibDirName}/{fileName} never reaches `{reservedScopeEnd}`, so every declaration after its opening was skipped as reserved.")
-	end 'neverClosed'
-
-	return names
-end 'publicNamesIn'
-
-// `public [static] <keyword> <name>...` gives `<name>`: the word run that follows the keyword.
-function readDeclaration(declaration String, at String) returns PublicDeclaration
-	let afterPublic = declaration.replaceFirst(PublicKeyword, with: "")
-	let afterStatic = afterPublic.replaceFirst(StaticKeyword, with: "") if afterPublic.startsWith(StaticKeyword) else afterPublic
-	let words = afterStatic.split(WordSeparator)
-	let keyword = try words.get(0) otherwise panic("stdlib-reference: a split always yields a first part")
-
-	let opensABlock = blockDeclarationKeywords().contains(keyword)
-
-	if not opensABlock and not lineDeclarationKeywords().contains(keyword) 'unknownShape'
-		panic("stdlib-reference: {at}: `{declaration}` is a public declaration whose keyword `{keyword}` this scanner does not know, so its name cannot be read.")
-	end 'unknownShape'
-
-	let rest = afterStatic.replaceFirst("{keyword}{WordSeparator}", with: "")
-	let name = leadingWord(rest)
-
-	if name.isEmpty() 'noName'
-		panic("stdlib-reference: {at}: `{declaration}` is a public declaration with no name after `{keyword}`.")
-	end 'noName'
-
-	return PublicDeclaration.create(name, opensABlock: opensABlock)
-end 'readDeclaration'
-
-function leadingWord(text String) returns String
-	var word = ""
-
-	for c in text 'eachCharacter'
-		let spelled = c.toString()
-
-		if not Ascii.isAlphanumeric(c) and spelled != WordUnderscore 'wordEnds'
-			break
-		end 'wordEnds'
-
-		word.append(spelled)
-	end 'eachCharacter'
-
-	return word
-end 'leadingWord'

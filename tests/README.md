@@ -618,7 +618,13 @@ tests/
     execute-passes-an-empty-argument-through.maxtest      `execute` hands an empty program argument to the program
     build-rebuild-compiles-an-up-to-date-output.maxtest  `build` given `rebuild: true` compiles a program its last call left up to date
   docs/
-    stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
+    StdlibRoster.maxon                                       the shared half: reads the `public` declarations of a stdlib source and indexes the reference by heading-delimited block
+    stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`, a member under its owner
+    a-member-documented-only-under-another-type-is-undocumented.maxtest   a `public` member whose name only another type's section carries is reported
+    a-member-documented-under-its-own-type-is-documented.maxtest          the same member documented under its own type, or a subsection of it, is not; so is a member of an extension
+    a-member-mentioned-beside-its-owner-in-another-types-section-is-undocumented.maxtest   a member listed in the section of another type that declares it, with only its owner's name beside it, is reported
+    a-member-spelled-with-its-owner-in-another-types-section-is-documented.maxtest         `Owner.member` documents a member wherever the document spells it
+    a-member-of-a-non-public-extension-belongs-to-the-extended-type.maxtest               a `public` member of an `extension` is owned by the extended type whatever the extension's own modifier
     each-shared-harness-helper-is-defined-once.maxtest       every `public function` in `tests/support/*.maxon` is declared by that one file and by no other `.maxon` or `.maxtest` under `tests/`
   targets/
     TargetsHarness.maxon                                             the shared half: the columns of `maxon-bin/targets.tsv`, read by header name
@@ -1527,10 +1533,20 @@ on a copy costs a file write rather than 25 s, and the whole corpus therefore ru
 
 ## `docs/` — the stdlib reference names every public declaration, and every shared helper has one home
 
-Two cases, and neither spawns anything. `stdlib-reference-documents-every-public-api.maxtest` reads every top-level `stdlib/*.maxon` and `docs/STDLIB_REFERENCE.md`, and
-fails listing, file by file, each `public` declaration name the document does not contain as a whole word.
+Seven cases, and none spawns anything. `stdlib-reference-documents-every-public-api.maxtest` reads every top-level `stdlib/*.maxon` and `docs/STDLIB_REFERENCE.md`, and
+fails listing, file by file, each `public` declaration the document does not name. A top-level declaration, or a
+member of a type that is not `public`, is named when its name appears in the document as a whole word. A `public` member of a `public` type, enum, union
+or interface, and of any `extension` (owned by the extended type whatever the extension's own modifier), is named
+only where the document spells `Owner.member`, or where its name sits in a heading-delimited block whose heading
+chain names the owner, or whose text names the owner under a heading that names no other type declaring a member
+of that name. So a member of another type with the same name (`TlsListener.setHandshakeDeadline` for
+`TlsClientOptions.setHandshakeDeadline`) does not count, however the owner is mentioned beside it.
 `stdlib/Builtins.maxon` is excluded with its reason in the case, and `stdlib/helpers/` is not descended
 into; a name in the `__` band, and everything declared inside one, is compiler machinery and is left out.
+The scanner and the document index are `StdlibRoster.maxon`, which the five `a-member-…` cases drive over inline
+sources and documents: a member documented only under another type, or listed under another type's heading with
+just its owner's name beside it, or belonging to an extended type the document does not tie it to, is reported; the
+same member documented under its own type or one of its subsections, or spelled `Owner.member`, is not.
 
 ⛔ **A `public` LINE WHOSE NAME THE SCANNER CANNOT READ PANICS**, naming its file and line. A shape it
 skipped would drop out of the roster and read exactly like a documented name.
@@ -1538,7 +1554,7 @@ skipped would drop out of the roster and read exactly like a documented name.
 `each-shared-harness-helper-is-defined-once.maxtest` reads every `public function` in `tests/support/*.maxon`
 and fails naming each one that another `.maxon` or `.maxtest` under `tests/` declares again.
 
-Its cases read the checkout itself, so the corpus is two files with no shared half and no staging. Run it as `maxon test tests/docs`.
+The two real cases read the checkout itself and the five roster cases read nothing, so the corpus needs no staging. Run it as `maxon test tests/docs`.
 
 ## `targets/` — every target is named once, in `maxon-bin/targets.tsv`
 
