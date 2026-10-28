@@ -29506,9 +29506,37 @@ export type Parser
 		let argType = try self.parseTypeReference(BarePrimitiveVoice.admitted)
 		try self.requireCarryableGenericArg(argType, slot: slot, position: position, argTok: argTok)
 		self.checkGenericArgType(argType, argTok: argTok, inlineElement: inlineElement)
+
+		if self.argDenotesTheEnclosingGenericType(argType) 'theEnclosingGenericType'
+			self.pushEnclosingInstanceNodes(nodes)
+			return spelledReadOnly
+		end 'theEnclosingGenericType'
+
 		nodes.push(GenericArgNode.leaf(argType))
 		return spelledReadOnly
 	end 'parseGenericArgNode'
+
+	// `Self` in a generic body is the bare base (`enclosingSelfType`; `scopedGenericInstanceOf` says why), which
+	// carries no `T`. As a type argument it is written over the type's own parameters instead: a container of
+	// the bare base takes the static create route, whose shallow element drop leaks each element's managed
+	// fields.
+	function argDenotesTheEnclosingGenericType(argType MaxonType) returns bool
+		if maxonTypeTag(argType) != ValueTypeTag.structRef or self.enclosingTypeParams.isEmpty() or not self.enclosingType.isType() 'notAGenericBodyStruct'
+			return false
+		end 'notAGenericBodyStruct'
+
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(argType)) otherwise panic("argDenotesTheEnclosingGenericType: a `structRef` argument's id is not in this file's interner — `parseTypeReference` interned it from a name in the same table")
+		return self.namesEnclosingType(name)
+	end 'argDenotesTheEnclosingGenericType'
+
+	function pushEnclosingInstanceNodes(nodes GenericArgNodeArray)
+		let owner = self.enclosingTypeName()
+		nodes.push(GenericArgNode.instanceHeader(owner, argCount: self.enclosingTypeParams.count() as FieldIndex, shape: InstanceShape.unsized))
+
+		for paramName in self.enclosingTypeParams 'eachParameter'
+			nodes.push(GenericArgNode.leaf(MaxonType.typeParameter(typeParamTokenFor(owner, paramName: paramName))))
+		end 'eachParameter'
+	end 'pushEnclosingInstanceNodes'
 
 	// ⭐ **WHAT A TYPE ARGUMENT MAY BE — THREE RULES, AND THE ORDER IS LOAD-BEARING, NOT TIDINESS.**
 	//

@@ -3850,3 +3850,556 @@ end 'main'
 ```stdout
 7
 ```
+
+<!-- test: a-member-array-of-self-is-one-instance-when-the-generic-type-is-used-through-an-alias -->
+A member `typealias Peers = Array with Self` names the enclosing type's own array, and spelling it in a signature and in a body must not mint a second instance of it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	var v as T
+
+	typealias Peers = Array with Self
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function peers(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+
+	static function firstOf(bs Peers) returns T
+		let first = try bs.get(0) otherwise panic("has one")
+		return first.v
+	end 'firstOf'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let boxes = IntBox.peers(5)
+	let p = IntBox.firstOf(boxes)
+	return p as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-member-array-of-self-stays-distinct-per-instance -->
+Two instances of one generic type each get their own `Peers`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	var v as T
+
+	typealias Peers = Array with Self
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function peers(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+
+	static function firstOf(bs Peers) returns T
+		let first = try bs.get(0) otherwise panic("has one")
+		return first.v
+	end 'firstOf'
+end 'Box'
+
+typealias IntBox = Box with Integer
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	let ints = IntBox.peers(5)
+	let texts = TextBox.peers("five")
+	let n = IntBox.firstOf(ints)
+	let s = TextBox.firstOf(texts)
+	print("{n} {s}\n")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+```stdout
+5 five
+```
+
+<!-- test: a-member-array-of-self-releases-a-managed-element -->
+The array of boxes a generic body creates through `Peers` drops each box's managed payload, not only the box.
+```maxon
+type Box uses T
+	var v as T
+
+	typealias Peers = Array with Self
+
+	static function peers(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+end 'Box'
+
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	let texts = TextBox.peers("five")
+	print("{texts.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-member-array-of-the-types-own-name-releases-a-managed-element -->
+Spelling the enclosing type's own name instead of `Self` is the same element.
+```maxon
+type Box uses T
+	var v as T
+
+	typealias Peers = Array with Box
+
+	static function peers(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+end 'Box'
+
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	let texts = TextBox.peers("five")
+	print("{texts.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-member-array-of-self-hands-its-elements-back-as-self -->
+An element read out of `Peers` is the enclosing type's own value, so a body may return it as `Self` and read its fields.
+```maxon
+type Box uses T
+	var v as T
+
+	typealias Peers = Array with Self
+
+	static function peers(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+
+	static function top(bs Peers) returns Self
+		return try bs.get(0) otherwise panic("has one")
+	end 'top'
+
+	function held() returns T
+		return self.v
+	end 'held'
+end 'Box'
+
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	let boxes = TextBox.peers("five")
+	let top = TextBox.top(boxes)
+	print("{boxes.count()} {top.held()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 five
+```
+
+<!-- test: a-member-array-of-self-in-a-plain-type-is-one-instance -->
+The same member alias in a type that is not generic.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	var v as Integer
+
+	typealias Peers = Array with Self
+
+	static function peers(v Integer) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+
+	static function firstOf(bs Peers) returns Integer
+		let first = try bs.get(0) otherwise panic("has one")
+		return first.v
+	end 'firstOf'
+end 'Box'
+
+function main() returns ExitCode
+	let boxes = Box.peers(5)
+	return Box.firstOf(boxes) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.a-member-array-of-self-is-not-another-instances -->
+One instance's `Peers` is not accepted where another instance's is declared.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	var v as T
+
+	typealias Peers = Array with Self
+
+	static function peers(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+
+	static function count(bs Peers) returns Integer
+		return bs.count() as Integer
+	end 'count'
+end 'Box'
+
+typealias IntBox = Box with Integer
+typealias FlagBox = Box with bool
+
+function main() returns ExitCode
+	let ints = IntBox.peers(5)
+	return FlagBox.count(ints) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:17: argument type mismatch for 'bs': expected 'Array with FlagBox', got 'Array with IntBox'
+```
+
+<!-- test: a-user-generic-of-self-takes-and-hands-back-self -->
+A user generic instantiated with `Self` inside the enclosing generic body takes a `Self` value and hands one back, as `Array with Self` does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses E
+	typealias Items = Array with E
+	var items as Items
+
+	static function of(e E) returns Self
+		var items = Items.create()
+		items.push(e)
+		return Self{items: items}
+	end 'of'
+
+	function take() returns E
+		return try self.items.get(self.items.count() - 1) otherwise panic("has")
+	end 'take'
+
+	function put(e E)
+		self.items.push(e)
+	end 'put'
+end 'Holder'
+
+type Box uses T
+	var v as T
+
+	typealias Slot = Holder with Self
+
+	static function replaced(v T, w T) returns T
+		var s = Slot.of(Self{v: v})
+		s.put(Self{v: w})
+		let b = s.take()
+		return b.v
+	end 'replaced'
+
+	static function wrap(v T) returns Slot
+		return Slot.of(Self{v: v})
+	end 'wrap'
+
+	static function unwrap(h Slot) returns T
+		let b = h.take()
+		return b.v
+	end 'unwrap'
+end 'Box'
+
+typealias IntBox = Box with Integer
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	let n = IntBox.replaced(1, w: 2)
+	let s = TextBox.replaced("one", w: "two")
+	let m = IntBox.unwrap(IntBox.wrap(3))
+	let t = TextBox.unwrap(TextBox.wrap("three"))
+	print("{n} {s} {m} {t}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 two 3 three
+```
+
+<!-- test: a-map-column-of-self-takes-a-self-value -->
+A `Map` whose value column is `Self` inside the enclosing generic body stores and reads a `Self` value.
+```maxon
+type Box uses T
+	var v as T
+
+	typealias Index = Map with String, Self
+
+	static function index(k String, v T) returns Index
+		var m = Index.create()
+		m.upsert(k, value: Self{v: v})
+		return m
+	end 'index'
+
+	static function at(m Index, k String) returns T
+		let b = try m.get(k) otherwise panic("has")
+		return b.v
+	end 'at'
+end 'Box'
+
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	let m = TextBox.index("k", v: "val")
+	print("{TextBox.at(m, k: "k")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+val
+```
+
+<!-- test: a-recursive-generic-type-holds-an-array-of-itself -->
+`Kids = Array with Self` makes a generic tree node whose children are nodes of the same instance.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Node uses T
+	var v as T
+
+	typealias Kids = Array with Self
+
+	var kids as Kids
+
+	static function leaf(v T) returns Self
+		return Self{v: v, kids: Kids.create()}
+	end 'leaf'
+
+	function add(k Self)
+		self.kids.push(k)
+	end 'add'
+
+	function size() returns Integer
+		var n = 1 as Integer
+		for k in self.kids 'each'
+			n = n + k.size()
+		end 'each'
+		return n
+	end 'size'
+end 'Node'
+
+typealias TextNode = Node with String
+
+function main() returns ExitCode
+	var root = TextNode.leaf("r")
+	root.add(TextNode.leaf("a"))
+	root.add(TextNode.leaf("b"))
+	print("{root.size()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: a-member-array-of-array-of-self-nests -->
+An array of arrays of `Self` is one nested instance per generic instance.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	var v as T
+
+	typealias Row = Array with Self
+	typealias Grid = Array with (Array with Self)
+
+	static function grid(v T) returns Grid
+		var row = Row.create()
+		row.push(Self{v: v})
+		var out = Grid.create()
+		out.push(row)
+		return out
+	end 'grid'
+
+	static function corner(g Grid) returns T
+		let row = try g.get(0) otherwise panic("row")
+		let b = try row.get(0) otherwise panic("col")
+		return b.v
+	end 'corner'
+end 'Box'
+
+typealias TextBox = Box with String
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let g = TextBox.grid("c")
+	let h = IntBox.grid(6)
+	print("{TextBox.corner(g)} {IntBox.corner(h)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+c 6
+```
+
+<!-- test: a-member-array-of-self-declared-by-an-extension-of-the-generic-type -->
+The member alias may be declared in an `extension` of the generic type.
+```maxon
+type Box uses T
+	var v as T
+end 'Box'
+
+extension Box
+	typealias Peers = Array with Self
+
+	static function peers(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+end 'Box'
+
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	let texts = TextBox.peers("five")
+	print("{texts.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-generic-type-implements-an-interface-with-itself-as-the-associated-type -->
+`implements Combiner with Self` binds the associated type to the enclosing type.
+```maxon
+interface Combiner uses Other
+	function combine(o Other) returns Other
+end 'Combiner'
+
+type Box uses T implements Combiner with Self
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function combine(o Self) returns Self
+		return o
+	end 'combine'
+
+	function held() returns T
+		return self.v
+	end 'held'
+end 'Box'
+
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	let a = TextBox.create("a")
+	let b = TextBox.create("b")
+	let c = a.combine(b)
+	print("{c.held()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+b
+```
+
+<!-- test: a-member-array-of-self-in-a-two-parameter-generic-type -->
+`Self` over two type parameters is the instance over both, in declaration order.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair uses K, V
+	var k as K
+	var v as V
+
+	typealias Peers = Array with Self
+
+	static function peers(k K, v V) returns Peers
+		var out = Peers.create()
+		out.push(Self{k: k, v: v})
+		return out
+	end 'peers'
+
+	static function keyOf(ps Peers) returns K
+		let first = try ps.get(0) otherwise panic("has one")
+		return first.k
+	end 'keyOf'
+
+	static function valueOf(ps Peers) returns V
+		let first = try ps.get(0) otherwise panic("has one")
+		return first.v
+	end 'valueOf'
+end 'Pair'
+
+typealias NamedCount = Pair with (String, Integer)
+typealias CountName = Pair with (Integer, String)
+
+function main() returns ExitCode
+	let a = NamedCount.peers("one", v: 1)
+	let b = CountName.peers(2, v: "two")
+	print("{NamedCount.keyOf(a)} {NamedCount.valueOf(a)} {CountName.keyOf(b)} {CountName.valueOf(b)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+one 1 2 two
+```

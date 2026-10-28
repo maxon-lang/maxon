@@ -1885,6 +1885,11 @@ Inside a type, interface or extension body, `Self` names the enclosing type. It 
 `Self.someCase`, `Self.MAX` mean exactly what the type's own name would. `Self` outside a type declaration
 is **E2015**.
 
+Inside `type Box uses T`, `Self` or `Box` written as a type argument is the instance over the type's own
+parameters, `Box with T`. A member `typealias Peers = Array with Self` is therefore one type per
+instantiation: an `IntBox`'s `Peers` is an `Array with IntBox` and is **E3005** where a `FlagBox`'s is
+expected, and an element read out of it is a `Self`.
+
 ### Interface Extensions
 
 `extension InterfaceName` adds methods to **every** type that conforms to the interface, with one

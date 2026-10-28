@@ -22465,7 +22465,7 @@ export type ProgramSignatures
 		let node = try nodes.get(cursor.pos) otherwise panic("ProgramSignatures.resolveArgNode: cursor {cursor.pos} out of range for a {nodes.count()}-node arg tree — the pre-order flattening and its counts disagree")
 		cursor.pos = cursor.pos + 1
 		return match node 'k'
-			leaf(argType) gives remapMaxonType(argType, remap: remap)
+			leaf(argType) gives self.canonicalInstanceArg(remapMaxonType(argType, remap: remap))
 			instanceHeader(baseName, argCount, shape) gives self.internNestedNode(baseName, argCount: argCount, shape: shape, nodes: nodes, cursor: cursor, remap: remap)
 		end 'k'
 	end 'resolveArgNode'
@@ -31523,6 +31523,26 @@ export type ProgramSignatures
 		return true
 	end 'instanceIsDeclarationSelf'
 
+	// The registry keeps a declaration's own instance (`Box with T`) nested, because the composed create
+	// route and the descriptor tables read it. The shared body is compiled once over the base, where `Self` is
+	// `structRef(Box)`, so a declared type read back is mapped to that spelling here; unmapped, the two
+	// spellings of one type refuse each other (E3005). A declaration whose value is the managed record is left
+	// alone: its `Self` is the instance (`ownRecordSelfInstance`).
+	export function declarationViewOfOwnInstance(t MaxonType, into TypeNameInterner) returns MaxonType
+		if maxonTypeTag(t) != ValueTypeTag.genericInstance 'notAnInstance'
+			return t
+		end 'notAnInstance'
+
+		let id = genericInstanceIdOf(t)
+		let base = self.genericInstanceBaseName(id)
+
+		if not self.instanceIsDeclarationSelf(id, declarationName: base, paramNames: self.structTypeParamsOf(base)) or self.declarationsValueIsTheManagedRecord(base) 'notADeclarationsOwnInstance'
+			return t
+		end 'notADeclarationsOwnInstance'
+
+		return MaxonType.structRef(into.intern(base))
+	end 'declarationViewOfOwnInstance'
+
 	// --- The `Array` builtin generic ---
 	//
 	// `Array` is a BUILTIN generic type with one type parameter `Element` — there is no `type Array uses
@@ -39389,7 +39409,7 @@ export type ProgramSignatures
 			return adopted
 		end 'notAnInstance'
 
-		return MaxonType.genericInstance(self.fileScopedInstance(genericInstanceIdOf(adopted), filePath: slotScopeFilePath))
+		return self.declarationViewOfOwnInstance(MaxonType.genericInstance(self.fileScopedInstance(genericInstanceIdOf(adopted), filePath: slotScopeFilePath)), into: into)
 	end 'declaredSlotType'
 
 	// ⭐⭐ **THE CASCADE ITSELF, KEYED BY THE NAME RATHER THAN BY AN ID — SO THE OTHER FAMILY OF ASKER CAN
