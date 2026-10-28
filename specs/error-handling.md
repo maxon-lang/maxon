@@ -779,7 +779,7 @@ enum MyError implements Error
 end 'MyError'
 
 function mayFail() returns Integer throws MyError
-	return 42
+	throw MyError.failed
 end 'mayFail'
 
 function main() returns ExitCode
@@ -801,7 +801,7 @@ enum MyError implements Error
 end 'MyError'
 
 function mayFail() returns Integer throws MyError
-	return 42
+	throw MyError.failed
 end 'mayFail'
 
 function pick() returns Integer
@@ -826,7 +826,7 @@ enum MyError implements Error
 end 'MyError'
 
 function mayFail() returns Integer throws MyError
-	return 42
+	throw MyError.failed
 end 'mayFail'
 
 function main() returns ExitCode

@@ -140,6 +140,10 @@ export type ParseJob
 	export function forInitializerRole(role InitializerRole) returns ParseJob
 		return Self{path: self.path, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, initializerRole: role}
 	end 'forInitializerRole'
+
+	export function readsAuthorSource() returns bool
+		return not self.isStdlibSource and not self.isRuntimeSource
+	end 'readsAuthorSource'
 end 'ParseJob'
 
 export enum InitializerRole
@@ -149,30 +153,377 @@ export enum InitializerRole
 end 'InitializerRole'
 
 // What one file's parse answers: its artifact, or the refusal with the blame it carries and what an aborted parse
-// still knows (`Parser.abortedParseArtifact`).
+// still knows (`Parser.abortedParseArtifact`). Either way it carries the regions the parse
+// abandoned, whose refusals no artifact holds, so the caller reports them from here.
 export union FileParseOutcome
-	parsed(artifact FileParseArtifact)
-	failed(error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact)
+	parsed(artifact FileParseArtifact, abandoned AbandonedRegionArray)
+	failed(error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact, consequence ConsequenceOf, abandoned AbandonedRegionArray)
 end 'FileParseOutcome'
+
+// What a parse refusal may be the consequence of. Anything but `unrelated` is held, and dropped
+// once a backed refusal of what it names explains it (`PendingConsequence.isExplainedBy`).
+export union ConsequenceOf
+	unrelated
+	subject(names NameRoster)
+	handlerBody(message ByteArray)
+	unknownType(name ByteArray)
+end 'ConsequenceOf'
+
+export type AbandonedRegion
+	export let error as SourceParseError
+	export let blame as LibraryBlame
+	export let key as PositionKey
+	export let poisoned as PoisonedAt
+	export let consequence as ConsequenceOf
+
+	export static function create(error SourceParseError, blame LibraryBlame, part RefusedPart, consequence ConsequenceOf) returns AbandonedRegion
+		return Self{error: error, blame: blame, key: part.key, poisoned: part.poisoned, consequence: consequence}
+	end 'create'
+end 'AbandonedRegion'
+
+export typealias AbandonedRegionArray = Array with AbandonedRegion
+
+union ParseAttempt
+	parsed(artifact FileParseArtifact)
+	failed(error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact, consequence ConsequenceOf)
+	retry(region AbandonedRegion, salvaged FileParseArtifact)
+end 'ParseAttempt'
 
 // ⭐⭐ **ONE FILE'S PARSE, AS A FUNCTION OF WHAT IT IS HANDED** — the job, the file's tokens, the row-set answers it
 // is told and the settled index, which it leaves as it found them. It reaches no `Project` and no module `var`, so
 // a pool worker holding a private index may run it (E3143); the caller reports the outcome. Its parser's anchors
 // are its own, so the artifact holds no record from outside itself.
+//
+// A refusal confined to one region (`Parser.openRegion`) is recovered by parsing the file again
+// with that region skipped. The loop ends because a refusal in a region an earlier attempt already
+// abandoned fails the file (`recoverableRegionOf`), so every retry abandons a region none before it
+// did.
 export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseOutcome
+	var recovered = AbandonedRegionArray.create()
+	var salvages = FileParseArtifactArray.create()
+
+	while true 'eachAttempt'
+		let attempt = parseAttempt(job, tokens: tokens, overrides: overrides, signatures: signatures, recovered: recovered, salvages: salvages)
+
+		match attempt 'attempt'
+			parsed(artifact) then return FileParseOutcome.parsed(artifact, abandoned: recovered)
+			failed(error, blame, salvaged, consequence) then return FileParseOutcome.failed(error, blame: blame, salvaged: salvaged, consequence: consequence, abandoned: recovered)
+			retry(region, salvaged) then keepRecovery(region, salvaged: salvaged, recovered: recovered, salvages: salvages)
+		end 'attempt'
+	end 'eachAttempt'
+end 'parseFile'
+
+function keepRecovery(region AbandonedRegion, salvaged FileParseArtifact, recovered AbandonedRegionArray, salvages FileParseArtifactArray)
+	recovered.push(region)
+	salvages.push(salvaged)
+end 'keepRecovery'
+
+function parseAttempt(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures, recovered AbandonedRegionArray, salvages FileParseArtifactArray) returns ParseAttempt
 	var parser = Parser.create(tokens, job: job, signatures: signatures, anchors: ParserAnchors.create())
+	parser.abandonRegions(recovered)
+	parser.adoptRetryStatesOf(salvages)
 	signatures.openParseBand(overrides)
 
 	// A refusal and its blame may hold records the index owns (a `throws` clause's name, a recorded constant's
 	// error, an instantiation's file), and the outcome crosses back from a pool worker, so it carries copies.
 	var artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		_ = signatures.closeParseBand(job.path)
-		return FileParseOutcome.failed(parseErr.clone(), blame: parser.libraryBlame.clone(), salvaged: parser.abortedParseArtifact())
+
+		if let region = try recoverableRegionOf(parseErr, parser: parser, job: job, signatures: signatures, recovered: recovered) 'aRecoverableRefusal'
+			return ParseAttempt.retry(region, salvaged: parser.abortedParseArtifact())
+		end 'aRecoverableRefusal'
+
+		return ParseAttempt.failed(parseErr.clone(), blame: parser.libraryBlame.clone(), salvaged: parser.abortedParseArtifact(), consequence: consequenceOfRefusal(parseErr, parser: parser, job: job, signatures: signatures))
 	end 'parseFail'
 
 	artifact.recordParseMints(signatures.closeParseBand(job.path))
-	return FileParseOutcome.parsed(artifact)
-end 'parseFile'
+	return ParseAttempt.parsed(artifact)
+end 'parseAttempt'
+
+function recoverableRegionOf(error SourceParseError, parser Parser, job ParseJob, signatures ProgramSignatures, recovered AbandonedRegionArray) returns AbandonedRegion throws AbsentError
+	if not refusalIsLocal(parser, job: job, signatures: signatures) 'theFileCannotBeReadPastIt'
+		throw AbsentError.absent
+	end 'theFileCannotBeReadPastIt'
+
+	let part = try parser.openRegion.partRefusedAt(try refusalPositionOf(error, path: job.path))
+
+	for region in recovered 'eachRecovered'
+		if region.key == part.key 'alreadyAbandoned'
+			throw AbsentError.absent
+		end 'alreadyAbandoned'
+	end 'eachRecovered'
+
+	return AbandonedRegion.create(error.clone(), blame: parser.libraryBlame.clone(), part: part, consequence: consequenceOfRefusal(error, parser: parser, job: job, signatures: signatures))
+end 'recoverableRegionOf'
+
+function refusalIsLocal(parser Parser, job ParseJob, signatures ProgramSignatures) returns bool
+	return job.readsAuthorSource() and not parser.blockStructureMisread and not signatures.hasMisclosedBlocks()
+end 'refusalIsLocal'
+
+function consequenceOfRefusal(error SourceParseError, parser Parser, job ParseJob, signatures ProgramSignatures) returns ConsequenceOf
+	if not refusalIsLocal(parser, job: job, signatures: signatures) 'nothingMayBeDropped'
+		return ConsequenceOf.unrelated
+	end 'nothingMayBeDropped'
+
+	return consequenceNamedBy(error)
+end 'consequenceOfRefusal'
+
+function consequenceOfReceiverOrigin(origin ReceiverOrigin) returns ConsequenceOf
+	return match origin 'origin'
+		derivedFrom(names) gives ConsequenceOf.subject(names.clone())
+		unattributed gives ConsequenceOf.unrelated
+	end 'origin'
+end 'consequenceOfReceiverOrigin'
+
+function namedConsequence(name ByteArray) returns ConsequenceOf
+	return ConsequenceOf.subject(singleName(name))
+end 'namedConsequence'
+
+// ⚠ A refusal given a subject is dropped whenever that subject was refused, so only a refusal that
+// cannot be independent of the declaration it names may have one; an independent error routed here
+// would go unreported.
+function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
+	return match error 'kind'
+		unknownTypeName(typeName, _, _) gives ConsequenceOf.unknownType(typeName.toByteArray())
+		unknownField(typeName, _, _, _) gives namedConsequence(typeName.toByteArray())
+		undefinedVariable(name, _, _) gives namedConsequence(name.toByteArray())
+		uninferrableClosureParam(_, aliasName, _, _) gives namedConsequence(aliasName.toByteArray())
+		unknownCompilerIntrinsic(callee, _, _, _) gives namedConsequence(callee.toByteArray())
+		undefinedQualifiedFunction(callee, _, _, _) gives namedConsequence(callee.toByteArray())
+		enumMatchNotExhaustive(_, typeName, _, _, _) gives namedConsequence(typeName.toByteArray())
+		serviceTypeNotASpawnTarget(_, typeName, _, _) gives namedConsequence(typeName.toByteArray())
+		serviceReplyGraphNotWalkable(_, message, _, _) gives ConsequenceOf.handlerBody(message.toByteArray())
+		memberAccessOnNonStruct(_, _, _, origin) gives consequenceOfReceiverOrigin(origin)
+		unexpectedToken or
+		expectedExpression or
+		uninferrableFieldDefault or
+		varStartsFromBareNumber or
+		letStartsFromUnboundedNumber or
+		callerLocationOutsideDefault or
+		unexpectedEof or
+		integerOverflow or
+		floatLiteralOverflow or
+		malformedNumericLiteral or
+		formatFieldOverflow or
+		nonIntegralOperands or
+		implicitNarrowing or
+		builtinArity or
+		builtinOperandType or
+		builtinArgumentType or
+		unsupported or
+		tupleElementRejected or
+		droppedSignature or
+		declarationTheSweepMissed or
+		duplicateParameter or
+		ambiguousBareFunctionName or
+		assignToImmutable or
+		useAfterMove or
+		useAfterMoveInto or
+		useAfterMoveInAnEarlierIteration or
+		useAfterMovePassedTwice or
+		staleCellOccupantRead or
+		promiseCannotBeBorrowed or
+		promiseAlreadyConsumed or
+		deepLet or
+		controlOutsideLoop or
+		labelTargetsOwnLoop or
+		labelTargetsOwnMatch or
+		unknownLoopLabel or
+		firstArgNamed or
+		argMissingLabel or
+		builtinArgNamed or
+		witnessArgCountMismatch or
+		witnessUnknownArgLabel or
+		witnessDuplicateArg or
+		ambiguousWitnessDispatch or
+		noWitnessRequirementOfArity or
+		staticRequirementNotDispatchable or
+		missingReturn or
+		returnValueFromVoid or
+		returnInInitializer or
+		returnWithoutValue or
+		operandTypeMismatch or
+		operandAliasMismatch or
+		nonNumericOperands or
+		enumAccessorComparison or
+		enumNoSuchRawValue or
+		fieldsNotInitialized or
+		fieldsNotDefinitelyAssigned or
+		undefinedOperatorForType or
+		nonNumericNegation or
+		shiftCountNegative or
+		comparisonTypeMismatch or
+		operatorRequiresConformance or
+		structEqualsResultNotBool or
+		witnessSelfArgNotTypeParam or
+		nonBoolCondition or
+		assignTypeMismatch or
+		typeMismatchExpectedGot or
+		tupleAssignArityMismatch or
+		returnTypeMismatch or
+		functionValueIntoNonFunction or
+		functionValueReturned or
+		invalidCast or
+		castTargetIsAContainer or
+		castFormsAValue or
+		throwingFunctionAsValue or
+		giveTypeMismatch or
+		ternaryValueTypeMismatch or
+		ternaryNonBoolCondition or
+		notOnUnknownType or
+		voidCallResultUsed or
+		invalidCharacterLiteral or
+		invalidDigitEscape or
+		byteStringCodepointRange or
+		duplicateTopLevelDeclaration or
+		circularConstants or
+		nonConstantInitializer or
+		divisionByProvableZero or
+		constantCastOutOfRange or
+		byteStringByteOutOfRange or
+		rawByteFillNarrowElement or
+		rawByteWriteSlotDomain or
+		constructorRestricted or
+		builtinTypeConstruction or
+		conditionalExtensionWithheld or
+		fieldNotInitialized or
+		duplicateFieldInitializer or
+		assignToImmutableField or
+		localShadowsSelfField or
+		unexportedFieldAccess or
+		strayToken or
+		expectedDeclaration or
+		expectedNewlineAfter or
+		bareTryInAClosure or
+		mismatchedEndLabel or
+		testOutsideTestFile or
+		testEmptyName or
+		duplicateTestName or
+		selfOutsideInstanceMethod or
+		unknownAnnotation or
+		heapAnnotationWithoutBinding or
+		heapAnnotationOnNonRecord or
+		matchFallthroughWithReturn or
+		matchNotExhaustive or
+		matchDuplicatePattern or
+		matchPatternTypeMismatch or
+		matchDefaultNotLast or
+		matchMissingBlockId or
+		matchMismatchedBlockId or
+		matchBlockStatement or
+		enumDuplicateCase or
+		enumDuplicateRawValue or
+		enumRawValueTypeMismatch or
+		enumUnknownCase or
+		enumNoCaseNamed or
+		enumFromNamePayloadArity or
+		allCasesOnUnion or
+		matchQualifiedCaseName or
+		matchDiscardedBindings or
+		matchDefaultEnumMustThrow or
+		errorUnionMatchNotExhaustive or
+		errorUnionMatchDefaultMustThrow or
+		errorUnionAmbiguousBareCase or
+		errorUnionUnknownCase or
+		errorUnionUnknownMember or
+		unknownPayloadName or
+		enumWrongBindingCount or
+		matchArmPayloadBindingConflict or
+		tryBlockBindingNotMatched or
+		errorMatchNotExactlyOnce or
+		matchOverlappingCase or
+		matchEnumCaseRange or
+		matchOrChainNeedsOwnLine or
+		matchSingleValueRange or
+		unionNotComparable or
+		existentialNotComparable or
+		genericInstanceNotComparable or
+		refIdentityOnPrimitive or
+		refIdentityTypeMismatch or
+		reservedIdentifier or
+		reservedFaultProbeName or
+		reservedReceiverName or
+		declarationTakesCompilerOwnedTypeName or
+		otherwiseWithoutTry or
+		errorTypeMismatch or
+		tryBlockFormInMatchArm or
+		tryBlockNoThrows or
+		tryBlockMissingOtherwise or
+		tryOnNonThrowing or
+		ifTryDiscardsResult or
+		redundantContainsGet or
+		tryOnNonThrowingBuiltin or
+		tryOnTotalDivision or
+		tryOnProvenFixedArrayAccess or
+		fixedArrayIndexPastTheSize or
+		awaitThrowingPromiseNeedsTry or
+		awaitNonPromise or
+		promiseStorageMismatch or
+		propagateTypeMismatch or
+		thrownValueNotAnErrorEnum or
+		reservedNameAsFunctionValue or
+		rawIntrinsicOutsideRuntimeTier or
+		rawSurfaceOutsideLibraryTier or
+		contradictoryFrameDirectives or
+		bareGenericSubjectUnbound or
+		managedValueInRuntimeSource or
+		wideVisibilityInRuntimeSource or
+		managedTypeInRuntimeSource or
+		managedValueBuiltInRuntimeSource or
+		arrayResizeManagedElement or
+		arrayResizeZeroOutsideElement or
+		fixedArrayCreateZeroOutsideElement or
+		bufferSetLengthZeroOutsideElement or
+		literalsShareNoIntegerType or
+		bufferSetManagedElement or
+		bufferByteAccessManagedElement or
+		emptyBlock or
+		unreachableCode or
+		bareSizedTypeAlias or
+		typealiasCycle or
+		typealiasOverANonRangedName or
+		implementsRangeDoesNotFit or
+		implementsPrimitiveDiffers or
+		genericTypeParameterNotInferable or
+		genericArgumentsHaveNoCommonType or
+		genericConstraintNotSatisfied or
+		genericCallAmbiguous or
+		genericArgumentKindUnsupported or
+		genericTypeGrowsWithoutBound or
+		illegalBitWidth or
+		barePrimitiveType or
+		barePrimitiveCastTarget or
+		mismatchedRangeBoundTypes or
+		unrepresentableIntegerRange or
+		integerRangeLowerBoundAboveSignedMax or
+		emptyIntegerRange or
+		otherwiseOutsideRangedReturn or
+		visibilityModifiersCombined or
+		ambiguousTypeAlias or
+		symbolNotVisible or
+		selfAssignmentHasNoEffect or
+		discardExpectsACall or
+		ucdTableLabelUnknown or
+		builtinUnknownArgLabel or
+		serviceNotASpawnTarget or
+		serviceValueNotTransferable or
+		serviceArgumentNotUnique or
+		serviceNotAMessage or
+		serviceReplyNotCarriable or
+		serviceReplyAliasesState or
+		serviceReplyInstanceUnknown or
+		registryRefused or
+		extensionMemberHidesOwnMember gives ConsequenceOf.unrelated
+	end 'kind'
+end 'consequenceNamedBy'
+
+function refusalPositionOf(error SourceParseError, path FilePath) returns PositionKey throws AbsentError
+	match parseErrorDiagnostic(error, path: path, keywords: KeywordTable.create()).anchor 'anchor'
+		at(_, line, column) then return positionKey(line, column: column)
+		programWide or
+		file then throw AbsentError.absent
+	end 'anchor'
+end 'refusalPositionOf'
 
 // What a real parse wrote into the signature index — `none` for an artifact no real parse produced: the
 // declaration sweep's, a top-level constant's, and an aborted parse's.
@@ -752,7 +1103,7 @@ export type FileParseArtifact
 	export var currentFuncIndex as ElementIndex
 
 	// ⭐ DIAGNOSTICS THE PARSER RAISES WITHOUT UNWINDING. The parser reports a malformed
-	// construct by THROWING a `SourceParseError` (which aborts the file's parse), but a WHOLE-PROGRAM
+	// construct by THROWING a `SourceParseError` (which abandons its region), but a WHOLE-PROGRAM
 	// SEMANTIC error a pure per-file parser detects — a generic instantiation whose base is not
 	// generic, whose arity is wrong, or whose argument is managed — is not a reason to abort the
 	// parse: it is a diagnostic that gates the build, exactly like `SemanticCheck`'s do. The parser
@@ -876,9 +1227,28 @@ export type FileParseArtifact
 
 	function recordHiddenTypeNames(entries DiagnosticArray)
 		for entry in entries 'eachEntry'
+			if self.holdsHiddenTypeName(entry) 'alreadyHeld'
+				continue
+			end 'alreadyHeld'
+
 			self.recordHiddenTypeName(entry)
 		end 'eachEntry'
 	end 'recordHiddenTypeNames'
+
+	function holdsHiddenTypeName(entry Diagnostic) returns bool
+		match self.hiddenTypeNames 'held'
+			unwritten then return false
+			entries(recorded) then return hiddenTypeNameIsAmong(recorded, entry: entry)
+		end 'held'
+	end 'holdsHiddenTypeName'
+
+	export function adoptRetryState(source FileParseArtifact)
+		for instance in source.genericInstanceRequests 'eachRequest'
+			self.recordGenericInstanceRequest(instance)
+		end 'eachRequest'
+
+		self.adoptHiddenTypeNames(source)
+	end 'adoptRetryState'
 
 	// THE emit choke point for a Maxon body op — the only way the parser creates
 	// one. Appending the op and recording its span happen together here, so
@@ -1262,6 +1632,18 @@ export type FileParseArtifact
 	// @generated library-cache end
 end 'FileParseArtifact'
 
+function hiddenTypeNameIsAmong(recorded DiagnosticArray, entry Diagnostic) returns bool
+	let rendered = entry.render()
+
+	for held in recorded 'eachHeld'
+		if held.render() == rendered 'sameDiagnostic'
+			return true
+		end 'sameDiagnostic'
+	end 'eachHeld'
+
+	return false
+end 'hiddenTypeNameIsAmong'
+
 // ⭐⭐ **THE OP AS THE ARTIFACT KEEPS IT: every record in its payload the artifact's own.** A name, a label, a
 // constant's bytes or a type in a payload is often a record the signature index holds, and an artifact built on a
 // pool worker crosses back to the main thread while the worker keeps that index. So the artifact's doors copy what
@@ -1547,6 +1929,7 @@ end 'pushEachDeferredDiagnostic'
 function commitDiagnostics(project Project, artifact FileParseArtifact)
 	for diagnostic in artifact.diagnostics 'each'
 		reportDiagnostic(project, diagnostic: diagnostic)
+		noteDeclarationRefusedBy(project, diagnostic: diagnostic)
 	end 'each'
 
 	// ⭐ The hygiene half does NOT go through `reportDiagnostic`: reaching the project's sink is exactly
@@ -1557,6 +1940,31 @@ function commitDiagnostics(project Project, artifact FileParseArtifact)
 		project.bindingHygieneDiagnostics.push(diagnostic)
 	end 'eachHygiene'
 end 'commitDiagnostics'
+
+function noteDeclarationRefusedBy(project Project, diagnostic Diagnostic)
+	match diagnostic.anchor 'anchor'
+		at(filePath, line, _) then noteDeclarationRefusedAt(project, filePath: filePath, line: line, backing: PoisonBacking.backed)
+		programWide or
+		file then break
+	end 'anchor'
+end 'noteDeclarationRefusedBy'
+
+module function noteDeclarationLostTo(project Project, filePath FilePath, poisoned PoisonedAt, backing PoisonBacking)
+	match poisoned 'site'
+		abandonedBody(number) then noteBodyAbandonedAt(project, filePath: filePath, line: number, backing: backing)
+		line(number) then noteDeclarationRefusedAt(project, filePath: filePath, line: number, backing: backing)
+	end 'site'
+end 'noteDeclarationLostTo'
+
+function noteDeclarationRefusedAt(project Project, filePath FilePath, line LineNumber, backing PoisonBacking)
+	view tokens = try queryActiveTokens(project, path: filePath) otherwise return
+	project.poison.noteRefusedDeclarationAt(filePath, line: line, tokens: tokens, backing: backing)
+end 'noteDeclarationRefusedAt'
+
+function noteBodyAbandonedAt(project Project, filePath FilePath, line LineNumber, backing PoisonBacking)
+	view tokens = try queryActiveTokens(project, path: filePath) otherwise return
+	project.poison.noteAbandonedBodyAt(filePath, line: line, tokens: tokens, backing: backing)
+end 'noteBodyAbandonedAt'
 
 // ⭐ **COMMIT EVERY TYPE-NAME DECLARATION, AND REPORT A NAME DECLARED TWICE.** The whole-program
 // duplicate check for the TYPE namespace, exactly as `commitFuncSignatures` is for functions and for
@@ -1717,6 +2125,10 @@ end 'InstantiationAnchor'
 // Called once per compile from `compileToCodeResult`, after `queryProgramSignatures` has interned every
 // instantiation — the same placement, and for the same reason, as `checkWhereConstraints`.
 export function checkTypeSymbolNamespace(project Project, signatures ProgramSignatures)
+	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
+		return
+	end 'theUniverseIsUnreadable'
+
 	let instantiationCount = signatures.genericInstanceCount()
 
 	// A program that instantiates no generic claims no compiled name and can contest nothing. That is
@@ -1725,19 +2137,16 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 		return
 	end 'noInstantiations'
 
-	// A prior diagnostic leaves the instantiation registry INCOMPLETE — a file whose parse failed merged
-	// nothing it declared — so refuse to check a malformed program, exactly as `checkConformance` and
-	// `checkWhereConstraints` do. The real diagnostic already fails the build.
-	if projectHasErrors(project) 'malformedProject'
-		return
-	end 'malformedProject'
-
 	// Walked in gid order, which is intern order and therefore source-path order over the sweep — so
 	// which instantiation of a colliding pair is the NEWCOMER is a property of the program rather than
 	// of a map's iteration.
 	var claimed = CompiledTypeNameClaimMap.create()
 
 	for gid in 0 upto instantiationCount 'eachInstantiation'
+		if instanceNamesATypeFromAFailedFile(project, signatures: signatures, gid: gid) 'aTypeOfAFileThatFailedToParse'
+			continue
+		end 'aTypeOfAFileThatFailedToParse'
+
 		view compiled = signatures.mangleGenericInstance(gid)
 
 		// A rejected newcomer is deliberately NOT recorded: the incumbent stays the one every later
@@ -1760,11 +2169,9 @@ end 'checkTypeSymbolNamespace'
 // cycle is ill-formed whether or not anyone instantiates it. Run BEFORE the pipeline (so before
 // `semanticCheck`), which is also what guarantees no later reader has to survive a cycle.
 export function checkGenericAliasCycles(project Project, signatures ProgramSignatures)
-	// A prior diagnostic leaves the registries INCOMPLETE, so a cycle "found" here could be an artifact of a
-	// half-folded program — the same refusal `checkTypeSymbolNamespace` and `checkWhereConstraints` make.
-	if projectHasErrors(project) 'malformedProject'
+	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
 		return
-	end 'malformedProject'
+	end 'theUniverseIsUnreadable'
 
 	match signatures.firstCyclicAliasDecl() 'cycle'
 		none then return
@@ -2303,6 +2710,8 @@ end 'renumberedOp'
 function commitFuncSignatures(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcSignatures 'each'
 		if project.funcSignatures.contains(entry.name) 'duplicate'
+			project.poison.noteDuplicatedFunction(entry.name)
+
 			// ⚠ **A SYNTHESIZED FUNCTION'S DUPLICATE IS THE SHADOW OF ONE THE AUTHOR CAN SEE, AND IS NOT
 			// REPORTED TWICE.** See `FuncSignatureEntry.synthesized` for why the two always arrive
 			// together. Reporting it would add, beside the correct `Duplicate function 'f'`, a second E3006

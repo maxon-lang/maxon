@@ -461,8 +461,6 @@ function total(source TextSeq) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	let u = Upto.create(4)
-	print("{total(u)}\n")
 	return 0
 end 'main'
 ```

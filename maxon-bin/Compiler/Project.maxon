@@ -10003,6 +10003,10 @@ end 'DeclaredBuiltinErrorEnum'
 // throws ordinals no handler arm can name.
 module function declaredBuiltinErrorEnum(project Project, typeName ByteArray, installer ByteArray) returns DeclaredBuiltinErrorEnum
 	view layout = try project.enumTypes.get(typeName) otherwise 'notDeclared'
+		if project.poison.declaresANominalType(typeName) 'declaredInAFailedFile'
+			return DeclaredBuiltinErrorEnum.notDeclared
+		end 'declaredInAFailedFile'
+
 		// ⚠ Names no module either, for `BuiltinErrorOrdinalCheck.refuse`'s reason directly above: SEVERAL
 		// families reach this and they are declared across several different files. No COUNT of either is
 		// written here, and one would go stale in either direction: the set is a consequence of which
@@ -12150,14 +12154,25 @@ export typealias UnplacedUnknownTypeArray = Array with UnplacedUnknownType
 typealias ReportedTypeSiteSet = Set with String
 
 typealias ReportedUnknownTypeMessageSet = Set with String
+typealias ReportedUnknownNameSet = Set with String
+typealias UnknownParameterSet = Set with String
 
 export type UnknownTypeReports
 	var reportedSites as ReportedTypeSiteSet
 	var reportedMessages as ReportedUnknownTypeMessageSet
+
+	// A parser refusal of the same unknown name in the same file repeats this E3011, and is dropped
+	// once `resolveTypes` has run (`ConsequenceDropStage.afterTypeResolution`).
+	var reportedNames as ReportedUnknownNameSet
+
+	// A parameter whose type names nothing holds a recovery type, so its arguments are not
+	// type-checked (`checkArgTypes`): a mismatch against that type would only repeat the E3011.
+	var unknownParameters as UnknownParameterSet
+	var occurrences as Count
 	export var unplaced as UnplacedUnknownTypeArray
 
 	export static function create() returns UnknownTypeReports
-		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), unplaced: UnplacedUnknownTypeArray.create()}
+		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), reportedNames: ReportedUnknownNameSet.create(), unknownParameters: UnknownParameterSet.create(), occurrences: 0, unplaced: UnplacedUnknownTypeArray.create()}
 	end 'create'
 
 	// One report per written site: a generic instance resolves the same written slot again.
@@ -12176,6 +12191,30 @@ export type UnknownTypeReports
 	export function wasReported(message String) returns bool
 		return self.reportedMessages.contains(message)
 	end 'wasReported'
+
+	export function noteReportedName(typeName String, readerFilePath FilePath)
+		self.reportedNames.insert("{readerFilePath}|{typeName}")
+	end 'noteReportedName'
+
+	export function reportedUnknownName(typeName ByteArray, readerFilePath FilePath) returns bool
+		return self.reportedNames.contains("{readerFilePath}|{String.from(typeName)}")
+	end 'reportedUnknownName'
+
+	export function noteOccurrence()
+		self.occurrences = self.occurrences + 1
+	end 'noteOccurrence'
+
+	export function occurrenceCount() returns Count
+		return self.occurrences
+	end 'occurrenceCount'
+
+	export function noteUnknownParameter(declaration ByteArray, position ParamCount)
+		self.unknownParameters.insert("{String.from(declaration)}|{position}")
+	end 'noteUnknownParameter'
+
+	export function holdsUnknownParameter(declaration ByteArray, position ParamCount) returns bool
+		return self.unknownParameters.contains("{String.from(declaration)}|{position}")
+	end 'holdsUnknownParameter'
 end 'UnknownTypeReports'
 
 export type Project
@@ -12270,9 +12309,9 @@ export type Project
 	// re-breaks `type-casting.md`.
 	//
 	// ⚠ **REPORTING THEM WHERE THEY ARE FOUND IS A MEASURED CASCADE, and it is why this list exists.** They
-	// are decided at a function's `end` DURING THE PARSE, and the parser's diagnostics gate the pipeline
-	// before `resolveTypes`/`semanticCheck` ever run — so `let x = 256 as Byte`, whose whole point is the
-	// out-of-range cast, reported `unused variable: 'x'` and the E3005 it is a test OF never happened. 26
+	// are decided at a function's `end` DURING THE PARSE, before `resolveTypes`/`semanticCheck` have
+	// judged the body — so `let x = 256 as Byte`, whose whole point is the out-of-range cast, would
+	// report `unused variable: 'x'` beside the E3005 it is a test OF. 26
 	// committed error-cases moved that way the first time locals were admitted, `type-casting.md` (a
 	// canonical `/specs` port) among them.
 	//
@@ -12713,6 +12752,8 @@ export type Project
 	// Accumulated user-facing diagnostics; a non-empty set fails the build.
 	export var diagnostics as DiagnosticArray
 
+	export var poison as DeclarationPoison
+
 	// ⭐ **THE USER CONSTRUCT THE DIAGNOSTICS REPORTED RIGHT NOW ARE ON BEHALF OF** — see
 	// `LibraryBlame`. Ambient rather than a parameter on `reportDiagnostic` because the front-end
 	// mappers reach that sink through `parseErrorDiagnostic`'s ~200 match arms, and threading a blame
@@ -12848,6 +12889,7 @@ export type Project
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
+			poison: DeclarationPoison.create(),
 			libraryBlame: LibraryBlame.unblamed,
 			globalData: GlobalDataTable.create(),
 			timings: CompileTimings.create(),
@@ -13009,11 +13051,19 @@ end 'rootIsASingleFile'
 // under `maxon test`; it is written down because a rule stated at a funnel
 // invites the assumption that the funnel is total.
 export function reportDiagnostic(project Project, diagnostic Diagnostic)
+	if diagnosticLeavesTheTypeUniverseUnreadable(diagnostic.code) 'anInfiniteType'
+		project.poison.noteUnreadableTypeUniverse()
+	end 'anInfiniteType'
+
 	// AFTER the blame swap, never before: `blamedAt` moves one location into the note and promotes
 	// another into the primary slot, so a rewrite applied first would leave whichever path it moved
 	// still spelled as the staged copy.
 	project.diagnostics.push(respelledForItsReaders(project, diagnostic: diagnostic.blamedAt(project.libraryBlame)).reportedUnder(project.stagedSourceOrigins))
 end 'reportDiagnostic'
+
+function diagnosticLeavesTheTypeUniverseUnreadable(code ErrorCode) returns bool
+	return code == ErrorCode.parserCircularDependency or code == ErrorCode.semanticTypeResolutionCycle or code == ErrorCode.genericTypeGrowsWithoutBound
+end 'diagnosticLeavesTheTypeUniverseUnreadable'
 
 // A library declaration an author's name shadows is renamed
 // (`ProgramSignatures.contestStdlibTypeName`), so every diagnostic is respelled for the reader of
@@ -13101,7 +13151,7 @@ export function authoredFileOf(project Project, func IrFunction, opIndex Element
 end 'authoredFileOf'
 
 // True once any diagnostic has been reported. The pipeline's error gate reads
-// this after each pass to stop before lowering an invalid module.
+// this to stop before lowering an invalid module.
 export function projectHasErrors(project Project) returns bool
 	return project.diagnostics.count() > 0
 end 'projectHasErrors'

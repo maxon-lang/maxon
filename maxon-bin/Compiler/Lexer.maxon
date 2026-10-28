@@ -395,8 +395,9 @@ end 'cacheEnumTablesAgreeInCompilerLexer'
 //
 // ⚠ It is ONE definition because the readers must agree or a construct means two things: the cursor
 // mover and its lookahead (`Parser.skipNewlines` / `indexPastNewlines`) decide what a program IS,
-// `dropBracketedLayout` removes the same kinds inside a bracket, and the declaration sweep
-// re-derives the same skip while walking the raw stream. A copy that admitted one kind and not the
+// `dropBracketedLayout` removes the same kinds inside a bracket, the declaration sweep
+// re-derives the same skip while walking the raw stream, and `DeclarationPoison` skips it to find
+// the declaration a refused line sits in. A copy that admitted one kind and not the
 // other would have a walk read a statement where the real parse steps over layout.
 //
 // `module` and not `export`: every reader lives under `Compiler/`.
@@ -2616,12 +2617,35 @@ function opensAKeptBlock(tokens TokenArray, groups ParenGroups, index ElementInd
 	panic("opensAKeptBlock: '{kind.rawValue}' spells block structure but no arm here answers for it")
 end 'opensAKeptBlock'
 
+module function tokenKindDeclaresANominalType(kind TokenKind) returns bool
+	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface
+end 'tokenKindDeclaresANominalType'
+
+module function tokenKindDeclaresANamedType(kind TokenKind) returns bool
+	return tokenKindDeclaresANominalType(kind) or kind == TokenKind.extension or kind == TokenKind.typealias
+end 'tokenKindDeclaresANamedType'
+
+function restoreLineEndBefore(tokens TokenArray, index ElementIndex, kept TokenArray)
+	if kept.isEmpty() 'nothingWasDropped'
+		return
+	end 'nothingWasDropped'
+
+	let last = try kept.get(kept.count() - 1) otherwise panic("restoreLineEndBefore: kept.get OOB below the count just read")
+	let previous = try tokens.get((index - 1) as ElementIndex) otherwise panic("restoreLineEndBefore: tokens.get OOB below an index a bracket was open at")
+
+	if previous.kind == TokenKind.newline and last.kind != TokenKind.newline 'theLineEndWasDropped'
+		kept.push(previous)
+	end 'theLineEndWasDropped'
+end 'restoreLineEndBefore'
+
 // Layout inside an open `(`, `[` or `{` is dropped here, once, so every parser lookahead reads a
 // bracket's interior as contiguous tokens and no production skips newlines of its own. A `match`
 // or block-form `otherwise` written inside a bracket keeps its newlines, which separate its arms
 // and statements, and its frame closes only at a labelled closer. Brackets on a `#if` line open no
-// frame, so the newline ending the condition survives. `tokenizeWithComments` keeps every layout
-// token: `maxon fmt` reads where the author broke lines.
+// frame, so the newline ending the condition survives. A declaration opening at column 1 closes
+// every frame still open, so an unclosed bracket costs only its own declaration rather than the
+// line breaks of every declaration after it. `tokenizeWithComments` keeps every layout token:
+// `maxon fmt` reads where the author broke lines.
 function dropBracketedLayout(tokens TokenArray) returns TokenArray
 	var frames = LayoutFrameStack.create()
 	var groups = ParenGroups.create()
@@ -2631,6 +2655,11 @@ function dropBracketedLayout(tokens TokenArray) returns TokenArray
 
 	for (iter, tok) in tokens.withIterator() 'eachToken'
 		let index = iter.index()
+
+		if not frames.isEmpty() and tok.column == DeclarationHeadColumn and declarationOpensIn(tokens, index: index) 'aDeclarationEndsTheOpenBrackets'
+			frames.clear()
+			restoreLineEndBefore(tokens, index: index, kept: kept)
+		end 'aDeclarationEndsTheOpenBrackets'
 
 		if tokenKindIsSkippedLayout(tok.kind) and stackTopIs(frames, frame: LayoutFrame.droppingGroup) 'insideABracket'
 			if not dropped 'firstDrop'

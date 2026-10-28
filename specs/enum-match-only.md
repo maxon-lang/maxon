@@ -246,7 +246,7 @@ end 'bad'
 
 function main() returns ExitCode
 	let s = bad()
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

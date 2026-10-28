@@ -1852,6 +1852,8 @@ end 'main'
 ```
 ```maxoncstderr
 error E3136: <fragment>:22:22: `interface Pinger` requires `ping`, but no service implementing it declares `ping` as an `export` instance method, so `Pinger.handle` has no such message to send. Implement it on the service
+error E3016: <fragment>:8:6: Partial interface implementation: type 'B' is missing 1 method(s):
+  - ping() returns Count
 ```
 
 <!-- test: error.a-withheld-interface-message-is-refused -->
@@ -2705,8 +2707,7 @@ end 'Config'
 typealias ConfigCell = SharedValue with Config
 
 function main() returns ExitCode
-	let cell = ConfigCell.create(Config.create())
-	return cell.current().step(2) as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -3584,10 +3585,6 @@ end 'Config'
 
 typealias ConfigCell = SharedValue with Config
 
-function publish(client TcpClient) returns ConfigCell
-	return ConfigCell.create(Config.create(client))
-end 'publish'
-
 function main() returns ExitCode
 	return 0
 end 'main'
@@ -3617,7 +3614,7 @@ end 'Config'
 default Config = Config.create()
 
 function main() returns ExitCode
-	return (await Config.current().pending) as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

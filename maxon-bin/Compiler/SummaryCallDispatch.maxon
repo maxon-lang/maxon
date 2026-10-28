@@ -552,6 +552,11 @@ module type CallSummaryIndex
 
 		var registry = functionTypeRegistryOf(self.project)
 		self.gatherFunctionRefBodies()
+
+		if functionShapeIsMissingBesideAFailedFile(self.project, registry: registry, name: calleeType) 'itsDeclaringFileFailedToParse'
+			return CallLandingBodies.create()
+		end 'itsDeclaringFileFailedToParse'
+
 		view calleeShape = requireFunctionShapeOf(registry, name: calleeType, side: "called")
 		var found = CallLandingBodies.create()
 		found.unresolved = self.functionRefBodies.unresolved
@@ -627,7 +632,13 @@ module type CallSummaryIndex
 		end 'notAParameter'
 
 		var registry = functionTypeRegistryOf(self.project)
-		return functionShapeMentionsATypeParameter(registry, signatures: self.signatures, shape: requireFunctionShapeOf(registry, name: functionValueOwnTypeName(self.project, func: func, value: callee), side: "called"))
+		let calleeType = functionValueOwnTypeName(self.project, func: func, value: callee)
+
+		if functionShapeIsMissingBesideAFailedFile(self.project, registry: registry, name: calleeType) 'itsDeclarationWasRefused'
+			return false
+		end 'itsDeclarationWasRefused'
+
+		return functionShapeMentionsATypeParameter(registry, signatures: self.signatures, shape: requireFunctionShapeOf(registry, name: calleeType, side: "called"))
 	end 'callsATypeParameterCallback'
 
 	module function bodilessFunctionValueNames() returns NameRoster
@@ -684,6 +695,10 @@ module type CallSummaryIndex
 	// An append clones records it can classify, but a function value is shared when copied, so an append whose
 	// elements may be functions stores the source's elements into its receiver.
 	module function runtimeShapeOf(func IrFunction, callee ByteArray, args ValueIdArray) returns RuntimeStoreShape
+		if self.project.poison.refusesACalleeFrom(callee, reader: func.sourceFilePath, signatures: self.signatures) 'aRefusedDeclarationIsCalled'
+			return RuntimeStoreShape.nothing
+		end 'aRefusedDeclarationIsCalled'
+
 		if copiesItsSourceCallee(callee) and args.count() > 0 and self.appendSharesFunctions(func, receiver: try args.get(0) otherwise panic("CallSummaryIndex.runtimeShapeOf: an append has a receiver")) 'sharesTheSourcesFunctions'
 			return RuntimeStoreShape.theSourcesElementsIntoTheReceiver
 		end 'sharesTheSourcesFunctions'

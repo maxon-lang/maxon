@@ -533,6 +533,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:9:10: Unsupported: countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. The pre-scan that reserves that slot reads raw tokens, so spell the operand `Self` (or the container's own name) directly rather than through an alias
+error E2069: <fragment>:6:33: `FixedArray with …` needs a positive element count before its element type (`FixedArray with 3 Int`), and it states no element count. The count is part of the TYPE — a `FixedArray with 3 Int` is a different type from a `FixedArray with 4 Int` — so there is no size a sizeless spelling could mean and none is assumed. Counts run from 1 to 4294967295
 ```
 
 <!-- test: error.an-ordinary-generics-static-is-refused-for-the-right-reason -->
@@ -981,7 +982,7 @@ A type private to another file is not visible to `countof` in a function body.
 typealias Int = int(i64.min to i64.max)
 typealias Hidden = FixedArray with 3 Int
 
-function hiddenCount() returns Count
+export function hiddenCount() returns Count
 	return countof(Hidden)
 end 'hiddenCount'
 
@@ -1001,7 +1002,7 @@ The same type named by a file-scope `countof` is refused with the same diagnosti
 typealias Int = int(i64.min to i64.max)
 typealias Hidden = FixedArray with 3 Int
 
-function hiddenCount() returns Count
+module function hiddenCount() returns Count
 	return countof(Hidden)
 end 'hiddenCount'
 

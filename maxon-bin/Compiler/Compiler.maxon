@@ -861,7 +861,7 @@ end 'reportDefineProblems'
 
 // Asked at the seam between the Maxon tier and the lowering pipeline, which is the last point the value
 // columns are readable — `releaseMaxonTier` swaps them for empty ones — and the first point past
-// every legitimate refusal, because `PassPipeline.run` re-checks for diagnostics after every pass.
+// every legitimate refusal, because `PassPipeline.run` throws while any diagnostic stands.
 //
 // ⚠ It reads `valueTags`, not the signature columns: the closure lift publishes `MaxonType.integer`
 // in place of an `unresolved` body type, so the signature is exactly where the lie would be
@@ -895,6 +895,12 @@ function unresolvedValueOrigin(module MaxonModule, func IrFunction, value ValueI
 	return "a value no op defines"
 end 'unresolvedValueOrigin'
 
+// An unreadable type universe (a cyclic alias, E3184, a library file that failed) stops after the
+// first pass that reports: the later passes overflow the stack or hang on an infinite type.
+function maxonTierGateFor(project Project) returns ErrorGate
+	return ErrorGate.afterEachPass if project.poison.typeUniverseIsUnreadable() else ErrorGate.afterTheLastPass
+end 'maxonTierGateFor'
+
 function lowerTheProgram(project Project, passes PassKindArray) returns LoweredProgram throws CompileError
 	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** A warm
 	// project compiles again on every editor re-check, and an uncleared sink would keep reporting an error
@@ -904,6 +910,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// module below.
 	project.diagnostics.clear()
 	project.targetRefusalDiagnostics.clear()
+	project.poison = DeclarationPoison.create()
 
 	// Fresh per compile, because a warm project lowers again. Sound only while nothing in the front end,
 	// whose results outlive a compile, writes either.
@@ -942,7 +949,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// ⭐ **`implements`-CONFORMANCE CHECKING — HERE, before the pipeline.** It reads the
 	// still-UNRESOLVED merged signatures so its E3016 message can print the source type spellings
 	// (`Integer`, `Float`, `void`) that `resolveTypes` erases — the same reason `checkValueMergeSignatures`
-	// runs here. Any E3015/E3016 it records is caught by the pipeline's error gate after `resolveTypes`.
+	// runs here. Any E3015/E3016 it records is caught by the pipeline's error gate.
 	// ⚠ `var`, because the index MEMOIZES: `mangleGenericInstance` derives each instance's compiled name
 	// on first ask and keeps it (`CompiledInstanceNameMap`), and every pass below asks. One binding, so
 	// the derivation is shared by all of them rather than repeated per pass.
@@ -953,6 +960,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// typed by a generic INSTANCE has no identity outside this index (`canonicalInstanceName`), and rendering
 	// one without it spelled `Array with Integer` and `Array with String` as the same word.
 	var signatures = try queryProgramSignatures(project)
+	dropExplainedParseConsequences(project, signatures: signatures, stage: ConsequenceDropStage.beforeTypeResolution)
 
 	// The second of `checkDeclarations`' two brackets — see the first, above `checkValueMergeSignatures`.
 	let declCheckProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.checkDeclarations)
@@ -961,7 +969,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 
 	// ⭐ **`<Type> from "…"` NEEDS `implements InitableFromStringLiteral`** — checked right beside the
 	// conformance pass it reads the same store as, and for the same reason it sits before the pipeline: its
-	// E3005 is caught by the pipeline's error gate after `resolveTypes`.
+	// E3005 is caught by the pipeline's error gate.
 	checkLiteralInitConformance(project)
 
 	// ⭐ **A CYCLIC GENERIC ALIAS IS REFUSED FIRST (E3091)** — before the two checks below and before
@@ -995,9 +1003,6 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 
 	recordPhase(project, phase: CompilePhase.checkDeclarations, probe: declCheckProbe)
 
-	// The ordinal guards' bracket, OUTSIDE the well-formedness gate below, so the phase reports on
-	// every compile: a row that vanished for a failing program would be indistinguishable from a
-	// phase that cost nothing.
 	let ordinalProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.verifyOrdinals)
 
 	// ⭐⭐ **THE BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT SCATTERED ACROSS THE
@@ -1018,47 +1023,42 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// left to fail against. Here they have both: `queryAllModule` has merged every declaration, and the
 	// pipeline's error gate below turns an E4016 into a failed build with no binary written.
 	//
-	// ⚠ **NOT ON A PROGRAM THAT IS ALREADY FAILING.** A file whose parse failed merged none of
-	// its declarations, so `stdlib/Builtins.maxon` failing to parse leaves the three DECLARED families
-	// absent — and each would then report an E4016 saying the module was not loaded, on top of the real
-	// diagnostic that says why. It is the refusal `checkTypeSymbolNamespace` and
-	// `checkGenericAliasCycles` above make, for the same reason: a check whose inputs are half-built
-	// cannot produce a verdict worth reading.
-	if not projectHasErrors(project) 'wellFormedSoFar'
-		verifyManagedFileOrdinals(project)
-		verifyManagedDirectoryOrdinals(project)
-		verifyManagedSocketOrdinals(project)
-		verifyManagedListenerOrdinals(project)
-		verifyManagedMemoryRuntimeOrdinals(project)
-		verifyRunProcessErrorOrdinals(project)
-		verifyDivisionByZeroOrdinals(project)
+	// ⚠ A family whose enum is declared in a file that failed to parse is absent from the merge, and
+	// `declaredBuiltinErrorEnum` answers `notDeclared` for it without reporting: an E4016 saying the
+	// module was not loaded would sit on top of the real diagnostic that says why.
+	verifyManagedFileOrdinals(project)
+	verifyManagedDirectoryOrdinals(project)
+	verifyManagedSocketOrdinals(project)
+	verifyManagedListenerOrdinals(project)
+	verifyManagedMemoryRuntimeOrdinals(project)
+	verifyRunProcessErrorOrdinals(project)
+	verifyDivisionByZeroOrdinals(project)
 
-		// ⚠ **`StringError` IS NOT CHECKED HERE, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS.** A check here
-		// holds a runtime's LITERAL error flag against the enum's case ORDER, and
-		// `__strix_first`/`__strix_last`/`__strix_after` are all `stdlib/String.maxon`'s, so the corpus
-		// `throw StringError.notFound` resolves its ordinal from the declaration itself and there is no
-		// second half to drift from. Adding a throwing `__strix_` graph brings the claim back with it.
-		// ⚠ **`MapError` IS NOT CHECKED HERE FOR THE SAME REASON.** No `__map_` graph transcribes
-		// `keyNotFound`'s or `keyAlreadyExists`'s ordinal as a literal, so the corpus
-		// `throw MapError.keyNotFound` resolves its ordinal from `stdlib/Map.maxon`'s own declaration and
-		// there is no second half to drift from. Adding a throwing `__map_` graph brings the claim back with it.
-		// `__EnumLookupError` is here for `__DivisionByZeroError`'s reason exactly: `EnumLookupRuntime`
-		// transcribes `noSuchRawValue`'s and `noSuchCaseName`'s ordinals as the literal error flags
-		// `__enum_from_raw_<Enum>` and `__enum_from_name_<Enum>` return on a miss, while
-		// `Project.builtinEnumLookupErrorEnum` declares both by POSITION — see `verifyEnumLookupErrorOrdinals`.
-		verifyEnumLookupErrorOrdinals(project)
+	// ⚠ **`StringError` IS NOT CHECKED HERE, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS.** A check here
+	// holds a runtime's LITERAL error flag against the enum's case ORDER, and
+	// `__strix_first`/`__strix_last`/`__strix_after` are all `stdlib/String.maxon`'s, so the corpus
+	// `throw StringError.notFound` resolves its ordinal from the declaration itself and there is no
+	// second half to drift from. Adding a throwing `__strix_` graph brings the claim back with it.
+	// ⚠ **`MapError` IS NOT CHECKED HERE FOR THE SAME REASON.** No `__map_` graph transcribes
+	// `keyNotFound`'s or `keyAlreadyExists`'s ordinal as a literal, so the corpus
+	// `throw MapError.keyNotFound` resolves its ordinal from `stdlib/Map.maxon`'s own declaration and
+	// there is no second half to drift from. Adding a throwing `__map_` graph brings the claim back with it.
+	// `__EnumLookupError` is here for `__DivisionByZeroError`'s reason exactly: `EnumLookupRuntime`
+	// transcribes `noSuchRawValue`'s and `noSuchCaseName`'s ordinals as the literal error flags
+	// `__enum_from_raw_<Enum>` and `__enum_from_name_<Enum>` return on a miss, while
+	// `Project.builtinEnumLookupErrorEnum` declares both by POSITION — see `verifyEnumLookupErrorOrdinals`.
+	verifyEnumLookupErrorOrdinals(project)
 
-		// ⛔ **`CharacterError` MEETS THIS ROSTER'S OWN CRITERION AND IS THE EASY ONE TO LEAVE OFF IT.** The
-		// two paragraphs above exclude `StringError` and `MapError` on a stated test — a family belongs here
-		// exactly while a throwing runtime graph transcribes its ordinals, and leaves when the corpus is the
-		// only producer. `__char_ascii` is such a graph (`GraphemeRuntime.buildCharAscii` returns
-		// `CharacterNotAsciiFlag` on its failure edge), while `stdlib/Character.maxon` declares the case order
-		// that flag encodes. A case inserted ahead of `notAscii` moves the declared ordinal to 1 while
-		// `buildCharAscii` goes on emitting 0, and without this check the compile succeeds with no
-		// diagnostic. Nothing can read the drift yet — `match e` over this enum is E2015 — which makes it a
-		// wire format waiting for a reader rather than a family that needs no guard.
-		verifyCharacterErrorOrdinals(project)
-	end 'wellFormedSoFar'
+	// ⛔ **`CharacterError` MEETS THIS ROSTER'S OWN CRITERION AND IS THE EASY ONE TO LEAVE OFF IT.** The
+	// two paragraphs above exclude `StringError` and `MapError` on a stated test — a family belongs here
+	// exactly while a throwing runtime graph transcribes its ordinals, and leaves when the corpus is the
+	// only producer. `__char_ascii` is such a graph (`GraphemeRuntime.buildCharAscii` returns
+	// `CharacterNotAsciiFlag` on its failure edge), while `stdlib/Character.maxon` declares the case order
+	// that flag encodes. A case inserted ahead of `notAscii` moves the declared ordinal to 1 while
+	// `buildCharAscii` goes on emitting 0, and without this check the compile succeeds with no
+	// diagnostic. Nothing can read the drift yet — `match e` over this enum is E2015 — which makes it a
+	// wire format waiting for a reader rather than a family that needs no guard.
+	verifyCharacterErrorOrdinals(project)
 
 	recordPhase(project, phase: CompilePhase.verifyOrdinals, probe: ordinalProbe)
 
@@ -1066,8 +1066,8 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// COMPILE IS ALREADY FAILING.** `deriveLibraryFacts` below reads each stdlib file's parse artifact
 	// back through `queryParseOps`, which opens the `parse` phase — but only on a MISS, and every
 	// stdlib file was parsed and cached by `queryAllModule` above. The single way to reach a miss here
-	// is a stdlib file whose parse FAILED (a failed parse is never cached), and that compile throws at
-	// the pipeline's error gate before anything stamps a total or reads a table. So the nesting the
+	// is a stdlib file whose parse FAILED (a failed parse is never cached), and that leaves the type
+	// universe unreadable, so `libraryReachOf` reads no artifact at all. So the nesting the
 	// disjointness contract forbids cannot be observed; it is stated because the next reader deserves
 	// to know it was checked rather than assumed.
 	try requireStillWanted(project)
@@ -1155,11 +1155,9 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// `declareAsyncReleaserNeeds`-shaped obligation a Std-tier synthesis would have owed.
 	//
 	// A program that spawns nothing builds nothing here.
-	if not projectHasErrors(project) 'handlersWereBuilt'
-		try installServiceLoops(module, project: project, signatures: signatures) otherwise (failure) 'serviceLoopsRefused'
-			try refuseUnlessAbandoned(project, failure: failure)
-		end 'serviceLoopsRefused'
-	end 'handlersWereBuilt'
+	try installServiceLoops(module, project: project, signatures: signatures) otherwise (failure) 'serviceLoopsRefused'
+		try refuseUnlessAbandoned(project, failure: failure)
+	end 'serviceLoopsRefused'
 
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
 
@@ -1173,7 +1171,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'duplicateFunctionName'
 
-	try pipeline.run(buildMaxonTierPasses()) otherwise (failure) 'maxonTierFailed'
+	try pipeline.run(buildMaxonTierPasses(), gate: maxonTierGateFor(project)) otherwise (failure) 'maxonTierFailed'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'maxonTierFailed'
 
@@ -1361,7 +1359,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// has answered and no Std pass has yet run.
 	pipeline.usesGreenThreads = usage.usesGt
 
-	try pipeline.run(passes) otherwise (failure) 'loweringFailed'
+	try pipeline.run(passes, gate: ErrorGate.afterEachPass) otherwise (failure) 'loweringFailed'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'loweringFailed'
 

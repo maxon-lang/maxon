@@ -326,7 +326,7 @@ type Marker
 end 'Marker'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

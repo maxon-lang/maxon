@@ -18617,7 +18617,13 @@ export type ProgramSignatures
 		var slots = DefaultSlotArray.create()
 
 		for declaration in self.liveWinningDefaults() 'eachBuiltDefault'
-			slots.push(self.defaultSlotOf(declaration))
+			let slot = self.defaultSlotOf(declaration)
+
+			if defaultSlotIsRefusedAsUnshareable(slot) 'refusedAtItsDeclaration'
+				continue
+			end 'refusedAtItsDeclaration'
+
+			slots.push(slot)
 		end 'eachBuiltDefault'
 
 		return slots
@@ -19092,7 +19098,7 @@ export type ProgramSignatures
 	// Both conjuncts bind: the compiler's own runtime calls (`__write_stdout`, interpolation parts) carry
 	// `resolvedTypeQualifier` too, and a hand-typed `__Range.nosuch()` is `notMinted` and stays E3004.
 	export function isMemberOfAMintedLibraryType(callee ByteArray, mint CalleeMint) returns bool
-		return mint == CalleeMint.resolvedTypeQualifier and self.isMintedStdlibShadowCallee(callee)
+		return (mint == CalleeMint.resolvedTypeQualifier or mint == CalleeMint.resolvedStaticTypeQualifier) and self.isMintedStdlibShadowCallee(callee)
 	end 'isMemberOfAMintedLibraryType'
 
 	export function settleStdlibShadowSpellings(declaredNames NameRoster, declaringFiles FilePathArray)
@@ -20036,6 +20042,12 @@ export type ProgramSignatures
 
 		return site.declFilePath
 	end 'declaringFileOf'
+
+	export function declaringFileIfDeclared(qualified ByteArray) returns FilePath throws AbsentError
+		let site = try self.settledDeclarations().funcDeclSites.get(qualified) otherwise throw AbsentError.absent
+
+		return site.declFilePath
+	end 'declaringFileIfDeclared'
 
 	export function declaredMethodTakesReceiver(qualified ByteArray) returns bool
 		let site = try self.settledDeclarations().funcDeclSites.get(qualified) otherwise panic("ProgramSignatures.declaredMethodTakesReceiver: nothing declares '{String.from(qualified)}' — the caller establishes that through `declaresCallee` first, and the two registries are written by one act (`record`)")
@@ -24619,9 +24631,9 @@ export type ProgramSignatures
 	// The value `name` denotes when read from `readerFilePath` — the door a USE SITE asks through
 	// (`Parser.topLevelBindingReference`), after every constant has been evaluated.
 	//
-	// A constant that FAILED reads as `notFound`, so its reader reports a plain undefined-name error
-	// rather than inlining a value that does not exist. The declaration's own diagnostic has already
-	// failed the build, so nothing is lost by the reader being vague about it.
+	// A constant that FAILED reads as `poisoned` rather than inlining a value that does not exist: the
+	// declaration's own diagnostic has already failed the build, and its readers add none of their
+	// own.
 	//
 	// A `var` reads as `notFound` here too — not because it is undefined, but because it is not a
 	// CONSTANT and this door only answers for constants. Its reader (`Parser.parseVariableReference`)
@@ -24816,9 +24828,8 @@ export type ProgramSignatures
 	end 'bindingTypeClaimAt'
 
 	// The `.data` label and TYPE of the global at `index` — everything a load or a store needs to
-	// name it. A var whose initializer failed reads as `notFound` for `resolvedValueOf`'s reason: the
-	// declaration's own diagnostic has already failed the build, and a slot with no value is a slot
-	// with no bytes to emit.
+	// name it. A var whose initializer failed reads as `poisoned`: the declaration's own diagnostic
+	// has already failed the build, and a slot with no value is a slot with no bytes to emit.
 	function resolvedGlobalOf(index ElementIndex, into TypeNameInterner) returns TopLevelGlobalLookup
 		view decl = self.declAt(index)
 
@@ -24826,7 +24837,7 @@ export type ProgramSignatures
 			value or
 			managedValue or
 			storedRecord then return self.storedGlobalFound(index, into: into)
-			failed then return TopLevelGlobalLookup.notFound
+			failed or
 			poisoned or
 			unvalidatedRecord then return TopLevelGlobalLookup.poisoned
 			imagedRecord or
@@ -25549,7 +25560,7 @@ export type ProgramSignatures
 		match decl.outcome 'state'
 			value(payload, tag, typeName) then return TopLevelConstantLookup.found(payload, tag: tag, typeName: typeName)
 			managedValue(bytes, kind) then return TopLevelConstantLookup.foundManaged(bytes, kind: kind)
-			failed then return TopLevelConstantLookup.notFound
+			failed or
 			poisoned or
 			unvalidatedRecord then return TopLevelConstantLookup.poisoned
 
@@ -26233,6 +26244,10 @@ export type ProgramSignatures
 		end 'eachLinkedClause'
 
 		for clause in cyclic 'eachCyclicClause'
+			if not self.implementsLinkReturnsTo(clause) 'anEarlierMemberBrokeTheCycle'
+				continue
+			end 'anEarlierMemberBrokeTheCycle'
+
 			self.mainThreadSettled().implementsVerdicts.upsert(fileScopedDeclKey(clause.name, declFilePath: clause.declFilePath), value: AliasImplementsVerdict.cycle)
 			self.unlinkImplements(clause)
 		end 'eachCyclicClause'

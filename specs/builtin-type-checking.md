@@ -58,9 +58,9 @@ type TestFile
 	end 'open'
 end 'TestFile'
 
-function main() returns ExitCode throws TestFileError
-	let f = try TestFile.open("test.txt")
-	let written = try f.file.write(42)
+function main() returns ExitCode
+	let f = try TestFile.open("test.txt") otherwise return 1
+	let written = try f.file.write(42) otherwise return 2
 	return 0
 end 'main'
 ```

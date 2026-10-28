@@ -1448,8 +1448,12 @@ function second(b Byte) returns Byte
 	return y
 end 'second'
 
+function seed() returns Byte
+	return 1
+end 'seed'
+
 function main() returns ExitCode
-	let a = 1 as Byte
+	let a = seed()
 	let b = first(a)
 	let c = second(b)
 	return c

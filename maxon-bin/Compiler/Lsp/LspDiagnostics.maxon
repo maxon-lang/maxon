@@ -168,12 +168,16 @@ extension Project
 		end 'corpus'
 	end 'explainedByTheCorpus'
 
-	// ⚠ A parse stops at its FIRST refusal — `FileParseOutcome.failed` carries one error — so an error
-	// BELOW a name-dependent one is never raised at all, and no filter downstream can recover it.
+	// ⚠ A refusal abandons only its region — a body, an initializer or a declaration — so an error
+	// later in that same region is never raised at all, and no filter downstream can recover it.
 	function bufferParse(path FilePath) returns BufferParse
 		let before = self.diagnostics.count()
 
 		_ = try queryParseOps(self, path: path) otherwise return BufferParse.compilable
+
+		// A held consequence names its diagnostics by their position in this sink, which is cleared
+		// below.
+		self.poison.forgetHeldConsequences()
 
 		if self.diagnostics.count() == before 'parsedCleanly'
 			return BufferParse.compilable
@@ -224,6 +228,7 @@ extension Project
 		self.diagnostics.clear()
 
 		view artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: try queryProgramSignatures(self) otherwise return SweptParse.unavailable), stamp: stamp)
+		self.poison.forgetHeldConsequences()
 		var published = self.diagnostics.clone()
 		published.append(artifact.diagnostics)
 

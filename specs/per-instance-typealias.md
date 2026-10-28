@@ -2371,7 +2371,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: <fragment>:25:15: Unknown type 'Bag'
+error E3011: <fragment>:24:20: Unknown type 'Bag'
 ```
 
 ### Two plain types in two files may declare one member name, exactly as two file-scope aliases may

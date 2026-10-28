@@ -449,7 +449,6 @@ type Box uses T where T is Sized with (Integer)
 end 'Box'
 
 function main() returns ExitCode
-	print("{Box.create(0).size()}\n")
 	return 0
 end 'main'
 ```

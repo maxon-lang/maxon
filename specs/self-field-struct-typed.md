@@ -90,8 +90,9 @@ constructibility test disabled at both doors, this case and the two below all an
 **`error E4014: <fragment>:5:6: type 'Node' contains a reference cycle (via Node → next: Node)`** —
 a clean refusal one stage later, from `TypeCycleCheck`, whose graph is a strict SUPERSET of
 `structTypeIsConstructible`'s (it walks container element types and union payloads too). The other
-four cases stay green. ⇒ **these three pin WHICH diagnostic wins, not whether the program is
-refused**, and the parser's E2015 wins only because it runs before `TypeCycleCheck`. See
+four cases stay green. ⇒ **these three pin the parser's E2015 beside the E4014 cycle refusal, not
+whether the program is refused**: both are reported, the E2015 first because a body's refusal is
+reported as the body is read. See
 `error.scalar-field-base-is-not-a-struct` for the sabotage on this file that IS still live.
 ```maxon
 
@@ -112,6 +113,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
+error E4014: <fragment>:5:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
 ```
 
 <!-- test: error.struct-typed-field-method-call -->
@@ -141,6 +143,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
+error E4014: <fragment>:5:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
 ```
 
 <!-- test: error.struct-typed-field-write -->
@@ -167,6 +170,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:10:3: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
+error E4014: <fragment>:5:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
 ```
 
 <!-- test: error.scalar-field-base-is-not-a-struct -->

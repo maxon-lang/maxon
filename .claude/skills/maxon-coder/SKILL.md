@@ -66,8 +66,12 @@ After each edit:
   a later `try` reads as E2015 "the expression after `try` is not a call").
 - `execute` runs the program with the host's working directory — the repository root. A probe that writes
   a file writes it there; delete it.
-- A diagnostic run stops at the first failing phase, so fixing one error can reveal the next. Re-run until
-  clean.
+- A diagnostic run reports every independent error the analysis finds, and nothing that is only the
+  consequence of another (a call to a function whose declaration was refused, a use of a refused binding).
+  A parse error abandons only the body, initializer or declaration it is in (one in a generic body fails
+  its file). Unused bindings and exports,
+  target refusals and the checks made during lowering are reported only once no other error remains, so
+  fixing one error can still reveal the next. Re-run until clean.
 - **Exit 101 is a leak.** Read exit codes; never grep output for a success string.
 - The compiler binary is gitignored and nothing rebuilds it, so a stale one lies in both directions —
   build after editing `maxon-bin/`. `spec-test` and `scale-test` refuse a stale binary by themselves.

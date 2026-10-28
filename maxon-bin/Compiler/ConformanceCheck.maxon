@@ -5,7 +5,7 @@
 // `process(value Float) returns Integer (expected process(value Integer) returns Integer)` — and
 // `resolveTypes` erases `Integer` to `int` and `Float` to `float`. So the check runs alongside
 // `checkValueMergeSignatures` (`compileToCodeResult`, before the pipeline), reading the still-unresolved
-// signatures; any diagnostic it records is caught by the pipeline's own error gate after `resolveTypes`.
+// signatures; any diagnostic it records is caught by the pipeline's own error gate.
 //
 // ⭐ **THE MESSAGE AND THE COMPARISON READ ONE STRING — THE SOURCE SPELLING.** An interface method carries
 // its types as rendered strings (see IrInterface); a type's method carries them as `MaxonType`s in the merged
@@ -36,21 +36,13 @@
 // carrying the stdlib already has conformances — and skipping it would have made the new check silently
 // conditional on an unrelated declaration.
 export function checkConformance(project Project, module MaxonModule, signatures ProgramSignatures)
+	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
+		return
+	end 'theUniverseIsUnreadable'
+
 	if project.conformances.count() == 0 and project.enumTypes.count() == 0 'nothingToCheck'
 		return
 	end 'nothingToCheck'
-
-	// A duplicate-named method is E3006 (recorded by `commitFuncSignatures` during `queryAllModule`, so it
-	// already sits in `project.diagnostics` here). It leaves the module's function table and the
-	// `funcSignatures` registry resolving that collision independently, disagreeing on the method's arity —
-	// and this check reads a method's param TYPES from the module but its param NAMES from `funcSignatures`
-	// (see `checkOneMethod`), so on a disagreement it would index one column by the other's count and PANIC.
-	// The E3006 already fails the build (the pipeline's error gate throws before lowering), so any E3015/E3016
-	// here would be moot; refuse to read a malformed table, exactly as `PassPipeline.run` refuses to lower a
-	// module that already has errors.
-	if projectHasErrors(project) 'malformedModule'
-		return
-	end 'malformedModule'
 
 	// The index is keyed by the REGISTRATION name (`func.name`): `qualifiedMethodName(typeName, methodName)`
 	// for the first declaration of a method name, and the mangled `Type.method#Suffix` for every later overload
@@ -786,13 +778,9 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 		return
 	end 'noSites'
 
-	// A prior diagnostic (a parse error, an E3006 duplicate) leaves `project.conformances` possibly INCOMPLETE
-	// — a file whose parse failed may not have merged its `implements` clauses — so a conforming type could
-	// read as non-conforming and yield a SPURIOUS E3017. Refuse to check a malformed program, exactly as
-	// `checkConformance` does: the real diagnostic already fails the build, and this one would only be noise.
-	if projectHasErrors(project) 'malformedProject'
+	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
 		return
-	end 'malformedProject'
+	end 'theUniverseIsUnreadable'
 
 	view declared = declaredConformanceIndex(project)
 
@@ -833,17 +821,18 @@ export function checkLiteralInitConformance(project Project)
 		return
 	end 'noConstructions'
 
-	// A prior diagnostic may leave `project.conformances` INCOMPLETE — a file whose parse failed has not
-	// merged its `implements` clauses — so a conforming type could read as non-conforming and earn a
-	// SPURIOUS E3005. Refuse to check a malformed program, exactly as `checkWhereConstraints` does.
-	if projectHasErrors(project) 'malformedProject'
+	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
 		return
-	end 'malformedProject'
+	end 'theUniverseIsUnreadable'
 
 	view declared = declaredConformanceIndex(project)
 
 	for siteIndex in 0 upto project.literalInitSites.count() 'eachSite'
 		let site = try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")
+
+		if project.poison.declaresANominalType(site.typeName) 'typeDeclaredInAFailedFile'
+			continue
+		end 'typeDeclaredInAFailedFile'
 
 		if not typeDeclaresInterface(declared, interfaces: project.interfaces, typeName: site.typeName, interfaceName: site.interfaceName) 'doesNotConform'
 			let nameLine = site.nameLine
@@ -855,10 +844,32 @@ export function checkLiteralInitConformance(project Project)
 	end 'eachSite'
 end 'checkLiteralInitConformance'
 
+module function instanceNamesATypeFromAFailedFile(project Project, signatures ProgramSignatures, gid GenericInstanceId) returns bool
+	if project.poison.isEmpty() 'noFileFailed'
+		return false
+	end 'noFileFailed'
+
+	if project.poison.declaresANominalType(signatures.genericInstanceBaseName(gid)) 'theBaseIsDeclaredThere'
+		return true
+	end 'theBaseIsDeclaredThere'
+
+	for position in 0 upto signatures.genericInstanceArgCount(gid) 'eachArgument'
+		if project.poison.declaresANominalType(signatures.instanceArgDisplayName(gid, position: position)) 'anArgumentIsDeclaredThere'
+			return true
+		end 'anArgumentIsDeclaredThere'
+	end 'eachArgument'
+
+	return false
+end 'instanceNamesATypeFromAFailedFile'
+
 // Validate one instantiation site's every `where` constraint. A base with no constraints (the whole
 // non-generic-witness corpus) iterates zero times.
 function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite)
 	let baseName = signatures.genericInstanceBaseName(site.gid)
+
+	if instanceNamesATypeFromAFailedFile(project, signatures: signatures, gid: site.gid) 'aTypeOfAFileThatFailedToParse'
+		return
+	end 'aTypeOfAFileThatFailedToParse'
 
 	// ⭐⭐ **AN `interface` BASE IS AN EXISTENTIAL, NOT A CONTAINER, AND ITS ARGUMENTS ARE A DIFFERENT
 	// OBLIGATION.** `Seq with Integer` binds an associated type; `Box with Integer` fills a type parameter with
@@ -1510,6 +1521,10 @@ end 'typeDeclaresInterface'
 
 // Check one `implements I1, I2` declaration against each named interface.
 function checkOneConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, signatures ProgramSignatures)
+	if project.poison.declaresANominalType(conformance.typeName) 'conformerDeclaredInAFailedFile'
+		return
+	end 'conformerDeclaredInAFailedFile'
+
 	// The conforming type's own `uses` names — the list a `typeParameter(token)` in one of its methods is
 	// re-spelled against (`typeParamPositionIn`: a token is a digest of `(declaring type, parameter)`,
 	// not an index, so the position is recovered by re-spelling and never by subscripting this list), read
@@ -1528,6 +1543,10 @@ function checkOneConformance(project Project, functionsByName FunctionNameIndex,
 
 	for i in 0 upto conformance.interfaces.count() 'eachIface'
 		let entry = try conformance.interfaces.get(i) otherwise panic("checkOneConformance: interfaces.get OOB at {i}")
+
+		if project.poison.declaresNamedFrom(entry.interfaceName, reader: conformance.filePath, signatures: signatures) 'interfaceDeclaredInAFailedFile'
+			continue
+		end 'interfaceDeclaredInAFailedFile'
 
 		match lookupInterface(project.interfaces, name: entry.interfaceName) 'resolve'
 			notFound then reportPositioned(project, code: ErrorCode.semanticUnknownInterface, message: "type '{String.from(conformance.typeName)}' implements unknown interface '{String.from(entry.interfaceName)}'", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)

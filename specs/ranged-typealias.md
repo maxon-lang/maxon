@@ -1505,7 +1505,7 @@ enum MyError implements Error
 end 'MyError'
 
 function getScore() returns Score throws MyError
-	return 50 as Score
+	throw MyError.failed
 end 'getScore'
 
 function main() returns ExitCode
@@ -1530,7 +1530,7 @@ enum MyError implements Error
 end 'MyError'
 
 function getScore() returns Score throws MyError
-	return 50 as Score
+	throw MyError.failed
 end 'getScore'
 
 function main() returns ExitCode
@@ -3797,7 +3797,7 @@ function half() returns float
 end 'half'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3813,7 +3813,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3894,7 +3894,7 @@ function first(t (int, int)) returns Small
 end 'first'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

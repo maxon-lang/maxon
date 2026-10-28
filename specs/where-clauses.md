@@ -1570,13 +1570,12 @@ door.
 
 The consequence is a DIAGNOSTIC one and only that. Every program that lands here is a program the real
 parse refuses on its own line, so no wrong program is ever accepted — but the reject below is raised at the
-DISPATCH, in a file that parses before the broken `interface` is reached, and the file's parse stops there.
-It is the ONLY diagnostic this program produces, which is why the sentence may not claim the
-interface is undeclared (it is declared, eight lines down). It names both causes instead.
+DISPATCH, in a body that parses before the broken `interface` is reached. The sentence may not claim the
+interface is undeclared (it is declared, eight lines down), so it names both causes.
 
-The same shape with the broken `interface` in a LATER FILE reports both errors — the dispatch's reject from
-`a.maxon` and the real `E2010` from the later file — because each file's parse is independent. It is the
-same-file ordering that hides the cause, so that is the one pinned.
+The program reports both errors — the dispatch's reject and the real `E2010` from the `interface`
+declaration — because the rejected body is abandoned on its own and the rest of the file is still read. The same
+shape with the broken `interface` in a LATER FILE reports the same two.
 
 <!-- test: where-clauses.error.constraint-interface-unreadable -->
 ```maxon
@@ -1614,7 +1613,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/where-clauses/where-clauses.error.constraint-interface-unreadable.maxon:20:20: Unsupported: the `where` constraint interface 'Digest' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse
+error E2015: <fragment>:20:20: Unsupported: the `where` constraint interface 'Digest' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse
+error E2010: <fragment>:28:17: Expected identifier but got ','
 ```
 
 ### An `extends`-inherited requirement is dispatchable through the constraint that inherits it

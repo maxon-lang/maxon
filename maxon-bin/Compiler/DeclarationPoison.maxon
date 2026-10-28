@@ -1,0 +1,617 @@
+typealias FailedFileSet = Set with FilePath
+typealias PoisonedDeclarationArray = Array with PoisonedDeclaration
+typealias PoisonedDeclarationsByName = Map with (ByteArray, PoisonedDeclarationArray)
+typealias DuplicatedFunctionSet = Set with ByteArray
+typealias LostHeadNameSet = Set with ByteArray
+
+export typealias PendingConsequenceArray = Array with PendingConsequence
+
+// A file-scope declaration is found only where its head starts a line at this column; one written
+// indented is attributed to the declaration above it.
+module let DeclarationHeadColumn = 1
+
+// `provisional` poison comes from a refusal still held as a possible consequence
+// (`Queries.holdAsAConsequence`), which may yet be dropped. Only `backed` poison explains a held
+// consequence: two held refusals could otherwise explain each other away and leave a failing
+// program with no diagnostic. A check that skips poisoned declarations counts both, because a held
+// refusal stays reported until it is explained.
+export enum PoisonBacking
+	backed
+	provisional
+end 'PoisonBacking'
+
+export enum PoisonEntriesCounted
+	everyEntry
+	backedEntries
+end 'PoisonEntriesCounted'
+
+export union LostDeclaration
+	region(site PoisonedAt)
+	file
+end 'LostDeclaration'
+
+export type PendingConsequence
+	export let file as FilePath
+	let consequence as ConsequenceOf
+	export let lost as LostDeclaration
+	export let sinkStart as ElementIndex
+	export let sinkEnd as ElementIndex
+
+	export static function create(file FilePath, consequence ConsequenceOf, lost LostDeclaration, sinkStart ElementIndex, sinkEnd ElementIndex) returns PendingConsequence
+		return Self{file: file, consequence: consequence, lost: lost, sinkStart: sinkStart, sinkEnd: sinkEnd}
+	end 'create'
+
+	export function shiftedBack(removed ElementIndex) returns PendingConsequence
+		return Self{file: self.file.clone(), consequence: self.consequence.clone(), lost: self.lost.clone(), sinkStart: (self.sinkStart - removed) as ElementIndex, sinkEnd: (self.sinkEnd - removed) as ElementIndex}
+	end 'shiftedBack'
+
+	export function isExplainedBy(poison DeclarationPoison, signatures ProgramSignatures, reports UnknownTypeReports) returns bool
+		return match self.consequence 'consequence'
+			unrelated gives false
+			unknownType(name) gives poison.refusesAnyPartOfFrom(singleName(name), reader: self.file, signatures: signatures, counting: PoisonEntriesCounted.backedEntries) or reports.reportedUnknownName(name, readerFilePath: self.file)
+			subject(names) gives poison.refusesAnyPartOfFrom(names, reader: self.file, signatures: signatures, counting: PoisonEntriesCounted.backedEntries) or poison.refusesAnExtensionQualifying(names, reader: self.file, signatures: signatures)
+			handlerBody(message) gives poison.holdsABackedAbandonedBodyNamed(message)
+		end 'consequence'
+	end 'isExplainedBy'
+end 'PendingConsequence'
+
+type PoisonedDeclaration
+	export let file as FilePath
+	export let reach as Visibility
+	export let nominal as bool
+	export let backing as PoisonBacking
+
+	static function create(file FilePath, reach Visibility, nominal bool, backing PoisonBacking) returns PoisonedDeclaration
+		return Self{file: file, reach: reach, nominal: nominal, backing: backing}
+	end 'create'
+end 'PoisonedDeclaration'
+
+union DeclaredWithin
+	anywhere
+	namespace(qualifier ByteArray)
+end 'DeclaredWithin'
+
+union EnclosingRegion
+	declaration(head DeclarationHead)
+	lostHead(name ByteArray)
+end 'EnclosingRegion'
+
+type DeclarationHead
+	export let name as ByteArray
+	export let reach as Visibility
+	export let nominal as bool
+	export let extendsAType as bool
+
+	static function create(name ByteArray, reach Visibility, nominal bool, extendsAType bool) returns DeclarationHead
+		return Self{name: name, reach: reach, nominal: nominal, extendsAType: extendsAType}
+	end 'create'
+end 'DeclarationHead'
+
+// The declarations a refusal took out of the program, keyed by name. A reader's question is matched
+// through the entry's file and visibility (`refusesANamedFrom`), so a poisoned declaration the
+// reader cannot name explains nothing that reader writes.
+export type DeclarationPoison
+	var files as FailedFileSet
+	var backedFiles as FailedFileSet
+	var declared as PoisonedDeclarationsByName
+
+	// An abandoned body is not a refusal of its declaration: the signature stands and its callers are
+	// still checked against it, so it is never filed in `declared`.
+	var abandonedBodies as PoisonedDeclarationsByName
+
+	var duplicated as DuplicatedFunctionSet
+	var lostHeads as LostHeadNameSet
+	var unreadable as bool
+	var unreadableTypeUniverse as bool
+
+	// Keyed by the extended type's name, because a refused extension's members may be what a call on
+	// that type, or on any type implementing it, meant (`refusesAnExtensionReaching`).
+	var extended as PoisonedDeclarationsByName
+	var heldConsequences as PendingConsequenceArray
+	var deferredConsequences as PendingConsequenceArray
+
+	export static function create() returns Self
+		return Self{files: FailedFileSet.create(), backedFiles: FailedFileSet.create(), declared: PoisonedDeclarationsByName.create(), abandonedBodies: PoisonedDeclarationsByName.create(), duplicated: DuplicatedFunctionSet.create(), lostHeads: LostHeadNameSet.create(), unreadable: false, unreadableTypeUniverse: false, extended: PoisonedDeclarationsByName.create(), heldConsequences: PendingConsequenceArray.create(), deferredConsequences: PendingConsequenceArray.create()}
+	end 'create'
+
+	export function snapshot() returns Self
+		var copy = Self.create()
+		copy.restore(self)
+
+		return copy
+	end 'snapshot'
+
+	// Every field is copied: one left out survives a rolled-back fold (`Queries.FoldCheckpoint`).
+	export function restore(source DeclarationPoison)
+		self.files = copiedFailedFiles(source.files)
+		self.backedFiles = copiedFailedFiles(source.backedFiles)
+		self.declared = copiedPoisonedDeclarations(source.declared)
+		self.abandonedBodies = copiedPoisonedDeclarations(source.abandonedBodies)
+		self.duplicated = copiedDuplicatedFunctions(source.duplicated)
+		self.lostHeads = copiedLostHeads(source.lostHeads)
+		self.unreadable = source.unreadable
+		self.unreadableTypeUniverse = source.unreadableTypeUniverse
+		self.extended = copiedPoisonedDeclarations(source.extended)
+		self.heldConsequences = copiedPendingConsequences(source.heldConsequences)
+		self.deferredConsequences = copiedPendingConsequences(source.deferredConsequences)
+	end 'restore'
+
+	export function holdConsequence(consequence PendingConsequence)
+		self.heldConsequences.push(consequence)
+	end 'holdConsequence'
+
+	export function forgetHeldConsequences()
+		self.heldConsequences.clear()
+	end 'forgetHeldConsequences'
+
+	export function releaseHeldConsequences() returns PendingConsequenceArray
+		let released = self.heldConsequences.clone()
+		self.heldConsequences.clear()
+
+		return released
+	end 'releaseHeldConsequences'
+
+	export function deferConsequences(consequences PendingConsequenceArray)
+		self.deferredConsequences = consequences.clone()
+	end 'deferConsequences'
+
+	export function takeDeferredConsequences() returns PendingConsequenceArray
+		let taken = self.deferredConsequences.clone()
+		self.deferredConsequences.clear()
+
+		return taken
+	end 'takeDeferredConsequences'
+
+	export function holdsAnAbandonedBodyOf(typeName ByteArray, declaredIn FilePath) returns bool
+		let held = try self.abandonedBodies.get(typeName) otherwise return false
+
+		for declaration in held 'eachDeclaration'
+			if declaration.nominal and declaration.file.equals(declaredIn) 'theTypeItself'
+				return true
+			end 'theTypeItself'
+		end 'eachDeclaration'
+
+		return false
+	end 'holdsAnAbandonedBodyOf'
+
+	export function refusesAnExtensionReaching(qualifier ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
+		for (target, held) in self.extended 'eachExtendedType'
+			if not (target.equals(qualifier) or signatures.typeImplementsInterface(qualifier, interfaceName: target)) 'notReachedByIt'
+				continue
+			end 'notReachedByIt'
+
+			for declaration in held 'eachDeclaration'
+				if counting == PoisonEntriesCounted.backedEntries and declaration.backing != PoisonBacking.backed 'notYetExplainedByAReportedError'
+					continue
+				end 'notYetExplainedByAReportedError'
+
+				if signatures.isVisibleFrom(declaration.reach, declFilePath: declaration.file, readerFilePath: reader) 'theReaderMayNameIt'
+					return true
+				end 'theReaderMayNameIt'
+			end 'eachDeclaration'
+		end 'eachExtendedType'
+
+		return false
+	end 'refusesAnExtensionReaching'
+
+	export function refusesAnExtensionQualifying(names NameRoster, reader FilePath, signatures ProgramSignatures) returns bool
+		for name in names 'eachName'
+			let qualifier = qualifyingTypeName(name)
+
+			if qualifier.count() == name.count() 'notQualified'
+				continue
+			end 'notQualified'
+
+			if self.refusesAnExtensionReaching(qualifier, reader: reader, signatures: signatures, counting: PoisonEntriesCounted.backedEntries) 'anExtensionOfTheQualifierIsRefused'
+				return true
+			end 'anExtensionOfTheQualifierIsRefused'
+		end 'eachName'
+
+		return false
+	end 'refusesAnExtensionQualifying'
+
+	export function isEmpty() returns bool
+		return self.files.count() == 0 and self.declared.count() == 0 and self.duplicated.count() == 0
+	end 'isEmpty'
+
+	export function noteDuplicatedFunction(registrationName ByteArray)
+		self.duplicated.insert(registrationName)
+	end 'noteDuplicatedFunction'
+
+	export function duplicatesAMemberOf(members NameRoster) returns bool
+		if self.duplicated.count() == 0 'nothingIsDeclaredTwice'
+			return false
+		end 'nothingIsDeclaredTwice'
+
+		for member in members 'eachMember'
+			if self.duplicated.contains(member) 'declaredTwice'
+				return true
+			end 'declaredTwice'
+		end 'eachMember'
+
+		return false
+	end 'duplicatesAMemberOf'
+
+	export function holdsAFailedFile() returns bool
+		return self.files.count() > 0
+	end 'holdsAFailedFile'
+
+	export function holdsADeclarationNamed(name ByteArray) returns bool
+		return self.declared.contains(name)
+	end 'holdsADeclarationNamed'
+
+	export function holdsAnUnreadableFile() returns bool
+		return self.unreadable
+	end 'holdsAnUnreadableFile'
+
+	export function noteUnreadableFile(path FilePath)
+		self.files.insert(path)
+		self.unreadable = true
+	end 'noteUnreadableFile'
+
+	export function noteUnreadableTypeUniverse()
+		self.unreadableTypeUniverse = true
+	end 'noteUnreadableTypeUniverse'
+
+	export function typeUniverseIsUnreadable() returns bool
+		return self.unreadableTypeUniverse
+	end 'typeUniverseIsUnreadable'
+
+	export function noteFailedFile(path FilePath, tokens TokenArray, backing PoisonBacking)
+		if self.backedFiles.contains(path) or (backing == PoisonBacking.provisional and self.files.contains(path)) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.files.insert(path)
+
+		if backing == PoisonBacking.backed 'aBackedFailure'
+			self.backedFiles.insert(path)
+		end 'aBackedFailure'
+
+		for position in 0 upto tokens.count() 'eachToken'
+			view token = try tokens.get(position) otherwise panic("DeclarationPoison.noteFailedFile: tokens.get OOB at {position} below count {tokens.count()}")
+
+			if token.column == DeclarationHeadColumn 'aDeclarationHead'
+				self.noteDeclarationAt(path, tokens: tokens, position: position, backing: backing)
+			end 'aDeclarationHead'
+		end 'eachToken'
+	end 'noteFailedFile'
+
+	export function noteRefusedDeclarationAt(path FilePath, line LineNumber, tokens TokenArray, backing PoisonBacking)
+		let region = try enclosingRegionAt(tokens, line: line) otherwise return
+
+		match region 'region'
+			declaration(enclosing) then self.noteHead(enclosing, file: path, backing: backing)
+			lostHead(name) then self.lostHeads.insert(name.clone())
+		end 'region'
+	end 'noteRefusedDeclarationAt'
+
+	// A head that lost its declaration keyword (`main() returns ExitCode`) declares nothing the merge
+	// registers, so only its name is kept, and only the entry check asks: E3001 does not follow the
+	// refusal.
+	export function holdsALostHeadNamed(name ByteArray) returns bool
+		return self.lostHeads.contains(name)
+	end 'holdsALostHeadNamed'
+
+	export function noteAbandonedBodyAt(path FilePath, line LineNumber, tokens TokenArray, backing PoisonBacking)
+		let region = try enclosingRegionAt(tokens, line: line) otherwise return
+
+		match region 'region'
+			declaration(enclosing) then self.noteAbandonedBodyUnder(enclosing, path: path, line: line, tokens: tokens, backing: backing)
+			lostHead then return
+		end 'region'
+	end 'noteAbandonedBodyAt'
+
+	function noteAbandonedBodyUnder(enclosing DeclarationHead, path FilePath, line LineNumber, tokens TokenArray, backing PoisonBacking)
+		fileHeadUnder(self.abandonedBodies, head: enclosing, file: path, backing: backing)
+
+		let member = try enclosingMemberAt(tokens, line: line) otherwise return
+		let message = DeclarationHead.create(qualifiedMethodName(enclosing.name, methodName: member), reach: enclosing.reach, nominal: false, extendsAType: false)
+		fileHeadUnder(self.abandonedBodies, head: message, file: path, backing: backing)
+	end 'noteAbandonedBodyUnder'
+
+	export function holdsABackedAbandonedBodyNamed(qualifiedName ByteArray) returns bool
+		let held = try self.abandonedBodies.get(qualifiedName) otherwise return false
+
+		for declaration in held 'eachDeclaration'
+			if declaration.backing == PoisonBacking.backed 'explainedByAReportedError'
+				return true
+			end 'explainedByAReportedError'
+		end 'eachDeclaration'
+
+		return false
+	end 'holdsABackedAbandonedBodyNamed'
+
+	function noteDeclarationAt(path FilePath, tokens TokenArray, position ElementIndex, backing PoisonBacking)
+		let head = try declarationHeadAt(tokens, position: position) otherwise return
+		self.noteHead(head, file: path, backing: backing)
+	end 'noteDeclarationAt'
+
+	function noteHead(head DeclarationHead, file FilePath, backing PoisonBacking)
+		if head.extendsAType 'anExtensionReachesItsTarget'
+			fileHeadUnder(self.extended, head: head, file: file, backing: backing)
+		end 'anExtensionReachesItsTarget'
+
+		fileHeadUnder(self.declared, head: head, file: file, backing: backing)
+	end 'noteHead'
+
+	export function fileFailed(path FilePath) returns bool
+		return self.files.contains(path)
+	end 'fileFailed'
+
+	export function declaresANominalType(name ByteArray) returns bool
+		if self.unreadable 'anUnreadableFileMayDeclareAnything'
+			return true
+		end 'anUnreadableFileMayDeclareAnything'
+
+		let held = try self.declared.get(name) otherwise return false
+
+		for declaration in held 'eachDeclaration'
+			if declaration.nominal 'aNominalDeclaration'
+				return true
+			end 'aNominalDeclaration'
+		end 'eachDeclaration'
+
+		return false
+	end 'declaresANominalType'
+
+	export function declaresNamedFrom(name ByteArray, reader FilePath, signatures ProgramSignatures) returns bool
+		if self.unreadable 'anUnreadableFileMayDeclareAnything'
+			return true
+		end 'anUnreadableFileMayDeclareAnything'
+
+		return self.refusesANamedFrom(name, reader: reader, signatures: signatures, counting: PoisonEntriesCounted.everyEntry, within: DeclaredWithin.anywhere)
+	end 'declaresNamedFrom'
+
+	export function refusesACalleeFrom(callee ByteArray, reader FilePath, signatures ProgramSignatures) returns bool
+		if self.isEmpty() 'noDeclarationWasRefused'
+			return false
+		end 'noDeclarationWasRefused'
+
+		return self.refusesAPartOfFrom(overloadRegistrationBaseName(callee), reader: reader, signatures: signatures, counting: PoisonEntriesCounted.everyEntry)
+	end 'refusesACalleeFrom'
+
+	export function refusesAnyPartOfFrom(callees NameRoster, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
+		for callee in callees 'eachCallee'
+			if self.refusesAPartOfFrom(callee, reader: reader, signatures: signatures, counting: counting) 'aPartIsRefused'
+				return true
+			end 'aPartIsRefused'
+		end 'eachCallee'
+
+		return false
+	end 'refusesAnyPartOfFrom'
+
+	export function refusesAPartOfFrom(callee ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
+		if self.refusesANamedFrom(callee, reader: reader, signatures: signatures, counting: counting, within: DeclaredWithin.anywhere) or self.refusesANamedFrom(qualifyingTypeName(callee), reader: reader, signatures: signatures, counting: counting, within: DeclaredWithin.anywhere) 'declaredUnderItsSpelling'
+			return true
+		end 'declaredUnderItsSpelling'
+
+		return match splitQualifiedName(callee) 'shape'
+			parts(prefix, member) gives self.refusesANamedFrom(member, reader: reader, signatures: signatures, counting: counting, within: DeclaredWithin.namespace(prefix))
+			notQualified gives false
+		end 'shape'
+	end 'refusesAPartOfFrom'
+
+	function refusesANamedFrom(name ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted, within DeclaredWithin) returns bool
+		let held = try self.declared.get(name) otherwise return false
+
+		for declaration in held 'eachDeclaration'
+			if counting == PoisonEntriesCounted.backedEntries and declaration.backing != PoisonBacking.backed 'notYetExplainedByAReportedError'
+				continue
+			end 'notYetExplainedByAReportedError'
+
+			if not declarationIsWithin(declaration, within: within, signatures: signatures) 'inAnotherNamespace'
+				continue
+			end 'inAnotherNamespace'
+
+			if signatures.isVisibleFrom(declaration.reach, declFilePath: declaration.file, readerFilePath: reader) 'theReaderMayNameIt'
+				return true
+			end 'theReaderMayNameIt'
+		end 'eachDeclaration'
+
+		return false
+	end 'refusesANamedFrom'
+end 'DeclarationPoison'
+
+function declarationIsWithin(declaration PoisonedDeclaration, within DeclaredWithin, signatures ProgramSignatures) returns bool
+	return match within 'within'
+		anywhere gives true
+		namespace(qualifier) gives signatures.namespaceOf(declaration.file).toByteArray().equals(qualifier)
+	end 'within'
+end 'declarationIsWithin'
+
+module function singleName(name ByteArray) returns NameRoster
+	var names = NameRoster.create()
+	names.push(name)
+
+	return names
+end 'singleName'
+
+function copiedFailedFiles(paths FailedFileSet) returns FailedFileSet
+	var copied = FailedFileSet.create()
+
+	for path in paths 'eachPath'
+		copied.insert(path.clone())
+	end 'eachPath'
+
+	return copied
+end 'copiedFailedFiles'
+
+function copiedDuplicatedFunctions(names DuplicatedFunctionSet) returns DuplicatedFunctionSet
+	var copied = DuplicatedFunctionSet.create()
+
+	for name in names 'eachName'
+		copied.insert(name.clone())
+	end 'eachName'
+
+	return copied
+end 'copiedDuplicatedFunctions'
+
+function copiedLostHeads(names LostHeadNameSet) returns LostHeadNameSet
+	var copied = LostHeadNameSet.create()
+
+	for name in names 'eachName'
+		copied.insert(name.clone())
+	end 'eachName'
+
+	return copied
+end 'copiedLostHeads'
+
+function copiedPoisonedDeclarations(table PoisonedDeclarationsByName) returns PoisonedDeclarationsByName
+	var copied = PoisonedDeclarationsByName.create()
+
+	for (name, declarations) in table 'eachName'
+		copied.upsert(name.clone(), value: declarations.clone())
+	end 'eachName'
+
+	return copied
+end 'copiedPoisonedDeclarations'
+
+function copiedPendingConsequences(held PendingConsequenceArray) returns PendingConsequenceArray
+	var copied = PendingConsequenceArray.create()
+
+	for consequence in held 'eachConsequence'
+		copied.push(consequence.clone())
+	end 'eachConsequence'
+
+	return copied
+end 'copiedPendingConsequences'
+
+function fileHeadUnder(table PoisonedDeclarationsByName, head DeclarationHead, file FilePath, backing PoisonBacking)
+	var held = try table.get(head.name) otherwise PoisonedDeclarationArray.create()
+	held.push(PoisonedDeclaration.create(file, reach: head.reach, nominal: head.nominal, backing: backing))
+	table.upsert(head.name, value: held)
+end 'fileHeadUnder'
+
+function enclosingRegionAt(tokens TokenArray, line LineNumber) returns EnclosingRegion throws AbsentError
+	var enclosing = EnclosingRegion.lostHead(ByteArray.create())
+	var named = false
+
+	for position in 0 upto tokens.count() 'eachToken'
+		view token = try tokens.get(position) otherwise panic("enclosingRegionAt: tokens.get OOB at {position} below count {tokens.count()}")
+
+		if token.line > line 'pastTheLine'
+			break
+		end 'pastTheLine'
+
+		if tokenKindIsSkippedLayout(token.kind) 'layoutBetweenLines'
+			continue
+		end 'layoutBetweenLines'
+
+		if token.column == DeclarationHeadColumn 'aDeclarationHead'
+			named = false
+			enclosing = try regionHeadAt(tokens, position: position) otherwise continue
+			named = true
+		end 'aDeclarationHead'
+	end 'eachToken'
+
+	if not named 'noDeclarationEncloses'
+		throw AbsentError.absent
+	end 'noDeclarationEncloses'
+
+	return enclosing
+end 'enclosingRegionAt'
+
+function regionHeadAt(tokens TokenArray, position ElementIndex) returns EnclosingRegion throws AbsentError
+	if declarationOpensIn(tokens, index: position) 'aDeclaration'
+		return EnclosingRegion.declaration(try declarationHeadAt(tokens, position: position))
+	end 'aDeclaration'
+
+	return EnclosingRegion.lostHead(try lostFunctionHeadAt(tokens, position: position))
+end 'regionHeadAt'
+
+function lostFunctionHeadAt(tokens TokenArray, position ElementIndex) returns ByteArray throws AbsentError
+	let nameAt = pastVisibilityModifiers(tokens, index: position)
+	view name = try tokens.get(nameAt) otherwise throw AbsentError.absent
+	view opener = try tokens.get(nameAt + 1) otherwise throw AbsentError.absent
+
+	if name.kind != TokenKind.identifier or opener.kind != TokenKind.leftParen 'notAFunctionHead'
+		throw AbsentError.absent
+	end 'notAFunctionHead'
+
+	return name.value.clone()
+end 'lostFunctionHeadAt'
+
+function enclosingMemberAt(tokens TokenArray, line LineNumber) returns ByteArray throws AbsentError
+	var member = ByteArray.create()
+	var named = false
+	var lineStartColumn = 1 as ColumnNumber
+	var previousLine = 0 as LineNumber
+
+	for position in 0 upto tokens.count() 'eachToken'
+		view token = try tokens.get(position) otherwise panic("enclosingMemberAt: tokens.get OOB at {position} below count {tokens.count()}")
+
+		if token.line > line 'pastTheLine'
+			break
+		end 'pastTheLine'
+
+		if tokenKindIsSkippedLayout(token.kind) 'layoutBetweenLines'
+			continue
+		end 'layoutBetweenLines'
+
+		if token.line != previousLine 'aLineStarts'
+			previousLine = token.line
+			lineStartColumn = token.column
+
+			if token.column == DeclarationHeadColumn 'aDeclarationHead'
+				named = false
+			end 'aDeclarationHead'
+		end 'aLineStarts'
+
+		if token.kind == TokenKind.function and lineStartColumn > DeclarationHeadColumn and functionDeclarationShapeIn(tokens, index: position) 'aNestedFunction'
+			view name = try tokens.get(position + 1) otherwise panic("enclosingMemberAt: the name of the function at {position} is missing, though its shape was just read")
+			member = name.value.clone()
+			named = true
+		end 'aNestedFunction'
+	end 'eachToken'
+
+	if not named 'noMemberEncloses'
+		throw AbsentError.absent
+	end 'noMemberEncloses'
+
+	return member
+end 'enclosingMemberAt'
+
+function declarationHeadAt(tokens TokenArray, position ElementIndex) returns DeclarationHead throws AbsentError
+	if not declarationOpensIn(tokens, index: position) 'notADeclaration'
+		throw AbsentError.absent
+	end 'notADeclaration'
+
+	let keywordAt = pastVisibilityModifiers(tokens, index: position)
+	view keyword = try tokens.get(keywordAt) otherwise throw AbsentError.absent
+	view name = try tokens.get(keywordAt + 1) otherwise throw AbsentError.absent
+
+	if not tokenCanBeAName(name) 'notNamed'
+		throw AbsentError.absent
+	end 'notNamed'
+
+	if keyword.kind == TokenKind.extension 'anExtensionReachesEveryReader'
+		return DeclarationHead.create(name.value.clone(), reach: Visibility.public, nominal: false, extendsAType: true)
+	end 'anExtensionReachesEveryReader'
+
+	var reach = Visibility.file
+
+	if keywordAt > position 'aModifierPrecedes'
+		reach = reachOfModifier(tokens, position: (keywordAt - 1) as ElementIndex)
+	end 'aModifierPrecedes'
+
+	return DeclarationHead.create(name.value.clone(), reach: reach, nominal: tokenKindDeclaresANominalType(keyword.kind), extendsAType: false)
+end 'declarationHeadAt'
+
+function reachOfModifier(tokens TokenArray, position ElementIndex) returns Visibility
+	view token = try tokens.get(position) otherwise panic("reachOfModifier: tokens.get OOB at {position}")
+
+	if token.kind == TokenKind.export 'exported'
+		return Visibility.global
+	end 'exported'
+
+	if token.kind == TokenKind.public 'publicApi'
+		return Visibility.public
+	end 'publicApi'
+
+	if not spellsModuleModifier(token.kind, value: token.value) 'notAModifier'
+		panic("reachOfModifier: the token at {position} is not a visibility modifier")
+	end 'notAModifier'
+
+	return Visibility.module
+end 'reachOfModifier'

@@ -294,7 +294,7 @@ directory as `a.maxon`'s `type`, so both would be spelled `export.Score` — one
 pair is a duplicate. File scoping rescues a pair that never meets; it does not merge two that do.
 ```maxon
 // --- file: a.maxon
-typealias Small = int(0 to 100)
+export typealias Small = int(0 to 100)
 
 export type Score
 	export var v as Small
@@ -4531,8 +4531,8 @@ the type is named, and naming it is what its tier refuses.
 type OverlayPrivateThing
 	export let size as Byte
 
-	public static function create() returns OverlayPrivateThing
-		return Self{size: 1}
+	public static function create() returns Byte
+		return 1
 	end 'create'
 end 'OverlayPrivateThing'
 // --- file: main.maxon

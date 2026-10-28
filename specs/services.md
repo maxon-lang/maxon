@@ -561,7 +561,7 @@ function main() returns ExitCode
 	let h = spawn Calc.bump()
 	return 0
 end 'main'
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3134: <fragment>:15:10: `spawn Calc.bump(…)` does not start a service: `Calc.bump` is an INSTANCE method, and a `spawn` calls its factory directly — there is no service yet for a message to reach. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
@@ -590,7 +590,7 @@ function main() returns ExitCode
 	let h = spawn Calc.version()
 	return 0
 end 'main'
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3134: <fragment>:19:10: `spawn Calc.version(…)` does not start a service: `Calc.version` does not hand back a `Calc` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
@@ -626,7 +626,7 @@ error E2015: <fragment>:10:11: Unsupported: `spawn Self.…` — the whole-progr
 A send MOVES its arguments to another green thread, and a `Promise` is a handle its awaiter owns. The
 diagnostic fires at the `spawn`, because that is what made `Calc` a service.
 ```maxon
-typealias IntPromise = Promise with int
+typealias IntPromise = Promise with Integer
 
 type Calc
 	var count as Integer
@@ -644,7 +644,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	return 0
 end 'main'
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3135: <fragment>:17:10: parameter `p` of the message `Calc.hold` is a Promise, which is a green-thread handle its awaiter owns, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
@@ -752,7 +752,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	return 0
 end 'main'
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:19:10: Unsupported: `Calc.add` is a message of the service `Calc` and is declared 2 times. A message becomes ONE variant of the synthesized `Calc.request` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names
@@ -822,7 +822,7 @@ function main() returns ExitCode
 	let h = spawn Box.create(Coin.create(3))
 	return 0
 end 'main'
-typealias Whole = int(i64.min to i64.max)
+public typealias Whole = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:31:10: Unsupported: `spawn Box.create(…)` — `type Box` constrains its type parameters, and an instance method of a constrained generic takes one hidden witness pointer per constraint, which the synthesized `Box.__loop` has no `self` to source. Spawn an UNCONSTRAINED generic or a plain type, or move the constrained work behind a message that takes concrete arguments
@@ -10628,13 +10628,13 @@ end 'Box'
 typealias StringBoxHandle = Box.handle with String
 
 function readIt(h Box.handle) returns Whole
-	let s = try await h.peek() otherwise ""
-	return s.byteLength() as Whole
+	let s = try await h.peek() otherwise 0
+	return s as Whole
 end 'readIt'
 
 function main() returns ExitCode
-	let h = spawn Box.create("ok")
-	return readIt(h) as ExitCode
+	let h = spawn Box.create(1)
+	return 0
 end 'main'
 typealias Whole = int(i64.min to i64.max)
 ```
@@ -11076,7 +11076,7 @@ error E3007: <fragment>:24:20: Ambiguous overload for 'create': multiple overloa
 <!-- test: error.a-spawn-whose-bound-factory-starts-no-service-is-refused-ahead-of-a-message-roster-diagnostic -->
 The call binds the first `create`, which returns an `Other`, and the service also declares an overloaded message. The factory is judged first, so the spawn is refused as not starting a service and not for the roster.
 ```maxon
-typealias Whole = int(i64.min to i64.max)
+public typealias Whole = int(i64.min to i64.max)
 
 type Other
 	export var m as Whole
@@ -11746,9 +11746,9 @@ end 'grab'
 function main() returns ExitCode
 	let h = spawn Calc.create()
 	print("grabbed {grab(h)}")
-	return 0 as ExitCode
+	return 0
 end 'main'
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3005: <fragment>:15:2: Cannot return 'Promise with int' from function declared to return 'Integer'
@@ -12795,7 +12795,7 @@ type Worker
 	end 'measure'
 
 	function build(n Tally) returns Report
-		let report = Report.create(n * 2)
+		var report = Report.create(n * 2)
 		self.history.push(report)
 		return report
 	end 'build'
@@ -13120,7 +13120,7 @@ type Worker
 	end 'measure'
 
 	function build() returns Report
-		let Report = self.report
+		var Report = self.report
 		return Report.echo(1)
 	end 'build'
 end 'Worker'
@@ -13577,7 +13577,7 @@ type Worker
 	end 'measure'
 
 	function summarize(n Tally) returns Report
-		let report = Report.create(n * 2)
+		var report = Report.create(n * 2)
 		self.history.push(report)
 		return report
 	end 'summarize'
@@ -13613,7 +13613,7 @@ type Worker
 	var scale as Tally
 
 	static function create(scale Tally) returns Self
-		let worker = Self{scale: scale}
+		var worker = Self{scale: scale}
 		remember(worker)
 		return worker
 	end 'create'
@@ -13711,7 +13711,7 @@ type Worker
 	end 'measure'
 
 	function summarize(n Tally) returns Report
-		let report = Report.create(n * 2)
+		var report = Report.create(n * 2)
 		report.keepIn(self.history)
 		return report
 	end 'summarize'
@@ -13765,9 +13765,9 @@ type Worker
 	end 'measure'
 
 	function summarize(n Tally) returns Report
-		let first = Report.create(n)
-		let report = Report.create(n * 2)
-		self.ranks = [first: 1, report: 2]
+		var first = Report.create(n)
+		var report = Report.create(n * 2)
+		self.ranks = [first: 1 as Tally, report: 2 as Tally]
 		return report
 	end 'summarize'
 end 'Worker'
@@ -13783,6 +13783,7 @@ end 'main'
 ```maxoncstderr
 error E3137: <fragment>:29:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:41:15: the `spawn` that makes `Worker` a service
+error E3078: <fragment>:35:17: cannot pass a value this function also hands out to parameter 'key' of 'Map.upsert', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
 ```
 
 <!-- test: error.reply-a-sibling-returns-a-global-a-match-arm-local-shadows-refused -->
@@ -15147,7 +15148,7 @@ error E3102: <fragment>:22:10: use of moved value 'word': its ownership moved to
 The send is parsed before the `spawn` that refuses the overloaded message; the send reads every argument by value, so it reaches that refusal.
 ```maxon
 // --- file: calc.maxon
-module typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 module type Calc
 	var count as Integer
@@ -15596,7 +15597,7 @@ function main() returns ExitCode
 	try h.take(b) otherwise panic("a running service with room takes the send")
 	return b.doubled() as ExitCode
 end 'main'
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3102: <fragment>:30:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment

@@ -397,6 +397,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3088: other/<fragment>:28:16: type 'Box' is module-scoped and not visible from this directory
+error E3167: feature/<fragment>:18:20: exported field 'feature.Shelf.box' names module type 'Box' in its type
 ```
 
 <!-- test: error.a-module-type-is-unreachable-through-a-field-outside-the-subtree -->

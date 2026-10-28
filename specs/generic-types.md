@@ -1675,8 +1675,7 @@ error E3018: <fragment>:8:13: type 'Array' has no field named 'value'
 The other way a generic base has no `StructLayout`: nothing declares it. A parameter
 typed by such an alias reaches the same field-access door, and must say what is
 actually wrong — the `with` — rather than crash. (`checkGenericInstance` records E2055
-against that `with`, but a thrown parse error discards this file's artifact
-diagnostics, so the message carries the cause itself.)
+against that `with`, and the message carries the cause itself.)
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntThing = Nonexistent with Int
@@ -1691,6 +1690,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:6:9: Unsupported: a field access on 't': its type instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error
+error E2055: <fragment>:3:22: Type 'Nonexistent' has no associated types
 ```
 
 <!-- test: error.undeclared-generic-base-reaches-no-layout-query -->
@@ -1802,6 +1802,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error
+error E2055: <fragment>:3:20: Type 'Nonexistent' has no associated types
 ```
 
 <!-- test: error.bare-int-type-arg -->
@@ -3923,7 +3924,7 @@ function main() returns ExitCode
 	var o = O.create()
 	print("{o.put(42)}")
 	print("{slot}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -4005,9 +4006,8 @@ end 'Outer'
 typealias O = Outer with Integer
 
 function main() returns ExitCode
-	var o = O.create()
-	print("{O.pick(42)}{o.n}")
-	return 0 as ExitCode
+	print("{O.pick(42)}")
+	return 0
 end 'main'
 ```
 ```maxoncstderr

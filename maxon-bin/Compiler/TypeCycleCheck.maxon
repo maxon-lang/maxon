@@ -357,13 +357,13 @@ end 'TypeCycleGraph'
 // property of a hash table rather than of the program. `specs/ownership.md` pins `A`, the one the author
 // wrote first.
 //
-// ⚠ **NOT ON A PROGRAM THAT IS ALREADY FAILING**, for `checkGenericAliasCycles`' stated reason: a prior
-// diagnostic leaves the declaration registries half-folded, so a cycle "found" over them could be an artifact
-// of the file that failed to parse rather than of the program.
+// ⚠ Not on an unreadable type universe: an infinite alias has no graph to walk, and a library file
+// that failed leaves the registries half-folded, so a cycle "found" over them could be an artifact
+// of that failure rather than of the program.
 export function checkTypeReferenceCycles(project Project, signatures ProgramSignatures)
-	if projectHasErrors(project) 'malformedProject'
+	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
 		return
-	end 'malformedProject'
+	end 'theUniverseIsUnreadable'
 
 	view graph = buildTypeReferenceGraph(project, signatures: signatures)
 

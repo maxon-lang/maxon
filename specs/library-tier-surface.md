@@ -34,8 +34,8 @@ call to '__Builtins.<member>' from outside the library tiers: '__Builtins' names
 ```
 
 A surface with no public replacement says `it has no public replacement`. A static called on a raw type
-is refused at the type it is called on, in the type's form. A file reports one raw door, the first in
-source order.
+is refused at the type it is called on, in the type's form. A body reports its first raw door, and every
+other body and signature of the file reports its own.
 
 `String.fromCString(…)` takes a `cstring`, which only the library tiers can produce, so it is `module`-scoped: a
 program that calls it is refused at the call with E3088, whatever it passes, and it is not part of the E3185 surface.
@@ -253,8 +253,6 @@ function bufferLength(m __ManagedMemory) returns Integer
 end 'bufferLength'
 
 function main() returns ExitCode
-	let bytes = "abcd".toByteArray()
-	print("{bufferLength(bytes.managed)}\n")
 	return 0
 end 'main'
 ```
@@ -325,8 +323,6 @@ function lengthOf(c cstring) returns Integer
 end 'lengthOf'
 
 function main() returns ExitCode
-	let s = "abc"
-	print("{lengthOf(s.cstr())}\n")
 	return 0
 end 'main'
 ```
@@ -379,15 +375,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntCursor = __ManagedMemoryCursor with Integer
 typealias IntArray = Array with Integer
 
-function firstOf(c IntCursor) returns Integer
-	return c.current()
-end 'firstOf'
-
 function main() returns ExitCode
-	var xs = IntArray.create()
-	xs.push(7)
-	let c = try xs.managed.createCursor() otherwise return 1
-	print("{firstOf(c)}\n")
 	return 0
 end 'main'
 ```
@@ -445,6 +433,8 @@ typealias IntCursor = __ManagedMemoryCursor with Integer
 ```
 ```maxoncstderr
 error E3185: <fragment>:9:12: '.current()' read from outside the library tiers: a raw '__ManagedMemoryCursor' is reachable only from a source file under stdlib/ or runtime/ — use a 'for' loop over the 'Array'
+error E3185: <fragment>:14:16: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
+error E3185: <fragment>:17:23: '__ManagedMemoryCursor' named outside the library tiers: the raw buffer cursor type is nameable only from a source file under stdlib/ or runtime/ — use a 'for' loop over the 'Array'
 ```
 
 <!-- test: a-cursor-member-compiles-in-the-library-tier -->
@@ -498,6 +488,8 @@ typealias IntBuffer = __ManagedMemory with Integer
 ```
 ```maxoncstderr
 error E3185: <fragment>:10:12: '.length()' read from outside the library tiers: a raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
+error E3185: <fragment>:15:12: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
+error E3185: <fragment>:18:23: '__ManagedMemory' named outside the library tiers: the raw buffer type is nameable only from a source file under stdlib/ or runtime/ — use 'Array'
 ```
 
 <!-- test: a-buffer-member-compiles-in-the-library-tier -->
@@ -611,9 +603,10 @@ end 'main'
 ```
 
 <!-- test: error.the-first-raw-door-in-source-order-is-the-one-reported -->
-A file reports one raw door, the first in source order. The signature of `lengthOf` names
-`__ManagedMemory`, and the declaration sweep reads signatures before bodies, but the `__Builtins` call in
-`main` comes first in the file, so it is the one named.
+A body reports its first raw door, and the file's other doors follow in source order. The `__Builtins` call in
+`main` comes first and is the one named for that body; the `__ManagedMemory` read inside `main` is not
+reported, because the body is abandoned at its first door, and the signature of `lengthOf` is reported
+beside it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -629,6 +622,7 @@ end 'lengthOf'
 ```
 ```maxoncstderr
 error E3185: <fragment>:5:23: call to '__Builtins.currentProcessId' from outside the library tiers: '__Builtins' names a raw runtime intrinsic, callable only from a source file under stdlib/ or runtime/ — use 'Process.id()'
+error E3185: <fragment>:10:21: '__ManagedMemory' named outside the library tiers: the raw buffer type is nameable only from a source file under stdlib/ or runtime/ — use 'Array'
 ```
 
 <!-- test: several-raw-doors-compile-in-the-library-tier -->

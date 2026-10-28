@@ -1,0 +1,18 @@
+let ProjectTwoIndependentDirName = "diagnostics-project-two-independent-errors"
+let ProjectTwoIndependentHelperFileName = "helper.maxon"
+let ProjectTwoIndependentBufferFileName = "main.maxon"
+let ProjectTwoIndependentHelperSource = "module function projectTwoIndependentHelper() returns String\n\treturn \"\"\nend 'projectTwoIndependentHelper'\n"
+let ProjectTwoIndependentBufferSource = "typealias Integer = int(i64.min to i64.max)\n\nfunction compute() returns Integer\n\treturn 42\nend 'compute'\n\nlet RESULT = compute()\n\nfunction broken() returns Integer\n\treturn projectTwoIndependentNowhere(7)\nend 'broken'\n\nfunction main() returns ExitCode\n\treturn RESULT\nend 'main'\n"
+let ProjectTwoIndependentPublished = "E3004@9 E2045@6"
+
+test 'an undefined call in one function and a non-constant initializer elsewhere are both published'
+	let root = stagedProjectDiagnosticsRoot(ProjectTwoIndependentDirName)
+	writeCorpusFile(root, fileName: ProjectTwoIndependentHelperFileName, content: ProjectTwoIndependentHelperSource)
+	writeCorpusFile(root, fileName: ProjectTwoIndependentBufferFileName, content: ProjectTwoIndependentBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectTwoIndependentBufferFileName, content: ProjectTwoIndependentBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectTwoIndependentPublished, note: "`projectTwoIndependentNowhere` is declared nowhere, and `RESULT` starts from a call that is not a constant. Neither mistake explains the other, so the server publishes the undefined call on its line and the initializer's call on its own.")
+end 'an undefined call in one function and a non-constant initializer elsewhere are both published'

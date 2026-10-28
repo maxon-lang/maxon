@@ -1205,7 +1205,7 @@ function make(seed Integer) returns Producer throws MakeError
 end 'make'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -2859,7 +2859,7 @@ function apply(f ShapeFn, v Shape) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	return apply(measure, v: Sq.create(31)) as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3005,7 +3005,7 @@ function take(p Pair) returns Integer
 end 'take'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3040,7 +3040,7 @@ function take(p (Shape, Integer)) returns Integer
 end 'take'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3074,7 +3074,7 @@ function make() returns (Shape, Integer)
 end 'make'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3138,7 +3138,7 @@ interface Maker
 end 'Maker'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3159,12 +3159,8 @@ end 'Shape'
 
 typealias MakeFn = function(Integer) returns Shape
 
-function apply(f MakeFn) returns Integer
-	return f(1).area()
-end 'apply'
-
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

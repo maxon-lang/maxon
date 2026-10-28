@@ -2404,8 +2404,7 @@ export typealias Score = int(0 to 100)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let s = 38 as Score
-	return (s + (small() as Score)) as ExitCode
+	return small()
 end 'main'
 ```
 ```maxoncstderr

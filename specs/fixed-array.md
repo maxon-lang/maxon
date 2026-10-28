@@ -1629,8 +1629,6 @@ end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	var got = v.buf()
-	got.clear()
 	return v.count() as ExitCode
 end 'main'
 ```
@@ -1724,6 +1722,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3185: <fragment>:7:8: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
+error E3185: <fragment>:10:18: 'ElementMemory' named outside the library tiers: the raw buffer type is nameable only from a source file under stdlib/ or runtime/ — use 'Array'
 ```
 
 <!-- test: the-slice-a-member-hands-to-a-helper-is-served -->

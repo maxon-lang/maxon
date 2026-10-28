@@ -47,6 +47,7 @@ module function queryTokens(project Project, path FilePath, lexing LexSource = L
 
 	let tokens = try lexedTokens(project, content: entry.content, lexing: lexing) otherwise (lexErr) 'lexFail'
 		reportDiagnostic(project, diagnostic: lexerErrorDiagnostic(lexErr, path: path))
+		noteUnreadableSource(project, path: path)
 
 		// A failed tokenize is NOT cached — the diagnostic gates the build, and the next attempt must
 		// re-run against corrected source.
@@ -215,6 +216,7 @@ end 'FilteredTokens'
 function activeTokensOrReported(project Project, path FilePath, tokens TokenArray, lexing LexSource) returns FilteredTokens
 	let active = try filteredTokens(project, tokens: tokens, lexing: lexing) otherwise (directiveErr) 'directiveFail'
 		reportDirectiveError(project, path: path, error: directiveErr)
+		noteUnreadableSource(project, path: path)
 		return FilteredTokens.create(TokenArray.create(), filtered: false)
 	end 'directiveFail'
 
@@ -1966,17 +1968,168 @@ module function landParseOutcome(project Project, path FilePath, outcome FilePar
 	end 'aLibraryParse'
 
 	return match outcome 'outcome'
-		parsed(artifact) gives memoizedArtifact(project, path: path, artifact: artifact, stamp: stamp)
-		failed(error, blame, salvaged) gives reportFailedParse(project, path: path, error: error, blame: blame, salvaged: salvaged)
+		parsed(artifact, abandoned) gives landReadableParse(project, path: path, artifact: artifact, abandoned: abandoned, stamp: stamp)
+		failed(error, blame, salvaged, consequence, abandoned) gives reportFailedParse(project, path: path, error: error, blame: blame, salvaged: salvaged, consequence: consequence, abandoned: abandoned)
 	end 'outcome'
 end 'landParseOutcome'
 
-// A failed parse is never cached. What IS returned carries only the type names the file had declared before it
-// stopped — see `Parser.abortedParseArtifact` for why that one registry crosses an abort and the rest cannot.
-function reportFailedParse(project Project, path FilePath, error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact) returns FileParseArtifact
+// A parse that abandoned a body is not memoized: its refusals are reported from the outcome, not carried by the
+// artifact, so a later hit would serve the artifact without them.
+function landReadableParse(project Project, path FilePath, artifact FileParseArtifact, abandoned AbandonedRegionArray, stamp ParseStamp) returns FileParseArtifact
+	if abandoned.isEmpty() 'nothingWasAbandoned'
+		return memoizedArtifact(project, path: path, artifact: artifact, stamp: stamp)
+	end 'nothingWasAbandoned'
+
+	reportAbandonedRegions(project, path: path, abandoned: abandoned)
+	return artifact
+end 'landReadableParse'
+
+function reportAbandonedRegions(project Project, path FilePath, abandoned AbandonedRegionArray)
+	for region in abandoned 'eachRegion'
+		let sinkStart = project.diagnostics.count()
+		reportParseFailure(project, path: path, error: region.error, blame: region.blame.clone())
+		let backing = holdAsAConsequence(project, path: path, consequence: region.consequence, lost: LostDeclaration.region(region.poisoned.clone()), sinkStart: sinkStart)
+		noteDeclarationLostTo(project, filePath: path, poisoned: region.poisoned, backing: backing)
+	end 'eachRegion'
+end 'reportAbandonedRegions'
+
+function holdAsAConsequence(project Project, path FilePath, consequence ConsequenceOf, lost LostDeclaration, sinkStart ElementIndex) returns PoisonBacking
+	match consequence 'consequence'
+		unrelated then return PoisonBacking.backed
+		subject or
+		unknownType or
+		handlerBody then break
+	end 'consequence'
+
+	project.poison.holdConsequence(PendingConsequence.create(path, consequence: consequence.clone(), lost: lost.clone(), sinkStart: sinkStart, sinkEnd: project.diagnostics.count()))
+
+	return PoisonBacking.provisional
+end 'holdAsAConsequence'
+
+module function dropExplainedParseConsequences(project Project, signatures ProgramSignatures, stage ConsequenceDropStage)
+	let held = project.poison.releaseHeldConsequences() if stage == ConsequenceDropStage.beforeTypeResolution else project.poison.takeDeferredConsequences()
+	let reports = UnknownTypeReports.create() if stage == ConsequenceDropStage.beforeTypeResolution else project.unknownTypeReports.clone()
+
+	if held.isEmpty() 'nothingIsHeld'
+		return
+	end 'nothingIsHeld'
+
+	var explained = BoolArray.create()
+	explained.growFilled(held.count(), value: false)
+	var progressed = true
+	var anyExplained = false
+
+	// A dropped consequence backs its own region's poison, which can explain another held one.
+	while progressed 'untilNothingMoreIsExplained'
+		progressed = false
+
+		for position in 0 upto held.count() 'eachHeld'
+			if consequenceIsExplained(explained, position: position) 'alreadyExplained'
+				continue
+			end 'alreadyExplained'
+
+			view consequence = try held.get(position) otherwise panic("dropExplainedParseConsequences: held.get OOB at {position} below count {held.count()}")
+
+			if not consequence.isExplainedBy(project.poison, signatures: signatures, reports: reports) 'stillUnexplained'
+				continue
+			end 'stillUnexplained'
+
+			try explained.set(position, value: true) otherwise panic("dropExplainedParseConsequences: explained.set OOB at {position} below count {explained.count()}")
+			noteConsequenceExplained(project, consequence: consequence)
+			progressed = true
+			anyExplained = true
+		end 'eachHeld'
+	end 'untilNothingMoreIsExplained'
+
+	if stage == ConsequenceDropStage.beforeTypeResolution 'theRestAreJudgedOnceTypesResolve'
+		project.poison.deferConsequences(unexplainedAfterTheDrop(held, explained: explained))
+	end 'theRestAreJudgedOnceTypesResolve'
+
+	if not anyExplained 'everyConsequenceStaysReported'
+		return
+	end 'everyConsequenceStaysReported'
+
+	var kept = DiagnosticArray.create()
+	var cursor = 0 as ElementIndex
+
+	for position in 0 upto held.count() 'eachHeldOnceMore'
+		if not consequenceIsExplained(explained, position: position) 'staysReported'
+			continue
+		end 'staysReported'
+
+		view consequence = try held.get(position) otherwise panic("dropExplainedParseConsequences: held.get OOB at {position} below count {held.count()}")
+		kept.append(try project.diagnostics.slice(cursor, endIndex: consequence.sinkStart) otherwise panic("dropExplainedParseConsequences: the sink holds fewer than {consequence.sinkStart} diagnostics, though the consequence was reported into it"))
+		cursor = consequence.sinkEnd
+	end 'eachHeldOnceMore'
+
+	kept.append(try project.diagnostics.slice(cursor, endIndex: project.diagnostics.count()) otherwise panic("dropExplainedParseConsequences: the sink holds fewer than {cursor} diagnostics, though a consequence was reported into it"))
+	project.diagnostics = kept
+end 'dropExplainedParseConsequences'
+
+// A held unknown-type refusal is also explained by the E3011 `resolveTypes` reports for the same
+// name in the same file, so what the first stage leaves is judged again once that pass has run.
+module enum ConsequenceDropStage
+	beforeTypeResolution
+	afterTypeResolution
+end 'ConsequenceDropStage'
+
+function unexplainedAfterTheDrop(held PendingConsequenceArray, explained BoolArray) returns PendingConsequenceArray
+	var remaining = PendingConsequenceArray.create()
+	var removed = 0 as ElementIndex
+
+	for position in 0 upto held.count() 'eachHeld'
+		view consequence = try held.get(position) otherwise panic("unexplainedAfterTheDrop: held.get OOB at {position} below count {held.count()}")
+
+		if consequenceIsExplained(explained, position: position) 'itWasDropped'
+			removed = (removed + (consequence.sinkEnd - consequence.sinkStart)) as ElementIndex
+			continue
+		end 'itWasDropped'
+
+		remaining.push(consequence.shiftedBack(removed))
+	end 'eachHeld'
+
+	return remaining
+end 'unexplainedAfterTheDrop'
+
+function consequenceIsExplained(explained BoolArray, position ElementIndex) returns bool
+	return try explained.get(position) otherwise panic("consequenceIsExplained: explained.get OOB at {position}")
+end 'consequenceIsExplained'
+
+function noteConsequenceExplained(project Project, consequence PendingConsequence)
+	match consequence.lost 'lost'
+		region(site) then noteDeclarationLostTo(project, filePath: consequence.file, poisoned: site, backing: PoisonBacking.backed)
+		file then noteFailedFileBacked(project, path: consequence.file)
+	end 'lost'
+end 'noteConsequenceExplained'
+
+function noteFailedFileBacked(project Project, path FilePath)
+	view tokens = try queryActiveTokens(project, path: path) otherwise return
+	project.poison.noteFailedFile(path, tokens: tokens, backing: PoisonBacking.backed)
+end 'noteFailedFileBacked'
+
+// A failed parse is never cached. What IS returned is what an aborted parse still knows — see
+// `Parser.abortedParseArtifact`.
+function reportFailedParse(project Project, path FilePath, error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact, consequence ConsequenceOf, abandoned AbandonedRegionArray) returns FileParseArtifact
+	reportAbandonedRegions(project, path: path, abandoned: abandoned)
+	let sinkStart = project.diagnostics.count()
 	reportParseFailure(project, path: path, error: error, blame: blame)
+	let backing = holdAsAConsequence(project, path: path, consequence: consequence, lost: LostDeclaration.file, sinkStart: sinkStart)
+	view tokens = try queryActiveTokens(project, path: path) otherwise panic("reportFailedParse: the active tokens of '{path.toString()}' are not memoized, though the parse that just failed read them")
+	project.poison.noteFailedFile(path, tokens: tokens, backing: backing)
+	noteTypeUniverseLostWith(project, path: path)
 	return salvaged
 end 'reportFailedParse'
+
+function noteUnreadableSource(project Project, path FilePath)
+	project.poison.noteUnreadableFile(path)
+	noteTypeUniverseLostWith(project, path: path)
+end 'noteUnreadableSource'
+
+function noteTypeUniverseLostWith(project Project, path FilePath)
+	if isLibrarySourceFile(project, path: path) 'aLibraryFileHoldsHalfTheLanguage'
+		project.poison.noteUnreadableTypeUniverse()
+	end 'aLibraryFileHoldsHalfTheLanguage'
+end 'noteTypeUniverseLostWith'
 
 function reportParseFailure(project Project, path FilePath, error SourceParseError, blame LibraryBlame)
 	// The only span in the compiler over which `project.libraryBlame` is set, exactly one reporting
@@ -2187,7 +2340,7 @@ end 'frontEndMustFoldAgain'
 // `default` goes live when a reached body spawns its type. Either moved set folds the front end
 // again.
 function liveReachDidMove(project Project, module MaxonModule, signatures ProgramSignatures, reached FunctionNameSet) returns bool
-	if not (signatures.declaresADefault() or signatures.declaresALibraryBodySpawn()) or projectHasErrors(project) 'nothingToDecide'
+	if not (signatures.declaresADefault() or signatures.declaresALibraryBodySpawn()) or project.poison.typeUniverseIsUnreadable() 'nothingToDecide'
 		return false
 	end 'nothingToDecide'
 
@@ -2490,6 +2643,22 @@ enum FoldVerdict
 	indexMoved
 end 'FoldVerdict'
 
+// The poison is rolled back with the diagnostics: a held consequence names its diagnostics by
+// position, and one left behind by a withdrawn fold points past the truncated sink.
+type FoldCheckpoint
+	let diagnosticCount as ElementIndex
+	let poison as DeclarationPoison
+
+	static function of(project Project) returns FoldCheckpoint
+		return Self{diagnosticCount: project.diagnostics.count(), poison: project.poison.snapshot()}
+	end 'of'
+
+	function rollBack(project Project)
+		project.diagnostics.truncate(self.diagnosticCount)
+		project.poison.restore(self.poison)
+	end 'rollBack'
+end 'FoldCheckpoint'
+
 // One fold into `merged`.
 //
 // ⚠ **A NEWLY INSTANTIATED TYPE IS ASKED FIRST, EVEN OF A FOLD THAT WAS REFUSED**, because it changes which methods
@@ -2498,7 +2667,7 @@ end 'FoldVerdict'
 // diagnostics are withdrawn with it, and the next fold reports afresh. A row a merge holds is an instance the
 // program really mints whether or not every file merged, so the type is filed either way.
 function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, ledger FoldLedger, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray, emissionOrder EmissionSlotArray) returns FoldVerdict throws CompileError
-	let diagnosticsBeforeTheFold = project.diagnostics.count()
+	let checkpoint = FoldCheckpoint.of(project)
 	resetMergeTargets(project, signatures: signatures)
 	signatures.restoreBaseline()
 
@@ -2538,7 +2707,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 			project.db.instantiatedByAParse.file(name)
 		end 'eachType'
 
-		project.diagnostics.truncate(diagnosticsBeforeTheFold)
+		checkpoint.rollBack(project)
 		return FoldVerdict.indexMoved
 	end 'aParseInstantiatedATypeTheIndexDidNotCount'
 
@@ -2554,7 +2723,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 	end 'eachRequested'
 
 	if newlyRequested 'aParseRequestedAGenericInstanceTheIndexDidNotDeclare'
-		project.diagnostics.truncate(diagnosticsBeforeTheFold)
+		checkpoint.rollBack(project)
 		return FoldVerdict.indexMoved
 	end 'aParseRequestedAGenericInstanceTheIndexDidNotDeclare'
 
@@ -3422,6 +3591,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// signature check. Pinned by `builtin-type-checking`.
 		builtinArgumentType(paramName, expected, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: argTypeMismatchSentence(quotedParamLabel(paramName), expected: expected, got: got), line: line, column: column, filePath: path)
 		unsupported(feature, line, column) gives unsupportedFeatureDiagnostic(feature, line: line, column: column, path: path)
+		memberAccessOnNonStruct(feature, line, column, _) gives unsupportedFeatureDiagnostic(feature, line: line, column: column, path: path)
 
 		// The SAME sentence and code, deliberately: `tupleElementRejected` exists so the declaration
 		// sweep can tell a whole-program element refusal from a malformed return type; it says nothing
@@ -3848,14 +4018,16 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// Worded beside its narrowing twin rather than inline here, so the two E3005s that quote one
 		// alias's bounds share the range renderer and the name strip.
 		otherwiseOutsideRangedReturn(value, aliasName, low, high, writtenNegative, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, writtenNegative: writtenNegative, domain: domain), line: line, column: column, filePath: path)
-		uninferrableClosureParam(paramName, line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
+		uninferrableClosureParam(paramName, _, line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
 
 		// The SENTENCE arrives rendered — see the three arms' own note in `SourceParseError`. These mapper
 		// lines carry the CODE and nothing else, which is what keeps the words beside the rule that chose
 		// them.
 		serviceNotASpawnTarget(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceNotASpawnTarget, message: explanation, line: line, column: column, filePath: path)
+		serviceTypeNotASpawnTarget(explanation, _, line, column) gives Diagnostic.create(ErrorCode.semanticServiceNotASpawnTarget, message: explanation, line: line, column: column, filePath: path)
 		serviceValueNotTransferable(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceValueNotTransferable, message: explanation, line: line, column: column, filePath: path)
 		serviceArgumentNotUnique(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceArgumentNotUnique, message: explanation, line: line, column: column, filePath: path)
+		serviceReplyGraphNotWalkable(explanation, _, line, column) gives Diagnostic.create(ErrorCode.semanticServiceArgumentNotUnique, message: explanation, line: line, column: column, filePath: path)
 		serviceNotAMessage(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceNotAMessage, message: explanation, line: line, column: column, filePath: path)
 		serviceReplyNotCarriable(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyNotCarriable, message: explanation, line: line, column: column, filePath: path)
 		serviceReplyAliasesState(explanation, line, column, note) gives Diagnostic.create(ErrorCode.semanticServiceReplyAliasesState, message: explanation, line: line, column: column, filePath: path).withNote(note)

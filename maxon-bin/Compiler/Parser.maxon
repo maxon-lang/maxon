@@ -877,10 +877,10 @@ export union SourceParseError implements Error
 	//
 	// ⚠ **WHY A PARSE-TIME DOOR RAISES A CODE THE AUTHORITY ALSO RAISES, AND WHY THAT IS NOT A SECOND
 	// PRODUCER.** The predicate and the words are the authority's — this arm supplies neither. What it
-	// supplies is a REPORT ON A ROUTE THE AUTHORITY CANNOT REACH: `resolveTypes` runs only if the file
-	// parses, and both an `as` cast and a member access on such a base make the parse THROW. A thrown
-	// `SourceParseError` stops the file before the pipeline's first pass AND discards this file's artifact
-	// diagnostics (`abortedParseArtifact`), so on these routes E3011 is never reported by anything else.
+	// supplies is a REPORT ON A ROUTE THE AUTHORITY CANNOT REACH: both an `as` cast and a member
+	// access on such a base make the parse THROW, and a thrown `SourceParseError` abandons the region
+	// that holds it, so `resolveTypes` never sees the cast or the access and on these routes E3011 is
+	// never reported by anything else.
 	// Measured without the member-access doors wired here: they report the base as *"declared
 	// 'int'"* — `typeTagName`'s reading of a `named` tag — and the authority's E3011 never appears.
 	//
@@ -1949,7 +1949,7 @@ export union SourceParseError implements Error
 	// second `b` of `nums.map(function(a, b) gives a + b)`. Renders as **E2003**, positioned at the
 	// parameter's NAME. There is no declared slot to type it from, and typing it anyway lifts a closure with
 	// more ABI slots than its caller passes — see `ClosureParamOffer`.
-	uninferrableClosureParam(paramName String, line LineNumber, column ColumnNumber)
+	uninferrableClosureParam(paramName String, aliasName String, line LineNumber, column ColumnNumber)
 
 	// ⭐⭐ **A NAME ITS FILE MAY NOT SEE, REFUSED WHILE THE FILE IS PARSED** — a hidden type, a hidden static
 	// member, a `spawn` of a factory no visible declaration provides. Renders as **E3008** or **E3088** by
@@ -2046,7 +2046,23 @@ export union SourceParseError implements Error
 
 	registryRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber, let note DiagnosticNote)
 	extensionMemberHidesOwnMember(explanation String, line LineNumber, column ColumnNumber, let note DiagnosticNote)
+
+	// These three render exactly as `unsupported`, `serviceNotASpawnTarget` and
+	// `serviceArgumentNotUnique`. Each is its own arm to carry the declaration it is about, which
+	// `ParseStaging.consequenceNamedBy` reads to drop the refusal when that declaration was itself
+	// refused.
+	memberAccessOnNonStruct(feature String, line LineNumber, column ColumnNumber, origin ReceiverOrigin)
+	serviceTypeNotASpawnTarget(explanation String, typeName String, line LineNumber, column ColumnNumber)
+	serviceReplyGraphNotWalkable(explanation String, message String, line LineNumber, column ColumnNumber)
 end 'SourceParseError'
+
+// The declarations a receiver was derived from (its brand, the calls that produced it followed
+// through their own receivers, the union a `match` payload was bound out of), so a member access on
+// it is dropped when one of them was refused.
+export union ReceiverOrigin
+	derivedFrom(names NameRoster)
+	unattributed
+end 'ReceiverOrigin'
 
 // Which refusal an `end` whose label does not repeat its header's is: a block's (E2008) or a match's (E2043).
 enum EndLabelRule
@@ -4044,7 +4060,7 @@ end 'ParamDefaultOwner'
 // plausible number.
 union ClosureParamOffer
 	// One type per parameter of the function type the argument's parameter is declared with, in order.
-	offered(paramTypes MaxonTypeArray, result ClosureResult)
+	offered(paramTypes MaxonTypeArray, result ClosureResult, aliasName ByteArray)
 
 	// No position is offering a type, so an omitted parameter type is a parse error.
 	none
@@ -4071,7 +4087,7 @@ end 'ClosureResult'
 
 function closureResultOf(offer ClosureParamOffer) returns ClosureResult
 	return match offer 'offer'
-		offered(_, result) gives result.clone()
+		offered(_, result, _) gives result.clone()
 		deferred or
 		none gives ClosureResult.inferred
 	end 'offer'
@@ -4583,6 +4599,31 @@ function stagedWitnessAt(staged ValueIdArray, slot ElementIndex) returns ValueId
 	return stagedWordAt(staged, slot: slot + StagedWitnessSlotDistance)
 end 'stagedWitnessAt'
 
+union ReceiverArgument
+	passed(value ValueId)
+	none
+end 'ReceiverArgument'
+
+function receiverArgumentOf(args ValueIdArray) returns ReceiverArgument
+	let first = try args.get(0) otherwise return ReceiverArgument.none
+
+	return ReceiverArgument.passed(first)
+end 'receiverArgumentOf'
+
+union ReceiverSource
+	producedByCall(let callee ByteArray, receiver ReceiverArgument)
+	boundOutOf(unionName ByteArray)
+	unknown
+end 'ReceiverSource'
+
+function receiverSourceOfCall(result ValueId, value ValueId, callee ByteArray, receiver ReceiverArgument) returns ReceiverSource
+	if result != value 'someOtherValue'
+		return ReceiverSource.unknown
+	end 'someOtherValue'
+
+	return ReceiverSource.producedByCall(callee, receiver: receiver)
+end 'receiverSourceOfCall'
+
 union ValueProducer
 	noOwnOp
 	at(opIdx ElementIndex)
@@ -4590,8 +4631,8 @@ end 'ValueProducer'
 
 union RoutableOp
 	notRoutable
-	call(result ValueId, let callee ByteArray)
-	tryChannelCall(result ValueId, let callee ByteArray)
+	call(result ValueId, let callee ByteArray, receiver ReceiverArgument)
+	tryChannelCall(result ValueId, let callee ByteArray, receiver ReceiverArgument)
 	witness(result ValueId)
 	await(result ValueId, promise ValueId)
 	send(result ValueId)
@@ -4604,7 +4645,7 @@ end 'TryChannelResult'
 
 function tryChannelCallOf(op RoutableOp, opIndex ElementIndex, wanted TryChannelResult) returns DiscardedCallee
 	return match op 'op'
-		tryChannelCall(result, callee) gives DiscardedCallee.named(callee, result: result, opIndex: opIndex) if tryChannelWants(wanted, result: result) else DiscardedCallee.notACall
+		tryChannelCall(result, callee, _) gives DiscardedCallee.named(callee, result: result, opIndex: opIndex) if tryChannelWants(wanted, result: result) else DiscardedCallee.notACall
 		notRoutable or
 		call or
 		witness or
@@ -9583,6 +9624,7 @@ function mintHeadIsTheCompilers(mint CalleeMint) returns bool
 		fromConstructionInit or
 		fieldDefaultHelper gives false
 		resolvedTypeQualifier or
+		resolvedStaticTypeQualifier or
 		rangeOperator gives true
 	end 'm'
 end 'mintHeadIsTheCompilers'
@@ -15148,6 +15190,52 @@ union MisclosedBlock
 	end 'isRecorded'
 end 'MisclosedBlock'
 
+export union PoisonedAt
+	abandonedBody(number LineNumber)
+	line(number LineNumber)
+end 'PoisonedAt'
+
+export type RefusedPart
+	export let key as PositionKey
+	export let poisoned as PoisonedAt
+
+	export static function create(key PositionKey, poisoned PoisonedAt) returns RefusedPart
+		return Self{key: key, poisoned: poisoned}
+	end 'create'
+end 'RefusedPart'
+
+export union AbandonableRegion
+	none
+	declaration(key PositionKey)
+	body(key PositionKey)
+	binding(key PositionKey, extentEnd PositionKey)
+
+	export function partRefusedAt(refusal PositionKey) returns RefusedPart throws AbsentError
+		match self 'region'
+			none then throw AbsentError.absent
+			declaration(key) then return try declarationPartWhenRefusedAfter(key, refusal: refusal)
+			body(key) then return RefusedPart.create(key, poisoned: PoisonedAt.abandonedBody(positionKeyLine(key)))
+			binding(key, extentEnd) then return try bindingPartWhenRefusedWithin(key, extentEnd: extentEnd, refusal: refusal)
+		end 'region'
+	end 'partRefusedAt'
+end 'AbandonableRegion'
+
+function declarationPartWhenRefusedAfter(key PositionKey, refusal PositionKey) returns RefusedPart throws AbsentError
+	if refusal < key 'beforeItsStart'
+		throw AbsentError.absent
+	end 'beforeItsStart'
+
+	return RefusedPart.create(key, poisoned: PoisonedAt.line(positionKeyLine(key)))
+end 'declarationPartWhenRefusedAfter'
+
+function bindingPartWhenRefusedWithin(key PositionKey, extentEnd PositionKey, refusal PositionKey) returns RefusedPart throws AbsentError
+	if refusal > extentEnd 'pastItsExtent'
+		throw AbsentError.absent
+	end 'pastItsExtent'
+
+	return RefusedPart.create(key, poisoned: PoisonedAt.line(positionKeyLine(refusal)))
+end 'bindingPartWhenRefusedWithin'
+
 union OpenedBlockLabel
 	spelled(let label ByteArray)
 	unread
@@ -15702,13 +15790,17 @@ end 'labelledBlockCloserAt'
 // legal declared name, and a `function while(…)` this did not recognize would leave the sweep's
 // `depth` one too deep for the rest of the file. A closure literal is excluded by construction — its
 // `(` sits where the name would, and a punctuator carries no spelling.
-function functionDeclarationShapeIn(tokens TokenArray, index ElementIndex) returns bool
+module function functionDeclarationShapeIn(tokens TokenArray, index ElementIndex) returns bool
+	return functionHeadIn(tokens, index: index) and (try tokens.get(index + 2) otherwise return false).kind == TokenKind.leftParen
+end 'functionDeclarationShapeIn'
+
+function functionHeadIn(tokens TokenArray, index ElementIndex) returns bool
 	if (try tokens.get(index) otherwise return false).kind != TokenKind.function or not declarationBeginsStatementIn(tokens, index: index) 'notAFunctionKeywordOpeningAStatement'
 		return false
 	end 'notAFunctionKeywordOpeningAStatement'
 
-	return tokenCanBeAName(try tokens.get(index + 1) otherwise return false) and (try tokens.get(index + 2) otherwise return false).kind == TokenKind.leftParen
-end 'functionDeclarationShapeIn'
+	return tokenCanBeAName(try tokens.get(index + 1) otherwise return false)
+end 'functionHeadIn'
 
 function functionDeclaresTypeParamsIn(tokens TokenArray, groups ParenGroups, nameIndex ElementIndex) returns bool
 	let open = nameIndex + 1
@@ -15782,6 +15874,41 @@ function visibilityModifierIn(tokens TokenArray, index ElementIndex) returns boo
 
 	return moduleModifierIn(tokens, index: index) and declarationOpensAt((try tokens.get(index + 1) otherwise return false).kind)
 end 'visibilityModifierIn'
+
+module function pastVisibilityModifiers(tokens TokenArray, index ElementIndex) returns ElementIndex
+	var keyword = index
+
+	while visibilityModifierIn(tokens, index: keyword) 'pastModifiers'
+		keyword = keyword + 1
+	end 'pastModifiers'
+
+	return keyword
+end 'pastVisibilityModifiers'
+
+function namedDeclarationBeginsIn(tokens TokenArray, index ElementIndex) returns bool
+	return tokenKindAt(tokens, index: index + 1) == TokenKind.identifier and declarationBeginsStatementIn(tokens, index: index)
+end 'namedDeclarationBeginsIn'
+
+function typeDeclarationHeaderIn(tokens TokenArray, index ElementIndex) returns bool
+	return tokenKindDeclaresANamedType(tokenKindAt(tokens, index: index)) and namedDeclarationBeginsIn(tokens, index: index)
+end 'typeDeclarationHeaderIn'
+
+function topLevelBindingIn(tokens TokenArray, index ElementIndex) returns bool
+	let kind = tokenKindAt(tokens, index: index)
+	return (kind == TokenKind.let or kind == TokenKind.var) and namedDeclarationBeginsIn(tokens, index: index)
+end 'topLevelBindingIn'
+
+function viewBindingIn(tokens TokenArray, index ElementIndex) returns bool
+	return (tokenKindAt(tokens, index: index) == TokenKind.view or tokenSpellsView(tokens, index: index)) and namedDeclarationBeginsIn(tokens, index: index)
+end 'viewBindingIn'
+
+function declarationHeadShapeIn(tokens TokenArray, index ElementIndex) returns bool
+	return functionHeadIn(tokens, index: index) or typeDeclarationHeaderIn(tokens, index: index) or topLevelBindingIn(tokens, index: index) or viewBindingIn(tokens, index: index) or testDeclarationAt(tokens, index: index) or defaultDeclarationAt(tokens, index: index)
+end 'declarationHeadShapeIn'
+
+module function declarationOpensIn(tokens TokenArray, index ElementIndex) returns bool
+	return declarationHeadShapeIn(tokens, index: pastVisibilityModifiers(tokens, index: index))
+end 'declarationOpensIn'
 
 // Is the token at `index` the WORD `module`? Split from `atModuleModifier` because the sweep reads the
 // modifier BACKWARDS, from the declaration keyword (`visibilityBefore`), where "the next token
@@ -19863,6 +19990,9 @@ export type Parser
 	// index kept alongside is the cursor at the mint, which serves the values no op defines — a merge phi.
 	var runtimeSourceOffence as RuntimeSourceOffence
 	var misclosedBlock as MisclosedBlock
+	export var openRegion as AbandonableRegion
+	export var blockStructureMisread as bool
+	var abandonedRegions as PositionKeyArray
 	var usedTypeNames as UsedTypeNameRoster
 
 	// ⭐⭐ **THE TYPES THIS FILE REACHED INTO THROUGH A VALUE — answers the RESOLVER already computed,
@@ -20136,6 +20266,9 @@ export type Parser
 			emptyMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumeRecordArray.create(), gives: ConditionalGiveArray.create()),
 			runtimeSourceOffence: RuntimeSourceOffence.none,
 			misclosedBlock: MisclosedBlock.none,
+			openRegion: AbandonableRegion.none,
+			blockStructureMisread: false,
+			abandonedRegions: PositionKeyArray.create(),
 			usedTypeNames: noUsedTypeNames,
 			memberAccessedTypeNames: noUsedTypeNames,
 			isTheReportingWalk: false,
@@ -20168,7 +20301,7 @@ export type Parser
 				break
 			end 'done'
 
-			try self.dispatchTopLevel()
+			try self.readTopLevelDeclaration()
 		end 'top'
 
 		// ⭐ Every parameter default this file declared becomes a function HERE, with no declaration open
@@ -20182,8 +20315,11 @@ export type Parser
 
 		// ⭐ AT THE END, AND ONLY AT THE END: "is this alias used?" is a question about the WHOLE file, so
 		// it cannot be answered before the last declaration has been read. A file that threw never gets
-		// here, which is right — its later uses were never parsed, so every alias would look unused.
-		self.reportUnusedTypeAliases()
+		// here, and one that abandoned a region skips the report: the uses in what it did not parse were
+		// never seen, so an alias used only there would look unused.
+		if self.abandonedRegions.isEmpty() 'everyUseWasRead'
+			self.reportUnusedTypeAliases()
+		end 'everyUseWasRead'
 
 		// ⭐ **THE SAME SET, KEPT.** `reportUnusedTypeAliases` has just answered "did THIS file use its own
 		// alias?" from `usedTypeNames`; `checkUnusedExports` asks "did any OTHER file use this one?", and
@@ -20209,9 +20345,36 @@ export type Parser
 		return self.artifact
 	end 'parseModule'
 
-	// ⭐ **WHAT AN ABORTED PARSE STILL KNOWS — and it is exactly ONE thing.** A `SourceParseError` stops the
-	// file mid-way, so its module, its spans and its value origins are half-built and must be thrown
-	// away: `queryParseOps` hands back a fresh artifact and the file contributes nothing to the merge.
+	function readTopLevelDeclaration() throws SourceParseError
+		let start = self.current()
+		let key = positionKey(start.line, column: start.column)
+
+		if self.abandonedRegions.contains(key) 'abandoned'
+			self.skipAbandonedDeclaration()
+			return
+		end 'abandoned'
+
+		let enclosing = self.enterRegion(AbandonableRegion.declaration(key))
+		try self.dispatchTopLevel()
+		self.openRegion = enclosing
+	end 'readTopLevelDeclaration'
+
+	export function abandonRegions(regions AbandonedRegionArray)
+		for region in regions 'eachRegion'
+			self.abandonedRegions.push(region.key)
+		end 'eachRegion'
+	end 'abandonRegions'
+
+	function enterRegion(region AbandonableRegion) returns AbandonableRegion
+		let enclosing = self.openRegion.clone()
+		self.openRegion = region
+		return enclosing
+	end 'enterRegion'
+
+	// ⭐ **WHAT AN ABORTED PARSE STILL KNOWS.** A `SourceParseError` stops the parse mid-way, so its
+	// module, its spans and its value origins are half-built and must be thrown away: the file is
+	// parsed again with the refused region skipped (`ParseStaging.parseFile`), or, when the refusal
+	// cannot be confined to a region, contributes nothing to the merge.
 	//
 	// The TYPE NAMES it declared are carried across, and not for symmetry — **because the parse error
 	// is so often the collision's own CONSEQUENCE.** A `typealias Box` and a `type Box` in one file
@@ -20232,13 +20395,15 @@ export type Parser
 			salvaged.typeNameDecls.push(decl)
 		end 'eachDecl'
 
-		for instance in self.artifact.genericInstanceRequests 'eachRequest'
-			salvaged.recordGenericInstanceRequest(instance)
-		end 'eachRequest'
-
-		salvaged.adoptHiddenTypeNames(self.artifact)
+		salvaged.adoptRetryState(self.artifact)
 		return salvaged
 	end 'abortedParseArtifact'
+
+	export function adoptRetryStatesOf(salvages FileParseArtifactArray)
+		for salvaged in salvages 'eachSalvage'
+			self.artifact.adoptRetryState(salvaged)
+		end 'eachSalvage'
+	end 'adoptRetryStatesOf'
 
 	// Sweep this file's tokens for every `function <name>(…) [returns <Type>]` it declares, and fold
 	// what is found into the whole-program `index`. THE way the signature index is built
@@ -20665,11 +20830,11 @@ export type Parser
 		var at = 0 as ElementIndex
 
 		while self.kindAt(at) != TokenKind.eof 'scan'
-			if depth == 0 and self.topLevelBindingAt(at) 'aBinding'
+			if depth == 0 and topLevelBindingIn(self.tokens, index: at) 'aBinding'
 				headers.bindings.push(TopLevelBindingHeader.create(self.tokenAt(at + 1).value, visibility: self.visibilityBefore(at)))
 			end 'aBinding'
 
-			if depth == 0 and self.typeDeclarationHeaderAt(at) 'aHeader'
+			if depth == 0 and typeDeclarationHeaderIn(self.tokens, index: at) 'aHeader'
 				let kind = self.kindAt(at)
 
 				if kind != TokenKind.extension 'declaresAName'
@@ -20695,17 +20860,6 @@ export type Parser
 		return headers
 	end 'topLevelDeclarationHeaders'
 
-	function typeDeclarationHeaderAt(index ElementIndex) returns bool
-		let kind = self.kindAt(index)
-		let declaresAType = kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias or kind == TokenKind.extension
-		return declaresAType and self.kindAt(index + 1) == TokenKind.identifier and declarationBeginsStatementIn(self.tokens, index: index)
-	end 'typeDeclarationHeaderAt'
-
-	function topLevelBindingAt(index ElementIndex) returns bool
-		let kind = self.kindAt(index)
-		return (kind == TokenKind.let or kind == TokenKind.var) and self.kindAt(index + 1) == TokenKind.identifier and declarationBeginsStatementIn(self.tokens, index: index)
-	end 'topLevelBindingAt'
-
 	function headerDeclKind(index ElementIndex) returns TypeDeclKind
 		match self.kindAt(index) 'keyword'
 			type then return TypeDeclKind.structType
@@ -20713,7 +20867,7 @@ export type Parser
 			union then return TypeDeclKind.unionType
 			interface then return TypeDeclKind.interfaceType
 			typealias then return self.aliasFormAt(index + 3)
-			default panic("Parser.headerDeclKind: '{self.kindAt(index).rawValue}' opens no named type declaration — `typeDeclarationHeaderAt` admitted it")
+			default panic("Parser.headerDeclKind: '{self.kindAt(index).rawValue}' opens no named type declaration — `typeDeclarationHeaderIn` admitted it")
 		end 'keyword'
 	end 'headerDeclKind'
 
@@ -23159,7 +23313,7 @@ export type Parser
 	end 'recordMethodCountNeeds'
 
 	function recordFieldDefaultCountNeeds(q ElementIndex, typeName ByteArray, methodNames NameRoster, countSeeds DescriptorNeedMap, countCallees SelfCalleesMap) returns ElementIndex
-		let afterModifier = self.pastVisibilityModifier(q)
+		let afterModifier = pastVisibilityModifiers(self.tokens, index: q)
 		let fieldName = self.tokenAt(afterModifier + 1).value
 
 		var eq = afterModifier + 2
@@ -25538,7 +25692,7 @@ export type Parser
 				// method (`declaredFunctionVisibility`). The cursor is then seated on the `let`/`var` itself,
 				// which is where the shared binding reader begins — the outer walk arrives here on whichever
 				// of the three tokens opens the declaration.
-				let modifierAnchor = self.pastVisibilityModifier(self.pos)
+				let modifierAnchor = pastVisibilityModifiers(self.tokens, index: self.pos)
 				self.pos = modifierAnchor + 1
 				self.recordScannedBinding(bindingOut, qualifier: self.enclosingType.clone(), modifierAnchor: modifierAnchor)
 				continue
@@ -26852,16 +27006,10 @@ export type Parser
 	// head is recognized. `visibilityModifierIn`'s split, one door up, and for its reason: the
 	// fixed-element-count scan walks a type body by index and parses nothing.
 	function structFieldKeywordAt(index ElementIndex) returns bool
-		let afterModifier = self.pastVisibilityModifier(index)
+		let afterModifier = pastVisibilityModifiers(self.tokens, index: index)
 		let kind = self.kindAt(afterModifier)
 		return kind == TokenKind.let or kind == TokenKind.var
 	end 'structFieldKeywordAt'
-
-	// The index of the `let`/`var` a field declaration opening at `index` reaches — past its visibility
-	// modifier when it has one. Both readers of a field head by index need it, so the step is taken once.
-	function pastVisibilityModifier(index ElementIndex) returns ElementIndex
-		return index + 1 if visibilityModifierIn(self.tokens, index: index) else index
-	end 'pastVisibilityModifier'
 
 	// ⭐ **DOES A MEMBER DECLARATION OPENING AT `index` DECLARE TYPE-QUALIFIED MODULE STORAGE — `[export]
 	// static (let|var)`?** The `static` prefix is the whole difference between this and
@@ -26873,7 +27021,7 @@ export type Parser
 	// that predicate's own reason: the set of keywords that introduce a binding lives in ONE place, so a
 	// keyword taught to one reader and not another cannot put two readers of one grammar a token apart.
 	function staticBindingKeywordAt(index ElementIndex) returns bool
-		let afterModifier = self.pastVisibilityModifier(index)
+		let afterModifier = pastVisibilityModifiers(self.tokens, index: index)
 		return self.kindAt(afterModifier) == TokenKind.static and self.structFieldKeywordAt(afterModifier + 1)
 	end 'staticBindingKeywordAt'
 
@@ -27270,8 +27418,8 @@ export type Parser
 	end 'readFieldDefaultLiteral'
 
 	// Advance past a balanced `( … )` starting at the cursor. Returns false — leaving the
-	// cursor where the walk stopped — when the token stream does not hold one, which the real
-	// parse will report properly.
+	// cursor where it was — when the token stream does not hold one, which the real parse will report
+	// properly.
 	function skipBalancedParens() returns bool
 		if not self.at(TokenKind.leftParen) 'noParen'
 			return false
@@ -27282,7 +27430,6 @@ export type Parser
 		// An unterminated group answers the EOF index, so this test is exact rather than a proxy: on a
 		// match the answer IS the `)`, and the cursor lands one past it.
 		if self.kindAt(closeIndex) != TokenKind.rightParen 'unbalanced'
-			self.pos = closeIndex
 			return false
 		end 'unbalanced'
 
@@ -27576,6 +27723,19 @@ export type Parser
 	// `declaredOutcome` carries the DRIFT GUARD: a `let` the real parse dispatches at top
 	// level must be one the sweep recorded, and a miss panics rather than compiling.
 	function raiseBindingFailure(decl TopLevelDecl) throws SourceParseError
+		let key = positionKey(decl.nameLine, column: decl.nameColumn)
+
+		if self.abandonedRegions.contains(key) 'abandoned'
+			return
+		end 'abandoned'
+
+		let extentEnd = self.tokenAt(decl.initEnd)
+		let enclosing = self.enterRegion(AbandonableRegion.binding(key, extentEnd: positionKey(extentEnd.line, column: extentEnd.column)))
+		try self.reportBindingFailure(decl)
+		self.openRegion = enclosing
+	end 'raiseBindingFailure'
+
+	function reportBindingFailure(decl TopLevelDecl) throws SourceParseError
 		try self.requireInitializerNamesNoRegistry(decl)
 
 		// A REDECLARATION is reported HERE, at the declaration its key does not hold — the top-level twin
@@ -27607,9 +27767,9 @@ export type Parser
 			unvalidatedRecord then try self.parseGlobalInitializer(decl, valueType: MaxonType.unresolved)
 			deferredRecord or
 			pending or
-			evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
+			evaluating then panic("Parser.reportBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
-	end 'raiseBindingFailure'
+	end 'reportBindingFailure'
 
 	function parseStoredRecordInitializer(decl TopLevelDecl, valueType MaxonType) throws SourceParseError
 		try self.requireGlobalVarNotBornFromABareNumber(decl, bare: self.globalSlotHoldsBareNumbers(valueType))
@@ -27843,10 +28003,16 @@ export type Parser
 
 		let key = keyTok.value
 		let isService = self.signatures.defaultKeyIsAService(key)
+		let defaultIsRefused = isService and not self.signatures.isInterfaceHandle(serviceHandleCompanionName(key))
 		let valueType = self.registryValueTypeOf(key, isService: isService)
 
 		if memberTok.value.equals(RegistryCurrentMemberName) 'aLookup'
 			let rparenTok = try self.consume(TokenKind.rightParen)
+
+			if defaultIsRefused 'aLookupOfARefusedDefault'
+				return self.mintDeferredValue()
+			end 'aLookupOfARefusedDefault'
+
 			let range = SourceRange.between(keyTok, last: rparenTok)
 			let slot = self.emitRegistrySlot(key, member: RegistryCurrentMemberName, range: range)
 
@@ -27864,6 +28030,10 @@ export type Parser
 		let range = SourceRange.between(keyTok, last: rparenTok)
 
 		try self.requireRegistryResultMatchesReplacement(replacement, resultUsed: resultUsed, memberTok: memberTok)
+
+		if defaultIsRefused 'aRegistrationOfARefusedDefault'
+			return self.mintDeferredValue()
+		end 'aRegistrationOfARefusedDefault'
 
 		let slot = self.emitRegistrySlot(key, member: RegistryRegisterMemberName, range: range)
 
@@ -28816,7 +28986,7 @@ export type Parser
 	// forms are told apart by that token alone — `function`, `(`, and the `int`/`float` keyword — which is why
 	// the parameter is a token kind and not a form name.
 	function nestedAliasRhsBeginsWith(index ElementIndex, kind TokenKind) returns bool
-		let at = self.pastVisibilityModifier(index)
+		let at = pastVisibilityModifiers(self.tokens, index: index)
 
 		// `typealias` at `at`, the member name at `at + 1`, and the `=` at `at + 2` — a malformed declaration
 		// that lacks the `=` is not any form, and the real parse reports it with a position.
@@ -28864,7 +29034,7 @@ export type Parser
 	// token is not one. A PEEK — the pre-scan above must not consume — and it reads the header in the order
 	// `atTypeAliasDeclaration` recognizes it: an optional visibility modifier, then `typealias <name>`.
 	function nestedAliasNameAt(index ElementIndex) returns ByteArray throws AbsentError
-		var at = self.pastVisibilityModifier(index)
+		var at = pastVisibilityModifiers(self.tokens, index: index)
 
 		if self.kindAt(at) != TokenKind.typealias 'notATypeAlias'
 			throw AbsentError.absent
@@ -30599,7 +30769,7 @@ export type Parser
 	end 'extensionMemberMethodNameAt'
 
 	function extensionMemberFunctionKeywordAt(index ElementIndex) returns ElementIndex
-		let at = self.pastVisibilityModifier(index)
+		let at = pastVisibilityModifiers(self.tokens, index: index)
 
 		if self.extensionMemberTakesReceiverAt(index) 'instanceMember'
 			return at
@@ -30702,7 +30872,7 @@ export type Parser
 	// and the real parse's query are both keyed by kind, so a second spelling of this test would file
 	// them apart.
 	function extensionMemberTakesReceiverAt(index ElementIndex) returns bool
-		return self.kindAt(self.pastVisibilityModifier(index)) != TokenKind.static
+		return self.kindAt(pastVisibilityModifiers(self.tokens, index: index)) != TokenKind.static
 	end 'extensionMemberTakesReceiverAt'
 
 	// Step the cursor past a whole extension MEMBER, leaving it exactly where `parseTypeMember` would have.
@@ -31634,14 +31804,9 @@ export type Parser
 	// the optional visibility and `static` modifiers. THE one spelling of that modifier list, read by the
 	// peek-only predicate above AND by the sweep's cursor step (`recordScannedEnum`) — taught to one and not
 	// the other, the sweep would count a modifier token as the method's block opener and mis-close the enum.
-	//
-	// ⛔ **IT SPELLED `TokenKind.export` DIRECTLY AND SO NEVER STEPPED OVER `module`**, which is the defect
-	// the "one spelling" sentence above exists to prevent — the paragraph was right about the risk and the
-	// code was a second answer anyway. `module function` on an enum was already reachable; `public function`
-	// would have been the second body to trip it. It asks `pastVisibilityModifier` now, so the modifier SET
-	// is the parser's one copy.
+	// The visibility modifiers are `pastVisibilityModifiers`', the parser's one copy of that set.
 	function enumMethodKeywordIndex(index ElementIndex) returns ElementIndex
-		var p = self.pastVisibilityModifier(index)
+		var p = pastVisibilityModifiers(self.tokens, index: index)
 
 		if self.kindAt(p) == TokenKind.static 'static'
 			p = p + 1
@@ -32854,6 +33019,7 @@ export type Parser
 		end 'aMethodOfAGenericType'
 
 		let instanceCount = self.signatures.genericInstanceCountAt(template.siteKey())
+		let enclosingRegion = self.enterRegion(AbandonableRegion.none)
 
 		for position in 0 upto instanceCount 'eachInstance'
 			self.openGenericInstance(template, position: position)
@@ -32862,6 +33028,7 @@ export type Parser
 			self.closeGenericInstance()
 		end 'eachInstance'
 
+		self.openRegion = enclosingRegion
 		self.pos = functionIndex
 		self.skipGenericTemplateDeclaration()
 
@@ -32908,11 +33075,7 @@ export type Parser
 	function skipGenericTemplateDeclaration()
 		self.skipWhereClauseToLineEnd()
 		self.advanceToOwnBlockEnd()
-		self.advance()
-
-		if self.at(TokenKind.charLiteral) 'aClosingLabel'
-			self.advance()
-		end 'aClosingLabel'
+		self.advancePastBlockCloser()
 	end 'skipGenericTemplateDeclaration'
 
 	function parseFunction(visibility Visibility, takesReceiver bool, form DeclaredHeadForm) throws SourceParseError
@@ -33221,10 +33384,24 @@ export type Parser
 		// ⭐⭐ **A STDLIB BODY NO PATH FROM `main` REACHES IS SKIPPED WHOLE — the ops, and with them every
 		// diagnostic that is a property of the ops.** See `ParseJob.buildsBodies` for why the DECLARATION
 		// above this line is never skipped.
-		if not self.job.buildsBodies 'bodyNotReached'
+		let regionKey = positionKey(nameTok.line, column: nameTok.column)
+		let abandoned = self.abandonedRegions.contains(regionKey)
+		let enclosingRegion = self.openRegion.clone()
+
+		if abandoned 'abandonedBody'
+			func.bodyWasSkippedAsUnreached = true
+			self.skipAbandonedBody(entry, nameTok: nameTok)
+		end 'abandonedBody' else if not self.job.buildsBodies 'bodyNotReached'
 			func.bodyWasSkippedAsUnreached = true
 			self.skipUnreachedFunctionBody(entry, nameTok: nameTok)
 		end 'bodyNotReached' else 'bodyReached'
+			// A refusal in a generic instance's body is confined to no region, so it fails the whole file.
+			if self.genericInstanceName.isInstance() 'anInstanceBody'
+				_ = self.enterRegion(AbandonableRegion.none)
+			end 'anInstanceBody' else 'aRecoverableBody'
+				_ = self.enterRegion(AbandonableRegion.body(regionKey))
+			end 'aRecoverableBody'
+
 			// parseStatements threads a "current block" that control-flow statements can
 			// move forward (an `if` leaves subsequent statements in its continuation block),
 			// so the block it RETURNS — not `entry` — is the one control falls out of.
@@ -33251,7 +33428,11 @@ export type Parser
 
 		// ⭐ **THE SECOND OF THE TWO PLACES THE FORMS DIFFER: a `test` MUST write its `end` label.** A test's
 		// label IS its name — the one the reporter prints — so an `end` without it names no test at all.
-		try self.consumeBlockEnd(nameTok.value, labelIsRequired: isTest)
+		if not abandoned 'aBodyWasRead'
+			try self.consumeBlockEnd(nameTok.value, labelIsRequired: isTest)
+		end 'aBodyWasRead'
+
+		self.openRegion = enclosingRegion
 
 		self.publishExistentialInstances(func)
 		self.stampLetCastScopes(nameTok.line, lastLine: self.tokenAt(self.pos - 1).line)
@@ -33873,6 +34054,84 @@ export type Parser
 		self.artifact.emitTerminator(entry, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
 	end 'skipUnreachedFunctionBody'
 
+	// The declaration keeps its signature, so its callers are still checked against it. The empty body
+	// is never lowered: the refusal that abandoned it stands at the error gate.
+	function skipAbandonedBody(entry IrBlock, nameTok Token)
+		self.advanceToOwnBlockEnd()
+		self.advancePastBlockCloser()
+		self.artifact.emitTerminator(entry, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
+	end 'skipAbandonedBody'
+
+	function skipAbandonedDeclaration()
+		let declarationColumn = self.lineStartColumnAt(self.pos)
+		let keyword = pastVisibilityModifiers(self.tokens, index: self.pos)
+
+		if self.functionDeclarationAt(keyword) or testDeclarationAt(self.tokens, index: keyword) 'aBlockDeclaration'
+			self.pos = keyword + 1
+			self.advanceToOwnBlockEnd()
+			self.advancePastBlockCloser()
+			return
+		end 'aBlockDeclaration'
+
+		// A `typealias` has no body, so no `end` of its own for a closer search to find.
+		if typeDeclarationHeaderIn(self.tokens, index: keyword) and self.kindAt(keyword) != TokenKind.typealias 'aTypeDeclaration'
+			self.pos = self.typeBodyCloserAfter(keyword, membersHaveBodies: self.kindAt(keyword) != TokenKind.interface)
+			self.advancePastBlockCloser()
+			return
+		end 'aTypeDeclaration'
+
+		self.advance()
+		self.advancePastDeclarationEnd(declarationColumn)
+	end 'skipAbandonedDeclaration'
+
+	function advancePastBlockCloser()
+		self.advance()
+
+		if self.at(TokenKind.charLiteral) 'aLabel'
+			self.advance()
+		end 'aLabel'
+	end 'advancePastBlockCloser'
+
+	function advancePastDeclarationEnd(declarationColumn ColumnNumber)
+		while self.kindAt(self.pos) != TokenKind.eof 'scan'
+			if self.beginsALineAt(self.pos) 'aLineStart'
+				let column = self.tokenAt(self.pos).column
+
+				if self.at(TokenKind.end) and column == declarationColumn 'itsOwnCloser'
+					self.advancePastBlockCloser()
+					return
+				end 'itsOwnCloser'
+
+				if column < declarationColumn or (column == declarationColumn and self.opensADeclarationAt(self.pos)) 'leavesIt'
+					return
+				end 'leavesIt'
+			end 'aLineStart'
+
+			self.advance()
+		end 'scan'
+	end 'advancePastDeclarationEnd'
+
+	function beginsALineAt(index ElementIndex) returns bool
+		return index > 0 and self.kindAt(index) != TokenKind.newline and self.tokenAt(index).line > self.tokenAt(index - 1).line
+	end 'beginsALineAt'
+
+	function opensADeclarationAt(index ElementIndex) returns bool
+		let keyword = pastVisibilityModifiers(self.tokens, index: index)
+
+		return declarationHeadShapeIn(self.tokens, index: keyword) and not (self.kindAt(keyword) == TokenKind.function and self.keywordIsAName(keyword))
+	end 'opensADeclarationAt'
+
+	function lineStartColumnAt(index ElementIndex) returns ColumnNumber
+		let line = self.tokenAt(index).line
+		var start = index
+
+		while start > 0 and self.tokenAt(start - 1).line == line 'toTheLineStart'
+			start = (start - 1) as ElementIndex
+		end 'toTheLineStart'
+
+		return self.tokenAt(start).column
+	end 'lineStartColumnAt'
+
 	function advanceToOwnBlockEnd()
 		var depth = 0 as BlockDepth
 
@@ -33927,8 +34186,9 @@ export type Parser
 	// and source order is the rule the header above already states.
 	//
 	// ⚠ **A FUNCTION WHOSE BODY FAILED TO PARSE NEVER REACHES HERE**: a `SourceParseError` unwinds past this
-	// call, so a body with a real error never also reports its unused names as cascade noise. The
-	// suppression is structural and needs no rule of its own.
+	// call, and the parse that follows skips the abandoned body whole, so a body with a real error
+	// never also reports its unused names as cascade noise. The suppression is structural and needs no
+	// rule of its own.
 	function reportUnusedBindings(methodName ByteArray) returns bool
 		for candidateIndex in 0 upto self.bodyState.unusedCandidates.count() 'eachCandidate'
 			view candidate = try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")
@@ -34424,7 +34684,7 @@ export type Parser
 		end 'declaredType'
 
 		match offer 'offer'
-			offered(paramTypes, _) then return try paramTypes.get(paramIndex) otherwise throw SourceParseError.uninferrableClosureParam(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			offered(paramTypes, _, aliasName) then return try paramTypes.get(paramIndex) otherwise throw SourceParseError.uninferrableClosureParam(String.from(nameTok.value), aliasName: String.from(aliasName), line: nameTok.line, column: nameTok.column)
 			deferred then return MaxonType.unresolved
 			none then break
 		end 'offer'
@@ -40367,7 +40627,7 @@ export type Parser
 	end 'wasRespelled'
 
 	function staticCallHeadMint(baseIndex ElementIndex, typeTok Token) returns CalleeMint
-		return CalleeMint.resolvedTypeQualifier if self.qualifiedTypeBaseIsAt(baseIndex) or self.wasRespelled(typeTok) else CalleeMint.notMinted
+		return CalleeMint.resolvedStaticTypeQualifier if self.qualifiedTypeBaseIsAt(baseIndex) or self.wasRespelled(typeTok) else CalleeMint.notMinted
 	end 'staticCallHeadMint'
 
 	// ⭐ **THE "UNKNOWN INTRINSIC" ARM OF THE `__Builtins` TABLE — AND OF EVERY OTHER RESERVED CALLEE.**
@@ -40497,8 +40757,9 @@ export type Parser
 		// ⇒ The clause is the PROVENANCE OF THE HEAD, of which the stdlib file test is one case
 		// (`everySpellingIsTheCompilers`): a stdlib file's identifier tokens were rewritten by the contest
 		// before this parse saw them, so nothing it spells is the author's. The other is
-		// `CalleeMint.resolvedTypeQualifier`, stated by the doors that join a resolved type name, or a
-		// head the rename respelled in a scriptlib file (`staticCallHeadMint`), to a written member. It is a
+		// `CalleeMint.resolvedTypeQualifier` or `resolvedStaticTypeQualifier`, stated by the doors that
+		// join a resolved type name, or a head the rename respelled in a scriptlib file
+		// (`staticCallHeadMint`), to a written member. It is a
 		// per-SITE fact for `CalleeMint`'s standing reason: the two spellings build the identical callee
 		// bytes, so no name-keyed rule can tell them apart.
 		//
@@ -40885,7 +41146,7 @@ export type Parser
 	function requireCarryableGenericArg(argType MaxonType, slot GenericArgSlot, position FieldIndex, argTok Token) throws SourceParseError
 		match slot 'which'
 			// Thrown here, where the argument is parsed, rather than recorded by `checkGenericArgType`: a
-			// recorded diagnostic is discarded when a later throw aborts the file's parse, and the author is
+			// recorded diagnostic is discarded when a later throw abandons its region, and the author is
 			// then shown an unrelated error further down instead.
 			containerElement then try self.requireStorableDeclaredType(argType, position: DeclaredStoragePosition.containerElement, line: argTok.line, column: argTok.column)
 			associatedTypeBinding(interfaceName) then try self.requireCarryableAssociatedBinding(argType, interfaceName: interfaceName, position: position, argTok: argTok)
@@ -43977,7 +44238,7 @@ export type Parser
 
 	function directCallDefining(idx ElementIndex, value ValueId) returns DiscardedCallee
 		return match self.routableOpAt(idx) 'producer'
-			call(result, callee) gives DiscardedCallee.named(callee, result: result, opIndex: idx) if result == value else DiscardedCallee.notACall
+			call(result, callee, _) gives DiscardedCallee.named(callee, result: result, opIndex: idx) if result == value else DiscardedCallee.notACall
 			notRoutable or
 			tryChannelCall or
 			witness or
@@ -46452,7 +46713,7 @@ export type Parser
 			notRoutable or
 			tryChannelCall then return
 			send(result) then self.routeSend(destination, opIdx: opIdx, result: result)
-			call(result, callee) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.signatures.throwsOf(callee), result: result)
+			call(result, callee, _) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.signatures.throwsOf(callee), result: result)
 			witness(result) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.tryTargetThrows(recordedTryTargetOf(self.lastWitnessDispatch, opIdx: opIdx)), result: result)
 			await (result, _) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.heldAwaitClause(opIdx), result: result)
 		end 'held'
@@ -46472,9 +46733,9 @@ export type Parser
 	// and every reader of a producing op asks it, so an op added to `MaxonOp` is classified once.
 	function routableOpAt(opIdx ElementIndex) returns RoutableOp
 		return match try self.artifact.module.ops.get(opIdx) otherwise panic("routableOpAt: opRef {opIdx} not in module.ops") 'op'
-			call(result, callee, _, _, _, _, _, _) gives RoutableOp.send(result) if callee.equals(MboxInterfaceSendName) else RoutableOp.call(result, callee: callee)
+			call(result, callee, args, _, _, _, _, _) gives RoutableOp.send(result) if callee.equals(MboxInterfaceSendName) else RoutableOp.call(result, callee: callee, receiver: receiverArgumentOf(args))
 			serviceSend(result, _, _, _, _, _, _, _) gives RoutableOp.send(result)
-			tryCall(result, _, callee, _, _, _, _, _, _) gives RoutableOp.tryChannelCall(result, callee: callee)
+			tryCall(result, _, callee, args, _, _, _, _, _) gives RoutableOp.tryChannelCall(result, callee: callee, receiver: receiverArgumentOf(args))
 			witnessDispatch(result, _, _, _, _, _, _, _) gives RoutableOp.witness(result)
 			await (result, promise) gives RoutableOp.await(result, promise: promise)
 			literal or
@@ -61137,8 +61398,8 @@ export type Parser
 	end 'enterMatch'
 
 	// ⚠ There is no unwinding guard, and none is owed: the only way out of the arm loop between the pair is
-	// a `SourceParseError`, which throws the whole file's parse away (`abortedParseArtifact`) along with this
-	// parser — so an unbalanced stack cannot be observed by anything.
+	// a `SourceParseError`, which throws this parser away (`ParseStaging.parseFile` parses the file
+	// again with a new one, or not at all) — so an unbalanced stack cannot be observed by anything.
 	function leaveMatch()
 		if not self.coverageActive() 'notInstrumenting'
 			return
@@ -63182,7 +63443,7 @@ export type Parser
 			typeIsNotAStruct or
 			memberIsNotDeclared or
 			memberTakesAReceiver or
-			memberDoesNotReturnTheType then throw SourceParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(target, typeName: typeName, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
+			memberDoesNotReturnTheType then throw SourceParseError.serviceTypeNotASpawnTarget(serviceTargetRefusalMessage(target, typeName: typeName, member: memberTok.value), typeName: String.from(typeName), line: spawnTok.line, column: spawnTok.column)
 			typeIsAConstrainedGeneric then throw SourceParseError.unsupported(serviceTargetRefusalMessage(target, typeName: typeName, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
 		end 'target'
 
@@ -63310,7 +63571,7 @@ export type Parser
 
 			// A reply graph no walk can be built for is the refusal the handler's `return` raises (E3138), asked
 			// here of the type the instantiation substitutes.
-			messageReplyGraphIsNotWalkable then throw SourceParseError.serviceArgumentNotUnique(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
+			messageReplyGraphIsNotWalkable(methodName, _) then throw SourceParseError.serviceReplyGraphNotWalkable(serviceRosterRefusalMessage(roster, typeName: typeName), message: String.from(qualifiedMethodName(typeName, methodName: methodName)), line: spawnTok.line, column: spawnTok.column)
 
 			// The same E3137 the handler's `return` raises, anchored at the `spawn` and so carrying no note:
 			// the return door's note names a `spawn` that may be in another file, and this one would point at
@@ -66792,6 +67053,7 @@ export type Parser
 		end 'namesNothingHere'
 
 		if self.opensBlockAt(self.pos) or self.closesBlockAt(self.pos) 'readAsBlockStructure'
+			self.blockStructureMisread = true
 			throw SourceParseError.unsupported("reading '{String.from(tok.value)}' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `{String.from(tok.value)}` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding", line: tok.line, column: tok.column)
 		end 'readAsBlockStructure'
 
@@ -73891,7 +74153,7 @@ export type Parser
 		let verdict = classifyFactoryDeclaration(self.signatures, typeName: typeName, decl: decl)
 
 		if verdict != FactoryVerdict.startsAService 'theBoundOneStartsNone'
-			throw SourceParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(serviceTargetVerdictOf(verdict), typeName: typeName, member: unqualifiedMemberOf(callee)), line: spawnTok.line, column: spawnTok.column)
+			throw SourceParseError.serviceTypeNotASpawnTarget(serviceTargetRefusalMessage(serviceTargetVerdictOf(verdict), typeName: typeName, member: unqualifiedMemberOf(callee)), typeName: String.from(typeName), line: spawnTok.line, column: spawnTok.column)
 		end 'theBoundOneStartsNone'
 	end 'requireBoundDeclarationStartsAService'
 
@@ -74877,6 +75139,91 @@ export type Parser
 		return self.emitAwaitAnyCall(recv.value, range: SourceRange.ofToken(methodTok))
 	end 'emitPromiseArrayAwaitAny'
 
+	function originOfValue(value ValueId) returns ReceiverOrigin
+		let names = self.originNamesOf(value)
+
+		if names.isEmpty() 'nothingExplainsIt'
+			return ReceiverOrigin.unattributed
+		end 'nothingExplainsIt'
+
+		return ReceiverOrigin.derivedFrom(names)
+	end 'originOfValue'
+
+	function originNamesOf(value ValueId) returns NameRoster
+		var names = NameRoster.create()
+		let brand = self.brandOf(value)
+
+		if not brand.isEmpty() 'aBrandedValue'
+			names.push(brand)
+		end 'aBrandedValue'
+
+		match self.sourceOfValue(value) 'source'
+			producedByCall(callee, receiver) then self.noteCallOrigins(callee, receiver: receiver, into: names)
+			boundOutOf(unionName) then names.push(unionName)
+			unknown then break
+		end 'source'
+
+		return names
+	end 'originNamesOf'
+
+	function noteCallOrigins(callee ByteArray, receiver ReceiverArgument, into NameRoster)
+		into.push(overloadRegistrationBaseName(callee))
+
+		match receiver 'receiver'
+			passed(value) then self.noteReceiverOrigins(value, into: into)
+			none then break
+		end 'receiver'
+	end 'noteCallOrigins'
+
+	function noteReceiverOrigins(value ValueId, into NameRoster)
+		for name in self.originNamesOf(value) 'eachReceiverOrigin'
+			into.push(name)
+		end 'eachReceiverOrigin'
+	end 'noteReceiverOrigins'
+
+	function sourceOfValue(value ValueId) returns ReceiverSource
+		if self.artifact.currentFuncIndex >= self.artifact.module.funcCount() 'noBodyHoldsTheValue'
+			return ReceiverSource.unknown
+		end 'noBodyHoldsTheValue'
+
+		for blockRef in self.bodyFunction().blockRefs 'eachBlock'
+			view block = try self.artifact.module.blocks.get(blockRef) otherwise panic("sourceOfValue: blockRef from the body function's blockRefs not in module.blocks")
+
+			for opIdx in block.bodyOps() 'eachOp'
+				let source = self.sourceOfCallAt(opIdx, value: value)
+
+				match source 'source'
+					producedByCall then return source
+					boundOutOf or
+					unknown then break
+				end 'source'
+			end 'eachOp'
+		end 'eachBlock'
+
+		return self.payloadSourceOf(value)
+	end 'sourceOfValue'
+
+	function payloadSourceOf(value ValueId) returns ReceiverSource
+		for (_, binding) in self.bodyState.scope.allVars() 'eachBinding'
+			if binding.isPayloadBinding() and binding.boundValue == value 'theBindingOfThisPayload'
+				return ReceiverSource.boundOutOf(self.internedName(self.valueNameId(binding.payloadScrutBox())))
+			end 'theBindingOfThisPayload'
+		end 'eachBinding'
+
+		return ReceiverSource.unknown
+	end 'payloadSourceOf'
+
+	function sourceOfCallAt(opIdx ElementIndex, value ValueId) returns ReceiverSource
+		return match self.routableOpAt(opIdx) 'producer'
+			call(result, callee, receiver) gives receiverSourceOfCall(result, value: value, callee: callee, receiver: receiver)
+			tryChannelCall(result, callee, receiver) gives receiverSourceOfCall(result, value: value, callee: callee, receiver: receiver)
+			notRoutable or
+			witness or
+			send or
+			await gives ReceiverSource.unknown
+		end 'producer'
+	end 'sourceOfCallAt'
+
 	// The `StructBase` a receiver that reached the struct fallthrough denotes — the value form of
 	// `requireStructBase`, sharing its layout resolution and differing only in that a VALUE has no binding
 	// to prove live and no self-field alias to materialize (its producer already did both).
@@ -74909,7 +75256,7 @@ export type Parser
 			// already one of the first two: an `Array`/`Set`/`Map` value is a
 			// `genericInstance`, a `StringIndex` and a `CharacterSet` are `structRef`s. A sentence that
 			// enumerates nothing cannot go stale when a container is retired or added.
-			throw SourceParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{self.valueKindWord(recv.value)}' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here", line: memberTok.line, column: memberTok.column)
+			throw SourceParseError.memberAccessOnNonStruct("a member access '{String.from(memberTok.value)}' on a '{self.valueKindWord(recv.value)}' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here", line: memberTok.line, column: memberTok.column, origin: self.originOfValue(recv.value))
 		end 'notAStruct'
 
 		// ⚠ **AN AGGREGATE-TYPED SELF-FIELD ALIAS IS REFUSED HERE ONLY WHEN NO VALUE OF ITS TYPE COULD EXIST**
@@ -79167,7 +79514,7 @@ export type Parser
 
 	function offeredClosureParamTypesOf(offeredAlias ByteArray, readerFilePath FilePath, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
 		match self.functionAliasMeantFrom(offeredAlias, readerFilePath: readerFilePath) 'alias'
-			declared(alias) then return self.offeredClosureParamTypes(alias, args: args, receiverArgs: receiverArgs)
+			declared(alias) then return self.offeredClosureParamTypes(alias, aliasName: offeredAlias, args: args, receiverArgs: receiverArgs)
 			undeclared then panic("closureParamOfferAt: '{String.from(offeredAlias)}' was offered only after `namesADeclaredFunctionAlias` found it declared")
 		end 'alias'
 	end 'offeredClosureParamTypesOf'
@@ -79192,7 +79539,7 @@ export type Parser
 	// alias's declaring file and fixed through the receiver. A parameter type still naming a type parameter this
 	// body does not declare — bare, or as a type argument (`Array with T`) — would type the closure against a
 	// binding nothing here supplies, so it withholds.
-	function offeredClosureParamTypes(alias FunctionTypeAlias, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
+	function offeredClosureParamTypes(alias FunctionTypeAlias, aliasName ByteArray, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
 		var paramTypes = MaxonTypeArray.create()
 
 		for param in alias.paramTypes 'eachParam'
@@ -79211,7 +79558,7 @@ export type Parser
 			value(inner) gives self.declaredClosureResult(self.slotTypeThroughCallReceiver(self.repairSweptType(inner, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: alias.declFilePath), offeredAlias: self.signatures.declaredIdentityOfSpelling(alias.name, declFilePath: alias.declFilePath))
 		end 'declaredReturn'
 
-		return ClosureParamOffer.offered(paramTypes, result: result)
+		return ClosureParamOffer.offered(paramTypes, result: result, aliasName: aliasName.clone())
 	end 'offeredClosureParamTypes'
 
 	function declaredClosureResult(declared MaxonType, offeredAlias ByteArray) returns ClosureResult
@@ -79278,7 +79625,7 @@ export type Parser
 		end 'noClosureToOffer'
 
 		match self.functionAliasForName(self.internedName(typeNameIdOf(declared))) 'alias'
-			declared(alias) then self.stateClosureParamOfferAt(valueStart, offer: self.offeredClosureParamTypes(alias, args: ValueIdArray.create(), receiverArgs: 0))
+			declared(alias) then self.stateClosureParamOfferAt(valueStart, offer: self.offeredClosureParamTypes(alias, aliasName: self.internedName(typeNameIdOf(declared)), args: ValueIdArray.create(), receiverArgs: 0))
 			undeclared then break
 		end 'alias'
 	end 'stateClosureOfferOfDeclaredType'
@@ -92172,7 +92519,7 @@ export type Parser
 
 			let registered = self.signatures.memberRegistrationKey(qualifiedMethodName(self.enclosingTypeName(), methodName: calleeTok.value), takesReceiver: takesReceiver)
 
-			return try self.parseCallNamed(func, callee: registered, anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
+			return try self.parseCallNamed(func, callee: registered, anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier if takesReceiver else CalleeMint.resolvedStaticTypeQualifier)
 		end 'implicitSelfMethod'
 
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and

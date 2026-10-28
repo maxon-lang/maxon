@@ -349,6 +349,15 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, signature
 	var op = try module.ops.get(opIndex) otherwise panic("resolveOneOverloadedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	view callee = maxonOpCalleeName(op)
 	view members = try project.overloadSets.get(callee) otherwise return
+
+	if maxonOpIsServiceSend(op) 'aMessageIsRefusedWhereItsServiceIsSpawned'
+		return
+	end 'aMessageIsRefusedWhereItsServiceIsSpawned'
+
+	if project.poison.duplicatesAMemberOf(members) 'aMemberIsDeclaredTwice'
+		return
+	end 'aMemberIsDeclaredTwice'
+
 	let candidates = overloadCandidates(project, members: members)
 	let call = overloadCallFactsOf(func, readerFilePath: readerFilePath, op: op)
 	let opaque = opaqueArgumentOf(func, op: op) if candidates.count() > 1 else OpaqueArgument.none
@@ -1392,6 +1401,10 @@ end 'checkThrowsClausesNameDeclaredErrors'
 // The sorting is `ConformanceCheck.classifyThrowsClauseName`'s, shared with `throwsRequirementIsAbstract`,
 // so the impl side and the plain-function side cannot disagree about what an error type is.
 function requireThrowsClauseNamesADeclaredError(project Project, signatures ProgramSignatures, func IrFunction, declared String) returns bool
+	if DiagnosedLines.of(project).includes(func.sourceFilePath, line: func.nameLine) 'theDeclarationIsAlreadyRefused'
+		return false
+	end 'theDeclarationIsAlreadyRefused'
+
 	match classifyThrowsClauseName(project, signatures: signatures, name: declared, readerFilePath: func.sourceFilePath) 'kind'
 		concreteError then return true
 		abstractInterface then reportAtFunctionName(project, func: func, code: ErrorCode.throwsTypeNotAnErrorEnum, message: "'throws {declared}' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws")
@@ -3129,7 +3142,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// A PLAIN call — its args are validated, and a call to a THROWING callee that is not
 					// under a `try` is E3057 (it is a `call`, not a `tryCall`, precisely because no `try`
 					// covered it).
-					call(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then validatePlainCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, throwsMap: throwsMap, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+					call(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then validatePlainCall(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, throwsMap: throwsMap, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// A global's address/load/store and a string literal are not calls. Their callee-shaped
 					// question ("does this name resolve?") was answered before the op was emitted
@@ -3188,7 +3201,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 
 					// A `tryCall`'s args are validated exactly like a `call`'s (it IS a call plus a flag);
 					// its throws-compatibility (E3055) was checked by the parser at the `try` token.
-					tryCall(result, _, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+					tryCall(result, _, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then validateCall(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// A `functionRef`'s "does this function name resolve?" was answered by the parser
 					// (`emitFunctionRef` checks `returnTypeOf`, else E2004). The TARGET gate is what this pass
@@ -3212,7 +3225,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// makes binding `args` here safe.
 					indirectCall then checkIndirectCall(project, module: module, calls: calls, func: func, opIndex: opIdx, op: op, mutationSummary: mutationSummary, provenance: provenance)
 
-					asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then validateAsyncCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+					asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then validateAsyncCall(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// A witness dispatch has no callee NAME to resolve — the parser already resolved the interface
 					// method against the type's `where` constraints (`findWitnessDispatchCandidates`), so there is nothing
@@ -3266,8 +3279,8 @@ end 'checkCalls'
 // holds the pre-resolution types and must type the promise safely); this is the one check the
 // parser cannot make — a callee declared in another file, whose param types only the whole-program
 // `funcSignatures` registry has.
-function validateAsyncCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
-	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+function validateAsyncCall(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+	validateCall(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 	requireAsyncScalarParams(project, func: func, funcNames: funcNames, opIndex: opIndex, callee: callee)
 end 'validateAsyncCall'
 
@@ -3533,6 +3546,7 @@ module function callDiagnosticNoun(callee ByteArray, mint CalleeMint) returns By
 		// A method dispatch: the author wrote the member and a receiver, and `<Type>.<member>` is the
 		// noun every method diagnostic uses for that (`p.join(1, 2)` reports `'FilePath.join'`).
 		resolvedTypeQualifier or
+		resolvedStaticTypeQualifier or
 
 		// A range operator: the author wrote `a upto b`, which names no callee at all. The constructed
 		// one names the type whose bounds were rejected.
@@ -3671,12 +3685,16 @@ end 'divisionRequiresTryMessage'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
-function validatePlainCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, throwsMap FuncThrowsMap, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
-	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+function validatePlainCall(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, throwsMap FuncThrowsMap, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+	validateCall(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 	if project.provenFixedArrayAccesses.contains(opIndex) 'cannotFail'
 		return
 	end 'cannotFail'
+
+	if project.poison.refusesACalleeFrom(callee, reader: authoredFileOf(project, func: func, opIndex: opIndex), signatures: signatures) 'aRefusedDeclarationMayBeTheOneMeant'
+		return
+	end 'aRefusedDeclarationMayBeTheOneMeant'
 
 	// A THROWING BUILTIN reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its
 	// error flag would be silently dropped: a throwing array accessor (`__managed_get`/…) would return a dummy 0 on an
@@ -3744,7 +3762,7 @@ end 'boundCalleeSpelling'
 // cleanly slotted call, the per-argument TYPES). The call site's own span
 // (`project.opRanges[opIndex]`) anchors the callee/arity/type errors; an argument's own span
 // (`argRanges[argIndex]`) anchors a per-argument label error.
-function validateCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+function validateCall(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = authoredFileOf(project, func: func, opIndex: opIndex)
 
@@ -3789,6 +3807,10 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 	end 'compilerOwnCall'
 
 	if calleeIsUnresolved(callee, mint: mint, signatures: signatures, funcSignatures: project.funcSignatures) 'unknownFn'
+		if calleeIsRefusedWhereItsDeclarationIsNamed(project, signatures: signatures, callee: callee, readerFilePath: filePath) 'aConsequenceOfARefusal'
+			return
+		end 'aConsequenceOfARefusal'
+
 		// ⭐⭐ **E3095 RE-ASKS A RESOLUTION THE PARSER ALREADY MADE.** A subdirectory's declaration of a contested
 		// free function is registered under its directory-qualified spelling, so a bare callee that found no single
 		// declaration this file may name (`ProgramSignatures.nameABareCallBinds`) reaches this arm still wearing
@@ -3807,7 +3829,13 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 		// so `m.set(…)` on a `Map` reported "call to undefined function 'Map.set'", quoting a symbol the
 		// author never wrote and pointing the fix at a free function that was never the subject. The two
 		// halves of that callee are exactly the two nouns the honest sentence needs.
-		if mint == CalleeMint.resolvedTypeQualifier 'aMethodMissOnAResolvedType'
+		if mint == CalleeMint.resolvedTypeQualifier or mint == CalleeMint.resolvedStaticTypeQualifier 'aMethodMissOnAResolvedType'
+			// Only a receiver is followed back: a static call's first argument is an ordinary argument, and
+			// a refused call producing it does not explain a miss on the type the author wrote.
+			if mint == CalleeMint.resolvedTypeQualifier and firstOperandComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, operands: args, readerFilePath: filePath) 'theReceiverIsAConsequenceOfARefusal'
+				return
+			end 'theReceiverIsAConsequenceOfARefusal'
+
 			reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: "Type '{String.from(qualifyingTypeName(callee))}' has no method named '{String.from(unqualifiedMemberName(callee))}'", line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aMethodMissOnAResolvedType'
@@ -3831,9 +3859,17 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 			return
 		end 'ambiguousPastAnInvisibleRootDeclaration'
 
+		if calleeIsRefusedWhereItsDeclarationIsNamed(project, signatures: signatures, callee: callee, readerFilePath: filePath) 'aConsequenceOfARefusal'
+			return
+		end 'aConsequenceOfARefusal'
+
 		reportCalleeNotVisible(project, funcNames: funcNames, callee: callee, noun: noun, callRange: callRange, filePath: filePath)
 		return
 	end 'notVisibleHere'
+
+	if project.poison.refusesACalleeFrom(callee, reader: filePath, signatures: signatures) 'aRefusedDeclarationMayBeTheOneMeant'
+		return
+	end 'aRefusedDeclarationMayBeTheOneMeant'
 
 	view sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 
@@ -3842,6 +3878,79 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 		refused(failure) then reportArgSlotFailure(project, failure: failure, noun: noun, callRange: callRange, argRanges: argRanges, filePath: filePath)
 	end 'slot'
 end 'validateCall'
+
+function calleeIsRefusedWhereItsDeclarationIsNamed(project Project, signatures ProgramSignatures, callee ByteArray, readerFilePath FilePath) returns bool
+	if signatures.typeNameHidingFrom(qualifyingTypeName(callee), readerFilePath: readerFilePath).isHidden() 'itsTypeIsRefusedWhereItIsNamed'
+		return true
+	end 'itsTypeIsRefusedWhereItIsNamed'
+
+	if project.poison.isEmpty() 'noFileFailed'
+		return false
+	end 'noFileFailed'
+
+	if project.poison.refusesAnExtensionReaching(qualifyingTypeName(callee), reader: readerFilePath, signatures: signatures, counting: PoisonEntriesCounted.everyEntry) 'itMayBeAMemberOfARefusedExtension'
+		return true
+	end 'itMayBeAMemberOfARefusedExtension'
+
+	if project.poison.duplicatesAMemberOf(try project.overloadSets.get(callee) otherwise NameRoster.create()) 'aMemberIsDeclaredTwice'
+		return true
+	end 'aMemberIsDeclaredTwice'
+
+	if project.poison.holdsAnUnreadableFile() or project.poison.refusesACalleeFrom(callee, reader: readerFilePath, signatures: signatures) 'aPartOfItIsDeclaredInAFailedFile'
+		return true
+	end 'aPartOfItIsDeclaredInAFailedFile'
+
+	let file = try signatures.declaringFileIfDeclared(callee) otherwise return false
+
+	return project.poison.fileFailed(file)
+end 'calleeIsRefusedWhereItsDeclarationIsNamed'
+
+function firstOperandComesFromARefusedDeclaration(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, operands ValueIdArray, readerFilePath FilePath) returns bool
+	let first = try operands.get(0) otherwise return false
+
+	return valueComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, value: first, readerFilePath: readerFilePath)
+end 'firstOperandComesFromARefusedDeclaration'
+
+function valueComesFromARefusedDeclaration(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, value ValueId, readerFilePath FilePath) returns bool
+	let producer = try opDefiningValue(module, func: func, value: value) otherwise return false
+
+	if maxonOpCalleeKind(producer) != MaxonCalleeKind.direct 'notADirectCall'
+		return false
+	end 'notADirectCall'
+
+	let callee = maxonOpCalleeName(producer)
+	let mint = maxonOpCalleeMint(producer)
+
+	if not calleeIsUnresolved(callee, mint: mint, signatures: signatures, funcSignatures: project.funcSignatures) 'theProducerResolved'
+		return false
+	end 'theProducerResolved'
+
+	if calleeIsRefusedWhereItsDeclarationIsNamed(project, signatures: signatures, callee: callee, readerFilePath: readerFilePath) 'theProducerIsRefused'
+		return true
+	end 'theProducerIsRefused'
+
+	if mint != CalleeMint.resolvedTypeQualifier 'noReceiverToFollow'
+		return false
+	end 'noReceiverToFollow'
+
+	var operands = ValueIdArray.create()
+	maxonOpOperandValues(producer, into: operands)
+
+	return firstOperandComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, operands: operands, readerFilePath: readerFilePath)
+end 'valueComesFromARefusedDeclaration'
+
+function opDefiningValue(module MaxonModule, func IrFunction, value ValueId) returns MaxonOp throws AbsentError
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("opDefiningValue: live op index not in module.ops")
+		let defined = try maxonOpDefinedValue(op) otherwise continue
+
+		if defined == value 'theProducer'
+			return op
+		end 'theProducer'
+	end 'eachOp'
+
+	throw AbsentError.absent
+end 'opDefiningValue'
 
 function reportArgSlotFailure(project Project, failure ArgSlotFailure, noun ByteArray, callRange SourceRange, argRanges SourceRangeArray, filePath FilePath)
 	match failure 'failure'
@@ -3901,7 +4010,8 @@ end 'calleeVisibleFrom'
 module function mintSpellsTheWholeCallee(mint CalleeMint) returns bool
 	return match mint 'm'
 		notMinted or
-		resolvedTypeQualifier gives false
+		resolvedTypeQualifier or
+		resolvedStaticTypeQualifier gives false
 		primitiveStatic or
 		paramDefaultHelper or
 		fromConstructionInit or
@@ -3934,10 +4044,49 @@ function reportAmbiguousCall(project Project, callee ByteArray, candidates NameR
 end 'reportAmbiguousCall'
 
 module function checkNonConstantCallInitializers(project Project, signatures ProgramSignatures)
+	var refused = DiagnosedLines.of(project)
+
 	for site in signatures.nonConstantCallInitializers() 'eachSite'
+		if refused.includes(site.filePath, line: site.line) 'theCallIsAlreadyRefused'
+			continue
+		end 'theCallIsAlreadyRefused'
+
 		reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{String.from(site.callee)}()' is not a constant expression", line: site.line, column: site.column, filePath: site.filePath)
+		refused.add(site.filePath, line: site.line)
 	end 'eachSite'
 end 'checkNonConstantCallInitializers'
+
+typealias DiagnosedLineKeySet = Set with String
+
+type DiagnosedLines
+	var keys as DiagnosedLineKeySet
+
+	static function of(project Project) returns DiagnosedLines
+		var keys = DiagnosedLineKeySet.create()
+
+		for reported in project.diagnostics 'eachDiagnostic'
+			match reported.anchor 'anchor'
+				at(path, line, _) then keys.insert(diagnosedLineKey(path, line: line))
+				programWide or
+				file then break
+			end 'anchor'
+		end 'eachDiagnostic'
+
+		return Self{keys: keys}
+	end 'of'
+
+	function includes(path FilePath, line LineNumber) returns bool
+		return self.keys.contains(diagnosedLineKey(path, line: line))
+	end 'includes'
+
+	function add(path FilePath, line LineNumber)
+		self.keys.insert(diagnosedLineKey(path, line: line))
+	end 'add'
+end 'DiagnosedLines'
+
+function diagnosedLineKey(path FilePath, line LineNumber) returns String
+	return "{path.toString()}:{line}"
+end 'diagnosedLineKey'
 
 function undefinedFunctionMessage(name String) returns String
 	return "call to undefined function '{name}'"
@@ -4048,6 +4197,10 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
 	let callRange = project.opRanges.get(opIndex)
 
 	let calleeName = functionValueGoverningName(project, func: func, value: callee)
+
+	if functionShapeIsMissingBesideAFailedFile(project, registry: functionTypeRegistryOf(project), name: calleeName) 'itsTypeCameFromAFileThatFailedToParse'
+		return
+	end 'itsTypeCameFromAFileThatFailedToParse'
 
 	// Unreachable `undeclared`, and PROVEN so at the point the op was emitted rather than assumed here:
 	// `Parser.mintIndirectCallResult` types every indirect call's result through `functionValueReturnType`,
@@ -4269,6 +4422,10 @@ end 'functionValueOwnTypeName'
 function checkFunctionTypeDoors(project Project, provenance ProvenanceTracer)
 	for doorIndex in 0 upto project.pendingFunctionTypeDoors.count() 'eachDoor'
 		view door = try project.pendingFunctionTypeDoors.get(doorIndex) otherwise panic("checkFunctionTypeDoors: doorIndex {doorIndex} is below project.pendingFunctionTypeDoors.count()")
+
+		if functionShapeIsMissingBesideAFailedFile(project, registry: functionTypeRegistryOf(project), name: door.declaredName) or functionShapeIsMissingBesideAFailedFile(project, registry: functionTypeRegistryOf(project), name: door.gotName) 'aRefusedDeclarationIsInvolved'
+			continue
+		end 'aRefusedDeclarationIsInvolved'
 
 		let shapesAgree = doorShapesAgree(project, door: door)
 
@@ -4670,21 +4827,36 @@ function checkDiscardedResults(project Project, module MaxonModule, signatures P
 	// ⛔ **A STATEMENT ALREADY REFUSED EARNS NO SECOND LINE.** The parser files a site from the SHAPE of the
 	// statement, before `checkCalls` has judged the call at all — so `takeInt("hello")` on a line of its own
 	// is one mistake wearing two diagnostics, the argument mismatch and then "its result must be used" about
-	// a call that will not survive the fix. `requireTargetHostsSpawn` guards on the same fact for the same
-	// reason. The author sees this on the next compile, which is when it is the only thing left to say.
-	if projectHasErrors(project) 'alreadyRefused'
-		return
-	end 'alreadyRefused'
+	// a call that will not survive the fix. The test is per line (`DiagnosedLines`), so an error
+	// elsewhere in the program leaves this site reported. The author sees this on the next compile,
+	// which is when it is the only thing left to say.
+	let sites = unrefusedDiscardSites(project)
+	let effectFree = effectFreeSummaryIfConsulted(project, module: module, signatures: signatures, funcNames: funcNames, sites: sites)
 
-	let effectFree = effectFreeSummaryIfConsulted(project, module: module, signatures: signatures, funcNames: funcNames)
-
-	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
+	for siteIndex in sites 'eachSite'
 		match resolveDiscardSite(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
 			settled(verdict) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: verdict)
 			purityOf(calleeIndex, callee) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: declaredCalleeVerdict(project, siteIndex: siteIndex, calleeIndex: calleeIndex, callee: callee, effectFree: effectFree))
 		end 'resolved'
 	end 'eachSite'
 end 'checkDiscardedResults'
+
+typealias DiscardSiteIndexArray = Array with ElementIndex
+
+function unrefusedDiscardSites(project Project) returns DiscardSiteIndexArray
+	let refused = DiagnosedLines.of(project)
+	var sites = DiscardSiteIndexArray.create()
+
+	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
+		view site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("unrefusedDiscardSites: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+
+		if not refused.includes(site.filePath, line: site.line) 'theStatementIsNotRefused'
+			sites.push(siteIndex)
+		end 'theStatementIsNotRefused'
+	end 'eachSite'
+
+	return sites
+end 'unrefusedDiscardSites'
 
 // ⛔⛔ **THE SUMMARY IS A WHOLE-PROGRAM WALK, AND A FILED SITE IS NOT ENOUGH OF A REASON TO BUILD ONE.** It
 // visits every op of every function and enumerates a witness candidate set per constrained requirement, and
@@ -4696,8 +4868,8 @@ end 'checkDiscardedResults'
 // The scan stops at the first site that asks; the drain below re-resolves every site it visits, including
 // ones that never trigger a build. Re-resolving one site is cheap — a lookup or two, no whole-program walk
 // — next to the summary build it lets most compiles skip entirely.
-function effectFreeSummaryIfConsulted(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
-	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
+function effectFreeSummaryIfConsulted(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, sites DiscardSiteIndexArray) returns BoolArray
+	for siteIndex in sites 'eachSite'
 		match resolveDiscardSite(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
 			settled then break
 			purityOf then return buildEffectFreeSummary(project, module: module, signatures: signatures, funcNames: funcNames)
@@ -6444,7 +6616,13 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// signature, so nothing in this pass sees its elements. `Parser.requireElementFitsSlot`, the door
 		// `Array.push` and `List.append` take as well, records a function-type door for exactly that gap.
 		if maxonTypeTag(substituted) == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionTypeArgument'
-			if checkFunctionArgShape(project, func: func, declaredShape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: signatures.indexSpaceTypeName(substituted), side: "declared"), declaredBrand: signatures.indexSpaceTypeName(substituted), argId: argId, param: ArgumentParameter.named(paramName), position: i as ParamCount, callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance) 'signatureMismatch'
+			let substitutedFnName = signatures.indexSpaceTypeName(substituted)
+
+			if functionShapeIsMissingBesideAFailedFile(project, registry: functionTypeRegistryOf(project), name: substitutedFnName) 'itsDeclarationWasRefused'
+				continue
+			end 'itsDeclarationWasRefused'
+
+			if checkFunctionArgShape(project, func: func, declaredShape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: substitutedFnName, side: "declared"), declaredBrand: substitutedFnName, argId: argId, param: ArgumentParameter.named(paramName), position: i as ParamCount, callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance) 'signatureMismatch'
 				return
 			end 'signatureMismatch'
 
@@ -6672,6 +6850,11 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, callee 
 
 	for i in 0 upto argIds.count() 'eachArg'
 		let argId = try argIds.get(i) otherwise panic("checkArgTypes: argIds.get OOB at {i}")
+
+		if project.unknownTypeReports.holdsUnknownParameter(callee, position: i as ParamCount) 'itsDeclaredTypeNamesNothing'
+			continue
+		end 'itsDeclaredTypeNamesNothing'
+
 		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature"))
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
 
@@ -7846,6 +8029,10 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	if paramTag == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionArg'
 		let declaredFnName = functionTypeNameOf(functionTypeRegistryOf(project), nameId: typeNameIdOf(paramType))
 
+		if functionShapeIsMissingBesideAFailedFile(project, registry: functionTypeRegistryOf(project), name: declaredFnName) 'itsDeclarationWasRefused'
+			return
+		end 'itsDeclarationWasRefused'
+
 		if checkFunctionArgShape(project, func: func, declaredShape: functionShapeThroughCallInstance(project, func: func, subject: callInstanceSubject, shape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: declaredFnName, side: "declared")), declaredBrand: declaredFnName, argId: argId, param: param, position: position, callRange: callRange, handedAt: handedAt, filePath: filePath, provenance: provenance) 'signatureMismatch'
 			return
 		end 'signatureMismatch'
@@ -7892,6 +8079,11 @@ end 'calleeParamAlias'
 // exactly the group a function type is not in.
 function checkFunctionArgShape(project Project, func IrFunction, declaredShape FunctionShape, declaredBrand ByteArray, argId ValueId, param ArgumentParameter, position ParamCount, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer) returns bool
 	let gotBrand = functionValueGoverningName(project, func: func, value: argId)
+
+	if functionShapeIsMissingBesideAFailedFile(project, registry: functionTypeRegistryOf(project), name: gotBrand) 'itsDeclarationWasRefused'
+		return false
+	end 'itsDeclarationWasRefused'
+
 	view gotShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: gotBrand, side: "arriving")
 	var signatures = programSignaturesIn(project, asker: "checkFunctionArgShape")
 
@@ -8089,6 +8281,10 @@ function checkMainFunction(project Project)
 	let entryName = String.from(project.entryFunctionName)
 
 	if not project.funcReturnTypes.contains(project.entryFunctionName) 'noEntry'
+		if project.poison.holdsAFailedFile() or project.poison.holdsADeclarationNamed(project.entryFunctionName) or project.poison.holdsALostHeadNamed(project.entryFunctionName) 'aRefusedDeclarationMayBeIt'
+			return
+		end 'aRefusedDeclarationMayBeIt'
+
 		reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.noMainFunction, message: "No '{entryName}' function found"))
 		return
 	end 'noEntry'

@@ -56,7 +56,7 @@ end 'grab'
 
 function main() returns ExitCode
 		print("grabbed {grab()}")
-		return 0 as ExitCode
+		return 0
 end 'main'
 ```
 ```maxoncstderr

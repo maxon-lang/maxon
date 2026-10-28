@@ -455,7 +455,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-record-for-scalar.maxon:13:20: Unsupported: a nested `Inner` constant written for field 'count' of the `Meta` backing, which this read selects as a single word — a nested constant fills a field whose OWN declared type is that `type`, and this field's is not, so there is no number for the select to take
+error E2015: <fragment>:13:20: Unsupported: a nested `Inner` constant written for field 'count' of the `Meta` backing, which this read selects as a single word — a nested constant fills a field whose OWN declared type is that `type`, and this field's is not, so there is no number for the select to take
+error E2015: <fragment>:17:2: Unsupported: the constant written for field 'count' of the `Meta` backing, which is declared `Wide` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
 ```
 
 ### Error: a label naming no field of the NESTED struct

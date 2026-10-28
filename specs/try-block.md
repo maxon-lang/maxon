@@ -1744,7 +1744,7 @@ function callA() returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function main() returns ExitCode
@@ -1995,7 +1995,7 @@ function callA(which Score) returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function classify(which Score) returns String
@@ -2256,7 +2256,7 @@ function callA(which Score) returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function classify(which Score, tries Score) returns String
@@ -2310,7 +2310,7 @@ function callA(which Score) returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function classify(which Score, quiet bool) returns String
@@ -2367,7 +2367,7 @@ function callA(which Score) returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function main() returns ExitCode
@@ -2519,7 +2519,7 @@ function callA(which Score) returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function classify(which Score) returns String
@@ -2574,7 +2574,7 @@ function callA(which Score) returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function classify(which Score) returns Score
@@ -2633,7 +2633,7 @@ function callA(which Score) returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function callC(which Score) returns Score throws ErrC
@@ -2704,7 +2704,7 @@ function callA(which Score) returns Score throws ErrA
 end 'callA'
 
 function callB() returns Score throws ErrB
-	return 6
+	throw ErrB.splat
 end 'callB'
 
 function classify(which Score) returns String

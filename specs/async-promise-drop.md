@@ -3582,7 +3582,7 @@ end 'pick'
 function main() returns ExitCode
 	let p = pick(async work(1), b: async work(10), c: true)
 	print("{await p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3611,7 +3611,7 @@ end 'pick'
 function main() returns ExitCode
 	let p = pick(true)
 	print("{await p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3640,7 +3640,7 @@ end 'pass'
 function main() returns ExitCode
 	let p = pass(async work(1))
 	print("{await p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

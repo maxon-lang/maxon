@@ -1220,9 +1220,6 @@ A `ProcessTrace` is refused as a `SharedValue` payload for the same reason.
 typealias SharedTrace = SharedValue with ProcessTrace
 
 function main() returns ExitCode
-	let shared = SharedTrace.create(ProcessTrace.create())
-	print("{shared.current().isReady()}\n")
-
 	return 0
 end 'main'
 ```

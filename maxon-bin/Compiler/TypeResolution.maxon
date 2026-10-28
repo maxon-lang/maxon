@@ -342,7 +342,12 @@ module function resolveTypes(project Project, module MaxonModule)
 
 		for position in 0 upto func.maxonParamTypes.count() 'eachParam'
 			let pt = try func.maxonParamTypes.get(position) otherwise panic("resolveTypes: maxonParamTypes.get OOB at {position} below its own count")
+			let unknownBefore = project.unknownTypeReports.occurrenceCount()
 			resolvedParams.push(resolveParamType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath, site: func.typeSites.siteAt(position), declaration: func.name))
+
+			if project.unknownTypeReports.occurrenceCount() != unknownBefore 'itsTypeNamesNothing'
+				project.unknownTypeReports.noteUnknownParameter(func.name, position: position as ParamCount)
+			end 'itsTypeNamesNothing'
 		end 'eachParam'
 
 		func.maxonParamTypes = resolvedParams
@@ -363,6 +368,7 @@ module function resolveTypes(project Project, module MaxonModule)
 	checkEnumPayloadTypes(project, signatures: signatures)
 	project.functionAliasShapes = functionAliasShapesIn(project, signatures: signatures, form: FunctionAliasShapeForm.resolved)
 	requireUnplacedUnknownTypesWereReported(project)
+	dropExplainedParseConsequences(project, signatures: signatures, stage: ConsequenceDropStage.afterTypeResolution)
 end 'resolveTypes'
 
 // ⭐⭐ **THE DEFERRED NAME DIAGNOSTICS — UNUSED TYPEALIASES FIRST, HIDDEN TYPE NAMES SECOND.**
@@ -999,6 +1005,17 @@ export function requireFunctionShapeOf(registry FunctionTypeRegistry, name ByteA
 	end 'shape'
 end 'requireFunctionShapeOf'
 
+module function functionShapeIsMissingBesideAFailedFile(project Project, registry FunctionTypeRegistry, name ByteArray) returns bool
+	if project.poison.isEmpty() 'noFileFailed'
+		return false
+	end 'noFileFailed'
+
+	return match declaredFunctionShapeOf(registry, name: name) 'shape'
+		declared gives false
+		undeclared gives true
+	end 'shape'
+end 'functionShapeIsMissingBesideAFailedFile'
+
 // Is this pair of names already being compared further up the same descent (see `FunctionTypePair`)? A linear
 // scan, because the list holds one entry per level of function-type NESTING actually descended into — which
 // is at most one on every program in the corpus and is bounded by the program's distinct function types.
@@ -1630,14 +1647,12 @@ function resolveNamedType(project Project, signatures ProgramSignatures, id Type
 	end 'aDeclaredType'
 
 	return try denotedAliasForm(signatures, name: name, readerFilePath: readerFilePath, into: project.typeNames) otherwise 'undeclared'
-		reportUnknownDeclaredType(project, message: unknownTypeMessage(signatures.aliasIdentityDisplay(name)), readerFilePath: readerFilePath, site: site, declaration: declaration)
+		reportUnknownDeclaredType(project, typeName: signatures.aliasIdentityDisplay(name), readerFilePath: readerFilePath, site: site, declaration: declaration)
 
-		// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
-		// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
-		// this pass returns. Nothing downstream ever reads it — it exists only to keep
-		// the module structurally well-formed for the instant in between, so that the
-		// rest of this pass can go on to report the OTHER unknown types in the file
-		// rather than stopping at the first.
+		// A RECOVERY type, not a sentinel answer: it keeps the module structurally
+		// well-formed so the analysis goes on to report the program's OTHER errors, and
+		// the E3011 refuses the build at the gate before lowering. An argument handed to a
+		// parameter of this type is not checked against it (`checkArgTypes`).
 		return MaxonType.integer
 	end 'undeclared'
 end 'resolveNamedType'
@@ -1645,9 +1660,12 @@ end 'resolveNamedType'
 // A slot with no site is a compiler copy of a written one (a default helper's return, a service
 // payload, a closure parameter typed by an offer). It is reported where it was written, so it is only
 // recorded here and checked by `requireUnplacedUnknownTypesWereReported`.
-function reportUnknownDeclaredType(project Project, message String, readerFilePath FilePath, site PositionKey, declaration ByteArray)
+function reportUnknownDeclaredType(project Project, typeName String, readerFilePath FilePath, site PositionKey, declaration ByteArray)
 	let line = positionKeyLine(site)
 	let column = positionKeyColumn(site)
+	let message = unknownTypeMessage(typeName)
+
+	project.unknownTypeReports.noteOccurrence()
 
 	if not namesASourcePosition(line, column: column) 'copiedByTheCompiler'
 		if declaration.isEmpty() 'noDeclarationToDeferTo'
@@ -1662,6 +1680,7 @@ function reportUnknownDeclaredType(project Project, message String, readerFilePa
 		return
 	end 'reportedAtItsDeclaration'
 
+	project.unknownTypeReports.noteReportedName(typeName, readerFilePath: readerFilePath)
 	reportPositioned(project, code: ErrorCode.unknownType, message: message, line: line, column: column, filePath: readerFilePath)
 end 'reportUnknownDeclaredType'
 

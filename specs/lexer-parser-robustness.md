@@ -27,10 +27,14 @@ error E3001: No 'main' function found
 
 <!-- test: truncated-after-function-keyword -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 function 
 ```
 ```maxoncstderr
-error E2010: specs/lexer-parser-robustness/truncated-after-function-keyword.maxon:2:10: Expected identifier but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-function-keyword.maxon:6:10: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-function-name -->
@@ -67,10 +71,14 @@ error E2010: specs/lexer-parser-robustness/truncated-after-param-colon.maxon:2:1
 
 <!-- test: truncated-after-close-paren -->
 ```maxon
-function main()
+function main() returns ExitCode
+	return 0
+end 'main'
+
+function f()
 ```
 ```maxoncstderr
-error E2007: specs/lexer-parser-robustness/truncated-after-close-paren.maxon:3:1: Unexpected end of input
+error E2007: specs/lexer-parser-robustness/truncated-after-close-paren.maxon:7:1: Unexpected end of input
 ```
 
 <!-- test: truncated-after-returns -->
@@ -230,10 +238,14 @@ error E3013: specs/lexer-parser-robustness/truncated-after-return-keyword.maxon:
 
 <!-- test: mid-keyword-functio -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 functio
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/mid-keyword-functio.maxon:2:1: Expected function declaration, got 'functio'
+error E2001: specs/lexer-parser-robustness/mid-keyword-functio.maxon:6:1: Expected function declaration, got 'functio'
 ```
 
 <!-- test: mid-keyword-retur -->
@@ -289,10 +301,14 @@ error E2001: specs/lexer-parser-robustness/mid-keyword-matc.maxon:3:2: unexpecte
 
 <!-- test: mid-keyword-functin-typo -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 functin main()
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/mid-keyword-functin-typo.maxon:2:1: Expected function declaration, got 'functin'
+error E2001: specs/lexer-parser-robustness/mid-keyword-functin-typo.maxon:6:1: Expected function declaration, got 'functin'
 ```
 
 <!-- test: keyword-prefix-ident -->
@@ -330,10 +346,14 @@ end 'main'
 
 <!-- test: near-keyword-uppercase -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 Function main()
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/near-keyword-uppercase.maxon:2:1: Expected function declaration, got 'Function'
+error E2001: specs/lexer-parser-robustness/near-keyword-uppercase.maxon:6:1: Expected function declaration, got 'Function'
 ```
 
 ### Random bytes: small fixed pseudo-random byte blobs
@@ -364,10 +384,14 @@ error E1010: specs/lexer-parser-robustness/random-printable-garbage-3.maxon:2:13
 
 <!-- test: random-operator-soup-1 -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 +-*/=<>(){}[]
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-operator-soup-1.maxon:2:1: Expected function declaration, got '+'
+error E2001: specs/lexer-parser-robustness/random-operator-soup-1.maxon:6:1: Expected function declaration, got '+'
 ```
 
 <!-- test: random-operator-soup-2 -->
@@ -388,118 +412,174 @@ error E1010: specs/lexer-parser-robustness/random-operator-soup-3.maxon:2:10: Un
 
 <!-- test: random-mixed-delim-1 -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 ({[)}](})[){[(])}
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-mixed-delim-1.maxon:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/random-mixed-delim-1.maxon:6:1: Expected function declaration, got '('
 ```
 
 <!-- test: random-mixed-delim-2 -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 (((]]]{{{)))
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-mixed-delim-2.maxon:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/random-mixed-delim-2.maxon:6:1: Expected function declaration, got '('
 ```
 
 <!-- test: random-mixed-delim-3 -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 [}({)]}{[(
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-mixed-delim-3.maxon:2:1: Expected function declaration, got '['
+error E2001: specs/lexer-parser-robustness/random-mixed-delim-3.maxon:6:1: Expected function declaration, got '['
 ```
 
 <!-- test: random-backslash-in-source-1 -->
 The literal chars `\x80\xFF\xC2` (not actual bytes) interleaved with text. Tests that
 the lexer's identifier scanner stops at the backslash without crashing.
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 foo\x80\xFF\xC2bar
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-backslash-in-source-1.maxon:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-1.maxon:6:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-backslash-in-source-2 -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 \xE9\xCA\xFE\xBA\xBE
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-backslash-in-source-2.maxon:2:1: Expected function declaration, got '\'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-2.maxon:6:1: Expected function declaration, got '\'
 ```
 
 <!-- test: random-backslash-in-source-bell -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 foo\x07bar
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-backslash-in-source-bell.maxon:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-bell.maxon:6:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-backslash-in-source-vtab -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 foo\x0Bbaz
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-backslash-in-source-vtab.maxon:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-vtab.maxon:6:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-backslash-in-source-formfeed -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 foo\x0Cqux
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-backslash-in-source-formfeed.maxon:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-formfeed.maxon:6:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-backslash-in-source-null -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 foo\x00bar
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-backslash-in-source-null.maxon:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-null.maxon:6:1: Expected function declaration, got 'foo'
 ```
 
 ### Pathological structure: deep / repeated input
 
 <!-- test: deep-parens-open-only -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/deep-parens-open-only.maxon:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/deep-parens-open-only.maxon:6:1: Expected function declaration, got '('
 ```
 
 <!-- test: deep-parens-balanced-empty -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/deep-parens-balanced-empty.maxon:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/deep-parens-balanced-empty.maxon:6:1: Expected function declaration, got '('
 ```
 
 <!-- test: deep-braces-open-only -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/deep-braces-open-only.maxon:2:1: Expected function declaration, got '{'
+error E2001: specs/lexer-parser-robustness/deep-braces-open-only.maxon:6:1: Expected function declaration, got '{'
 ```
 
 <!-- test: deep-brackets-open-only -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/deep-brackets-open-only.maxon:2:1: Expected function declaration, got '['
+error E2001: specs/lexer-parser-robustness/deep-brackets-open-only.maxon:6:1: Expected function declaration, got '['
 ```
 
 <!-- test: deep-mixed-delimiters -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 ({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/deep-mixed-delimiters.maxon:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/deep-mixed-delimiters.maxon:6:1: Expected function declaration, got '('
 ```
 
 <!-- test: long-binop-chain -->
@@ -560,18 +640,26 @@ inner
 
 <!-- test: unmatched-close-paren-many -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 ))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/unmatched-close-paren-many.maxon:2:1: Expected function declaration, got ')'
+error E2001: specs/lexer-parser-robustness/unmatched-close-paren-many.maxon:6:1: Expected function declaration, got ')'
 ```
 
 <!-- test: unmatched-close-brace-many -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/unmatched-close-brace-many.maxon:2:1: Expected function declaration, got '}'
+error E2001: specs/lexer-parser-robustness/unmatched-close-brace-many.maxon:6:1: Expected function declaration, got '}'
 ```
 
 <!-- test: comment-with-many-asterisks -->
@@ -587,10 +675,14 @@ end 'main'
 
 <!-- test: repeated-keyword -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 function function function function
 ```
 ```maxoncstderr
-error E2010: specs/lexer-parser-robustness/repeated-keyword.maxon:2:19: Expected '(' but got 'function'
+error E2010: specs/lexer-parser-robustness/repeated-keyword.maxon:6:19: Expected '(' but got 'function'
 ```
 
 ### Truncated literals: partial tokens at unusual boundaries

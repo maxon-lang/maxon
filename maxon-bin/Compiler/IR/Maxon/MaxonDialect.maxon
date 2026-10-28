@@ -1416,15 +1416,20 @@ export enum CalleeMint
 	// `__FilePath.join`, and the reserved-CALL door read that `__` as the author reaching for a compiler
 	// intrinsic (**E3004**, measured) about a callee no author wrote and a function the program declares.
 	// The head's provenance is the one fact that tells it from a written-out `__FilePath.join(p, …)`, which
-	// stays refused — see `Parser.requireCalleeIsNotReservedName` and `stdlib-user-shadows.md`. In a
-	// scriptlib file it also marks a static call's or spawn's `<Type>.` head the rename respelled
-	// (`Parser.staticCallHeadMint`): a token the compiler, not the package author, spelled.
+	// stays refused — see `Parser.requireCalleeIsNotReservedName` and `stdlib-user-shadows.md`.
 	//
 	// ⛔ **IT IS THEREFORE NOT "THE COMPILER SPELLED THIS CALLEE", AND ITS READERS MAY NOT TREAT IT AS THE
 	// OTHER FOUR.** `SemanticCheck.calleeVisibleFrom` exempts a minted callee from the export rule because
 	// the author named nothing; here the author named the MEMBER, so visibility (E3008) still answers for it,
 	// and that reader asks a roster rather than `!= notMinted`.
 	resolvedTypeQualifier
+
+	// The same fact for a head with no receiver: an implicit-self static call, and a static call's or
+	// spawn's `<Type>.` head the compiler resolved or, in a scriptlib file, the rename respelled
+	// (`Parser.staticCallHeadMint`). Its own case because a method miss is a refused call's
+	// consequence only through a receiver (`SemanticCheck.validateCall`), and a static call's first
+	// argument is none.
+	resolvedStaticTypeQualifier
 
 	// ⭐ **`a to b` / `a upto b` OUTSIDE A FOR-IN HEADER ⇒ `Range.create` / `OpenRange.create`**, minted by
 	// `Parser.emitRangeValue`.
@@ -1436,7 +1441,7 @@ export enum CalleeMint
 end 'CalleeMint'
 
 // @generated library-cache begin
-let CacheCasesCalleeMint = [CalleeMint.notMinted, CalleeMint.primitiveStatic, CalleeMint.paramDefaultHelper, CalleeMint.fromConstructionInit, CalleeMint.fieldDefaultHelper, CalleeMint.resolvedTypeQualifier, CalleeMint.rangeOperator]
+let CacheCasesCalleeMint = [CalleeMint.notMinted, CalleeMint.primitiveStatic, CalleeMint.paramDefaultHelper, CalleeMint.fromConstructionInit, CalleeMint.fieldDefaultHelper, CalleeMint.resolvedTypeQualifier, CalleeMint.resolvedStaticTypeQualifier, CalleeMint.rangeOperator]
 
 function cacheReadCalleeMint(reader LibraryCacheReader) returns CalleeMint throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -3320,6 +3325,50 @@ export function maxonOpIsServiceSpawn(op MaxonOp) returns bool
 		holdEnd gives false
 	end 'op'
 end 'maxonOpIsServiceSpawn'
+
+export function maxonOpIsServiceSend(op MaxonOp) returns bool
+	return match op 'op'
+		serviceSend gives true
+		call or
+		literal or
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		stringLiteral or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort or
+		functionRef or
+		indirectCall or
+		asyncCall or
+		await or
+		tryAwait or
+		sizeofType or
+		constArrayLiteral or
+		switch or
+		witnessDispatch or
+		witnessTryDispatch or
+		panicAbortValue or
+		errorFlagEncode or
+		serviceSpawn or
+		serviceReplyCell or
+		immortalStructRecord or
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic or
+		existentialWitness or
+		holdValue or
+		holdEnd gives false
+	end 'op'
+end 'maxonOpIsServiceSend'
 
 export function maxonOpLeavesByError(op MaxonOp) returns bool
 	return match op 'op'

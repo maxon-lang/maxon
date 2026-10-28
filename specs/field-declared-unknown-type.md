@@ -14,8 +14,8 @@ type denotes — and report `E3011` when no registry declares the name. The thir
 `TypeResolution.checkStructFieldTypes`, which `resolveTypes` runs over every `StructLayout.fieldTypes`.
 
 That walk is what makes `Parser.fieldStorageType`'s recovery value safe. The recovery hands back
-`integer` so the `loadIndirect` stays well-formed for the instant before the pipeline's error gate
-throws; without a check on the field, that value would be the **final answer**: the program would
+`integer` so the `loadIndirect` stays well-formed until the pipeline's error gate throws before
+lowering; without a check on the field, that value would be the **final answer**: the program would
 compile clean and the field would silently type itself `i64`. The recovery is safe *because* E3011,
 reported by `TypeResolution` against the merged registry, fires first.
 
@@ -153,8 +153,7 @@ error E3011: <fragment>:7:20: Unknown type 'Nonexistent'
 
 <!-- test: param-unknown-type-member-access -->
 The FIRST declaration site, met at a MEMBER ACCESS — the one route on which the authority above never
-gets to speak, because the access is refused at PARSE time and a thrown `ParseError` stops the file
-before `resolveTypes` runs. What the refusal may not do is invent a type: `h` is declared
+gets to speak first, because the access is refused at PARSE time, ahead of `resolveTypes`. What the refusal may not do is invent a type: `h` is declared
 `NoSuchTypeAtAll` and nothing else, so a message calling it `int` asserts something the source does
 not say. It is the SAME undeclared-name fact the two cases above report, named by the name the source
 wrote.
@@ -175,11 +174,12 @@ function takes(h NoSuchTypeAtAll) returns Small
 end 'takes'
 
 function main() returns ExitCode
-	return takes(Holder.make(7))
+	return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3011: <fragment>:14:9: Unknown type 'NoSuchTypeAtAll'
+error E3011: <fragment>:13:18: Unknown type 'NoSuchTypeAtAll'
 ```
 
 <!-- test: param-unknown-type-captured-member-access -->
@@ -206,6 +206,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3011: <fragment>:11:41: Unknown type 'NoSuchTypeAtAll'
+error E3011: <fragment>:10:18: Unknown type 'NoSuchTypeAtAll'
 ```
 
 <!-- test: param-unknown-type-method-call -->
@@ -229,6 +230,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3011: <fragment>:6:11: Unknown type 'NoSuchTypeAtAll'
+error E3011: <fragment>:5:18: Unknown type 'NoSuchTypeAtAll'
 ```
 
 <!-- test: param-unknown-type-unread -->

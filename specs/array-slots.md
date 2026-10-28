@@ -535,28 +535,17 @@ the builtin's ordinals — `try arr.get(5)` would route `indexOutOfBounds` (ordi
 case with no diagnostic anywhere. It is refused, exactly as `Ordering` and `CharacterSet` are — a REFERENCE
 to the name in a `throws` clause stays legal, which is the whole reason the name is bare.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
 enum ArrayError
 	somethingElse
 	another
 end 'ArrayError'
 
 function main() returns ExitCode
-	var a = IntArray.create()
-	a.push(7)
-	let v = try a.get(5) otherwise (e) 'oops'
-		match e 'k'
-			somethingElse then return 11
-			another then return 12
-		end 'k'
-	end 'oops'
-	return v
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:6: Unsupported: a declaration of the type name 'ArrayError', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
+error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'ArrayError', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
 ```
 
 <!-- test: error.set-length-cannot-publish-slots-of-an-element-that-excludes-zero -->

@@ -373,7 +373,7 @@ end 'bad'
 
 function main() returns ExitCode
 	let b = bad()
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -408,7 +408,7 @@ end 'bad'
 
 function main() returns ExitCode
 	let r = bad()
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

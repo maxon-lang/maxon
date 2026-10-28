@@ -342,7 +342,7 @@ end 'WorkError'
 
 function compute() returns Integer throws WorkError
 	Scheduler.yield()
-	return 42
+	throw WorkError.failed
 end 'compute'
 
 function main() returns ExitCode

@@ -328,7 +328,7 @@ end 'wrap'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	_ = wrap(7)
+	let boxed = wrap(7)
 	return 7
 end 'main'
 ```
@@ -1220,9 +1220,8 @@ name `Worker`, spawn one and hold the handle `run` sits on — so `run`'s reply 
 tier, and `Report` is not. A message exempt from the rule outright, rather than moved to its type's tier,
 would let an exported service hand a file-private record to a caller with no spelling for it.
 
-⚠ `Worker` is named nowhere outside `api/lib.maxon`, which is E3092 — and `checkSignatureVisibility` runs
-ahead of `checkUnusedExports` (`PassPipeline.buildMaxonTierPasses`) and the pipeline stops at the first
-pass that reports, so the stderr below is the whole of it.
+⚠ `Worker` is named nowhere outside `api/lib.maxon`, which is E3092 — and `checkUnusedExports` audits only
+a program no other check has refused (`UnusedExportCheck`), so the stderr below is the whole of it.
 ```maxon
 // --- file: api/lib.maxon
 typealias Tally = int(0 to 100)
@@ -1367,10 +1366,9 @@ error E3167: api/<fragment>:11:12: public constant 'api.DEFAULT' names module ty
 No type is written anywhere on the binding: the record is the value of the initializer and nothing else
 names it.
 
-⚠ `SHARED` is read nowhere outside `api/lib.maxon`, which is E3092, and `checkSignatureVisibility` runs ahead of
-`checkUnusedExports` (`PassPipeline.buildMaxonTierPasses`) and the pipeline stops at the first pass that
-reports, so the stderr below is the whole of it. A reader that touched `SHARED.n` would be refused at its own
-use, before this pass runs.
+⚠ `SHARED` is read nowhere outside `api/lib.maxon`, which is E3092, and `checkUnusedExports` audits only a
+program no other check has refused (`UnusedExportCheck`), so the stderr below is the whole of it. A
+reader that touched `SHARED.n` would be refused at its own use, before this pass runs.
 ```maxon
 // --- file: api/lib.maxon
 type Secret

@@ -50,11 +50,9 @@
 
 // ── Gates ────────────────────────────────────────────────────────────────────────────────────────
 
-// ⭐ **THE STRUCTURAL GATE IS THE PIPELINE'S, NOT THIS PASS'S.** A half-resolved reader would produce
-// spurious findings, and the schedule already rules that out: `PassPipeline.run` throws the moment ANY
-// pass reports a diagnostic, and this pass is scheduled after `semanticCheck`, so reaching it means the
-// project's diagnostic list is empty. Re-testing it here would be a second answer to a question the
-// driver has already answered.
+// A program with any diagnostic is not audited: a refused use or an abandoned body leaves its
+// declaration with no reader, so the audit would report a spurious E3092/E3093/E3094 beside the
+// error.
 
 // ── What is seeded ───────────────────────────────────────────────────────────────────────────────
 
@@ -313,6 +311,10 @@ end 'TrackedDecls'
 // ── The pass ─────────────────────────────────────────────────────────────────────────────────────
 
 module function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
+	if projectHasErrors(project) 'aRefusedUseHidesAReader'
+		return
+	end 'aRefusedUseHidesAReader'
+
 	let sources = splitSourcePaths(project)
 
 	let entryPoints = try entryPointNamesOf(project, userFiles: sources.userFiles)

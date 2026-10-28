@@ -250,7 +250,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

@@ -427,8 +427,6 @@ declaration written on line 1. The rule the author broke is stated on line 1.
 typealias CharSet = Set with String
 
 function main() returns ExitCode
-	var s = CharSet.create()
-	s.insert("a")
 	return 0
 end 'main'
 ```

@@ -3064,7 +3064,6 @@ function wide(p0 Count, p1 Count, p2 Count, p3 Count, p4 Count, p5 Count, p6 Cou
 end 'wide'
 
 function main() returns ExitCode
-	_ = wide(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	return 0
 end 'main'
 ```
@@ -3085,8 +3084,6 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder{seed: 1}
-	_ = holder.wide(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	return 0
 end 'main'
 ```
@@ -3107,7 +3104,6 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	_ = Holder.wide(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	return 0
 end 'main'
 ```
@@ -3423,7 +3419,7 @@ end 'int'
 
 function main() returns ExitCode
 	let n = 21
-	print("{n.toString()} {n.toString(3)}\n")
+	print("{n.toString(3)}\n")
 	return 0
 end 'main'
 ```

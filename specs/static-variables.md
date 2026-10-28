@@ -1168,7 +1168,7 @@ type Holder
 	static function create() returns Self
 		var index = ItemIndex.create()
 		index.upsert(1, value: [7])
-		return Self{index: index}
+		return Self{index: index.clone()}
 	end 'create'
 end 'Holder'
 

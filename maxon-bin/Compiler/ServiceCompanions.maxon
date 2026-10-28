@@ -398,6 +398,23 @@ end 'DefaultSlot'
 
 export typealias DefaultSlotArray = Array with DefaultSlot
 
+export function defaultSlotIsRefusedAsUnshareable(slot DefaultSlot) returns bool
+	return match slot.kind 'kind'
+		service gives false
+		value(_, _, shareWalk) gives shareWalkIsRefused(shareWalk)
+	end 'kind'
+end 'defaultSlotIsRefusedAsUnshareable'
+
+function shareWalkIsRefused(walk TransferWalk) returns bool
+	return match walk 'walk'
+		refused gives true
+		closed or
+		walkedBy or
+		walkedAlone or
+		walkedThroughWitness gives false
+	end 'walk'
+end 'shareWalkIsRefused'
+
 let DefaultSlotLabelPrefix = b"__default."
 
 export function defaultSlotLabel(key ByteArray) returns ByteArray
@@ -813,8 +830,8 @@ end 'declaredReplyType'
 
 // ⭐⭐ **WHY THE REPLY'S GRAPH AT AN INSTANTIATION CANNOT BE WALKED.** The loop walks the reply at the type the instantiation substitutes
 // (`ServiceLoop.publishReplyValue`). So the substituted graph is refused HERE, at the `spawn` that fixes it,
-// or it reaches the loop with no diagnostic behind it. A declaration alone has nothing substituted to ask
-// about.
+// and the refused spawn emits no `serviceSpawn` op, so no loop is built for it. A declaration alone has
+// nothing substituted to ask about.
 function instantiatedReplyGraphRefusal(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
 	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
 		return ServiceCrossing.acceptable

@@ -123,7 +123,11 @@ name belongs: the function below has no name on its line, and the name expected 
 refused at the line's end.
 ```maxon
 function /// a comment where a name belongs
-main() returns ExitCode
+broken() returns ExitCode
+	return 0
+end 'broken'
+
+function main() returns ExitCode
 	return 0
 end 'main'
 ```

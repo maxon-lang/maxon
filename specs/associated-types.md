@@ -1072,10 +1072,6 @@ type Sack implements Bag
 end 'Sack'
 
 function main() returns ExitCode
-	let s = Sack.create()
-	var f = IntArray.create()
-	f.push(7)
-	print("{s.take(f)}")
 	return 0
 end 'main'
 ```

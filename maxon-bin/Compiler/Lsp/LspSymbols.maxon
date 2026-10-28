@@ -291,7 +291,16 @@ end 'lineOpensNoBody'
 
 // The opener on a line that is not an `end` line: a declaration keyword, or a trailing label.
 function openDeclarationOrLabelledBlock(open OpenBlockArray, tokens TokenArray, tokenLine LspTokenLine)
-	let keywordIndex = pastVisibilityModifiers(tokens, tokenLine: tokenLine)
+	var keywordIndex = pastVisibilityModifiers(tokens, index: tokenLine.firstIndex)
+
+	if lspTokenAt(tokens, index: keywordIndex).kind == TokenKind.static 'aStaticMember'
+		keywordIndex = keywordIndex + 1
+	end 'aStaticMember'
+
+	if keywordIndex > tokenLine.lastIndex 'pastTheLine'
+		keywordIndex = tokenLine.lastIndex
+	end 'pastTheLine'
+
 	let keyword = lspTokenAt(tokens, index: keywordIndex)
 
 	if kindOpensADeclarationBlock(keyword.kind) 'declaration'
@@ -422,22 +431,6 @@ module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
 
 	return lines
 end 'lspTokenLines'
-
-// The token index a line's declaration keyword would sit at, past `export` / `public` / `module` /
-// `static`. Every one of those may precede a declaration and none of them opens a block itself.
-function pastVisibilityModifiers(tokens TokenArray, tokenLine LspTokenLine) returns ElementIndex
-	var index = tokenLine.firstIndex
-
-	while index < tokenLine.lastIndex 'skipModifiers'
-		if not lspIsDeclarationModifier(lspTokenAt(tokens, index: index)) 'notAModifier'
-			return index
-		end 'notAModifier'
-
-		index = index + 1
-	end 'skipModifiers'
-
-	return index
-end 'pastVisibilityModifiers'
 
 /// `export`, `public`, `static` and the contextual `module` — every word that may stand in front of a
 /// declaration keyword.

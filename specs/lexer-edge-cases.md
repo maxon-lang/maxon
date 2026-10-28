@@ -17,10 +17,14 @@ Tests for lexer behavior at source boundaries: empty source, tokens at EOF, unte
 
 <!-- test: single-char-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 x
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/single-char-eof.maxon:2:1: Expected function declaration, got 'x'
+error E2001: specs/lexer-edge-cases/single-char-eof.maxon:6:1: Expected function declaration, got 'x'
 ```
 
 <!-- test: whitespace-only -->
@@ -86,6 +90,10 @@ error E1002: specs/lexer-edge-cases/unterminated-escape-eof.maxon:2:9: Untermina
 <!-- test: empty-squote-string -->
 ```maxon
 let x = ''
+
+function main() returns ExitCode
+	return 0
+end 'main'
 ```
 ```maxoncstderr
 error E2016: specs/lexer-edge-cases/empty-squote-string.maxon:2:9: invalid character literal: a character literal must contain exactly one character
@@ -103,66 +111,98 @@ error E3001: No 'main' function found
 
 <!-- test: integer-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 42
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/integer-eof.maxon:2:1: Expected function declaration, got '42'
+error E2001: specs/lexer-edge-cases/integer-eof.maxon:6:1: Expected function declaration, got '42'
 ```
 
 <!-- test: hex-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 0xFF
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/hex-eof.maxon:2:1: Expected function declaration, got '0xFF'
+error E2001: specs/lexer-edge-cases/hex-eof.maxon:6:1: Expected function declaration, got '0xFF'
 ```
 
 <!-- test: binary-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 0b1010
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/binary-eof.maxon:2:1: Expected function declaration, got '0b1010'
+error E2001: specs/lexer-edge-cases/binary-eof.maxon:6:1: Expected function declaration, got '0b1010'
 ```
 
 <!-- test: octal-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 0o77
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/octal-eof.maxon:2:1: Expected function declaration, got '0o77'
+error E2001: specs/lexer-edge-cases/octal-eof.maxon:6:1: Expected function declaration, got '0o77'
 ```
 
 <!-- test: float-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 3.14
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/float-eof.maxon:2:1: Expected function declaration, got '3.14'
+error E2001: specs/lexer-edge-cases/float-eof.maxon:6:1: Expected function declaration, got '3.14'
 ```
 
 <!-- test: float-exponent-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 1e10
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/float-exponent-eof.maxon:2:1: Expected function declaration, got '1'
+error E2001: specs/lexer-edge-cases/float-exponent-eof.maxon:6:1: Expected function declaration, got '1'
 ```
 
 <!-- test: number-underscore-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 1_000
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/number-underscore-eof.maxon:2:1: Expected function declaration, got '1_000'
+error E2001: specs/lexer-edge-cases/number-underscore-eof.maxon:6:1: Expected function declaration, got '1_000'
 ```
 
 <!-- test: bare-hex-prefix-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 0x
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/bare-hex-prefix-eof.maxon:2:1: Expected function declaration, got '0x'
+error E2001: specs/lexer-edge-cases/bare-hex-prefix-eof.maxon:6:1: Expected function declaration, got '0x'
 ```
 
 ### Comments at EOF
@@ -204,34 +244,50 @@ error E3001: No 'main' function found
 
 <!-- test: two-char-operator-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 ==
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/two-char-operator-eof.maxon:2:1: Expected function declaration, got '=='
+error E2001: specs/lexer-edge-cases/two-char-operator-eof.maxon:6:1: Expected function declaration, got '=='
 ```
 
 <!-- test: single-equals-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 =
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/single-equals-eof.maxon:2:1: Expected function declaration, got '='
+error E2001: specs/lexer-edge-cases/single-equals-eof.maxon:6:1: Expected function declaration, got '='
 ```
 
 <!-- test: single-bang-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 !
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/single-bang-eof.maxon:2:1: Expected function declaration, got '!'
+error E2001: specs/lexer-edge-cases/single-bang-eof.maxon:6:1: Expected function declaration, got '!'
 ```
 
 <!-- test: single-slash-eof -->
 ```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+
 /
 ```
 ```maxoncstderr
-error E2001: specs/lexer-edge-cases/single-slash-eof.maxon:2:1: Expected function declaration, got '/'
+error E2001: specs/lexer-edge-cases/single-slash-eof.maxon:6:1: Expected function declaration, got '/'
 ```
 
 ### Line endings

@@ -467,7 +467,7 @@ enum MyError implements Error
 end 'MyError'
 
 function g() returns Integer throws MyError
-	return 5
+	throw MyError.failed
 end 'g'
 
 function f(x Integer) returns Integer
@@ -495,7 +495,7 @@ end 'MyError'
 function th() returns IntArray throws MyError
 	var arr = IntArray.create()
 	arr.push(10)
-	return arr
+	throw MyError.failed
 end 'th'
 
 function main() returns ExitCode

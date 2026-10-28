@@ -389,7 +389,7 @@ type Array uses Element implements BuiltinArrayLiteral
 end 'Array'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -410,13 +410,13 @@ typealias Num = int(0 to 1000)
 type Array uses Element implements BuiltinArrayLiteral
 	export var managed as Num
 
-	static function init(managed Num) returns Self
-		return Self{managed: managed}
+	static function init(value ByteArray) returns Self
+		return Self{managed: 0}
 	end 'init'
 end 'Array'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -558,7 +558,7 @@ type Holder implements BuiltinArrayLiteral
 end 'Holder'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -1603,8 +1603,6 @@ simply gone.
 precisely what cannot be honoured under such a name — so the declaration is refused where it constructs,
 with the container's own reason rather than the `String`/`Character` sentence a `Holder` gets.
 ```maxon
-typealias Num = int(0 to 100)
-
 type FixedArray uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 
@@ -1615,16 +1613,12 @@ type FixedArray uses Element implements BuiltinArrayLiteral
 	end 'init'
 end 'FixedArray'
 
-typealias Vec3 = FixedArray with 3 Num
-
 function main() returns ExitCode
-	var v = Vec3.create()
-	v.push(5 as Num)
-	return v.count() as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: `FixedArray` is a generic container the compiler SYNTHESIZES the record for, so a `FixedArray with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `FixedArray` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
+error E2015: <fragment>:8:10: Unsupported: `FixedArray` is a generic container the compiler SYNTHESIZES the record for, so a `FixedArray with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `FixedArray` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
 ```
 
 <!-- test: a-conformer-named-for-the-list-is-admitted-because-the-list-left-the-class -->
@@ -1753,7 +1747,7 @@ type FixedArray implements BuiltinStringLiteral
 end 'FixedArray'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
 	try mm.setLength(40) otherwise return 2
 	let w = FixedArray.init(mm)
 	return 0

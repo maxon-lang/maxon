@@ -47,8 +47,7 @@
 // ⭐⭐ **BUILD `<T>.__loop` FOR EVERY SERVICE IN THE PROGRAM.** Called from
 // `Compiler.lowerTheProgram` directly after `installManagedGlobalInit`, at the same tier and for
 // the same reason — see this file's header, and `ModuleInit`'s, which states the position's whole
-// argument. It is called only while the project has no diagnostic, so every handler it calls was
-// parsed.
+// argument.
 //
 // A program that spawns nothing builds NOTHING here: `serviceTypeRoster` is empty, which is every program
 // that never writes `spawn`.
@@ -68,6 +67,15 @@ export function installServiceLoops(module MaxonModule, project Project, signatu
 
 	for i in 0 upto services.count() 'eachService'
 		let typeName = try services.get(i) otherwise panic("installServiceLoops: services.get OOB at {i} on a list walked to its own count")
+
+		if project.poison.declaresANominalType(typeName) 'declaredInAFailedFile'
+			continue
+		end 'declaredInAFailedFile'
+
+		if project.poison.holdsAnAbandonedBodyOf(typeName, declaredIn: spawnTargetLayoutOf(signatures, typeName: typeName).declFilePath) 'aHandlerWasAbandoned'
+			continue
+		end 'aHandlerWasAbandoned'
+
 		buildServiceLoops(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, instances: try spawned.get(i) otherwise panic("installServiceLoops: spawned.get OOB at {i} — one bucket is pushed per service before the walk"))
 	end 'eachService'
 end 'installServiceLoops'
@@ -582,15 +590,17 @@ end 'publishAnsweredReply'
 // ⚠ **A REFUSED GRAPH HERE MEANS THE PROGRAM IS ALREADY REFUSED** — at the handler's `return`
 // (`Parser.proveReplyCrossable`) for the type the body declares, and at the `spawn` for the type an
 // instantiation substitutes (`ServiceCompanions.instantiatedReplyGraphRefusal`), both through
-// `ProgramSignatures.transferWalkOf`. The loop is built only for a program with no diagnostic, so a
-// refused graph reaching here is a compiler defect, and the `refused` arm panics on it.
+// `ProgramSignatures.transferWalkOf`. The handler's refusal abandons its body, and
+// `installServiceLoops` builds no loop for a service with an abandoned handler body; the spawn's refusal
+// emits no `serviceSpawn` op, so no loop is built for that instance. A refused graph reaching here is a
+// compiler defect, and the `refused` arm panics on it.
 function publishReplyValue(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, replyType MaxonType, result ValueId, reply ServiceReplyTarget, threw ValueId, site SynthesizedSite)
 	match replyTransferWalk(signatures, replyType: replyType, declFilePath: signatures.recordedReturnDeclFileOf(callee)) 'graph'
 		closed then break
 		walkedBy(walk) then emitReplyGraphWalk(fn, walk: walk, walked: argsOf(result), site: site)
 		walkedAlone(walk) then fn.emitPositionalCallDiscarding(walk, args: argsOf(result), site: site)
 		walkedThroughWitness(entry) then emitReplyGraphWalk(fn, walk: entry, walked: twoArgs(fn.witnessOf(result), second: result), site: site)
-		refused(noun) then panic("publishReplyValue: the reply of `{String.from(callee)}` is {noun}, on a program with no error — `Parser.proveReplyCrossable` and the `spawn`'s roster refuse that graph")
+		refused(noun) then panic("publishReplyValue: the reply of `{String.from(callee)}` is {noun}, yet a loop is built only for a service with no abandoned handler body, whose every `return` passed `Parser.proveReplyCrossable`, and only for an instance a `serviceSpawn` op names, which `Parser.parseSpawn` emits after the roster passed at that instance")
 	end 'graph'
 
 	if maxonTypeTag(replyType) == ValueTypeTag.interfaceRef 'aFatPointer'

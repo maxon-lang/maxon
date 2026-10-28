@@ -1,0 +1,18 @@
+let ProjectBodyAbandonedDirName = "diagnostics-project-body-abandoned"
+let ProjectBodyAbandonedHelperFileName = "helper.maxon"
+let ProjectBodyAbandonedBufferFileName = "main.maxon"
+let ProjectBodyAbandonedHelperSource = "module function projectBodyAbandonedHelper() returns String\n\treturn \"\"\nend 'projectBodyAbandonedHelper'\n"
+let ProjectBodyAbandonedBufferSource = "typealias Integer = int(i64.min to i64.max)\n\nfunction broken() returns Integer\n\tlet x: int = 0\n\treturn 0\nend 'broken'\n\nfunction other() returns Integer\n\treturn projectBodyAbandonedNowhere(7)\nend 'other'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let ProjectBodyAbandonedPublished = "E2010@3 E3004@8"
+
+test 'a parse error in one body and an undefined call in another are both published'
+	let root = stagedProjectDiagnosticsRoot(ProjectBodyAbandonedDirName)
+	writeCorpusFile(root, fileName: ProjectBodyAbandonedHelperFileName, content: ProjectBodyAbandonedHelperSource)
+	writeCorpusFile(root, fileName: ProjectBodyAbandonedBufferFileName, content: ProjectBodyAbandonedBufferSource)
+
+	let probe = probeProjectCheckDiagnostics(root, fileName: ProjectBodyAbandonedBufferFileName, content: ProjectBodyAbandonedBufferSource, edits: StringArray.create())
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectBodyAbandonedPublished, note: "`broken` has a malformed binding and `projectBodyAbandonedNowhere` is declared nowhere. A parse error abandons only the body it is in, so the rest of the file is read and the server publishes both mistakes on their own lines.")
+end 'a parse error in one body and an undefined call in another are both published'

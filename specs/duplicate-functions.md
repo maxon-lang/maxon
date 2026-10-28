@@ -83,3 +83,28 @@ end 'main'
 ```maxoncstderr
 error E3006: specs/duplicate-functions/error.multi-file-duplicate-main.maxon:8:10: Duplicate function 'main'
 ```
+
+<!-- test: error.a-duplicate-function-beside-an-undefined-call-in-another-function-reports-both -->
+A duplicate declaration is refused where it is declared, and the rest of the program is still checked: the
+undefined call in `broken` is independent of the duplicate.
+```maxon
+function helper() returns ExitCode
+	return 1
+end 'helper'
+
+function helper() returns ExitCode
+	return 2
+end 'helper'
+
+function broken() returns ExitCode
+	return nothere(7)
+end 'broken'
+
+function main() returns ExitCode
+	return broken()
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:6:10: Duplicate function 'helper'
+error E3004: <fragment>:11:9: call to undefined function 'nothere'
+```

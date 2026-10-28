@@ -1062,7 +1062,7 @@ end 'Cell'
 
 function main() returns ExitCode
 	var chain = CellChain.create()
-	let n = chain.insertLast(Cell.create(Nothing.create(3)))
+	var n = chain.insertLast(Cell.create(Nothing.create(3)))
 	var cell = n.value()
 	cell.retarget(Holder.create(n))
 	return cell.tag()

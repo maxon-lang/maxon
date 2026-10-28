@@ -402,9 +402,7 @@ end 'Judge'
 // --- file: main.maxon
 function main() returns ExitCode
 	let judge = Judge.create()
-	let high = 50 as b.Score
-	let low = 3 as a.Score
-	return (judge.rate(high) + (low as Integer)) as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -1947,6 +1945,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: <fragment>:12:6: Method 'Point.digest' throws 'Error' but interface 'Digest' declares it 'throws DigestError' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'DigestError'
+error E3113: <fragment>:17:11: 'throws Error' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws
 ```
 
 <!-- test: error.boxed-throws-under-abstract-requirement -->
@@ -2087,8 +2086,8 @@ refuses it.
 
 ⚠ The refusal reaches only pairs the strict rule refuses — a same-named pair never asks either
 question — so nothing the strict rule accepts is touched by it. `throws Bogus` on a
-plain function is not refused at this door: **E3113** refuses it, at the function's own clause. Both fire on the program below, and this
-one WINS, deliberately — `checkConformance` runs before the pipeline, and it is the only one of the two that
+plain function is not refused at this door: **E3113** refuses it, at the function's own clause. Both fire on the program below and both are reported, the conformance
+refusal first — `checkConformance` runs before the pipeline, and it is the only one of the two that
 can name the requirement the implementation is violating.
 ```maxon
 typealias Code = int(0 to u32.max)
@@ -2113,6 +2112,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: <fragment>:8:6: Method 'Point.digest' throws 'Bogus' but interface 'Digest' declares it 'throws Error', and 'Bogus' names no declared enum or union — the narrowing an abstract requirement permits is granted only to an error type whose flag SHAPE the compiler can see, and an unresolvable name is a mistake rather than a licence. Declare 'Bogus', or name 'Error' itself
+error E3113: <fragment>:13:11: 'throws Bogus' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
 ```
 
 ## A builtin literal marker is not a marker a user type may wear
@@ -2146,7 +2146,7 @@ type Wrapped implements BuiltinStringLiteral
 end 'Wrapped'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
 	try mm.setLength(40) otherwise return 2
 	let w = Wrapped.init(mm)
 	return 0
@@ -2187,7 +2187,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
 	try mm.setLength(40) otherwise return 2
 	let b = Box.init(Wrapped.init(mm))
 	let copy = b.get()
@@ -2223,7 +2223,7 @@ type Wrapped implements BuiltinStringLiteral
 end 'Wrapped'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.setByte(0, 65) otherwise return 3
 	let w = Wrapped.init(mm)

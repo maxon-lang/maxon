@@ -1491,7 +1491,7 @@ end 'useSqrt'
 1
 ```
 
-<!-- test: error.a-refused-initializer-call-beside-an-unused-typealias-reports-the-typealias -->
+<!-- test: error.a-refused-initializer-call-beside-an-unused-typealias-reports-both -->
 An unused typealias in another file is reported ahead of an initializer's undefined call, as it is ahead
 of the same call in a function body.
 ```maxon
@@ -1507,10 +1507,11 @@ typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
 error E3062: <fragment>:10:11: unused typealias: 'Unused'
+error E3004: <fragment>:3:9: call to undefined function 'nothere'
 ```
 
-<!-- test: error.a-refused-function-body-call-beside-an-unused-typealias-reports-the-typealias -->
-The same call in a function body.
+<!-- test: error.a-refused-function-body-call-beside-an-unused-typealias-reports-both -->
+The same call in a function body: the unused typealias and the undefined call are independent, so both are reported.
 ```maxon
 // --- file: main.maxon
 function main() returns ExitCode
@@ -1523,6 +1524,399 @@ typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
 error E3062: <fragment>:9:11: unused typealias: 'Unused'
+error E3004: <fragment>:4:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-non-constant-initializer-beside-an-undefined-call-in-another-function-reports-both -->
+An initializer that calls a function is refused (E2045) whatever else the program holds, so an undefined call
+in another function is reported beside it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function compute() returns Integer
+	return 42
+end 'compute'
+
+let RESULT = compute()
+
+function broken() returns Integer
+	return nothere(7)
+end 'broken'
+
+function main() returns ExitCode
+	return RESULT
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:11:9: call to undefined function 'nothere'
+error E2045: <fragment>:8:14: Function calls are not allowed in global variable initializers; 'compute()' is not a constant expression
+```
+
+<!-- test: error.the-uses-of-a-refused-local-binding-report-only-the-refusal -->
+Every use of `g` below meets a binding whose initializer is a refused call: only the call is reported.
+```maxon
+typealias Digit = int(0 to 9)
+
+function use(n Digit) returns Digit
+	return n
+end 'use'
+
+function main() returns ExitCode
+	let g = nothere(7)
+	let a = use(g)
+	print("{g} {a}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:9:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.an-unused-typealias-in-one-file-beside-a-type-mismatch-in-another-reports-both -->
+An unused typealias and an argument of the wrong type in different files are independent, so both are reported.
+```maxon
+// --- file: main.maxon
+typealias Small = int(0 to 255)
+
+function takesSmall(n Small) returns Small
+	return n
+end 'takesSmall'
+
+function main() returns ExitCode
+	let code = 3 as ExitCode
+	return takesSmall(code) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+typealias Unused = int(0 to 5)
+```
+```maxoncstderr
+error E3062: <fragment>:15:11: unused typealias: 'Unused'
+error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+```
+
+<!-- test: error.a-parse-error-in-one-file-beside-an-undefined-call-in-another-reports-both -->
+A file that fails to parse and an undefined call in another file are independent, so both are reported.
+```maxon
+// --- file: main.maxon
+function main() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'main'
+
+// --- file: other.maxon
+function broken() returns ExitCode
+	let x: int = 0
+	return 0
+end 'broken'
+```
+```maxoncstderr
+error E2010: <fragment>:10:7: Expected '=' but got ':'
+error E3004: <fragment>:4:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-failed-file-beside-a-same-named-function-reports-the-healthy-files-argument-mistake -->
+The file that fails to parse declares a `helper`; a healthy file in another directory declares its own and
+calls it with the wrong argument. The mistake is in the healthy declaration's call, so it is reported
+beside the parse error.
+```maxon
+// --- file: a/broken.maxon
+typealias Digit = int(0 to 9)
+
+function helper(n Digit) returns Digit
+	let x: int = 0
+	return n
+end 'helper'
+
+// --- file: b/main.maxon
+typealias Digit = int(0 to 9)
+
+function helper(n Digit) returns Digit
+	return n
+end 'helper'
+
+function main() returns ExitCode
+	let answer = helper(true)
+	return answer as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2010: a/<fragment>:6:7: Expected '=' but got ':'
+error E3005: b/<fragment>:18:15: argument type mismatch for 'n': expected 'b.Digit', got 'bool'
+```
+
+<!-- test: error.a-failed-file-beside-a-same-named-private-function-reports-the-healthy-declarations-refusal -->
+The file that fails to parse declares a private `helper`, which no other file can name. A healthy file calls
+a `helper` that another healthy file keeps private: that refusal is the healthy declaration's, so it is
+reported beside the parse error.
+```maxon
+// --- file: a/broken.maxon
+function helper(n ExitCode) returns ExitCode
+	let x: int = 0
+	return n
+end 'helper'
+
+// --- file: b/lib.maxon
+function helper(n ExitCode) returns ExitCode
+	return n
+end 'helper'
+
+// --- file: b/main.maxon
+function main() returns ExitCode
+	return helper(1)
+end 'main'
+```
+```maxoncstderr
+error E2010: a/<fragment>:4:7: Expected '=' but got ':'
+error E3004: b/<fragment>:15:9: call to undefined function 'helper'
+```
+
+<!-- test: error.a-failed-file-beside-a-same-named-type-reports-the-healthy-files-mistake -->
+The file that fails to parse declares a typealias `Shape` that only it can name; a healthy file declares a
+type of that name and calls a member it does not have. The call is the healthy type's mistake, so it is
+reported beside the parse error.
+```maxon
+// --- file: a/broken.maxon
+typealias Shape = int(0 to 9)
+
+function broken(n Shape) returns Shape
+	let x: int = 0
+	return n
+end 'broken'
+
+// --- file: b/main.maxon
+type Shape
+	var sides as ExitCode
+
+	static function make() returns Shape
+		return Shape{sides: 4}
+	end 'make'
+end 'Shape'
+
+function main() returns ExitCode
+	return Shape.nothere()
+end 'main'
+```
+```maxoncstderr
+error E2010: a/<fragment>:6:7: Expected '=' but got ':'
+error E3004: b/<fragment>:20:15: call to undefined function 'Shape.nothere'
+```
+
+<!-- test: error.a-parse-error-in-one-function-beside-an-undefined-call-in-another-function-of-the-same-file-reports-both -->
+A parse error abandons only the body it is in: the rest of the file is read, so an undefined call in another
+function of the same file is reported beside it.
+```maxon
+function broken() returns ExitCode
+	let x: int = 0
+	return 0
+end 'broken'
+
+function other() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'other'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:7: Expected '=' but got ':'
+error E3004: <fragment>:8:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-call-to-a-function-whose-body-failed-to-parse-reports-only-the-parse-error -->
+The function whose body failed to parse keeps its signature, so a correct call to it is no consequence of the
+parse error and is not reported.
+```maxon
+function broken(n ExitCode) returns ExitCode
+	let x: int = 0
+	return n
+end 'broken'
+
+function main() returns ExitCode
+	return broken(1)
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:7: Expected '=' but got ':'
+```
+
+<!-- test: error.a-wrong-call-to-a-function-whose-body-failed-to-parse-reports-both -->
+The signature of a function whose body failed to parse survives, so a call that disagrees with it is refused
+beside the parse error.
+```maxon
+function broken(n ExitCode) returns ExitCode
+	let x: int = 0
+	return n
+end 'broken'
+
+function main() returns ExitCode
+	return broken(true)
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:7: Expected '=' but got ':'
+error E3005: <fragment>:8:9: argument type mismatch for 'n': expected 'ExitCode', got 'bool'
+```
+
+<!-- test: error.a-parse-error-in-one-function-beside-a-refused-initializer-reports-both -->
+A parse error in a function body and a refused top-level initializer in the same file are independent, so both
+are reported.
+```maxon
+typealias Digit = int(0 to 9)
+
+let TOO_BIG = 42 as Digit
+
+function broken() returns ExitCode
+	let x: int = 0
+	return 0
+end 'broken'
+
+function main() returns ExitCode
+	return TOO_BIG as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:18: Value 42 is outside the range of 'Digit' (int(0 to 9))
+error E2010: <fragment>:7:7: Expected '=' but got ':'
+```
+
+<!-- test: error.a-parse-error-in-a-method-body-beside-an-undefined-call-in-a-function-reports-both -->
+A method body is a body too: the type around it and the functions after it are read.
+```maxon
+type Counter
+	export var total as ExitCode
+
+	function bump() returns ExitCode
+		let x: int = 0
+		return self.total
+	end 'bump'
+end 'Counter'
+
+function other() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'other'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:6:8: Expected '=' but got ':'
+error E3004: <fragment>:12:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-parse-error-in-a-function-body-beside-a-missing-main-reports-both -->
+A file whose only fault in reading is a body is readable, so it is known to hold no `main`.
+```maxon
+function broken() returns ExitCode
+	let x: int = 0
+	return 0
+end 'broken'
+```
+```maxoncstderr
+error E2010: <fragment>:3:7: Expected '=' but got ':'
+error E3001: No 'main' function found
+```
+
+<!-- test: error.a-parse-error-in-a-declaration-head-beside-an-undefined-call-in-another-function-reports-both -->
+A parse error outside every body abandons only the declaration it is in: the declarations after it are read,
+so an undefined call in a later function of the same file is reported beside it.
+```maxon
+function broken( returns ExitCode
+	return 0
+end 'broken'
+
+function other() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'other'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:2: Expected ')' but got 'return'
+error E3004: <fragment>:7:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-parse-error-in-a-type-body-beside-an-undefined-call-in-a-later-function-reports-both -->
+A parse error in a type's member abandons that type, not the file. The uses of the type are no mistake of
+their own and are not reported; the undefined call in a later function is.
+```maxon
+type Counter
+	export var total as ExitCode
+	export var step ExitCode
+
+	static function make() returns Counter
+		return Counter{total: 0, step: 1}
+	end 'make'
+end 'Counter'
+
+function read(c Counter) returns ExitCode
+	return c.total
+end 'read'
+
+function other() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'other'
+
+function main() returns ExitCode
+	return read(Counter.make())
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:4:18: Expected '=' but got 'ExitCode'
+error E3004: <fragment>:16:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-malformed-declaration-line-between-two-functions-reports-only-itself -->
+A line that begins no declaration is abandoned to the next declaration; `main` calls the functions on both
+sides of it, and neither call is a mistake.
+```maxon
+function first() returns ExitCode
+	return 1
+end 'first'
+
+zzz not a declaration
+
+function second() returns ExitCode
+	return 2
+end 'second'
+
+function main() returns ExitCode
+	let a = first()
+	let b = second()
+
+	if a == b 'same'
+		return 1
+	end 'same'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:6:1: Expected function declaration, got 'zzz'
+```
+
+<!-- test: error.a-call-to-a-function-whose-head-failed-to-parse-reports-only-the-parse-error -->
+`broken` is abandoned with its head, so its signature is gone; the call to it is the parse error's consequence
+and is not reported.
+```maxon
+function broken( returns ExitCode
+	return 0
+end 'broken'
+
+function main() returns ExitCode
+	return broken()
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:2: Expected ')' but got 'return'
 ```
 
 <!-- test: error.a-constant-reading-a-refused-call-constant-reports-the-call-once -->
@@ -1850,10 +2244,9 @@ end 'useLarger'
 error E3008: <fragment>:3:11: function 'larger' is not exported
 ```
 
-<!-- test: error.a-tuple-assignment-to-a-refused-call-var-reports-the-tuple-assignment -->
+<!-- test: error.a-tuple-assignment-to-a-refused-call-var-reports-the-tuple-assignment-and-the-call -->
 `G`'s initializer is a refused call, and a tuple assignment naming a module `var` is refused whatever
-its value. The tuple assignment's refusal is reported ahead of the call, as it is when the same call is
-written in a function body.
+its value. The two are independent, so both are reported, the tuple assignment ahead of the call.
 ```maxon
 typealias Digit = int(0 to 9)
 
@@ -1871,10 +2264,11 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:12:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
+error E3004: <fragment>:4:9: call to undefined function 'nothere'
 ```
 
-<!-- test: error.a-tuple-assignment-to-a-module-var-beside-a-refused-call-in-a-function-body -->
-The same refused call written in a function body, beside the same tuple assignment.
+<!-- test: error.a-tuple-assignment-to-a-module-var-beside-a-refused-call-in-another-function-body -->
+The same refused call written in another function body, beside the same tuple assignment.
 ```maxon
 typealias Digit = int(0 to 9)
 
@@ -1884,15 +2278,20 @@ function pair() returns (Digit, Digit)
 	return (1 as Digit, 2 as Digit)
 end 'pair'
 
-function main() returns ExitCode
+function other() returns Digit
 	let h = nothere(7)
+	return h
+end 'other'
+
+function main() returns ExitCode
 	var y = 0 as Digit
 	(G, y) = pair()
-	return (y + h) as ExitCode
+	return (y + other()) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
+error E2015: <fragment>:17:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
+error E3004: <fragment>:11:10: call to undefined function 'nothere'
 ```
 
 <!-- test: error.a-refused-call-inside-a-record-literal-reports-the-call-and-the-cast-before-it -->
@@ -2558,4 +2957,797 @@ end 'main'
 ```
 ```maxoncstderr
 error E2080: <fragment>:22:2: `return` has no function to leave in the initializer of 'CONFIG' — end a handler there with `panic(…)`, or give the `try` a fallback value with `otherwise <expr>`
+```
+
+<!-- test: error.a-type-name-of-a-refused-alias-written-in-a-healthy-body-reports-only-the-refusal -->
+```maxon
+typealias Odd = bits(5)
+
+function main() returns ExitCode
+	let x = 1 as Odd
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3148: <fragment>:2:22: 'bits(5)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
+```
+
+<!-- test: error.a-field-read-of-a-type-with-a-refused-member-reports-only-the-refusal -->
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	view n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2077: <fragment>:5:2: `view` binds a local name, so it cannot declare a field, a module-level binding, an extension member or a `@heap` binding; use `let` or `var`
+```
+
+<!-- test: error.a-read-of-a-refused-module-binding-in-a-healthy-body-reports-only-the-refusal -->
+```maxon
+typealias Count = int(0 to 1000)
+
+view limit = 3 as Count
+
+function main() returns ExitCode
+	print("{limit}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2077: <fragment>:4:1: `view` binds a local name, so it cannot declare a field, a module-level binding, an extension member or a `@heap` binding; use `let` or `var`
+```
+
+<!-- test: error.a-type-refused-in-one-file-and-written-in-a-healthy-file-reports-only-the-refusal -->
+```maxon
+// --- file: odd.maxon
+export typealias Odd = bits(5)
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let x = 1 as Odd
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3148: <fragment>:3:29: 'bits(5)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
+```
+
+<!-- test: error.a-call-to-a-refused-reserved-name-from-a-healthy-function-reports-only-the-refusal -->
+```maxon
+function __helper() returns ExitCode
+	return 0
+end '__helper'
+
+function other() returns ExitCode
+	return __helper()
+end 'other'
+
+function main() returns ExitCode
+	return other()
+end 'main'
+```
+```maxoncstderr
+error E2051: <fragment>:2:10: identifier '__helper' is reserved: declarations starting with '__' are reserved for compiler internals
+```
+
+<!-- test: error.an-unknown-type-no-refused-declaration-names-is-still-reported-beside-a-refusal -->
+```maxon
+typealias Odd = bits(5)
+
+function main() returns ExitCode
+	let x = 1 as Missing
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3148: <fragment>:2:22: 'bits(5)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
+error E3011: <fragment>:5:12: Unknown type 'Missing'
+```
+
+<!-- test: error.a-body-refused-in-one-file-leaves-a-clone-handed-to-a-let-field-in-another-file-unreported -->
+```maxon
+// --- file: refused.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function classify(c Container) returns ExitCode
+	match c 'check'
+		empty then return 1
+		value(_) then return 0
+	end 'check'
+end 'classify'
+
+// --- file: main.maxon
+type Pair
+	let left as ByteArray
+	let right as ByteArray
+
+	static function of(left ByteArray, right ByteArray) returns Self
+		return Self{left: left, right: right}
+	end 'of'
+end 'Pair'
+
+function settle(text ByteArray) returns Pair
+	return Pair.of(text.clone(), right: text.clone())
+end 'settle'
+
+function main() returns ExitCode
+	let settled = settle(ByteArray.create())
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3081: <fragment>:13:3: use 'value' instead of 'value(_)' to ignore associated values
+```
+
+<!-- test: error.a-program-that-folds-twice-with-an-explained-consequence-does-not-panic -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Odd = bits(5)
+
+function same(v T) uses T returns T
+	return v
+end 'same'
+
+function main() returns ExitCode
+	let b = same(4 as Digit)
+	let x = 1 as Odd
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3148: <fragment>:3:22: 'bits(5)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
+```
+
+<!-- test: error.a-broken-body-keeps-a-discarded-pure-result-elsewhere -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+function broken(v Tally) returns Tally
+	let s = v + "x"
+	return v
+end 'broken'
+
+function same(v Tally) returns Tally
+	return v
+end 'same'
+
+function main() returns ExitCode
+	_ = broken(1)
+	_ = same(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:5:12: Cannot operate on Tally and String
+error E3064: <fragment>:15:2: result of pure function 'same' must be used
+```
+
+<!-- test: error.a-refused-call-keeps-a-discarded-pure-result-on-another-line-of-the-same-body -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+function same(v Tally) returns Tally
+	return v
+end 'same'
+
+function main() returns ExitCode
+	let s = nothere(7)
+	_ = same(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:9:10: call to undefined function 'nothere'
+error E3064: <fragment>:10:2: result of pure function 'same' must be used
+```
+
+<!-- test: error.a-generic-services-function-valued-reply-is-reported-once-at-the-handler -->
+```maxon
+typealias Tally = int(0 to 1000)
+typealias Op = function(Tally) returns Tally
+
+type Maker uses T
+	var seen as Tally
+
+	static function create(seed T) returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function make() returns Op
+		self.seen = self.seen + 1
+		return function(n Tally) gives n + 1
+	end 'make'
+end 'Maker'
+
+function main() returns ExitCode
+	let h = spawn Maker.create(1 as Tally)
+	let op = try await h.make() otherwise panic("the maker is running")
+	return op(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:14:3: the reply of the message `Maker.make` is a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+```
+
+<!-- test: error.a-spawn-refusal-beside-another-methods-abandoned-body-is-still-reported -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Maker uses T
+	export typealias Items = Array with T
+	var seen as Integer
+
+	static function create(seed T) returns Self
+		var first = Items.create()
+		first.push(seed)
+		return Self{seen: first.count() as Integer}
+	end 'create'
+
+	export function make() returns Items
+		self.seen = self.seen + 1
+		return Items.create()
+	end 'make'
+
+	export function other() returns Integer
+		return (1 +
+	end 'other'
+end 'Maker'
+
+function main() returns ExitCode
+	let h = spawn Maker.create(MachinePin.acquire())
+	let items = try await h.make() otherwise panic("the maker is running")
+	print("{items.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:21:2: Expected expression but got 'end'
+error E3138: <fragment>:25:10: the reply of the message `Maker.make` is a `Array with MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+```
+
+<!-- test: error.a-spawn-refusal-beside-an-unrelated-error-builds-no-loop-for-the-refused-instance -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Maker uses T
+	export typealias Items = Array with T
+	var seen as Integer
+
+	static function create(seed T) returns Self
+		var first = Items.create()
+		first.push(seed)
+		return Self{seen: first.count() as Integer}
+	end 'create'
+
+	export function make() returns Items
+		self.seen = self.seen + 1
+		return Items.create()
+	end 'make'
+end 'Maker'
+
+function unrelated() returns Integer
+	return nothere(7)
+end 'unrelated'
+
+function main() returns ExitCode
+	let h = spawn Maker.create(MachinePin.acquire())
+	let items = try await h.make() otherwise panic("the maker is running")
+	print("{items.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:25:10: the reply of the message `Maker.make` is a `Array with MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3004: <fragment>:21:9: call to undefined function 'nothere'
+```
+
+<!-- test: error.an-unclosed-bracket-ends-at-a-column-one-module-function -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function broken() returns Digit
+	return foo(1,
+end 'broken'
+
+module function helper() returns ExitCode
+	return nothere(7)
+end 'helper'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2053: <fragment>:6:1: the second and later arguments must be named ('name: value')
+error E3004: <fragment>:9:9: call to undefined function 'nothere'
+```
+
+<!-- test: error.an-unclosed-bracket-ends-at-a-column-one-default-declaration -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function broken() returns Digit
+	return foo(1,
+end 'broken'
+
+default Feed = nothere(7)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2053: <fragment>:6:1: the second and later arguments must be named ('name: value')
+error E3011: <fragment>:8:9: Unknown type 'Feed'
+```
+
+<!-- test: error.an-abandoned-declaration-ends-at-a-default-declaration -->
+```maxon
+typealias Digit = int(0 to 9)
+
+typealias Bad =
+
+default Feed = nothere(7)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:16: Unsupported: a typealias over 'newline' (a typealias names `int(low to high)`, `float(low to high)`, `bits(n)`, `function(...)`, a tuple `(A, B)` or a generic instance `Base with …`)
+error E3011: <fragment>:6:9: Unknown type 'Feed'
+```
+
+<!-- test: error.an-abandoned-declaration-ends-at-a-view-declaration -->
+```maxon
+typealias Digit = int(0 to 9)
+
+typealias Bad =
+
+view shown = 3
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:16: Unsupported: a typealias over 'newline' (a typealias names `int(low to high)`, `float(low to high)`, `bits(n)`, `function(...)`, a tuple `(A, B)` or a generic instance `Base with …`)
+error E2077: <fragment>:6:1: `view` binds a local name, so it cannot declare a field, a module-level binding, an extension member or a `@heap` binding; use `let` or `var`
+```
+
+<!-- test: error.a-fold-redone-after-a-refused-binding-with-an-explained-consequence-does-not-panic -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias UnaryOp = function(Digit) returns Digit
+
+let Broken = 3 + "x"
+
+function same(v T) uses T returns T
+	return v
+end 'same'
+
+function twice(v Digit) returns Digit
+	return v
+end 'twice'
+
+function pickFn() returns UnaryOp
+	return twice
+end 'pickFn'
+
+function main() returns ExitCode
+	let a = Broken
+	let b = same(4 as Digit)
+	return pickFn().x
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:5:16: Cannot operate on int and String
+error E2015: <fragment>:22:18: Unsupported: a member access 'x' on a 'function' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here
+```
+
+<!-- test: error.a-body-reading-a-refused-global-keeps-its-own-independent-member-access -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias UnaryOp = function(Digit) returns Digit
+
+let Broken = 3 + "x"
+
+function twice(v Digit) returns Digit
+	return v
+end 'twice'
+
+function pickFn() returns UnaryOp
+	return twice
+end 'pickFn'
+
+function main() returns ExitCode
+	let a = Broken
+	return pickFn().x
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:5:16: Cannot operate on int and String
+error E2015: <fragment>:17:18: Unsupported: a member access 'x' on a 'function' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here
+```
+
+<!-- test: error.a-parameter-sharing-a-refused-globals-name-keeps-its-bodys-member-access -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias UnaryOp = function(Digit) returns Digit
+
+let total = 3 + "x"
+
+function twice(v Digit) returns Digit
+	return v
+end 'twice'
+
+function pickFn() returns UnaryOp
+	return twice
+end 'pickFn'
+
+function show(total Digit) returns Digit
+	_ = total
+	return pickFn().x
+end 'show'
+
+function main() returns ExitCode
+	return show(3)
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:5:15: Cannot operate on int and String
+error E2015: <fragment>:17:18: Unsupported: a member access 'x' on a 'function' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here
+```
+
+<!-- test: error.a-refused-global-named-like-the-member-keeps-the-member-access -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias UnaryOp = function(Digit) returns Digit
+
+let x = 3 + "x"
+
+function twice(v Digit) returns Digit
+	return v
+end 'twice'
+
+function pickFn() returns UnaryOp
+	return twice
+end 'pickFn'
+
+function main() returns ExitCode
+	return pickFn().x
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:5:11: Cannot operate on int and String
+error E2015: <fragment>:16:18: Unsupported: a member access 'x' on a 'function' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here
+```
+
+<!-- test: error.a-refused-global-keeps-an-undefined-method-of-the-same-member-name -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Point
+	let x as Digit
+
+	static function create() returns Point
+		return Self{x: 1}
+	end 'create'
+end 'Point'
+
+let make = 3 + "x"
+
+function main() returns ExitCode
+	let p = Point.make()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:12:14: Cannot operate on int and String
+error E3004: <fragment>:15:16: call to undefined function 'Point.make'
+```
+
+<!-- test: error.a-refused-global-keeps-a-wrong-arity-call-to-a-same-named-method -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Point
+	let x as Digit
+
+	static function create() returns Point
+		return Self{x: 1}
+	end 'create'
+
+	function scale(k Digit) returns Digit
+		return k
+	end 'scale'
+end 'Point'
+
+let scale = 3 + "x"
+
+function main() returns ExitCode
+	let q = Point.create().scale(1, extra: 2)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:16:15: Cannot operate on int and String
+error E3036: <fragment>:19:25: 'Point.scale' expects 2 argument(s) but 3 were provided
+```
+
+<!-- test: error.a-keyword-less-main-head-is-the-only-diagnostic -->
+```maxon
+main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:2:1: Expected function declaration, got 'main'
+```
+
+<!-- test: error.a-fold-redone-with-a-stdlib-body-demand-reports-only-the-width -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Odd = bits(5)
+
+function same(v T) uses T returns T
+	return v
+end 'same'
+
+function main() returns ExitCode
+	let b = same(4 as Digit)
+	let x = 1 as Odd
+	let loud = "quiet".toUpper()
+	print("{loud}{x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3148: <fragment>:3:22: 'bits(5)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
+```
+
+<!-- test: error.a-refused-extension-keeps-an-undefined-call-on-an-unrelated-type -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Foo
+	let n as Digit
+
+	static function create() returns Foo
+		return Self{n: 1}
+	end 'create'
+end 'Foo'
+
+type Bar
+	let n as Digit
+
+	static function create() returns Bar
+		return Self{n: 2}
+	end 'create'
+end 'Bar'
+
+extension Foo
+	function shifted(amount) returns Digit
+		return n
+	end 'shifted'
+end 'Foo'
+
+function main() returns ExitCode
+	let c = Bar.missing()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:19: Unsupported: parameter 'amount' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
+error E3004: <fragment>:27:14: call to undefined function 'Bar.missing'
+```
+
+<!-- test: error.a-refused-extension-keeps-a-method-miss-on-a-list-not-built-from-the-extended-type -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = List with Digit
+
+type Box
+	typealias Items = List with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+extension Box
+	typealias Items = Array with Digit
+
+	function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Box'
+
+function main() returns ExitCode
+	var xs = Digits.create()
+	xs.pushh(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:15:12: Duplicate typealias 'Items': `Box.Items` is already declared in the body of `Box`
+error E4006: <fragment>:24:5: Type 'List' has no method named 'pushh'
+```
+
+<!-- test: error.a-refused-extension-keeps-a-missing-static-method-whose-argument-came-from-the-refused-producer -->
+```maxon
+// --- file: lib/token.maxon
+export type Token
+	export var n as Count
+
+	export static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+// --- file: main.maxon
+typealias Digit = int(0 to 9)
+
+type Box
+	typealias Items = List with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+extension Box
+	typealias Items = Array with Digit
+
+	function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create(3)
+	let xs = box.all()
+	lib.Token.nosuch(xs)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:24:12: Duplicate typealias 'Items': `Box.Items` is already declared in the body of `Box`
+error E4006: <fragment>:34:12: Type 'Token' has no method named 'nosuch'
+```
+
+<!-- test: error.a-call-with-too-few-arguments-to-a-function-with-an-unknown-parameter-type-keeps-its-arity-error -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function firstOf(b Bag) returns Digit
+	return try b.get(0) otherwise 0
+end 'firstOf'
+
+function main() returns ExitCode
+	return firstOf() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:4:20: Unknown type 'Bag'
+error E3036: <fragment>:9:9: 'firstOf' expects 1 argument(s) but 0 were provided
+```
+
+<!-- test: error.a-mismatched-argument-beside-an-unknown-parameter-type-keeps-its-own-error -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function pair(b Bag, n Digit) returns Digit
+	return n
+end 'pair'
+
+function main() returns ExitCode
+	return pair(1, n: true) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:4:17: Unknown type 'Bag'
+error E3005: <fragment>:9:9: argument type mismatch for 'n': expected 'Digit', got 'bool'
+```
+
+<!-- test: error.an-unknown-type-name-no-declaration-reported-stays-reported-beside-one-that-was -->
+```maxon
+typealias Digit = int(0 to 9)
+
+function firstOf(b Bag) returns Digit
+	return try b.get(0) otherwise 0
+end 'firstOf'
+
+function main() returns ExitCode
+	return 5 as Nosuch
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:9:11: Unknown type 'Nosuch'
+error E3011: <fragment>:4:20: Unknown type 'Bag'
+```
+
+<!-- test: error.a-refused-extension-hides-a-call-to-its-own-member-on-the-extended-type -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Foo
+	let n as Digit
+
+	static function create() returns Foo
+		return Self{n: 1}
+	end 'create'
+end 'Foo'
+
+extension Foo
+	function shifted(amount) returns Digit
+		return n
+	end 'shifted'
+end 'Foo'
+
+function main() returns ExitCode
+	let c = Foo.create().shifted(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:19: Unsupported: parameter 'amount' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
+```
+
+<!-- test: error.a-refused-interface-extension-hides-a-call-to-its-member-on-a-conformer -->
+```maxon
+typealias Digit = int(0 to 9)
+
+interface Named
+	function label() returns Digit
+end 'Named'
+
+type Thing implements Named
+	let n as Digit
+
+	static function create() returns Thing
+		return Self{n: 1}
+	end 'create'
+
+	function label() returns Digit
+		return n
+	end 'label'
+end 'Thing'
+
+extension Named
+	function shouted(amount) returns Digit
+		return label()
+	end 'shouted'
+end 'Named'
+
+function main() returns ExitCode
+	let t = Thing.create()
+	return t.shouted(1)
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:19: Unsupported: parameter 'amount' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
 ```

@@ -4830,9 +4830,8 @@ end 'Pair'
 
 function main() returns ExitCode
 	let h = Outer.create()
-	var p = Pair.from(h)
-	p.first.n = 5
-	print("{h.inner.n}\n")
+	let p = Pair.from(h)
+	print("{p.first.n} {h.inner.n}\n")
 	return 0
 end 'main'
 ```

@@ -1393,7 +1393,7 @@ end 'Leaf'
 
 function main() returns ExitCode
 	var h = Holder.create(Leaf.create(1))
-	let b = HolderBox.create(h)
+	var b = HolderBox.create(h)
 	h.retarget(b)
 	return h.go() as ExitCode
 end 'main'

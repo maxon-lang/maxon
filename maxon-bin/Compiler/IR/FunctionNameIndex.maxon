@@ -6,8 +6,10 @@
 // policy each would have to get right on its own, and the one that learned the fact would be the only one
 // that could say so. So there is no tie-break at all:
 // a duplicate is DETECTED where the index is built — the collision is never something to predict, only
-// something to notice — and the compile is refused. Nothing downstream needs a policy for a state
-// that cannot exist.
+// something to notice — and the compile is refused. The one tie that is resolved is two parsed
+// declarations already reported (E3006): the index keeps the one the merge kept, so the analysis
+// passes still report the program's other errors, and the error gate before lowering refuses the
+// compile.
 //
 // ⭐ **WHY DETECTION IS FREE, AND WHY IT IS NOT A `contains` PROBE.** The loop inserts index `i` on
 // iteration `i`, so the map's height IS `i + 1` after every insert unless one insert collapsed two names
@@ -104,12 +106,28 @@ export type FunctionNameIndex
 	// duplicate-name refusal (E4015); see the header for which site can see which collision.
 	export static function create(functions IrFunctionArray, project Project) returns FunctionNameIndex throws CompileError
 		match FunctionNameIndex.build(functions) 'build'
-			duplicateAt(laterIndex) then try refuseDuplicateFunctionName(functions, project: project, laterIndex: laterIndex)
+			duplicateAt(laterIndex) then return try FunctionNameIndex.besideAReportedDuplicate(functions, project: project, laterIndex: laterIndex)
 			built(index) then return index
 		end 'build'
-
-		panic("FunctionNameIndex.create: `refuseDuplicateFunctionName` returned instead of throwing — every arm of it either reports and throws or panics, and this constructor has no answer for a duplicate it was told about and asked to ignore")
 	end 'create'
+
+	static function besideAReportedDuplicate(functions IrFunctionArray, project Project, laterIndex ElementIndex) returns FunctionNameIndex throws CompileError
+		try refuseDuplicateFunctionName(functions, project: project, laterIndex: laterIndex)
+
+		var byName = FuncIndexByName.create()
+
+		for i in 0 upto functions.count() 'eachFunc'
+			let func = try functions.get(i) otherwise panic("FunctionNameIndex.besideAReportedDuplicate: functions.get OOB at {i}, inside a loop bounded by its own count")
+
+			if byName.contains(func.name) and not functionIsTheDeclarationTheMergeKept(project, func: func) 'aShadowedDeclaration'
+				continue
+			end 'aShadowedDeclaration'
+
+			byName.upsert(func.name, value: i)
+		end 'eachFunc'
+
+		return Self{functions: functions, byName: byName}
+	end 'besideAReportedDuplicate'
 
 	// ⭐⭐ **THE SAME WALK, WITHOUT THE REFUSAL — for the one reader that must NOT raise it.** It ANSWERS
 	// with the duplicate instead of reporting it, so a caller that is not the compile's authority on E4015
@@ -211,10 +229,10 @@ function refuseDuplicateFunctionName(functions IrFunctionArray, project Project,
 	// BACK END, downstream of the pipeline's error gate, could argue the panic below; most callers run
 	// UPSTREAM of that gate, so the argument has to be read off the
 	// project instead of inherited from a call site. A program already carrying a diagnostic is already
-	// refused: stop, and let the caller's own gate print what was accumulated. Resolving the tie would be
-	// the silent half of the very behaviour this file removes.
+	// refused, so the duplicate is left to `besideAReportedDuplicate` and the error gate before
+	// lowering.
 	if projectHasErrors(project) 'alreadyRefused'
-		throw CompileError.compileError
+		return
 	end 'alreadyRefused'
 
 	// Both positions are printed rather than one cause asserted: two declarations E3006 missed entirely and
@@ -222,6 +240,12 @@ function refuseDuplicateFunctionName(functions IrFunctionArray, project Project,
 	// A panic that asserts a cause instead can name two that are both false for the case in front of it.
 	panic("refuseDuplicateFunctionName: two PARSED functions are named '{name}', at {earlier.sourceFilePath.toString()}:{earlier.nameLine} and {later.sourceFilePath.toString()}:{later.nameLine}, and no diagnostic has been reported — two DISTINCT positions mean `commitFuncSignatures`' whole-program E3006 did not see one of them; the SAME position twice means one declaration was merged or lowered into the module twice")
 end 'refuseDuplicateFunctionName'
+
+function functionIsTheDeclarationTheMergeKept(project Project, func IrFunction) returns bool
+	view floor = try project.funcSignatureFloors.get(func.name) otherwise return false
+
+	return floor.nameLine == func.nameLine and floor.sourceFilePath == func.sourceFilePath
+end 'functionIsTheDeclarationTheMergeKept'
 
 // The function `name` was already bound to before index `before`. It has to be recovered from the function
 // ARRAY rather than the map: `upsert`'s last-wins has already replaced the incumbent's index with `before`'s,

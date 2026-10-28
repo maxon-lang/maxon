@@ -26,9 +26,8 @@ export union PassKind
 	resolveTypes
 	semanticCheck
 
-	// Phase 2b: the cross-file unused-export audit (E3092/E3093/E3094). Scheduled AFTER `semanticCheck`
-	// and therefore reached only on a project with no diagnostics at all — which is what supplies its
-	// structural gate for free (see UnusedExportCheck's header).
+	// Phase 2b: the cross-file unused-export audit (E3092/E3093/E3094). Scheduled AFTER
+	// `semanticCheck`, so its own no-diagnostic guard sees every error the language checks report.
 	checkUnusedExports
 
 	// The last Maxon-tier pass, so every language check has spoken before a deferred target refusal
@@ -284,6 +283,11 @@ enum PassClassification
 	fanOutDriver
 end 'PassClassification'
 
+export enum ErrorGate
+	afterEachPass
+	afterTheLastPass
+end 'ErrorGate'
+
 // Map a pass to its classification — THE membership table of the fan-out.
 function classifyPass(pass PassKind) returns PassClassification
 	return match pass 'classify'
@@ -508,9 +512,10 @@ export function buildMaxonTierPasses() returns PassKindArray
 	var passes = PassKindArray.create()
 
 	// ⚠ The first two are ordered, and neither order is recoverable from the passes themselves.
-	// `reportDeferredNames` drains diagnostics the merge deferred, and the gate below fires only BETWEEN
-	// passes, so anything scheduled ahead of it that can report would swallow the whole drain — E3062 and
-	// the hidden-name E2003 go missing on any program that already earned a diagnostic at merge time.
+	// `reportDeferredNames` drains diagnostics the merge deferred, and on an unreadable type universe
+	// the gate fires after every pass (`maxonTierGateFor`), so anything scheduled ahead of it that can
+	// report would swallow the whole drain — E3062 and the hidden-name E2003 go missing on any such
+	// program that already earned a diagnostic at merge time.
 	// Both also run ahead of `resolveTypes`, which ERASES alias names (a `named` ranged alias becomes
 	// `integer`): behind it `checkSignatureVisibility` has no name left to judge and silently finds
 	// nothing, and the deferred diagnostics, two of which name a typealias, have nothing left to name.
@@ -766,18 +771,17 @@ export type PassPipeline
 		}
 	end 'create'
 
-	// Run `passes` in order, gating on diagnostics after each: once a
-	// pass reports an error (semanticCheck's E3001/E3002), the pipeline throws
-	// rather than lower an invalid module (e.g. one with no `main` for the entry
-	// stub to call). The driver catches this, prints the diagnostics, and exits
-	// non-zero. Per-pass IR compaction/dump grows in with the backend cache.
+	// Run `passes` in order, and throw while any diagnostic stands rather than hand an invalid module
+	// (e.g. one with no `main` for the entry stub to call) to the next stage. The driver catches this,
+	// prints the diagnostics, and exits non-zero. Per-pass IR compaction/dump grows in with the
+	// backend cache.
 	//
 	// The schedule is an ARGUMENT rather than accumulated state because the driver runs the pipeline in two
 	// stages and each stage is one list — see `buildMaxonTierPasses` for what sits between them.
 	//
 	// The fan-out announces each of its members itself, after the drain, so its members' banners sit
 	// where a serial run would have printed them; the driver pass gets no banner of its own.
-	export function run(passes PassKindArray) throws CompileError
+	export function run(passes PassKindArray, gate ErrorGate) throws CompileError
 		requireFanOutMembership(passes)
 
 		for pass in passes 'eachPass'
@@ -790,18 +794,24 @@ export type PassPipeline
 			try requireStillWanted(self.project)
 			try self.dispatch(pass)
 
-			if projectHasErrors(self.project) 'errorGate'
-				throw CompileError.compileError
-			end 'errorGate'
+			match gate 'gateTiming'
+				afterEachPass then try self.refuseWhileErrorsStand()
+				afterTheLastPass then break
+			end 'gateTiming'
 		end 'eachPass'
+
+		try self.refuseWhileErrorsStand()
 	end 'run'
+
+	function refuseWhileErrorsStand() throws CompileError
+		if projectHasErrors(self.project) 'errorGate'
+			throw CompileError.compileError
+		end 'errorGate'
+	end 'refuseWhileErrorsStand'
 
 	function semanticCheckThenNonConstantCalls() throws CompileError
 		try semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
-
-		if not projectHasErrors(self.project) 'everyCallWasValid'
-			checkNonConstantCallInitializers(self.project, signatures: self.signatures)
-		end 'everyCallWasValid'
+		checkNonConstantCallInitializers(self.project, signatures: self.signatures)
 
 		if not projectHasErrors(self.project) 'nothingWasReported'
 			self.signatures.requireEveryUnvalidatedInitializerReported()

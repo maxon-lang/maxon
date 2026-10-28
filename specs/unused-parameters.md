@@ -117,12 +117,11 @@ end 'main'
 
 
 <!-- test: void-function-unused -->
-⚠ **AN ARGUMENT-LABELLING REFUSAL IS A PARSE ERROR, SO THE UNUSED CHECK NEVER REPORTS ON THIS PROGRAM.** The
-unnamed second argument is `E2053`, the parse of the file unwinds, and the unused check — which runs at each
-function's `end` — reports nothing, not even for `doNothing`, which is parsed before `main`. **The
-unused-parameter behaviour this case is named for is pinned by the other cases in this file** —
-`single-unused`, `multiple-unused` and `method-on-non-conforming-type-still-errors` — so this case pins only
-that the parse error is the one diagnostic.
+⚠ **AN UNUSED NAME IS REPORTED ONLY WHEN NOTHING ELSE IS.** The unnamed second argument is `E2053`, so `main`
+is abandoned, and the unused-name reports — held back while any other diagnostic stands — say nothing, not even
+for `doNothing`, which is read in full. **The unused-parameter behaviour this case is named for is pinned by the
+other cases in this file** — `single-unused`, `multiple-unused` and `method-on-non-conforming-type-still-errors` —
+so this case pins only that the parse error is the one diagnostic.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

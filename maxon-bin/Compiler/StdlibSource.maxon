@@ -431,15 +431,13 @@ module function reachedLibraryNamesOf(reach LibraryReach) returns FunctionNameSe
 end 'reachedLibraryNamesOf'
 
 module function libraryReachOf(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryReach throws CompileError
-	// A prior diagnostic leaves the merged module and its registries describing a program that is
-	// already refused, so a walk over it can only be noise, and a compile that stops here builds no
-	// further bodies. Nothing that runs before the pipeline's error gate reads these facts to report
-	// anything: `scanRuntimeUsage` only sets usage bits, and the two passes that do report off them
-	// (`checkCalls`'s target refusal, `insertRangeChecks`) are inside the pipeline, downstream of that
-	// gate.
-	if projectHasErrors(project) 'malformedModule'
+	// Only an unreadable type universe skips the walk, because the library it would walk is half read.
+	// Any other program with errors is still walked: without its reach no library body is built, every
+	// library callee reads as worst-case, and the borrow checks bury the program's errors under
+	// thousands that are not its own.
+	if project.poison.typeUniverseIsUnreadable() 'theLibraryIsHalfRead'
 		return LibraryReach.noLibrarySource
-	end 'malformedModule'
+	end 'theLibraryIsHalfRead'
 
 	let roster = try libraryFunctionRoster(project)
 
