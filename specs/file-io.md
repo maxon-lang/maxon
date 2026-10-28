@@ -399,11 +399,15 @@ A file a running program's image keeps from being written — which Windows refu
 Linux with `ETXTBSY` — is `FileWriteError.busy`, distinct from a permission refusal. The program writes over a COPY
 of itself that it keeps running, so a host that lets the write through truncates only the copy. macOS lets it
 through, so it does not run there.
+
+Windows keeps a program's image locked for a moment after the program has exited, and nothing the case can read
+says when it lets go, so the copy's deletion there is retried for as long as it is refused: an image that is never
+released is a TIMEOUT, and no budget of attempts has to outlast how long the host takes.
 ```maxon
 #if os(Windows)
-	let CopyDeleteAttempts = 40
+	let CopyDeleteWaitsForTheImage = true
 #else
-	let CopyDeleteAttempts = 1
+	let CopyDeleteWaitsForTheImage = false
 #endif
 
 let CopyDeleteRetryMs = 50
@@ -460,23 +464,22 @@ function endedCleanly(running StreamingSubprocess) returns bool
 end 'endedCleanly'
 
 function deleteTheCopy(copy FilePath) returns bool
-	for attempt in 1 to CopyDeleteAttempts 'eachAttempt'
+	while true 'eachAttempt'
 		try File.delete(copy) otherwise (e) 'refused'
 			if e == FileDeleteError.notFound 'nothingToDelete'
 				return true
 			end 'nothingToDelete'
 
-			if attempt < CopyDeleteAttempts 'anotherAttemptFollows'
-				sleep(CopyDeleteRetryMs)
-			end 'anotherAttemptFollows'
+			if not CopyDeleteWaitsForTheImage 'noWaitingHere'
+				return false
+			end 'noWaitingHere'
 
+			sleep(CopyDeleteRetryMs)
 			continue
 		end 'refused'
 
 		return true
 	end 'eachAttempt'
-
-	return false
 end 'deleteTheCopy'
 ```
 ```exitcode

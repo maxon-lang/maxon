@@ -374,7 +374,7 @@ end 'main'
 <!-- test: builtins-gt-quiesce.waits-for-a-renounced-coroutine-to-finish-unwinding -->
 <!-- procs: 1 -->
 The wait answers at the moment every machine is idle, so a coroutine whose promise was dropped holds it open until
-it has run out. `sleeper` is parked on its timer when `startAndDrop` returns and scope exit drops its promise. The
+it has run out. `sleeper` is parked on a timer without end (`ForeverMs`) when `startAndDrop` returns and scope exit drops its promise, so only the drop can end its sleep. The
 drop gives up the promise's slot in the live count and readies the sleeper with its sleep ended early, so the count
 is already zero when `main` waits. The wait still parks `main`, the sleeper prints its line as it finishes, and only
 then does the wait answer `0`.
@@ -382,7 +382,7 @@ then does the wait answer `0`.
 typealias Integer = int(i64.min to i64.max)
 
 function sleeper() returns Integer
-	sleep(50)
+	sleep(ForeverMs)
 	print("the sleeper finished\n")
 	return 1
 end 'sleeper'

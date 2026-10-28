@@ -143,13 +143,15 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: spawn-read-line.posix-a-parked-line-read-yields-to-a-sleeper -->
 <!-- unsupported-targets: x64-windows -->
 <!-- procs: 1 -->
-⭐ **THE READ YIELDS ON THIS LANE TOO.** A slow child (a one-second delay before its line) and a 50 ms
-sleeper run at ONE processor. The pipe's read end is non-blocking and carries a poll descriptor, so the
-reader PARKS and the sleeper's timer fires while the line is still unwritten. Each records its completion
-order into a global (`order = order * 10 + tag`), so `21` says the sleeper (tag 2) finished first. A read
-that holds the only machine inside a blocking `read(2)` answers `12` — which is what
-`async-subprocess.posix-interleave-with-sleep`'s own prose records for the streaming reader on this lane,
-and this case is that `12` turned into a `21`. The exit code IS the assertion.
+⭐ **THE READ YIELDS ON THIS LANE TOO.** A slow child, which writes its line only once the sleeper has created a
+flag file, and a 50 ms sleeper run at ONE processor. The pipe's read end is non-blocking and carries a poll
+descriptor, so the reader PARKS and the sleeper's timer fires while the line is still unwritten. Each records its
+completion order into a global (`order = order * 10 + tag`), so `21` says the sleeper (tag 2) finished first. A
+read that holds the only machine inside a blocking `read(2)` never lets the sleeper run, so the child never sees
+the flag and the runner reports the case TIMED OUT; no elapsed time is compared to a threshold, so a slow host
+cannot reorder the two. That is the `12` that
+`async-subprocess.posix-interleave-with-sleep`'s own prose records for the streaming reader on this lane, turned
+into a hang for the surface that must not have it. The exit code IS the assertion.
 
 ⚠ **THE ORDER IS THE ONLY THING THIS SURFACE CAN PIN, BECAUSE `spawnReadLine` SPAWNS AND READS IN ONE
 CALL.** A retake witness would say where the thread went rather than only that something else ran, but
@@ -161,10 +163,22 @@ retake is CORRECT: it is what lets the sleeper run at all while a child is being
 `streaming-subprocess.posix-a-parked-line-read-needs-no-rescue` is the case that pins the retake property,
 because its two-call surface (`subpSpawn` then `subpReadLine`) CAN bracket the read by itself.
 ```maxon
+let flagName = "spawn-read-line-interleave.flag"
+
 var order = 0 as Integer
 
+function flagPath() returns FilePath
+	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
+end 'flagPath'
+
+function clearFlag()
+	if File.exists(flagPath()) 'present'
+		try File.delete(flagPath()) otherwise panic("the flag file cannot be deleted")
+	end 'present'
+end 'clearFlag'
+
 function slow() returns Integer
-	_ = spawnReadLine("sleep 1; echo hello")
+	_ = spawnReadLine("while [ ! -f {flagName} ]; do sleep 0.05; done; echo hello")
 	order = order * 10 + 1
 	return 1
 end 'slow'
@@ -172,14 +186,19 @@ end 'slow'
 function fast() returns Integer
 	sleep(50)
 	order = order * 10 + 2
+	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
 	return 2
 end 'fast'
 
 function main() returns ExitCode
+	clearFlag()
+
 	let p1 = async slow()
 	let p2 = async fast()
 	_ = await p1
 	_ = await p2
+
+	clearFlag()
 	return order as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)

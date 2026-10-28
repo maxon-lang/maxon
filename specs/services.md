@@ -3125,24 +3125,30 @@ n=2
 <!-- procs: 1 -->
 <!-- preempt: off -->
 A send whose timeout expires before room appears fails `mailboxFull` and hands its `String` back. The yield
-lets the service take `hold`, whose handler sleeps for `holdMs`, so nothing drains the mailbox while `main`
-waits: `s0` fills the one slot and `s1` waits out its `timeoutMs`. The wait is measured with `Clock`: at least
-the timeout, and well short of the handler's sleep, which says the timer and not a drain ended it. Both queued
-messages run at the exit drain.
+lets the service take `hold`, whose handler returns only once `main` publishes the release, so nothing drains
+the mailbox while `main` waits: `s0` fills the one slot and `s1` waits out its `timeoutMs`. The wait is measured
+with `Clock` from below only: at least the timeout. That the handler cannot have returned is what says the timer
+and not a drain ended it, with no bound on how long the timer takes to fire. `main` releases the handler after the
+refusal, and both queued messages run at the exit drain.
 ```maxon
-let holdMs = 500
+typealias ReleaseCell = SharedValue with bool
+
 let timeoutMs = 20
-let wellShortMs = 250
+let releasePollMs = 1
 
 type Store
+	let released as ReleaseCell
 	var n as Integer
 
-	static function create() returns Self
-		return Self{n: 0}
+	static function create(released ReleaseCell) returns Self
+		return Self{released: released, n: 0}
 	end 'create'
 
-	export function hold(ms Milliseconds)
-		sleep(ms)
+	export function hold()
+		while not self.released.current() 'untilReleased'
+			sleep(releasePollMs)
+		end 'untilReleased'
+
 		print("held\n")
 	end 'hold'
 
@@ -3153,8 +3159,9 @@ type Store
 end 'Store'
 
 function main() returns ExitCode
-	let h = spawn(capacity: 1) Store.create()
-	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	let released = ReleaseCell.create(false)
+	let h = spawn(capacity: 1) Store.create(released.clone())
+	try h.hold() otherwise panic("an empty mailbox takes the first send")
 	Scheduler.yield()
 	try h.keep("s{0}") otherwise panic("the service took hold, so its one slot is free")
 	let start = Clock.nowMs()
@@ -3168,7 +3175,7 @@ function main() returns ExitCode
 		end 'why'
 
 		print("waited out the timeout: {waited >= timeoutMs}\n")
-		print("returned before the handler woke: {waited < wellShortMs}\n")
+		released.publish(true)
 		return 0
 	end 'refused'
 
@@ -3183,7 +3190,6 @@ typealias Integer = int(i64.min to i64.max)
 ```stdout
 full s1
 waited out the timeout: true
-returned before the handler woke: true
 held
 kept s0
 ```
@@ -3193,22 +3199,30 @@ kept s0
 <!-- preempt: off -->
 `shutdown()` wakes a send waiting for room, and the send fails `serviceStopped` with its `String`. The waiting
 green thread cannot shut the service down itself, so a second service, `Closer`, does. The yield lets `Store`
-take `hold` and sleep, and lets `Closer` park on its empty mailbox. `s0` then fills `Store`'s one slot,
+take `hold` and wait, and lets `Closer` park on its empty mailbox. `s0` then fills `Store`'s one slot,
 `close` goes to `Closer`, and `s1` waits with a timeout far longer than the case runs. Its wait is what lets
-`Closer` run. `s0` still runs after the shutdown, once `hold` returns.
+`Closer` run. `hold` returns only once `main` publishes the release after the refusal, so nothing but the
+shutdown can have ended the wait, however slow the host is. `s0` still runs after the shutdown, once `hold`
+returns.
 ```maxon
-let holdMs = 300
+typealias ReleaseCell = SharedValue with bool
+
 let longTimeoutMs = 60000
+let releasePollMs = 1
 
 type Store
+	let released as ReleaseCell
 	var n as Integer
 
-	static function create() returns Self
-		return Self{n: 0}
+	static function create(released ReleaseCell) returns Self
+		return Self{released: released, n: 0}
 	end 'create'
 
-	export function hold(ms Milliseconds)
-		sleep(ms)
+	export function hold()
+		while not self.released.current() 'untilReleased'
+			sleep(releasePollMs)
+		end 'untilReleased'
+
 		print("held\n")
 	end 'hold'
 
@@ -3230,9 +3244,10 @@ type Closer
 end 'Closer'
 
 function main() returns ExitCode
-	let h = spawn(capacity: 1) Store.create()
+	let released = ReleaseCell.create(false)
+	let h = spawn(capacity: 1) Store.create(released.clone())
 	let closer = spawn Closer.create()
-	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	try h.hold() otherwise panic("an empty mailbox takes the first send")
 	Scheduler.yield()
 	try h.keep("s{0}") otherwise panic("the service took hold, so its one slot is free")
 	try closer.close(h.clone()) otherwise panic("an open mailbox with room takes the send")
@@ -3243,6 +3258,7 @@ function main() returns ExitCode
 			serviceStopped(s) then print("stopped {s}\n")
 		end 'why'
 
+		released.publish(true)
 		return 0
 	end 'refused'
 
@@ -3267,21 +3283,29 @@ kept s0
 A coroutine parked on a full mailbox's sender queue has its promise dropped. The drop takes it off the queue and
 readies it, and its send fails `mailboxFull` with the `String` handed back, so a coroutine winding down gives up
 its message rather than waiting out a timeout this long. `main` yields twice for what the case needs parked: once
-so `Store` takes `hold` and sleeps, and once so `begForRoom` runs to its wait. The block's end drops the promise,
-and `main` prints before the coroutine runs again.
+so `Store` takes `hold` and waits, and once so `begForRoom` runs to its wait. The block's end drops the promise,
+and `main` prints before the coroutine runs again. `hold` returns only once `main` publishes the release, which it
+does after the coroutine has published that it gave up, so the room the coroutine would have been woken by cannot
+appear first, however slow the host is.
 ```maxon
-let holdMs = 300
+typealias ReleaseCell = SharedValue with bool
+
 let longTimeoutMs = 60000
+let pollMs = 1
 
 type Store
+	let released as ReleaseCell
 	var n as Integer
 
-	static function create() returns Self
-		return Self{n: 0}
+	static function create(released ReleaseCell) returns Self
+		return Self{released: released, n: 0}
 	end 'create'
 
-	export function hold(ms Milliseconds)
-		sleep(ms)
+	export function hold()
+		while not self.released.current() 'untilReleased'
+			sleep(pollMs)
+		end 'untilReleased'
+
 		print("held\n")
 	end 'hold'
 
@@ -3291,13 +3315,14 @@ type Store
 	end 'keep'
 end 'Store'
 
-function begForRoom(h Store.handle) returns Integer
+function begForRoom(h Store.handle, gaveUp ReleaseCell) returns Integer
 	try h.keep("s1", sendTimeout: longTimeoutMs) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull(s) then print("gave up {s}\n")
 			serviceStopped(s) then print("stopped {s}\n")
 		end 'why'
 
+		gaveUp.publish(true)
 		return 1
 	end 'refused'
 
@@ -3305,18 +3330,26 @@ function begForRoom(h Store.handle) returns Integer
 end 'begForRoom'
 
 function main() returns ExitCode
-	let h = spawn(capacity: 1) Store.create()
-	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	let released = ReleaseCell.create(false)
+	let gaveUp = ReleaseCell.create(false)
+	let h = spawn(capacity: 1) Store.create(released.clone())
+	try h.hold() otherwise panic("an empty mailbox takes the first send")
 	Scheduler.yield()
 	try h.keep("s0") otherwise panic("the service took hold, so its one slot is free")
 
 	if true 'scope'
-		let waiting = async begForRoom(h.clone())
+		let waiting = async begForRoom(h.clone(), gaveUp: gaveUp.clone())
 		Scheduler.yield()
 		print("waiting: {not waiting.isComplete()}\n")
 	end 'scope'
 
 	print("dropped\n")
+
+	while not gaveUp.current() 'untilGaveUp'
+		sleep(pollMs)
+	end 'untilGaveUp'
+
+	released.publish(true)
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3336,23 +3369,30 @@ kept s0
 <!-- procs: 1 -->
 <!-- preempt: off -->
 A coroutine whose promise was dropped while it slept may not begin a wait on a far end, and a send given
-`sendTimeout:` to a full mailbox is one. The drop ends the sleep early, the coroutine resumes, and its send
-fails `mailboxFull` at once with the `String` handed back, so `s1` is never delivered. A coroutine that waited
-instead would be woken by `Store` taking `s0` once `hold` returns, and `kept s1` would print.
+`sendTimeout:` to a full mailbox is one. The coroutine sleeps without end (`ForeverMs`), so only the drop ends
+the sleep; it resumes, and its send fails `mailboxFull` at once with the `String` handed back, so `s1` is never
+delivered. `hold` returns only once `main` publishes the release, after the coroutine has published that its send
+failed. A coroutine that waited instead would never publish, and `main` would wait for ever and the runner report
+the case TIMED OUT: no release could wake it by taking `s0`, however slow the host is.
 ```maxon
-let holdMs = 300
-let napMs = 5000
+typealias ReleaseCell = SharedValue with bool
+
 let longTimeoutMs = 60000
+let pollMs = 1
 
 type Store
+	let released as ReleaseCell
 	var n as Integer
 
-	static function create() returns Self
-		return Self{n: 0}
+	static function create(released ReleaseCell) returns Self
+		return Self{released: released, n: 0}
 	end 'create'
 
-	export function hold(ms Milliseconds)
-		sleep(ms)
+	export function hold()
+		while not self.released.current() 'untilReleased'
+			sleep(pollMs)
+		end 'untilReleased'
+
 		print("held\n")
 	end 'hold'
 
@@ -3362,8 +3402,8 @@ type Store
 	end 'keep'
 end 'Store'
 
-function napThenBeg(h Store.handle) returns Integer
-	sleep(napMs)
+function napThenBeg(h Store.handle, gaveUp ReleaseCell) returns Integer
+	sleep(ForeverMs)
 
 	try h.keep("s1", sendTimeout: longTimeoutMs) otherwise (e) 'refused'
 		match e 'why'
@@ -3371,6 +3411,7 @@ function napThenBeg(h Store.handle) returns Integer
 			serviceStopped(s) then print("stopped {s}\n")
 		end 'why'
 
+		gaveUp.publish(true)
 		return 1
 	end 'refused'
 
@@ -3378,18 +3419,26 @@ function napThenBeg(h Store.handle) returns Integer
 end 'napThenBeg'
 
 function main() returns ExitCode
-	let h = spawn(capacity: 1) Store.create()
-	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	let released = ReleaseCell.create(false)
+	let gaveUp = ReleaseCell.create(false)
+	let h = spawn(capacity: 1) Store.create(released.clone())
+	try h.hold() otherwise panic("an empty mailbox takes the first send")
 	Scheduler.yield()
 	try h.keep("s0") otherwise panic("the service took hold, so its one slot is free")
 
 	if true 'scope'
-		let napping = async napThenBeg(h.clone())
+		let napping = async napThenBeg(h.clone(), gaveUp: gaveUp.clone())
 		Scheduler.yield()
 		print("napping: {not napping.isComplete()}\n")
 	end 'scope'
 
 	print("dropped\n")
+
+	while not gaveUp.current() 'untilGaveUp'
+		sleep(pollMs)
+	end 'untilGaveUp'
+
+	released.publish(true)
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3506,25 +3555,32 @@ sent s1
 <!-- preempt: off -->
 A send whose `sendTimeout:` is so large that its deadline cannot be represented arms no timer, so nothing but a
 drain, a shutdown or a cancellation ends the wait. The wait here is a real one: the yield lets the service take
-`hold`, whose handler sleeps for `holdMs`, so `s0` fills the one slot and `s1` parks for the whole sleep. The
-service then takes `s0`, moves `s1` into the freed slot and readies `main`, which would have failed
+`hold`, whose handler returns only once a coroutine publishes the release, and that coroutine runs only when
+`main` has parked on its send. So `s0` fills the one slot and `s1` parks for the whole of `hold`, however slow
+the host is. The service then takes `s0`, moves `s1` into the freed slot and readies `main`, which would have failed
 `mailboxFull` had a deadline been armed and passed. The service handles `s0` and `s1` before `main` prints.
 `i64.max` is the other half of `the-largest-send-timeout-waits-for-room-instead-of-failing-at-once`: it is
 representable as a signed count of milliseconds and too large to turn into a deadline, so the saturation is the
 clock-reading road's rather than the sign test's.
 ```maxon
-let holdMs = 150
+typealias ReleaseCell = SharedValue with bool
+
 let indefiniteTimeoutMs = i64.max
+let releasePollMs = 1
 
 type Store
+	let released as ReleaseCell
 	var n as Integer
 
-	static function create() returns Self
-		return Self{n: 0}
+	static function create(released ReleaseCell) returns Self
+		return Self{released: released, n: 0}
 	end 'create'
 
-	export function hold(ms Milliseconds)
-		sleep(ms)
+	export function hold()
+		while not self.released.current() 'untilReleased'
+			sleep(releasePollMs)
+		end 'untilReleased'
+
 		print("held\n")
 	end 'hold'
 
@@ -3534,11 +3590,19 @@ type Store
 	end 'keep'
 end 'Store'
 
+function publishRelease(released ReleaseCell) returns Integer
+	released.publish(true)
+	return 1
+end 'publishRelease'
+
 function main() returns ExitCode
-	let h = spawn(capacity: 1) Store.create()
-	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	let released = ReleaseCell.create(false)
+	let h = spawn(capacity: 1) Store.create(released.clone())
+	try h.hold() otherwise panic("an empty mailbox takes the first send")
 	Scheduler.yield()
 	try h.keep("s{0}") otherwise panic("the service took hold, so its one slot is free")
+
+	let releaser = async publishRelease(released.clone())
 
 	try h.keep("s{1}", sendTimeout: indefiniteTimeoutMs) otherwise (e) 'refused'
 		match e 'why'
@@ -3549,6 +3613,7 @@ function main() returns ExitCode
 		return 1
 	end 'refused'
 
+	_ = await releaser
 	print("sent s1\n")
 	return 0
 end 'main'
@@ -12156,24 +12221,35 @@ end 'main'
 <!-- test: main-is-never-run-on-top-of-a-service-it-awaits -->
 <!-- procs: 1 -->
 ⛔⛔ **NOTHING RUNS ON TOP OF A PARKED GREEN THREAD, SO `main` MAY WAKE WHILE THE SERVICE IT AWAITS IS
-ITSELF WAITING.** `Middle.go` awaits `Slow.get`, which parks `Middle`. `main`'s `sleep(1)` ends while
-`Middle` is parked waiting out `Slow`'s `sleep(20)`, and `main` is readied like any other green thread and
-runs on its own stack, switched in from a machine's scheduler context — never on `Middle`'s. An await that
+ITSELF WAITING.** `Middle.go` awaits `Slow.get`, which parks `Middle`. `Slow.get` publishes that it has begun and
+then waits for `main` to publish the release; `main`'s `sleep(1)` polls end while `Middle` is parked waiting out
+`Slow`, and `main` is readied like any other green thread and runs on its own stack, switched in from a machine's
+scheduler context — never on `Middle`'s. The release comes only after `main` has woken on seeing `Slow` begin, so
+no clock decides whether `main` woke while `Middle` was parked. An await that
 ran whatever it took off a run queue on the awaiter's own stack would run `main` on top of `Middle`, and
 `main`'s `await r1` — a reply only `Middle` can send — would wait on the frame it stands on: such a runtime
 exits **92** (`schedulerDeadlock`) on one processor. Here both replies arrive.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias FlagCell = SharedValue with bool
+
+let pollMs = 1
 
 type Slow
-	var n as Integer
+	let begun as FlagCell
+	let released as FlagCell
 
-	static function create() returns Self
-		return Self{n: 0}
+	static function create(begun FlagCell, released FlagCell) returns Self
+		return Self{begun: begun, released: released}
 	end 'create'
 
 	export function get() returns Integer
-		sleep(20)
+		self.begun.publish(true)
+
+		while not self.released.current() 'untilReleased'
+			sleep(pollMs)
+		end 'untilReleased'
+
 		return 7
 	end 'get'
 end 'Slow'
@@ -12181,8 +12257,8 @@ end 'Slow'
 type Middle
 	var s as Slow.handle
 
-	static function create() returns Self
-		return Self{s: spawn Slow.create()}
+	static function create(begun FlagCell, released FlagCell) returns Self
+		return Self{s: spawn Slow.create(begun.clone(), released: released.clone())}
 	end 'create'
 
 	export function go() returns Integer
@@ -12192,10 +12268,17 @@ type Middle
 end 'Middle'
 
 function main() returns ExitCode
-	let m = spawn Middle.create()
+	let begun = FlagCell.create(false)
+	let released = FlagCell.create(false)
+	let m = spawn Middle.create(begun.clone(), released: released.clone())
 	let r1 = try m.go() otherwise panic("a running service with room takes the send")
-	sleep(1)
+
+	while not begun.current() 'untilSlowBegins'
+		sleep(pollMs)
+	end 'untilSlowBegins'
+
 	let r2 = try m.go() otherwise panic("a running service with room takes the send")
+	released.publish(true)
 	let a = await r1
 	let b = await r2
 	print("a={a} b={b}\n")

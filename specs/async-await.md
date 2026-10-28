@@ -3875,12 +3875,10 @@ by a machine's scheduler loop, whose idle park is bounded by the earliest deadli
 (`SchedRuntime.emitSchedParkTimeout`). What this case pins
 is that the `try` road waits on that same deadline and not on some longer bound.
 
-The assertion is RELATIVE and its control is IN THE SAME PROCESS, so it states the
-invariant directly ("`try await` costs what `await` costs") and is immune to how
-fast the host is. The 200 ms slack is a wide band over six rounds: a road that waits on a
-longer bound costs tens of milliseconds per round, so a regression clears the threshold by 100+ ms while a healthy run sits ~0 ms above its
-own control. The absolute bound on the control is the anchor that keeps the
-relation from passing because BOTH halves regressed.
+A coroutine asleep without end (`ForeverMs`) holds the far end of the timer heap for the whole case, so a park
+bounded by anything but the earliest deadline never returns and the runner reports the case TIMED OUT. The
+plain `await` rounds are the control in the same process, and no elapsed time is compared to a threshold, so
+the case does not depend on how fast the host is.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3903,36 +3901,33 @@ function timedPlain() returns Integer
 		return 1
 end 'timedPlain'
 
+function foreverAsleep() returns Integer
+		sleep(ForeverMs)
+		return 1
+end 'foreverAsleep'
+
 function main() returns ExitCode
-		let awaitStart = Clock.nowMs()
+		let holder = async foreverAsleep()
+		Scheduler.yield()
+
 		var plain = 0 as Integer
 		for _ in 0 upto 6 'plainRound'
 				let p = async timedPlain()
 				plain = plain + (await p)
 		end 'plainRound'
-		let awaitMs = Clock.elapsedMs(awaitStart)
 
-		let tryStart = Clock.nowMs()
 		var thrown = 0 as Integer
 		for _ in 0 upto 6 'tryRound'
 				let p = async timedThrowing()
 				thrown = thrown + (try await p otherwise 0)
 		end 'tryRound'
-		let tryMs = Clock.elapsedMs(tryStart)
 
-		var score = 0 as Integer
-		if awaitMs < 10000 'controlSane'
-				score = score + 1
-		end 'controlSane'
-		if tryMs < awaitMs + 200 'noTimerPenalty'
-				score = score + 1
-		end 'noTimerPenalty'
-		print("plain={plain} thrown={thrown} score={score}\n")
+		print("plain={plain} thrown={thrown} held={not holder.isComplete()}\n")
 		return 0
 end 'main'
 ```
 ```stdout
-plain=6 thrown=6 score=2
+plain=6 thrown=6 held=true
 ```
 
 ### An `async` Whose Result Is a MANAGED GENERIC INSTANCE

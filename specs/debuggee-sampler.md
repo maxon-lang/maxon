@@ -27,6 +27,10 @@ word-aligned byte offset:
 
 A program that names these types compiles whether or not it reaches every method.
 
+A case that samples a child runs the program itself as the child. The child prints a line when it reaches its
+wait, and the parent reads that line before it opens the child, so the child is running its program by
+construction and no pause has to outlast how long a host takes to start one.
+
 ## Tests
 
 <!-- test: a-register-block-reads-the-registers-of-a-context -->
@@ -498,6 +502,7 @@ function main() returns ExitCode
 	let arguments = CommandLine.args()
 
 	if arguments.count() > 1 'asTheChild'
+		print("ready\n")
 		sleep(60000)
 
 		return 0
@@ -507,7 +512,7 @@ function main() returns ExitCode
 	var childArguments = StringArray.create()
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	sleep(300)
+	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	var sampled = try SampledProcess.open(pid) otherwise return 4
 	let threads = sampled.threads()
@@ -573,6 +578,7 @@ function main() returns ExitCode
 	let arguments = CommandLine.args()
 
 	if arguments.count() > 1 'asTheChild'
+		print("ready\n")
 		sleep(60000)
 
 		return 0
@@ -582,7 +588,7 @@ function main() returns ExitCode
 	var childArguments = StringArray.create()
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	sleep(300)
+	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = seizeAndDrop(pid)
 	print("traced after the drop {isTraced(pid)}\n")
@@ -654,6 +660,7 @@ function main() returns ExitCode
 	end 'asTheSampler'
 
 	if arguments.count() > 1 'asTheTarget'
+		print("ready\n")
 		sleep(60000)
 
 		return 0
@@ -663,7 +670,7 @@ function main() returns ExitCode
 	var targetArguments = StringArray.create()
 	targetArguments.push("target")
 	var target = try StreamingSubprocess.spawn(Executable.path(me), arguments: targetArguments) otherwise return 2
-	sleep(300)
+	_ = try target.readStdoutLine() otherwise return 7
 	let pid = try target.processId() otherwise return 3
 	var samplerArguments = StringArray.create()
 	samplerArguments.push("sampler")
@@ -671,12 +678,8 @@ function main() returns ExitCode
 	let sampler = try Subprocess.run(Executable.path(me), arguments: samplerArguments) otherwise return 4
 	print("stderr is the one line {sampler.stderr == "sampler: thread {pid} of process {pid} could not be detached within 10000 ms, so the process was killed rather than left stopped\n"}\n")
 
-	if let code = try target.waitWithTimeout(3000) 'ended'
-		print("ended {code}\n")
-	end 'ended' else 'survived'
-		print("survived\n")
-	end 'survived'
-
+	let code = try target.wait() otherwise return 8
+	print("ended {code}\n")
 	target.release()
 
 	return 0
@@ -973,6 +976,7 @@ function main() returns ExitCode
 	let arguments = CommandLine.args()
 
 	if arguments.count() > 1 'asTheChild'
+		print("ready\n")
 		sleep(60000)
 
 		return 0
@@ -982,7 +986,7 @@ function main() returns ExitCode
 	var childArguments = StringArray.create()
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	sleep(300)
+	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = openAndDrop(pid)
 	print("caller pin depth {Scheduler.pinDepth()}\n")
@@ -1018,6 +1022,7 @@ function main() returns ExitCode
 	let arguments = CommandLine.args()
 
 	if arguments.count() > 1 'asTheChild'
+		print("ready\n")
 		sleep(60000)
 
 		return 0
@@ -1027,7 +1032,7 @@ function main() returns ExitCode
 	var childArguments = StringArray.create()
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	sleep(300)
+	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = releaseAndDrop(pid)
 	_ = try child.waitWithTimeout(1) otherwise 0
@@ -1065,6 +1070,7 @@ function main() returns ExitCode
 	let arguments = CommandLine.args()
 
 	if arguments.count() > 1 'asTheChild'
+		print("ready\n")
 		sleep(60000)
 
 		return 0
@@ -1074,7 +1080,7 @@ function main() returns ExitCode
 	var childArguments = StringArray.create()
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	sleep(300)
+	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = closeAndDrop(pid)
 	_ = try child.waitWithTimeout(1) otherwise 0

@@ -70,52 +70,68 @@ quiet=true
 
 <!-- test: netpoll-idle.an-earlier-timer-interrupts-a-later-wait -->
 <!-- procs: 2 -->
-**A DEADLINE ARMED EARLIER THAN THE ONE THE POLLER WAITS FOR ENDS ITS WAIT.** A service sleeps 600 ms and
-`main` stays busy long enough for an idle machine to block in the poller on that deadline; `main` then sleeps
-50 ms and must wake near 50, not at 600.
+**A DEADLINE ARMED EARLIER THAN THE ONE THE POLLER WAITS FOR ENDS ITS WAIT.** A service parks a coroutine on a
+timer without end (`ForeverMs`), so the machine that runs it settles into the poller with no deadline that could
+ever wake it. `main` stays busy until a processor reports idle, which is that machine giving its processor up,
+and then sleeps 50 ms. Only an interrupt of the poller's wait can fire that timer, so a missed one leaves `main`
+asleep for ever and the runner reports the case TIMED OUT: no elapsed time is compared to a threshold, and no
+deadline of the sleeper's can run out before the nap is armed.
+
+⚠ **THE SLEEPER IS A COROUTINE THE SERVICE HOLDS, NOT A HANDLER THAT SLEEPS.** A handler asleep without end
+cannot be ended from outside, `cancel()` on its reply included: a queued message always runs. The coroutine sits
+in a field of the service, `arm` yields once so the strand runs it up to its `sleep`, and `release` pops it and
+drops it at its end, so the sleep ends and the program exits. It reports whether the coroutine was still parked
+when it was dropped.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Held = Promise with Integer
+typealias HeldArray = Array with Held
 
-// Far below the long sleep and far above the short one: a short sleep that waited for the long deadline
-// reads 600.
-let lateMs = 300
+function forever() returns Integer
+	sleep(ForeverMs)
+	return 1
+end 'forever'
 
 type Sleeper
-	var n as Integer
+	var held as HeldArray
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{held: HeldArray.create()}
 	end 'create'
 
-	export function nap() returns Integer
-		sleep(600)
+	export function arm() returns Integer
+		self.held.push(async forever())
+		Scheduler.yield()
 		return 1
-	end 'nap'
+	end 'arm'
+
+	export function release() returns bool
+		let sleeper = try self.held.pop() otherwise panic("arm ran before this message")
+		return not sleeper.isComplete()
+	end 'release'
 end 'Sleeper'
 
 function main() returns ExitCode
 	let s = spawn Sleeper.create()
-	let r = try s.nap() otherwise panic("an open mailbox with room takes the send")
-	sleep(20)
-	// Busy, so this machine does not go idle: the other machine settles into the poller on the 600 ms
-	// deadline first, and only an interrupt can end that wait at 50.
-	let spinFrom = Clock.nowMs()
-	var spins = 0 as Integer
+	let armed = try s.arm() otherwise panic("an open mailbox with room takes the send")
+	let v = await armed
+	var idle = 0 as SchedulerEventCount
 
-	while Clock.elapsedMs(spinFrom) < 10 'spin'
-		spins = spins + 1
-	end 'spin'
+	// Busy, so this machine does not go idle: the other machine settles into the poller on the sleeper's
+	// deadline, and only an interrupt can end that wait at 50.
+	while idle == 0 'untilOtherIdles'
+		idle = Scheduler.counters().idleProcessors
+	end 'untilOtherIdles'
 
-	let start = Clock.nowMs()
 	sleep(50)
-	let tookMs = Clock.elapsedMs(start) as Integer
-	let v = await r
-	print("late={tookMs >= lateMs} v={v}\n")
+	let stillParked = try await s.release() otherwise false
+	s.shutdown()
+	print("napped parked={stillParked} v={v}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-late=false v=1
+napped parked=true v=1
 ```
 ```exitcode
 0
@@ -124,59 +140,91 @@ late=false v=1
 <!-- test: netpoll-idle.a-break-reaches-the-poller-while-a-former-poller-runs -->
 <!-- procs: 2 -->
 **A BREAK ENDS THE POLLER'S WAIT WHILE ANOTHER MACHINE THAT ONCE POLLED IS BUSY.** `main`'s machine waits in the
-poller first, then stays busy while a service's 50 ms sleep breaks the other machine's wait on a 900 ms
-deadline. The service must wake near 50, not when `main` stops running at 600.
+poller first, then stays busy while a service's 50 ms sleep breaks the other machine's wait on a deadline that
+never comes (a held coroutine asleep for `ForeverMs`). `main` spins until that service has finished its nap and
+published it, so a break that never reaches the poller leaves the nap unfired and `main` spinning for ever, and
+the runner reports the case TIMED OUT. No elapsed time is compared to a threshold, and the long sleeper cannot
+wake first.
+
+⚠ **THE LONG SLEEPER IS A COROUTINE THE SERVICE HOLDS**, for the reason the previous case gives: a handler asleep
+without end cannot be ended, and `release` drops the coroutine out of the field that holds it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Held = Promise with Integer
+typealias HeldArray = Array with Held
+typealias NapCell = SharedValue with bool
 
-// Far below the busy stretch and the long sleep, far above the short one.
-let lateMs = 300
+function forever() returns Integer
+	sleep(ForeverMs)
+	return 1
+end 'forever'
 
-type Sleeper
-	var n as Integer
+type Holder
+	var held as HeldArray
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{held: HeldArray.create()}
 	end 'create'
 
-	export function nap(ms Integer) returns Integer
-		let start = Clock.nowMs()
-		sleep(ms as Milliseconds)
-		return Clock.elapsedMs(start) as Integer
+	export function arm() returns Integer
+		self.held.push(async forever())
+		Scheduler.yield()
+		return 1
+	end 'arm'
+
+	export function release() returns bool
+		let sleeper = try self.held.pop() otherwise panic("arm ran before this message")
+		return not sleeper.isComplete()
+	end 'release'
+end 'Holder'
+
+type Napper
+	let napped as NapCell
+
+	static function create(napped NapCell) returns Self
+		return Self{napped: napped}
+	end 'create'
+
+	export function nap() returns Integer
+		sleep(50)
+		self.napped.publish(true)
+		return 1
 	end 'nap'
-end 'Sleeper'
-
-function spinMs(ms Integer) returns Integer
-	let began = Clock.nowMs()
-	var spins = 0 as Integer
-
-	while (Clock.elapsedMs(began) as Integer) < ms 'spin'
-		spins = spins + 1
-	end 'spin'
-
-	return spins
-end 'spinMs'
+end 'Napper'
 
 function main() returns ExitCode
-	let longer = spawn Sleeper.create()
-	let shorter = spawn Sleeper.create()
-	let r1 = try longer.nap(900) otherwise panic("an open mailbox with room takes the send")
+	let napped = NapCell.create(false)
+	let longer = spawn Holder.create()
+	let shorter = spawn Napper.create(napped.clone())
+	let armed = try longer.arm() otherwise panic("an open mailbox with room takes the send")
+	let v = await armed
 
-	// `main`'s machine is the poller for this one, and then the other machine polls on the 900 ms deadline.
+	// `main`'s machine is the poller for this one, and then the other machine polls on the sleeper's deadline.
 	sleep(20)
-	let settled = spinMs(10)
 
-	// Armed by a third machine while `main`'s keeps running: only the break can end the poller's wait at 50.
-	let r2 = try shorter.nap(50) otherwise panic("an open mailbox with room takes the send")
-	let busy = spinMs(600)
+	var idle = 0 as SchedulerEventCount
+
+	while idle == 0 'untilOtherIdles'
+		idle = Scheduler.counters().idleProcessors
+	end 'untilOtherIdles'
+
+	// Armed by a third machine while `main`'s keeps running: only the break can end the poller's wait.
+	let r2 = try shorter.nap() otherwise panic("an open mailbox with room takes the send")
+	var seen = false
+
+	while not seen 'untilNapped'
+		seen = napped.current()
+	end 'untilNapped'
+
 	let took = await r2
-	let slept = await r1
-	print("late={took >= lateMs} spun={settled > 0} {busy > 0} slept={slept >= 900}\n")
+	let stillParked = try await longer.release() otherwise false
+	longer.shutdown()
+	print("napped={seen} took={took} parked={stillParked} v={v}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-late=false spun=true true slept=true
+napped=true took=1 parked=true v=1
 ```
 ```exitcode
 0

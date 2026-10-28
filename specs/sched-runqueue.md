@@ -602,11 +602,12 @@ total=4 finished=4 recycled=6
 
 <!-- test: sched-runqueue.a-drop-of-a-parked-thread-renounces-it -->
 <!-- procs: 1 -->
-**A DROP RENOUNCES A PARKED THREAD; IT DOES NOT FREE IT.** `s` parks on a 200 ms timer and `await f` returns
-long before it fires, so the loop body's scope exit drops a thread that is registered in the timer store. The
-drop takes it out of the store under `__sched_lock` and READIES it: the thread resumes from its `sleep` early,
-runs its own body out, unwinds its own frame, and its own completion performs the runner's half. Three
-iterations with no hang, because nothing ever waits on the 200 ms deadline.
+**A DROP RENOUNCES A PARKED THREAD; IT DOES NOT FREE IT.** `s` parks on a timer without end (`ForeverMs`), so
+the loop body's scope exit drops a thread that is registered in the timer store and that nothing but the drop can
+end. The drop takes it out of the store under `__sched_lock` and READIES it: the thread resumes from its `sleep`
+early, runs its own body out, unwinds its own frame, and its own completion performs the runner's half. Three
+iterations with no hang, because a drop that left the deadline in the store would wait for ever and the runner
+would report the case TIMED OUT.
 
 ⛔⛔ **THE DROP MAY NOT PERFORM THE RUNNER's HALF ITSELF, AND THAT IS WHAT THIS COUNT PINS.** The runner's half
 frees the STACK the parked thread is suspended on — and nothing can unwind a suspended frame from outside, so
@@ -640,7 +641,7 @@ function done() returns Integer
 end 'done'
 
 function sleeper() returns Integer
-	sleep(200)
+	sleep(ForeverMs)
 	return 9
 end 'sleeper'
 
@@ -721,7 +722,7 @@ function done() returns Integer
 end 'done'
 
 function sleeper() returns Integer
-	sleep(200)
+	sleep(ForeverMs)
 	return 9
 end 'sleeper'
 
@@ -1136,11 +1137,13 @@ readies `Tally` into the slot, and `Tally` therefore rides the leaf's own slice.
 those too and measure something the check does not act on. `Scheduler.counters().slices` is the tick the
 check itself tests, read in the LEAF, since reading it in `Tally` would time `Tally`.
 
-⭐⭐ **THE SETUP IS A BURST OF SENDS TO PARKED SERVICES, AND THE SLEEP IS WHAT MAKES IT ONE.** Publishing by
+⭐⭐ **THE SETUP IS A BURST OF SENDS TO PARKED SERVICES, AND A HELLO TO EVERY LEAF IS WHAT MAKES IT ONE.** Publishing by
 `spawn` alone cannot be relied on: 300 spawns take longer than one 10 ms slice, and a preemption in the
 middle (`specs/sched-preempt.md`) lets the leaves drain as they are created, so the ring never fills and
-nothing reaches the global queue. After the sleep every leaf is parked on an empty mailbox, so the 300
-sends ready them all in id order — which costs no slices at all, on every lane — the 257th ready
+nothing reaches the global queue. `main` awaits a reply from each leaf in turn. At one processor with
+preemption off a leaf runs on after it replies, up to its park on an empty mailbox, before `main` is scheduled
+again, so once the last reply is in every leaf is parked and no clock has to say how long that takes. The 300
+sends then ready them all in id order — which costs no slices at all, on every lane — the 257th ready
 overflows the ring, and the batch it moves is leaves #1..#129 with #1 at its head.
 
 ⛔ **THE CASE STATES WHETHER ITS OWN SETUP HAPPENED.** `Scheduler.counters().globalPushes` across the burst
@@ -1156,18 +1159,17 @@ REFUSES.** This case's subject is an ORDER ACROSS SERVICES, so its tally cannot 
 mailbox is FIFO, so the order the notes are enqueued is the order the leaves ran, with no word two green
 threads both step.
 
-⚠ **THE BOUNDED DRAIN SURVIVES, AND SO DOES ITS REASON.** `main` asks `Tally` for the count rather than
-reading a word, and the loop is bounded, so a leaf the overflow dropped leaves `runCount` short and prints
-a wrong answer rather than wedging. `main` sleeps between asks: back to back, ask and reply would keep `main`
-and `Tally` handing the `runnext` slot to each other, which `preempt: off` leaves nothing to break.
+⚠ **THE DRAIN HAS NO BOUND, SO A LEAF THE OVERFLOW DROPPED IS A TIMEOUT.** `main` asks `Tally` for the count
+rather than reading a word, and a count that never reaches `leafCount` leaves `main` asking for ever, which the
+runner reports as TIMED OUT; a bound in polls would be a clock against how long the leaves take on a slow host.
+`main` sleeps between asks: back to back, ask and reply would keep `main` and `Tally` handing the `runnext`
+slot to each other, which `preempt: off` leaves nothing to break.
 ```maxon
 typealias LeafHandleArray = Array with Leaf.handle
 
 let leafCount = 300
 let fairnessInterval = 61
-let parkBarrierMs = 50
 let drainPollMs = 1
-let drainPollLimit = 5000
 
 // The 301st service, and the only shared sequence in the program. A send is an ENQUEUE, so the order these
 // arrive in is the order the leaves ran — with no word two green threads both step.
@@ -1208,6 +1210,10 @@ type Leaf
 		return Self{id: id}
 	end 'create'
 
+	export function hello() returns Integer
+		return self.id
+	end 'hello'
+
 	export function go(sink Tally.handle)
 		try sink.note(self.id, slice: Scheduler.counters().slices as Integer) otherwise panic("the collector's mailbox holds every leaf's note")
 	end 'go'
@@ -1224,8 +1230,13 @@ function main() returns ExitCode
 
 	let tally = spawn Tally.create()
 
-	// Every service reaches its park on an empty mailbox, so the burst below is what publishes them.
-	sleep(parkBarrierMs)
+	// Each leaf has replied and run on to its park on an empty mailbox, so the burst below is what publishes them.
+	var h = 0 as Integer
+	while h < leafCount 'helloEach'
+		view leaf = try leaves.get(h as ElementIndex) otherwise panic("leaves.get OOB at {h} — the loop is bounded by the count the pushes above filled")
+		_ = try await leaf.hello() otherwise panic("a leaf answers while its handle is held")
+		h = h + 1
+	end 'helloEach'
 
 	let pushedBefore = Scheduler.counters().globalPushes
 
@@ -1240,11 +1251,9 @@ function main() returns ExitCode
 	let burstPushes = Scheduler.counters().globalPushes - pushedBefore
 
 	var runCount = 0 as Integer
-	var polls = 0 as Integer
-	while runCount < leafCount and polls < drainPollLimit 'drain'
+	while runCount < leafCount 'drain'
 		sleep(drainPollMs)
 		runCount = try await tally.count() otherwise 0
-		polls = polls + 1
 	end 'drain'
 
 	let waited = try await tally.slicesWaited() otherwise 0 - 1
@@ -1296,10 +1305,10 @@ order — the same discrimination a shared word would make, through a channel wi
 ⚠ **`Tally` IS SPAWNED THIRD, AFTER `y` AND `s`.** Both of those keep the publication slots the argument
 above turns on; a collector spawned ahead of them would take `y`'s.
 
-`main` sleeps between its asks for the count, for the fairness case's reason above.
+`main` sleeps between its asks for the count, for the fairness case's reason above, and the drain has no bound:
+a note that never arrives is a TIMEOUT.
 ```maxon
 let drainPollMs = 1
-let drainPollLimit = 5000
 
 let spawneeId = 1
 let yielderId = 2
@@ -1383,11 +1392,9 @@ function main() returns ExitCode
 	try s.go(tally.clone()) otherwise panic("an open mailbox with room takes the send")
 
 	var order = 0 as Integer
-	var polls = 0 as Integer
-	while order < 2 and polls < drainPollLimit 'drain'
+	while order < 2 'drain'
 		sleep(drainPollMs)
 		order = try await tally.count() otherwise 0
-		polls = polls + 1
 	end 'drain'
 
 	let sPos = try await tally.spawneePosition() otherwise 0

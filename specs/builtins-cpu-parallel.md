@@ -656,19 +656,24 @@ fatal error: a machine pin was released by a green thread that holds none
 
 <!-- test: builtins-cpu-parallel.a-pinned-service-outlives-main-and-resumes-on-its-machine -->
 <!-- procs: 1 -->
-A service pins itself to the machine that runs it and parks on a timer. That machine is the main one, so it
-waits for its pinned thread while another machine runs `main` to its end, and the exit drain that follows
-finds the timer pending. The machine that fires the timer is not the pinned thread's, so it must hand the
-thread to its own machine rather than resume it: the service prints after `main` has returned, from the
-machine it parked on, and the program exits 0 with nothing leaked.
+A service pins itself to the machine that runs it and parks on timers until `main` publishes a release. That
+machine is the main one, so it waits for its pinned thread while another machine runs `main` to its end, and the
+exit drain that follows finds a timer pending. The machine that fires the timer is not the pinned thread's, so it
+must hand the thread to its own machine rather than resume it: the service prints after `main` has returned, from
+the machine it parked on, and the program exits 0 with nothing leaked. The release is what orders the service's
+last line after `main`'s, so no timer is compared to how long `main` takes to get there.
 ```maxon
 typealias Count = int(0 to 1000)
+typealias ReleaseCell = SharedValue with bool
+
+let releasePollMs = 1
 
 type Holder
+	let released as ReleaseCell
 	var held as Count
 
-	static function create() returns Self
-		return Self{held: 0}
+	static function create(released ReleaseCell) returns Self
+		return Self{released: released, held: 0}
 	end 'create'
 
 	export function hold()
@@ -679,7 +684,11 @@ type Holder
 
 		let parkedOn = Scheduler.currentMachine()
 		print("the pinned service parks\n")
-		sleep(60)
+
+		while not self.released.current() 'untilReleased'
+			sleep(releasePollMs)
+		end 'untilReleased'
+
 		self.held = self.held + 1
 		print("the pinned service resumed on its own machine {Scheduler.currentMachine() == parkedOn}\n")
 		Scheduler.unpinFromMachine()
@@ -687,10 +696,12 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let holder = spawn Holder.create()
+	let released = ReleaseCell.create(false)
+	let holder = spawn Holder.create(released.clone())
 	try holder.hold() otherwise panic("an open mailbox with room takes the send")
 	Scheduler.yield()
 	print("main returns\n")
+	released.publish(true)
 	return 0
 end 'main'
 ```
