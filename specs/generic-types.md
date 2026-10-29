@@ -265,6 +265,27 @@ end 'main'
 error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
 ```
 
+<!-- test: error.an-instance-with-more-than-sixty-four-type-arguments-is-refused -->
+An instance records which of its arguments are read-only in a 64-bit mask, so a type-argument list past 64 is refused
+where its sixty-fifth argument is written.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Widest uses P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, P16, P17, P18, P19, P20, P21, P22, P23, P24, P25, P26, P27, P28, P29, P30, P31, P32, P33, P34, P35, P36, P37, P38, P39, P40, P41, P42, P43, P44, P45, P46, P47, P48, P49, P50, P51, P52, P53, P54, P55, P56, P57, P58, P59, P60, P61, P62, P63, P64
+	export let last as P64
+end 'Widest'
+
+typealias TooWide = Widest with (Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:610: Unsupported: a type-argument list with more than 64 arguments — the arguments spelled `readonly` are recorded as one bit per position of a 64-bit mask, so an instance has no position to record a later argument at
+```
+
 <!-- test: managed-string-arg -->
 ```maxon
 type Box uses T

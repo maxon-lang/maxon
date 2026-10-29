@@ -993,3 +993,102 @@ end 'main'
 ```maxoncstderr
 error E3006: <fragment>:29:11: duplicate definition of 'Array___ro_Counter' — the generic instantiations `Array with readonly Counter` and `Array_ with _ro_Counter` compile to that same name
 ```
+
+<!-- test: a-read-only-element-is-carried-to-the-ninth-argument-of-a-nested-instance -->
+An `extension Array` member returns a nine-argument instance whose last argument is the array's element type. On an
+`Array with readonly Counter` that argument is read-only, and the position it occupies is the ninth, past the eight a
+one-byte mask could hold.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+type Wide uses A, B, C, D, E, F, G, H, I
+	let last as I
+
+	static function create(last I) returns Self
+		return Self{last: last}
+	end 'create'
+
+	function item() returns I
+		return self.last
+	end 'item'
+end 'Wide'
+
+extension Array
+	typealias NineWide = Wide with (Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Element)
+
+	function wide() returns NineWide throws ArrayError
+		let first = try self.get(0)
+		return NineWide.create(first)
+	end 'wide'
+end 'Array'
+
+typealias Roster = Array with readonly Counter
+
+function main() returns ExitCode
+	var roster = Roster.create()
+	roster.push(Counter.create(7))
+	let nine = try roster.wide() otherwise return 1
+	return nine.item().n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-read-only-element-is-carried-to-the-sixty-fourth-argument-of-a-nested-instance -->
+The sixty-fourth argument is the last position an instance records, and an `Array with readonly Counter`'s element
+reaches it.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+type Widest uses P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, P16, P17, P18, P19, P20, P21, P22, P23, P24, P25, P26, P27, P28, P29, P30, P31, P32, P33, P34, P35, P36, P37, P38, P39, P40, P41, P42, P43, P44, P45, P46, P47, P48, P49, P50, P51, P52, P53, P54, P55, P56, P57, P58, P59, P60, P61, P62, P63
+	let last as P63
+
+	static function create(last P63) returns Self
+		return Self{last: last}
+	end 'create'
+
+	function item() returns P63
+		return self.last
+	end 'item'
+end 'Widest'
+
+extension Array
+	typealias SixtyFourWide = Widest with (Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Element)
+
+	function widest() returns SixtyFourWide throws ArrayError
+		let first = try self.get(0)
+		return SixtyFourWide.create(first)
+	end 'widest'
+end 'Array'
+
+typealias Roster = Array with readonly Counter
+
+function main() returns ExitCode
+	var roster = Roster.create()
+	roster.push(Counter.create(9))
+	let wide = try roster.widest() otherwise return 1
+	return wide.item().n as ExitCode
+end 'main'
+```
+```exitcode
+9
+```

@@ -15,6 +15,8 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- A `with` list names at most 64 type arguments; a longer one is E2015.
+  Fix: group the arguments into a smaller number of types, such as a record type passed as one argument.
 - A call whose argument wears an alias binds the overload declared over that alias, even where another
   overload takes the argument's primitive type exactly: beside `f(n Small)` and `f(n Integer)`,
   `f(x as Small)` binds `f(n Small)`.

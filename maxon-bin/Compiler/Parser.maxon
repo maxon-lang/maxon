@@ -29597,6 +29597,7 @@ export type Parser
 
 			while self.at(TokenKind.comma) 'moreBareArgs'
 				try self.consume(TokenKind.comma)
+				try self.requireGenericArgPositionFits(bareCount)
 				let spelledReadOnly = try self.parseGenericArgNode(nodes, baseName: baseName, inlineElement: inlineElement, slot: slot, position: bareCount)
 
 				if spelledReadOnly 'laterSpelledReadOnly'
@@ -29613,6 +29614,7 @@ export type Parser
 		var count = 0 as FieldIndex
 
 		while true 'argLoop'
+			try self.requireGenericArgPositionFits(count)
 			let spelledReadOnly = try self.parseGenericArgNode(nodes, baseName: baseName, inlineElement: inlineElement, slot: slot, position: count)
 
 			if spelledReadOnly 'spelledReadOnlyHere'
@@ -29636,6 +29638,15 @@ export type Parser
 
 		return (count, readOnlyShapeOf(spelled))
 	end 'parseGenericArgNodes'
+
+	function requireGenericArgPositionFits(position FieldIndex) throws SourceParseError
+		if position < MaxGenericTypeArgs as FieldIndex 'withinTheMask'
+			return
+		end 'withinTheMask'
+
+		let tok = self.current()
+		throw SourceParseError.unsupported("a type-argument list with more than {MaxGenericTypeArgs} arguments — the arguments spelled `{String.from(ReadonlyModifierWord)}` are recorded as one bit per position of a {MaxGenericTypeArgs}-bit mask, so an instance has no position to record a later argument at", line: tok.line, column: tok.column)
+	end 'requireGenericArgPositionFits'
 
 	function atReadonlyModifier() returns bool
 		if not self.at(TokenKind.identifier) or not isReadonlyWord(self.current().value) 'notTheWord'

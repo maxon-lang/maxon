@@ -12089,7 +12089,7 @@ let UnsizedHashWord = 0 as HashDigest
 
 let ReadOnlyHashFlag = 1099511627776 as HashDigest
 
-export typealias ReadOnlyArgMask = int(0 to u8.max)
+export typealias ReadOnlyArgMask = bits(64)
 
 export typealias ReadOnlyArgMaskArray = Array with ReadOnlyArgMask
 
@@ -12108,7 +12108,7 @@ function cacheReadReadOnlyArgMaskArray(reader LibraryCacheReader) returns ReadOn
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
-		let item = (try reader.boundedUnsigned(0, high: u8.max)) as ReadOnlyArgMask
+		let item = (try reader.unsigned()) as ReadOnlyArgMask
 		result.push(item)
 	end 'eachItem'
 
@@ -12117,24 +12117,27 @@ end 'cacheReadReadOnlyArgMaskArray'
 
 // @generated library-cache end
 
-let ReadOnlyMaskWidth = 8 as ElementIndex
+// The width of `ReadOnlyArgMask`, one bit per type-argument position, and so the most type arguments an
+// instance can have (`Parser.requireGenericArgPositionFits`). `readOnlyArgsCarriedThrough` can carry a
+// read-only bit to any position of a nested instance, so the mask covers the whole arity.
+module let MaxGenericTypeArgs = 64 as ElementIndex
 
-module let NoReadOnlyArgs = 0 as FullRangeInt
+module let NoReadOnlyArgs = 0 as ReadOnlyArgMask
 
-module function spelledReadOnlyAt(mask FullRangeInt, position FieldIndex) returns FullRangeInt
-	if position >= ReadOnlyMaskWidth as FieldIndex 'pastTheMask'
-		panic("spelledReadOnlyAt: position {position} is past the {ReadOnlyMaskWidth} positions a read-only mask holds")
+module function spelledReadOnlyAt(mask ReadOnlyArgMask, position FieldIndex) returns ReadOnlyArgMask
+	if position >= MaxGenericTypeArgs as FieldIndex 'pastTheMask'
+		panic("spelledReadOnlyAt: position {position} is past the {MaxGenericTypeArgs} positions a read-only mask holds")
 	end 'pastTheMask'
 
-	return mask or (1 shl (position as FullRangeInt))
+	return mask or (1 shl position)
 end 'spelledReadOnlyAt'
 
-module function readOnlyShapeOf(mask FullRangeInt) returns InstanceShape
+module function readOnlyShapeOf(mask ReadOnlyArgMask) returns InstanceShape
 	if mask == NoReadOnlyArgs 'nothingSpelled'
 		return InstanceShape.unsized
 	end 'nothingSpelled'
 
-	return InstanceShape.readOnlyArgs(mask as ReadOnlyArgMask)
+	return InstanceShape.readOnlyArgs(mask)
 end 'readOnlyShapeOf'
 
 let ReadOnlyCanonicalPrefix = "__ro_"
@@ -12179,11 +12182,11 @@ export union InstanceShape
 	export function argIsReadOnly(position ElementIndex) returns bool
 		let mask = try self.readOnlyMask() otherwise return false
 
-		if position >= ReadOnlyMaskWidth 'pastTheMask'
-			panic("InstanceShape.argIsReadOnly: position {position} is past the {ReadOnlyMaskWidth} positions a read-only mask holds")
+		if position >= MaxGenericTypeArgs 'pastTheMask'
+			panic("InstanceShape.argIsReadOnly: position {position} is past the {MaxGenericTypeArgs} positions a read-only mask holds")
 		end 'pastTheMask'
 
-		return ((mask as FullRangeInt shr position as FullRangeInt) and 1) == 1
+		return ((mask shr position) and 1) == 1
 	end 'argIsReadOnly'
 
 	export function sameAs(other InstanceShape) returns bool
@@ -12214,7 +12217,8 @@ export union InstanceShape
 		return match self 'shape'
 			unsized gives UnsizedHashWord
 			sized(count) gives count as HashDigest
-			readOnlyArgs(mask) gives ReadOnlyHashFlag or (mask as HashDigest)
+			// Combined rather than OR-ed: a mask reaching the flag's bit would alias it.
+			readOnlyArgs(mask) gives Hasher.combined(ReadOnlyHashFlag, value: mask as HashDigest)
 		end 'shape'
 	end 'hashWord'
 end 'InstanceShape'
@@ -12256,7 +12260,7 @@ function cacheReadInstanceShapeSized(reader LibraryCacheReader) returns Instance
 end 'cacheReadInstanceShapeSized'
 
 function cacheReadInstanceShapeReadOnlyArgs(reader LibraryCacheReader) returns InstanceShape throws LibraryCacheDamage
-	let a0 = (try reader.boundedUnsigned(0, high: u8.max)) as ReadOnlyArgMask
+	let a0 = (try reader.unsigned()) as ReadOnlyArgMask
 
 	return InstanceShape.readOnlyArgs(a0)
 end 'cacheReadInstanceShapeReadOnlyArgs'
@@ -12643,7 +12647,7 @@ export type GenericInstanceRegistry
 			return InstanceShape.sized(count)
 		end 'sized'
 
-		return readOnlyShapeOf(try self.readOnlyArgs.get(position) otherwise panic("GenericInstanceRegistry.shapeAtPosition: readOnlyArgs.get OOB at {position}") as FullRangeInt)
+		return readOnlyShapeOf(try self.readOnlyArgs.get(position) otherwise panic("GenericInstanceRegistry.shapeAtPosition: readOnlyArgs.get OOB at {position}"))
 	end 'shapeAtPosition'
 
 	// File the new instance under its base. Appended, never re-sorted, so a base's bucket is in intern

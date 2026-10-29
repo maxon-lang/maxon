@@ -1687,7 +1687,7 @@ end 'main'
 - A generic type whose methods reach an instance of itself through an ever-growing type argument
   (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic
-  type is **E2055**.
+  type is **E2055**. A `with` list names at most 64 type arguments; a longer one is **E2015**.
 - A `float` type argument, bare or through a ranged float alias such as `FullRangeFloat`, is **E2062**
   (`Box with FullRangeFloat`). The element of an `Array` or a `FixedArray` is the exception, because it is stored
   inline in a buffer: `Array with FullRangeFloat` and `FixedArray with 2 FullRangeFloat` compile, and there a bare `float` is
