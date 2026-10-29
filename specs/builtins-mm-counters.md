@@ -703,7 +703,9 @@ necessary and neither alone is enough:
   process-wide one passes the first half and fails here.
 
 ⚠ The spawn comes FIRST so both readings are taken with a scheduler already installed — it comes up lazily,
-and before it there is no green thread for a per-thread column to be about.
+and before it there is no green thread for a per-thread column to be about. `main` awaits a `ready` reply
+before the serial window, because the factory runs on the service's own green thread and its allocation
+would otherwise land inside that window.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
@@ -715,6 +717,10 @@ type Churn
 	static function create() returns Self
 		return Self{rounds: 0}
 	end 'create'
+
+	export function ready() returns Integer
+		return self.rounds
+	end 'ready'
 
 	export function churn(n Integer) returns Integer
 		var buf = Bytes.create()
@@ -732,6 +738,7 @@ end 'processWide'
 
 function main() returns ExitCode
 	let h = spawn Churn.create()
+	_ = try await h.ready() otherwise panic("an open mailbox with room takes the send")
 
 	let serialThreadBefore = __Builtins.threadAllocTotal()
 	let serialProcessBefore = processWide()
@@ -823,8 +830,9 @@ deltas must agree to the digit — the byte pair included, because both count a 
 A process total that answered the header-free volume fails the byte half; one wired to a tracked column
 fails the count halves.
 
-⚠ The spawn comes FIRST so `main` runs on a green thread with columns of its own; the service is never sent
-a message until the window has closed, so it is parked on its mailbox throughout.
+⚠ The spawn comes FIRST so `main` runs on a green thread with columns of its own. The factory runs on the
+service's own green thread, so `main` awaits one reply before the window opens: the service has then built
+itself and is parked on its mailbox throughout.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
@@ -853,6 +861,7 @@ end 'fillAndDrop'
 
 function main() returns ExitCode
 	let h = spawn Idle.create()
+	var score = try await h.ping(0) otherwise 0
 
 	let threadAllocsBefore = __Builtins.threadAllocTotal()
 	let threadFreesBefore = __Builtins.threadFreeTotal()
@@ -868,7 +877,6 @@ function main() returns ExitCode
 	let threadFrees = __Builtins.threadFreeTotal() - threadFreesBefore
 	let threadBytes = __Builtins.threadAllocBytes() - threadBytesBefore
 
-	var score = try await h.ping(0) otherwise 0
 	if allocs > 0 and allocs == threadAllocs 'allocsAgree'
 		score = score + 2
 	end 'allocsAgree'
