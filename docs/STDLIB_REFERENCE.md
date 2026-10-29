@@ -3728,8 +3728,9 @@ above `L`, are `false`. Verification handles public data only and runs in variab
 `publicKey` and `sign` hash the private key with SHA-512 and use its first half, clamped, as the scalar and
 its second half as the nonce prefix, so every 32-byte key is valid, an all-zero one included. The signature
 is a function of the key and the message alone, and `S` is below `L`. The base-point multiplications and
-the reductions modulo `L` take time independent of the key: every step runs, and a masked select keeps the
-result. `verify` accepts every signature `sign` makes under the key `publicKey` returns.
+the reductions modulo `L` take time independent of the key: every step runs, each multiple of the base point
+is picked by a masked scan of its whole precomputed table, and a masked select keeps each reduced value.
+`verify` accepts every signature `sign` makes under the key `publicKey` returns.
 
 ## EcdhP256
 

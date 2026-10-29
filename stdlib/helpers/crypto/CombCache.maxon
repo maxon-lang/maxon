@@ -1,0 +1,146 @@
+public enum CombCurve
+	p256
+	p384
+	ed25519
+end 'CombCurve'
+
+public type CombModuli
+	public let prime as WorkspaceLimbs
+	public let order as WorkspaceLimbs
+
+	public static function create(prime WorkspaceLimbs, order WorkspaceLimbs) returns CombModuli
+		return Self{prime: prime.clone(), order: order.clone()}
+	end 'create'
+end 'CombModuli'
+
+public typealias CombTableBuild = function() returns WorkspaceLimbs
+public typealias CombModuliBuild = function() returns CombModuli
+
+module union CombTableState
+	unbuilt
+	built(limbs WorkspaceLimbs)
+end 'CombTableState'
+
+module union CombModuliState
+	unknown
+	known(moduli CombModuli)
+end 'CombModuliState'
+
+module union CombUpdate
+	settled
+	replace(entry CombEntry)
+end 'CombUpdate'
+
+typealias CombStep = function(CombEntry) returns CombUpdate
+typealias CombEntries = Array with CombEntry
+
+module type CombEntry
+	module let table as CombTableState
+	module let moduli as CombModuliState
+
+	module static function unbuilt() returns CombEntry
+		return Self{table: CombTableState.unbuilt, moduli: CombModuliState.unknown}
+	end 'unbuilt'
+
+	function copiedTable() returns CombTableState
+		return match self.table 'table'
+			unbuilt gives CombTableState.unbuilt
+			built(limbs) gives CombTableState.built(limbs.clone())
+		end 'table'
+	end 'copiedTable'
+
+	function copiedModuli() returns CombModuliState
+		return match self.moduli 'moduli'
+			unknown gives CombModuliState.unknown
+			known(pair) gives CombModuliState.known(CombModuli.create(pair.prime, order: pair.order))
+		end 'moduli'
+	end 'copiedModuli'
+
+	module function copy() returns CombEntry
+		return Self{table: copiedTable(), moduli: copiedModuli()}
+	end 'copy'
+
+	function withTable(limbs WorkspaceLimbs) returns CombEntry
+		return Self{table: CombTableState.built(limbs.clone()), moduli: copiedModuli()}
+	end 'withTable'
+
+	function withModuli(replacement CombModuli) returns CombEntry
+		return Self{table: copiedTable(), moduli: CombModuliState.known(CombModuli.create(replacement.prime, order: replacement.order))}
+	end 'withModuli'
+
+	module function tableUpdate(build CombTableBuild) returns CombUpdate
+		return match self.table 'table'
+			built gives CombUpdate.settled
+			unbuilt gives CombUpdate.replace(withTable(build()))
+		end 'table'
+	end 'tableUpdate'
+
+	module function moduliUpdate(build CombModuliBuild) returns CombUpdate
+		return match self.moduli 'moduli'
+			known gives CombUpdate.settled
+			unknown gives CombUpdate.replace(withModuli(build()))
+		end 'moduli'
+	end 'moduliUpdate'
+end 'CombEntry'
+
+// One copy serves every caller in the process, which is sound only because each value is derived
+// from public curve constants. Anything derived from a key must stay out of it.
+public type CombCache
+	module let entries as CombEntries
+
+	module static function unbuilt() returns CombCache
+		var entries = CombEntries.create()
+
+		for _ in CombCurve.allCases 'eachCurve'
+			entries.push(CombEntry.unbuilt())
+		end 'eachCurve'
+
+		return Self{entries: entries}
+	end 'unbuilt'
+
+	function entryOf(curve CombCurve) returns CombEntry
+		return try self.entries.get(curve.ordinal) otherwise panic("CombCache: every curve has an entry")
+	end 'entryOf'
+
+	function with(curve CombCurve, entry CombEntry) returns CombCache
+		var copies = CombEntries.create()
+
+		for candidate in CombCurve.allCases 'eachCurve'
+			copies.push(entry.copy() if candidate == curve else entryOf(candidate).copy())
+		end 'eachCurve'
+
+		return Self{entries: copies}
+	end 'with'
+
+	static function settle(curve CombCurve, step CombStep) returns CombEntry
+		while true 'eachAttempt'
+			let seen = CombCache.current()
+			let entry = seen.entryOf(curve)
+
+			match step(entry) 'update'
+				settled then return entry
+				replace(next) then _ = CombCache.register(seen.with(curve, entry: next), replacing: seen)
+			end 'update'
+		end 'eachAttempt'
+	end 'settle'
+
+	public static function table(curve CombCurve, build CombTableBuild) returns WorkspaceLimbs
+		let entry = CombCache.settle(curve, step: function(current CombEntry) gives current.tableUpdate(build))
+
+		match entry.table 'table'
+			built(limbs) then return limbs
+			unbuilt then panic("CombCache: a settled table is built")
+		end 'table'
+	end 'table'
+
+	public static function moduli(curve CombCurve, build CombModuliBuild) returns CombModuli
+		let entry = CombCache.settle(curve, step: function(current CombEntry) gives current.moduliUpdate(build))
+
+		match entry.moduli 'moduli'
+			known(moduli) then return moduli
+			unknown then panic("CombCache: settled moduli are known")
+		end 'moduli'
+	end 'moduli'
+end 'CombCache'
+
+default CombCache = CombCache.unbuilt()

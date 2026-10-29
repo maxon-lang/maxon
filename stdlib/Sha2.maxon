@@ -6,7 +6,6 @@ typealias Sha2Word = bits(64)
 typealias Sha2Words = Array with Sha2Word
 typealias Sha2State = FixedArray with 8 Sha2Word
 
-typealias Sha256RotateAmount = int(1 to 31)
 typealias Sha512RotateAmount = int(1 to 63)
 typealias Sha2StateSlot = int(0 to 7)
 typealias Sha2WordBytes = int(4 to 8) implements Count
@@ -108,37 +107,37 @@ function sha2ReadBlock(schedule Sha2Words, padded ByteArray, blockOff ElementInd
 	end 'readWords'
 end 'sha2ReadBlock'
 
-function sha2FoldRoundConstants(schedule Sha2Words, roundConstants Sha2Words, mask Sha2Word)
-	for (iter, kv) in roundConstants.withIterator() 'foldRoundConstants'
-		let index = iter.index()
-		let raw = try schedule.get(index) otherwise panic("sha2: schedule index unreachable")
-		try schedule.set(index, value: (raw + kv) and mask) otherwise panic("sha2: schedule index unreachable")
-	end 'foldRoundConstants'
-end 'sha2FoldRoundConstants'
+function sha2WordAt(words Sha2Words, index ElementIndex) returns Sha2Word
+	return try words.get(index) otherwise panic("sha2: word index past the schedule or the round constants")
+end 'sha2WordAt'
 
 function sha2AddIntoState(state Sha2State, slot Sha2StateSlot, addend Sha2Word, mask Sha2Word)
 	let current = try state.get(slot as ElementIndex) otherwise panic("sha2: state index unreachable")
 	try state.set(slot as ElementIndex, value: (current + addend) and mask) otherwise panic("sha2: state index unreachable")
 end 'sha2AddIntoState'
 
-function sha256RotR(v Sha2Word, n Sha256RotateAmount) returns Sha2Word
-	return ((v shr n) or (v shl (sha256WordBits - n))) and sha256WordMask
-end 'sha256RotR'
+function sha256Doubled(v Sha2Word) returns Sha2Word
+	return v or (v shl sha256WordBits)
+end 'sha256Doubled'
 
 function sha256BigSigma0(v Sha2Word) returns Sha2Word
-	return sha256RotR(v, n: 2) xor sha256RotR(v, n: 13) xor sha256RotR(v, n: 22)
+	let doubled = sha256Doubled(v)
+	return ((doubled shr 2) xor (doubled shr 13) xor (doubled shr 22)) and sha256WordMask
 end 'sha256BigSigma0'
 
 function sha256BigSigma1(v Sha2Word) returns Sha2Word
-	return sha256RotR(v, n: 6) xor sha256RotR(v, n: 11) xor sha256RotR(v, n: 25)
+	let doubled = sha256Doubled(v)
+	return ((doubled shr 6) xor (doubled shr 11) xor (doubled shr 25)) and sha256WordMask
 end 'sha256BigSigma1'
 
 function sha256SmSigma0(v Sha2Word) returns Sha2Word
-	return sha256RotR(v, n: 7) xor sha256RotR(v, n: 18) xor (v shr 3)
+	let doubled = sha256Doubled(v)
+	return (((doubled shr 7) xor (doubled shr 18)) and sha256WordMask) xor (v shr 3)
 end 'sha256SmSigma0'
 
 function sha256SmSigma1(v Sha2Word) returns Sha2Word
-	return sha256RotR(v, n: 17) xor sha256RotR(v, n: 19) xor (v shr 10)
+	let doubled = sha256Doubled(v)
+	return (((doubled shr 17) xor (doubled shr 19)) and sha256WordMask) xor (v shr 10)
 end 'sha256SmSigma1'
 
 function sha2Ch(a Sha2Word, b Sha2Word, c Sha2Word, mask Sha2Word) returns Sha2Word
@@ -162,8 +161,6 @@ function sha256Compress(state Sha2State, schedule Sha2Words, padded ByteArray, b
 		schedule.push((wm16 + sha256SmSigma0(wm15) + wm7 + sha256SmSigma1(wm2)) and sha256WordMask)
 	end 'extend'
 
-	sha2FoldRoundConstants(schedule, roundConstants: sha256KTable, mask: sha256WordMask)
-
 	var a = state.get(0)
 	var b = state.get(1)
 	var c = state.get(2)
@@ -173,7 +170,8 @@ function sha256Compress(state Sha2State, schedule Sha2Words, padded ByteArray, b
 	var g = state.get(6)
 	var hv = state.get(7)
 
-	for wri in schedule 'rounds'
+	for round in 0 upto sha256RoundCount 'rounds'
+		let wri = sha2WordAt(schedule, index: round) + sha2WordAt(sha256KTable, index: round)
 		let t1 = (hv + sha256BigSigma1(ve) + sha2Ch(ve, b: f, c: g, mask: sha256WordMask) + wri) and sha256WordMask
 		let t2 = (sha256BigSigma0(a) + sha2Maj(a, b: b, c: c)) and sha256WordMask
 
@@ -228,8 +226,6 @@ function sha512Compress(state Sha2State, schedule Sha2Words, padded ByteArray, b
 		schedule.push(wm16 + sha512SmSigma0(wm15) + wm7 + sha512SmSigma1(wm2))
 	end 'extend'
 
-	sha2FoldRoundConstants(schedule, roundConstants: sha512KTable, mask: sha512WordMask)
-
 	var a = state.get(0)
 	var b = state.get(1)
 	var c = state.get(2)
@@ -239,7 +235,8 @@ function sha512Compress(state Sha2State, schedule Sha2Words, padded ByteArray, b
 	var g = state.get(6)
 	var hv = state.get(7)
 
-	for wri in schedule 'rounds'
+	for round in 0 upto sha512RoundCount 'rounds'
+		let wri = sha2WordAt(schedule, index: round) + sha2WordAt(sha512KTable, index: round)
 		let t1 = hv + sha512BigSigma1(ve) + sha2Ch(ve, b: f, c: g, mask: sha512WordMask) + wri
 		let t2 = sha512BigSigma0(a) + sha2Maj(a, b: b, c: c)
 

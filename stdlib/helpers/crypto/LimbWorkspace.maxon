@@ -19,6 +19,60 @@ public function selectByMask(kept WorkspaceLimb, replacement WorkspaceLimb, mask
 	return kept xor (mask and (kept xor replacement))
 end 'selectByMask'
 
+let limbWordBits = 32
+let limbTopBit = 63
+let limbWordMask = 0xFFFFFFFF as WorkspaceLimb
+let limbNone = 0 as WorkspaceLimb
+let limbOne = 1
+let limbAllOnes = u64.max as WorkspaceLimb
+
+public function limbEqualMask(a WorkspaceLimb, b WorkspaceLimb) returns WorkspaceLimb
+	return (((a xor b) - limbOne) shr limbTopBit) * limbAllOnes
+end 'limbEqualMask'
+
+public function limbBorrowChain(dst WorkspaceLimbs, dstBase ElementIndex, a WorkspaceLimbs, aBase ElementIndex, b WorkspaceLimbs, bBase ElementIndex, count Count) returns WorkspaceLimb
+	var borrow = limbNone
+
+	for index in 0 upto count 'eachLimb'
+		let total = workspaceLimbAt(a, index: aBase + index) - workspaceLimbAt(b, index: bBase + index) - borrow
+		workspaceLimbPut(dst, index: dstBase + index, value: total and limbWordMask)
+		borrow = total shr limbTopBit
+	end 'eachLimb'
+
+	return borrow
+end 'limbBorrowChain'
+
+public function limbCarryChain(dst WorkspaceLimbs, dstBase ElementIndex, a WorkspaceLimbs, aBase ElementIndex, b WorkspaceLimbs, bBase ElementIndex, bMask WorkspaceLimb, count Count) returns WorkspaceLimb
+	var carry = limbNone
+
+	for index in 0 upto count 'eachLimb'
+		let total = workspaceLimbAt(a, index: aBase + index) + (workspaceLimbAt(b, index: bBase + index) and bMask) + carry
+		workspaceLimbPut(dst, index: dstBase + index, value: total and limbWordMask)
+		carry = total shr limbWordBits
+	end 'eachLimb'
+
+	return carry
+end 'limbCarryChain'
+
+public function limbMultiplyInto(dst WorkspaceLimbs, dstBase ElementIndex, a WorkspaceLimbs, aBase ElementIndex, aCount Count, b WorkspaceLimbs, bBase ElementIndex, bCount Count)
+	for index in 0 upto bCount 'eachClear'
+		workspaceLimbPut(dst, index: dstBase + index, value: limbNone)
+	end 'eachClear'
+
+	for index in 0 upto aCount 'eachMultiplier'
+		let multiplier = workspaceLimbAt(a, index: aBase + index)
+		var carry = limbNone
+
+		for offset in 0 upto bCount 'eachMultiplicand'
+			let total = workspaceLimbAt(dst, index: dstBase + index + offset) + multiplier * workspaceLimbAt(b, index: bBase + offset) + carry
+			workspaceLimbPut(dst, index: dstBase + index + offset, value: total and limbWordMask)
+			carry = total shr limbWordBits
+		end 'eachMultiplicand'
+
+		workspaceLimbPut(dst, index: dstBase + index + bCount, value: carry)
+	end 'eachMultiplier'
+end 'limbMultiplyInto'
+
 public type LimbSlots
 	let slotWidth as Count
 	public let limbCount as Count
@@ -38,10 +92,43 @@ public type LimbSlots
 	public function load(ws WorkspaceLimbs, slot Count, value WorkspaceLimbs)
 		let base = offset(slot)
 
-		for (iter, limb) in value.withIterator() 'eachLimb'
-			workspaceLimbPut(ws, index: base + iter.index(), value: limb)
+		for index in 0 upto value.count() 'eachLimb'
+			workspaceLimbPut(ws, index: base + index, value: workspaceLimbAt(value, index: index))
 		end 'eachLimb'
 	end 'load'
+
+	// Every entry is read and masked: the digit can be a private key's or a nonce's, and indexing the
+	// table by it would leak that scalar through cache timing.
+	public function lookup(ws WorkspaceLimbs, dst Count, table Count, entryCount Count, entrySlots Count, digit WorkspaceLimb)
+		for slot in 0 upto entrySlots 'eachClear'
+			clear(ws, slot: dst + slot)
+		end 'eachClear'
+
+		for entry in 0 upto entryCount 'eachEntry'
+			let mask = limbEqualMask(entry as WorkspaceLimb, b: digit)
+
+			for slot in 0 upto entrySlots 'eachSlot'
+				accumulate(ws, dst: dst + slot, source: table + entry * entrySlots + slot, mask: mask)
+			end 'eachSlot'
+		end 'eachEntry'
+	end 'lookup'
+
+	public function copyPoint(ws WorkspaceLimbs, dst Count, src Count, slotCount Count)
+		for slot in 0 upto slotCount 'eachSlot'
+			copy(ws, dst: dst + slot, src: src + slot)
+		end 'eachSlot'
+	end 'copyPoint'
+
+	public function loadPacked(ws WorkspaceLimbs, firstSlot Count, packed WorkspaceLimbs, slotCount Count)
+		for slot in 0 upto slotCount 'eachSlot'
+			let target = offset(firstSlot + slot)
+			let origin = slot * self.limbCount
+
+			for index in 0 upto self.limbCount 'eachLimb'
+				workspaceLimbPut(ws, index: target + index, value: workspaceLimbAt(packed, index: origin + index))
+			end 'eachLimb'
+		end 'eachSlot'
+	end 'loadPacked'
 
 	public function read(ws WorkspaceLimbs, slot Count) returns WorkspaceLimbs
 		let base = offset(slot)

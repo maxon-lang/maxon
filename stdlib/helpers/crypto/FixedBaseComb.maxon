@@ -1,0 +1,113 @@
+public interface CombPoints
+	function addPoints(ws WorkspaceLimbs, result Count, p Count, q Count)
+
+	function doublePoint(ws WorkspaceLimbs, result Count, p Count)
+
+	function loadIdentity(ws WorkspaceLimbs, slot Count)
+end 'CombPoints'
+
+public typealias CombScalars = Array with WorkspaceLimbs
+
+// The limb width: `chunks` makes each scalar limb one chunk, so table j must hold the multiples of
+// 2^(32j)·Base for the shared doubling loop to sum the right point.
+let combChunkBits = 32
+let combWindowBits = 4
+let combWindowsPerChunk = 8
+let combWindowsPerChunkShift = 3
+let combWindowInChunkMask = 7 as WorkspaceLimb
+let combWindowMask = 0xF as WorkspaceLimb
+let combTableEntries = 16
+
+public type FixedBaseComb
+	let slots as LimbSlots
+	let pointSlots as Count
+	public let chunkCount as Count
+
+	public static function create(slots LimbSlots, pointSlots Count, chunkCount Count) returns FixedBaseComb
+		return Self{slots: slots, pointSlots: pointSlots, chunkCount: chunkCount}
+	end 'create'
+
+	public function tableSlots() returns Count
+		return combTableEntries * self.pointSlots
+	end 'tableSlots'
+
+	public function chunks(scalar WorkspaceLimbs) returns CombScalars
+		var terms = CombScalars.create()
+
+		for index in 0 upto self.chunkCount 'eachChunk'
+			var chunk = zeroLimbs(1)
+			workspaceLimbPut(chunk, index: 0, value: workspaceLimbAt(scalar, index: index))
+			terms.push(chunk)
+		end 'eachChunk'
+
+		return terms
+	end 'chunks'
+
+	function windowDigits(scalars CombScalars) returns WorkspaceLimbs
+		let leading = try scalars.first() otherwise panic("comb: a multiplication has a term")
+		let windowCount = leading.count() * combWindowsPerChunk
+		var digits = WorkspaceLimbs.create()
+		digits.reserve(windowCount * scalars.count())
+
+		for step in 0 upto windowCount 'eachWindow'
+			let window = (windowCount - 1 - step) as WorkspaceLimb
+
+			for scalar in scalars 'eachTerm'
+				let limb = workspaceLimbAt(scalar, index: (window shr combWindowsPerChunkShift) as ElementIndex)
+				digits.push((limb shr ((window and combWindowInChunkMask) * combWindowBits)) and combWindowMask)
+			end 'eachTerm'
+		end 'eachWindow'
+
+		return digits
+	end 'windowDigits'
+
+	public function buildTable(ws WorkspaceLimbs, points CombPoints, table Count, base Count)
+		points.loadIdentity(ws, slot: table)
+		self.slots.copyPoint(ws, dst: table + self.pointSlots, src: base, slotCount: self.pointSlots)
+
+		for entry in 2 upto combTableEntries 'eachMultiple'
+			points.addPoints(ws, result: table + entry * self.pointSlots, p: table + (entry - 1) * self.pointSlots, q: base)
+		end 'eachMultiple'
+	end 'buildTable'
+
+	public function buildChunkTables(ws WorkspaceLimbs, points CombPoints, scratch Count, base Count) returns WorkspaceLimbs
+		var packed = WorkspaceLimbs.create()
+		packed.reserve(self.chunkCount * tableSlots() * self.slots.limbCount)
+
+		for _ in 0 upto self.chunkCount 'eachChunk'
+			buildTable(ws, points: points, table: scratch, base: base)
+
+			for slot in 0 upto tableSlots() 'eachSlot'
+				packed.append(self.slots.read(ws, slot: scratch + slot))
+			end 'eachSlot'
+
+			for _ in 0 upto combChunkBits 'eachDoubling'
+				points.doublePoint(ws, result: base, p: base)
+			end 'eachDoubling'
+		end 'eachChunk'
+
+		return packed
+	end 'buildChunkTables'
+
+	public function loadChunkTables(ws WorkspaceLimbs, firstSlot Count, packed WorkspaceLimbs)
+		self.slots.loadPacked(ws, firstSlot: firstSlot, packed: packed, slotCount: self.chunkCount * tableSlots())
+	end 'loadChunkTables'
+
+	public function multiply(ws WorkspaceLimbs, points CombPoints, table Count, scalars CombScalars, looked Count, result Count)
+		let digits = windowDigits(scalars)
+		points.loadIdentity(ws, slot: result)
+		var cursor = 0 as ElementIndex
+
+		while cursor < digits.count() 'eachWindow'
+			for _ in 0 upto combWindowBits 'eachDoubling'
+				points.doublePoint(ws, result: result, p: result)
+			end 'eachDoubling'
+
+			for term in 0 upto scalars.count() 'eachTerm'
+				self.slots.lookup(ws, dst: looked, table: table + term * tableSlots(), entryCount: combTableEntries, entrySlots: self.pointSlots, digit: workspaceLimbAt(digits, index: cursor))
+				points.addPoints(ws, result: result, p: result, q: looked)
+				cursor = cursor + 1
+			end 'eachTerm'
+		end 'eachWindow'
+	end 'multiply'
+end 'FixedBaseComb'
