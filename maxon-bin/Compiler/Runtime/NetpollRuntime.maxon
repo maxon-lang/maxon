@@ -1964,6 +1964,10 @@ function buildNetpollPdReadyOne(module StdModule)
 	disarmTimer.blockArgs.push(IrBlockArg.create(deadline, argType: StdType.i64))
 	disarmTimer.blockArgs.push(IrBlockArg.create(disarmTag, argType: StdType.i64))
 	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: disarmTimer, gt: state, deadline: deadline, tag: disarmTag, cont: readied)
+
+	// For a release or close that readies the last waiter under a blocked poller. In the poller's own
+	// readiness walk `__sched_lastpoll` is set, so this is a no-op there.
+	emitSchedBreakIdlePoller(module, block: readied, ids: ids)
 	module.setTerminator(readied, op: StdOp.ret(emitGtReady(module, block: readied, gt: state, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)))
 
 	module.functions.push(func)

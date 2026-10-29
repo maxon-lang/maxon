@@ -229,3 +229,116 @@ napped=true took=1 parked=true v=1
 ```exitcode
 0
 ```
+
+<!-- test: netpoll-idle.a-close-under-a-parked-accept-breaks-a-poller-it-leaves-nothing-to-wait-for -->
+<!-- procs: 2 -->
+**A CLOSE THAT READIES THE LAST WAITER BREAKS THE POLLER, NOT ONLY THE PARK THE CLOSE BEGINS WITH.** `Holder`'s
+coroutine is parked in `accept` on a listener nothing connects to, so the machine that ran it settles into the
+poller with no deadline. `main` stays busy until that has happened, sends `release` and finishes: its completion
+breaks the poller once, which is past by the time `release` runs. `release` starts a second coroutine on its
+strand and closes the listener. The close first yields (`__gt_io_park` is a timer park with a deadline of now),
+and that park breaks the poller; the second coroutine then holds the strand until the poller's wait has returned
+(`parkWakes` moves) and a spin has given it time to block again, so the poller is blocked on the accept again
+when the close goes on to ready the accept and leaves nothing pending. Only a break from that readiness can end
+the wait now. The poller machine counts as running in `__sched_checkdead`, so without it the exit drain never
+ends and the runner reports the case TIMED OUT: no elapsed time is compared to a threshold.
+
+⚠ **THE SPIN IS NOT AN ASSERTION.** It sets the order the case needs (the poller blocked again before the
+readiness), and a host fast enough to finish it early reads green rather than red.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+let settleReads = 2000000
+
+function holdStrandUntilPollerReturns(wakesBefore SchedulerEventCount) returns Integer
+	var wakes = wakesBefore
+
+	while wakes == wakesBefore 'untilPollerReturns'
+		wakes = Scheduler.counters().parkWakes
+	end 'untilPollerReturns'
+
+	var reads = 0 as Integer
+	var idle = 0 as SchedulerEventCount
+
+	while reads < settleReads 'settle'
+		idle = Scheduler.counters().idleProcessors
+		reads = reads + 1
+	end 'settle'
+
+	return 1
+end 'holdStrandUntilPollerReturns'
+
+function stall(listener TcpListener) returns Integer
+	_ = try listener.accept() otherwise return 2
+
+	return 0
+end 'stall'
+
+type Holder
+	var pending as IntPromiseArray
+	var listener as TcpListener
+
+	static function create() returns Self
+		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("a loopback bind on an ephemeral port succeeds")
+		return Self{pending: IntPromiseArray.create(), listener: listener}
+	end 'create'
+
+	export function arm()
+		self.pending.push(async stall(self.listener))
+		Scheduler.yield()
+	end 'arm'
+
+	export function release()
+		var idle = 0 as SchedulerEventCount
+
+		while idle == 0 'untilOtherIdles'
+			idle = Scheduler.counters().idleProcessors
+		end 'untilOtherIdles'
+
+		var reads = 0 as Integer
+
+		while reads < settleReads 'settle'
+			idle = Scheduler.counters().idleProcessors
+			reads = reads + 1
+		end 'settle'
+
+		self.pending.push(async holdStrandUntilPollerReturns(Scheduler.counters().parkWakes))
+		self.listener.close()
+	end 'release'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = spawn Holder.create()
+	let before = Scheduler.counters().netpollBlocks
+	try h.arm() otherwise panic("an open mailbox with room takes the send")
+
+	var idle = 0 as SchedulerEventCount
+
+	while Scheduler.counters().netpollBlocks == before 'untilParked'
+		idle = Scheduler.counters().idleProcessors
+	end 'untilParked'
+
+	while idle == 0 'untilPollerSettles'
+		idle = Scheduler.counters().idleProcessors
+	end 'untilPollerSettles'
+
+	var reads = 0 as Integer
+
+	while reads < settleReads 'settle'
+		idle = Scheduler.counters().idleProcessors
+		reads = reads + 1
+	end 'settle'
+
+	try h.release() otherwise panic("an open mailbox with room takes the send")
+	print("released\n")
+	return 0
+end 'main'
+```
+```stdout
+released
+```
+```exitcode
+0
+```

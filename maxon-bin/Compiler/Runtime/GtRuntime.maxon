@@ -6463,8 +6463,9 @@ end 'buildGtRunnerDone'
 // ⚠ **THE TAG IS HALF THE KEY AND NOT A FILTER** — see `TimerTagSleep`: a thread holding both a `sleep` and a
 // socket read deadline has two entries, and a gt-keyed scan would take whichever it met first.
 //
-// A poller blocked until the removed deadline is broken by `emitGtRenouncePark`, not here: this also runs
-// inside `__np_pd_ready_one` → `__np_group_unhook`, unguarded chains x64-linux refuses with E5004.
+// A poller blocked until the removed deadline is broken by the callers (`emitGtRenouncePark`,
+// `emitMboxReadyClaimedSender`, `__np_pd_ready_one`), not here: `emitNetpollDisarmDeadline` skips this
+// for a waiter that armed no deadline, and readying that waiter can empty the pending set too.
 //
 // ⭐ **REMOVING FROM THE MIDDLE OF A HEAP NEEDS BOTH DIRECTIONS, AND THIS PICKS THE ONE THAT APPLIES.** The
 // last live entry fills the hole, and from there it may be too EARLY for its new parent or too LATE for its

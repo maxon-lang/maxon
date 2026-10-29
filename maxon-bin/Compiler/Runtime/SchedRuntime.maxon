@@ -7005,9 +7005,10 @@ export function emitSchedBreakIdlePoller(module StdModule, block IrBlock, ids Va
 end 'emitSchedBreakIdlePoller'
 
 // `__sched_lock` held. A machine blocked in the poller waits for the earliest deadline as it was when it
-// entered, and counts as running in `__sched_checkdead`. When a drop removes that entry and leaves nothing
-// pending, the exit drain cannot end until the stale deadline passes, never for `ForeverMs`; the break
-// makes the poller re-read the empty set and go idle.
+// entered, and counts as running in `__sched_checkdead`. A promise drop, a receive that claims a timed
+// sender, and a release or close that readies the last netpoll waiter can each leave nothing pending
+// under it; the exit drain then cannot end until that wait's deadline passes, never for a wait with no
+// timer. The break makes the poller re-read the empty set and go idle.
 function buildSchedBreakIdlePoller(module StdModule)
 	var func = IrFunction.createFromStd(SchedBreakIdlePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
@@ -7159,7 +7160,8 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	// ⭐ **WHAT WAKES THE DRAIN FOR IT.** A machine joins the idle list only inside the critical section that
 	// ends with `__sched_checkdead`, which signals the main machine the moment the last one leaves it with
 	// nothing pending. A machine blocked in the poller stays off the list until its wait returns, so a promise
-	// drop that empties the pending set under it breaks that wait (`__sched_break_idle_poller`).
+	// drop, a claimed timed send or a netpoll readiness that empties the pending set under it breaks that wait
+	// (`__sched_break_idle_poller`).
 	let running = emitSchedMachinesRunning(module, block: block, ids: ids)
 	let aloneOnTheBox = emitCompareWithConstant(module, block: block, value: running, pred: StdCmpPred.eq, against: 1, ids: ids)
 	let settled = emitBin(module, block: block, a: quiet, b: aloneOnTheBox, opcode: StdBinOpcode.bitAnd, ids: ids)

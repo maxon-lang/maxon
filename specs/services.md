@@ -3679,6 +3679,99 @@ held
 kept s0
 ```
 
+<!-- test: a-receive-that-claims-a-timed-sender-ends-the-polling-machines-wait -->
+<!-- procs: 2 -->
+**A SENDER WOKEN BY A RECEIVE LEAVES NO TIMER FOR THE POLLER TO SLEEP TO.** `Sender.run` fills the one slot of
+`Store`'s mailbox and then sends a second message with a `sendTimeout` of a day, so it parks on the sender
+queue with a timer a day away, and the machine that ran it settles into the poller until that deadline. `hold`
+is the handler that keeps `Store` from receiving: it returns only once `Sender` has published that it is about to
+make the timed send and a processor has reported idle, then spins to give `Sender` the time to arm its timer
+and the poller the time to block. Its return lets `Store`'s next
+receive take the front sender, remove its timer and ready it, which leaves nothing pending. `main` has finished
+by then, so the break it makes on completing is past, and only the receive's own break can end the poller's wait.
+That machine counts as running in `__sched_checkdead`, so without the break the exit drain waits out the day and
+the runner reports the case TIMED OUT. No elapsed time is compared to a threshold.
+```maxon
+typealias Flag = SharedValue with bool
+typealias Integer = int(i64.min to i64.max)
+
+let farTimeoutMs = 86400000
+let settleReads = 2000000
+
+type Store
+	let started as Flag
+	let armed as Flag
+
+	static function create(started Flag, armed Flag) returns Self
+		return Self{started: started, armed: armed}
+	end 'create'
+
+	export function hold()
+		self.started.publish(true)
+
+		while not self.armed.current() 'untilArmed'
+			Scheduler.yield()
+		end 'untilArmed'
+
+		var idle = 0 as SchedulerEventCount
+
+		while idle == 0 'untilOtherIdles'
+			idle = Scheduler.counters().idleProcessors
+		end 'untilOtherIdles'
+
+		var reads = 0 as Integer
+
+		while reads < settleReads 'settle'
+			idle = Scheduler.counters().idleProcessors
+			reads = reads + 1
+		end 'settle'
+
+		print("held\n")
+	end 'hold'
+
+	export function keep(s String)
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+type Sender
+	let armed as Flag
+
+	static function create(armed Flag) returns Self
+		return Self{armed: armed}
+	end 'create'
+
+	export function run(target Store.handle)
+		try target.keep("s0") otherwise panic("the service took hold, so its one slot is free")
+		self.armed.publish(true)
+		try target.keep("s1", sendTimeout: farTimeoutMs) otherwise panic("room appears when hold returns")
+	end 'run'
+end 'Sender'
+
+function main() returns ExitCode
+	let started = Flag.create(false)
+	let armed = Flag.create(false)
+	let h = spawn(capacity: 1) Store.create(started.clone(), armed: armed.clone())
+	let sender = spawn Sender.create(armed.clone())
+	try h.hold() otherwise panic("an empty mailbox takes the first send")
+
+	while not started.current() 'untilHeld'
+		Scheduler.yield()
+	end 'untilHeld'
+
+	try sender.run(h.clone()) otherwise panic("an empty mailbox takes the send")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+held
+kept s0
+kept s1
+```
+
 <!-- test: a-zero-send-timeout-fails-at-once -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
