@@ -35,7 +35,10 @@ The vectors are the canra `ecdsa-verify`, `ecdsa-sign-p256` and `ecdsa-sign-p384
 `SigVer` and `SigGen` records, Wycheproof subsets for both curves, RFC 6979 appendices A.2.5 and A.2.6 and
 constructed cases. The six
 `UnsupportedCurve` vectors (`verify-err-059` to `verify-err-063` and `verify-err-079`) are left out: a curve
-is an `EcdsaCurve`, so an unsupported name cannot be passed.
+is an `EcdsaCurve`, so an unsupported name cannot be passed. The cases after the contracts' pin the joint
+multiplication's degenerate sums, a digest at or above `n`, the P-384 sign-and-verify round trip and P-384
+signatures from OpenSSL; their vectors come from Python `cryptography` (OpenSSL) and an independent RFC 6979
+implementation, as each case states.
 
 ## Tests
 
@@ -917,4 +920,299 @@ sign-err-005 invalidPrivateKey
 sign-err-006 invalidPrivateKey
 sign-err-007 invalidPrivateKey
 sign-err-008 invalidPrivateKey
+```
+
+<!-- test: ecdsa.verify-joint-multiply-edges -->
+`Ecdsa.verify` when the joint multiplication `u1·G + u2·Q` meets its degenerate sums. Each vector is constructed for a fixed message and `s`: `doubling` takes `r = x(2·(z/s)·G)` and `Q = (z/r)·G`, so `u1·G` and `u2·Q` are the same point and the final addition is a doubling (`doubling-high-s` is the same signature with `s` replaced by `n - s`); `infinity` takes `Q = -(z/r)·G`, so the sum is the point at infinity and the answer is `false`, never an error. Each expectation was checked by Python `cryptography` (OpenSSL) verifying the DER signature under the same key. Vectors edge-doubling-p256 to edge-infinity-p384 (6).
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function errorName(failure EcdsaError) returns String
+	return match failure 'name'
+		invalidPublicKey gives "invalidPublicKey"
+		invalidSignatureEncoding gives "invalidSignatureEncoding"
+	end 'name'
+end 'errorName'
+
+function report(id String, curve EcdsaCurve, publicKeyHex String, messageHex String, signatureHex String)
+	if let valid = try Ecdsa.verify(curve, publicKey: fromHex(publicKeyHex), message: fromHex(messageHex), signature: fromHex(signatureHex)) 'checked'
+		print("{id} {valid}\n")
+	end 'checked' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'report'
+
+function main() returns ExitCode
+	report("edge-doubling-p256", curve: EcdsaCurve.p256, publicKeyHex: "04a18b8afada6ef29d9913420b80614744bbb9a973c44838578fed336b28f4f5469db1806a2b67a927adb79ec9ce274430f8c55a38b322facc7569e3e4de0569d6", messageHex: "6d61786f6e206a6f696e74206d756c7469706c7920656467652070323536", signatureHex: "3044022054d9e7ada3e994429ef55e157724bbdf5429e4d2ee46a215c3f17c3043b75c1602201f2e3d4c5b6a79880123456789abcdeffedcba9876543210a1b2c3d4e5f60718")
+	report("edge-doubling-high-s-p256", curve: EcdsaCurve.p256, publicKeyHex: "04a18b8afada6ef29d9913420b80614744bbb9a973c44838578fed336b28f4f5469db1806a2b67a927adb79ec9ce274430f8c55a38b322facc7569e3e4de0569d6", messageHex: "6d61786f6e206a6f696e74206d756c7469706c7920656467652070323536", signatureHex: "3045022054d9e7ada3e994429ef55e157724bbdf5429e4d2ee46a215c3f17c3043b75c16022100e0d1c2b2a4958678fedcba987654320fbe0a401530c36c74520706ee166d1e39")
+	report("edge-infinity-p256", curve: EcdsaCurve.p256, publicKeyHex: "04b03b45015cca536357e80cbdef29f165c4b2ac508383cc78433fff6e9edffb2d5085495c3de782c8f5d92aa5fd79622346caa5882cbd9a7449b083115550fe2e", messageHex: "6d61786f6e206a6f696e74206d756c7469706c7920656467652070323536", signatureHex: "304402207a3b1c2d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f902201f2e3d4c5b6a79880123456789abcdeffedcba9876543210a1b2c3d4e5f60718")
+	report("edge-doubling-p384", curve: EcdsaCurve.p384, publicKeyHex: "04208671ca222252c1aa5b69eb6cf75d26c0f61a93c1f961effb5acfe4008d91e99cc5ded48f3b8152f4028fbecaedd5fa70ecf1de6bbf8fbc443ef13759a0233c9dce358c7219b3a7916f49e4b45cf6faa66d9a634f05ed6f76e9583aa398b28d", messageHex: "6d61786f6e206a6f696e74206d756c7469706c7920656467652070333834", signatureHex: "3065023100ffcdfaccae398d2641acccbe77bb1abddde36ff8bd4c999f30d8e95ce927932f47dde2ce5abbc9eadcba3890263c7a0602303c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0918273645546372819a0b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3")
+	report("edge-doubling-high-s-p384", curve: EcdsaCurve.p384, publicKeyHex: "04208671ca222252c1aa5b69eb6cf75d26c0f61a93c1f961effb5acfe4008d91e99cc5ded48f3b8152f4028fbecaedd5fa70ecf1de6bbf8fbc443ef13759a0233c9dce358c7219b3a7916f49e4b45cf6faa66d9a634f05ed6f76e9583aa398b28d", messageHex: "6d61786f6e206a6f696e74206d756c7469706c7920656467652070333834", signatureHex: "3066023100ffcdfaccae398d2641acccbe77bb1abddde36ff8bd4c999f30d8e95ce927932f47dde2ce5abbc9eadcba3890263c7a06023100c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f6e7d8c9ba72ffdb005a2c11b219cabd50d62d12d536244080dc2376b0")
+	report("edge-infinity-p384", curve: EcdsaCurve.p384, publicKeyHex: "04d35226e204f11fea074c4ad789a2e7c76bf14d769db47d156c06959ef7a6f2093bd0930c5536e33ebbd1e2ce409695bf63af15d9103caa96f52891330cf827f45e2212e647c78f0ddd11f19d0535b30bfd67c71ead6bd22c505de23f6fdd857f", messageHex: "6d61786f6e206a6f696e74206d756c7469706c7920656467652070333834", signatureHex: "3064023051a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8002303c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0918273645546372819a0b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+edge-doubling-p256 true
+edge-doubling-high-s-p256 true
+edge-infinity-p256 false
+edge-doubling-p384 true
+edge-doubling-high-s-p384 true
+edge-infinity-p384 false
+```
+
+<!-- test: ecdsa.digest-above-the-order -->
+A message whose SHA-256 digest `ffffffffe50edc4d27674023ce1746624a9cb68ef2f8fd03d422ef0d3d44bb44` is at least the P-256 group order `n`, so the digest must be reduced mod `n` on both paths: RFC 6979 section 2.3.4 reduces it for the nonce derivation and FIPS 186-5 uses `e mod n` in `u1 = e·s⁻¹`. The message `maxon-nist-digest-above-order-759881945` was found by exhaustive search for a SHA-256 prefix of `ffffffff`. The expected signature is the RFC 6979 deterministic signature from an independent Python implementation (it reproduces RFC 6979 A.2.5 and A.2.6 exactly) and Python `cryptography` (OpenSSL) accepts it; the last vector is a randomized OpenSSL signature of the same message under a fresh key.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function reportSign(id String, privateKeyHex String, messageHex String)
+	let signature = try EcdsaP256.sign(fromHex(privateKeyHex), message: fromHex(messageHex)) otherwise panic("a valid key signs")
+	print("{id} {toHex(signature)}\n")
+end 'reportSign'
+
+function reportVerify(id String, curve EcdsaCurve, publicKeyHex String, messageHex String, signatureHex String)
+	let valid = try Ecdsa.verify(curve, publicKey: fromHex(publicKeyHex), message: fromHex(messageHex), signature: fromHex(signatureHex)) otherwise panic("a well-formed key and signature verify")
+	print("{id} {valid}\n")
+end 'reportVerify'
+
+function main() returns ExitCode
+	reportSign("above-order-sign", privateKeyHex: "2b6a4c8e1d3f5a7c9e0b2d4f61830a5c7e9b1d3f5a7c9e0b2d4f6183a5c7e9b1", messageHex: "6d61786f6e2d6e6973742d6469676573742d61626f76652d6f726465722d373539383831393435")
+	reportVerify("above-order-verify-own", curve: EcdsaCurve.p256, publicKeyHex: "04846912b1cc2baf0cb35a38e7d30fe5021672a5c37474c75427f1212bb39326359956315922cd6868dce18ac58748d0cc8beef273ac4f077182255519b5f34ab1", messageHex: "6d61786f6e2d6e6973742d6469676573742d61626f76652d6f726465722d373539383831393435", signatureHex: "3045022028602b5f28d328ee5c4caf258ea50011468823d5626288ebe078430547ee90c7022100df73e440eb212c51a750def76552808a9c445de05d08649412af6c1067c6b909")
+	reportVerify("above-order-verify-openssl", curve: EcdsaCurve.p256, publicKeyHex: "046fa001f0a2dbe4e1b51b80abf830a044a0a7a5e48a97db650960ed2eec83a6602382add24faf4fdf34a6783bf1f0f248beaa245f94aafdcceef257d74bf7e0b0", messageHex: "6d61786f6e2d6e6973742d6469676573742d61626f76652d6f726465722d373539383831393435", signatureHex: "3046022100bd01820c2d8283ea1808c739d599f72919ac3a804a8a9db688161dd74533eb950221008eb280af03b7438be883ce8b2417854477084852765a55c5de4aeb2ed2089c06")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+above-order-sign 3045022028602b5f28d328ee5c4caf258ea50011468823d5626288ebe078430547ee90c7022100df73e440eb212c51a750def76552808a9c445de05d08649412af6c1067c6b909
+above-order-verify-own true
+above-order-verify-openssl true
+```
+
+<!-- test: ecdsa.p384-sign-verify-round-trip -->
+`EcdsaP384.sign` then `Ecdsa.verify` on P-384 for three private keys (a mid-range key, `n - 1` and 1) and three messages each (empty, short and 200 bytes). Each line prints the deterministic signature, whether `Ecdsa.verify` accepts it under the matching public key, and whether it accepts it for the message with one byte appended. The signatures are RFC 6979 over HMAC-SHA-384 from an independent Python implementation that reproduces RFC 6979 A.2.6, and each was accepted by Python `cryptography` (OpenSSL).
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function round(id String, privateKeyHex String, publicKeyHex String, messageHex String)
+	let message = fromHex(messageHex)
+	let publicKey = fromHex(publicKeyHex)
+	let signature = try EcdsaP384.sign(fromHex(privateKeyHex), message: message) otherwise panic("a valid key signs")
+	var altered = message.clone()
+	altered.push(0x21)
+	let accepted = try Ecdsa.verify(EcdsaCurve.p384, publicKey: publicKey, message: message, signature: signature) otherwise panic("a signature verifies")
+	let acceptedAltered = try Ecdsa.verify(EcdsaCurve.p384, publicKey: publicKey, message: altered, signature: signature) otherwise panic("a signature verifies")
+	print("{id} {toHex(signature)} {accepted} {acceptedAltered}\n")
+end 'round'
+
+function main() returns ExitCode
+	round("round-trip-001", privateKeyHex: "01a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80", publicKeyHex: "0433a2d6454d2520588a6d51fef87e63a9596baefc3e9caefb955f0ac0d9e06f9df2f609cad7a9e0bffe87b97a8591a0c3df73fa0b8f72da50878bcf7ceb074734eef010ea4f6692525dea973211bc54947eff47e66d0878b47a1cdd3e46ca095f", messageHex: "")
+	round("round-trip-002", privateKeyHex: "01a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80", publicKeyHex: "0433a2d6454d2520588a6d51fef87e63a9596baefc3e9caefb955f0ac0d9e06f9df2f609cad7a9e0bffe87b97a8591a0c3df73fa0b8f72da50878bcf7ceb074734eef010ea4f6692525dea973211bc54947eff47e66d0878b47a1cdd3e46ca095f", messageHex: "6d61786f6e207033383420726f756e6420747269702000")
+	round("round-trip-003", privateKeyHex: "01a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80", publicKeyHex: "0433a2d6454d2520588a6d51fef87e63a9596baefc3e9caefb955f0ac0d9e06f9df2f609cad7a9e0bffe87b97a8591a0c3df73fa0b8f72da50878bcf7ceb074734eef010ea4f6692525dea973211bc54947eff47e66d0878b47a1cdd3e46ca095f", messageHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7")
+	round("round-trip-004", privateKeyHex: "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52972", publicKeyHex: "04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7c9e821b569d9d390a26167406d6d23d6070be242d765eb831625ceec4a0f473ef59f4e30e2817e6285bce2846f15f1a0", messageHex: "")
+	round("round-trip-005", privateKeyHex: "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52972", publicKeyHex: "04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7c9e821b569d9d390a26167406d6d23d6070be242d765eb831625ceec4a0f473ef59f4e30e2817e6285bce2846f15f1a0", messageHex: "6d61786f6e207033383420726f756e6420747269702001")
+	round("round-trip-006", privateKeyHex: "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52972", publicKeyHex: "04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7c9e821b569d9d390a26167406d6d23d6070be242d765eb831625ceec4a0f473ef59f4e30e2817e6285bce2846f15f1a0", messageHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7")
+	round("round-trip-007", privateKeyHex: "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001", publicKeyHex: "04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab73617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f", messageHex: "")
+	round("round-trip-008", privateKeyHex: "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001", publicKeyHex: "04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab73617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f", messageHex: "6d61786f6e207033383420726f756e6420747269702002")
+	round("round-trip-009", privateKeyHex: "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001", publicKeyHex: "04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab73617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f", messageHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+round-trip-001 30640230605e2a77a49776ae92186d2a78d2967edba24fbc922f454791bb8ea1782926bb1832a91de4ca7453cb802f84d7dc548b02301a3d27f91dfb99219006e0f6fa195bb6faa49150f31a94019fdd10f54e34a6f07164fe0399d2fe587213e15f291746d9 true false
+round-trip-002 30640230691d41c15f75f7471bdf52ca54aa1985f236556a778dd44ce501b6965bfdc4576ac681f1a29d521415b713bf752ea8fe02307c648c80484ee6f9e1f42a30718ecac82d86f0eabbea6f9e3d35025ef135e1aedb51244bca0d4c824ec3c06b46162fca true false
+round-trip-003 30640230256dd78519270bc752f2395cbc1e992b6a3128329b912ae350088caf99846e3f7809c536e3c52a580257ba37132646e6023025e7bde0ccfbff5e004fd91584e100dcad3bfed139ac356f8b54f0e77b6d6d4e32e3a1d86aec7ac2db1ea53ba23c666c true false
+round-trip-004 306602310094a633c1c9ab4029cbe0fc728c2fa6f1d7b73ebbfb53c5e5e19ff0ca98034a7487e0a480695850d88aeb280e47e760fd023100f1cee550018277274bc03567961d8b1a69483a617eb7560caf334ae2b1477f2fd17aa8160541925f36b55f6947acedb0 true false
+round-trip-005 306402303e79b374cd5a3cdb466441ee51b88d244934e89ce6b12c3b50b0673d833b5336631c1607f5fc59a01a6caf513d9d5b95023005a246dcbf35209c2aa9c0df0b1dc2935cd574f4cc1b0014e7ff9576a2f6fe47881a48dd4535c6c65595a2d41e51f459 true false
+round-trip-006 3065023100f74f6a46606d70a46f398219020f073f7826c22db1eac90650e50c149e077bdd815d54b395b20b622415565141f58e5a02303927334a4bad1c94a77d4a4d340314d4ba52cd07c4029ff6fec52edb1a7e0a6358cf812d2b692d0881d947b0308b04c3 true false
+round-trip-007 3065023056b5c6964c7a34f2e0d73fbff14e2e13aed526ea47c70ed6fe0c433bf237a189e7903612a9851808534e0e535d3589bb023100dd899d1b850d739ade69adc4608b24a9023942befaad7049be434bfe95af67ad4b3c554db66af7895818c6538472ba1f true false
+round-trip-008 3066023100adb75ba0cb62962fb74674dd3abdb152f62060ca197b71a9b5fe39a3ac3d0aaf1dd59728287029aa8b545bb809160867023100897dc44047e283e3926dc66aa5bce964bfbe02b36527c20592f5796c1a00d047945a68b806f62f1bed53475d89b20d3d true false
+round-trip-009 3065023030ee67b44ff564902a6c3768f639ccc340570f717c5d6898636f307bc67ec8437a0c9cf11d8272023933f920f98fc0cd023100afeb589bedc6be14d355d4f891078ae566bfd574e09b784904383dc25331ad2be12cb74afff5b6a149a31598099a8629 true false
+```
+
+<!-- test: ecdsa.verify-p384-openssl -->
+`Ecdsa.verify` on P-384 with SHA-384 against signatures produced by Python `cryptography` (OpenSSL) under three fresh keys, each followed by the same signature checked against an altered message (`false`). Vectors openssl-p384-001 to openssl-p384-006 (6).
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function errorName(failure EcdsaError) returns String
+	return match failure 'name'
+		invalidPublicKey gives "invalidPublicKey"
+		invalidSignatureEncoding gives "invalidSignatureEncoding"
+	end 'name'
+end 'errorName'
+
+function report(id String, curve EcdsaCurve, publicKeyHex String, messageHex String, signatureHex String)
+	if let valid = try Ecdsa.verify(curve, publicKey: fromHex(publicKeyHex), message: fromHex(messageHex), signature: fromHex(signatureHex)) 'checked'
+		print("{id} {valid}\n")
+	end 'checked' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'report'
+
+function main() returns ExitCode
+	report("openssl-p384-001", curve: EcdsaCurve.p384, publicKeyHex: "043956c798c8da6072026a77df96d459cfc8f35d48ae3c6b73220f94440cea01a52e1a914bb1929dfbf2d0f488a2e251a4ed918a683583001b5f05a1359e4794b5f49cb2315c74d42e0002bbffbc2e1d15d03845be8d1584361bd2a80e202ccd92", messageHex: "6f70656e73736c20703338342076657269667920766563746f722030", signatureHex: "3066023100ab33b9dbccf048c01c9870bfea7d698d2273c64f1bdb7ee10b8d6430179523b1f0b1e942c2a09ad240b57bc24f43543d023100d874229cb1ababdd9c4cd5e8e480fdde9716fcc6ab782f9d39c1b7fc4353198543571e03824577c71b2668de3642bb86")
+	report("openssl-p384-002", curve: EcdsaCurve.p384, publicKeyHex: "043956c798c8da6072026a77df96d459cfc8f35d48ae3c6b73220f94440cea01a52e1a914bb1929dfbf2d0f488a2e251a4ed918a683583001b5f05a1359e4794b5f49cb2315c74d42e0002bbffbc2e1d15d03845be8d1584361bd2a80e202ccd92", messageHex: "6f70656e73736c20703338342076657269667920766563746f7220302028616c746572656429", signatureHex: "3066023100ab33b9dbccf048c01c9870bfea7d698d2273c64f1bdb7ee10b8d6430179523b1f0b1e942c2a09ad240b57bc24f43543d023100d874229cb1ababdd9c4cd5e8e480fdde9716fcc6ab782f9d39c1b7fc4353198543571e03824577c71b2668de3642bb86")
+	report("openssl-p384-003", curve: EcdsaCurve.p384, publicKeyHex: "046d3b56e2031624fd495205dfe44d1552feedac1818c0c4621ad28ddbd57eb92863a7f031a8af555d9899732f48de582c3d999bb407f3a45ce1b76f08a269199794ff9fc6ed0002571cdedcfa26b38d220afc4c1c98e2351e20f2cc8b8630a747", messageHex: "6f70656e73736c20703338342076657269667920766563746f722031", signatureHex: "3064023034e8478136f40e37a4ec1e0abcc688b6e6eb958222d16d529a056c21e966c5052b0a42c46e6c945a041fc7e2d7a9af2d023031f0bf923be54a6bfb344d6c4bb3555ec6e9c483cfb6aff27c1d1f708de7207078c503e7fa9a5f154d21df85ce1fff72")
+	report("openssl-p384-004", curve: EcdsaCurve.p384, publicKeyHex: "046d3b56e2031624fd495205dfe44d1552feedac1818c0c4621ad28ddbd57eb92863a7f031a8af555d9899732f48de582c3d999bb407f3a45ce1b76f08a269199794ff9fc6ed0002571cdedcfa26b38d220afc4c1c98e2351e20f2cc8b8630a747", messageHex: "6f70656e73736c20703338342076657269667920766563746f7220312028616c746572656429", signatureHex: "3064023034e8478136f40e37a4ec1e0abcc688b6e6eb958222d16d529a056c21e966c5052b0a42c46e6c945a041fc7e2d7a9af2d023031f0bf923be54a6bfb344d6c4bb3555ec6e9c483cfb6aff27c1d1f708de7207078c503e7fa9a5f154d21df85ce1fff72")
+	report("openssl-p384-005", curve: EcdsaCurve.p384, publicKeyHex: "04fe59c3612dd3f61ae7b89b782ac983b59e2a2c7229129ae96b4e60ad2503fbcdddffd2aa7b409ba56e7a89c02cab60f1e02d23c3018cecb645b4d5bc46b1399156b4084b6ffaa814ca173f053089ff8abebf266b6a312ad3ff7b34d7df143b36", messageHex: "6f70656e73736c20703338342076657269667920766563746f722032", signatureHex: "306402301f17de2808a0169693c07476c912fb45899c75d51e439ec27157dfdfd64b2c58f01717fffac6a7f3e9244d9c4ac2723b02302b6f573c66d91c85ddcb2bbd3d401dd422c377d304a5223f0aba84f0697b29dfea95b1679aa258f2d02897b3c61791eb")
+	report("openssl-p384-006", curve: EcdsaCurve.p384, publicKeyHex: "04fe59c3612dd3f61ae7b89b782ac983b59e2a2c7229129ae96b4e60ad2503fbcdddffd2aa7b409ba56e7a89c02cab60f1e02d23c3018cecb645b4d5bc46b1399156b4084b6ffaa814ca173f053089ff8abebf266b6a312ad3ff7b34d7df143b36", messageHex: "6f70656e73736c20703338342076657269667920766563746f7220322028616c746572656429", signatureHex: "306402301f17de2808a0169693c07476c912fb45899c75d51e439ec27157dfdfd64b2c58f01717fffac6a7f3e9244d9c4ac2723b02302b6f573c66d91c85ddcb2bbd3d401dd422c377d304a5223f0aba84f0697b29dfea95b1679aa258f2d02897b3c61791eb")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+openssl-p384-001 true
+openssl-p384-002 false
+openssl-p384-003 true
+openssl-p384-004 false
+openssl-p384-005 true
+openssl-p384-006 false
 ```

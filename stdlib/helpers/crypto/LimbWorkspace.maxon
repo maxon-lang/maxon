@@ -1,0 +1,93 @@
+public typealias WorkspaceLimb = bits(64)
+public typealias WorkspaceLimbs = Array with WorkspaceLimb
+
+public function zeroLimbs(count Count) returns WorkspaceLimbs
+	var limbs = WorkspaceLimbs.create()
+	limbs.growFilled(count, value: 0)
+	return limbs
+end 'zeroLimbs'
+
+public function workspaceLimbAt(limbs WorkspaceLimbs, index ElementIndex) returns WorkspaceLimb
+	return try limbs.get(index) otherwise panic("limb workspace: index past the operand")
+end 'workspaceLimbAt'
+
+public function workspaceLimbPut(limbs WorkspaceLimbs, index ElementIndex, value WorkspaceLimb)
+	try limbs.set(index, value: value) otherwise panic("limb workspace: index past the operand")
+end 'workspaceLimbPut'
+
+public function selectByMask(kept WorkspaceLimb, replacement WorkspaceLimb, mask WorkspaceLimb) returns WorkspaceLimb
+	return kept xor (mask and (kept xor replacement))
+end 'selectByMask'
+
+public type LimbSlots
+	let slotWidth as Count
+	public let limbCount as Count
+
+	public static function create(slotWidth Count, limbCount Count) returns LimbSlots
+		return Self{slotWidth: slotWidth, limbCount: limbCount}
+	end 'create'
+
+	public function offset(slot Count) returns ElementIndex
+		return slot * self.slotWidth
+	end 'offset'
+
+	public function workspace(slots Count) returns WorkspaceLimbs
+		return zeroLimbs(slots * self.slotWidth)
+	end 'workspace'
+
+	public function load(ws WorkspaceLimbs, slot Count, value WorkspaceLimbs)
+		let base = offset(slot)
+
+		for (iter, limb) in value.withIterator() 'eachLimb'
+			workspaceLimbPut(ws, index: base + iter.index(), value: limb)
+		end 'eachLimb'
+	end 'load'
+
+	public function read(ws WorkspaceLimbs, slot Count) returns WorkspaceLimbs
+		let base = offset(slot)
+		var values = WorkspaceLimbs.create()
+		values.reserve(self.limbCount)
+
+		for index in 0 upto self.limbCount 'eachLimb'
+			values.push(workspaceLimbAt(ws, index: base + index))
+		end 'eachLimb'
+
+		return values
+	end 'read'
+
+	public function clear(ws WorkspaceLimbs, slot Count)
+		let base = offset(slot)
+
+		for index in 0 upto self.limbCount 'eachLimb'
+			workspaceLimbPut(ws, index: base + index, value: 0)
+		end 'eachLimb'
+	end 'clear'
+
+	public function copy(ws WorkspaceLimbs, dst Count, src Count)
+		let target = offset(dst)
+		let source = offset(src)
+
+		for index in 0 upto self.limbCount 'eachLimb'
+			workspaceLimbPut(ws, index: target + index, value: workspaceLimbAt(ws, index: source + index))
+		end 'eachLimb'
+	end 'copy'
+
+	public function select(ws WorkspaceLimbs, dst Count, kept Count, replacement Count, mask WorkspaceLimb)
+		let target = offset(dst)
+		let first = offset(kept)
+		let second = offset(replacement)
+
+		for index in 0 upto self.limbCount 'eachLimb'
+			workspaceLimbPut(ws, index: target + index, value: selectByMask(workspaceLimbAt(ws, index: first + index), replacement: workspaceLimbAt(ws, index: second + index), mask: mask))
+		end 'eachLimb'
+	end 'select'
+
+	public function accumulate(ws WorkspaceLimbs, dst Count, source Count, mask WorkspaceLimb)
+		let target = offset(dst)
+		let origin = offset(source)
+
+		for index in 0 upto self.limbCount 'eachLimb'
+			workspaceLimbPut(ws, index: target + index, value: workspaceLimbAt(ws, index: target + index) or (workspaceLimbAt(ws, index: origin + index) and mask))
+		end 'eachLimb'
+	end 'accumulate'
+end 'LimbSlots'

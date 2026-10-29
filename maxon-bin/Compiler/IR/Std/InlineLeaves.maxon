@@ -1,9 +1,10 @@
 // InlineLeaves — the Std→Std inliner. Two admission rules, one splice:
 //
-//   • THE LEAF RULE: a direct call to a TINY LEAF function — no call of any kind, inside
-//     `MaxInlinedLeafOps` — is replaced at EVERY site by a copy of the body. The call is nearly all of such
-//     a function's cost: MEASURED on the self-compile, `regMaskContains` — `((mask shr regNum) and 1) != 0`
-//     plus its entry guard — was 21% of the profile's self time from 14 static sites, because the body is
+//   • THE LEAF RULE: a direct call to a TINY LEAF function — no call outside a `BlockHeat.cold`
+//     block, inside `MaxInlinedLeafOps`, or `MaxInlinedColdCallLeafOps` when it holds a cold call —
+//     is replaced at EVERY site by a copy of the body. The call is nearly all of such a function's
+//     cost: MEASURED on the self-compile, `regMaskContains` — `((mask shr regNum) and 1) != 0` plus
+//     its entry guard — was 21% of the profile's self time from 14 static sites, because the body is
 //     smaller than the protocol around it (the argument moves, the `call`, the frame, the `ret`).
 //   • THE CALLED-ONCE RULE: a function with exactly one direct `call` site in the whole program is spliced
 //     into its caller whatever its body holds — loops, stores, panics, `div`/`mod`, calls of every kind.
@@ -20,7 +21,8 @@
 //
 // ONE ROUND PER PAIR: the called-once rule is applied to each callee once, in waves that splice a callee
 // only after every called-once callee inside it; the leaf rule then decides eligibility on the bodies as
-// they stand and splices every admitted site. Neither cascades further.
+// they stand and splices every admitted site outside the eligible leaves themselves
+// (`admittedBodyStaysAsMeasured`). Neither cascades further.
 //
 // ⭐⭐ **THE PASS RUNS TWICE OVER ONE MODULE AND THE TWO RUNS PARTITION THE PAIRS** — the pipeline's over
 // every caller, the band's over the callers `Compiler.compileToCodeResult` appended below the pipeline.
@@ -60,10 +62,16 @@
 // the number for THIS compile instead of a guess.
 let MaxInlinedLeafOps = 24 as ElementIndex
 
-// The second budget the pass MEASURES but does not use — reported beside the refusals so that "would a
-// bigger one be better?" is answered from the compile being asked about rather than re-derived. It is
-// deliberately not a knob: two budgets that both took effect would be two rules.
+// A larger call-free budget the pass MEASURES but does not use — reported beside the refusals so
+// that "would a bigger one be better?" is answered from the compile being asked about rather than
+// re-derived.
 let ReportedLargerLeafBudget = 32 as ElementIndex
+
+// The budget for a leaf whose calls all sit in cold blocks, counting every op, cold ones included.
+// A checked get/set's cold slow arm is what pushes a hot accessor helper past `MaxInlinedLeafOps`.
+// Raising the call-free budget to match grows code with no speed gain, and leaving cold ops
+// uncounted leaves the cold part of an admitted body unbounded.
+let MaxInlinedColdCallLeafOps = 32 as ElementIndex
 
 // The block labels this pass mints. They reach the rendered Target IR, so they are short and
 // prefixed `__il_` (inline-leaves — disjoint from `InsertRangeChecks`' `__rc_` and
@@ -146,8 +154,8 @@ enum InlineOpRole
 	// call site's argument instead.
 	parameter
 
-	// A call of ANY kind. The leaf rule refuses it — which is what makes ownership free there (a
-	// retain/release/scope-drop is a `call`) — and the called-once rule copies it.
+	// A call of ANY kind. The leaf rule admits it only in a cold block (`callFit`), and the
+	// called-once rule copies it.
 	calling
 
 	// An op the dialect itself marks unsupported inside an inline body. See `inlineOpRole`.
@@ -173,16 +181,16 @@ type StdOpMetaMemo
 
 	// ⛔⛔ **THE ANSWER `inlineOpRole`'s TAIL GIVES AN OP IT DID NOT NAME, AND THE ONE DISAGREEMENT THAT
 	// TAIL CAN HIDE.** The tail can say `body` or `refusing` and never `calling`, so a variant that is
-	// `isCall: true` and carries `isUnsupportedInInlineBody: false` is filed an ordinary body op — and the
-	// LEAF rule, whose whole rule is *"no call of any kind"*, then admits a callee holding it. The dialect
-	// states that invariant at the field; this is where it is enforced, once per variant's worth of column
-	// reads rather than by re-deriving the metadata per op.
+	// `isCall: true` and carries `isUnsupportedInInlineBody: false` is filed an ordinary body op — and
+	// the LEAF rule, which admits a call only in a cold block, then admits a callee holding it
+	// anywhere. The dialect states that invariant at the field; this is where it is enforced, once per
+	// variant's worth of column reads rather than by re-deriving the metadata per op.
 	function bodyRole(op StdOp) returns InlineOpRole
 		let variant = self.learned(op)
 		let isCall = try self.calls.get(variant) otherwise panic("StdOpMetaMemo.bodyRole: calls.get OOB at {variant} after learning it")
 
 		if isCall 'aCallWithNoRoleOfItsOwn'
-			panic("inlineOpRole: a variant in category {op.rawValue.category.name} is `isCall: true` and reaches the flag tail carrying `isUnsupportedInInlineBody: false` — the tail cannot answer `calling`, so the leaf rule would admit a callee holding a call")
+			panic("inlineOpRole: a variant in category {op.rawValue.category.name} is `isCall: true` and reaches the flag tail carrying `isUnsupportedInInlineBody: false` — the tail cannot answer `calling`, so the leaf rule would admit a callee holding a call on its hot path")
 		end 'aCallWithNoRoleOfItsOwn'
 
 		return InlineOpRole.body
@@ -373,14 +381,14 @@ enum LeafVerdict
 	// The body may be spliced at any direct call site that is not its own function.
 	eligible
 
-	// Inside every other rule but past `MaxInlinedLeafOps`. Kept apart from `notALeaf` because it is the
+	// Inside every other rule but past its op budget. Kept apart from `notALeaf` because it is the
 	// only refusal a BUDGET could change, and the report says how many sites it costs.
 	tooManyOps
 
-	// Everything else, and the list is the whole eligibility rule read backwards: a call of any kind, an
-	// `isUnsupportedInInlineBody` op, a
-	// by-reference parameter, a body that carries the green-thread stack guard, an entry block carrying
-	// phis, a block still in `Terminator.unset` (a body the lowering never emitted), or no body at all.
+	// Everything else, and the list is the whole eligibility rule read backwards: a call outside a
+	// cold block, a calling terminator, an `isUnsupportedInInlineBody` op, a by-reference parameter, a
+	// body that carries the green-thread stack guard, an entry block carrying phis, a block still in
+	// `Terminator.unset` (a body the lowering never emitted), or no body at all.
 	notALeaf
 end 'LeafVerdict'
 
@@ -525,7 +533,7 @@ function buildLeafPlan(module StdModule, namedByIrRequest BoolArray, meta StdOpM
 end 'buildLeafPlan'
 
 // One candidate body's whole verdict, from ONE walk: the shape both rules refuse, then the leaf rule's
-// own — a call of any kind, and the op budget.
+// own — a call outside a cold block, and the op budget its calls select.
 //
 // ⚠ **IT WALKS `blockRefs` → `opRefs` + terminator DIRECTLY rather than `IrModule.liveOpIndices`, and
 // that is the same descent** — but the array version MATERIALIZES the index list, and this runs over
@@ -536,11 +544,11 @@ end 'buildLeafPlan'
 //
 // ⭐ **THE SHAPE RULES ARE ASKED IN THE SAME WALK AS THE LEAF RULE, so a body is read once**; the shape
 // helpers below are shared with `scanSpliceableShape`, which asks them of a called-once candidate and
-// nothing else. A leaf scan RETURNS at the first call — the commonest op there is — where the shape scan
-// has to read the whole body for its refusal reason.
+// nothing else. A leaf scan RETURNS at the first hot-path call — the commonest op there is — where
+// the shape scan has to read the whole body for its refusal reason.
 function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference) returns LeafBodyScan
-	// The row's cost rules are waived here and nowhere else in this scan — see `leafOpRefusesTheBody` and
-	// the budget below.
+	// The row's cost rules are waived here and nowhere else in this scan — see `callFit` and the
+	// budget below.
 	let alwaysSpliced = func.mustBeSplicedAtEverySite
 
 	match functionShape(func) 'shape'
@@ -549,6 +557,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 	end 'shape'
 
 	var ops = 0 as ElementIndex
+	var holdsColdCall = false
 
 	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
 		let block = module.blockAtPosition(func, position: blockIndex)
@@ -567,9 +576,11 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 			// ⭐ **RETURNED FROM, NOT FLAGGED — a call is the commonest op there is, and this scan runs over
 			// the whole module.** Bailing at the first refusing op is what keeps a 5,000-op function from
 			// being walked to the end to learn something its second op already said.
-			if leafOpRefusesTheBody(role, op: op, module: module, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference) 'theRuleRefusesThisOp'
-				return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
-			end 'theRuleRefusesThisOp'
+			match leafOpFit(role, op: op, module: module, block: block, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference) 'fit'
+				fits then break
+				coldCall then holdsColdCall = true
+				refuses then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+			end 'fit'
 
 			ops = ops + countedBodyOps(role)
 		end 'eachOp'
@@ -577,7 +588,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 		if block.hasTerminatorOp() 'terminated'
 			ops = ops + 1
 
-			// A terminator that calls refuses the leaf rule as any call does.
+			// A terminator that calls refuses the leaf rule whatever its block's heat.
 			match terminatorRole(module.getOp(block.terminatorIndex()), func: func, meta: meta) 'termRole'
 				body then break
 				calling or
@@ -586,7 +597,9 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 		end 'terminated'
 	end 'eachBlock'
 
-	if ops > MaxInlinedLeafOps and not alwaysSpliced 'tooBig'
+	let budget = MaxInlinedColdCallLeafOps if holdsColdCall else MaxInlinedLeafOps
+
+	if ops > budget and not alwaysSpliced 'tooBig'
 		return LeafBodyScan.create(LeafVerdict.tooManyOps, opCount: ops)
 	end 'tooBig'
 
@@ -600,24 +613,43 @@ function countedBodyOps(role InlineOpRole) returns ElementIndex
 	return 0 if role == InlineOpRole.parameter else 1
 end 'countedBodyOps'
 
+enum LeafOpFit
+	fits
+	coldCall
+	refuses
+end 'LeafOpFit'
+
 // ⭐⭐ **WHETHER ONE OP PUTS ITS BODY OUTSIDE THE LEAF RULE, AND THE ANSWER A
 // `__Raw.splicedAtEverySite()` BODY GETS DIFFERENTLY.**
 //
-//   • A `calling` op refuses — which is what makes ownership free here, a retain, a release and a scope
-//     drop all being calls — UNLESS this body and the callee both declare the row. That edge is spliced
-//     away before this body is copied anywhere (`spliceAlwaysSplicedCallees`), and the cascade terminates
-//     because a cycle among those edges is refused rather than capped (`AlwaysSplicedPlan`).
+//   • A `calling` op refuses UNLESS this body and the callee both declare the row, or the call sits
+//     in a cold block (`callFit`). The row's edge is spliced away before this body is copied
+//     anywhere (`spliceAlwaysSplicedCallees`), and the cascade terminates because a cycle among those
+//     edges is refused rather than capped (`AlwaysSplicedPlan`). A cold call is copied verbatim and
+//     puts the body under `MaxInlinedColdCallLeafOps`.
 //
 // ⛔ `refusing` is the dialect's own `isUnsupportedInInlineBody`, which no row overrides.
-function leafOpRefusesTheBody(role InlineOpRole, op StdOp, module StdModule, alwaysSpliced bool, byName FunctionNameIndex, reference StdFunctionReference) returns bool
+function leafOpFit(role InlineOpRole, op StdOp, module StdModule, block IrBlock, alwaysSpliced bool, byName FunctionNameIndex, reference StdFunctionReference) returns LeafOpFit
 	return match role 'role'
 		// A parameter is the call's argument, not an instruction — it is neither counted nor copied.
 		parameter or
-		body gives false
-		calling gives not (alwaysSpliced and callIsIntoAnAlwaysSplicedBody(op, module: module, byName: byName, reference: reference))
-		refusing gives true
+		body gives LeafOpFit.fits
+		calling gives callFit(op, module: module, block: block, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference)
+		refusing gives LeafOpFit.refuses
 	end 'role'
-end 'leafOpRefusesTheBody'
+end 'leafOpFit'
+
+function callFit(op StdOp, module StdModule, block IrBlock, alwaysSpliced bool, byName FunctionNameIndex, reference StdFunctionReference) returns LeafOpFit
+	if alwaysSpliced and callIsIntoAnAlwaysSplicedBody(op, module: module, byName: byName, reference: reference) 'intoARow'
+		return LeafOpFit.fits
+	end 'intoARow'
+
+	if block.heat == BlockHeat.cold 'offTheHotPath'
+		return LeafOpFit.coldCall
+	end 'offTheHotPath'
+
+	return LeafOpFit.refuses
+end 'callFit'
 
 // Does this op directly call a body that declares the row? Asked through `DeadFunctionElimination`'s own
 // reference enumeration, so "which ops name a callee" stays the roster that walk already keeps rather than
@@ -1328,6 +1360,12 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 			continue
 		end 'theCascadeOwnsIt'
 
+		// An eligible leaf's own sites stay calls: a cold call into another leaf spliced here would grow
+		// a body `LeafPlan.measure` already took, and every later copy of it fails `buildValueColumn`.
+		if plan.verdictOf(funcIndex) == LeafVerdict.eligible 'admittedBodyStaysAsMeasured'
+			continue
+		end 'admittedBodyStaysAsMeasured'
+
 		var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
 		splicer.run()
 	end 'eachFunc'
@@ -1344,7 +1382,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
 
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops, or {MaxInlinedColdCallLeafOps} with a cold call ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
 	end 'debugging'
 end 'spliceLeaves'
 
@@ -1510,7 +1548,7 @@ function bodyOpRefusalText(module StdModule, calleeIndex ElementIndex, byName Fu
 		for opIdx in block.bodyOps() 'eachOp'
 			let op = module.getOp(opIdx)
 
-			if leafOpRefusesTheBody(inlineOpRole(op, meta: meta), op: op, module: module, alwaysSpliced: true, byName: byName, reference: reference) 'thisOpRefuses'
+			if leafOpFit(inlineOpRole(op, meta: meta), op: op, module: module, block: block, alwaysSpliced: true, byName: byName, reference: reference) == LeafOpFit.refuses 'thisOpRefuses'
 				return refusedOpText(op, module: module, byName: byName, reference: reference)
 			end 'thisOpRefuses'
 		end 'eachOp'
@@ -2916,11 +2954,11 @@ type SiteSplicer
 	end 'clearSiteBuffers'
 
 	// ⭐ **THE BOUND IS SNAPSHOTTED, AND THAT IS WHAT KEEPS THIS LOOP OFF ITS OWN OUTPUT — and, unlike
-	// `InlineManagedPrimitives`, nothing is revisited at all.** A splice appends two kinds of block and
-	// neither holds a site this run admits: a COPIED body holds no call under the leaf rule, and under the
-	// called-once rule every called-once callee inside it was spliced in an earlier wave; a CONTINUATION
-	// holds ops of the ORIGINAL block, every site in which `inlineSitesIn` has already collected before
-	// it split anything. So one pass over the original blocks IS the whole walk — no worklist, no
+	// `InlineManagedPrimitives`, nothing is revisited at all.** A splice appends two kinds of block. A
+	// COPIED body under the leaf rule may hold calls in cold blocks, and the snapshot is what leaves
+	// them calls (one round); under the called-once rule every called-once callee inside it was spliced
+	// in an earlier wave. A CONTINUATION holds ops of the ORIGINAL block, every site in which
+	// `inlineSitesIn` has already collected before it split anything. So one pass over the original blocks IS the whole walk — no worklist, no
 	// "already expanded" marker column, and no chain to follow.
 	export function run()
 		let originalBlockCount = self.func.blockRefs.count()

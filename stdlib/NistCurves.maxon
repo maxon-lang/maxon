@@ -1,10 +1,8 @@
 /// NIST P-256 and P-384 elliptic curves: ECDH key agreement, ECDSA verification and deterministic ECDSA signing.
 /// @category Crypto
-typealias NistLimb = bits(64)
-typealias NistLimbs = Array with NistLimb
-typealias NistPoint = (NistLimbs, NistLimbs, NistLimbs)
-typealias NistAffinePoint = (NistLimbs, NistLimbs)
-typealias NistPoints = Array with NistPoint
+typealias NistAffinePoint = (WorkspaceLimbs, WorkspaceLimbs)
+typealias NistTerm = (WorkspaceLimbs, Count)
+typealias NistTerms = Array with NistTerm
 typealias NistScalarBytes = int(32 to 48) implements Count
 typealias NistSpan = (ElementIndex, ElementIndex)
 
@@ -17,15 +15,36 @@ let nistWindowsPerLimbShift = 3
 let nistTableSize = 16
 let nistInverseRefinements = 4
 let nistTopBit = 63
+let nistSlotWidth = 14
+let nistCoordinates = 3
+let nistProductSlot = 0
+let nistRemainderSlot = 1
+let nistOneSlot = 2
+let nistSquaredSlot = 3
+let nistUnitSlot = 4
+let nistDoubledSlot = 5
+let nistCurveBSlot = 6
+let nistFirstFreeSlot = 7
+let nistPointASlot = 7
+let nistPointBSlot = 10
+let nistPointCSlot = 13
+let nistLookedSlot = 16
+let nistTableSlot = 19
+let nistTableSlots = 48
+let nistMaxTerms = 2
+let nistTemporarySlot = nistTableSlot + nistMaxTerms * nistTableSlots
+let nistTemporarySlots = 32
+let nistCurveSlots = nistTemporarySlot + nistTemporarySlots
+let nistFieldSlots = 16
 
-let nistLimbMask = 0xFFFFFFFF as NistLimb
-let nistWindowMask = 0xF as NistLimb
-let nistWindowsPerLimbMask = 0x7 as NistLimb
-let nistAllOnes = u64.max as NistLimb
-let nistZero = 0 as NistLimb
-let nistOne = 1 as NistLimb
+let nistLimbMask = 0xFFFFFFFF as WorkspaceLimb
+let nistWindowMask = 0xF as WorkspaceLimb
+let nistWindowsPerLimbMask = 0x7 as WorkspaceLimb
+let nistAllOnes = u64.max as WorkspaceLimb
+let nistZero = 0 as WorkspaceLimb
+let nistOne = 1 as WorkspaceLimb
 let nistTwo = 2
-let nistByteMask = 0xFF as NistLimb
+let nistByteMask = 0xFF as WorkspaceLimb
 
 let nistUncompressedTag = 0x04 as Byte
 let nistDerSequenceTag = 0x30
@@ -35,7 +54,6 @@ let nistDerSignBit = 0x80
 let nistDerLengthBytesLimit = 4
 let nistPointTagBytes = 1
 let nistPointCoordinates = 2
-let nistAccumulatorExtraLimbs = 2
 let p256ScalarBytes = 32
 let p384ScalarBytes = 48
 let nistByteRadix = 256
@@ -65,90 +83,77 @@ enum NistRefusal implements Error
 	rejectedNonce
 end 'NistRefusal'
 
-function nistLimb(limbs NistLimbs, index ElementIndex) returns NistLimb
-	return try limbs.get(index) otherwise panic("nist: limb index past the operand")
-end 'nistLimb'
-
 function nistByte(bytes ByteArray, index ElementIndex) returns Byte throws NistRefusal
 	return try bytes.get(index) otherwise throw NistRefusal.invalidEncoding
 end 'nistByte'
 
-function nistZeros(count Count) returns NistLimbs
-	var limbs = NistLimbs.create()
-	limbs.growFilled(count, value: nistZero)
-	return limbs
-end 'nistZeros'
-
-function nistSmall(count Count, value NistLimb) returns NistLimbs
-	var limbs = nistZeros(count)
-	try limbs.set(0, value: value) otherwise panic("nist: an operand has limbs")
+function nistSmall(count Count, value WorkspaceLimb) returns WorkspaceLimbs
+	var limbs = zeroLimbs(count)
+	workspaceLimbPut(limbs, index: 0, value: value)
 	return limbs
 end 'nistSmall'
 
-function nistMask(bit NistLimb) returns NistLimb
+function nistMask(bit WorkspaceLimb) returns WorkspaceLimb
 	return bit * nistAllOnes
 end 'nistMask'
 
-function nistEqualMask(a NistLimb, b NistLimb) returns NistLimb
+function nistEqualMask(a WorkspaceLimb, b WorkspaceLimb) returns WorkspaceLimb
 	return nistMask(((a xor b) - nistOne) shr nistTopBit)
 end 'nistEqualMask'
 
-function nistSelect(kept NistLimbs, replacement NistLimbs, mask NistLimb) returns NistLimbs
-	var selected = NistLimbs.create()
-	selected.reserve(kept.count())
-
-	for (iter, limb) in kept.withIterator() 'eachLimb'
-		selected.push((limb and (mask xor nistAllOnes)) or (nistLimb(replacement, index: iter.index()) and mask))
-	end 'eachLimb'
-
-	return selected
-end 'nistSelect'
-
-function nistAdd(a NistLimbs, b NistLimbs) returns (NistLimbs, NistLimb)
-	var sum = NistLimbs.create()
-	sum.reserve(a.count())
-	var carry = nistZero
-
-	for (iter, limb) in a.withIterator() 'eachLimb'
-		let total = limb + nistLimb(b, index: iter.index()) + carry
-		sum.push(total and nistLimbMask)
-		carry = total shr nistLimbBits
-	end 'eachLimb'
-
-	return (sum, carry)
-end 'nistAdd'
-
-function nistSubtract(a NistLimbs, b NistLimbs) returns (NistLimbs, NistLimb)
-	var difference = NistLimbs.create()
-	difference.reserve(a.count())
+function nistBorrowChain(dst WorkspaceLimbs, dstBase ElementIndex, a WorkspaceLimbs, aBase ElementIndex, b WorkspaceLimbs, bBase ElementIndex, count Count) returns WorkspaceLimb
 	var borrow = nistZero
 
-	for (iter, limb) in a.withIterator() 'eachLimb'
-		let total = limb - nistLimb(b, index: iter.index()) - borrow
-		difference.push(total and nistLimbMask)
+	for index in 0 upto count 'eachLimb'
+		let total = workspaceLimbAt(a, index: aBase + index) - workspaceLimbAt(b, index: bBase + index) - borrow
+		workspaceLimbPut(dst, index: dstBase + index, value: total and nistLimbMask)
 		borrow = total shr nistTopBit
 	end 'eachLimb'
 
+	return borrow
+end 'nistBorrowChain'
+
+function nistCarryChain(dst WorkspaceLimbs, dstBase ElementIndex, a WorkspaceLimbs, aBase ElementIndex, b WorkspaceLimbs, bBase ElementIndex, bMask WorkspaceLimb, count Count) returns WorkspaceLimb
+	var carry = nistZero
+
+	for index in 0 upto count 'eachLimb'
+		let total = workspaceLimbAt(a, index: aBase + index) + (workspaceLimbAt(b, index: bBase + index) and bMask) + carry
+		workspaceLimbPut(dst, index: dstBase + index, value: total and nistLimbMask)
+		carry = total shr nistLimbBits
+	end 'eachLimb'
+
+	return carry
+end 'nistCarryChain'
+
+function nistSubtract(a WorkspaceLimbs, b WorkspaceLimbs) returns (WorkspaceLimbs, WorkspaceLimb)
+	var difference = zeroLimbs(a.count())
+	let borrow = nistBorrowChain(difference, dstBase: 0, a: a, aBase: 0, b: b, bBase: 0, count: a.count())
 	return (difference, borrow)
 end 'nistSubtract'
 
-function nistIsZero(limbs NistLimbs) returns bool
-	return nistEqual(limbs, b: nistZeros(limbs.count()))
+function nistIsZero(limbs WorkspaceLimbs) returns bool
+	var accumulated = nistZero
+
+	for limb in limbs 'eachLimb'
+		accumulated = accumulated or limb
+	end 'eachLimb'
+
+	return accumulated == nistZero
 end 'nistIsZero'
 
-function nistEqual(a NistLimbs, b NistLimbs) returns bool
+function nistEqual(a WorkspaceLimbs, b WorkspaceLimbs) returns bool
 	var difference = nistZero
 
 	for (iter, limb) in a.withIterator() 'eachLimb'
-		difference = difference or (limb xor nistLimb(b, index: iter.index()))
+		difference = difference or (limb xor workspaceLimbAt(b, index: iter.index()))
 	end 'eachLimb'
 
 	return difference == nistZero
 end 'nistEqual'
 
-function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) returns NistLimbs
+function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) returns WorkspaceLimbs
 	let limbCount = count / nistLimbBytes
-	var limbs = NistLimbs.create()
+	var limbs = WorkspaceLimbs.create()
 	limbs.reserve(limbCount)
 
 	for index in 0 upto limbCount 'eachLimb'
@@ -157,7 +162,7 @@ function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) re
 
 		for offset in 0 upto nistLimbBytes 'eachByte'
 			let byte = try bytes.get(first + offset) otherwise panic("nist: byte index past the checked length")
-			word = (word shl nistBitsPerByte) or (byte as NistLimb)
+			word = (word shl nistBitsPerByte) or (byte as WorkspaceLimb)
 		end 'eachByte'
 
 		limbs.push(word)
@@ -166,12 +171,12 @@ function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) re
 	return limbs
 end 'nistLimbsFromBytes'
 
-function nistBytesFromLimbs(limbs NistLimbs) returns ByteArray
+function nistBytesFromLimbs(limbs WorkspaceLimbs) returns ByteArray
 	var bytes = ByteArray.create()
 	bytes.reserve(limbs.count() * nistLimbBytes)
 
 	for step in 0 upto limbs.count() 'eachLimb'
-		let limb = nistLimb(limbs, index: limbs.count() - 1 - step)
+		let limb = workspaceLimbAt(limbs, index: limbs.count() - 1 - step)
 
 		for offset in 0 upto nistLimbBytes 'eachByte'
 			let shift = (nistLimbBytes - 1 - offset) * nistBitsPerByte
@@ -190,7 +195,7 @@ function nistHexDigit(symbol Byte) returns Byte
 	return symbol - nistHexDigitBase
 end 'nistHexDigit'
 
-function nistLimbsFromHex(hex String) returns NistLimbs
+function nistLimbsFromHex(hex String) returns WorkspaceLimbs
 	var bytes = ByteArray.create()
 	bytes.reserve(hex.byteLength() / nistHexDigitsPerByte)
 	var high = nistZeroByte
@@ -209,7 +214,7 @@ function nistLimbsFromHex(hex String) returns NistLimbs
 	return nistLimbsFromBytes(bytes, start: 0, count: bytes.count())
 end 'nistLimbsFromHex'
 
-function nistMontgomeryInverse(low NistLimb) returns NistLimb
+function nistMontgomeryInverse(low WorkspaceLimb) returns WorkspaceLimb
 	var inverse = low
 
 	for _ in 0 upto nistInverseRefinements 'eachRefinement'
@@ -219,53 +224,9 @@ function nistMontgomeryInverse(low NistLimb) returns NistLimb
 	return (nistZero - inverse) and nistLimbMask
 end 'nistMontgomeryInverse'
 
-function nistMultiplyAccumulate(accumulator NistLimbs, a NistLimbs, word NistLimb)
-	let count = a.count()
-	var carry = nistZero
-
-	for (iter, limb) in a.withIterator() 'eachLimb'
-		let index = iter.index()
-		let total = nistLimb(accumulator, index: index) + limb * word + carry
-		try accumulator.set(index, value: total and nistLimbMask) otherwise panic("nist: accumulator index unreachable")
-		carry = total shr nistLimbBits
-	end 'eachLimb'
-
-	let top = nistLimb(accumulator, index: count) + carry
-	try accumulator.set(count, value: top and nistLimbMask) otherwise panic("nist: accumulator index unreachable")
-	try accumulator.set(count + 1, value: top shr nistLimbBits) otherwise panic("nist: accumulator index unreachable")
-end 'nistMultiplyAccumulate'
-
-function nistReduceStep(accumulator NistLimbs, modulus NistLimbs, inverse NistLimb)
-	let count = modulus.count()
-	let quotient = (nistLimb(accumulator, index: 0) * inverse) and nistLimbMask
-	var carry = (nistLimb(accumulator, index: 0) + quotient * nistLimb(modulus, index: 0)) shr nistLimbBits
-
-	for index in 1 upto count 'eachLimb'
-		let total = nistLimb(accumulator, index: index) + quotient * nistLimb(modulus, index: index) + carry
-		try accumulator.set(index - 1, value: total and nistLimbMask) otherwise panic("nist: accumulator index unreachable")
-		carry = total shr nistLimbBits
-	end 'eachLimb'
-
-	let top = nistLimb(accumulator, index: count) + carry
-	try accumulator.set(count - 1, value: top and nistLimbMask) otherwise panic("nist: accumulator index unreachable")
-	try accumulator.set(count, value: nistLimb(accumulator, index: count + 1) + (top shr nistLimbBits)) otherwise panic("nist: accumulator index unreachable")
-end 'nistReduceStep'
-
-function nistLookup(table NistPoints, digit NistLimb) returns NistPoint
-	let (first, _, _) = try table.first() otherwise panic("nist: the window table is never empty")
-	var x = nistZeros(first.count())
-	var y = nistZeros(first.count())
-	var z = nistZeros(first.count())
-
-	for (iter, entry) in table.withIterator() 'eachEntry'
-		let mask = nistEqualMask(iter.index() as NistLimb, b: digit)
-		x = nistSelect(x, replacement: entry.0, mask: mask)
-		y = nistSelect(y, replacement: entry.1, mask: mask)
-		z = nistSelect(z, replacement: entry.2, mask: mask)
-	end 'eachEntry'
-
-	return (x, y, z)
-end 'nistLookup'
+function nistTableAt(term ElementIndex) returns Count
+	return nistTableSlot + (term as Count) * nistTableSlots
+end 'nistTableAt'
 
 function nistDerSpan(der ByteArray, position ElementIndex, tag Byte) returns NistSpan throws NistRefusal
 	let found = try nistByte(der, index: position)
@@ -352,7 +313,7 @@ function nistParseSignature(der ByteArray) returns (ByteArray, ByteArray) throws
 	return (r, s)
 end 'nistParseSignature'
 
-function nistDerEncodedInteger(value NistLimbs) returns ByteArray
+function nistDerEncodedInteger(value WorkspaceLimbs) returns ByteArray
 	var content = ByteArray.create()
 
 	for byte in nistBytesFromLimbs(value) 'eachByte'
@@ -378,113 +339,170 @@ function nistNonceStep(hash HashAlgorithm, key ByteArray, value ByteArray, suffi
 end 'nistNonceStep'
 
 type NistModulus
-	let limbs as NistLimbs
-	let inverse as NistLimb
-	let one as NistLimbs
+	let limbs as WorkspaceLimbs
+	let inverse as WorkspaceLimb
+	export let slots as LimbSlots
+	let one as WorkspaceLimbs
+	var squared = WorkspaceLimbs.create()
+	let exponent as WorkspaceLimbs
 
 	static function create(hex String) returns NistModulus
 		let limbs = nistLimbsFromHex(hex)
-		let (one, _) = nistSubtract(nistZeros(limbs.count()), b: limbs)
-		return NistModulus{limbs: limbs, inverse: nistMontgomeryInverse(nistLimb(limbs, index: 0)), one: one}
+		let count = limbs.count()
+		let (one, _) = nistSubtract(zeroLimbs(count), b: limbs)
+		let (exponent, _) = nistSubtract(limbs, b: nistSmall(count, value: nistTwo))
+		let inverse = nistMontgomeryInverse(workspaceLimbAt(limbs, index: 0))
+		var modulus = NistModulus{limbs: limbs, inverse: inverse, slots: LimbSlots.create(nistSlotWidth, limbCount: count), one: one, exponent: exponent}
+		modulus.squared = modulus.computeSquared()
+		return modulus
 	end 'create'
 
-	function zero() returns NistLimbs
-		return nistZeros(self.limbs.count())
-	end 'zero'
+	function blankWorkspace(slotCount Count) returns WorkspaceLimbs
+		var ws = self.slots.workspace(slotCount)
+		self.slots.load(ws, slot: nistOneSlot, value: self.one)
+		self.slots.load(ws, slot: nistUnitSlot, value: nistSmall(self.slots.limbCount, value: nistOne))
+		return ws
+	end 'blankWorkspace'
 
-	function montgomeryOne() returns NistLimbs
-		return self.one.clone()
-	end 'montgomeryOne'
+	function workspace(slotCount Count) returns WorkspaceLimbs
+		var ws = blankWorkspace(slotCount)
+		self.slots.load(ws, slot: nistSquaredSlot, value: self.squared)
+		return ws
+	end 'workspace'
 
-	function isBelow(value NistLimbs) returns bool
+	function computeSquared() returns WorkspaceLimbs
+		var ws = blankWorkspace(nistFieldSlots)
+		self.slots.load(ws, slot: nistFirstFreeSlot, value: self.one)
+
+		for _ in 0 upto self.slots.limbCount * nistLimbBits 'eachDoubling'
+			add(ws, dst: nistFirstFreeSlot, a: nistFirstFreeSlot, b: nistFirstFreeSlot)
+		end 'eachDoubling'
+
+		return self.slots.read(ws, slot: nistFirstFreeSlot)
+	end 'computeSquared'
+
+	function isBelow(value WorkspaceLimbs) returns bool
 		let (_, borrow) = nistSubtract(value, b: self.limbs)
 		return borrow == nistOne
 	end 'isBelow'
 
-	function reduced(value NistLimbs, carry NistLimb) returns NistLimbs
-		let (difference, borrow) = nistSubtract(value, b: self.limbs)
-		return nistSelect(value, replacement: difference, mask: nistMask(carry or (borrow xor nistOne)))
-	end 'reduced'
+	function settle(ws WorkspaceLimbs, dst Count)
+		let width = self.slots.limbCount
+		let sum = self.slots.offset(nistProductSlot)
+		let borrow = nistBorrowChain(ws, dstBase: self.slots.offset(nistRemainderSlot), a: ws, aBase: sum, b: self.limbs, bBase: 0, count: width)
+		let replace = nistMask(workspaceLimbAt(ws, index: sum + width) or (borrow xor nistOne))
+		self.slots.select(ws, dst: dst, kept: nistProductSlot, replacement: nistRemainderSlot, mask: replace)
+	end 'settle'
 
-	function reduceOnce(value NistLimbs) returns NistLimbs
-		return reduced(value, carry: nistZero)
+	function reduceOnce(value WorkspaceLimbs) returns WorkspaceLimbs
+		let (difference, borrow) = nistSubtract(value, b: self.limbs)
+		let replace = nistMask(borrow xor nistOne)
+		var reduced = WorkspaceLimbs.create()
+		reduced.reserve(value.count())
+
+		for (iter, limb) in value.withIterator() 'eachLimb'
+			reduced.push(selectByMask(limb, replacement: workspaceLimbAt(difference, index: iter.index()), mask: replace))
+		end 'eachLimb'
+
+		return reduced
 	end 'reduceOnce'
 
-	function add(a NistLimbs, b NistLimbs) returns NistLimbs
-		let (sum, carry) = nistAdd(a, b: b)
-		return reduced(sum, carry: carry)
+	function add(ws WorkspaceLimbs, dst Count, a Count, b Count)
+		let sum = self.slots.offset(nistProductSlot)
+		let carry = nistCarryChain(ws, dstBase: sum, a: ws, aBase: self.slots.offset(a), b: ws, bBase: self.slots.offset(b), bMask: nistAllOnes, count: self.slots.limbCount)
+		workspaceLimbPut(ws, index: sum + self.slots.limbCount, value: carry)
+		settle(ws, dst: dst)
 	end 'add'
 
-	function triple(a NistLimbs) returns NistLimbs
-		return add(a, b: add(a, b: a))
+	function triple(ws WorkspaceLimbs, dst Count, a Count)
+		add(ws, dst: nistDoubledSlot, a: a, b: a)
+		add(ws, dst: dst, a: nistDoubledSlot, b: a)
 	end 'triple'
 
-	function subtract(a NistLimbs, b NistLimbs) returns NistLimbs
-		let (difference, borrow) = nistSubtract(a, b: b)
-		let (corrected, _) = nistAdd(difference, b: self.limbs)
-		return nistSelect(difference, replacement: corrected, mask: nistMask(borrow))
+	function subtract(ws WorkspaceLimbs, dst Count, a Count, b Count)
+		let difference = self.slots.offset(nistProductSlot)
+		let borrow = nistBorrowChain(ws, dstBase: difference, a: ws, aBase: self.slots.offset(a), b: ws, bBase: self.slots.offset(b), count: self.slots.limbCount)
+		_ = nistCarryChain(ws, dstBase: self.slots.offset(dst), a: ws, aBase: difference, b: self.limbs, bBase: 0, bMask: nistMask(borrow), count: self.slots.limbCount)
 	end 'subtract'
 
-	function multiply(a NistLimbs, b NistLimbs) returns NistLimbs
-		let count = self.limbs.count()
-		var accumulator = nistZeros(count + nistAccumulatorExtraLimbs)
+	function multiply(ws WorkspaceLimbs, dst Count, a Count, b Count)
+		let width = self.slots.limbCount
+		let accumulator = self.slots.offset(nistProductSlot)
+		let left = self.slots.offset(a)
+		let right = self.slots.offset(b)
+		let modulus = self.limbs
+		let factor = self.inverse
+		let first = workspaceLimbAt(modulus, index: 0)
 
-		for word in b 'eachWord'
-			nistMultiplyAccumulate(accumulator, a: a, word: word)
-			nistReduceStep(accumulator, modulus: self.limbs, inverse: self.inverse)
+		for index in 0 upto width + 2 'eachClear'
+			workspaceLimbPut(ws, index: accumulator + index, value: nistZero)
+		end 'eachClear'
+
+		for step in 0 upto width 'eachWord'
+			let word = workspaceLimbAt(ws, index: right + step)
+			var carry = nistZero
+
+			for index in 0 upto width 'eachProduct'
+				let total = workspaceLimbAt(ws, index: accumulator + index) + workspaceLimbAt(ws, index: left + index) * word + carry
+				workspaceLimbPut(ws, index: accumulator + index, value: total and nistLimbMask)
+				carry = total shr nistLimbBits
+			end 'eachProduct'
+
+			let top = workspaceLimbAt(ws, index: accumulator + width) + carry
+			workspaceLimbPut(ws, index: accumulator + width, value: top and nistLimbMask)
+			workspaceLimbPut(ws, index: accumulator + width + 1, value: top shr nistLimbBits)
+
+			let low = workspaceLimbAt(ws, index: accumulator)
+			let quotient = (low * factor) and nistLimbMask
+			var shifted = (low + quotient * first) shr nistLimbBits
+
+			for index in 1 upto width 'eachReduction'
+				let total = workspaceLimbAt(ws, index: accumulator + index) + quotient * workspaceLimbAt(modulus, index: index) + shifted
+				workspaceLimbPut(ws, index: accumulator + index - 1, value: total and nistLimbMask)
+				shifted = total shr nistLimbBits
+			end 'eachReduction'
+
+			let reducedTop = workspaceLimbAt(ws, index: accumulator + width) + shifted
+			workspaceLimbPut(ws, index: accumulator + width - 1, value: reducedTop and nistLimbMask)
+			workspaceLimbPut(ws, index: accumulator + width, value: workspaceLimbAt(ws, index: accumulator + width + 1) + (reducedTop shr nistLimbBits))
 		end 'eachWord'
 
-		let carry = nistLimb(accumulator, index: count)
-		accumulator.truncate(count)
-		return reduced(accumulator, carry: carry)
+		settle(ws, dst: dst)
 	end 'multiply'
 
-	function toMontgomery(value NistLimbs) returns NistLimbs
-		var converted = reduceOnce(value)
+	function loadMontgomery(ws WorkspaceLimbs, slot Count, value WorkspaceLimbs)
+		self.slots.load(ws, slot: slot, value: value)
+		multiply(ws, dst: slot, a: slot, b: nistSquaredSlot)
+	end 'loadMontgomery'
 
-		for _ in 0 upto self.limbs.count() * nistLimbBits 'eachDoubling'
-			converted = add(converted, b: converted)
-		end 'eachDoubling'
+	function inverted(ws WorkspaceLimbs, dst Count, a Count)
+		self.slots.copy(ws, dst: dst, src: nistOneSlot)
 
-		return converted
-	end 'toMontgomery'
-
-	function fromMontgomery(value NistLimbs) returns NistLimbs
-		return multiply(value, b: nistSmall(self.limbs.count(), value: nistOne))
-	end 'fromMontgomery'
-
-	function inverted(value NistLimbs) returns NistLimbs
-		let (exponent, _) = nistSubtract(self.limbs, b: nistSmall(self.limbs.count(), value: nistTwo))
-		var power = self.one.clone()
-
-		for step in 0 upto exponent.count() 'eachLimb'
-			let limb = nistLimb(exponent, index: exponent.count() - 1 - step)
+		for step in 0 upto self.exponent.count() 'eachLimb'
+			let limb = workspaceLimbAt(self.exponent, index: self.exponent.count() - 1 - step)
 
 			for offset in 1 to nistLimbBits 'eachBit'
-				power = multiply(power, b: power)
+				multiply(ws, dst: dst, a: dst, b: dst)
 
 				if ((limb shr (nistLimbBits - offset)) and nistOne) == nistOne 'setBit'
-					power = multiply(power, b: value)
+					multiply(ws, dst: dst, a: dst, b: a)
 				end 'setBit'
 			end 'eachBit'
 		end 'eachLimb'
-
-		return power
 	end 'inverted'
 end 'NistModulus'
 
 type NistCurve
 	let primeField as NistModulus
 	let scalarField as NistModulus
-	let b as NistLimbs
-	let generator as NistPoint
+	let b as WorkspaceLimbs
+	module let generator as NistAffinePoint
 	let scalarBytes as NistScalarBytes
 	let hash as HashAlgorithm
 
 	static function create(prime String, order String, b String, gx String, gy String, scalarBytes NistScalarBytes, hash HashAlgorithm) returns NistCurve
-		let field = NistModulus.create(prime)
-		let generator = (field.toMontgomery(nistLimbsFromHex(gx)), field.toMontgomery(nistLimbsFromHex(gy)), field.montgomeryOne())
-		return NistCurve{primeField: field, scalarField: NistModulus.create(order), b: field.toMontgomery(nistLimbsFromHex(b)), generator: generator, scalarBytes: scalarBytes, hash: hash}
+		let generator = (nistLimbsFromHex(gx), nistLimbsFromHex(gy))
+		return NistCurve{primeField: NistModulus.create(prime), scalarField: NistModulus.create(order), b: nistLimbsFromHex(b), generator: generator, scalarBytes: scalarBytes, hash: hash}
 	end 'create'
 
 	static function of(curve EcdsaCurve) returns NistCurve
@@ -494,95 +512,223 @@ type NistCurve
 		end 'parameters'
 	end 'of'
 
-	function identity() returns NistPoint
-		return (self.primeField.zero(), self.primeField.montgomeryOne(), self.primeField.zero())
-	end 'identity'
+	function workspace() returns WorkspaceLimbs
+		var ws = self.primeField.workspace(nistCurveSlots)
+		self.primeField.loadMontgomery(ws, slot: nistCurveBSlot, value: self.b)
+		return ws
+	end 'workspace'
 
-	function add(p NistPoint, q NistPoint) returns NistPoint
+	function loadPoint(ws WorkspaceLimbs, slot Count, point NistAffinePoint)
+		self.primeField.loadMontgomery(ws, slot: slot, value: point.0)
+		self.primeField.loadMontgomery(ws, slot: slot + 1, value: point.1)
+		self.primeField.slots.copy(ws, dst: slot + 2, src: nistOneSlot)
+	end 'loadPoint'
+
+	function loadIdentity(ws WorkspaceLimbs, slot Count)
+		self.primeField.slots.clear(ws, slot: slot)
+		self.primeField.slots.copy(ws, dst: slot + 1, src: nistOneSlot)
+		self.primeField.slots.clear(ws, slot: slot + 2)
+	end 'loadIdentity'
+
+	function copyPoint(ws WorkspaceLimbs, dst Count, src Count)
+		for coordinate in 0 upto nistCoordinates 'eachCoordinate'
+			self.primeField.slots.copy(ws, dst: dst + coordinate, src: src + coordinate)
+		end 'eachCoordinate'
+	end 'copyPoint'
+
+	function addPoints(ws WorkspaceLimbs, result Count, p Count, q Count)
 		let field = self.primeField
-		let t0 = field.multiply(p.0, b: q.0)
-		let t1 = field.multiply(p.1, b: q.1)
-		let t2 = field.multiply(p.2, b: q.2)
-		let t3 = field.subtract(field.multiply(field.add(p.0, b: p.1), b: field.add(q.0, b: q.1)), b: field.add(t0, b: t1))
-		let t4 = field.subtract(field.multiply(field.add(p.1, b: p.2), b: field.add(q.1, b: q.2)), b: field.add(t1, b: t2))
-		let xz = field.multiply(field.add(p.0, b: p.2), b: field.add(q.0, b: q.2))
-		let y3a = field.subtract(xz, b: field.add(t0, b: t2))
-		let x3a = field.triple(field.subtract(y3a, b: field.multiply(self.b, b: t2)))
-		let z3a = field.subtract(t1, b: x3a)
-		let x3b = field.add(t1, b: x3a)
-		let t2b = field.triple(t2)
-		let y3b = field.triple(field.subtract(field.subtract(field.multiply(self.b, b: y3a), b: t2b), b: t0))
-		let t0b = field.subtract(field.triple(t0), b: t2b)
-		let y3 = field.add(field.multiply(x3b, b: z3a), b: field.multiply(t0b, b: y3b))
-		let x3 = field.subtract(field.multiply(t3, b: x3b), b: field.multiply(t4, b: y3b))
-		let z3 = field.add(field.multiply(t4, b: z3a), b: field.multiply(t3, b: t0b))
-		return (x3, y3, z3)
-	end 'add'
+		let t0 = nistTemporarySlot
+		let t1 = nistTemporarySlot + 1
+		let t2 = nistTemporarySlot + 2
+		let t3 = nistTemporarySlot + 3
+		let t4 = nistTemporarySlot + 4
+		let sumLeft = nistTemporarySlot + 5
+		let sumRight = nistTemporarySlot + 6
+		let sumBoth = nistTemporarySlot + 7
+		let xz = nistTemporarySlot + 8
+		let y3a = nistTemporarySlot + 9
+		let scaled = nistTemporarySlot + 10
+		let x3a = nistTemporarySlot + 11
+		let z3a = nistTemporarySlot + 12
+		let x3b = nistTemporarySlot + 13
+		let t2b = nistTemporarySlot + 14
+		let y3b = nistTemporarySlot + 15
+		let t0b = nistTemporarySlot + 16
+		let other = nistTemporarySlot + 17
 
-	function double(p NistPoint) returns NistPoint
+		field.multiply(ws, dst: t0, a: p, b: q)
+		field.multiply(ws, dst: t1, a: p + 1, b: q + 1)
+		field.multiply(ws, dst: t2, a: p + 2, b: q + 2)
+
+		field.add(ws, dst: sumLeft, a: p, b: p + 1)
+		field.add(ws, dst: sumRight, a: q, b: q + 1)
+		field.multiply(ws, dst: t3, a: sumLeft, b: sumRight)
+		field.add(ws, dst: sumBoth, a: t0, b: t1)
+		field.subtract(ws, dst: t3, a: t3, b: sumBoth)
+
+		field.add(ws, dst: sumLeft, a: p + 1, b: p + 2)
+		field.add(ws, dst: sumRight, a: q + 1, b: q + 2)
+		field.multiply(ws, dst: t4, a: sumLeft, b: sumRight)
+		field.add(ws, dst: sumBoth, a: t1, b: t2)
+		field.subtract(ws, dst: t4, a: t4, b: sumBoth)
+
+		field.add(ws, dst: sumLeft, a: p, b: p + 2)
+		field.add(ws, dst: sumRight, a: q, b: q + 2)
+		field.multiply(ws, dst: xz, a: sumLeft, b: sumRight)
+		field.add(ws, dst: sumBoth, a: t0, b: t2)
+		field.subtract(ws, dst: y3a, a: xz, b: sumBoth)
+
+		field.multiply(ws, dst: scaled, a: nistCurveBSlot, b: t2)
+		field.subtract(ws, dst: x3a, a: y3a, b: scaled)
+		field.triple(ws, dst: x3a, a: x3a)
+		field.subtract(ws, dst: z3a, a: t1, b: x3a)
+		field.add(ws, dst: x3b, a: t1, b: x3a)
+		field.triple(ws, dst: t2b, a: t2)
+
+		field.multiply(ws, dst: scaled, a: nistCurveBSlot, b: y3a)
+		field.subtract(ws, dst: y3b, a: scaled, b: t2b)
+		field.subtract(ws, dst: y3b, a: y3b, b: t0)
+		field.triple(ws, dst: y3b, a: y3b)
+		field.triple(ws, dst: t0b, a: t0)
+		field.subtract(ws, dst: t0b, a: t0b, b: t2b)
+
+		field.multiply(ws, dst: scaled, a: x3b, b: z3a)
+		field.multiply(ws, dst: other, a: t0b, b: y3b)
+		field.add(ws, dst: result + 1, a: scaled, b: other)
+		field.multiply(ws, dst: scaled, a: t3, b: x3b)
+		field.multiply(ws, dst: other, a: t4, b: y3b)
+		field.subtract(ws, dst: result, a: scaled, b: other)
+		field.multiply(ws, dst: scaled, a: t4, b: z3a)
+		field.multiply(ws, dst: other, a: t3, b: t0b)
+		field.add(ws, dst: result + 2, a: scaled, b: other)
+	end 'addPoints'
+
+	function doublePoint(ws WorkspaceLimbs, result Count, p Count)
 		let field = self.primeField
-		let t0 = field.multiply(p.0, b: p.0)
-		let t1 = field.multiply(p.1, b: p.1)
-		let t2 = field.multiply(p.2, b: p.2)
-		let xy = field.multiply(p.0, b: p.1)
-		let t3 = field.add(xy, b: xy)
-		let xz = field.multiply(p.0, b: p.2)
-		let z3a = field.add(xz, b: xz)
-		let y3a = field.triple(field.subtract(field.multiply(self.b, b: t2), b: z3a))
-		let x3a = field.subtract(t1, b: y3a)
-		let y3b = field.multiply(x3a, b: field.add(t1, b: y3a))
-		let x3b = field.multiply(x3a, b: t3)
-		let t2b = field.triple(t2)
-		let z3b = field.triple(field.subtract(field.subtract(field.multiply(self.b, b: z3a), b: t2b), b: t0))
-		let y3 = field.add(y3b, b: field.multiply(field.subtract(field.triple(t0), b: t2b), b: z3b))
-		let yz = field.multiply(p.1, b: p.2)
-		let t0b = field.add(yz, b: yz)
-		let x3 = field.subtract(x3b, b: field.multiply(t0b, b: z3b))
-		let z3c = field.multiply(t0b, b: t1)
-		let z3d = field.add(z3c, b: z3c)
-		return (x3, y3, field.add(z3d, b: z3d))
-	end 'double'
+		let t0 = nistTemporarySlot
+		let t1 = nistTemporarySlot + 1
+		let t2 = nistTemporarySlot + 2
+		let t3 = nistTemporarySlot + 3
+		let z3a = nistTemporarySlot + 4
+		let y3a = nistTemporarySlot + 5
+		let x3a = nistTemporarySlot + 6
+		let y3b = nistTemporarySlot + 7
+		let x3b = nistTemporarySlot + 8
+		let t2b = nistTemporarySlot + 9
+		let z3b = nistTemporarySlot + 10
+		let t0b = nistTemporarySlot + 11
+		let scaled = nistTemporarySlot + 12
+		let other = nistTemporarySlot + 13
 
-	function multiples(point NistPoint) returns NistPoints
-		var table = NistPoints.create()
-		table.reserve(nistTableSize)
-		table.push(identity())
-		var current = point
+		field.multiply(ws, dst: t0, a: p, b: p)
+		field.multiply(ws, dst: t1, a: p + 1, b: p + 1)
+		field.multiply(ws, dst: t2, a: p + 2, b: p + 2)
+		field.multiply(ws, dst: other, a: p, b: p + 1)
+		field.add(ws, dst: t3, a: other, b: other)
+		field.multiply(ws, dst: other, a: p, b: p + 2)
+		field.add(ws, dst: z3a, a: other, b: other)
+		field.multiply(ws, dst: other, a: p + 1, b: p + 2)
+		field.add(ws, dst: t0b, a: other, b: other)
 
-		for _ in 1 upto nistTableSize 'eachMultiple'
-			table.push(current)
-			current = add(current, q: point)
+		field.multiply(ws, dst: scaled, a: nistCurveBSlot, b: t2)
+		field.subtract(ws, dst: y3a, a: scaled, b: z3a)
+		field.triple(ws, dst: y3a, a: y3a)
+		field.subtract(ws, dst: x3a, a: t1, b: y3a)
+		field.add(ws, dst: scaled, a: t1, b: y3a)
+		field.multiply(ws, dst: y3b, a: x3a, b: scaled)
+		field.multiply(ws, dst: x3b, a: x3a, b: t3)
+		field.triple(ws, dst: t2b, a: t2)
+
+		field.multiply(ws, dst: scaled, a: nistCurveBSlot, b: z3a)
+		field.subtract(ws, dst: z3b, a: scaled, b: t2b)
+		field.subtract(ws, dst: z3b, a: z3b, b: t0)
+		field.triple(ws, dst: z3b, a: z3b)
+
+		field.triple(ws, dst: scaled, a: t0)
+		field.subtract(ws, dst: scaled, a: scaled, b: t2b)
+		field.multiply(ws, dst: other, a: scaled, b: z3b)
+		field.add(ws, dst: result + 1, a: y3b, b: other)
+		field.multiply(ws, dst: other, a: t0b, b: z3b)
+		field.subtract(ws, dst: result, a: x3b, b: other)
+		field.multiply(ws, dst: scaled, a: t0b, b: t1)
+		field.add(ws, dst: other, a: scaled, b: scaled)
+		field.add(ws, dst: result + 2, a: other, b: other)
+	end 'doublePoint'
+
+	// Every entry is read and masked: the digit can be a private key's or a nonce's, and indexing the
+	// table by it would leak that scalar through cache timing.
+	function selectEntry(ws WorkspaceLimbs, table Count, digit WorkspaceLimb)
+		let slots = self.primeField.slots
+
+		for coordinate in 0 upto nistCoordinates 'eachClear'
+			slots.clear(ws, slot: nistLookedSlot + coordinate)
+		end 'eachClear'
+
+		for entry in 0 upto nistTableSize 'eachEntry'
+			let mask = nistEqualMask(entry as WorkspaceLimb, b: digit)
+
+			for coordinate in 0 upto nistCoordinates 'eachCoordinate'
+				slots.accumulate(ws, dst: nistLookedSlot + coordinate, source: table + entry * nistCoordinates + coordinate, mask: mask)
+			end 'eachCoordinate'
+		end 'eachEntry'
+	end 'selectEntry'
+
+	function buildTable(ws WorkspaceLimbs, table Count, base Count)
+		loadIdentity(ws, slot: table)
+		copyPoint(ws, dst: table + nistCoordinates, src: base)
+
+		for entry in 2 upto nistTableSize 'eachMultiple'
+			addPoints(ws, result: table + entry * nistCoordinates, p: table + (entry - 1) * nistCoordinates, q: base)
 		end 'eachMultiple'
+	end 'buildTable'
 
-		return table
-	end 'multiples'
+	function scalarMultiply(ws WorkspaceLimbs, terms NistTerms, result Count)
+		for (iter, term) in terms.withIterator() 'eachTable'
+			buildTable(ws, table: nistTableAt(iter.index()), base: term.1)
+		end 'eachTable'
 
-	function multiply(scalar NistLimbs, point NistPoint) returns NistPoint
-		let table = multiples(point)
-		let windowCount = scalar.count() * nistWindowsPerLimb
-		var result = identity()
+		loadIdentity(ws, slot: result)
+		let (leading, _) = try terms.first() otherwise panic("nist: a multiplication has a term")
+		let windowCount = leading.count() * nistWindowsPerLimb
 
 		for step in 0 upto windowCount 'eachWindow'
-			let window = (windowCount - 1 - step) as NistLimb
+			let window = (windowCount - 1 - step) as WorkspaceLimb
 
 			for _ in 0 upto nistWindowBits 'eachDoubling'
-				result = double(result)
+				doublePoint(ws, result: result, p: result)
 			end 'eachDoubling'
 
-			let limb = nistLimb(scalar, index: (window shr nistWindowsPerLimbShift) as ElementIndex)
-			let digit = (limb shr ((window and nistWindowsPerLimbMask) * nistWindowBits)) and nistWindowMask
-			result = add(result, q: nistLookup(table, digit: digit))
+			for (iter, term) in terms.withIterator() 'eachTerm'
+				let limb = workspaceLimbAt(term.0, index: (window shr nistWindowsPerLimbShift) as ElementIndex)
+				let digit = (limb shr ((window and nistWindowsPerLimbMask) * nistWindowBits)) and nistWindowMask
+				selectEntry(ws, table: nistTableAt(iter.index()), digit: digit)
+				addPoints(ws, result: result, p: result, q: nistLookedSlot)
+			end 'eachTerm'
 		end 'eachWindow'
+	end 'scalarMultiply'
 
-		return result
-	end 'multiply'
-
-	function affine(point NistPoint) returns NistAffinePoint
-		let zInverse = self.primeField.inverted(point.2)
-		return (self.primeField.fromMontgomery(self.primeField.multiply(point.0, b: zInverse)), self.primeField.fromMontgomery(self.primeField.multiply(point.1, b: zInverse)))
+	function affine(ws WorkspaceLimbs, point Count) returns NistAffinePoint
+		let field = self.primeField
+		let inverse = nistTemporarySlot
+		let x = nistTemporarySlot + 1
+		let y = nistTemporarySlot + 2
+		field.inverted(ws, dst: inverse, a: point + 2)
+		field.multiply(ws, dst: x, a: point, b: inverse)
+		field.multiply(ws, dst: y, a: point + 1, b: inverse)
+		field.multiply(ws, dst: x, a: x, b: nistUnitSlot)
+		field.multiply(ws, dst: y, a: y, b: nistUnitSlot)
+		return (field.slots.read(ws, slot: x), field.slots.read(ws, slot: y))
 	end 'affine'
 
-	function scalar(value NistLimbs) returns NistLimbs throws NistRefusal
+	function multiplyAffine(scalar WorkspaceLimbs, point NistAffinePoint) returns NistAffinePoint
+		var ws = workspace()
+		loadPoint(ws, slot: nistPointBSlot, point: point)
+		scalarMultiply(ws, terms: NistTerms from [(scalar.clone(), nistPointBSlot)], result: nistPointASlot)
+		return affine(ws, point: nistPointASlot)
+	end 'multiplyAffine'
+
+	function scalar(value WorkspaceLimbs) returns WorkspaceLimbs throws NistRefusal
 		if nistIsZero(value) or not self.scalarField.isBelow(value) 'outOfRange'
 			throw NistRefusal.invalidEncoding
 		end 'outOfRange'
@@ -590,7 +736,7 @@ type NistCurve
 		return value
 	end 'scalar'
 
-	function decodeScalar(bytes ByteArray) returns NistLimbs throws NistRefusal
+	function decodeScalar(bytes ByteArray) returns WorkspaceLimbs throws NistRefusal
 		if bytes.count() != self.scalarBytes 'wrongLength'
 			throw NistRefusal.invalidEncoding
 		end 'wrongLength'
@@ -598,7 +744,7 @@ type NistCurve
 		return try scalar(nistLimbsFromBytes(bytes, start: 0, count: self.scalarBytes))
 	end 'decodeScalar'
 
-	function signatureScalar(content ByteArray) returns NistLimbs throws NistRefusal
+	function signatureScalar(content ByteArray) returns WorkspaceLimbs throws NistRefusal
 		var padded = ByteArray.create()
 		padded.reserve(self.scalarBytes)
 
@@ -621,7 +767,7 @@ type NistCurve
 		return try decodeScalar(padded)
 	end 'signatureScalar'
 
-	function decodePoint(bytes ByteArray) returns NistPoint throws NistRefusal
+	function decodePoint(bytes ByteArray) returns NistAffinePoint throws NistRefusal
 		if bytes.count() != nistPointTagBytes + nistPointCoordinates * self.scalarBytes 'wrongLength'
 			throw NistRefusal.invalidEncoding
 		end 'wrongLength'
@@ -640,63 +786,99 @@ type NistCurve
 		end 'nonCanonical'
 
 		let field = self.primeField
-		let xm = field.toMontgomery(x)
-		let ym = field.toMontgomery(y)
-		let rightSide = field.add(field.subtract(field.multiply(xm, b: field.multiply(xm, b: xm)), b: field.triple(xm)), b: self.b)
+		var ws = workspace()
+		let xm = nistFirstFreeSlot
+		let ym = nistFirstFreeSlot + 1
+		let rightSide = nistFirstFreeSlot + 2
+		let leftSide = nistFirstFreeSlot + 3
+		field.loadMontgomery(ws, slot: xm, value: x)
+		field.loadMontgomery(ws, slot: ym, value: y)
+		field.multiply(ws, dst: rightSide, a: xm, b: xm)
+		field.multiply(ws, dst: rightSide, a: rightSide, b: xm)
+		field.triple(ws, dst: leftSide, a: xm)
+		field.subtract(ws, dst: rightSide, a: rightSide, b: leftSide)
+		field.add(ws, dst: rightSide, a: rightSide, b: nistCurveBSlot)
+		field.multiply(ws, dst: leftSide, a: ym, b: ym)
 
-		if not nistEqual(field.multiply(ym, b: ym), b: rightSide) 'offCurve'
+		if not nistEqual(field.slots.read(ws, slot: leftSide), b: field.slots.read(ws, slot: rightSide)) 'offCurve'
 			throw NistRefusal.invalidEncoding
 		end 'offCurve'
 
-		return (xm, ym, field.montgomeryOne())
+		return (x, y)
 	end 'decodePoint'
 
-	function encodePoint(point NistPoint) returns ByteArray
-		let (x, y) = affine(point)
+	function encodePoint(point NistAffinePoint) returns ByteArray
 		var encoded = ByteArray.create()
 		encoded.reserve(nistPointTagBytes + nistPointCoordinates * self.scalarBytes)
 		encoded.push(nistUncompressedTag)
-		encoded.append(nistBytesFromLimbs(x))
-		encoded.append(nistBytesFromLimbs(y))
+		encoded.append(nistBytesFromLimbs(point.0))
+		encoded.append(nistBytesFromLimbs(point.1))
 		return encoded
 	end 'encodePoint'
 
-	function digest(message ByteArray) returns NistLimbs
+	function digest(message ByteArray) returns WorkspaceLimbs
 		var digest = Digest.create(self.hash)
 		digest.update(message)
 		return nistLimbsFromBytes(digest.finalize(), start: 0, count: self.scalarBytes)
 	end 'digest'
 
-	function verifies(q NistPoint, message ByteArray, rContent ByteArray, sContent ByteArray) returns bool
+	function verifies(q NistAffinePoint, message ByteArray, rContent ByteArray, sContent ByteArray) returns bool
 		let r = try signatureScalar(rContent) otherwise return false
 		let s = try signatureScalar(sContent) otherwise return false
 		let order = self.scalarField
-		let sInverse = order.inverted(order.toMontgomery(s))
-		let u1 = order.fromMontgomery(order.multiply(order.toMontgomery(digest(message)), b: sInverse))
-		let u2 = order.fromMontgomery(order.multiply(order.toMontgomery(r), b: sInverse))
-		let sum = add(baseMultiple(u1), q: multiply(u2, point: q))
+		var orderWs = order.workspace(nistFieldSlots)
+		let sMontgomery = nistFirstFreeSlot
+		let sInverse = nistFirstFreeSlot + 1
+		let first = nistFirstFreeSlot + 2
+		let second = nistFirstFreeSlot + 3
+		order.loadMontgomery(orderWs, slot: sMontgomery, value: s)
+		order.inverted(orderWs, dst: sInverse, a: sMontgomery)
+		order.loadMontgomery(orderWs, slot: first, value: digest(message))
+		order.multiply(orderWs, dst: first, a: first, b: sInverse)
+		order.multiply(orderWs, dst: first, a: first, b: nistUnitSlot)
+		order.loadMontgomery(orderWs, slot: second, value: r)
+		order.multiply(orderWs, dst: second, a: second, b: sInverse)
+		order.multiply(orderWs, dst: second, a: second, b: nistUnitSlot)
 
-		if nistIsZero(sum.2) 'infinity'
+		var ws = workspace()
+		loadPoint(ws, slot: nistPointBSlot, point: self.generator)
+		loadPoint(ws, slot: nistPointCSlot, point: q)
+		scalarMultiply(ws, terms: NistTerms from [(order.slots.read(orderWs, slot: first), nistPointBSlot), (order.slots.read(orderWs, slot: second), nistPointCSlot)], result: nistPointASlot)
+
+		if nistIsZero(self.primeField.slots.read(ws, slot: nistPointASlot + 2)) 'infinity'
 			return false
 		end 'infinity'
 
-		let (x, _) = affine(sum)
+		let (x, _) = affine(ws, point: nistPointASlot)
 		return nistEqual(order.reduceOnce(x), b: r)
 	end 'verifies'
 
-	function signature(nonce NistLimbs, key NistLimbs, hashed NistLimbs) returns ByteArray throws NistRefusal
+	function signature(nonce WorkspaceLimbs, key WorkspaceLimbs, hashed WorkspaceLimbs) returns ByteArray throws NistRefusal
 		let k = try scalar(nonce) otherwise throw NistRefusal.rejectedNonce
 		let order = self.scalarField
-		let (x, _) = affine(baseMultiple(k))
+		let (x, _) = multiplyAffine(k, point: self.generator)
 		let r = order.reduceOnce(x)
 
 		if nistIsZero(r) 'zeroR'
 			throw NistRefusal.rejectedNonce
 		end 'zeroR'
 
-		let kInverse = order.inverted(order.toMontgomery(k))
-		let sum = order.add(order.toMontgomery(hashed), b: order.multiply(order.toMontgomery(key), b: order.toMontgomery(r)))
-		let s = order.fromMontgomery(order.multiply(kInverse, b: sum))
+		var ws = order.workspace(nistFieldSlots)
+		let kMontgomery = nistFirstFreeSlot
+		let kInverse = nistFirstFreeSlot + 1
+		let keyMontgomery = nistFirstFreeSlot + 2
+		let rMontgomery = nistFirstFreeSlot + 3
+		let hashMontgomery = nistFirstFreeSlot + 4
+		order.loadMontgomery(ws, slot: kMontgomery, value: k)
+		order.inverted(ws, dst: kInverse, a: kMontgomery)
+		order.loadMontgomery(ws, slot: keyMontgomery, value: key)
+		order.loadMontgomery(ws, slot: rMontgomery, value: r)
+		order.loadMontgomery(ws, slot: hashMontgomery, value: hashed)
+		order.multiply(ws, dst: keyMontgomery, a: keyMontgomery, b: rMontgomery)
+		order.add(ws, dst: hashMontgomery, a: hashMontgomery, b: keyMontgomery)
+		order.multiply(ws, dst: hashMontgomery, a: kInverse, b: hashMontgomery)
+		order.multiply(ws, dst: hashMontgomery, a: hashMontgomery, b: nistUnitSlot)
+		let s = order.slots.read(ws, slot: hashMontgomery)
 
 		if nistIsZero(s) 'zeroS'
 			throw NistRefusal.rejectedNonce
@@ -712,7 +894,7 @@ type NistCurve
 		return deterministicSignature(key, privateKey: privateKey, message: message)
 	end 'sign'
 
-	function deterministicSignature(key NistLimbs, privateKey ByteArray, message ByteArray) returns ByteArray
+	function deterministicSignature(key WorkspaceLimbs, privateKey ByteArray, message ByteArray) returns ByteArray
 		let hashed = digest(message)
 		let hashOctets = nistBytesFromLimbs(self.scalarField.reduceOnce(hashed))
 		var nonceKey = ByteArray.create()
@@ -738,17 +920,13 @@ type NistCurve
 			(nonceKey, nonceValue) = nistNonceStep(self.hash, key: nonceKey, value: nonceValue, suffix: ByteArray from [nistZeroByte])
 		end 'eachCandidate'
 	end 'deterministicSignature'
-
-	function baseMultiple(scalar NistLimbs) returns NistPoint
-		return multiply(scalar, point: self.generator)
-	end 'baseMultiple'
 end 'NistCurve'
 
 module function nistPublicKey(curve EcdsaCurve, privateKey ByteArray) returns ByteArray throws EcdhError
 	let nist = NistCurve.of(curve)
 	let d = try nist.decodeScalar(privateKey) otherwise throw EcdhError.invalidPrivateKey
 
-	return nist.encodePoint(nist.baseMultiple(d))
+	return nist.encodePoint(nist.multiplyAffine(d, point: nist.generator))
 end 'nistPublicKey'
 
 /// Why `EcdhP256` refused a key.
@@ -769,7 +947,7 @@ public type EcdhP256
 		let curve = NistCurve.of(EcdsaCurve.p256)
 		let d = try curve.decodeScalar(privateKey) otherwise throw EcdhError.invalidPrivateKey
 		let q = try curve.decodePoint(peerPublicKey) otherwise throw EcdhError.invalidPublicKey
-		let (x, _) = curve.affine(curve.multiply(d, point: q))
+		let (x, _) = curve.multiplyAffine(d, point: q)
 		return nistBytesFromLimbs(x)
 	end 'sharedSecret'
 end 'EcdhP256'

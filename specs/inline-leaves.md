@@ -15,17 +15,21 @@ the three Std→Std splicing passes, for the reason below.
 A callee is eligible when ALL of the following hold — computed ONCE per callee, on the body as it
 stands BEFORE any splice, and memoised:
 
-- its body contains **no call of any kind** (`call`, `tryCall`, `callIndirect`, `witnessCall`,
-  `witnessTryCall`) — which is also what makes ownership free here, because a retain, a release and a
-  scope drop are all parser-emitted calls;
+- its body contains **no call outside a cold block** (`call`, `tryCall`, `callIndirect`, `witnessCall`,
+  `witnessTryCall`), and no terminator that calls. A cold block is one reached only when a guard
+  refuses, such as the slow arm `inlineManagedPrimitives` leaves in a checked `get` or `set`; its calls
+  are copied verbatim, as the called-once rule copies every call. A retain, a release and a scope drop
+  are parser-emitted calls, so the same rule covers them;
 - it contains **no op the dialect marks `isUnsupportedInInlineBody`** except the two PANIC ops, which
   are copied like any other block (see `THE PANIC RULE` below) — so an `errorReturn` (a throwing body),
   a `stackRecordAddr`, a `covPoint` and every OS primitive refuse the callee. The OS band carries the
   mark because it is `isCall: true` and `inlineOpRole` classifies it off the flag, where the only two
   answers are "body op" and "refused": a system op that is NOT a call is a body op like any other, which
   is what admits `memFill`, the two atomics and the per-OS-thread slot read;
-- it has **no more than 24 body ops** (over all its blocks, terminators counted, the `param` ops not).
-  24 is measured rather than chosen: `regMaskContains` — the function this pass exists for — is 23 Std
+- it has **no more than 24 body ops** (over all its blocks, terminators counted, the `param` ops not),
+  or **no more than 32** when it holds a call in a cold block, cold ops counted. Raising the call-free
+  budget to 32 grows code with no speed gain, and leaving cold ops uncounted leaves a body's cold part
+  unbounded. 24 is measured rather than chosen: `regMaskContains` — the function this pass exists for — is 23 Std
   ops, because a shift whose count the compiler cannot fold carries the 6-op saturation `THE SHIFT RULE`
   emits at the Maxon tier, and its `int(0 to 63)` parameter adds a 9-op entry guard on top of that;
 - it takes **no by-reference parameter**, and it does not run user code on its caller's stack;
@@ -48,11 +52,12 @@ builder never paid.
 
 **What it waives** is every judgement about what inlining is WORTH:
 
-- the 24-op budget above;
+- the op budgets above;
 - the called-once rule's register-pressure budget;
 - the inline-frame-record rule, on the ground that a builder's spliced code never carried a frame record
   either — so a panic inside a copy prints the caller's frame on a target without them;
-- the leaf rule's *"no call of any kind"* for ONE edge: a call into another body that declares the row.
+- the leaf rule's refusal of a call outside a cold block for ONE edge: a call into another body that
+  declares the row.
   Those are spliced away callees-first, before either body is copied anywhere. It is this pass's only
   exception to ONE ROUND, NO CASCADE, and it is bounded by the graph of declared rows being a DAG.
 
@@ -74,21 +79,26 @@ which also holds the trace mechanism both rules share.
 
 `__managed_count(a)` is the one managed primitive `inlineManagedPrimitives` rewrites IN PLACE — into a
 single `loadIndirect` of the record's `length@8`. Every accessor whose whole body is that one call is
-therefore a body **holding a call** until that pass has run, and the leaf rule refuses one outright. Run
+therefore a body **holding a call** on its hot path until that pass has run, and the leaf rule refuses
+one. Run
 the other way round, this pass would refuse them one pass before the call stops existing, and on the
 compiler's own self-compile accessors such as `Array.isEmpty`, `Parser.advance` and `String.byteLength`
 — with about a hundred more `count`/`size` accessors of the same shape — would keep hundreds of direct
 calls.
 
-⭐ **THE ORDER CANNOT COST THIS PASS A CALLEE, AND THAT IS A PROOF RATHER THAN A MEASUREMENT.**
-`inlineManagedPrimitives` rewrites only bodies that hold a `__managed_*` CALL, and a leaf holds no call
-by rule — so no body it can reach is one this pass would have accepted.
+⭐ **THE ORDER COSTS THIS PASS NO CALLEE WHOSE `__managed_*` CALL IS ON ITS HOT PATH.**
+`inlineManagedPrimitives` rewrites only bodies that hold a `__managed_*` CALL, and the leaf rule refuses
+a call outside a cold block, so no such body is one this pass would have accepted. A body whose
+`__managed_*` calls all sit in cold blocks can be a leaf before that pass runs, and its expansion can
+grow the body past the 32-op budget.
 
 ⚠ **IT IS AN ORDER AND NOT A SECOND ROUND.** A second round would admit the cascade the next paragraph refuses on purpose.
 
 **ONE ROUND, NO CASCADE.** Eligibility is decided on the pre-splice body, so a caller that becomes
 call-free BY being inlined into does not become eligible in the same compile. That is what bounds the
 work at one copy per site and keeps a chain of helpers from pulling a large body through three of them.
+An eligible leaf's own call sites stay calls, so every copy of it is the body its eligibility was
+measured on.
 
 ### ⭐ THE PANIC RULE — how a ranged-parameter leaf is inlined without moving a stack trace
 

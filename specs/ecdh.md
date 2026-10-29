@@ -25,7 +25,9 @@ The scalar multiplication runs in time independent of the private key: a fixed 4
 of the scalar, the table entry chosen by a masked scan of the whole table, and complete addition formulas.
 
 The vectors are the canra `ecdh-p256` contract's: the 25 NIST CAVS `[P-256]` records, a Wycheproof
-`ecdh_secp256r1_ecpoint_test` subset, computed edge keys and constructed refusals.
+`ecdh_secp256r1_ecpoint_test` subset, computed edge keys and constructed refusals. The
+`ecdh.peer-coordinates-near-the-prime` case's secrets, for peer points with an x-coordinate just below `p`,
+come from Python `cryptography` (OpenSSL).
 
 ## Tests
 
@@ -999,4 +1001,104 @@ shared-secret-err-034 invalidPublicKey
 shared-secret-err-035 invalidPublicKey
 shared-secret-err-036 invalidPublicKey
 shared-secret-err-037 invalidPrivateKey
+```
+
+<!-- test: ecdh.peer-coordinates-near-the-prime -->
+`EcdhP256.sharedSecret` with peer points whose x-coordinate is just below `p` (the three on the curve among `p - 1` down to `p - 399`), under private keys `1`, `2`, `n - 1`, `n - 2`, `2^255 - 1` and the RFC 6979 A.2.5 key. The coordinates are loaded into Montgomery form and multiplied while at the edge of the field. The secrets were computed with Python `cryptography` (OpenSSL).
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function errorName(failure EcdhError) returns String
+	return match failure 'name'
+		invalidPrivateKey gives "invalidPrivateKey"
+		invalidPublicKey gives "invalidPublicKey"
+	end 'name'
+end 'errorName'
+
+function report(id String, privateKeyHex String, peerPublicKeyHex String)
+	if let secret = try EcdhP256.sharedSecret(fromHex(privateKeyHex), peerPublicKey: fromHex(peerPublicKeyHex)) 'agreed'
+		print("{id} {toHex(secret)}\n")
+	end 'agreed' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'report'
+
+function main() returns ExitCode
+	report("near-p-001", privateKeyHex: "0000000000000000000000000000000000000000000000000000000000000001", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffc19719bebf6aea13f25c96dfd7c71f5225d4c8fc09eb5a0ab9f39e9178e55c121")
+	report("near-p-002", privateKeyHex: "0000000000000000000000000000000000000000000000000000000000000002", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffc19719bebf6aea13f25c96dfd7c71f5225d4c8fc09eb5a0ab9f39e9178e55c121")
+	report("near-p-003", privateKeyHex: "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffc19719bebf6aea13f25c96dfd7c71f5225d4c8fc09eb5a0ab9f39e9178e55c121")
+	report("near-p-004", privateKeyHex: "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc63254f", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffc19719bebf6aea13f25c96dfd7c71f5225d4c8fc09eb5a0ab9f39e9178e55c121")
+	report("near-p-005", privateKeyHex: "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffc19719bebf6aea13f25c96dfd7c71f5225d4c8fc09eb5a0ab9f39e9178e55c121")
+	report("near-p-006", privateKeyHex: "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffc19719bebf6aea13f25c96dfd7c71f5225d4c8fc09eb5a0ab9f39e9178e55c121")
+	report("near-p-007", privateKeyHex: "0000000000000000000000000000000000000000000000000000000000000001", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffbde998cb9ed8a12d7f706cf79349a0621142af47f9faba77e895e9177392eefb7")
+	report("near-p-008", privateKeyHex: "0000000000000000000000000000000000000000000000000000000000000002", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffbde998cb9ed8a12d7f706cf79349a0621142af47f9faba77e895e9177392eefb7")
+	report("near-p-009", privateKeyHex: "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffbde998cb9ed8a12d7f706cf79349a0621142af47f9faba77e895e9177392eefb7")
+	report("near-p-010", privateKeyHex: "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc63254f", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffbde998cb9ed8a12d7f706cf79349a0621142af47f9faba77e895e9177392eefb7")
+	report("near-p-011", privateKeyHex: "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffbde998cb9ed8a12d7f706cf79349a0621142af47f9faba77e895e9177392eefb7")
+	report("near-p-012", privateKeyHex: "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffbde998cb9ed8a12d7f706cf79349a0621142af47f9faba77e895e9177392eefb7")
+	report("near-p-013", privateKeyHex: "0000000000000000000000000000000000000000000000000000000000000001", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffa9ae53f7daf02dc98710f91c94cbb0254b987ba8690a78300846e44a4eaf27d59")
+	report("near-p-014", privateKeyHex: "0000000000000000000000000000000000000000000000000000000000000002", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffa9ae53f7daf02dc98710f91c94cbb0254b987ba8690a78300846e44a4eaf27d59")
+	report("near-p-015", privateKeyHex: "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffa9ae53f7daf02dc98710f91c94cbb0254b987ba8690a78300846e44a4eaf27d59")
+	report("near-p-016", privateKeyHex: "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc63254f", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffa9ae53f7daf02dc98710f91c94cbb0254b987ba8690a78300846e44a4eaf27d59")
+	report("near-p-017", privateKeyHex: "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffa9ae53f7daf02dc98710f91c94cbb0254b987ba8690a78300846e44a4eaf27d59")
+	report("near-p-018", privateKeyHex: "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721", peerPublicKeyHex: "04ffffffff00000001000000000000000000000000fffffffffffffffffffffffa9ae53f7daf02dc98710f91c94cbb0254b987ba8690a78300846e44a4eaf27d59")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+near-p-001 ffffffff00000001000000000000000000000000fffffffffffffffffffffffc
+near-p-002 ed26f320933a2f6d137532f6ba34cf8a53d2e6913afa3581e834818471690ee4
+near-p-003 ffffffff00000001000000000000000000000000fffffffffffffffffffffffc
+near-p-004 ed26f320933a2f6d137532f6ba34cf8a53d2e6913afa3581e834818471690ee4
+near-p-005 0829f008cb29295ee53205eac0c823ef82f91cd054446946a521185d61d26153
+near-p-006 adfa958012bdf6c65fb7fdf1e7a2b75246d521aa97ed8d690f8992f54e16959f
+near-p-007 ffffffff00000001000000000000000000000000fffffffffffffffffffffffb
+near-p-008 9c4a8133902d66a8ca12076c20350071beda80efbb858c82ffe2ac8612ab087c
+near-p-009 ffffffff00000001000000000000000000000000fffffffffffffffffffffffb
+near-p-010 9c4a8133902d66a8ca12076c20350071beda80efbb858c82ffe2ac8612ab087c
+near-p-011 c16099779480cef60e705e57820c7b7366178529af100ee056eab8b03955fc52
+near-p-012 2eeab9cc760c56b46e8e082d79d62de3da16cd4c5120d0843d0bff3a6a028345
+near-p-013 ffffffff00000001000000000000000000000000fffffffffffffffffffffffa
+near-p-014 3abe97341b13df7721b8c5c8e0bba12130d8005001b101205bfb723e8beb33c9
+near-p-015 ffffffff00000001000000000000000000000000fffffffffffffffffffffffa
+near-p-016 3abe97341b13df7721b8c5c8e0bba12130d8005001b101205bfb723e8beb33c9
+near-p-017 1c9f7c63a11c6bb663ec8e060e7295fb1895226913dc486259eeb7e75f47a169
+near-p-018 6c77521621cc09df88e693b81b7e1b641e0c3a78a474d8e3a2d75449261c4035
 ```

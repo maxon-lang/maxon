@@ -1052,3 +1052,432 @@ func @__probe_tls_caller {
     arm64.ret
 }
 ```
+
+<!-- test: a-checked-accessor-whose-slow-arm-is-cold-is-inlined -->
+A checked `get` or `set` on a concrete `Array with Integer` keeps the runtime call as the SLOW ARM of the
+expansion `inlineManagedPrimitives` emits, and that arm is a cold block: the known stride means the fast arm
+serves every element, so the call is reached only for an index past the end, a shared buffer or a
+non-owned one. A helper that wraps one access holds that call, and a call in a cold block does not refuse a
+leaf, so `elementAt` and `putElement` are spliced at both of their sites
+and the pin's `main` holds the fast arms with no `callDirect elementAt` or `callDirect putElement`; the
+`__im_slow` arm of each copy still reaches `__managed_get` and `__managed_set`, and the panic block still
+names the helper's own line.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function elementAt(values IntArray, index ElementIndex) returns Integer
+	return try values.get(index) otherwise panic("element past the end")
+end 'elementAt'
+
+function putElement(values IntArray, index ElementIndex, value Integer)
+	try values.set(index, value: value) otherwise panic("element past the end")
+end 'putElement'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(20)
+	values.push(0)
+	putElement(values, index: 1, value: 1)
+	putElement(values, index: 1, value: 22)
+	return (elementAt(values, index: 0) + elementAt(values, index: 1)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 1
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc belowEqual, __im_slow
+  __im_buffer#15:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow
+  __im_store#17:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  __il_cont#8:
+    x64.movRegImm32 rax, 22
+  __im_buffer#24:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+  __im_store#26:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  __im_load#32:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __im_load#38:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+  __il_cont#5:
+    x64.leaRegRegReg r12, rax, rcx
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#8
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:10: element past the end\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 1
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc belowEqual, __im_slow
+  __im_buffer#15:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow
+  __im_store#17:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  __il_cont#8:
+    x64.movRegImm32 rax, 22
+  __im_buffer#24:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+  __im_store#26:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  __im_load#32:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __im_load#38:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+  __il_cont#5:
+    x64.leaRegRegReg r12, rax, rcx
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#8
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:10: element past the end\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movImm x2, 1
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow
+  __im_buffer#15:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow
+  __im_store#17:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x2
+  __il_cont#8:
+    arm64.movImm x0, 22
+  __im_buffer#24:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+  __im_store#26:
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+  __im_load#32:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  __im_load#38:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+  __il_cont#5:
+    arm64.add x20, x0, x1
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#8
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:10: element past the end\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movImm x2, 1
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow
+  __im_buffer#15:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow
+  __im_store#17:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x2
+  __il_cont#8:
+    arm64.movImm x0, 22
+  __im_buffer#24:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+  __im_store#26:
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+  __im_load#32:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  __im_load#38:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+  __il_cont#5:
+    arm64.add x20, x0, x1
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#8
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:10: element past the end\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```

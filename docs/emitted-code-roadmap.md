@@ -619,8 +619,8 @@ NO type — the Std tier is deliberately type-free — so the tier that still HA
 `LowerMaxonToStd`, which writes the stamp against the **Std op index** of the call it is appending
 (`Project.stdOpElementStrides`). A `(blockId, stdOpPos)` table like the range-check sites' could not survive:
 `insertRangeChecks` and `inlineLeaves` both split blocks. The op index does, and for a stated reason —
-`IrModule.ops` allocates indices by `push`, and **a leaf holds no call by rule** (`LeafOpRole.calling`
-refuses the callee outright), so `inlineLeaves` can neither clone nor re-issue a managed primitive.
+`IrModule.ops` allocates indices by `push`, and `inlineLeaves`, which clones a leaf's cold calls with its
+body, runs after `inlineManagedPrimitives` has read the table.
 ⇒ every recorded index still names the very call the lowering appended.
 
 ⭐ The recorder is **callee-agnostic** — it asks about the ARGUMENT (`isArrayInstanceAt`, the one home of

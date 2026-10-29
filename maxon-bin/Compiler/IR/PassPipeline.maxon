@@ -64,15 +64,12 @@ export union PassKind
 	// it, one pass before the call stops existing: MEASURED on the self-compile, `Array.isEmpty` keeps
 	// **209** call sites, `Parser.advance` **106** and `String.byteLength` **92**.
 	//
-	// ⭐ **THIS ORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE, AND THAT IS A PROOF RATHER THAN A
-	// MEASUREMENT.** This pass rewrites only bodies holding a `__managed_*` CALL, and a leaf holds no call
-	// BY RULE (`InlineLeaves.InlineOpRole.calling` refuses the callee outright) — so no body this pass can
-	// touch is one the leaf inliner would have accepted, and the eligible set can only grow. MEASURED
-	// anyway, because a proof about two passes is worth checking: against the opposite order, on the
-	// self-compile the leaf inliner's eligible callees go **469 → 530** and its sites **4,138 → 4,921**,
-	// while THIS pass's own expansion count is unchanged to the digit at **6,032 across 9,494
-	// functions** — leaf splicing duplicates no managed primitive in either order, and this order
-	// leaves nothing unreachable.
+	// ⭐ **THIS ORDER COSTS `inlineLeaves` NO CALLEE WHOSE `__managed_*` CALL IS ON ITS HOT PATH.** This
+	// pass rewrites only bodies holding a `__managed_*` CALL, and the leaf rule refuses a call outside a
+	// cold block (`InlineLeaves.callFit`), so no such body is one the leaf inliner would have accepted.
+	// A body whose `__managed_*` calls all sit in cold blocks is the exception: it can be a leaf under
+	// `MaxInlinedColdCallLeafOps` before this pass, and this pass's expansion of those calls can grow it
+	// past that budget.
 	//
 	// It runs BEFORE `foldConstOperands`, which IS chosen: every bound and stride it emits is a `const`,
 	// and the fold is what turns them into `cmpImm`/`binOpImm` operands so they never occupy a register in

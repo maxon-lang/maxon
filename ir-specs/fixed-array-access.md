@@ -14,9 +14,9 @@ displacement when the index is a constant — and ONE load for a `get` or ONE st
 compare of the index against the count `N`, no branch to an `ArrayError.indexOutOfBounds` path, and no call
 to `__managed_get`/`__managed_set` or the `FixedArray.get`/`FixedArray.set` bodies.
 
-Each accessor is reached only through a function value, so neither inliner rule can splice it into `main`
-and fold it against the array `main` builds: its own body is what the pin holds, compiled exactly as every
-caller reaches it.
+Each accessor is also taken as a function value, which keeps its body in the program after the inliner
+splices `main`'s call to it. That body, compiled with no caller's array to fold against, is what
+the pin holds.
 
 ## Tests
 
@@ -1251,12 +1251,26 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_resize
-  __il_cont:
+  __il_cont#9:
     x64.leaRegRdata rax, [rip + __fnrec_writeAt]
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 77
-    x64.movRegReg rcx, r12
-    x64.callDirect writeAt
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow
+  __im_store:
+    x64.storeBaseDispReg.word64 [rcx + 48], rax
+  __il_cont#11:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 48]
   __im_cont#7:
@@ -1287,6 +1301,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_set_unchecked
+    x64.jmp __il_cont#11
 }
 ```
 
@@ -1357,12 +1375,26 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_resize
-  __il_cont:
+  __il_cont#9:
     x64.leaRegRdata rax, [rip + __fnrec_writeAt]
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 77
-    x64.movRegReg rcx, r12
-    x64.callDirect writeAt
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow
+  __im_store:
+    x64.storeBaseDispReg.word64 [rcx + 48], rax
+  __il_cont#11:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 48]
   __im_cont#7:
@@ -1393,6 +1425,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_set_unchecked
+    x64.jmp __il_cont#11
 }
 ```
 
@@ -1457,12 +1493,26 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x19
     arm64.bl __managed_resize
-  __il_cont:
+  __il_cont#9:
     arm64.leaRdata x0, __fnrec_writeAt
     arm64.movImm x1, 6
     arm64.movImm x2, 77
-    arm64.movRegReg x0, x20
-    arm64.bl writeAt
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow
+  __im_store:
+    arm64.storeBaseDispReg.word64 [x0 + 48], x2
+  __il_cont#11:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 48]
   __im_cont#7:
@@ -1491,6 +1541,10 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set_unchecked
+    arm64.b __il_cont#11
 }
 ```
 
@@ -1558,12 +1612,26 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x19
     arm64.bl __managed_resize
-  __il_cont:
+  __il_cont#9:
     arm64.leaRdata x0, __fnrec_writeAt
     arm64.movImm x1, 6
     arm64.movImm x2, 77
-    arm64.movRegReg x0, x20
-    arm64.bl writeAt
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow
+  __im_store:
+    arm64.storeBaseDispReg.word64 [x0 + 48], x2
+  __il_cont#11:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 48]
   __im_cont#7:
@@ -1592,5 +1660,9 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set_unchecked
+    arm64.b __il_cont#11
 }
 ```

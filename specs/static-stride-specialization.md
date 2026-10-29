@@ -35,9 +35,8 @@ clones nor replaces a call: `insertRangeChecks` appends guards and splits blocks
 and never ops.
 
 ⭐ **`inlineLeaves` IS NOT ON THAT LIST.** It runs AFTER `inlineManagedPrimitives` — after this table has
-been read and spent — so a splice cannot reach a live key at all. The leaf rule (a leaf holds no call BY
-RULE, so it can neither clone nor re-issue a managed primitive) still holds, but this key does not rely
-on it.
+been read and spent — so a splice cannot reach a live key at all. A leaf may carry a call in a cold block, which a splice
+clones with the body, so this key relies on that order alone.
 
 ### THE STATIC STAMP IS NOT ALWAYS THE RECORD'S STAMP
 
