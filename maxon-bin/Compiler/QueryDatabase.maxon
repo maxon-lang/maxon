@@ -382,20 +382,26 @@ export type SharedLibraryParse
 
 	function rebasedOnto(signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
 		let rebase = try signatures.rebaseFor(self.footprint)
+		// Before the told answers are re-asked: their clone walk interns rows, which this check would read as
+		// the baseline's own.
+		let rebasedMints = try self.rebasedMintsAbsentFromTheBaseline(signatures, rebase: rebase)
 
 		if not self.toldAnswersHold(signatures, overrides: overrides) 'anAnswerMoved'
 			throw SharedMemoMiss.footprintMoved
 		end 'anAnswerMoved'
 
 		var rebasedArtifact = self.workingArtifact(consuming)
-
-		match rebasedArtifact.parseMints 'mints'
-			none then break
-			minted(mints) then rebasedArtifact.parseMints = ParseMints.minted(try signatures.rebasedMintsAbsentFromTheBaseline(mints, rebase: rebase))
-		end 'mints'
+		rebasedArtifact.parseMints = rebasedMints
 
 		return RebasedParse.create(rebasedArtifact, rebase: rebase)
 	end 'rebasedOnto'
+
+	function rebasedMintsAbsentFromTheBaseline(signatures ProgramSignatures, rebase ParseRebase) returns ParseMints throws SharedMemoMiss
+		return match self.artifact.parseMints 'mints'
+			none gives ParseMints.none
+			minted(mints) gives ParseMints.minted(try signatures.rebasedMintsAbsentFromTheBaseline(mints, rebase: rebase))
+		end 'mints'
+	end 'rebasedMintsAbsentFromTheBaseline'
 
 	function toldAnswersHold(signatures ProgramSignatures, overrides RowSetOverrideTable) returns bool
 		return match self.artifact.parseMints 'mints'
