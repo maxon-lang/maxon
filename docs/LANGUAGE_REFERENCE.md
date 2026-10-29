@@ -6530,8 +6530,9 @@ end 'main'
 ### Compile-Time Errors
 
 A compile reports every independent error in the program at once. An error that follows from another is
-covered by it: a call to a function whose declaration was refused, or a use of a binding whose initializer
-was refused, is reported through that refusal. A parse error abandons the function body, initializer or
+covered by it: a call to a function whose declaration was refused, an argument typed by that function's
+result, a closure written for its parameter, or a use of a binding whose initializer was refused, is
+reported through that refusal. A parse error abandons the function body, initializer or
 declaration it is in, and the rest of its file is checked; one inside a generic body, or one that leaves
 the file's block structure unreadable, fails the whole file. Unused bindings (**E3012**, **E3077**),
 unused exports (**E3092**–**E3094**), target refusals and the checks made while generating code are

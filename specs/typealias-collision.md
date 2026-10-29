@@ -235,12 +235,10 @@ error E3063: app/specs/typealias-collision/error.three-way-ambiguous-typealias.m
 A FUNCTION typealias collides on the same terms as a ranged one. Two directories export `Step` over the identical shape; the shapes agreeing does not make the bare reference unambiguous, because either declaration is one the reader may legally name.
 ```maxon
 // --- file: api/t.maxon
-typealias Integer = int(i64.min to i64.max)
-export typealias Step = function(n Integer) returns Integer
+export typealias Step = function(n int) returns int
 
 // --- file: legacy/t.maxon
-typealias Integer = int(i64.min to i64.max)
-export typealias Step = function(n Integer) returns Integer
+export typealias Step = function(n int) returns int
 
 // --- file: app/main.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -254,15 +252,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: app/specs/typealias-collision/error.exported-function-alias-collision-is-ambiguous-at-the-reference.maxon:13:16: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: api.Step, legacy.Step
+error E3063: app/specs/typealias-collision/error.exported-function-alias-collision-is-ambiguous-at-the-reference.maxon:11:16: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: api.Step, legacy.Step
 ```
 
 <!-- test: error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous -->
 The twin of the case above with the two exported `Step`s declared over DIFFERENT shapes. The answer is the same E3063: disagreeing shapes are a reason the reader cannot be assumed to mean either one, not a way to pick between them.
 ```maxon
 // --- file: api/t.maxon
-typealias Integer = int(i64.min to i64.max)
-export typealias Step = function(n Integer) returns Integer
+export typealias Step = function(n int) returns int
 
 // --- file: legacy/t.maxon
 export typealias Step = function(s String) returns String
@@ -279,7 +276,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: app/specs/typealias-collision/error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous.maxon:12:16: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: api.Step, legacy.Step
+error E3063: app/specs/typealias-collision/error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous.maxon:11:16: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: api.Step, legacy.Step
 ```
 
 <!-- test: error.ambiguous-typealias-is-anchored-on-the-name-token -->

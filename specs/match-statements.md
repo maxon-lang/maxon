@@ -820,6 +820,32 @@ end 'main'
 error E2049: specs/match-statements/error.match-block-statement.maxon:5:10: block-opening statement 'if' is not allowed in a match arm; use a function call instead
 ```
 
+<!-- test: error.match-block-statement-abandons-only-its-own-function -->
+The refused arm abandons its function up to that function's own `end`, whichever blocks the abandoned text opened or closed, so the declaration after it is read whole and its own mistake is reported.
+```maxon
+function first() returns ExitCode
+	let x = 1
+	match x 'check'
+		1 then if true 'inner'
+			return 10
+		end 'inner'
+		default then return 0
+	end 'check'
+end 'first'
+
+function second() returns ExitCode
+	return nothere(7)
+end 'second'
+
+function main() returns ExitCode
+	return second()
+end 'main'
+```
+```maxoncstderr
+error E2049: specs/match-statements/error.match-block-statement-abandons-only-its-own-function.maxon:5:10: block-opening statement 'if' is not allowed in a match arm; use a function call instead
+error E3004: specs/match-statements/error.match-block-statement-abandons-only-its-own-function.maxon:13:9: call to undefined function 'nothere'
+```
+
 <!-- test: error.match-not-exhaustive -->
 ```maxon
 function main() returns ExitCode

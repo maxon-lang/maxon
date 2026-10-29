@@ -1613,7 +1613,7 @@ error E3131: <fragment>:14:12: Cannot cast to 'NarrowCol': a container's element
 <!-- test: error.a-cast-between-fixed-arrays-of-two-sizes-is-not-a-rebrand -->
 Two files of one directory each declare a file-private `Limit` over one range. `Wide` is a `FixedArray with 8`
 of `pkg/lib.maxon`'s and `Quad` a `FixedArray with 4` of `pkg/main.maxon`'s: the elements share a layout but the containers do not, and the cast is
-refused.
+refused. The exported field that carries the value names a file-private alias, which E3167 refuses too.
 ```maxon
 // --- file: pkg/lib.maxon
 typealias Limit = int(0 to 9)
@@ -1638,6 +1638,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3131: pkg/<fragment>:19:30: Cannot cast to 'Quad': a container's elements have a storage layout of their own, so 'Wide' cannot be retagged as one — build the container with the element type you need, or convert it element by element
+error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.slots' names file-private typealias 'Wide' in its type
 ```
 
 <!-- test: a-cast-between-a-library-and-an-authors-same-layout-element-is-a-rebrand -->
@@ -1673,7 +1674,8 @@ end 'main'
 <!-- test: error.a-cast-between-elements-of-two-ranges-is-refused -->
 Two files of one directory each declare a file-private `Limit`, over two ranges of one byte width. `Lows`
 is an `Array` of `pkg/lib.maxon`'s `Limit` and `Highs` an `Array` of `pkg/main.maxon`'s: the elements share
-a name but not a range, so their layouts differ and the cast is refused.
+a name but not a range, so their layouts differ and the cast is refused. The exported field that carries the
+value names a file-private alias, which E3167 refuses too.
 ```maxon
 // --- file: pkg/lib.maxon
 typealias Limit = int(0 to 9)
@@ -1698,6 +1700,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3131: pkg/<fragment>:19:30: Cannot cast to 'Highs': a container's elements have a storage layout of their own, so 'Lows' cannot be retagged as one — build the container with the element type you need, or convert it element by element
+error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.slots' names file-private typealias 'Lows' in its type
 ```
 
 <!-- test: error.a-managed-buffer-of-one-brand-does-not-reach-another-brands-parameter -->

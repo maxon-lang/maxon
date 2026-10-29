@@ -982,10 +982,10 @@ type BagIter implements Iterator with Integer
 	end 'advance'
 end 'BagIter'
 
-export type Bag implements Iterable with (Integer, BagIter)
+type Bag implements Iterable with (Integer, BagIter)
 	var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
@@ -993,7 +993,7 @@ export type Bag implements Iterable with (Integer, BagIter)
 		return BagIter.create()
 	end 'createIterator'
 
-	export function walk() returns Integer
+	function walk() returns Integer
 		var total = 0 as Integer
 
 		for x in self 'loop'
@@ -1004,14 +1004,18 @@ export type Bag implements Iterable with (Integer, BagIter)
 	end 'walk'
 end 'Bag'
 
+export function bagTotal() returns Integer
+	return Bag.create().walk()
+end 'bagTotal'
+
 // --- file: main.maxon
 function main() returns ExitCode
 	let doubled = [1, 2, 3].map(function(x) gives x + x)
 	let c = BagIter.create()
-	return (doubled.count() as Integer + Bag.create().walk() + c.current()) as ExitCode
+	return (doubled.count() as Integer + bagTotal() + c.current()) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:50:63: type 'BagIter' is not exported
-error E3008: <fragment>:49:10: type 'BagIter' is not exported
+error E3008: <fragment>:54:54: type 'BagIter' is not exported
+error E3008: <fragment>:53:10: type 'BagIter' is not exported
 ```

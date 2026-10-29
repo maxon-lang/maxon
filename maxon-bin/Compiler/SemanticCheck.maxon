@@ -3874,7 +3874,7 @@ function validateCall(project Project, module MaxonModule, func IrFunction, sign
 	view sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 
 	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
-		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath, overloadRefused: project.refusedOverloadCalls.contains(opIndex))
+		ordered(argIds) then checkSlottedCall(project, module: module, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath, overloadRefused: project.refusedOverloadCalls.contains(opIndex))
 		refused(failure) then reportArgSlotFailure(project, failure: failure, noun: noun, callRange: callRange, argRanges: argRanges, filePath: filePath)
 	end 'slot'
 end 'validateCall'
@@ -3905,13 +3905,31 @@ function calleeIsRefusedWhereItsDeclarationIsNamed(project Project, signatures P
 	return project.poison.fileFailed(file)
 end 'calleeIsRefusedWhereItsDeclarationIsNamed'
 
+enum RefusedProducers
+	unresolvedCallees
+	anyCallee
+end 'RefusedProducers'
+
 function firstOperandComesFromARefusedDeclaration(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, operands ValueIdArray, readerFilePath FilePath) returns bool
 	let first = try operands.get(0) otherwise return false
 
-	return valueComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, value: first, readerFilePath: readerFilePath)
+	return valueComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, value: first, readerFilePath: readerFilePath, producers: RefusedProducers.unresolvedCallees)
 end 'firstOperandComesFromARefusedDeclaration'
 
-function valueComesFromARefusedDeclaration(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, value ValueId, readerFilePath FilePath) returns bool
+// A refused declaration's recorded signature may be the part that was refused (an ambiguous type
+// name picks one candidate), so a mismatch against the type it gives an argument is the refusal's
+// consequence, not an independent error.
+function argumentComesFromARefusedCallee(project Project, module MaxonModule, func IrFunction, argId ValueId, readerFilePath FilePath) returns bool
+	if project.poison.isEmpty() 'noDeclarationWasRefused'
+		return false
+	end 'noDeclarationWasRefused'
+
+	var signatures = programSignaturesIn(project, asker: "argumentComesFromARefusedCallee")
+
+	return valueComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, value: argId, readerFilePath: readerFilePath, producers: RefusedProducers.anyCallee)
+end 'argumentComesFromARefusedCallee'
+
+function valueComesFromARefusedDeclaration(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, value ValueId, readerFilePath FilePath, producers RefusedProducers) returns bool
 	let producer = try opDefiningValue(module, func: func, value: value) otherwise return false
 
 	if maxonOpCalleeKind(producer) != MaxonCalleeKind.direct 'notADirectCall'
@@ -3921,7 +3939,7 @@ function valueComesFromARefusedDeclaration(project Project, module MaxonModule, 
 	let callee = maxonOpCalleeName(producer)
 	let mint = maxonOpCalleeMint(producer)
 
-	if not calleeIsUnresolved(callee, mint: mint, signatures: signatures, funcSignatures: project.funcSignatures) 'theProducerResolved'
+	if producers == RefusedProducers.unresolvedCallees and not calleeIsUnresolved(callee, mint: mint, signatures: signatures, funcSignatures: project.funcSignatures) 'theProducerResolved'
 		return false
 	end 'theProducerResolved'
 
@@ -3929,7 +3947,9 @@ function valueComesFromARefusedDeclaration(project Project, module MaxonModule, 
 		return true
 	end 'theProducerIsRefused'
 
-	if mint != CalleeMint.resolvedTypeQualifier 'noReceiverToFollow'
+	// `anyCallee` asks about the producer alone: a resolved callee's result type comes from its own
+	// signature, which a refused receiver says nothing about.
+	if producers == RefusedProducers.anyCallee or mint != CalleeMint.resolvedTypeQualifier 'noReceiverToFollow'
 		return false
 	end 'noReceiverToFollow'
 
@@ -6021,8 +6041,8 @@ end 'targetCanHostSubprocess'
 //
 // The two keep checks run before the write check and hand it the positions they refused, so an
 // argument a callee both keeps and writes is refused once, as E3078, and never again as E3159.
-function checkSlottedCall(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argLabels NameRoster, argImmutableNames WriteBlameArray, argIds ValueIdArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath, overloadRefused bool)
-	checkArgTypes(project, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argIds: argIds, argLabels: argLabels, defaultedArgs: defaultedArgs, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
+function checkSlottedCall(project Project, module MaxonModule, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argLabels NameRoster, argImmutableNames WriteBlameArray, argIds ValueIdArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath, overloadRefused bool)
+	checkArgTypes(project, module: module, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argIds: argIds, argLabels: argLabels, defaultedArgs: defaultedArgs, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
 	checkTypeParameterArgs(project, func: func, result: result, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
 	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	let keptReadOnly = checkReadOnlyArgToKeepingParam(func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange)
@@ -6838,7 +6858,7 @@ function argumentRangeOf(args ValueIdArray, argRanges SourceRangeArray, argId Va
 	return fallback
 end 'argumentRangeOf'
 
-function checkArgTypes(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argIds ValueIdArray, argLabels NameRoster, defaultedArgs ParamCount, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
+function checkArgTypes(project Project, module MaxonModule, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argIds ValueIdArray, argLabels NameRoster, defaultedArgs ParamCount, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
 	// ⭐⭐ **A CALL THROUGH A CONCRETE INSTANCE JUDGES ITS ARGUMENTS AGAINST THE INSTANCE VIEW OF EACH
 	// PARAMETER, NOT AGAINST THE SHARED BODY'S DECLARATION VIEW.** The compiler compiles one body per
 	// generic type, so `adopt(other Items)` and `merge(source Self)` are declared in terms the
@@ -6854,6 +6874,10 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, callee 
 		if project.unknownTypeReports.holdsUnknownParameter(callee, position: i as ParamCount) 'itsDeclaredTypeNamesNothing'
 			continue
 		end 'itsDeclaredTypeNamesNothing'
+
+		if argumentComesFromARefusedCallee(project, module: module, func: func, argId: argId, readerFilePath: filePath) 'itsTypeIsTheRefusedCalleesToo'
+			continue
+		end 'itsTypeIsTheRefusedCalleesToo'
 
 		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature"))
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")

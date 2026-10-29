@@ -213,7 +213,7 @@ error E3180: <fragment>:16:10: the arguments of 'larger' give type parameter 'T'
 <!-- test: error.two-files-same-range-limits-give-no-one-type -->
 Three files of one directory each declare a file-private `Limit`: `pkg/a.maxon` and `pkg/b.maxon` over one
 range, `pkg/c.maxon` over another. The first two are still two declarations, so a value of each gives `T`
-two types.
+two types. The exported fields that carry those values name a file-private alias, which E3167 refuses too.
 ```maxon
 // --- file: pkg/a.maxon
 typealias Limit = int(0 to 9)
@@ -264,6 +264,8 @@ end 'main'
 ```
 ```maxoncstderr
 error E3180: pkg/<fragment>:43:11: the arguments of 'larger' give type parameter 'T' no one type: 'Limit' (declared in pkg/a.maxon) and 'Limit' (declared in pkg/b.maxon) share no alias they both implement
+error E3167: pkg/<fragment>:6:18: exported field 'pkg.Ha.v' names file-private typealias 'Limit' in its type
+error E3167: pkg/<fragment>:17:18: exported field 'pkg.Hb.v' names file-private typealias 'Limit' in its type
 ```
 
 <!-- test: error.a-record-that-is-not-equatable -->

@@ -847,7 +847,8 @@ not chosen.
 `api/lib.maxon` and `app/main.maxon` each declare a file-private `Bytes` over their own `Byte`, and those
 are two element types. Neither file sees the other's declaration, so a value of one could reach the other
 only through an exported surface, and the field `Holder.items` is such a surface: E3167 refuses it, naming
-the field by its namespace `api` and the alias as `api/lib.maxon` wrote it.
+the field by its namespace `api` and the alias as `api/lib.maxon` wrote it. The value read from the field
+still meets `app/main.maxon`'s own `Bytes` in an argument check, which E3005 refuses.
 ```maxon
 // --- file: api/lib.maxon
 typealias Byte = int(0 to 1000)
@@ -877,14 +878,15 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: api/<fragment>:7:22: exported field 'api.Holder.items' names file-private typealias 'Bytes' in its type
+error E3005: app/<fragment>:25:9: argument type mismatch for 'b': expected 'app.Bytes', got 'api.Bytes'
 ```
 
 <!-- test: error.a-contested-alias-in-one-module-is-qualified-by-its-file -->
 ### Claimants in ONE module: the refusal still names the field and the alias as written
 The same contest with both declarations in `pkg/`. Both declarations are file-private, which is what lets
 two files of one directory hold one name, and `Holder.items` would be the only way a `pkg/lib.maxon`
-value could reach `pkg/main.maxon`. E3167 refuses the field at its declaration, so the two `Bytes` never
-meet in an argument check.
+value could reach `pkg/main.maxon`. E3167 refuses the field at its declaration, and the two `Bytes` meet in
+an argument check that E3005 refuses.
 ```maxon
 // --- file: pkg/lib.maxon
 typealias Byte = int(0 to 1000)
@@ -914,6 +916,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bytes' in its type
+error E3005: pkg/<fragment>:25:9: argument type mismatch for 'b': expected 'Bytes' (declared in pkg/main.maxon), got 'Bytes' (declared in pkg/lib.maxon)
 ```
 
 <!-- test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller -->

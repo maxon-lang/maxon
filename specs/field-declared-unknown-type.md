@@ -152,11 +152,12 @@ error E3011: <fragment>:7:20: Unknown type 'Nonexistent'
 ```
 
 <!-- test: param-unknown-type-member-access -->
-The FIRST declaration site, met at a MEMBER ACCESS — the one route on which the authority above never
-gets to speak first, because the access is refused at PARSE time, ahead of `resolveTypes`. What the refusal may not do is invent a type: `h` is declared
-`NoSuchTypeAtAll` and nothing else, so a message calling it `int` asserts something the source does
-not say. It is the SAME undeclared-name fact the two cases above report, named by the name the source
-wrote.
+The FIRST declaration site, met at a MEMBER ACCESS — the one route on which the access is refused at
+PARSE time, ahead of `resolveTypes`. The refusal at the access is the consequence of the parameter's
+undeclared type, so it is held and dropped, and only the declaration is reported. What the refusal may
+not do is invent a type: `h` is declared `NoSuchTypeAtAll` and nothing else, so a message calling it
+`int` asserts something the source does not say. It is the SAME undeclared-name fact the two cases
+above report, named by the name the source wrote.
 ```maxon
 
 typealias Small = int(0 to 1000)
@@ -178,7 +179,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: <fragment>:14:9: Unknown type 'NoSuchTypeAtAll'
 error E3011: <fragment>:13:18: Unknown type 'NoSuchTypeAtAll'
 ```
 
@@ -205,7 +205,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: <fragment>:11:41: Unknown type 'NoSuchTypeAtAll'
 error E3011: <fragment>:10:18: Unknown type 'NoSuchTypeAtAll'
 ```
 
@@ -229,7 +228,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: <fragment>:6:11: Unknown type 'NoSuchTypeAtAll'
 error E3011: <fragment>:5:18: Unknown type 'NoSuchTypeAtAll'
 ```
 

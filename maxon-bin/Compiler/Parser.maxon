@@ -827,7 +827,10 @@ export union SourceParseError implements Error
 	// (`return flag` from a function declared `returns Integer`). Renders as E3005 — `Cannot return
 	// 'bool' from function declared to return 'int'` — positioned at the `return`. The declared type
 	// prints as its RESOLVED primitive (see TypeRules' typeTagName).
-	returnTypeMismatch(got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber)
+	//
+	// `origin` names the callee a closure's declared result was offered by, so the refusal is dropped
+	// when that callee's declaration was refused (`ParseStaging.consequenceNamedBy`).
+	returnTypeMismatch(got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber, origin ReceiverOrigin)
 
 	// A FUNCTION VALUE stored into a NON-function place (`slot = dbl` where `slot` holds an
 	// int). Renders as E3005 with the spec's exact text — "cannot assign a value of type 'function' to
@@ -4074,6 +4077,7 @@ end 'ClosureParamOffer'
 // The one `none`, shared: a payload-free union case is still a heap object, and this is the answer for nearly
 // every argument that opens with `function`.
 let noClosureParamOffer = ClosureParamOffer.none
+let noResultOrigin = ReceiverOrigin.unattributed
 
 union PendingClosureParamOffer
 	none
@@ -4081,7 +4085,7 @@ union PendingClosureParamOffer
 end 'PendingClosureParamOffer'
 
 union ClosureResult
-	declared(returnType MaxonType, offeredAlias ByteArray)
+	declared(returnType MaxonType, offeredAlias ByteArray, origin ReceiverOrigin)
 	inferred
 end 'ClosureResult'
 
@@ -4093,9 +4097,16 @@ function closureResultOf(offer ClosureParamOffer) returns ClosureResult
 	end 'offer'
 end 'closureResultOf'
 
+function resultOriginOf(result ClosureResult) returns ReceiverOrigin
+	return match result 'result'
+		declared(_, _, origin) gives origin.clone()
+		inferred gives ReceiverOrigin.unattributed
+	end 'result'
+end 'resultOriginOf'
+
 function offeredAliasOf(result ClosureResult) returns ByteArray
 	return match result 'result'
-		declared(_, offeredAlias) gives offeredAlias.clone()
+		declared(_, offeredAlias, _) gives offeredAlias.clone()
 		inferred gives EmptySourceText
 	end 'result'
 end 'offeredAliasOf'
@@ -10554,12 +10565,12 @@ end 'InferredFieldType'
 
 // A field default's helper has no `return` the author wrote, so its mismatch reads as a plain type
 // mismatch — pinned byte-for-byte by `specs/field-defaults.md`'s `error.inferred-head-mismatch`.
-function returnMismatchError(func IrFunction, got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber) returns SourceParseError
+function returnMismatchError(func IrFunction, got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber, origin ReceiverOrigin) returns SourceParseError
 	if isFieldDefaultHelperName(func.name) 'aFieldDefault'
 		return SourceParseError.typeMismatchExpectedGot("{expected}{expectedNote}", got: "{got}{gotNote}", line: line, column: column)
 	end 'aFieldDefault'
 
-	return SourceParseError.returnTypeMismatch(got, gotNote: gotNote, expected: expected, expectedNote: expectedNote, line: line, column: column)
+	return SourceParseError.returnTypeMismatch(got, gotNote: gotNote, expected: expected, expectedNote: expectedNote, line: line, column: column, origin: origin)
 end 'returnMismatchError'
 
 function tokenKindMayPrecedeAFieldDefaultCast(kind TokenKind, leading bool) returns bool
@@ -18993,6 +19004,7 @@ type FunctionBodyState
 
 	export let functionReturnSpelling as ByteArray
 	export let functionReturnBrand as ByteArray
+	export var resultOrigin as ReceiverOrigin
 
 	// What the body being parsed files for `StorageProvenance` at its `end` (`DeferredProvenance`,
 	// `fileDeferredProvenance`), the module-level `let`s it read among them, which
@@ -19097,6 +19109,7 @@ type FunctionBodyState
 			valueMintedSole: BoolArray.create(),
 			functionReturnSpelling: returnSpelling,
 			functionReturnBrand: returnBrand,
+			resultOrigin: noResultOrigin,
 			deferredProvenance: provenance,
 			enclosingFunctionMayReturnAGlobalAlias: mayReturnAGlobalAlias,
 			captureNames: NameRoster.create(),
@@ -33695,7 +33708,7 @@ export type Parser
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			if self.functionDeclarationAt(q) 'declaration'
 				open.push(OpenedBlockLabel.spelled(self.tokenAt(q + 1).value))
-			end 'declaration' else if self.opensBlockAt(q) or (self.kindAt(q) == TokenKind.if and self.kindAt(q - 1) == TokenKind.then) 'opens'
+			end 'declaration' else if self.opensBlockAt(q) or self.armBlockIfAt(q) 'opens'
 				open.push(self.blockHeaderLabelAt(q))
 			end 'opens' else if self.closesBlockAt(q) 'closes'
 				view innermost = try open.pop() otherwise panic("scanBlockClosers: the walk returns when the outermost block closes, so a closer always has an opener to pop")
@@ -34136,7 +34149,7 @@ export type Parser
 		var depth = 0 as BlockDepth
 
 		while self.kindAt(self.pos) != TokenKind.eof 'scan'
-			if self.functionDeclarationAt(self.pos) or self.opensBlockAt(self.pos) 'opens'
+			if self.functionDeclarationAt(self.pos) or self.opensBlockAt(self.pos) or self.armBlockIfAt(self.pos) 'opens'
 				depth = depth + 1
 			end 'opens' else if self.closesBlockAt(self.pos) 'closes'
 				if depth == 0 'ownEnd'
@@ -34149,6 +34162,12 @@ export type Parser
 			self.advance()
 		end 'scan'
 	end 'advanceToOwnBlockEnd'
+
+	// A block `if` after `then` is refused (E2049) but still closes with its own `end`, which
+	// `opensBlockAt` does not match to an opener; a scan that skips it ends a region one `end` early.
+	function armBlockIfAt(index ElementIndex) returns bool
+		return self.kindAt(index) == TokenKind.if and index > 0 and self.kindAt(index - 1) == TokenKind.then and not self.keywordIsAName(index)
+	end 'armBlockIfAt'
 
 	// ⭐⭐ **E3012 — THE FIRST BINDING THIS FUNCTION DECLARED AND NEVER MENTIONED.** Called at the `end` of
 	// a function, once the whole body has been seen, because "never mentioned" is a fact about the WHOLE
@@ -43000,7 +43019,7 @@ export type Parser
 		// where `checkDeclaredType(named, named)` agrees because `ValueTypeTag.named` is overloaded.
 		match self.declaredSlotVerdict(retTag, gotNameId: self.valueNameId(retVal), declared: declaredTag, declaredNameId: declaredNameId) 'declared'
 			ok then break
-			mismatch then throw returnMismatchError(func, got: self.valueDisplayTypeName(retVal), gotNote: "", expected: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId), expectedNote: "", line: anchor.line, column: anchor.column)
+			mismatch then throw returnMismatchError(func, got: self.valueDisplayTypeName(retVal), gotNote: "", expected: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId), expectedNote: "", line: anchor.line, column: anchor.column, origin: self.bodyState.resultOrigin.clone())
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(self.valueDisplayTypeName(retVal), targetType: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId), line: anchor.line, column: anchor.column)
 
 			// A FUNCTION VALUE returned where a NON-function type is declared — the spec's
@@ -43118,7 +43137,7 @@ export type Parser
 
 		let declaredShown = self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId)
 		let paired = self.pairedDisplays(value, declaredTag: declaredTag, declaredNameId: declaredNameId, declaredBrand: returnBrand, declaredIdentity: declaredReturnName, declaredShown: declaredShown)
-		try self.refuseUnlessDeferred(returnMismatchError(func, got: paired.got, gotNote: paired.gotNote, expected: paired.declared, expectedNote: paired.declaredNote, line: anchor.line, column: anchor.column), value: value)
+		try self.refuseUnlessDeferred(returnMismatchError(func, got: paired.got, gotNote: paired.gotNote, expected: paired.declared, expectedNote: paired.declaredNote, line: anchor.line, column: anchor.column, origin: self.bodyState.resultOrigin.clone()), value: value)
 		return value
 	end 'admitReturnedAggregate'
 
@@ -79508,13 +79527,13 @@ export type Parser
 
 		match offered 'offered'
 			none then return noClosureParamOffer
-			alias(offeredAlias, offeredDeclFile) then return self.offeredClosureParamTypesOf(offeredAlias, readerFilePath: offeredDeclFile, args: args, receiverArgs: receiverArgs)
+			alias(offeredAlias, offeredDeclFile) then return self.offeredClosureParamTypesOf(offeredAlias, readerFilePath: offeredDeclFile, origin: ReceiverOrigin.derivedFrom(singleName(overloadRegistrationBaseName(callee))), args: args, receiverArgs: receiverArgs)
 		end 'offered'
 	end 'closureParamOfferAt'
 
-	function offeredClosureParamTypesOf(offeredAlias ByteArray, readerFilePath FilePath, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
+	function offeredClosureParamTypesOf(offeredAlias ByteArray, readerFilePath FilePath, origin ReceiverOrigin, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
 		match self.functionAliasMeantFrom(offeredAlias, readerFilePath: readerFilePath) 'alias'
-			declared(alias) then return self.offeredClosureParamTypes(alias, aliasName: offeredAlias, args: args, receiverArgs: receiverArgs)
+			declared(alias) then return self.offeredClosureParamTypes(alias, aliasName: offeredAlias, origin: origin, args: args, receiverArgs: receiverArgs)
 			undeclared then panic("closureParamOfferAt: '{String.from(offeredAlias)}' was offered only after `namesADeclaredFunctionAlias` found it declared")
 		end 'alias'
 	end 'offeredClosureParamTypesOf'
@@ -79539,7 +79558,7 @@ export type Parser
 	// alias's declaring file and fixed through the receiver. A parameter type still naming a type parameter this
 	// body does not declare — bare, or as a type argument (`Array with T`) — would type the closure against a
 	// binding nothing here supplies, so it withholds.
-	function offeredClosureParamTypes(alias FunctionTypeAlias, aliasName ByteArray, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
+	function offeredClosureParamTypes(alias FunctionTypeAlias, aliasName ByteArray, origin ReceiverOrigin, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
 		var paramTypes = MaxonTypeArray.create()
 
 		for param in alias.paramTypes 'eachParam'
@@ -79555,18 +79574,18 @@ export type Parser
 
 		let result = match maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames) 'declaredReturn'
 			void gives ClosureResult.inferred
-			value(inner) gives self.declaredClosureResult(self.slotTypeThroughCallReceiver(self.repairSweptType(inner, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: alias.declFilePath), offeredAlias: self.signatures.declaredIdentityOfSpelling(alias.name, declFilePath: alias.declFilePath))
+			value(inner) gives self.declaredClosureResult(self.slotTypeThroughCallReceiver(self.repairSweptType(inner, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: alias.declFilePath), offeredAlias: self.signatures.declaredIdentityOfSpelling(alias.name, declFilePath: alias.declFilePath), origin: origin)
 		end 'declaredReturn'
 
 		return ClosureParamOffer.offered(paramTypes, result: result, aliasName: aliasName.clone())
 	end 'offeredClosureParamTypes'
 
-	function declaredClosureResult(declared MaxonType, offeredAlias ByteArray) returns ClosureResult
+	function declaredClosureResult(declared MaxonType, offeredAlias ByteArray, origin ReceiverOrigin) returns ClosureResult
 		if tagIsUnresolved(maxonTypeTag(declared)) or self.namesTypeParameterOutOfScope(declared) 'nothingThisBodyCanHold'
 			return ClosureResult.inferred
 		end 'nothingThisBodyCanHold'
 
-		return ClosureResult.declared(declared, offeredAlias: offeredAlias.clone())
+		return ClosureResult.declared(declared, offeredAlias: offeredAlias.clone(), origin: origin.clone())
 	end 'declaredClosureResult'
 
 	// A slot declared in a shared generic body, read through this call's receiver when it has one.
@@ -79625,7 +79644,7 @@ export type Parser
 		end 'noClosureToOffer'
 
 		match self.functionAliasForName(self.internedName(typeNameIdOf(declared))) 'alias'
-			declared(alias) then self.stateClosureParamOfferAt(valueStart, offer: self.offeredClosureParamTypes(alias, aliasName: self.internedName(typeNameIdOf(declared)), args: ValueIdArray.create(), receiverArgs: 0))
+			declared(alias) then self.stateClosureParamOfferAt(valueStart, offer: self.offeredClosureParamTypes(alias, aliasName: self.internedName(typeNameIdOf(declared)), origin: ReceiverOrigin.unattributed, args: ValueIdArray.create(), receiverArgs: 0))
 			undeclared then break
 		end 'alias'
 	end 'stateClosureOfferOfDeclaredType'
@@ -90757,14 +90776,14 @@ export type Parser
 
 	function closurePlaceholderReturn(declaredResult ClosureResult) returns MaxonReturnType
 		return match declaredResult 'result'
-			declared(returnType, _) gives MaxonReturnType.value(returnType.clone())
+			declared(returnType, _, _) gives MaxonReturnType.value(returnType.clone())
 			inferred gives MaxonReturnType.value(MaxonType.unresolved)
 		end 'result'
 	end 'closurePlaceholderReturn'
 
 	function parseClosureBody(lifted IrFunction, block IrBlock, declaredResult ClosureResult, givesTok Token) returns MaxonType throws SourceParseError
 		match declaredResult 'result'
-			declared(returnType, _) then return try self.parseDeclaredClosureBody(lifted, block: block, returnType: returnType, givesTok: givesTok)
+			declared(returnType, _, _) then return try self.parseDeclaredClosureBody(lifted, block: block, returnType: returnType, givesTok: givesTok)
 			inferred then return try self.parseInferredClosureBody(lifted, block: block, givesTok: givesTok)
 		end 'result'
 	end 'parseClosureBody'
@@ -90899,6 +90918,7 @@ export type Parser
 		self.recordValueType(MaxonType.integer)
 		self.bodyState.bodyStart = self.pos
 		self.bodyState.outerBodyStart = savedBody.outerBodyStart
+		self.bodyState.resultOrigin = resultOriginOf(declaredResult)
 		self.bodyState.boundParams = savedBody.boundParams
 		self.seedCellLocalNames(paramNames)
 		try self.bindParameters(lifted, byRef: allByValueConvention, consume: self.signatures.consumeOf(closureName), paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
