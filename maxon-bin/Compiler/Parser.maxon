@@ -17101,6 +17101,13 @@ end 'SizedAccessor'
 union FixedArrayAccessProof
 	notProven
 	proven(accessor SizedAccessor)
+
+	function isProven() returns bool
+		return match self 'proof'
+			notProven gives false
+			proven gives true
+		end 'proof'
+	end 'isProven'
 end 'FixedArrayAccessProof'
 
 module function sizedAccessorOf(signatures ProgramSignatures, receiverTag ValueTypeTag, receiverNameId TypeNameId, callee ByteArray) returns SizedAccessor throws AbsentError
@@ -95077,7 +95084,7 @@ export type Parser
 				// column are both in hand here, which is what makes the position answerable this early.
 				let column = args.count() as ParamCount
 				try requireCallArgumentFitsTheAbi(column, anchor: valueTok)
-				let passing = argumentPassingAt(conventions, argIndex: column, label: label)
+				let passing = self.sizedAccessorPassing(target, args: args, declared: argumentPassingAt(conventions, argIndex: column, label: label))
 				let byRefPosition = passing == ArgumentPassing.byReference
 				let readsAPlace = passing == ArgumentPassing.undecided
 
@@ -95542,6 +95549,22 @@ export type Parser
 		return try self.materializeByRefScratchCell(place.value, cellType: self.typeOf(place.value), anchor: place.anchor)
 	end 'placeStorageFor'
 
+	// A by-reference position of `FixedArray.get`/`set` exists only because the bare-name forwarding closure
+	// (`SignatureIndex.closeByRefForwarding`) widened it, and a cell bound at argument time would hide a
+	// constant index from `fixedArrayAccessProof`. Deferring the position lets a proven access, which runs
+	// the unchecked primitive, pass plain values, while an unproven one is bound to the cell its callee takes.
+	function sizedAccessorPassing(target CallArgTarget, args ValueIdArray, declared ArgumentPassing) returns ArgumentPassing
+		if declared != ArgumentPassing.byReference 'notByReference'
+			return declared
+		end 'notByReference'
+
+		let callee = try target.declaredName() otherwise return declared
+		let receiver = try args.get(0) otherwise return declared
+		_ = try sizedAccessorOf(self.signatures, receiverTag: self.tagOf(receiver), receiverNameId: self.valueNameId(receiver), callee: callee) otherwise return declared
+
+		return ArgumentPassing.undecided
+	end 'sizedAccessorPassing'
+
 	function byRefConventionsOfTarget(target CallArgTarget) returns ByRefConventionArray
 		match target 'target'
 			witnessDispatch(declarations) then return conventionsOf(declarations)
@@ -95965,7 +95988,7 @@ export type Parser
 		// it with no change to any of them.
 		let defaultedArgs = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
 		view declarations = self.declarationsTheCallMayBind(callee, places: places, pick: pick, argLabels: argLabels)
-		let placeBindings = try self.bindPlaceArguments(places, declarations: declarations, args: args, argLabels: argLabels)
+		let placeBindings = noPlaceBindings if accessProof.isProven() else try self.bindPlaceArguments(places, declarations: declarations, args: args, argLabels: argLabels)
 		self.widenArgsToInterfaceHandles(callee, pick: pick, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
 		try self.admitOperandAliasSetArgs(callee, pick: pick, args: args, argLabels: argLabels, anchor: anchor)
 		let bound = self.boundReturnOf(callee, pick: pick.clone())

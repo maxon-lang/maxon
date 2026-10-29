@@ -971,6 +971,8 @@ end 'HiddenArgumentSource'
 
 union ByReferenceParamSource
 	indirectCallee
+	// A runtime primitive's arguments, which are always values whatever the source call's ABI.
+	valueArguments
 	directCallee(let name ByteArray)
 end 'ByReferenceParamSource'
 
@@ -5130,7 +5132,7 @@ type MaxonToStdLowering
 			set gives ManagedSetUncheckedName
 		end 'accessor'
 
-		let wordArgs = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
+		let wordArgs = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.valueArguments, dstBlock: dstBlock)
 		self.appendRuntimeCall(result, callee: primitive, args: wordArgs, dstBlock: dstBlock)
 	end 'lowerSlottedOrProvenCall'
 
@@ -6587,7 +6589,8 @@ type MaxonToStdLowering
 		end 'everyArgAlreadyInItsDomain'
 
 		let byRefParams = match byReference 'byRefSource'
-			indirectCallee gives NoParamPositions
+			indirectCallee or
+			valueArguments gives NoParamPositions
 			directCallee(callee) gives self.funcNames.byReferenceParamsOf(callee)
 		end 'byRefSource'
 

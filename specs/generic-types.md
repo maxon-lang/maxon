@@ -4746,12 +4746,9 @@ refused
 ```
 
 <!-- test: a-generic-factory-pushes-a-type-parameter-argument-it-also-reassigns -->
-<!-- process: own -->
 A generic factory that reassigns its `T` parameter and pushes it into an array it builds owns neither the
 caller's cell nor a second reference to the pushed value: the caller's variable and the array each keep what
-they hold, and the leak gate is clean. It runs alone because, batched with
-`a-float-element-is-admitted-on-a-buffer-base`, a type member that reassigns its parameter loses that
-program's `FixedArray` index proof (a false E3057).
+they hold, and the leak gate is clean.
 ```maxon
 function longText(tag String) returns String
 	var sb = StringBuilder.create()
@@ -4804,11 +4801,8 @@ kept payload long enough to allocate
 ```
 
 <!-- test: a-concrete-factory-pushes-a-string-argument-it-also-reassigns -->
-<!-- process: own -->
 The concrete twin of the case above: a `String` parameter that is reassigned and then pushed into an array the
-factory builds, with the caller's variable and the array each keeping what they hold. It runs alone because,
-batched with `a-float-element-is-admitted-on-a-buffer-base`, a type member that reassigns its parameter loses
-that program's `FixedArray` index proof (a false E3057).
+factory builds, with the caller's variable and the array each keeping what they hold.
 ```maxon
 function longText(tag String) returns String
 	var sb = StringBuilder.create()
@@ -5079,11 +5073,8 @@ end 'main'
 ```
 
 <!-- test: a-generic-factory-stores-a-type-parameter-argument-it-also-reassigns -->
-<!-- process: own -->
 A generic factory that reassigns its `T` parameter and then stores it in the record it builds leaves the caller's
-variable and the record each holding their own reference, and the leak gate is clean. It runs alone because,
-batched with `a-float-element-is-admitted-on-a-buffer-base`, a type member that reassigns its parameter loses
-that program's `FixedArray` index proof (a false E3057).
+variable and the record each holding their own reference, and the leak gate is clean.
 ```maxon
 function longText(tag String) returns String
 	var sb = StringBuilder.create()

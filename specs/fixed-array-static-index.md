@@ -777,3 +777,135 @@ end 'main'
 ```exitcode
 27
 ```
+
+<!-- test: a-proven-index-survives-a-member-that-reassigns-a-parameter -->
+A type member that reassigns a parameter turns pass-by-reference on for the whole program, and the
+bare-name match that decides which library parameters follow reaches `FixedArray.get`'s `index`. The
+literal `0` then travels in a scratch cell, and the proof must still be read off the literal the author wrote.
+The member is never called.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Reals = Array with Real
+typealias Vec2 = FixedArray with 2 Real
+
+type Hold
+	function of(first String, replacement String) returns String
+		first = replacement
+		return first
+	end 'of'
+end 'Hold'
+
+function main() returns ExitCode
+	var a = Reals.create()
+	a.push(1.5)
+	var v = Vec2.create()
+	v.set(0, value: 3.5)
+	return trunc((try a.get(0) otherwise 0.0) + v.get(0))
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-proven-read-and-write-survive-members-named-like-the-accessors -->
+Members named `get` and `set` that reassign a parameter make `FixedArray.get`'s `index` and
+`FixedArray.set`'s `index` and `value` by-reference positions. The access stays total, and the constant,
+the ranged parameter and the stored float all arrive at the runtime primitive as values, not as the address
+of the cell that carried them.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Whole = int(i64.min to i64.max)
+typealias Slot = int(0 to 1) implements ElementIndex
+typealias Reals = FixedArray with 2 Real
+typealias Wholes = FixedArray with 2 Whole
+
+type Chooser
+	function get(first String, replacement String) returns String
+		first = replacement
+		return first
+	end 'get'
+
+	function set(first String, replacement String) returns String
+		first = replacement
+		return first
+	end 'set'
+end 'Chooser'
+
+function throughSlot(slot Slot) returns Whole
+	var w = Wholes.create()
+	w.set(slot, value: 7)
+	return w.get(slot)
+end 'throughSlot'
+
+function main() returns ExitCode
+	var reals = Reals.create()
+	reals.set(1, value: 2.5)
+	var wholes = Wholes.create()
+	wholes.set(0, value: 4)
+	let scaled = trunc(reals.get(1) * 2.0) as Whole
+	return scaled + wholes.get(0) + throughSlot(1)
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: an-unproven-index-is-handed-to-the-accessor-in-its-cell -->
+An index the compiler cannot place inside the fixed array still calls the accessor, and the accessor's widened
+`index` position receives the cell the call site spilled the index into: the read and the write both round-trip.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Reals = FixedArray with 2 Real
+
+type Hold
+	function of(first String, replacement String) returns String
+		first = replacement
+		return first
+	end 'of'
+end 'Hold'
+
+function store(v Reals, at ElementIndex, value Real)
+	try v.set(at, value: value) otherwise return
+end 'store'
+
+function load(v Reals, at ElementIndex) returns Real
+	return try v.get(at) otherwise 0.0
+end 'load'
+
+function main() returns ExitCode
+	var v = Reals.create()
+	store(v, at: 1, value: 6.5)
+	return trunc(load(v, at: 1))
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: error.an-unproven-index-keeps-its-try-beside-a-member-that-reassigns-a-parameter -->
+Reading the proof off the written literal must not widen it: an index the compiler cannot place inside the
+fixed array still needs `try` when the program takes parameters by reference.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Vec2 = FixedArray with 2 Real
+
+type Hold
+	function of(first String, replacement String) returns String
+		first = replacement
+		return first
+	end 'of'
+end 'Hold'
+
+function read(v Vec2, at ElementIndex) returns Real
+	return v.get(at)
+end 'read'
+
+function main() returns ExitCode
+	var v = Vec2.create()
+	v.set(0, value: 3.5)
+	return trunc(read(v, at: 0))
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:13:11: throwing function requires try: 'get' — its index is not proven inside the fixed array's 2 elements; wrap it as `try … otherwise …`, or give the index a ranged type within `int(0 to 1)`
+```
