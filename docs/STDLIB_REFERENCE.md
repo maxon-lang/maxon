@@ -1825,7 +1825,6 @@ union InputSource
 	bytes(data String)
 	file(path FilePath)
 	hold
-	delayed(data String)
 end 'InputSource'
 
 union OutputDestination
@@ -1854,7 +1853,6 @@ override's spelling, and a map that names one variable in two spellings makes th
 | `bytes(data)` | `data` whole, NUL bytes included, then end of input |
 | `file(path)` | The file's contents |
 | `hold` | A pipe that stays open and silent until the child exits, so a read blocks |
-| `delayed(data)` | Like `hold` until about one second after the child's first stdout byte, then `data` whole and end of input. Requires `standardOutput` to be `collect`; any other pairing throws `spawnFailed` before spawning. |
 
 | OutputDestination | The stream |
 |-------------------|------------|
@@ -1863,7 +1861,7 @@ override's spelling, and a map that names one variable in two spellings makes th
 | `collect(limitBytes)` | Captured into `CollectedOutput`, truncated at the `limitBytes` limit |
 | `file(path)` | Written to a file |
 
-A run feeds `bytes` and `delayed` input while it drains the child's output, so a child that writes before it
+A run feeds `bytes` input while it drains the child's output, so a child that writes before it
 reads still receives its whole input, and a `timeoutMs` deadline fires while input is still pending.
 
 A child inherits only the three standard streams its own configuration gives it; the files this process

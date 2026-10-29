@@ -58,18 +58,14 @@ public typealias ByteLimit = int(0 to u64.max)
 // `SubpStdinHold` (`maxon-bin/Compiler/Runtime/GtRuntime.maxon`), and a value the language can spell
 // must not answer to a second name inside one compiler.
 //
-// ⚠ ALL THREE EMITTERS DECODE `hold` AND `delayed` — the bootstrap's x64 and arm64 emitters and the
-// compiler's `emitSubpStdinSetup`. `emitSubpStdinKindWantsPipe` is the ONE place the pipe question is
-// asked, and `SubpSlotStdinFeedAt` carries the not-before time. ⇒ **the divergence to watch for is a
-// NEW kind added to this enum and to fewer than three emitters**, which is what the two
-// `…WantingPipe` sets exist to make a one-line change.
+// ⚠ `emitSubpStdinKindWantsPipe` is the ONE place the compiler's runtime asks which kinds want a pipe.
+// ⇒ **the divergence to watch for is a NEW kind added to this enum and not to that set.**
 enum StdinKind
 	none = 0
 	inherit = 1
 	bytes = 2
 	file = 3
 	hold = 4
-	delayed = 5
 end 'StdinKind'
 
 // Stdout / stderr discriminator passed across the builtin boundary. Shared
@@ -229,12 +225,6 @@ end 'SpawnOperands'
 ///   reaped. A read in the child therefore BLOCKS IN THE KERNEL instead of
 ///   seeing EOF, which is what `none` and a spent `bytes` payload both give.
 ///
-/// - `delayed(s)` — `hold`'s pipe until about a second after the child's FIRST
-///   STDOUT BYTE, then `s`, then close. A read in the child BLOCKS for that
-///   long and then COMPLETES, so the child both enters a real kernel wait and
-///   still terminates on its own. A child that never writes to stdout is never
-///   fed.
-///
 /// ⭐ `hold` IS THE ONLY ARM THAT LEAVES THE CHILD BLOCKED RATHER THAN ANSWERED,
 /// and it exists because nothing else can express that. `none` opens the null
 /// device (instant EOF), `bytes("")` writes nothing and then closes (also EOF —
@@ -243,31 +233,8 @@ end 'SpawnOperands'
 /// not a property any caller controls. A caller that needs a child to be stuck
 /// in a real blocking syscall has this and no other way to ask for it.
 ///
-/// ⭐⭐ `delayed` EXISTS BECAUSE `hold` ALONE CANNOT BE ASSERTED ON. A child parked
-/// forever can only ever end at its spawner's timeout, so the only observation
-/// `hold` supports is "it did not finish" — which is also what a hang, a crash
-/// loop and a deadlock look like. `delayed` ends the wait, so the child exits
-/// normally and what it PRINTED, and in what ORDER against whatever ran while it
-/// was parked, becomes the observable.
-///
-/// ⭐ THE CLOCK STARTS AT THE CHILD'S FIRST STDOUT BYTE, NOT AT THE SPAWN, so a
-/// child slow to reach its first print — an exec stall, a page-in, a deliberate
-/// sleep — is fed no earlier for it and its read still blocks for the full
-/// delay. The parent can only see that byte when it is collecting stdout, so
-/// `delayed` REQUIRES `OutputDestination.collect` on `standardOutput`;
-/// `runConfiguration` refuses any other pairing as `spawnFailed` before any
-/// spawn, because the alternative is a feed that never arms and a child that
-/// sits until `timeoutMs` — for ever at 0.
-///
-/// ⚠ THE DELAY IS FIXED AND THE CALLER CANNOT NAME IT (`SubpStdinDelayedFeedMs`,
-/// in the runtime that performs the write). The spawn contract carries a `limit`
-/// alongside stdout's and stderr's kinds and NONE alongside stdin's, so there is
-/// no slot to put a per-call duration in; a caller-chosen delay is a change to
-/// the builtin's arity, which is declared in the parser as well as in the
-/// emitter. The payload IS the caller's, so only the duration is fixed.
-///
 /// `file` routes its path through the `subprocessSpawn` stdio triple; `bytes`
-/// and `delayed` queue their payload once the spawn answers
+/// queues its payload once the spawn answers
 /// (`__Builtins.subprocessQueueStdin`), so it reaches the child whole.
 public union InputSource
 	none
@@ -275,7 +242,6 @@ public union InputSource
 	bytes(data String)
 	file(path FilePath)
 	hold
-	delayed(data String)
 end 'InputSource'
 
 /// Where the child's stdout (or stderr) is sent.
@@ -531,7 +497,6 @@ public type Subprocess
 	/// payloads, spawn, wait-collect, decode the result struct, release.
 	public static function runConfiguration(config Configuration) returns CollectedOutput throws SubprocessError
 		try requireNulFreeStandardStreams(config.standardInput, stdout: config.standardOutput, stderr: config.standardError)
-		try requireDelayedFeedObservable(config.standardInput, stdout: config.standardOutput)
 		let operands = try SpawnOperands.prepare(config.executable, arguments: config.arguments, workingDirectory: config.workingDirectory, environment: config.environment)
 		let stdinTriple = stdinTripleFromSource(config.standardInput)
 		let stdoutTriple = outputTripleFromDestination(config.standardOutput)
@@ -596,10 +561,9 @@ end 'Subprocess'
 
 // Stdio-kind discriminator carried into spawn. Narrowed to the values the
 // contract defines so an out-of-range value can't be produced by an accidental
-// assignment. The upper bound is stdin's, which has two kinds more than the
-// output side (`StdinKind.hold`, `StdinKind.delayed`); an output slot never
-// produces either.
-public typealias StdioKindValue = int(0 to 5)
+// assignment. The upper bound is stdin's, which has one kind more than the
+// output side (`StdinKind.hold`); an output slot never produces it.
+public typealias StdioKindValue = int(0 to 4)
 
 // Spawn-flags bitfield. Bits past the documented 3 are reserved.
 typealias SpawnFlagsValue = int(0 to 15)
@@ -611,9 +575,9 @@ typealias SpawnFlagsValue = int(0 to 15)
 /// type-checked at the source language level; the conversion to `cstring`
 /// happens at the spawn call site via `.cstr()`. For kinds whose contract
 /// has no payload (e.g. inherit/discard), pass the empty string and the
-/// runtime treats the leading-NUL cstring as "no payload". `bytes` and
-/// `delayed` pass it empty too: a `cstring` ends at its first NUL, so their
-/// payload is queued after the spawn (`queueStdinPayload`).
+/// runtime treats the leading-NUL cstring as "no payload". `bytes` passes it
+/// empty too: a `cstring` ends at its first NUL, so its payload is queued
+/// after the spawn (`queueStdinPayload`).
 public type StdioRuntimeTriple
 	public var kind as StdioKindValue
 	public var data as String
@@ -748,7 +712,6 @@ function requireNulFreeInputFile(source InputSource) throws SubprocessError
 		none or
 		inherit or
 		bytes or
-		delayed or
 		hold then return
 	end 'in'
 end 'requireNulFreeInputFile'
@@ -885,32 +848,6 @@ function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitI
 	end 's'
 end 'terminationStatusFromKind'
 
-/// `InputSource.delayed` clocks its feed from the child's first stdout byte, which only a collected stdout
-/// lets the parent see. Every other pairing is refused before any spawn, because it would never arm.
-let delayedFeedNeedsCollectedStdout = "InputSource.delayed needs OutputDestination.collect on stdout: the line is fed after the child's first stdout byte, which no other destination lets the parent observe"
-
-function requireDelayedFeedObservable(stdin InputSource, stdout OutputDestination) throws SubprocessError
-	let feedNeedsStdout = match stdin 'in'
-		delayed gives true
-		none or
-		inherit or
-		bytes or
-		file or
-		hold gives false
-	end 'in'
-
-	if not feedNeedsStdout 'unaffected'
-		return
-	end 'unaffected'
-
-	match stdout 'out'
-		collect then return
-		discard or
-		inherit or
-		file then throw SubprocessError.spawnFailed(delayedFeedNeedsCollectedStdout)
-	end 'out'
-end 'requireDelayedFeedObservable'
-
 function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
 	return match src 's'
 		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, data: "", limit: 0)
@@ -918,14 +855,12 @@ function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
 		bytes gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, data: "", limit: 0)
 		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, data: path.path, limit: 0)
 		hold gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: 0)
-		delayed gives StdioRuntimeTriple.create(StdinKind.delayed.rawValue, data: "", limit: 0)
 	end 's'
 end 'stdinTripleFromSource'
 
 function queueStdinPayload(handle StreamingHandle, source InputSource)
 	match source 's'
 		bytes(data) then queuePayload(handle, data: data)
-		delayed(data) then queuePayload(handle, data: data)
 		none or
 		inherit or
 		file or

@@ -15,6 +15,10 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `InputSource.delayed(data)` is removed, with the fixed one-second stdin feed it stood for.
+  Fix: to feed a child after it prints a marker, run it as a `StreamingSubprocess`, read its stdout with
+  `tryReadStdoutLine()` until the marker line, then `writeStdinLine(...)` and `closeStdin()`; where the
+  child only needs to block on stdin, use `InputSource.hold`.
 - A `with` list names at most 64 type arguments; a longer one is E2015.
   Fix: group the arguments into a smaller number of types, such as a record type passed as one argument.
 - A call whose argument wears an alias binds the overload declared over that alias, even where another

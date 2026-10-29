@@ -196,33 +196,6 @@ end 'main'
 0
 ```
 
-<!-- test: subprocess-delayed-stdin-needs-collected-stdout -->
-<!-- unsupported-targets: wasm32-wasi -->
-`InputSource.delayed` writes its line one second after the child's FIRST STDOUT BYTE, and the parent can
-only see that byte when it is collecting stdout. Any other destination would leave the feed with nothing
-to anchor on, so the configuration is refused up front, as `spawnFailed` with the reason below — BEFORE
-any spawn, which the executable name proves: it exists nowhere, and a spawn attempt would have failed on
-it with a different reason.
-```maxon
-function main() returns ExitCode
-	var c = Configuration.create(Executable.name("definitely-not-a-real-binary-xyzzy"))
-	c.standardInput = InputSource.delayed("hello\n")
-	c.standardOutput = OutputDestination.discard
-	try Subprocess.runConfiguration(c) otherwise (e) 'refused'
-		print("{e.displayReason()}\n")
-		return 0
-	end 'refused'
-	print("spawned\n")
-	return 1
-end 'main'
-```
-```stdout
-spawn failed: InputSource.delayed needs OutputDestination.collect on stdout: the line is fed after the child's first stdout byte, which no other destination lets the parent observe
-```
-```exitcode
-0
-```
-
 <!-- test: subprocess-streaming-roundtrip -->
 <!-- unsupported-targets: wasm32-wasi -->
 `StreamingSubprocess` keeps the child's pipes open and drives stdio
@@ -1962,8 +1935,7 @@ prefix holds x
 <!-- unsupported-targets: wasm32-wasi -->
 A stdin payload is bytes, and a zero byte is one of them: every door that feeds a child's stdin delivers a
 payload holding a NUL whole, never cut at the NUL. The child is this case's own executable, which reads its
-stdin to the end and prints the count and the value of every byte it received. The `delayed` child prints a
-line first, because that door feeds nothing until the child's first stdout byte.
+stdin to the end and prints the count and the value of every byte it received.
 ```maxon
 function readAllStdin() returns String
 	var received = ByteArray.create()
@@ -1993,10 +1965,6 @@ function main() returns ExitCode
 	let args = CommandLine.args()
 
 	if args.count() > 1 'childMode'
-		if (try args.get(1) otherwise "") == "ready" 'announce'
-			print("ready\n")
-		end 'announce'
-
 		print("{readAllStdin()}\n")
 		return 0
 	end 'childMode'
@@ -2011,19 +1979,11 @@ function main() returns ExitCode
 	let fedResult = try fed.run() otherwise return 3
 	print("bytes: {fedResult.stdout}")
 
-	var readyArgv = StringArray.create()
-	readyArgv.push("ready")
-	var held = Configuration.create(exe)
-	held.arguments = readyArgv
-	held.standardInput = InputSource.delayed("a\0b")
-	let heldResult = try held.run() otherwise return 4
-	print("delayed: {heldResult.stdout}")
-
-	var streamed = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 5
-	try streamed.writeStdinLine("a\0b") otherwise return 6
+	var streamed = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 4
+	try streamed.writeStdinLine("a\0b") otherwise return 5
 	streamed.closeStdin()
-	let streamedLine = try streamed.readStdoutLine() otherwise return 7
-	_ = try streamed.wait() otherwise return 8
+	let streamedLine = try streamed.readStdoutLine() otherwise return 6
+	_ = try streamed.wait() otherwise return 7
 	streamed.release()
 	print("streamed: {streamedLine}\n")
 	return 0
@@ -2034,8 +1994,6 @@ end 'main'
 ```
 ```stdout
 bytes: 3 bytes [97 0 98]
-delayed: ready
-3 bytes [97 0 98]
 streamed: 4 bytes [97 0 98 10]
 ```
 

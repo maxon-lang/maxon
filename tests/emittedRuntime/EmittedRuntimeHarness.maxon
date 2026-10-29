@@ -127,12 +127,151 @@ export function buildStagedForHost(staged FilePath, caseLabel String) returns Fi
 	return executable
 end 'buildStagedForHost'
 
-export function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs DurationMs, standardInput InputSource) returns CollectedOutput
+function environmentWithProcessors(procs ProcessorCount) returns Environment
 	var overrides = EnvMap.create()
 	try overrides.insert(MaxProcsVariableName, value: "{procs}") otherwise panic("emitted-runtime tests: the gate could not run — could not name {MaxProcsVariableName} in the child's environment.")
 
-	return spawnIn(Executable.path(executable), arguments: StringArray.create(), staged: staged, what: "the staged program at {executable.toString()}", environment: Environment.inheritUpdating(overrides), standardInput: standardInput, timeoutMs: deadlineMs)
+	return Environment.inheritUpdating(overrides)
+end 'environmentWithProcessors'
+
+export function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs DurationMs, standardInput InputSource) returns CollectedOutput
+	return spawnIn(Executable.path(executable), arguments: StringArray.create(), staged: staged, what: "the staged program at {executable.toString()}", environment: environmentWithProcessors(procs), standardInput: standardInput, timeoutMs: deadlineMs)
 end 'runStagedForHost'
+
+let FeedPollMs = 5
+let DeadlineKillGraceMs = 1000
+
+export union StagedRunEnd
+	exited(code ExitInt)
+	killedAtDeadline
+end 'StagedRunEnd'
+
+export type FedRun
+	export let ending as StagedRunEnd
+	export let stdout as String
+	export let stderr as String
+
+	export static function create(ending StagedRunEnd, stdout String, stderr String) returns FedRun
+		return FedRun{ending: ending, stdout: stdout, stderr: stderr}
+	end 'create'
+end 'FedRun'
+
+type FedChild
+	var child as StreamingSubprocess
+	let afterLine as String
+	let feed as String
+	var stdout as String
+	var fed as bool
+
+	static function spawn(executable FilePath, staged FilePath, procs ProcessorCount, afterLine String, feed String) returns FedChild
+		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(executable), arguments: StringArray.create(), workingDirectory: staged, environment: environmentWithProcessors(procs)) otherwise (e) 'spawnFailed'
+			panic("emitted-runtime tests: the gate could not run — could not spawn the staged program at {executable.toString()} ({e.displayReason()}).")
+		end 'spawnFailed'
+
+		return FedChild{child: child, afterLine: afterLine, feed: feed, stdout: "", fed: false}
+	end 'spawn'
+
+	function pollExit() returns ExitPoll
+		return self.child.pollExit()
+	end 'pollExit'
+
+	function drainBuffered()
+		var drained = false
+
+		while not drained 'eachBufferedLine'
+			match self.child.tryReadStdoutLine() 'polled'
+				line(text) then self.take(text)
+				none then drained = true
+			end 'polled'
+		end 'eachBufferedLine'
+	end 'drainBuffered'
+
+	function take(text String)
+		self.stdout.append("{text}{LineSeparator}")
+
+		if self.fed or text != self.afterLine 'nothingToFeed'
+			return
+		end 'nothingToFeed'
+
+		try self.child.writeStdinLine(self.feed) otherwise (e) 'feedFailed'
+			panic("emitted-runtime tests: the gate could not run — could not feed the child after it printed `{self.afterLine}` ({e.displayReason()}).")
+		end 'feedFailed'
+
+		self.child.closeStdin()
+		self.fed = true
+	end 'take'
+
+	function killAtDeadline()
+		_ = try self.child.waitWithTimeout(DeadlineKillGraceMs) otherwise 0
+	end 'killAtDeadline'
+
+	function finish(ending StagedRunEnd) returns FedRun
+		let heard = "{self.stdout}{drainToEndOfStream(self.child, stderr: false)}"
+		let errors = drainToEndOfStream(self.child, stderr: true)
+
+		self.child.release()
+
+		return FedRun.create(ending, stdout: heard, stderr: errors)
+	end 'finish'
+end 'FedChild'
+
+function readOneLine(child StreamingSubprocess, stderr bool) returns String throws SubprocessError
+	if stderr 'theErrorStream'
+		return try child.readStderrLine()
+	end 'theErrorStream'
+
+	return try child.readStdoutLine()
+end 'readOneLine'
+
+function drainToEndOfStream(child StreamingSubprocess, stderr bool) returns String
+	var collected = ""
+
+	while true 'untilEndOfStream'
+		let line = try readOneLine(child, stderr: stderr) otherwise (e) 'readFailed'
+			if not e.endedTheStream() 'aReadFailure'
+				panic("emitted-runtime tests: the gate could not run — could not read the staged program's output ({e.displayReason()}).")
+			end 'aReadFailure'
+
+			break
+		end 'readFailed'
+
+		collected.append("{line}{LineSeparator}")
+	end 'untilEndOfStream'
+
+	return collected
+end 'drainToEndOfStream'
+
+function endOfRun(polled ExitPoll) returns StagedRunEnd
+	return match polled 'ended'
+		running gives StagedRunEnd.killedAtDeadline
+		exited(code) gives StagedRunEnd.exited(code)
+	end 'ended'
+end 'endOfRun'
+
+export function runStagedFedAfterLine(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs DurationMs, afterLine String, feed String) returns FedRun
+	var run = FedChild.spawn(executable, staged: staged, procs: procs, afterLine: afterLine, feed: feed)
+	let started = Clock.nowMs()
+	var finished = false
+
+	while not finished and Clock.elapsedMs(started) < deadlineMs 'pumping'
+		let polled = run.pollExit()
+
+		run.drainBuffered()
+
+		match polled 'exitPoll'
+			running then sleep(FeedPollMs)
+			exited then finished = true
+		end 'exitPoll'
+	end 'pumping'
+
+	if not finished 'overran'
+		run.killAtDeadline()
+
+		return run.finish(StagedRunEnd.killedAtDeadline)
+	end 'overran'
+
+	return run.finish(endOfRun(run.pollExit()))
+end 'runStagedFedAfterLine'
 
 export function irLines(path FilePath) returns StringArray
 	return fileText(path).split(LineSeparator)
