@@ -101,21 +101,21 @@ export union ScriptlibLoad
 
 	export function tierBeside(stdlibDir FilePath) returns ScriptlibTier
 		return match self 'load'
-			besideStdlib gives ScriptlibTier.at(scriptlibDirBeside(stdlibDir), bodies: ScriptlibBodies.onDemand)
+			besideStdlib gives ScriptlibTier.at(scriptlibDirBeside(stdlibDir), bodies: LibraryBodies.onDemand)
 			omitted gives ScriptlibTier.absent
-			checking(directory) gives ScriptlibTier.at(directory.resolve(Directory.currentPath()), bodies: ScriptlibBodies.every)
+			checking(directory) gives ScriptlibTier.at(directory.resolve(Directory.currentPath()), bodies: LibraryBodies.every)
 		end 'load'
 	end 'tierBeside'
 end 'ScriptlibLoad'
 
-export enum ScriptlibBodies
+export enum LibraryBodies
 	onDemand
 	every
-end 'ScriptlibBodies'
+end 'LibraryBodies'
 
 export union ScriptlibTier
 	absent
-	at(root FilePath, bodies ScriptlibBodies)
+	at(root FilePath, bodies LibraryBodies)
 
 	export function packagesRoot() returns FilePath throws AbsentError
 		match self 'tier'
@@ -133,7 +133,7 @@ export union ScriptlibTier
 	export function buildsEveryBody() returns bool
 		return match self 'tier'
 			absent gives false
-			at(_, bodies) gives bodies == ScriptlibBodies.every
+			at(_, bodies) gives bodies == LibraryBodies.every
 		end 'tier'
 	end 'buildsEveryBody'
 end 'ScriptlibTier'
@@ -455,11 +455,11 @@ module function libraryReachOf(project Project, module MaxonModule, signatures P
 	// different questions of the same list, and a second build would be the same arena walked twice.
 	var initCallees = signatures.globalInitCallees()
 
-	// Under `check-scriptlib` every package function is a reach root: nothing calls a package there, and
-	// a diagnostic in a swept library body is dropped.
-	for name in roster.checkedScriptlib 'eachCheckedPackageFunction'
+	// Under `check-scriptlib` every package function, and under `check-stdlib` every stdlib function, is a
+	// reach root: nothing calls one there, and a diagnostic in a swept library body is dropped.
+	for name in roster.auditedLibrary 'eachAuditedLibraryFunction'
 		initCallees.push(name.clone())
-	end 'eachCheckedPackageFunction'
+	end 'eachAuditedLibraryFunction'
 
 	// Common-case short-circuit. If no op in user code reaches stdlib, no stdlib function is reachable
 	// at all, so an empty reached set is the exact answer and none can be blamed for a substrate. It
@@ -512,10 +512,10 @@ function demandOneStdlibFileIfReached(project Project, path FilePath, reachable 
 		return false
 	end 'alreadyBuilding'
 
-	// `runtime/`, and a scriptlib under `check-scriptlib`, are outside the demand entirely — their bodies
-	// are built unconditionally (`Queries.buildsBodiesFor`). A record here would be read by nobody and
-	// would spin the fixpoint one further round.
-	if isRuntimeSourceFile(project, path: path) or scriptlibBodiesAreEveryBody(project, path: path) 'notTheDemandTier'
+	// `runtime/`, a scriptlib under `check-scriptlib` and a stdlib under `check-stdlib` are outside the
+	// demand entirely — their bodies are built unconditionally (`Queries.buildsBodiesFor`). A record here
+	// would be read by nobody and would spin the fixpoint one further round.
+	if isRuntimeSourceFile(project, path: path) or libraryBodiesAreEveryBody(project, path: path) 'notTheDemandTier'
 		return false
 	end 'notTheDemandTier'
 
@@ -549,10 +549,10 @@ module type LibraryFunctionRoster
 	// same walk as the two columns above so the three cannot come to disagree about which names they hold.
 	export let compilerReached as FunctionNameSet
 
-	export let checkedScriptlib as NameRoster
+	export let auditedLibrary as NameRoster
 
-	static function create(names NameRoster, runtimeTier FunctionNameSet, compilerReached FunctionNameSet, checkedScriptlib NameRoster) returns LibraryFunctionRoster
-		return Self{names: names, runtimeTier: runtimeTier, compilerReached: compilerReached, checkedScriptlib: checkedScriptlib}
+	static function create(names NameRoster, runtimeTier FunctionNameSet, compilerReached FunctionNameSet, auditedLibrary NameRoster) returns LibraryFunctionRoster
+		return Self{names: names, runtimeTier: runtimeTier, compilerReached: compilerReached, auditedLibrary: auditedLibrary}
 	end 'create'
 end 'LibraryFunctionRoster'
 
@@ -562,19 +562,19 @@ function libraryFunctionRoster(project Project) returns LibraryFunctionRoster th
 	var names = NameRoster.create()
 	var runtimeTier = FunctionNameSet.create()
 	var compilerReached = FunctionNameSet.create()
-	var checkedScriptlib = NameRoster.create()
+	var auditedLibrary = NameRoster.create()
 
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
-		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier, compilerReached: compilerReached, checkedScriptlib: checkedScriptlib)
+		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier, compilerReached: compilerReached, auditedLibrary: auditedLibrary)
 	end 'eachFile'
 
-	return LibraryFunctionRoster.create(names, runtimeTier: runtimeTier, compilerReached: compilerReached, checkedScriptlib: checkedScriptlib)
+	return LibraryFunctionRoster.create(names, runtimeTier: runtimeTier, compilerReached: compilerReached, auditedLibrary: auditedLibrary)
 end 'libraryFunctionRoster'
 
 // One library file's functions, filed into the roster's columns.
-function collectOneLibraryFile(project Project, path FilePath, names NameRoster, runtimeTier FunctionNameSet, compilerReached FunctionNameSet, checkedScriptlib NameRoster) throws CompileError
+function collectOneLibraryFile(project Project, path FilePath, names NameRoster, runtimeTier FunctionNameSet, compilerReached FunctionNameSet, auditedLibrary NameRoster) throws CompileError
 	let isRuntime = isRuntimeSourceFile(project, path: path)
-	let isCheckedScriptlib = scriptlibBodiesAreEveryBody(project, path: path)
+	let isAuditedLibrary = libraryBodiesAreEveryBody(project, path: path)
 	let isCompilerCalled = isRuntime and runtimeTierFileIsCompilerCalled(path)
 	view artifact = try queryParseOps(project, path: path)
 
@@ -589,9 +589,9 @@ function collectOneLibraryFile(project Project, path FilePath, names NameRoster,
 			compilerReached.insert(func.name)
 		end 'declaredReached'
 
-		if isCheckedScriptlib 'aCheckedPackageFunction'
-			checkedScriptlib.push(func.name)
-		end 'aCheckedPackageFunction'
+		if isAuditedLibrary 'anAuditedLibraryFunction'
+			auditedLibrary.push(func.name)
+		end 'anAuditedLibraryFunction'
 	end 'eachFunc'
 end 'collectOneLibraryFile'
 

@@ -39,8 +39,9 @@ agents, and reads back what a program did.
 | `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
 
-Four more commands are for working on the compiler itself: `spec-test`, `scale-test`, `verify-recheck`
-and `verify-warm-rebuild`. `maxon` with no arguments does not list them; `maxon help` does. See
+Six more commands are for working on the compiler itself: `spec-test`, `scale-test`, `check-stdlib`,
+`stage-library-tier`, `verify-recheck` and `verify-warm-rebuild`. `maxon` with no arguments does not list
+them; `maxon help` does. See
 [Working on the Compiler](/docs/cli/compiler-development/).
 
 Only the **first** command word on a line is the command. A later one is an ordinary positional

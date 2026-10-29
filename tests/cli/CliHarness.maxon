@@ -111,6 +111,7 @@ export let InstallScriptAddress = "maxon.dev/install"
 let RuntimeDirName = "runtime"
 
 let CheckScriptlibCommandWord = "check-scriptlib"
+let CheckStdlibCommandWord = "check-stdlib"
 
 // Where a case keeps the cache it is about, under its own staging directory, and the program it caches a
 // build of. The program is never inspected — only compiled, so that a build exists to be removed.
@@ -319,6 +320,10 @@ end 'installedCompilerIn'
 export function runCheckScriptlib(installDir FilePath) returns CollectedOutput
 	return runWithCacheRoot([CheckScriptlibCommandWord], cacheRoot: cacheRootIn(installDir), workingDirectory: installDir, binary: installedCompilerIn(installDir))
 end 'runCheckScriptlib'
+
+export function runCheckStdlib(installDir FilePath, target String) returns CollectedOutput
+	return runWithCacheRoot([CheckStdlibCommandWord, "{TargetOptionPrefix}{target}"], cacheRoot: cacheRootIn(installDir), workingDirectory: installDir, binary: installedCompilerIn(installDir))
+end 'runCheckStdlib'
 
 function freshOutsideCheckoutDirWithoutVendor(caseDirName String) returns FilePath
 	let dir = freshOutsideCheckoutDir(caseDirectoryName(caseDirName))

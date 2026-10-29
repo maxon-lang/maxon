@@ -12239,6 +12239,7 @@ export type Project
 	export let runtimeDir as FilePath
 
 	export let scriptlib as ScriptlibTier
+	export let stdlibBodies as LibraryBodies
 
 	// Every file the library loader parsed out of those two directories and the scriptlib packages it
 	// loaded — which is exactly "the LIBRARY source this compile contains", established by construction
@@ -12806,7 +12807,7 @@ export type Project
 	// folds and the initializer parses. A real parse builds its own (`ParseStaging.parseFile`).
 	export var readerAnchors as ParserAnchors
 
-	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, stdlibBodies LibraryBodies, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray) returns Project
 		let interfaces = IrInterfaceMap.create()
 
 		return Self{
@@ -12814,6 +12815,7 @@ export type Project
 			stdlibDir: stdlibDir,
 			runtimeDir: runtimeDir,
 			scriptlib: scriptlib,
+			stdlibBodies: stdlibBodies,
 			librarySourcePaths: MaxonSourcePathArray.create(),
 			libraryFacts: LibraryFacts.empty(),
 			managedGlobals: ManagedGlobalArray.create(),
@@ -12916,8 +12918,8 @@ end 'Project'
 // The library roots are passed IN rather than located here so the project is born
 // with valid ones: the library loader reads them before the first pass runs, and a
 // field that is briefly wrong is a field something can read while it is wrong.
-export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create()) returns Project
-	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: scriptlib, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), stdlibBodies LibraryBodies = LibraryBodies.onDemand) returns Project
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: scriptlib, stdlibBodies: stdlibBodies, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
 end 'createProject'
 
 // Asking a `whileCurrent` interest is a round trip to the stdout writer's service, and the checkpoints

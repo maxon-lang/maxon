@@ -140,9 +140,8 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
 - E3077 (`semanticVarShouldBeLet`) covers locals only, so a `var` field nothing writes goes unflagged — 21 such fields
   sat in `MxdbgReader.maxon` until c7a076e57. A user-approved design: extend E3077 to file-private and `module` `var`
   fields of the program's own types (`public`/`export` exempt, library tiers not audited in a user compile) with
-  "field 'T.f' is never written; use 'let' instead of 'var'", every such field reported; a `maxon check-stdlib`
-  maintenance command (library tier, every stdlib body built, sharing `check-scriptlib`'s path) audits stdlib, since
-  stdlib cannot be compiled as a program. The test is "would `let` compile": a field needs `var` wherever a `let`
+  "field 'T.f' is never written; use 'let' instead of 'var'", every such field reported; `maxon check-stdlib`, which
+  compiles every stdlib function as reached, is where stdlib's fields are audited. The test is "would `let` compile": a field needs `var` wherever a `let`
   field is refused — E2013 assignment after construction, E3159 write-through / mutating method / by-reference /
   writing parameter, E3078 a store a `let` field refuses, E3188 a read-out value reaching writable state — and that
   answer must come from `ProvenanceTracer` treating each audited field as a hypothetical read-only root, not from a

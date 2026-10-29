@@ -21,6 +21,7 @@ module let NothingRanExitCode = 2
 module let SpecTestCommandName = "spec-test"
 let StageLibraryTierCommandName = "stage-library-tier"
 let CheckScriptlibCommandName = "check-scriptlib"
+let CheckStdlibCommandName = "check-stdlib"
 
 // Re-emitted by `SpecTestRunner.buildGuestCompiler` and `ScaleTestRunner.compileRung`, and read
 // back by the same parser.
@@ -321,6 +322,7 @@ function main() returns ExitCode
 		build gives runBuild(args)
 		cache gives runCache(args)
 		checkScriptlib gives runCheckScriptlib(args)
+		checkStdlib gives runCheckStdlib(args)
 		coverage gives runCoverage(args)
 		dapServer gives runDapServerCommand(args)
 		debug gives runDebugCommand(args)
@@ -365,6 +367,7 @@ function commandReadsEveryWord(command MaxonCommand) returns bool
 		build or
 		cache or
 		checkScriptlib or
+		checkStdlib or
 		dapServer or
 		fmt or
 		help or
@@ -929,6 +932,55 @@ function runCheckScriptlib(args MaxonArgs) returns ExitCode
 
 	return SucceededExit if clean else OwnFailureExit
 end 'runCheckScriptlib'
+
+function runCheckStdlib(args MaxonArgs) returns ExitCode
+	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {CheckStdlibCommandName} [{TargetFlagPrefix}<cpu>-<os>]") 'unexpectedArgument'
+		return OwnFailureExit
+	end 'unexpectedArgument'
+
+	var targets = supportedTargets()
+
+	if args.targetSpec.isStated() 'oneTargetNamed'
+		targets = [try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit]
+	end 'oneTargetNamed'
+
+	var clean = true
+
+	for target in targets 'eachTarget'
+		let check = try stdlibCheckOf(target, session: CompileSession.discarding()) otherwise (e) 'notChecked'
+			reportCompileError(e)
+			return OwnFailureExit
+		end 'notChecked'
+
+		let triple = targetToString(target)
+
+		match check 'verdict'
+			compiles then print("{StdlibDirName}/ compiles for {triple}\n")
+			targetLacksFacilities(absences) then reportStdlibTargetAbsences(absences, triple: triple)
+			refused(diagnostics) then reportStdlibRefusal(diagnostics, triple: triple)
+		end 'verdict'
+
+		clean = check.passes() and clean
+	end 'eachTarget'
+
+	return SucceededExit if clean else OwnFailureExit
+end 'runCheckStdlib'
+
+function reportStdlibRefusal(diagnostics DiagnosticArray, triple String)
+	for diagnostic in diagnostics 'eachDiagnostic'
+		printError("{diagnostic.render()}\n")
+	end 'eachDiagnostic'
+
+	printError("error: {StdlibDirName}/ does not compile for {triple}\n")
+end 'reportStdlibRefusal'
+
+function reportStdlibTargetAbsences(absences DiagnosticArray, triple String)
+	print("{StdlibDirName}/ passes every language check for {triple}, where its check ends: {triple} has no runtime for what these functions need\n")
+
+	for absence in absences 'eachAbsence'
+		print("  {absence.render()}\n")
+	end 'eachAbsence'
+end 'reportStdlibTargetAbsences'
 
 // Exit 0 iff the query spine is deterministic and incremental for `<file>`.
 function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
@@ -1639,6 +1691,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		build or
 		cache or
 		checkScriptlib or
+		checkStdlib or
 		coverage or
 		dapServer or
 		debug or
@@ -1859,6 +1912,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		build gives CommandReference.create(BuildSubcommandName, arguments: "<file|directory>...", summary: "Compile a Maxon program to an executable.", detail: "Several paths are compiled as ONE program, in the order given.{ParagraphSeparator}With no path it builds a target of the `{ProjectFileExtension}` file in the working directory: its only target, or the one a single word names, each `_` in the target's name written `-` (`maxon {BuildSubcommandName} my-app` builds the exported function `my_app`). With several targets and no word, the targets are listed. A word naming no target is a path. A target that states no output builds `{ProjectProductsDirName}/<name>`, `<name>` being the `{ProjectFileExtension}` file's.", audience: CommandAudience.usingTheCompiler)
 		cache gives CommandReference.create(CacheCommandName, arguments: "[{CacheClearVerb}]", summary: "Report what this compiler has cached on the host, or remove it.", detail: "With no verb it reports, on stdout: a line per cache directory this host keeps, naming the one a run will use, how many builds it holds and how much disk. A build is the executable; the debug sidecar beside one is not a build, and its bytes are counted in the size because clearing gives them back. A directory that cannot be read says so and the command exits 1.{ParagraphSeparator}`{CacheClearVerb}` removes the compiled programs `{ExecuteCommandName}` and a path-less `{BuildSubcommandName}` keep, the directories holding them, and the Maxon directory above those. It removes nothing else in a directory you named through {RunCacheRootVariable}, which Maxon does not own. Nothing to remove is an ordinary state and is reported as success.{ParagraphSeparator}The cache is the first of {cacheRootChain()} whose variable names a directory this compiler can create, and both the report and `{CacheClearVerb}` reach every one of them this host names, because a build published while a different one ranked first is stranded under it otherwise.", audience: CommandAudience.usingTheCompiler)
 		checkScriptlib gives CommandReference.create(CheckScriptlibCommandName, arguments: "[<directory>]", summary: "Compile every package of a {ScriptlibDirName} directory, with every function body built.", detail: "A script compiles only the packages' functions it reaches, so a package this compiler no longer accepts stays unseen until a script calls into it. This builds them all and reports every diagnostic on stderr. With no directory it checks the `{ScriptlibDirName}/` beside this compiler's `{StdlibDirName}/`. Only the files inside the directory's immediate subdirectories are packages; a `{MaxonSourceExtension}` file directly in it is never read. A package declares no `main` and needs none. Nothing is written.{ParagraphSeparator}Exit 0 every package compiles, or there is none to check; 1 a package does not compile, or the directory could not be checked.", audience: CommandAudience.usingTheCompiler)
+		checkStdlib gives CommandReference.create(CheckStdlibCommandName, arguments: "[{TargetFlagPrefix}<cpu>-<os>]", summary: "Compile every function of this compiler's `{StdlibDirName}/` for every target, as though a program called each one.", detail: "A program compiles only the library functions it reaches, so a library function no program calls is checked by no compile. This builds every `{StdlibDirName}/` function body, runs every check on each as a reached function, and reports every diagnostic on stderr, once for each target: {targetRoster(supportedTargets())}, or only the one `{TargetFlagPrefix}` names. Nothing is written. A target with no runtime for something a library function needs answers E3104 or E3074 for it once every language check has passed; the command lists those functions on stdout, notes that the check of that target ended with the language checks, and counts the target as passing.{ParagraphSeparator}Exit 0 the library compiles for every target checked; 1 it does not compile for one, which a line on stderr names after its diagnostics.", audience: CommandAudience.workingOnTheCompiler)
 		coverage gives CommandReference.create(CoverageCommandName, arguments: "<run|report> <exe>", summary: "Run a {CoverageFlag} binary and report line + branch coverage.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		debug gives CommandReference.create(DebugCommandName, arguments: "[<subcommand>] <exe>", summary: "Debug a program interactively, or read back its `.mxdbg` sidecar.", detail: "`maxon debug <exe>` opens a command prompt over the running program: `break`, `run`, `continue`, `step`, `next`, `finish`, `until`, `backtrace`, `print`, `locals`, `clear`, `pause`, `threads`, `gt`, `gt-backtrace`, `gt-park`, `gt-resume`, `trace`, `detach`, `help` and `quit`, with the usual short aliases. `break <target> if <local> <op> <literal>` arms a conditional breakpoint the debugger evaluates at the stop; `break *0x<offset>` arms one exact `.text` offset; `pause` interrupts a program that stops on nothing; the `gt` words list, walk, select and hold green threads; and `trace` prints the DebugStream events committed before the stop when the session was started with {DebugTraceOption}. `{BatchOption} {CommandsOptionPrefix}<cmd;cmd;...>` runs a script instead and writes one JSON object per line on stdout, with the program's own two streams on stderr; `{CompleteOptionPrefix}<partial line>` answers the completions for a line and runs nothing.{ParagraphSeparator}The debugger drives the program from outside it, so the program carries nothing of the debugger in it. It serves a program built for the host's own native target (x64-windows, x64-linux, arm64-linux or arm64-macos): one built for another target and a wasm module are each refused by name, and on arm64-macos it drives the program through Apple's `debugserver`, so a host without the Xcode command line tools is refused too. `detach` lets a stopped program go and leaves it running; `quit` kills it.{ParagraphSeparator}`{DumpInfoOption} <exe>` prints the sidecar; `{SymbolizeOption} <exe> <offset>...` resolves `.text` code offsets to file:line:col.", audience: CommandAudience.usingTheCompiler)
 		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `{MaxonSourceExtension}`, `{TestSourceExtension}`, `{ProjectFileExtension}` and `{TaskFileExtension}` files, skipping anything under a `.maxonignore`, and any subdirectory that is its own checkout. A file whose layout it cannot tell (one that does not lex, a keyword where a name must stand, blocks that do not close) is refused, left as it is, and the run exits 1. Takes no options.", audience: CommandAudience.usingTheCompiler)
@@ -1984,7 +2038,7 @@ function optionReference(option HelpOption) returns OptionReference
 		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(OutputFlagPrefix)])
 		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(EmitIrFlag)])
 		emitIrRuntime gives OptionReference.create("{EmitIrRuntimeFlagPrefix}<a>,<b>", description: "Render these compiler-emitted functions in that IR too. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(EmitIrRuntimeFlagPrefix)])
-		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {targetRoster(supportedTargets())} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it where this host has a runner: wasm32-wasi under the vendored wasmtime, a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine {OrbMachineName} (natively for the Mac's own CPU, x64-linux under Rosetta on Apple silicon); a target this host cannot execute, x64-windows off Windows included, is compiled and reported as not run. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])
+		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {targetRoster(supportedTargets())} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it where this host has a runner: wasm32-wasi under the vendored wasmtime, a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine {OrbMachineName} (natively for the Mac's own CPU, x64-linux under Rosetta on Apple silicon); a target this host cannot execute, x64-windows off Windows included, is compiled and reported as not run. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run. For {CheckStdlibCommandName} it checks that one target instead of every one.", commands: [MaxonCommand.build, MaxonCommand.checkStdlib, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])
 		debugBatch gives OptionReference.create(BatchOption, description: "Drive the session from {CommandsOptionPrefix} instead of a prompt, and write one JSON object per line on stdout. The program's own stdout and stderr both go to this driver's STDERR, so stdout stays pure JSON. The driver exits 0 when the session completed - the program's own code is DATA in the `exit` event - and 1 on a timeout, a refused session or a crash.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.exactly(BatchOption)])
 		debugCommands gives OptionReference.create("{CommandsOptionPrefix}<cmd;cmd;...|@file>", description: "The commands {BatchOption} runs, separated by `;`, or `@<path>` to read them from a file one per line.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CommandsOptionPrefix)])
 		debugComplete gives OptionReference.create("{CompleteOptionPrefix}<partial line>", description: "Print the completions for a partially typed debugger line, one per line, and run nothing. The first word completes to the command vocabulary, aliases included; a break target completes to the functions the program holds.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CompleteOptionPrefix)])
@@ -2258,6 +2312,8 @@ export enum MaxonCommand
 	cache
 
 	checkScriptlib
+
+	checkStdlib
 
 	coverage
 

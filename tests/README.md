@@ -459,6 +459,7 @@ tests/
     build-a-file-sees-scriptlib.maxtest                     an install-shaped `build <file>` compiles the `scriptlib/` package the file calls, and the executable prints its answer
     check-scriptlib-reports-a-broken-package.maxtest        `check-scriptlib` builds a package body nothing calls, exits 1 and names `bad/Bad.maxon`
     check-scriptlib-passes-clean-packages.maxtest           `check-scriptlib` over two clean packages and no `main` exits 0 with nothing on stderr
+    check-stdlib-reports-an-error-in-a-function-nothing-calls.maxtest   `check-stdlib --target=x64-linux` over an install-shaped stdlib holding a planted E3188 in a function nothing calls exits 1, naming the file and the target
     scratch-name-mints-distinct-names.maxtest               names one process mints one after another never repeat
     scratch-name-round-trips-through-its-parser.maxtest     a minted name gives back its stem and, on its own host, its owner
     scratch-name-parser-refuses-what-it-did-not-mint.maxtest   the parser judges only a name of its family and of the fixed width, and calls the rest unmarked

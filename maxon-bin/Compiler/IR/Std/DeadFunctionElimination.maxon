@@ -312,7 +312,7 @@ end 'thisWalkReached'
 // PARSED method, so parsed-ness there is the ordinary case rather than the error.
 function seedRoots(globalData GlobalDataTable, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
 	markLiveFunction(project.entryFunctionName, byName: index.byName, reached: reached, worklist: worklist)
-	seedTestRoots(index, reached: reached, worklist: worklist)
+	seedNamedRoots(project, index: index, reached: reached, worklist: worklist)
 
 	for root in compilerOwnedRoots(project.target, stub: project.entryStubCalls) 'eachOwnedRoot'
 		try markCompilerOwnedRoot(root, project: project, index: index, reached: reached, worklist: worklist)
@@ -419,13 +419,19 @@ module typealias CompilerOwnedRootArray = Array with CompilerOwnedRoot
 // assert the name is the COMPILER's and refuse a parsed declaration of it. A test's body is the AUTHOR's;
 // only its NAME is minted. So it goes through the plain `markLiveFunction`, exactly as `main` does — and a
 // module that declares no test roots nothing here.
-function seedTestRoots(index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray)
+function seedNamedRoots(project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray)
 	for func in index.functions 'eachFunction'
-		if isTestFunctionName(func.name) 'aTest'
+		if isRootByName(project, name: func.name) 'aRoot'
 			markLiveFunction(func.name, byName: index.byName, reached: reached, worklist: worklist)
-		end 'aTest'
+		end 'aRoot'
 	end 'eachFunction'
-end 'seedTestRoots'
+end 'seedNamedRoots'
+
+// Also asked by `CalledOnceCensus.markRoots`: a root the census did not count is spliced into its one
+// call site and emptied, and `requireNotSplicedAway` then panics on it.
+module function isRootByName(project Project, name ByteArray) returns bool
+	return isTestFunctionName(name) or (project.stdlibBodies == LibraryBodies.every and project.libraryFacts.libraryFunctions.contains(name) and not project.libraryFacts.runtimeTier.contains(name))
+end 'isRootByName'
 
 // Refuse a declaration that took one of the names the compiler owns, and root the name where this build
 // calls it. The refusal reads the whole roster and the root reads the gate, so a name is the compiler's in

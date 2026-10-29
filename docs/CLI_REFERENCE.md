@@ -36,8 +36,9 @@ agents, and reads back what a program did.
 | `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
 
-Four more commands are for working on the compiler itself: `spec-test`, `scale-test`, `verify-recheck`
-and `verify-warm-rebuild`. `maxon` with no arguments does not list them; `maxon help` does. See
+Six more commands are for working on the compiler itself: `spec-test`, `scale-test`, `check-stdlib`,
+`stage-library-tier`, `verify-recheck` and `verify-warm-rebuild`. `maxon` with no arguments does not list
+them; `maxon help` does. See
 [Working on the Compiler](#working-on-the-compiler).
 
 Only the **first** command word on a line is the command. A later one is an ordinary positional
@@ -3199,6 +3200,32 @@ maxon stage-library-tier <directory>
 It writes `<directory>/stdlib`, `<directory>/runtime` and `<directory>/bin/<compiler>`: the sources this
 compiler loads, the unicode tables it embeds, and a copy of its executable. Anything already under
 `<directory>` is removed first. Exit 0 when the tier is staged, 1 when it could not be.
+
+### `maxon check-stdlib`
+
+Compiles every function of the `stdlib/` beside this compiler as though a program called each one, once
+for every target, and reports every diagnostic on stderr. A program compiles only the library functions
+it reaches, so this is the one compile that checks a stdlib function no program calls: every body is
+built, every check runs on it, and the back end compiles it.
+
+```bash
+maxon check-stdlib                         # every supported target
+maxon check-stdlib --target=<cpu>-<os>     # one target
+```
+
+Each target that compiles prints `stdlib/ compiles for <target>` on stdout. A target with no runtime for
+something a library function needs answers [E3104](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3104)
+or [E3074](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3074) for that function once every language
+check has passed: the command then lists those functions on stdout, notes that the check of that target
+ended with the language checks, and counts it as passing. On `wasm32-wasi` these are the
+library's services (`Log`, `TraceCapture`), which need green threads.
+
+| Code | Meaning |
+|------|---------|
+| `0` | The stdlib compiles for every target checked |
+| `1` | It does not compile for a target: its diagnostics are on stderr, followed by `error: stdlib/ does not compile for <target>` |
+
+CI runs it on every lane.
 
 ### A typical loop
 

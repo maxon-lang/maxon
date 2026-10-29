@@ -684,7 +684,8 @@ module function checkWithoutWriting(project Project) returns CheckedCompile
 end 'checkWithoutWriting'
 
 let ScriptlibCheckProgramName = "check-scriptlib.maxon"
-let ScriptlibCheckProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let StdlibCheckProgramName = "check-stdlib.maxon"
+let LibraryCheckProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 // The program is a one-file root beside the directory, never inside it, so the packages load as the
 // scriptlib tier rather than as the program's own files.
@@ -692,17 +693,67 @@ export function scriptlibPackagesCompile(scriptlibDir FilePath, session CompileS
 	let stdlibDir = try locateStdlibDir()
 	let resolvedDir = scriptlibDir.resolve(Directory.currentPath())
 	let besideScriptlib = try resolvedDir.parent() otherwise throw CompileError.directoryNotFound(scriptlibDir)
-	let program = besideScriptlib.join("{ScriptlibCheckProgramName}")
 
-	var project = createProject(program, target: detectHostTarget(), stdlibDir: stdlibDir, runtimeDir: try runtimeDirBeside(stdlibDir), scriptlib: ScriptlibLoad.checking(resolvedDir).tierBeside(stdlibDir), debugStream: false, session: session)
-	fileChanged(project, path: program, content: ScriptlibCheckProgramSource)
-	try loadLibrarySources(project)
+	let check = try libraryCheckOf(besideScriptlib.join(ScriptlibCheckProgramName), target: detectHostTarget(), stdlibDir: stdlibDir, scriptlib: ScriptlibLoad.checking(resolvedDir), stdlibBodies: LibraryBodies.onDemand, session: session)
 
-	return match checkWithoutWriting(project) 'verdict'
-		compiled gives true
+	return match check 'verdict'
+		compiles gives true
+		targetLacksFacilities or
 		refused gives false
 	end 'verdict'
 end 'scriptlibPackagesCompile'
+
+export union LibraryCheck
+	compiles
+
+	// Every diagnostic is E3104 or E3074, which are reported only once every language check has passed.
+	targetLacksFacilities(diagnostics DiagnosticArray)
+	refused(diagnostics DiagnosticArray)
+
+	export function passes() returns bool
+		return match self 'verdict'
+			compiles or
+			targetLacksFacilities gives true
+			refused gives false
+		end 'verdict'
+	end 'passes'
+end 'LibraryCheck'
+
+export function stdlibCheckOf(target Target, session CompileSession) returns LibraryCheck throws CompileError
+	let stdlibDir = try locateStdlibDir()
+	let besideStdlib = try stdlibDir.parent() otherwise throw CompileError.directoryNotFound(stdlibDir)
+
+	return try libraryCheckOf(besideStdlib.join(StdlibCheckProgramName), target: target, stdlibDir: stdlibDir, scriptlib: ScriptlibLoad.omitted, stdlibBodies: LibraryBodies.every, session: session)
+end 'stdlibCheckOf'
+
+function libraryCheckOf(program FilePath, target Target, stdlibDir FilePath, scriptlib ScriptlibLoad, stdlibBodies LibraryBodies, session CompileSession) returns LibraryCheck throws CompileError
+	var project = createProject(program, target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirBeside(stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: false, session: session, stdlibBodies: stdlibBodies)
+	fileChanged(project, path: program, content: LibraryCheckProgramSource)
+	try loadLibrarySources(project)
+
+	match checkWithoutWriting(project) 'verdict'
+		compiled then return LibraryCheck.compiles
+		refused then break
+	end 'verdict'
+
+	let diagnostics = distinctDiagnostics(project.diagnostics)
+
+	if diagnostics.isEmpty() 'refusedWithoutADiagnostic'
+		return LibraryCheck.refused(diagnostics)
+	end 'refusedWithoutADiagnostic'
+
+	for diagnostic in diagnostics 'eachDiagnostic'
+		if not diagnosticIsATargetAbsence(diagnostic) 'aLanguageError'
+			return LibraryCheck.refused(diagnostics)
+		end 'aLanguageError'
+	end 'eachDiagnostic'
+
+	return LibraryCheck.targetLacksFacilities(diagnostics)
+end 'libraryCheckOf'
+
+function diagnosticIsATargetAbsence(diagnostic Diagnostic) returns bool
+	return diagnostic.code == ErrorCode.targetUnsupportedConstruct or diagnostic.code == ErrorCode.semanticSubprocessUnsupportedTarget
+end 'diagnosticIsATargetAbsence'
 
 // The Target IR text of a finished compile: what `--emit-ir` writes and `maxon/generateIR` answers. What it
 // shows and withholds is stated at the render in `compileMeasured`.

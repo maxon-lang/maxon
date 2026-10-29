@@ -3085,9 +3085,13 @@ export function isScriptlibSourceFile(project Project, path FilePath) returns bo
 	return fileProvenanceOf(project, path: path).isScriptlibSource
 end 'isScriptlibSourceFile'
 
-export function scriptlibBodiesAreEveryBody(project Project, path FilePath) returns bool
-	return project.scriptlib.buildsEveryBody() and isScriptlibSourceFile(project, path: path)
-end 'scriptlibBodiesAreEveryBody'
+export function libraryBodiesAreEveryBody(project Project, path FilePath) returns bool
+	if isScriptlibSourceFile(project, path: path) 'aPackageFile'
+		return project.scriptlib.buildsEveryBody()
+	end 'aPackageFile'
+
+	return project.stdlibBodies == LibraryBodies.every and isStdlibSourceFile(project, path: path)
+end 'libraryBodiesAreEveryBody'
 
 // Asked once per file, by the places that need a file's provenance: the two queries that build a
 // `Parser` for a real parse, and `queryProgramSignatures`'s partition of the declaration sweep, which
@@ -3314,13 +3318,14 @@ function hashEventSourceOf(isStdlibSource bool, isRuntimeSource bool) returns Ha
 	return HashEventSource.library if isStdlibSource or isRuntimeSource else HashEventSource.author
 end 'hashEventSourceOf'
 
-// ⭐⭐ **ONLY THE STDLIB TIER IS LAZY: `stdlib/`, AND `scriptlib/` OUTSIDE `check-scriptlib`.**
+// ⭐⭐ **ONLY THE STDLIB TIER IS LAZY: `stdlib/` OUTSIDE `check-stdlib`, AND `scriptlib/` OUTSIDE
+// `check-scriptlib`.**
 //
 // A USER file's bodies are always built — its bodies are the program, and a diagnostic in unreached user
 // code is still the user's bug. A `stdlib/` file builds once any function it declares has been reached,
 // and then builds all of them; see `QueryDatabase.demandedLibraryBodyFiles` for why the unit is the
-// file. A package under `check-scriptlib` is always built: the check has no program to reach it, and its
-// whole job is the diagnostics in bodies no script reached.
+// file. A package under `check-scriptlib`, and a `stdlib/` file under `check-stdlib`, is always built: the
+// check has no program to reach it, and its whole job is the diagnostics in bodies no program reached.
 //
 // ⛔⛔ **A `runtime/` FILE IS ALWAYS BUILT, AND A DEMAND-DRIVEN ANSWER THERE IS NOT MERELY CONSERVATIVE —
 // IT IS ALWAYS EMPTY.** The demand is discovered from SOURCE CALL SITES: a library file earns its bodies
@@ -3329,7 +3334,7 @@ end 'hashEventSourceOf'
 // can never grow, every one of its bodies would be skipped, and each would ship as the bare `retVoid`
 // `Parser.skipUnreachedFunctionBody` leaves behind. A silent wrong answer, not a missing feature.
 function buildsBodiesFor(project Project, path FilePath, isStdlibSource bool) returns bool
-	if not isStdlibSource or scriptlibBodiesAreEveryBody(project, path: path) 'notTheLazyTier'
+	if not isStdlibSource or libraryBodiesAreEveryBody(project, path: path) 'notTheLazyTier'
 		return true
 	end 'notTheLazyTier'
 
