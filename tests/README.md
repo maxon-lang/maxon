@@ -507,6 +507,7 @@ tests/
     scriptlib-a-package-member-named-like-a-shadowed-type-is-refused.maxtest   a package method named `Clock` beside that script is refused with E3112, naming scriptlib
     scriptlib-a-package-names-another-packages-type-by-its-qualified-name.maxtest   a package builds `scriptlib.shapes.Square` from another package, and the script prints `9`
     scriptlib-a-script-shadowing-a-package-type-leaves-the-package-whole.maxtest   a script declaring `type Widget` beside a package whose `use()` reads its own `Widget.make()` prints `7`
+    scriptlib-an-unreached-package-var-a-let-could-not-replace-compiles.maxtest   a package function the script never calls keeps a `var` a `let` could not replace, and the script still runs
     fixtures/<program>/main.maxon.fixture   stored names only - see rule 1
   consoleWrite/
     console-write-imports.maxtest           which console API an emitted x64-windows image imports
@@ -1108,7 +1109,7 @@ directory under `temp/profile/`), and it keeps rule 5: one spawning `test`, one 
 
 ## `execute/` — compile a program and run it, and do not compile it again
 
-Twenty-eight cases in twenty-seven files over one subject: `maxon execute <file|directory> [args...]` compiles a program (or reuses a
+Thirty cases in twenty-nine files over one subject: `maxon execute <file|directory> [args...]` compiles a program (or reuses a
 cached build of it) and runs it, forwarding stdin, stdout, stderr and the exit code. The shared half —
 the staging, the per-case cache root, the two spawners and the slot readers — lives in
 `ExecuteHarness.maxon`, and the rest in `support/`; see the note under `debug/`.

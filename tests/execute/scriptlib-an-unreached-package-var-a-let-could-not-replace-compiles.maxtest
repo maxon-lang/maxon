@@ -1,0 +1,17 @@
+let UnreachedVarCaseLabel = "scriptlib-an-unreached-package-var-a-let-could-not-replace-compiles"
+let UnreachedCursorSource = "\ntype Cursor\n\tvar bytes as ByteArray\n\tvar position as Count\n\n\tstatic function create(bytes ByteArray) returns Cursor\n\t\treturn Cursor\{bytes: bytes, position: 0\}\n\tend 'create'\n\n\tfunction enter() returns Cursor\n\t\tposition = position + 1\n\t\treturn Cursor\{bytes: bytes, position: position\}\n\tend 'enter'\n\n\tfunction skip()\n\t\tposition = position + 1\n\tend 'skip'\nend 'Cursor'\n\nfunction innerCursor(encoding ByteArray) returns Cursor\n\tvar outer = Cursor.create(encoding)\n\tvar inner = outer.enter()\n\touter.skip()\n\treturn inner\nend 'innerCursor'\n"
+
+test 'a var in a package function the script never reaches is judged as it would be if the function were reached'
+	let staged = stageScriptlibCase(UnreachedVarCaseLabel)
+	writeScriptlibPackageFile(stagedTier(UnreachedVarCaseLabel), package: GreetingPackageName, fileName: GreetingPackageFileName, content: "{greetingPackageSource(ScriptlibGreeting)}{UnreachedCursorSource}")
+	let script = staged.sources.join(ScriptFileName)
+	writeStagedFile(script, content: greetingScriptSource())
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "a script calling `greeting()` did not run. `{GreetingPackageFileName}` also declares `innerCursor`, which nothing calls, whose `var inner` a `let` could not replace (E3188: it reaches `outer`'s record, which `outer` still writes). It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	Expect.equal(observedStdout, expected: "{ScriptlibGreeting}{LineFeed}", message: "the script did not print the answer the scriptlib package returns")
+end 'a var in a package function the script never reaches is judged as it would be if the function were reached'

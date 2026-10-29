@@ -4745,6 +4745,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		if func.isCompilerBuilt() or self.project.libraryFacts.bodyIsSwept(func.name) 'noAuthorToBlameOrNothingReaches'
 			self.refusals.clear()
 			self.clearKeptRefused()
+
+			match sites.varCandidates 'unjudgedE3077'
+				none then break
+				filed(candidates) then self.withdrawVarShouldBeLet(candidates.reported)
+			end 'unjudgedE3077'
+
 			return
 		end 'noAuthorToBlameOrNothingReaches'
 
@@ -7146,24 +7152,28 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'theReportedOneStands'
 
-		let at = try self.hygieneIndexOf(candidates.reported) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: the E3077 the parser filed with these candidates is not among the project's binding-hygiene diagnostics — `commitDiagnostics` merges every artifact's")
-
 		if firstUnexcused == candidates.values.count() 'everyOneIsNeeded'
-			try self.hygieneWithdrawn.set(at, value: true) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: hygieneWithdrawn.set OOB at {at}")
+			self.withdrawVarShouldBeLet(candidates.reported)
 			return
 		end 'everyOneIsNeeded'
 
+		let at = self.hygieneIndexOf(candidates.reported)
 		let name = try candidates.names.get(firstUnexcused) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: names.get OOB at {firstUnexcused}")
 		let range = try candidates.ranges.get(firstUnexcused) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: ranges.get OOB at {firstUnexcused}")
 		try self.project.bindingHygieneDiagnostics.set(at, value: Diagnostic.create(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(name)), line: range.line, column: range.column, filePath: hygieneSiteOf(candidates.reported).0)) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: bindingHygieneDiagnostics.set OOB at {at}")
 	end 'withholdVarShouldBeLet'
 
-	function hygieneIndexOf(reported Diagnostic) returns ElementIndex throws AbsentError
+	function withdrawVarShouldBeLet(reported Diagnostic)
+		let at = self.hygieneIndexOf(reported)
+		try self.hygieneWithdrawn.set(at, value: true) otherwise panic("ProvenanceTracer.withdrawVarShouldBeLet: hygieneWithdrawn.set OOB at {at}")
+	end 'withdrawVarShouldBeLet'
+
+	function hygieneIndexOf(reported Diagnostic) returns ElementIndex
 		self.indexHygieneDiagnostics()
-		var at = try self.hygieneFirstAtPosition.get(hygienePositionKeyOf(reported)) otherwise throw AbsentError.absent
+		var at = try self.hygieneFirstAtPosition.get(hygienePositionKeyOf(reported)) otherwise panic("ProvenanceTracer.hygieneIndexOf: no binding-hygiene diagnostic sits where the parser filed this E3077 — `commitDiagnostics` merges every artifact's")
 
 		while not hygieneDiagnosticsAreOne(try self.project.bindingHygieneDiagnostics.get(at) otherwise panic("ProvenanceTracer.hygieneIndexOf: bindingHygieneDiagnostics.get OOB at {at}"), reported: reported) 'eachAtThePosition'
-			at = try self.hygieneNextAtPosition.get(at)
+			at = try self.hygieneNextAtPosition.get(at) otherwise panic("ProvenanceTracer.hygieneIndexOf: none of the binding-hygiene diagnostics at its position is the E3077 the parser filed — `commitDiagnostics` merges every artifact's")
 		end 'eachAtThePosition'
 
 		return at
