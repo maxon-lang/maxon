@@ -472,9 +472,10 @@ end 'main'
 
 ```
 
-<!-- test: error.generic-double-store-managed -->
+<!-- test: generic-double-store-managed -->
+Two fields of one record built from one managed `T` argument each hold a reference of their own, as two fields built
+from one `String` parameter do.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 type DPair uses T
 	export var a as T
 	export var b as T
@@ -485,11 +486,15 @@ end 'DPair'
 typealias StrDPair = DPair with String
 function main() returns ExitCode
 	let p = StrDPair.create("{7}")
+	print("{p.a}{p.b}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:7:24: use of moved value 'v': its ownership moved to another binding at an earlier bind or assignment
+```stdout
+77
+```
+```exitcode
+0
 ```
 
 <!-- test: scalar-double-store -->
@@ -1509,6 +1514,152 @@ end 'main'
 ```
 ```exitcode
 4
+```
+
+<!-- test: a-throwing-generic-factory-releases-a-consumed-managed-argument -->
+A throwing generic factory that fails before it builds `Self` releases the `T`-typed argument it consumed. The
+argument is a heap string, so the call leaks it (**exit 101**) unless the shared generic body drops the parameter
+on its throw edge.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Box uses T
+	var item as T
+	var extra as Whole
+
+	static function create(item T, extra Whole) returns Self throws StartError
+		if extra < 0 'negative'
+			throw StartError.refused
+		end 'negative'
+
+		return Self{item: item, extra: extra}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	try Box.create("another label long enough to be a heap string", extra: -1) otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+
+		return 0
+	end 'failed'
+
+	return 1
+end 'main'
+```
+```stdout
+refused
+```
+```exitcode
+0
+```
+
+<!-- test: a-throwing-generic-factory-with-a-scalar-argument-is-unchanged -->
+The scalar control of the case above: a `T` bound to an integer has nothing to release on the throw edge, and the
+failing call still reaches its handler.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Box uses T
+	var item as T
+	var extra as Whole
+
+	static function create(item T, extra Whole) returns Self throws StartError
+		if extra < 0 'negative'
+			throw StartError.refused
+		end 'negative'
+
+		return Self{item: item, extra: extra}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	try Box.create(5, extra: -1) otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+
+		return 0
+	end 'failed'
+
+	return 1
+end 'main'
+```
+```stdout
+refused
+```
+```exitcode
+0
+```
+
+<!-- test: a-throwing-generic-factory-releases-an-argument-it-already-handed-to-a-local -->
+A generic factory that moves its `T` argument into a local holder on one branch and then throws releases it
+exactly once: the holder owns it from the move on, and it dies with the frame. The other branch still builds `Self`
+from the argument.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Holder uses T
+	var item as T
+
+	static function wrap(item T) returns Self
+		return Self{item: item}
+	end 'wrap'
+
+	function held() returns Whole
+		return 1
+	end 'held'
+end 'Holder'
+
+type Box uses T
+	var item as T
+	var extra as Whole
+
+	static function create(item T, extra Whole) returns Self throws StartError
+		if extra < 0 'negative'
+			let holder = Holder.wrap(item)
+
+			if holder.held() > 0 'held'
+				throw StartError.refused
+			end 'held'
+
+			throw StartError.refused
+		end 'negative'
+
+		return Self{item: item, extra: extra}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	try Box.create("another label long enough to be a heap string", extra: -5) otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+
+		return 0
+	end 'failed'
+
+	return 1
+end 'main'
+```
+```stdout
+refused
+```
+```exitcode
+0
 ```
 
 <!-- test: per-instance-alias-decays-at-a-type-parameter-argument -->
@@ -4327,4 +4478,177 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:16:26: use of moved value 'w': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: a-generic-factory-builds-two-records-from-one-managed-argument -->
+Each record a generic factory builds from its `T` argument holds a reference of its own: dropping one record leaves
+the string the other holds readable, and the leak gate is clean.
+```maxon
+type Box uses T
+	var v as T
+
+	typealias Peers = Array with Self
+
+	static function twice(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		out.push(Self{v: v})
+		return out
+	end 'twice'
+
+	function held() returns T
+		return self.v
+	end 'held'
+end 'Box'
+
+typealias TextBox = Box with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var boxes = TextBox.twice(heapString("first payload ", b: "long enough to allocate"))
+	let first = try boxes.pop() otherwise panic("one")
+	_ = try boxes.pop() otherwise panic("two")
+	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
+	print("{first.held()}\n")
+	print("{noise}\n")
+	return 0
+end 'main'
+```
+```stdout
+first payload long enough to allocate
+overwrite payload long enough to allocate xxxxxxxx
+```
+```exitcode
+0
+```
+
+<!-- test: a-generic-factory-reads-its-argument-after-storing-it -->
+A generic factory keeps its `T` argument readable after a record has stored it, as a concrete managed parameter
+is, and returns the record without a leak.
+```maxon
+type Solo uses T where T is Equatable
+	var a as T
+
+	static function create(item T) returns Self
+		let built = Self{a: item}
+
+		if built.sameAs(item) 'same'
+			return built
+		end 'same'
+
+		panic("the stored value must equal the argument")
+	end 'create'
+
+	function sameAs(other T) returns bool
+		return self.a.equals(other)
+	end 'sameAs'
+
+	function held() returns T
+		return self.a
+	end 'held'
+end 'Solo'
+
+function main() returns ExitCode
+	let s = Solo.create("another label long enough to be a heap string")
+	print(s.held())
+	print("\n")
+	return 0
+end 'main'
+```
+```stdout
+another label long enough to be a heap string
+```
+```exitcode
+0
+```
+
+<!-- test: a-concrete-string-factory-builds-two-records-from-one-argument -->
+The concrete twin of the two cases above: a `String` parameter stored into two fields, and read after it was
+stored, behaves as the generic body does.
+```maxon
+type Pair
+	export var a as String
+	var b as String
+
+	static function create(item String) returns Self
+		return Self{a: item, b: item}
+	end 'create'
+end 'Pair'
+
+type Solo
+	export var a as String
+
+	static function create(item String) returns Self
+		let built = Self{a: item}
+		print(item)
+		return built
+	end 'create'
+end 'Solo'
+
+function main() returns ExitCode
+	let p = Pair.create("a label long enough to be a heap string")
+	let s = Solo.create("another label long enough to be a heap string\n")
+	print(p.a)
+	print("\n")
+	print(s.a)
+	return 0
+end 'main'
+```
+```stdout
+another label long enough to be a heap string
+a label long enough to be a heap string
+another label long enough to be a heap string
+```
+```exitcode
+0
+```
+
+<!-- test: a-throwing-generic-factory-releases-what-it-stored-before-it-throws -->
+A generic factory that stores its `T` argument in a record and then throws releases the record's reference and its
+own: nothing is left owned.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Box uses T
+	var item as T
+	var extra as Whole
+
+	static function create(item T, extra Whole) returns Self throws StartError
+		let built = Self{item: item, extra: extra}
+
+		if built.extra < 0 'negative'
+			throw StartError.refused
+		end 'negative'
+
+		return built
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	try Box.create("another label long enough to be a heap string", extra: -1) otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+
+		return 0
+	end 'failed'
+
+	return 1
+end 'main'
+```
+```stdout
+refused
+```
+```exitcode
+0
 ```

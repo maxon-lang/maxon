@@ -1,13 +1,14 @@
 // Runtime/AsyncReleaser.maxon — the `__gt_release_<callee>` helpers that discharge a green thread's
 // ownership of its managed ARGUMENTS and of its managed RESULT-or-ERROR.
 //
-// ⭐⭐ **WHY A PER-CALLEE FUNCTION AND NOT A BITMASK IN THE GT STRUCT.** A mask that said "slot 0 and slot 2
-// are managed" would have to be released by ONE runtime entry, and there is no such entry: a release in the compiler
-// is TYPE-DIRECTED, and `Parser.decrefCalleeFor` routes to seven of them (`__str_decref`,
-// `__destruct_<Struct>`, `__destruct_<mangled>`, `__drop_type_param`, `__drop_existential`, `__mm_decref`,
-// `__gt_promise_drop`). The generic `__mm_decref` is not a safe default for the rest: `decrefCalleeFor`'s own
-// `tagIsByteRecord` arm states what happens when a String reaches it — it *"frees the box without releasing
-// the external buffer a detached record owns"*, a leak on exactly the arguments this file exists to release.
+// ⭐⭐ **WHY A PER-CALLEE FUNCTION AND NOT A BITMASK IN THE GT STRUCT.** A mask that said "slot 0 and
+// slot 2 are managed" would have to be released by ONE runtime entry, and there is no such entry: a
+// release in the compiler is TYPE-DIRECTED, and `Parser.decrefCalleeFor` routes to eight of them
+// (`__str_decref`, `__destruct_<Struct>`, `__destruct_<mangled>`, `__drop_type_param`,
+// `__release_type_param`, `__drop_existential`, `__mm_decref`, `__gt_promise_drop`). The generic
+// `__mm_decref` is not a safe default for the rest: `decrefCalleeFor`'s own `tagIsByteRecord` arm
+// states what happens when a String reaches it — it *"frees the box without releasing the external
+// buffer a detached record owns"*, a leak on exactly the arguments this file exists to release.
 // A mask can name one callee; a spawn's slots can want three.
 //
 // ⭐ **AND WHY THE RELEASE CANNOT SIMPLY BE EMITTED AT THE AWAIT.** The parser does know the types — but

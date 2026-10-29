@@ -18868,6 +18868,52 @@ refused
 0
 ```
 
+<!-- test: services.a-throwing-generic-factory-releases-a-managed-argument-when-the-spawn-fails -->
+A failing `spawn` of a generic service's throwing factory releases the managed `T` argument it consumed: the
+factory throws before it builds the service, so nothing else owns the heap string.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Box uses T
+	var item as T
+	var extra as Whole
+
+	static function create(item T, extra Whole) returns Self throws StartError
+		if extra < 0 'negative'
+			throw StartError.refused
+		end 'negative'
+
+		return Self{item: item, extra: extra}
+	end 'create'
+
+	export function extraOf() returns Whole
+		return self.extra
+	end 'extraOf'
+end 'Box'
+
+function main() returns ExitCode
+	try spawn Box.create("another label long enough to be a heap string", extra: -1) otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+
+		return 0
+	end 'failed'
+
+	return 1
+end 'main'
+```
+```stdout
+refused
+```
+```exitcode
+0
+```
+
 <!-- test: services.a-throwing-factory-takes-ten-arguments-of-mixed-kinds-on-the-service -->
 The spawner's wait costs the start record nothing: ten arguments — integers, floats and a value held at an interface
 type — reach a throwing factory in the order and register class it declares them in, and one that fails releases the

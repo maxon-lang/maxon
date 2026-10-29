@@ -18813,20 +18813,30 @@ type FunctionBodyState
 
 	export var witnessCursorElements as ValueMarkColumn
 
-	// ⭐⭐ **WHICH OPAQUE PARAMETERS ARE `constructedValue` FEEDS — the ones the CALL SITE has already settled.**
-	// `Box.create(v T)` doing `Self{value: v}` hands `v` to the box the call RETURNS, and the
-	// concrete caller consumed its argument to pay for that; so this store owes no reference, and taking one
-	// would leak the caller's.
+	// ⭐⭐ **WHICH OPAQUE PARAMETERS ARE `constructedValue` FEEDS THIS FRAME DOES NOT KEEP — the ones
+	// the CALL SITE has already settled:** a by-reference feed, or a feed of a `T` no instantiation of
+	// which can owe a reference (`bindParameters`). `Box.create(v T)` doing `Self{value: v}` hands `v`
+	// to the box the call RETURNS, and the concrete caller consumed its argument to pay for that; so
+	// this store owes no reference, and taking one would leak the caller's.
 	//
-	// ⚠ **IT CANNOT BE READ OFF `valueIsOpaqueOwned`, AND THE REASON IS DELIBERATE**: `bindParameters` pointedly
-	// does NOT enrol such a parameter owned, because enrolling it would make the shared body DROP it (see there).
-	// So the ownership bit says "borrowed" for a value whose reference is already accounted for, and this is the
-	// distinction the store side needs. It is a mark of its own rather than a widening of that bit because
-	// `isOpaqueOwnedFeedArg` and `transferConsumedArg` read that bit to decide FORWARDING, where the answer for
-	// a constructor feed must stay what it is.
+	// ⚠ **IT CANNOT BE READ OFF `valueIsOpaqueOwned`**: `bindParameters` does not enrol such a
+	// parameter owned, so the ownership bit says "borrowed" for a value whose reference is already
+	// accounted for, and this is the distinction the store side needs. It is a mark of its own rather
+	// than a widening of that bit because `isOpaqueOwnedFeedArg` and `transferConsumedArg` read that
+	// bit to decide FORWARDING, where the answer for a constructor feed must stay what it is.
 	//
 	// A SPARSE set, reset per function and SWAPPED across a closure body, exactly like the sibling value marks.
 	export var constructorFeedParams as ValueMarkColumn
+
+	// The `constructedValue` feeds this frame keeps: enrolled owned, and every store of one into a
+	// record takes its own reference through the descriptor, so the frame's own reference is released
+	// once at its exit.
+	export var coOwningFeedParams as ValueMarkColumn
+
+	// The co-owning feeds a store took a reference for. Such a feed drops through
+	// `__release_type_param` (see `ReleaseTypeParamName`); one no store reached drops through
+	// `__drop_type_param`, since this frame is then its only owner.
+	export var storedFeedParams as ValueMarkColumn
 
 	// ⭐⭐ **WHICH RECORDS THIS SHARED BODY BUILT HOLD A REFERENCE IT TOOK THROUGH THE DESCRIPTOR**
 	// — the exact set whose drop, IF IT HAPPENS HERE, must release that reference.
@@ -19315,6 +19325,8 @@ type FunctionBodyState
 			heldReads: noValueMarks,
 			witnessCursorElements: noValueMarks,
 			constructorFeedParams: noValueMarks,
+			coOwningFeedParams: noValueMarks,
+			storedFeedParams: noValueMarks,
 			recordsOwningOpaqueSlots: noValueMarks,
 			recordsHoldingReferencedOpaqueSlots: noValueMarks,
 			callReferencedAnOpaqueFeedSlot: false,
@@ -35479,38 +35491,45 @@ export type Parser
 			// IR is unchanged — only a method that can drop becomes a layout carrier
 			// (`MaxonToStdLowering.planLayoutCarriers`).
 			//
-			// ⚠⚠ **IT ASKS THE FEED'S SINK, NOT WHETHER THE FUNCTION HAS A RECEIVER.** A
-			// `Self{value: v}` CONSTRUCTOR feed is settled entirely at the concrete call site — the value the call
-			// RETURNS owns it — so enrolling one here would drop it a second time, through a `__drop_type_param`
-			// whose descriptor a non-array generic program does not even install. A has-a-receiver test
-			// standing in for that distinction would be exact only while the recognizer saw `self`-headed
-			// stores alone; a STATIC that pushes its argument into a local `Array with T` and hands that
-			// array to the `Self` it returns feeds CALLEE STORAGE with no receiver at all, and reading the
-			// receiver there would leave the caller transferring a value nobody drops (a leak). The sink is
-			// recorded, so this reads it.
+			// ⚠⚠ **IT ASKS THE FEED'S SINK, NOT WHETHER THE FUNCTION HAS A RECEIVER.** A callee-storage feed
+			// is moved into that storage. A `Self{value: v}` CONSTRUCTOR feed is CO-OWNED instead: each
+			// store of it into a record takes its own reference (`opaqueSlotTakesItsOwnReference`) and this
+			// frame releases its own at exit, so a throw before the store still drops the consumed argument
+			// and two records built from it hold two references. A constructor feed is kept only when it is
+			// not by-reference and some instantiation can owe a reference (`typeParamFeedCanOwnAReference`);
+			// any other is left to the call site (`constructorFeedParams`). A has-a-receiver test standing
+			// in for that distinction would be exact only while the recognizer saw `self`-headed stores
+			// alone; a STATIC that pushes its argument into a local `Array with T` and hands that array to
+			// the `Self` it returns feeds CALLEE STORAGE with no receiver at all, and reading the receiver
+			// there would leave the caller transferring a value nobody drops (a leak). The sink is recorded,
+			// so this reads it.
 			//
 			// Gated on the opaque `typeParameter` tag as well: a feed parameter is type-parameter-typed by
 			// construction (`markOpaqueContainerMutatorFeeds` marks only such a parameter), so the tag test
-			// is redundant with the sink — but it makes this branch PROVABLY exclusive of the managed branch above
-			// (which needs `valueIsManagedHeap`, false for a `typeParameter`), so no parameter is ever enrolled
-			// twice, and it pins the drop router's `typeParameter` arm to exactly what is enrolled here.
+			// is redundant with the feed — but it makes this branch PROVABLY exclusive of the managed branch
+			// above (which needs `valueIsManagedHeap`, false for a `typeParameter`), so no parameter is ever
+			// enrolled twice, and it pins the drop router's `typeParameter` arm to exactly what is enrolled
+			// here.
 			//
 			// Co-owned for the branch above's reason, which does not depend on the tag: a feed parameter's
 			// concrete call site may have increfed a borrow to pay for the slot.
-			if self.tagOf(paramId) == ValueTypeTag.typeParameter and consume.feedAt(param).answers(FeedSinkQuery.calleeStorageSink) 'opaqueFeed'
-				self.markValueOwnsHeap(paramId, exclusivity: OwnedHeapExclusivity.coOwned)
-				self.enrolOwnedBinding(binding)
-			end 'opaqueFeed'
+			let feed = consume.feedAt(param)
 
-			// ⭐ **A `constructedValue` FEED IS RECORDED RATHER THAN ENROLLED.** The paragraph above
-			// says why it must not be enrolled owned — the value the call RETURNS owns it, so a drop here would
-			// be the second. But the STORE that puts it there must equally not take a reference for it: the
-			// concrete call site already consumed the argument to pay for that slot. So the fact is recorded for
-			// `moveOpaqueValueInto` to read, which is the one place that has to tell this parameter from a
-			// borrow the body itself produced. Guarded by the same tag test.
-			if self.tagOf(paramId) == ValueTypeTag.typeParameter and consume.feedAt(param).isFeed() 'anyOpaqueFeed'
-				self.bodyState.constructorFeedParams = withValueMarked(self.bodyState.constructorFeedParams, value: paramId)
-			end 'anyOpaqueFeed'
+			if self.tagOf(paramId) == ValueTypeTag.typeParameter and feed.isFeed() 'opaqueFeed'
+				let constructed = not feed.answers(FeedSinkQuery.calleeStorageSink)
+				let keptByThisFrame = not constructed or (not paramIsByRef and self.signatures.typeParamFeedCanOwnAReference(self.valueTypeParamId(paramId)))
+
+				if keptByThisFrame 'enrolled'
+					self.markValueOwnsHeap(paramId, exclusivity: OwnedHeapExclusivity.coOwned)
+					self.enrolOwnedBinding(binding)
+
+					if constructed 'constructedFeed'
+						self.bodyState.coOwningFeedParams = withValueMarked(self.bodyState.coOwningFeedParams, value: paramId)
+					end 'constructedFeed'
+				end 'enrolled' else 'settledByTheCaller'
+					self.bodyState.constructorFeedParams = withValueMarked(self.bodyState.constructorFeedParams, value: paramId)
+				end 'settledByTheCaller'
+			end 'opaqueFeed'
 		end 'eachParam'
 	end 'bindParameters'
 
@@ -48856,6 +48875,13 @@ export type Parser
 		if self.valueOwnsGreenThread(value) 'promise'
 			return GtPromiseDropName
 		end 'promise'
+
+		// Ahead of the `dropCallees` memo, whose key is the tag and the type parameter's name: it cannot
+		// tell a stored feed from an unstored value of the same `T`, so an answer cached for one would be
+		// served to the other.
+		if valueIsMarked(self.bodyState.storedFeedParams, value: value) 'aStoredFeed'
+			return ReleaseTypeParamName
+		end 'aStoredFeed'
 
 		let carriesLayoutParam = self.bodyState.carriesLayoutParam()
 		var key = ((self.tagOf(value).ordinal as ImageableVerdictKey) shl ImageableVerdictTagShift) or (self.valueNameId(value) as ImageableVerdictKey)
@@ -72915,11 +72941,12 @@ export type Parser
 	end 'moveConcreteValueInto'
 
 	// ⭐⭐ **MOVE A VALUE INTO A SLOT DECLARED AT THE ENCLOSING GENERIC'S OWN TYPE PARAMETER** —
-	// `moveManagedValueInto`'s twin for the one slot kind whose protocol is not a compile-time fact. The split
-	// it makes is the SAME split: an already-OWNED value is TRANSFERRED (a consumed feed parameter moved into
-	// `Self{value: v}` or into an opaque array — the caller already handed over its `+1`, so a reference taken
-	// here would leak it), and a BORROWED one is CO-OWNED. Only the second arm is this twin's own, and only it can
-	// be right: a body reading `items.get(i)` holds a borrow the array still owns.
+	// `moveManagedValueInto`'s twin for the one slot kind whose protocol is not a compile-time fact.
+	// The split it makes is the SAME split: an already-OWNED value is TRANSFERRED (a consumed feed
+	// parameter moved into an opaque array — the caller already handed over its `+1`, so a reference
+	// taken here would leak it), and a BORROWED one is CO-OWNED. Only the second arm is this twin's
+	// own, and only it can be right: a body reading `items.get(i)` holds a borrow the array still
+	// owns.
 	//
 	// ⚠ **A VALUE WHOSE TAG IS NO LONGER THE OPAQUE PARAMETER HAS BEEN SUBSTITUTED**, and then the static
 	// protocol is both available and strictly better — a String COPIES rather than dispatching to `__str_clone`
@@ -72935,6 +72962,7 @@ export type Parser
 			// recorded at the one line that takes the reference, which is what makes the store half and the drop
 			// half one act rather than two that agree. A CELL releases its occupant itself (`cellOwnsItsOccupant`).
 			self.markOpaqueSlotOwner(slot)
+			self.noteCoOwningFeedKept(arg)
 			return self.coOwnBorrowedOpaque(arg, range: range)
 		end 'referenceThroughTheDescriptor'
 
@@ -72955,6 +72983,12 @@ export type Parser
 		return arg
 	end 'moveOpaqueValueInto'
 
+	function noteCoOwningFeedKept(value ValueId)
+		if valueIsMarked(self.bodyState.coOwningFeedParams, value: value) 'aCoOwningFeed'
+			self.bodyState.storedFeedParams = withValueMarked(self.bodyState.storedFeedParams, value: value)
+		end 'aCoOwningFeed'
+	end 'noteCoOwningFeedKept'
+
 	function markOpaqueSlotOwner(slot DurableOpaqueSlot)
 		match slot 'owner'
 			inRecord(box) then self.markRecordOwningOpaqueSlots(box)
@@ -72971,25 +73005,29 @@ export type Parser
 	// repeated — N destinations take N references and each is released by its own owner; one that INHERITS may
 	// not, because the single reference this frame holds cannot answer for two owners.
 	//
-	// ⛔⛔ **THREE SHAPES INHERIT, AND "IS IT OWNED" NAMES ONLY THE FIRST.** A constructor FEED parameter and a
-	// generic no `with` ever names both read as BORROWED to the ownership bit while taking no reference at all,
-	// so a guard asking `valueIsOpaqueOwned` alone would admit a repeat of either — two owners of one `+1`. Each
-	// arm below says why it takes nothing; the consequence for a repeat is identical across all three.
+	// ⛔⛔ **THREE SHAPES INHERIT, AND "IS IT OWNED" NAMES ONLY THE FIRST.** A constructor FEED
+	// parameter this frame does not keep and a generic no `with` ever names both read as BORROWED to
+	// the ownership bit while taking no reference at all, so a guard asking `valueIsOpaqueOwned` alone
+	// would admit a repeat of either — two owners of one `+1`. Each arm below says why it takes
+	// nothing; the consequence for a repeat is identical across all three.
 	//
 	// Precondition: `value` carries the opaque `typeParameter` tag. A SUBSTITUTED value is concrete and is
 	// routed through the ordinary doors, which CO-OWN and may therefore always be repeated.
 	function opaqueSlotTakesItsOwnReference(value ValueId) returns bool
-		// An already-OWNED value is TRANSFERRED — a consumed feed parameter moved into `Self{value: v}` or into
-		// an opaque array. The caller already handed over its `+1`, so a reference taken here would leak it.
+		// Owned, yet it takes its own reference: the frame keeps one too (`coOwningFeedParams`). Asked
+		// before the ownership bit, which would transfer it.
+		if valueIsMarked(self.bodyState.coOwningFeedParams, value: value) 'aFeedThisFrameKeeps'
+			return true
+		end 'aFeedThisFrameKeeps'
+
+		// Any other already-OWNED value is TRANSFERRED — a consumed feed parameter moved into an opaque
+		// array. The caller already handed over its `+1`, so a reference taken here would leak it.
 		if self.valueIsOpaqueOwned(value) 'ownedIsTransferred'
 			return false
 		end 'ownedIsTransferred'
 
-		// ⭐⭐ **A `constructedValue` FEED PARAMETER IS ALREADY PAID FOR AT THE CALL SITE.**
-		// `Box.create(v T)`'s `Self{value: v}` is the whole of the constructor feed: the CONCRETE caller
-		// consumed its argument precisely because this store takes ownership of it, so a reference here would be
-		// a second one and the caller's would leak. It reads as a BORROW to the ownership bit — deliberately, so
-		// the shared body drops nothing (`bindParameters`) — which is exactly why it needs its own mark.
+		// A constructor feed this frame does not keep is paid for by the call site's consume
+		// (`constructorFeedParams`).
 		if valueIsMarked(self.bodyState.constructorFeedParams, value: value) 'settledByTheCallSite'
 			return false
 		end 'settledByTheCallSite'
@@ -73086,13 +73124,13 @@ export type Parser
 	// words). Routing it back to a move would rebuild the inconsistency in the other direction — `self.f = t`
 	// co-owning while `byRefParam = t` moved.
 	//
-	// ⚠ **THE OPAQUE `T` DOORS DELIBERATELY STILL MOVE** (`moveOpaqueValueInto`, `moveElementIntoContainer`'s
-	// opaque arm, `transferConsumedArg`'s opaque arm). A shared generic body cannot name an incref: its only
-	// retain is `retainFunc@64` out of the enclosing instance's layout descriptor, which a body carrying no
-	// descriptor (a `static` over a trivial instantiation) does not have — so co-owning there converts a working
-	// program into a refusal, where here it converts a refusal into a working program. Those doors already take a
-	// reference at the one place a move is provably wrong (across a loop back edge), which is the part of
-	// this ruling they can express.
+	// ⚠ **THE OPAQUE `T` DOORS MOVE AN OWNED VALUE** (`moveOpaqueValueInto`,
+	// `moveElementIntoContainer`'s opaque arm, `transferConsumedArg`'s opaque arm). A shared generic
+	// body cannot name an incref: its only retain is `retainFunc@64` out of the enclosing instance's
+	// layout descriptor, which a body carrying no descriptor (a `static` over a trivial instantiation)
+	// does not have — so co-owning there unconditionally converts a working program into a refusal.
+	// Those doors take a reference where a move is provably wrong (across a loop back edge), and for a
+	// constructor feed whose `T` some instantiation can owe a reference for (`coOwningFeedParams`).
 	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, range SourceRange) returns ValueId throws SourceParseError
 		if self.valueIsDeferred(arg) 'aDeferredCallResult'
 			return arg
@@ -86422,11 +86460,12 @@ export type Parser
 			return value
 		end 'noInstantiationToReference'
 
-		// ⚠ **A `constructedValue` FEED PARAMETER IS *NOT* EXEMPTED HERE, WHERE `moveOpaqueValueInto` EXEMPTS
-		// IT — and the difference is which SLOT the concrete call site paid for.** There the store IS the
-		// `Self{…}` that call site consumed its argument for, so a second reference would leak the caller's. A
-		// container is a DIFFERENT durable slot with an element walk of its own, so it owes its own reference;
-		// passing the value straight through would give that walk one nobody ever took.
+		// ⚠ **A `constructorFeedParams` PARAMETER IS *NOT* EXEMPTED HERE, WHERE `moveOpaqueValueInto`
+		// EXEMPTS IT — and the difference is which SLOT the concrete call site paid for.** There the
+		// store IS the `Self{…}` that call site consumed its argument for, so a second reference would
+		// leak the caller's. A container is a DIFFERENT durable slot with an element walk of its own, so
+		// it owes its own reference; passing the value straight through would give that walk one nobody
+		// ever took.
 		return self.coOwnBorrowedOpaque(value, range: SourceRange.ofToken(anchor))
 	end 'referenceBorrowedOpaqueElement'
 
@@ -98910,7 +98949,11 @@ export type Parser
 			// The decision is `moveOfValueEscapesLoop`, read by both doors so they cannot settle on different
 			// bindings (see `liveOwnerIndexOf`), and the reference is `coOwnBorrowedOpaque`, emitted by both
 			// so the retain and its release are one protocol.
-			if self.moveOfValueEscapesLoop(argValue) 'referenceRatherThanMove'
+			//
+			// A co-owning constructor feed takes a reference wherever it is forwarded: this frame keeps its
+			// own (`coOwningFeedParams`).
+			if valueIsMarked(self.bodyState.coOwningFeedParams, value: argValue) or self.moveOfValueEscapesLoop(argValue) 'referenceRatherThanMove'
+				self.noteCoOwningFeedKept(argValue)
 				return self.coOwnBorrowedOpaque(argValue, range: SourceRange.ofToken(anchor))
 			end 'referenceRatherThanMove'
 

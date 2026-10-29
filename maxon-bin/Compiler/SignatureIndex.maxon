@@ -4178,9 +4178,9 @@ end 'OpaqueSlotDeclaration'
 // callee storage with no receiver at all, and the accident stops holding — so the fact is recorded
 // rather than inferred.
 export enum FeedSink
-	// `Self{item: p}` in a receiverless constructor: the parameter is moved into a field of the value the call
-	// RETURNS, so the CALLER's value co-owns it and this frame drops nothing. Enrolling it owned in the callee
-	// would drop it a second time.
+	// `Self{item: p}` in a receiverless constructor: the parameter is stored into a field of the value
+	// the call RETURNS. Each such store takes its own reference, so the shared body enrols the
+	// parameter owned and releases its own reference once (`bindParameters`).
 	constructedValue
 
 	// An opaque `Array` element (`items.push(p)`, wherever the array lives) or a reassigned opaque `T` field
@@ -4333,9 +4333,9 @@ export enum FeedSinkQuery
 	anySink
 
 	// Does the fed value land in storage the callee owns and releases? The callee's enrolment
-	// (`bindParameters`) asks the sink and not merely `isFeed()`: only a callee-storage feed is enrolled
-	// owned, so only it can be left live at an exit and dropped through the descriptor. A `Self{item: p}`
-	// constructor feed is settled at the concrete call site.
+	// (`bindParameters`) asks the sink and not merely `isFeed()`: a callee-storage feed is always
+	// enrolled owned and moved into that storage, while a `Self{item: p}` constructor feed is enrolled
+	// only where a reference can be owed, and each of its stores takes one.
 	calleeStorageSink
 end 'FeedSinkQuery'
 
@@ -39698,11 +39698,13 @@ export type ProgramSignatures
 		return self.typeOwnershipProtocol(self.canonicalInstanceArg(id, position: position))
 	end 'typeParamOwnershipProtocol'
 
-	// ⭐⭐ **WHAT A LAYOUT DESCRIPTOR'S `destroyFunc@40` HOLDS FOR INSTANCE `id`'s TYPE ARGUMENT AT `position`**
-	// — the exact dual of the retain word above, off the SAME `typeOwnershipProtocol` answer about the SAME
-	// substituted argument, so **the two words are non-zero TOGETHER BY CONSTRUCTION** rather than by two
-	// predicates agreeing. That is the invariant `managedOpaqueArrayElementOf` states, and the arrangement the
-	// witness table's `destroyFunc@8`/`retainFunc@16` pair holds.
+	// ⭐⭐ **WHAT A LAYOUT DESCRIPTOR'S `destroyFunc@40` HOLDS FOR INSTANCE `id`'s TYPE ARGUMENT AT
+	// `position`** — the exact dual of the retain word above, off the SAME `typeOwnershipProtocol`
+	// answer about the SAME substituted argument, so **the two words are non-zero TOGETHER BY
+	// CONSTRUCTION** rather than by two predicates agreeing — except `greenThread`, whose retain word
+	// is 0 because a promise is never co-owned (`retainCalleeForProtocol`) and whose drop word is not.
+	// That is the invariant `managedOpaqueArrayElementOf` states, and the arrangement the witness
+	// table's `destroyFunc@8`/`retainFunc@16` pair holds.
 	//
 	// ⛔⛔ **NEITHER WORD MAY BE GATED ON THE BASE'S FIELD LIST.** `retainFunc@64` is a fact about the
 	// ARGUMENT, and a generic that stores a borrowed `T` into a record it builds needs no `T`-typed field at
