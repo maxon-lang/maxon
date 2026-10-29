@@ -7486,6 +7486,27 @@ type ArrayLiteralElement
 	end 'create'
 end 'ArrayLiteralElement'
 
+union ElementFit
+	opaque
+	checked(let payload PayloadClass, let declaredNameId TypeNameId)
+end 'ElementFit'
+
+type ElementSlot
+	export let indexSpaceType as MaxonType
+	export let declared as MaxonType
+	export let alias as DeclaredAlias
+	export let fit as ElementFit
+
+	static function create(indexSpaceType MaxonType, declared MaxonType, alias DeclaredAlias, fit ElementFit) returns ElementSlot
+		return Self{indexSpaceType: indexSpaceType, declared: declared, alias: alias, fit: fit}
+	end 'create'
+end 'ElementSlot'
+
+union ElementLiteralTargets
+	none
+	typed(let adopted MaxonType, let arrayTarget DeclaredArrayInstance, let tupleTarget DeclaredTupleTarget)
+end 'ElementLiteralTargets'
+
 union DirectoryFunction
 	declared(let callee ByteArray)
 	notADirectoryFunction
@@ -14200,6 +14221,12 @@ typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
 
 typealias DeclaredAliasAnswerMap = Map with (TypeNameId, DeclaredAlias)
 
+typealias NamedTypeTagAnswerMap = Map with (TypeNameId, ValueTypeTag)
+
+typealias ElementSlotAnswerMap = Map with (GenericInstanceId, ElementSlot)
+
+typealias ElementLiteralTargetAnswerMap = Map with (GenericInstanceId, ElementLiteralTargets)
+
 union GlobalMapColumnsAnswer
 	known(pair ColumnPair)
 	notAnImmutableMapLiteral
@@ -19564,6 +19591,13 @@ export type Parser
 	var settledTypeNames as SettledTypeNameMap
 	var handedResolution as HandedResolution
 	var declaredAliasAnswers as DeclaredAliasAnswerMap
+
+	// Keyed by name or instance alone: sound because a `Parser` parses one file, and `ProgramSignatures`
+	// is not written while it does.
+	var rangedAliasTagAnswers as NamedTypeTagAnswerMap
+	var castTargetTagAnswers as NamedTypeTagAnswerMap
+	var elementSlotAnswers as ElementSlotAnswerMap
+	var elementLiteralTargetAnswers as ElementLiteralTargetAnswerMap
 	var globalMapColumnAnswers as GlobalMapColumnsAnswerMap
 
 	// The first break of a combined error's match obligation found where nothing may throw — a drop site or a
@@ -20311,6 +20345,10 @@ export type Parser
 			settledTypeNames: SettledTypeNameMap.create(),
 			handedResolution: NothingHanded,
 			declaredAliasAnswers: DeclaredAliasAnswerMap.create(),
+			rangedAliasTagAnswers: NamedTypeTagAnswerMap.create(),
+			castTargetTagAnswers: NamedTypeTagAnswerMap.create(),
+			elementSlotAnswers: ElementSlotAnswerMap.create(),
+			elementLiteralTargetAnswers: ElementLiteralTargetAnswerMap.create(),
 			globalMapColumnAnswers: GlobalMapColumnsAnswerMap.create(),
 			pos: 0,
 			artifact: FileParseArtifact.create(job.path, livesUnderStdlibDirectory: job.livesUnderStdlibDirectory, sourceBytes: sourceBytes),
@@ -42931,7 +42969,14 @@ export type Parser
 	// `builtinConformerOfType` claims is one conformer with `Integer`/`Byte`/`int` — would be E2015 while
 	// `TypeResolution.resolveNamedType` erases the very same name to `integer`.
 	function rangedAliasTag(nameId TypeNameId) returns ValueTypeTag
-		return self.rangedAliasTagOfNameFrom(self.internedName(nameId), scopeFilePath: self.job.path)
+		if let answered = try self.rangedAliasTagAnswers.get(nameId) 'alreadyAsked'
+			return answered
+		end 'alreadyAsked'
+
+		let tag = self.rangedAliasTagOfNameFrom(self.internedName(nameId), scopeFilePath: self.job.path)
+		self.rangedAliasTagAnswers.upsert(nameId, value: tag)
+
+		return tag
 	end 'rangedAliasTag'
 
 	// The same reduction on a named FILE's behalf. Split for `namedIsFloatAliasFor`'s reason: a slot another
@@ -42951,7 +42996,7 @@ export type Parser
 	// (`Parser.readTypeAliasDeclaration`) is the ONE `named` type whose VALUE is a genuine float; an
 	// `int(low to high)` alias is `named` too and is an int.
 	function namedIsFloatAlias(nameId TypeNameId) returns bool
-		return self.namedIsFloatAliasFor(nameId, scopeFilePath: self.job.path)
+		return tagIsFloat(self.rangedAliasTag(nameId))
 	end 'namedIsFloatAlias'
 
 	// The same question on a named FILE's behalf — see `resolveFloatAliasType`, the one caller that asks it
@@ -60982,7 +61027,7 @@ export type Parser
 		// would then withhold the site whose E3005 says so. The float arm passes `false` because a float
 		// alias's bounds are IEEE-754 patterns that `floatOrderKey` already orders by VALUE, so there is no
 		// signed/unsigned ambiguity for a mark to resolve.
-		return self.constIsKnown(value) and literalInRange(self.constOf(value), low: alias.low, high: alias.high, isFloat: false, writtenNegative: valueIsMarked(self.bodyState.writtenNegativeLiterals, value: value), writtenAboveSignedMax: valueIsMarked(self.bodyState.unsignedMaxLiterals, value: value))
+		return self.constIsKnown(value) and literalInRange(self.constOf(value), low: alias.low, high: alias.high, isFloat: false, writtenNegative: valueIsMarked(self.bodyState.writtenNegativeLiterals, value: value), writtenAboveSignedMax: self.valueIsAboveSignedMax(value))
 	end 'edgeProvesAlias'
 
 	// The phi a MERGED BINDING carries: its type is the binding's declared one, which the
@@ -64267,7 +64312,7 @@ export type Parser
 		let payload = self.floatConstBitsOf(value) if isFloat else self.constOf(value)
 		let writtenNegative = valueIsMarked(self.bodyState.writtenNegativeLiterals, value: value) and not isFloat
 
-		if literalInRange(payload, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, writtenAboveSignedMax: valueIsMarked(self.bodyState.unsignedMaxLiterals, value: value) and not isFloat) 'inRange'
+		if literalInRange(payload, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, writtenAboveSignedMax: self.valueIsAboveSignedMax(value) and not isFloat) 'inRange'
 			return
 		end 'inRange'
 
@@ -64631,7 +64676,15 @@ export type Parser
 		end 'alreadyConcrete'
 
 		let nameId = typeNameIdOf(targetType)
-		return try self.denotedCastTargetTag(self.internedName(nameId), id: nameId, asTok: asTok)
+
+		if let answered = try self.castTargetTagAnswers.get(nameId) 'alreadyAsked'
+			return answered
+		end 'alreadyAsked'
+
+		let tag = try self.denotedCastTargetTag(self.internedName(nameId), id: nameId, asTok: asTok)
+		self.castTargetTagAnswers.upsert(nameId, value: tag)
+
+		return tag
 	end 'castTargetTag'
 
 	// The KIND a NAMED cast target denotes, or E3011 anchored on the `as` — the half of the cast-target
@@ -78963,7 +79016,7 @@ export type Parser
 		// across the byte/sub-byte boundary), so which instance `[1 as Percent, …]` mints is that predicate's answer, not this
 		// gate's.
 		if self.signatures.arrayElementMayBeConstantBlob(giid) 'anInlineStoredElement'
-			return try self.parseCollectedArrayLiteralBody(func, first: head, firstStart: firstStart, giid: giid, range: range)
+			return try self.parseCollectedArrayLiteralBody(func, first: head, firstStart: firstStart, giid: giid, range: range, restIsConstantRun: self.restIsIntegerLiteralRun() and self.constIsKnown(head) and self.admitIntegerLiteralIntoElementSlot(first, slot: self.elementSlotOf(giid)))
 		end 'anInlineStoredElement'
 
 		let arr = try self.emitArrayCreateOp(giid, range: range)
@@ -78993,14 +79046,14 @@ export type Parser
 	// ⚠ Only an INLINE-STORED element reaches here — never a managed one, whose slot is a pointer to a heap
 	// box — so there is no managed move-in to preserve, which is what makes holding the elements across the
 	// `]` legitimate at all. `arrayElementMayBeConstantBlob` is where that exclusion is stated.
-	function parseCollectedArrayLiteralBody(func IrFunction, first ValueId, firstStart ElementIndex, giid GenericInstanceId, range SourceRange) returns ValueId throws SourceParseError
+	function parseCollectedArrayLiteralBody(func IrFunction, first ValueId, firstStart ElementIndex, giid GenericInstanceId, range SourceRange, restIsConstantRun bool) returns ValueId throws SourceParseError
 		var values = ValueIdArray.create()
 		var starts = TokenIndexArray.create()
 		values.push(first)
 		starts.push(firstStart)
 
 		while try self.atAnotherLiteralEntry() 'moreElements'
-			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
+			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid, constantRun: restIsConstantRun)
 
 			if self.valueIsDeferred(parsed.value) 'aDeferredElement'
 				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
@@ -79017,6 +79070,10 @@ export type Parser
 			let blob = self.emitConstantArrayBlob(values, giid: giid, range: range)
 			return blob
 		end 'aConstantBlob'
+
+		if restIsConstantRun 'aRunThatIsNotConstant'
+			panic("Parser.parseCollectedArrayLiteralBody: a run of integer literals converted into '{String.from(self.signatures.instanceDisplayName(giid))}' left a non-constant element — every element of the run is a constant, converted or proven in range")
+		end 'aRunThatIsNotConstant'
 
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 
@@ -79169,7 +79226,7 @@ export type Parser
 	end 'literalColumnsOf'
 
 	function noteColumnSign(signs ColumnSigns, value ValueId) returns ColumnSigns
-		if self.tagOf(value) != ValueTypeTag.integer or self.valueNameId(value) != UnnamedTypeId or not self.constIsKnown(value) 'notABareConstant'
+		if not self.valueIsAnIntegerConstant(value) 'notABareConstant'
 			return signs
 		end 'notABareConstant'
 
@@ -79460,7 +79517,7 @@ export type Parser
 	// a collect-then-push walk would have already moved past.
 	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws SourceParseError
 		while try self.atAnotherLiteralEntry() 'moreElements'
-			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
+			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid, constantRun: false)
 
 			if self.valueIsDeferred(parsed.value) 'aDeferredElement'
 				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
@@ -79498,18 +79555,72 @@ export type Parser
 	// the element rule, shared by `finishArrayLiteral` (which pushes what it gets) and
 	// `parseCollectedArrayLiteralBody` (which collects it). The separator is
 	// `atAnotherLiteralEntry`'s.
-	function parseArrayLiteralTailElement(func IrFunction, giid GenericInstanceId) returns ArrayLiteralElement throws SourceParseError
+	function parseArrayLiteralTailElement(func IrFunction, giid GenericInstanceId, constantRun bool) returns ArrayLiteralElement throws SourceParseError
 		let elemTok = self.current()
 		let elemStart = self.pos
-		self.stateContainerElementLiteralTargets(giid, valueStart: elemStart)
+
+		if not constantRun 'aLiteralTargetIsOnOffer'
+			self.stateContainerElementLiteralTargets(giid, valueStart: elemStart)
+		end 'aLiteralTargetIsOnOffer'
+
 		let elem = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		if self.valueIsDeferred(elem) 'aDeferredElement'
 			return ArrayLiteralElement.create(elem, start: elemStart)
 		end 'aDeferredElement'
 
+		if constantRun and self.admitIntegerLiteralIntoElementSlot(elem, slot: self.elementSlotOf(giid)) 'provenInRange'
+			return ArrayLiteralElement.create(elem, start: elemStart)
+		end 'provenInRange'
+
 		return ArrayLiteralElement.create(try self.admitArrayLiteralElement(elem, giid: giid, elemTok: elemTok, valueStart: elemStart), start: elemStart)
 	end 'parseArrayLiteralTailElement'
+
+	// Bare literals only, so no element of a run is negative: a run skips the element conversion, and
+	// `requireElementsShareASign` sees the same signs either way only because of that.
+	function restIsIntegerLiteralRun() returns bool
+		var q = self.pos
+
+		while self.kindAt(q) == TokenKind.comma 'eachEntry'
+			if self.kindAt(q + 1) != TokenKind.intLiteral 'notALiteralEntry'
+				return false
+			end 'notALiteralEntry'
+
+			q = q + 2
+		end 'eachEntry'
+
+		return self.kindAt(q) == TokenKind.rightBracket
+	end 'restIsIntegerLiteralRun'
+
+	// A literal the slot provably holds is stored unconverted: `InsertRangeChecks` drops an in-range
+	// literal's site, so the conversion would add nothing.
+	function admitIntegerLiteralIntoElementSlot(value ValueId, slot ElementSlot) returns bool
+		if not self.valueIsAnIntegerConstant(value) 'notAnIntegerConstant'
+			return false
+		end 'notAnIntegerConstant'
+
+		return match slot.alias 'alias'
+			declared(ranged) gives self.admitIntegerLiteralIntoAlias(value, alias: ranged)
+			undeclared gives maxonTypeTag(slot.declared) == ValueTypeTag.integer and not self.valueIsAboveSignedMax(value)
+		end 'alias'
+	end 'admitIntegerLiteralIntoElementSlot'
+
+	function admitIntegerLiteralIntoAlias(value ValueId, alias RangedTypeAlias) returns bool
+		if aliasIsFloat(alias) or not self.edgeProvesAlias(value, alias: alias) 'notProvenInside'
+			return false
+		end 'notProvenInside'
+
+		self.admitUnsignedLiteral(value)
+		return true
+	end 'admitIntegerLiteralIntoAlias'
+
+	function valueIsAnIntegerConstant(value ValueId) returns bool
+		return self.tagOf(value) == ValueTypeTag.integer and self.valueNameId(value) == UnnamedTypeId and self.constIsKnown(value)
+	end 'valueIsAnIntegerConstant'
+
+	function valueIsAboveSignedMax(value ValueId) returns bool
+		return valueIsMarked(self.bodyState.unsignedMaxLiterals, value: value)
+	end 'valueIsAboveSignedMax'
 
 	function requireLiteralElementIsStorable(value ValueId, giid GenericInstanceId, elemTok Token, valueStart ElementIndex) throws SourceParseError
 		if self.signatures.containerElementIsReadOnly(giid) or not self.valueIsARecordAStoreAliases(value) or self.valueIsOpaque(value) 'nothingToJudgeHere'
@@ -79548,14 +79659,11 @@ export type Parser
 	// answer. `requireCastKindsConvert` is the existing E3009 for it and needs no new sentence. (The runnable
 	// oracle has no answer here to match: `ByteArray from ["a", "b"]` crashes it with an internal E9001.)
 	function admitArrayLiteralElement(value ValueId, giid GenericInstanceId, elemTok Token, valueStart ElementIndex) returns ValueId throws SourceParseError
-		let indexSpaceElement = self.signatures.containerElementType(giid)
-		let declaredElement = self.resolvedSlotType(indexSpaceElement)
+		let slot = self.elementSlotOf(giid)
 
-		if self.valueIsPromise(value) and typeIsPromiseStorage(self.signatures, t: declaredElement) 'aPromiseElement'
-			return try self.storedPromiseValue(value, storage: genericInstanceIdOf(declaredElement), anchor: elemTok, range: SourceRange.ofToken(elemTok))
+		if self.valueIsPromise(value) and typeIsPromiseStorage(self.signatures, t: slot.declared) 'aPromiseElement'
+			return try self.storedPromiseValue(value, storage: genericInstanceIdOf(slot.declared), anchor: elemTok, range: SourceRange.ofToken(elemTok))
 		end 'aPromiseElement'
-
-		view targetAlias = self.declaredAliasOfIndexSpaceType(indexSpaceElement)
 
 		// ⚠ **THE ELEMENT TYPE HAS TO BE RE-SPELLED IN THIS FILE'S INTERNER BEFORE ANY DOOR BELOW SEES IT.**
 		// The instance's argument was interned by `ProgramSignatures`, and every step from here mints or reads
@@ -79567,8 +79675,8 @@ export type Parser
 		// `requireCastKindsConvert` and thereby got ONE of the conversion's three legality guards; the enum
 		// refusal it dropped let `ByteArray from [Color.red, …]` through. They live inside
 		// `convertValueToDeclaredType` now, so reaching the conversion is what grants them.
-		let converted = try self.convertedArrayLiteralElement(value, targetAlias: targetAlias, indexSpaceElement: indexSpaceElement, giid: giid, elemTok: elemTok, valueStart: valueStart)
-		let fitted = try self.requireElementFitsSlot(giid, value: converted, valueStart: valueStart, site: ContainerElementSite.literalElement(elemTok))
+		let converted = try self.convertedArrayLiteralElement(value, slot: slot, giid: giid, elemTok: elemTok, valueStart: valueStart)
+		let fitted = try self.requireElementFitsSlot(giid, slot: slot, value: converted, valueStart: valueStart, site: ContainerElementSite.literalElement(elemTok))
 		try self.requireLiteralElementIsStorable(value, giid: giid, elemTok: elemTok, valueStart: valueStart)
 
 		return fitted
@@ -79577,13 +79685,13 @@ export type Parser
 	// The element itself, converted into the instance's element type when it is not already that type and
 	// handed straight back when it is. Split from the `requireElementFitsSlot` call above so that call is
 	// written ONCE for both arms — calling it in each arm is one question asked from two places.
-	function convertedArrayLiteralElement(value ValueId, targetAlias DeclaredAlias, indexSpaceElement MaxonType, giid GenericInstanceId, elemTok Token, valueStart ElementIndex) returns ValueId throws SourceParseError
-		if not (try self.elementMustBeConvertedInto(value, giid: giid, targetAlias: targetAlias, elemTok: elemTok)) 'alreadyThisInstancesElement'
+	function convertedArrayLiteralElement(value ValueId, slot ElementSlot, giid GenericInstanceId, elemTok Token, valueStart ElementIndex) returns ValueId throws SourceParseError
+		if not (try self.elementMustBeConvertedInto(value, giid: giid, targetAlias: slot.alias, elemTok: elemTok)) 'alreadyThisInstancesElement'
 			return value
 		end 'alreadyThisInstancesElement'
 
-		let elementType = MaxonType.named(self.artifact.typeNames.intern(self.signatures.indexSpaceTypeName(indexSpaceElement)))
-		return try self.convertValueToDeclaredType(value, sourceTag: self.tagOf(value), targetType: elementType, targetAlias: targetAlias, opTok: elemTok, sourceIsBareLocal: self.rhsWasBareLocalReference(valueStart), mustCarryTargetType: true)
+		let elementType = MaxonType.named(self.artifact.typeNames.intern(self.signatures.indexSpaceTypeName(slot.indexSpaceType)))
+		return try self.convertValueToDeclaredType(value, sourceTag: self.tagOf(value), targetType: elementType, targetAlias: slot.alias, opTok: elemTok, sourceIsBareLocal: self.rhsWasBareLocalReference(valueStart), mustCarryTargetType: true)
 	end 'convertedArrayLiteralElement'
 
 	// ⭐⭐ **MUST THIS ELEMENT STILL BE MADE INTO THE INSTANCE'S ELEMENT TYPE? — TWO QUESTIONS, AND NEITHER
@@ -79967,10 +80075,14 @@ export type Parser
 	// The two columns of one request, written together — the ONE writer, so a position can never be left
 	// standing beside an instance some earlier slot named.
 	function stateDeclaredLiteralTarget(declared MaxonType, scopeFilePath FilePath, valueStart ElementIndex)
-		self.stateArrayLiteralTargetAt(self.signatures.arrayInstanceOfDeclaredType(declared, interner: self.artifact.typeNames, readerFilePath: scopeFilePath), tokenIndex: valueStart)
-		self.stateTupleLiteralTargetAt(self.declaredTupleTargetOf(declared), tokenIndex: valueStart)
-		self.stateClosureOfferOfDeclaredType(declared, valueStart: valueStart)
+		self.stateLiteralTargets(declared, arrayTarget: self.signatures.arrayInstanceOfDeclaredType(declared, interner: self.artifact.typeNames, readerFilePath: scopeFilePath), tupleTarget: self.declaredTupleTargetOf(declared), valueStart: valueStart)
 	end 'stateDeclaredLiteralTarget'
+
+	function stateLiteralTargets(declared MaxonType, arrayTarget DeclaredArrayInstance, tupleTarget DeclaredTupleTarget, valueStart ElementIndex)
+		self.stateArrayLiteralTargetAt(arrayTarget, tokenIndex: valueStart)
+		self.stateTupleLiteralTargetAt(tupleTarget, tokenIndex: valueStart)
+		self.stateClosureOfferOfDeclaredType(declared, valueStart: valueStart)
+	end 'stateLiteralTargets'
 
 	function stateClosureOfferOfDeclaredType(declared MaxonType, valueStart ElementIndex)
 		if maxonTypeTag(declared) != ValueTypeTag.function or not self.argumentOpensAClosure(valueStart) 'noClosureToOffer'
@@ -80133,13 +80245,29 @@ export type Parser
 	end 'stateDeclaredReturnArrayLiteralTarget'
 
 	function stateContainerElementLiteralTargets(giid GenericInstanceId, valueStart ElementIndex)
+		match self.elementLiteralTargetsOf(giid) 'targets'
+			none then self.stateNoElementLiteralTargets(valueStart)
+			typed(adopted, arrayTarget, tupleTarget) then self.stateLiteralTargets(adopted, arrayTarget: arrayTarget.clone(), tupleTarget: tupleTarget.clone(), valueStart: valueStart)
+		end 'targets'
+	end 'stateContainerElementLiteralTargets'
+
+	function elementLiteralTargetsOf(giid GenericInstanceId) returns ElementLiteralTargets
+		if let answered = try self.elementLiteralTargetAnswers.get(giid) 'alreadyAsked'
+			return answered
+		end 'alreadyAsked'
+
+		self.elementLiteralTargetAnswers.upsert(giid, value: self.freshElementLiteralTargets(giid))
+		return try self.elementLiteralTargetAnswers.get(giid) otherwise panic("elementLiteralTargetsOf: the answer filed for {giid} one line up is missing")
+	end 'elementLiteralTargetsOf'
+
+	function freshElementLiteralTargets(giid GenericInstanceId) returns ElementLiteralTargets
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
-			self.stateNoElementLiteralTargets(valueStart)
-			return
+			return ElementLiteralTargets.none
 		end 'opaqueInSharedBody'
 
-		self.stateDeclaredLiteralTarget(self.signatures.adoptType(self.signatures.containerElementType(giid), into: self.artifact.typeNames), scopeFilePath: self.job.path, valueStart: valueStart)
-	end 'stateContainerElementLiteralTargets'
+		let adopted = self.signatures.adoptType(self.signatures.containerElementType(giid), into: self.artifact.typeNames)
+		return ElementLiteralTargets.typed(adopted, arrayTarget: self.signatures.arrayInstanceOfDeclaredType(adopted, interner: self.artifact.typeNames, readerFilePath: self.job.path), tupleTarget: self.declaredTupleTargetOf(adopted))
+	end 'freshElementLiteralTargets'
 
 	function stateArrayLiteralTargetAt(slot DeclaredArrayInstance, tokenIndex ElementIndex)
 		self.arrayLiteralTargetTokenIndex = tokenIndex
@@ -86080,31 +86208,57 @@ export type Parser
 			self.noteMutableStoreSite(value, valueStart: valueStart, place: "an element of the container {String.from(methodTok.value)} writes", anchor: methodTok)
 		end 'aWritableElement'
 
-		return try self.requireElementFitsSlot(giid, value: value, valueStart: valueStart, site: ContainerElementSite.call(methodTok))
+		return try self.requireElementFitsSlot(giid, slot: self.elementSlotOf(giid), value: value, valueStart: valueStart, site: ContainerElementSite.call(methodTok))
 	end 'requireContainerElementType'
 
-	function requireElementFitsSlot(giid GenericInstanceId, value ValueId, valueStart ElementIndex, site ContainerElementSite) returns ValueId throws SourceParseError
+	function elementSlotOf(giid GenericInstanceId) returns ElementSlot
+		if let answered = try self.elementSlotAnswers.get(giid) 'alreadyAsked'
+			return answered
+		end 'alreadyAsked'
+
+		self.elementSlotAnswers.upsert(giid, value: self.freshElementSlot(giid))
+		return try self.elementSlotAnswers.get(giid) otherwise panic("elementSlotOf: the answer filed for {giid} one line up is missing")
+	end 'elementSlotOf'
+
+	function freshElementSlot(giid GenericInstanceId) returns ElementSlot
+		let indexSpaceType = self.signatures.containerElementType(giid)
+		let declared = self.resolvedSlotType(indexSpaceType)
+		let alias = self.declaredAliasOfIndexSpaceType(indexSpaceType)
+
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
-			return value
+			return ElementSlot.create(indexSpaceType, declared: declared, alias: alias, fit: ElementFit.opaque)
 		end 'opaqueInSharedBody'
 
+		let payload = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.job.path)
+		let declaredNameId = typeNameIdOf(self.typeKeepingAlias(indexSpaceType, collapsed: declared, scopeFilePath: self.job.path))
+
+		return ElementSlot.create(indexSpaceType, declared: declared, alias: alias, fit: ElementFit.checked(payload, declaredNameId: declaredNameId))
+	end 'freshElementSlot'
+
+	function requireElementFitsSlot(giid GenericInstanceId, slot ElementSlot, value ValueId, valueStart ElementIndex, site ContainerElementSite) returns ValueId throws SourceParseError
+		return match slot.fit 'fit'
+			opaque gives value
+			checked(payload, declaredNameId) gives try self.requireValueFitsCheckedSlot(giid, slot: slot, payload: payload, declaredNameId: declaredNameId, value: value, valueStart: valueStart, site: site)
+		end 'fit'
+	end 'requireElementFitsSlot'
+
+	function requireValueFitsCheckedSlot(giid GenericInstanceId, slot ElementSlot, payload PayloadClass, declaredNameId TypeNameId, value ValueId, valueStart ElementIndex, site ContainerElementSite) returns ValueId throws SourceParseError
 		let anchor = containerElementSiteAnchor(site)
-		let declared = self.resolvedSlotType(self.signatures.containerElementType(giid))
+		let declared = slot.declared
 
 		// A promise element is compared by its whole promise type, here and not by the two arms below: they
 		// compare a tag, and the type's result and error are what must agree. The check only checks; taking the
 		// promise is `storedContainerElement`'s.
-		if self.valueIsPromise(value) and self.containerElementHoldsPromises(giid) 'promiseElement'
+		if self.valueIsPromise(value) and typeIsPromiseStorage(self.signatures, t: declared) 'promiseElement'
 			try self.requirePromiseSlotAgrees(value, storage: genericInstanceIdOf(declared), anchor: anchor)
 			return value
 		end 'promiseElement'
 
 		let element = try self.integerizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
-		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.job.path)
 
-		if payloadClassIsManaged(class) 'managed'
+		if payloadClassIsManaged(payload) 'managed'
 			let widened = self.interfaceHandleOf(element, declared: declared, first: anchor, last: anchor)
-			try self.requireManagedSlotValueMatches(class, declared: declared, value: widened, placeDoor: FunctionTypeDoor.containerElement, placeName: containerElementSiteName(site), placeOwner: SlotOwner.unowned, placeBrand: self.elementBrandOf(giid), placeSpelling: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: anchor)
+			try self.requireManagedSlotValueMatches(payload, declared: declared, value: widened, placeDoor: FunctionTypeDoor.containerElement, placeName: containerElementSiteName(site), placeOwner: SlotOwner.unowned, placeBrand: self.elementBrandOf(giid), placeSpelling: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: anchor)
 			return widened
 		end 'managed'
 
@@ -86115,7 +86269,7 @@ export type Parser
 		// The VOICE is the other axis and is the mutator's own: `push` is a METHOD and its element is that
 		// method's ARGUMENT, so the type refusal is the argument sentence rather than the assignment one.
 		// See `SlotMismatchVoice`, which records what calling `push` a "variable" was measured to say.
-		let stored = try self.assignableValue(anchor, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(self.typeKeepingAlias(self.signatures.containerElementType(giid), collapsed: declared, scopeFilePath: self.job.path)), door: FunctionTypeDoor.field, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.containerElementArgument)
+		let stored = try self.assignableValue(anchor, value: element, declared: maxonTypeTag(declared), declaredNameId: declaredNameId, door: FunctionTypeDoor.field, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.containerElementArgument)
 
 		// An enum is the one aggregate that reaches here: its value is a scalar `named` tag, so
 		// `assignableValue`'s verdict agrees for any two enums. A managed aggregate's identity is the
@@ -86149,10 +86303,15 @@ export type Parser
 		end 'site'
 
 		return stored
-	end 'requireElementFitsSlot'
+	end 'requireValueFitsCheckedSlot'
 
 	function containerElementHoldsPromises(giid GenericInstanceId) returns bool
-		return not self.signatures.containerElementIsOpaque(giid) and typeIsPromiseStorage(self.signatures, t: self.resolvedSlotType(self.signatures.containerElementType(giid)))
+		let slot = self.elementSlotOf(giid)
+
+		return match slot.fit 'fit'
+			opaque gives false
+			checked gives typeIsPromiseStorage(self.signatures, t: slot.declared)
+		end 'fit'
 	end 'containerElementHoldsPromises'
 
 	function storedContainerElement(giid GenericInstanceId, value ValueId, valueStart ElementIndex, methodTok Token) returns ValueId throws SourceParseError
@@ -100885,7 +101044,7 @@ export type Parser
 	end 'admitUnsignedLiteral'
 
 	function unsignedLiteralAwaitsAdmission(value ValueId) returns bool
-		return not self.bodyState.unsignedLiteralSites.isEmpty() and valueIsMarked(self.bodyState.unsignedMaxLiterals, value: value)
+		return not self.bodyState.unsignedLiteralSites.isEmpty() and self.valueIsAboveSignedMax(value)
 	end 'unsignedLiteralAwaitsAdmission'
 
 	function admitUnsignedLiteralBeside(literal ValueId, partner ValueId)

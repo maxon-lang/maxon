@@ -1,0 +1,89 @@
+// an-integer-table-adds-bounded-signature-allocations-per-element.maxtest - a top-level table of integer
+// literals costs a bounded number of `signatures` allocations per element, though nothing reads it:
+// every compile parses a top-level initializer in full.
+//
+// Two fixture sizes rather than one budget: an absolute count drifts with every unrelated change, while
+// the slope across two tables of the same shape is the property itself.
+typealias TableElements = int(0 to 65536)
+
+let CaseDirName = "integer-table-allocations"
+let WarmUpAppDirName = "warm"
+
+let WarmUpElements = 4
+let SmallElements = 500
+let LargeElements = 4500
+
+let SignaturesPhaseName = "signatures"
+let MetricsPhaseKind = "phase"
+
+let MainDeclaration = "function main() returns ExitCode\n\tprint(\"a table nothing reads\\n\")\n\treturn 0\nend 'main'\n\n"
+let AliasPreamble = "typealias Limb = int(0 to 4294967295)\ntypealias Limbs = Array with Limb\n\n"
+let AliasOpening = "let table = Limbs from ["
+let PlainOpening = "let table = ["
+let FixtureFooter = "]\n"
+let ElementStride = 40503
+let ElementModulus = 65536
+let MostAllocationsPerElement = 16 as ReportedTally
+
+type TableShape
+	export let name as String
+	export let preamble as String
+	export let opening as String
+
+	static function create(name String, preamble String, opening String) returns TableShape
+		return Self{name: name, preamble: preamble, opening: opening}
+	end 'create'
+end 'TableShape'
+
+typealias TableShapes = Array with TableShape
+
+function tableShapes() returns TableShapes
+	return [TableShape.create("alias", preamble: "{AliasPreamble}{MainDeclaration}", opening: AliasOpening), TableShape.create("plain", preamble: MainDeclaration, opening: PlainOpening)]
+end 'tableShapes'
+
+function fixtureSource(shape TableShape, elements TableElements) returns String
+	var out = "{shape.preamble}{shape.opening}"
+	var value = 0 as ReportedTally
+
+	for index in 0 upto elements 'eachElement'
+		if index > 0 'afterTheFirst'
+			out.append(", ")
+		end 'afterTheFirst'
+
+		out.append("{value}")
+		value = (value + ElementStride) mod ElementModulus
+	end 'eachElement'
+
+	out.append(FixtureFooter)
+	return out
+end 'fixtureSource'
+
+function signaturesAllocationsFor(dir FilePath, appDirName String, shape TableShape, elements TableElements) returns ReportedTally throws TestFailure
+	let table = try stagedProgramMetrics(dir, name: appDirName, source: fixtureSource(shape, elements: elements), described: "the {elements}-element {shape.name} fixture")
+	return metricsCell(table, kind: MetricsPhaseKind, name: SignaturesPhaseName, field: MetricsAllocsField)
+end 'signaturesAllocationsFor'
+
+test 'a table of integer literals nothing reads adds a bounded number of signature allocations per element'
+	requireHeldOutsideCheckout(CaseDirName, check: IntegerTableAllocatesBoundedlyPerElement.create())
+end 'a table of integer literals nothing reads adds a bounded number of signature allocations per element'
+
+type IntegerTableAllocatesBoundedlyPerElement implements OutsideCheckoutCase
+	static function create() returns IntegerTableAllocatesBoundedlyPerElement
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		for shape in tableShapes() 'eachShape'
+			_ = try signaturesAllocationsFor(dir, appDirName: "{shape.name}-{WarmUpAppDirName}", shape: shape, elements: WarmUpElements)
+
+			let smallAllocs = try signaturesAllocationsFor(dir, appDirName: "{shape.name}-small", shape: shape, elements: SmallElements)
+			let largeAllocs = try signaturesAllocationsFor(dir, appDirName: "{shape.name}-large", shape: shape, elements: LargeElements)
+
+			let addedElements = (LargeElements - SmallElements) as ReportedTally
+			let addedAllocs = largeAllocs - smallAllocs
+			let bound = MostAllocationsPerElement * addedElements
+
+			try Expect.isTrue(addedAllocs <= bound, message: "the `{MetricsPhaseKind} {SignaturesPhaseName}` row allocated {smallAllocs} times with a {SmallElements}-element {shape.name} table nothing reads and {largeAllocs} times with {LargeElements}: {addedElements} more elements cost {addedAllocs} more allocations, over the {bound} that {MostAllocationsPerElement} per element allows. The record probe admits every element of an integer-literal run the slot provably holds without the element rule's conversion, so an element must cost a bounded handful of allocations.")
+		end 'eachShape'
+	end 'requireHeldIn'
+end 'IntegerTableAllocatesBoundedlyPerElement'
