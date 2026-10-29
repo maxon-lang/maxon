@@ -14,12 +14,13 @@
 
 # ⭐ A COMMIT THAT TOUCHES NOTHING THIS WORKFLOW READS DOES NOT RUN IT. The build reads `maxon-bin/`,
 # `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts re-included below; the jobs read
-# `specs/` and the `tests/` corpora they run. Everything excluded below is read by none of them — prose,
-# editor and agent config, and projects with workflows of their own. `tests/` and `scripts/`
-# are excluded because no job here runs the rest of them, so a run on their change reports on code it
-# never touched; the corpora and scripts a job does run are re-included, and so are the website pages
-# whose snippets `tests/examples` compiles and the workflows and installers `tests/targets` reads. A
-# step that starts running another script needs that script re-included here.
+# `specs/` and every `tests/` corpus, because `scripts/build-test-corpora.sh` builds each one and a
+# corpus that stops compiling must fail the run that changed it. Everything excluded below is read by
+# none of them — prose, editor and agent config, and projects with workflows of their own. `scripts/`
+# is excluded because no job here runs the rest of it, so a run on its change reports on code it never
+# touched; the scripts a job does run are re-included, and so are the website pages whose snippets
+# `tests/examples` compiles and the workflows and installers `tests/targets` reads. A step that starts
+# running another script needs that script re-included here.
 #
 # ⛔ THE LIST IS EXCLUSIONS, AND A RE-INCLUSION IS WRITTEN ONLY FOR A PATH A JOB READS. A new
 # directory therefore runs CI until someone decides it need not, rather than being skipped silently
@@ -53,21 +54,9 @@ on:
       - '!vscode-extension/**'
       - '!installer/**'
       - '!bench/**'
-      - '!tests/**'
-      - 'tests/lsp/**'
-      - 'tests/fmt/**'
-      - 'tests/ladders/**'
-      - 'tests/specHarness/**'
-      - 'tests/debug/**'
-      - 'tests/dap/**'
-      - 'tests/mcp/**'
-      - 'tests/cli/**'
-      - 'tests/buildManifest/**'
-      - 'tests/examples/**'
-      - 'tests/emittedRuntime/**'
-      - 'tests/support/**'
-      - 'tests/targets/**'
+      - '!tests/README.md'
       - '!scripts/**'
+      - 'scripts/build-test-corpora.sh'
       - 'scripts/fetch-seed.sh'
       - 'scripts/seed-tag'
       - 'scripts/build-from-seed.sh'
@@ -266,6 +255,12 @@ jobs:
       - name: Stage vendor
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
+
+      # Every tracked directory under `tests/` holding a `.maxtest` is built and nothing is run, so a
+      # corpus no job here runs still has to compile; the script derives the set rather than listing it.
+      - name: Every test corpus builds
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./scripts/build-test-corpora.sh
 
       - name: Spec harness corpus
         if: steps.seed.outputs.seeded == 'yes'

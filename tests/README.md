@@ -10,6 +10,14 @@ Twenty-two corpora live here, one directory each, every path into one spelled fr
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.specRunWorkingDir` states, along with why it is deliberately not `specDir.parent()`.
 
+⭐ **CI BUILDS EVERY CORPUS AND RUNS THE LISTED ONES.** `scripts/build-test-corpora.sh` runs
+`maxon test tests/<corpus> --list --build` for each tracked directory directly under `tests/` that holds a
+`.maxtest` file, stops at the first that fails, and names it. The set is derived, never listed, so a new
+corpus is built from the day it is added. `support/` holds none and `test-fixtures/` keeps its `.maxtest`
+sources one level down, so neither is a corpus to it. The corpora a CI step runs are named in
+`maxon-bin/AGENTS.md`; every other one is built there and run only when someone names it. A change under
+`tests/` other than this file triggers `ci.yml`.
+
 The last column names the constant each corpus is reached through. Two are not one constant
 naming a directory, and both say so in the row: `fmt/`'s is written three times because its
 generator MINTS what its two test files read, and `lsp/` has no constant for itself at all —
