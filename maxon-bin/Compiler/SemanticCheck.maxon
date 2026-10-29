@@ -1283,9 +1283,9 @@ function overloadDisagreementIsIrreparable(current ValueTypeTag, declared ValueT
 	return not overloadResultTagAgrees(current, declared: declared) and (not tagIsPlainOverloadScalar(current) or not tagIsPlainOverloadScalar(declared))
 end 'overloadDisagreementIsIrreparable'
 
-// The value an overload-resolvable op DEFINES. All three define one — a `call` in statement position defines
-// a `void`-tagged value it never reads — so the `definesNothing` arm exists for the op set to grow into
-// rather than for a case that occurs today.
+// The value an overload-resolvable op DEFINES. Each defines one — a `call` in statement position
+// defines a `void`-tagged value it never reads — so the `definesNothing` arm exists for the op set to
+// grow into rather than for a case that occurs today.
 union OverloadResultValue
 	defines(result ValueId)
 	definesAPromise(result ValueId)
@@ -1297,7 +1297,8 @@ function overloadResultValue(op MaxonOp) returns OverloadResultValue
 		call(result, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
 		tryCall(result, _, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
 		asyncCall(result, _, _, _, _, _, _, _) gives OverloadResultValue.definesAPromise(result)
-		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly these three")
+		serviceSpawn(_, _, state, _, _, _, _, _, _, _, _, _) gives OverloadResultValue.defines(state)
+		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly these four")
 	end 'op'
 end 'overloadResultValue'
 
@@ -1316,9 +1317,9 @@ function reportAmbiguousOverload(project Project, func IrFunction, opIndex Eleme
 	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
 end 'reportAmbiguousOverload'
 
-// The argument list an overload-resolvable op supplies. A THIRD match over the same three variants would be
-// one too many, but this one asks a different question from `maxonOpCalleeKind`'s and cannot be folded into it:
-// that answer is built once per op, this one is read once per CANDIDATE.
+// The argument list an overload-resolvable op supplies. A THIRD match over the same variants would
+// be one too many, but this one asks a different question from `maxonOpCalleeKind`'s and cannot be
+// folded into it: that answer is built once per op, this one is read once per CANDIDATE.
 union OverloadCallArgs
 	supplied(args ValueIdArray, argLabels NameRoster, defaultedArgs ParamCount, mint CalleeMint)
 end 'OverloadCallArgs'
@@ -1327,8 +1328,9 @@ function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
 	return match op 'op'
 		call(_, _, args, argLabels, _, _, defaultedArgs, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultedArgs: defaultedArgs, mint: mint)
 		asyncCall(_, _, args, argLabels, _, _, defaultedArgs, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultedArgs: defaultedArgs, mint: mint)
+		serviceSpawn(_, _, _, _, _, args, argLabels, _, _, defaultedArgs, mint, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultedArgs: defaultedArgs, mint: mint)
 		tryCall(_, _, _, args, argLabels, _, _, defaultedArgs, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultedArgs: defaultedArgs, mint: mint)
-		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly these three")
+		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly these four")
 	end 'op'
 end 'overloadCallArgs'
 
@@ -1987,10 +1989,8 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		indirectCall then addFunctionValueParamEdges(op, calls: calls, func: func, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites, capturedLoads: capturedLoads)
 		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
 
-		// ⚠ An `async` spawn carries the same edge a direct call does. A managed argument is legal
-		// (`requireAsyncScalarParams` refuses a parameter that cannot ride the integer channel — a
-		// `float`, an interface value or an opaque type parameter — not a managed one) and the spawn
-		// hands the coroutine a reference to it, so `async g(p)` where `g`
+		// ⚠ An `async` spawn carries the same edge a direct call does. A managed argument is legal and
+		// the spawn hands the coroutine a reference to it, so `async g(p)` where `g`
 		// writes its parameter writes the caller's own, before the await or after it. Without the edge,
 		// `relay(q)` spawning a writing `replace(q)` would read as writing nothing, and E3159 would admit
 		// a `let` handed to `relay`.
@@ -2020,8 +2020,8 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 
 		// No edge for a service op: this summary answers "does a call to this function write the
 		// caller's own parameter?", and a parameter a send hands over is shared read-only, refused
-		// (E3138) when the sender or the handler writes or keeps it. A `serviceSpawn`'s state is a
-		// factory's own fresh box and was never anybody's parameter.
+		// (E3138) when the sender or the handler writes or keeps it. A `serviceSpawn` moves its factory's
+		// arguments to the service's green thread, so the factory writes none of this frame's.
 		serviceSpawn or
 		serviceSend or
 		serviceReplyCell or
@@ -2596,7 +2596,8 @@ function opConsumesAPromise(op MaxonOp) returns bool
 		errorFlagEncode or
 
 		// A service's green thread is not a promise and no service op reclaims one: a Promise may not be
-		// sent at all (`Parser.handOffTakeOf` refuses it), which is what keeps this answer true.
+		// sent or handed to a factory at all (`Parser.requireNoPromiseLeaves` refuses it), which is what
+		// keeps this answer true.
 		serviceSpawn or
 		serviceSend or
 		serviceReplyCell or
@@ -2939,8 +2940,9 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		panicAbortValue or
 		errorFlagEncode or
 
-		// No service op re-awaits: a spawn defines a mailbox pointer and a reply cell defines a promise,
-		// so both fall through to the re-arm test below, and a send reads a mailbox and a box.
+		// No service op re-awaits: a spawn defines a mailbox pointer or its start's cell and a reply cell
+		// defines a promise, so both fall through to the re-arm test below, and a send reads a mailbox
+		// and a box.
 		serviceSpawn or
 		serviceSend or
 		serviceReplyCell or
@@ -3243,10 +3245,10 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// flag travels and says nothing about what may be passed.
 					witnessTryDispatch(_, _, args, argImmutableNames, _, methodIndex, interfaceDeclIndex, _) then checkWitnessArguments(project, module: module, calls: calls, func: func, signatures: signatures, witnessSlots: witnessSlots, opIndex: opIdx, args: args, argImmutableNames: argImmutableNames, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, mutationSummary: mutationSummary, provenance: provenance)
 
-					// A service op's arguments are checked at the parser and cannot be checked here: a message's
-					// are inside the request (typed against the request union's payload fields, which are the
-					// method's declared parameter types — `ServiceCompanions.serviceRequestPayloads`), and a
-					// `spawn`'s state is the factory `call` op's own result, validated as that call.
+					// A message's arguments are checked at the parser and cannot be checked here: they are
+					// inside the request (typed against the request union's payload fields, which are the
+					// method's declared parameter types — `ServiceCompanions.serviceRequestPayloads`). A `spawn`
+					// carries its factory's arguments and is validated as that call (`validateServiceSpawn`).
 					//
 					// ⛔ The target gate is still owed here. Every other road into the green-thread substrate is a
 					// call, which `requireTargetSupportsCallee` meets by name, but a service reaches it through an
@@ -3254,7 +3256,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// E3104 into a backend that cannot emit it, and panics there. Each names the entry the
 					// lowering will mint, through the one E3104 wire format, so a service refusal and a `sleep`
 					// refusal cannot become two spellings of one rejection.
-					serviceSpawn then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "'spawn'", entry: SvcSpawnName, blameTargetErrorsHere: blameTargetErrorsHere)
+					serviceSpawn(_, _, state, _, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint, _) then validateServiceSpawn(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, state: state, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 					serviceSend then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "a message send", entry: MboxSendName, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// ⭐ A REPLY CELL reaches the scheduler substrate exactly as the two above do — it mints a
@@ -3274,39 +3276,38 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 	end 'eachFunc'
 end 'checkCalls'
 
-// An `async` spawn: validate its arguments exactly like a plain call, then require the callee's
-// PARAMETERS to be GPR scalars. The argument-VALUE and RESULT scalar checks are the parser's (it
-// holds the pre-resolution types and must type the promise safely); this is the one check the
+// An `async` spawn: validate its arguments exactly like a plain call, then refuse a callee
+// PARAMETER held at an opaque type parameter. The argument-VALUE and RESULT checks are the parser's
+// (it holds the pre-resolution types and must type the promise safely); this is the one check the
 // parser cannot make — a callee declared in another file, whose param types only the whole-program
 // `funcSignatures` registry has.
 function validateAsyncCall(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	validateCall(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
-	requireAsyncScalarParams(project, func: func, funcNames: funcNames, opIndex: opIndex, callee: callee)
+	requireAsyncArgumentsCarriable(project, func: func, funcNames: funcNames, opIndex: opIndex, callee: callee)
 end 'validateAsyncCall'
 
-// Refuse `async f(…)` when any parameter of `f` cannot ride the green thread's integer channel. The
-// trampoline passes every argument through the INTEGER arg registers, so a `float` (XMM) parameter would
-// read the wrong register file — a silent miscompile the parser's argument check cannot catch, because an
-// int argument LEGALLY coerces to a float parameter (`checkArgTypes`). Reads the RESOLVED signature: a
-// ranged-int alias has already collapsed to `integer`, while a boxed union — which resolution erases to
-// `integer` too — is recovered by its `paramAggregateNames` entry. A payload-free enum is a genuine i64
-// scalar and carries no aggregate name. An undeclared callee is E3004 (reported by `validateCall`); its
-// absent signature simply skips this check.
-function requireAsyncScalarParams(project Project, func IrFunction, funcNames FunctionNameIndex, opIndex ElementIndex, callee ByteArray)
+function validateServiceSpawn(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, state ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+	validateCall(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: state, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+	requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "'spawn'", entry: SvcSpawnName, blameTargetErrorsHere: blameTargetErrorsHere)
+end 'validateServiceSpawn'
+
+// An undeclared callee is E3004, reported by `validateCall`, so its absent signature skips this
+// check.
+function requireAsyncArgumentsCarriable(project Project, func IrFunction, funcNames FunctionNameIndex, opIndex ElementIndex, callee ByteArray)
 	view sig = try project.funcSignatures.get(callee) otherwise return
-	let member = try funcNames.funcNamed(callee) otherwise panic("requireAsyncScalarParams: '{String.from(callee)}' has a signature and no body in the module")
+	let member = try funcNames.funcNamed(callee) otherwise panic("requireAsyncArgumentsCarriable: '{String.from(callee)}' has a signature and no body in the module")
 
 	for i in 0 upto sig.paramCount() 'eachParam'
-		let paramType = try sig.paramTypes.get(i) otherwise panic("requireAsyncScalarParams: paramTypes.get OOB at {i}")
+		let paramType = try sig.paramTypes.get(i) otherwise panic("requireAsyncArgumentsCarriable: paramTypes.get OOB at {i}")
 
-		if not parameterRidesACellIntoASpawn(member.reassignedParamMask, param: i, paramType: paramType) and not tagRidesAsyncGprChannel(maxonTypeTag(paramType)) 'unfittableParam'
+		if not parameterRidesACellIntoASpawn(member.reassignedParamMask, param: i, paramType: paramType) and not tagRidesAsyncArgumentChannel(maxonTypeTag(paramType)) 'unfittableParam'
 			let range = project.opRanges.get(opIndex)
-			view paramName = try sig.paramNames.get(i) otherwise panic("requireAsyncScalarParams: paramNames.get OOB at {i} — a signature's param columns are built in lockstep")
-			reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "`async {String.from(callee)}(…)` — parameter '{String.from(paramName)}' cannot ride the green thread's integer channel: a `float` travels in an XMM register the hand-assembled trampoline never fills, a value held at an interface type is released through a witness table and one held at an opaque type parameter through a layout descriptor, and the green-thread struct carries neither. A float or an interface parameter the function reassigns rides a cell the coroutine owns", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+			view paramName = try sig.paramNames.get(i) otherwise panic("requireAsyncArgumentsCarriable: paramNames.get OOB at {i} — a signature's param columns are built in lockstep")
+			reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "`async {String.from(callee)}(…)` — parameter '{String.from(paramName)}' is held at an opaque type parameter, which is released through a layout descriptor the green-thread struct does not carry", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 			return
 		end 'unfittableParam'
 	end 'eachParam'
-end 'requireAsyncScalarParams'
+end 'requireAsyncArgumentsCarriable'
 
 // **E3057 for a witness dispatch of a THROWING interface method written without `try`** — the
 // witness twin of `validatePlainCall`'s user-function arm, and the same rule: a bare throwing call

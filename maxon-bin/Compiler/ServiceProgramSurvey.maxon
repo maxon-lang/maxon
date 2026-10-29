@@ -171,6 +171,7 @@ end 'SlotRoster'
 union MessageOwner
 	none
 	service(let name ByteArray)
+	factory(let name ByteArray)
 end 'MessageOwner'
 
 typealias MessageOwnerArray = Array with MessageOwner
@@ -185,8 +186,10 @@ module type ServiceProgramSurvey
 	// Built once the sweep is done (`settleCallGraph`).
 	export var calleeGraph as CsrGraph
 
-	// funcIndex ⇒ the service this function is a message of. Asked once per FUNCTION rather than
-	// once per (function, service): `messageOwnerNameOf` already walks every service's every variant.
+	// funcIndex ⇒ the service this function is a message or the factory of. Asked once per FUNCTION
+	// rather than once per (function, service): `messageOwnerNameOf` already walks every service's
+	// every variant. A factory runs on its service's green thread, so every rule a message seeds, it
+	// seeds too.
 	var ownerPerFunc as MessageOwnerArray
 
 	// E3139's column: every (function, awaited service) pair.
@@ -231,9 +234,18 @@ module type ServiceProgramSurvey
 	module function isAMessage(funcIndex ElementIndex) returns bool
 		return match try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.isAMessage: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}") 'owner'
 			none gives false
-			service gives true
+			service or
+			factory gives true
 		end 'owner'
 	end 'isAMessage'
+
+	module function isAFactory(funcIndex ElementIndex) returns bool
+		return match try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.isAFactory: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}") 'owner'
+			factory gives true
+			none or
+			service gives false
+		end 'owner'
+	end 'isAFactory'
 
 	module function messageSeeds() returns BoolArray
 		var seeds = BoolArray.create()
@@ -249,6 +261,7 @@ module type ServiceProgramSurvey
 		match try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.serviceOf: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}") 'owner'
 			none then throw AbsentError.absent
 			service(name) then return name
+			factory(name) then return name
 		end 'owner'
 	end 'serviceOf'
 
@@ -309,6 +322,22 @@ module type ServiceProgramSurvey
 		end 'eachWitnessDispatch'
 	end 'widenFrom'
 
+	function factoryOwnerOf(signatures ProgramSignatures, callee ByteArray) returns MessageOwner
+		if let owner = try serviceFactoryOwnerOf(signatures, callee: callee) 'aFactory'
+			return MessageOwner.factory(owner)
+		end 'aFactory'
+
+		return MessageOwner.none
+	end 'factoryOwnerOf'
+
+	module function seedDescription(funcIndex ElementIndex, name ByteArray) returns String
+		if self.isAFactory(funcIndex) 'aFactory'
+			return "factory `{String.from(name)}`"
+		end 'aFactory'
+
+		return "message `{String.from(name)}`"
+	end 'seedDescription'
+
 	module function settleCallGraph()
 		self.calleeGraph = buildCsr(self.edges.callerIndices, to: self.edges.calleeIndices, nodeCount: self.funcCount())
 	end 'settleCallGraph'
@@ -320,7 +349,7 @@ module type ServiceProgramSurvey
 		if let owner = try messageOwnerNameOf(signatures, callee: func.name) 'aMessage'
 			self.ownerPerFunc.push(MessageOwner.service(owner))
 		end 'aMessage' else 'notAMessage'
-			self.ownerPerFunc.push(MessageOwner.none)
+			self.ownerPerFunc.push(self.factoryOwnerOf(signatures, callee: func.name))
 		end 'notAMessage'
 
 		self.witnessDispatchStarts.push(self.witnessDispatchFuncs.count())

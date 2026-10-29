@@ -684,6 +684,8 @@ export enum ErrorCode
 	// `FixedArray` `get`/`set` whose index is proven inside the size cannot throw: the proof is a
 	// constant, a ranged type whose range lies inside, a counted-loop counter between compile-time
 	// bounds, or a value computed from those. Drop the `try … otherwise`.
+	// So is `try spawn Type.factory(…)` of a factory that cannot throw: that `spawn` returns the
+	// handle at once.
 	tryRequiresThrowingFunction = "E3055"
 
 	// A throwing call, a call to a throwing interface method, or an `await` of a throwing promise is
@@ -696,6 +698,8 @@ export enum ErrorCode
 	// `<Service>.<message>.sendError` when the mailbox is full or the service has stopped.
 	// So is a `FixedArray` `get`/`set` whose index is not proven inside the size: write `try`, or give
 	// the index a ranged type within `int(0 to N-1)` for a `FixedArray with N`.
+	// So is a `spawn` of a factory that throws: the spawner waits for the factory to run on the
+	// service's green thread and receives the handle or the factory's error.
 	throwingFunctionRequiresTry = "E3057"
 
 	// 'otherwise' is written without a 'try'.
@@ -1712,18 +1716,24 @@ export enum ErrorCode
 	// The cure is to name a static factory of the type you mean to start.
 	semanticServiceNotASpawnTarget = "E3134"
 
-	// A message of a service declares a parameter whose value cannot cross to another green thread.
+	// A message of a service declares a parameter or a reply, or a `spawn` passes its factory an argument,
+	// whose value cannot cross to another green thread.
 	// A send moves an argument, and the receiving green thread must reach, count and
 	// release what it is handed through the request union's payload cascade. Three shapes cannot be reached that
-	// way. A `Promise` is a green-thread handle its awaiter owns. A function value is a closure record
+	// way. A `Promise` is a green-thread handle its awaiter owns, and so is any type that can hold one: a
+	// record with a promise in a field, a union with a case carrying one, an array or list of them. A coroutine
+	// belongs to the strand that started it, so a promise that crossed would be dropped, awaited or cancelled
+	// by a strand that does not own it. The type decides, so an empty array of promises is refused as well.
+	// A function value is a closure record
 	// that owns what it captures, and it does not cross to another thread. An
 	// opaque type parameter has no layout at the send, so the sender cannot know what it is handing over.
 	// A value held at an interface type does cross: the request carries its witness half beside it.
+	// The service's own state may hold promises its handlers start on the service's strand.
 	// The diagnostic fires at the `spawn` that made the type a service, which may be in a different file
 	// from the method it names: whether a type is a service is a whole-program property, and the site that
-	// decided it is the one worth naming.
-	// The cure is to send a `.clone()`, to send the scalar the value is derived from, or to drop the
-	// parameter from the message and reach the value another way.
+	// decided it is the one worth naming. A factory argument is reported at the argument.
+	// The cure is to send a `.clone()`, to send the scalar the value is derived from, to `await` the promise
+	// and send or return the result, or to drop the parameter from the message and reach the value another way.
 	semanticServiceValueNotTransferable = "E3135"
 
 	// A member was called on a service or interface HANDLE that is not one of its messages.
@@ -1796,10 +1806,10 @@ export enum ErrorCode
 	// reference is a second owner for the rest of the function, whatever its initializer was. Reassigning the
 	// `var` a fresh record makes it sendable again. A record whose fields are all `let` is written by nothing,
 	// so it is shared instead and the view stays valid.
-	// A `spawn`'s factory argument that the factory keeps moves into the service's state on the same terms,
-	// so a borrowed one is refused, naming the argument and the `spawn` -- a generic factory's
+	// Every argument of a `spawn`'s factory moves to the service's green thread on the same terms, so
+	// a borrowed one is refused, naming the argument and the `spawn` -- a generic factory's
 	// argument at a type parameter included. An owned one this frame also shares is caught by the
-	// run-time walk of the service's state described below (exit 96). A field read off a temporary
+	// run-time walk described below (exit 96). A field read off a temporary
 	// built in the factory call's own argument list crosses, because the `spawn` releases that
 	// temporary.
 	// An element a member hands back out of a field's container (`return self.queue.pop()`) has left the
@@ -1832,8 +1842,9 @@ export enum ErrorCode
 	// Two or more services can await replies from each other, so a message of each could be blocked waiting
 	// on the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.
 	// The compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`
-	// exists when a message of `A` AWAITS a reply from a `B.handle` -- transitively through ordinary
-	// functions, so a message that calls a helper that awaits still contributes the edge.
+	// exists when a message of `A`, or the factory `A` is spawned with, AWAITS a reply from a
+	// `B.handle` -- transitively through ordinary functions, so a message that calls a helper that
+	// awaits still contributes the edge. A factory counts: it runs on the service's green thread.
 	// ONLY BLOCKING EDGES COUNT. A send that is not awaited is not an edge: a send returns at once, queued
 	// or failed with its `sendError`, so it cannot participate in a wait cycle -- which is what keeps
 	// peer-to-peer messaging legal, and is the whole of why the rule is not crippling.
@@ -1941,7 +1952,8 @@ export enum ErrorCode
 	// read of a module-level `let` is legal and is the escape hatch every configuration constant takes: it
 	// is written once before any green thread exists, so no store can free anything under a reader. And a
 	// plain function no message reaches may read and write a module `var` all it likes: a `spawn` somewhere
-	// does not make the rest of the program concurrent.
+	// does not make the rest of the program concurrent. A service's factory runs on the service's
+	// green thread, so it and what it reaches are held to the rule as a message is.
 	// REACHABILITY IS TRANSITIVE, exactly as a service's blocking edge (E3139) is, and that is what makes
 	// the rule worth having -- a rule keyed on writes syntactically inside a handler body would refuse only
 	// the shape an author would have spotted anyway, while the race does not care which frame the store
@@ -1954,8 +1966,9 @@ export enum ErrorCode
 	// `self` and hand it back through a reply, or make the global a `let`. A reply is a Promise the awaiter
 	// owns, so the value is handled by one green thread at every instant.
 	// The diagnostic anchors at the ACCESS -- which is where the program can be repaired -- names the message
-	// that reaches it, and carries the `spawn` that made the type a service as a note, because whether a
-	// type is a service is a whole-program property whose cause may be in another file.
+	// or factory that reaches it, and carries the `spawn` that made the type a service as a note,
+	// because whether a type is a service is a whole-program property whose cause may be in another
+	// file.
 	semanticModuleVarInServiceProgram = "E3143"
 
 	// A union case's payload argument carries a `name:` label naming no payload of that case --
@@ -2158,12 +2171,13 @@ export enum ErrorCode
 	// `typealias Inner = Box with T`.
 	bareGenericSubjectUnbound = "E3162"
 
-	// A message of a service may read a module-level `let` whose value no share walk can mark. In a program that
-	// spawns a service, every `let` record is marked shared before `main` runs, so the counts green threads on
-	// different OS threads step on it are atomic -- which needs a walk over its graph, and none can be built for
-	// an OS handle, a value held at an interface type, or a generic instance with no base layout. A `let` no
-	// message can reach stays legal and unmarked, since only `main` counts it. Reached through the message call
-	// graph E3143 closes, dispatches included, and reported at the read with the message that reaches it; the
+	// A message or the factory of a service may read a module-level `let` whose value no share walk
+	// can mark. In a program that spawns a service, every `let` record is marked shared before `main`
+	// runs, so the counts green threads on different OS threads step on it are atomic -- which needs a
+	// walk over its graph, and none can be built for an OS handle, a value held at an interface type,
+	// or a generic instance with no base layout. A `let` no message or factory can reach stays legal
+	// and unmarked, since only `main` counts it. Reached through the call graph E3143 closes,
+	// dispatches included, and reported at the read with the message or factory that reaches it; the
 	// note is the declaration. Keep the value in a field of the service that reads it.
 	semanticUnmarkableLetReadByAMessage = "E3163"
 

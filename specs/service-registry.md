@@ -508,12 +508,12 @@ typealias Integer = int(i64.min to i64.max)
 9
 ```
 ```mm-trace
-mm_alloc Polite #1 size=8
+mm_alloc ServiceStartRecord #1 size=8
 mm_alloc Polite.handle #2 size=8
 mm_alloc tag=0 #3 size=16
 mm_decref Polite.handle #2 rc=0
 mm_free Polite.handle #2
-mm_alloc Rude #4 size=8
+mm_alloc ServiceStartRecord #4 size=8
 mm_alloc Rude.handle #5 size=8
 mm_alloc tag=0 #6 size=16
 mm_alloc tag=0 #7 size=16
@@ -522,16 +522,22 @@ mm_free tag=0 #3
 mm_decref tag=0 #6 rc=0
 mm_free tag=0 #6
 mm_alloc tag=0 #8 size=16
+mm_alloc Rude #9 size=8
+mm_decref ServiceStartRecord #4 rc=0
+mm_free ServiceStartRecord #4
 mm_decref tag=0 #8 rc=0
 mm_free tag=0 #8
 mm_decref Rude.handle #5 rc=0
 mm_free Rude.handle #5
-mm_decref Polite #1 rc=0
-mm_free Polite #1
+mm_alloc Polite #10 size=8
+mm_decref ServiceStartRecord #1 rc=0
+mm_free ServiceStartRecord #1
+mm_decref Polite #10 rc=0
+mm_free Polite #10
 mm_decref tag=0 #7 rc=0
 mm_free tag=0 #7
-mm_decref Rude #4 rc=0
-mm_free Rude #4
+mm_decref Rude #9 rc=0
+mm_free Rude #9
 ```
 
 <!-- test: a-conditional-register-fails-when-the-value-moved -->

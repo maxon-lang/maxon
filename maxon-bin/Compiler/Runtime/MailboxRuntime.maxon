@@ -153,16 +153,19 @@ end 'MboxSendStatus'
 
 // --- Entry points ---
 
-// ⭐⭐ **`__svc_spawn(loopPtr, state, slotBytes, capacity) -> mbox` — CREATE THE MAILBOX AND THE
-// GREEN THREAD THAT SERVES IT, IN THAT ORDER.** The mailbox exists before the thread does, because
-// the thread's second argument IS the mailbox; and the thread is published LAST, once both its
-// argument slots are written, for `GtRuntime.GtReadyName`'s measured reason (a worker M dequeues
-// and runs a spawned thread while the spawning thread is still storing its arguments).
+// ⭐⭐ **`__svc_spawn(startThunk, startRecord, slotBytes, capacity) -> mbox` — CREATE THE MAILBOX AND THE
+// GREEN THREAD THAT SERVES IT, IN THAT ORDER.** The thread runs `startThunk(startRecord, mbox)`: the
+// service's start thunk (`<T>.__start_<factory>`) on its start record. The mailbox exists before
+// the thread does, because the thread's second argument IS the mailbox; and the thread is published
+// LAST, once both its argument slots are written, for `GtRuntime.GtReadyName`'s measured reason (a
+// worker M dequeues and runs a spawned thread while the spawning thread is still storing its
+// arguments).
 //
-// ⚠ **IT ANSWERS THE MAILBOX AND NOT A HANDLE BOX.** The `<T>.handle` box is allocated by the PARSER, at
-// `emitBoxAlloc` — the one `__mm_alloc` door, which is where the box header's destructor argument is decided
-// — and this pointer is stored into its one field. A runtime-minted box would be a second place that knows
-// what a managed record costs.
+// ⚠ **IT ANSWERS THE MAILBOX AND NOT A HANDLE BOX.** A non-throwing factory's `<T>.handle` box is
+// allocated by the PARSER, at `emitBoxAlloc` — the one `__mm_alloc` door, which is where the box
+// header's destructor argument is decided — and this pointer is stored into its one field. A
+// throwing factory's is minted by the start thunk (`AsyncReleaser.finishReportedStart`), which
+// hands it back through the start's cell.
 export let SvcSpawnName = b"__svc_spawn"
 
 // `__mbox_send(mbox, msg, bytes, timeoutMs)` — copy `bytes` of one staged request into the
@@ -215,7 +218,7 @@ export let MboxHandleCloneBoxName = b"__mbox_handle_clone_box"
 // `__mbox_handle_destruct(handleBox)` — the destructor every handle box is minted with. The BOX owns one
 // share of the mailbox's `handles` and `refs`, not each reference to it, so a handle is retained and
 // dropped by the plain box incref and decref, and only the box's last reference steps the pair. Exported
-// because `Parser.emitServiceSpawn` mints the spawned handle's box with it.
+// because `Parser.emitServiceHandle` mints the spawned handle's box with it.
 export let MboxHandleDestructName = b"__mbox_handle_destruct"
 
 // `__mbox_service_exit(mbox)` — the loop's last act. Exported because `ServiceLoop` emits the call as the
@@ -312,10 +315,11 @@ module function emitInterfaceHandleBoxHolding(module StdModule, block IrBlock, m
 	return box
 end 'emitInterfaceHandleBoxHolding'
 
-// Every caller takes the mailbox share first (`emitMboxSharesStep` by `MboxShareUnit`): the
-// destructor stamped here gives one back, so a box minted without it closes and frees the mailbox
-// under a live handle.
-function emitHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, boxBytes FullRangeInt, ids ValueMinter) returns ValueId
+// The caller owes the box one mailbox share — taken first (`emitMboxSharesStep` by
+// `MboxShareUnit`), or at a service's start the one its initial counts hold: the destructor stamped
+// here gives one back, so a box minted without one closes and frees the mailbox under a live
+// handle.
+module function emitHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, boxBytes FullRangeInt, ids ValueMinter) returns ValueId
 	let size = emitConst(module, block: block, value: boxBytes, ids: ids)
 	let destructor = ids.mint()
 	module.appendOp(block, op: StdOp.funcAddr(destructor, funcName: MboxHandleDestructName))
@@ -740,15 +744,15 @@ module function emitMboxSharesStep(module StdModule, block IrBlock, mbox ValueId
 	return emitFieldAccumulate(module, block: block, record: mbox, offset: MboxOffShares, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: true, ids: ids)
 end 'emitMboxSharesStep'
 
-// `__svc_spawn(loopPtr, state, slotBytes, capacity) -> mbox`. See `SvcSpawnName`.
+// `__svc_spawn(startThunk, startRecord, slotBytes, capacity) -> mbox`. See `SvcSpawnName`.
 function buildSvcSpawn(module StdModule)
 	var func = IrFunction.createFromStd(SvcSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
 	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 4)
-	let loopPtr = 0
-	let state = 1
+	let startThunk = 0
+	let startRecord = 1
 	let slotBytes = 2
 	let capacity = 3
 
@@ -770,8 +774,8 @@ function buildSvcSpawn(module StdModule)
 	// P's RING, rather than a member of its spawner's strand. A coroutine here would run only where its
 	// spawner's work runs, which is exactly the property a service must not have.
 	let gt = ids.mint()
-	module.appendOp(entry, op: StdOp.call(gt, callee: GtSpawnGreenName, args: argsOf(loopPtr)))
-	emitStoreField(module, block: entry, record: gt, offset: GtOffArgInline, value: state)
+	module.appendOp(entry, op: StdOp.call(gt, callee: GtSpawnGreenName, args: argsOf(startThunk)))
+	emitStoreField(module, block: entry, record: gt, offset: GtOffArgInline, value: startRecord)
 	emitStoreField(module, block: entry, record: gt, offset: GtOffArgInline + GtArgSlotBytes, value: mbox)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtReadyName, args: argsOf(gt)))
 

@@ -204,7 +204,7 @@ end 'arm64PhysReg'
 // second number to update. The arm64 twin of `x64RegisterArgCapacity`, including its precondition: the rule
 // asks ONE capacity of whichever file an argument belongs to, so two depths would send floats to stack slots
 // the callee still expected in `d` registers.
-function arm64RegisterArgCapacity() returns RegisterArgCapacity
+export function arm64RegisterArgCapacity() returns RegisterArgCapacity
 	if arm64ArgRegisters.count() != arm64FpArgRegisters.count() 'filesDiffer'
 		panic("arm64RegisterArgCapacity: the integer file holds {arm64ArgRegisters.count()} argument registers and the SIMD file {arm64FpArgRegisters.count()} — the shared placement rule asks ONE capacity of both files, so they must be the same depth")
 	end 'filesDiffer'
@@ -255,7 +255,7 @@ end 'arm64ArgRegisterAt'
 // The physical SIMD register FP argument slot `index` occupies — the float twin of
 // `arm64ArgRegisterAt`, a compiler-invariant break past the file for the same reason. It must reject
 // cleanly here rather than mis-storing from the wrong file.
-function arm64FpArgRegisterAt(index ParamCount) returns Arm64Register
+export function arm64FpArgRegisterAt(index ParamCount) returns Arm64Register
 	return try arm64FpArgRegisters.get(index) otherwise panic("arm64FpArgRegisterAt: float argument slot {index} exceeds the {arm64FpArgRegisters.count()} SIMD register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'arm64FpArgRegisterAt'
 

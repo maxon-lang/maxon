@@ -2954,10 +2954,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			tryCall(result, _, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: func, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
 
 			// ⭐ **A SPAWN IS TRACED AS THE CALL IT IS.** Its target takes a reference to a managed argument
-			// (`Parser.transferAsyncSpawnArgs`), so what that target KEEPS — stores into another parameter, binds
-			// to a mutable name, hands back inside its result — is kept out of this frame just as a direct call's
-			// is, and the summary must carry it one frame out or a caller that only spawns reads as keeping
-			// nothing.
+			// (`Parser.transferThreadArguments`), so what that target KEEPS — stores into another parameter,
+			// binds to a mutable name, hands back inside its result — is kept out of this frame just as a direct
+			// call's is, and the summary must carry it one frame out or a caller that only spawns reads as
+			// keeping nothing.
 			asyncCall(result, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: func, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
 			witnessDispatch(result, args, _, _, methodIndex, interfaceDeclIndex, _, _) then self.traceLandingCall(func, op: op, opIdx: opIdx, result: result, args: args, bodies: self.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
 			witnessTryDispatch(result, _, args, _, _, methodIndex, interfaceDeclIndex, _) then self.traceLandingCall(func, op: op, opIdx: opIdx, result: result, args: args, bodies: self.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
@@ -2978,7 +2978,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			sizeofType(result, _) then self.flowFromOperands(func, op: op, result: result)
 			constArrayLiteral(result, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			errorFlagEncode(result, _, _) then self.flowFromOperands(func, op: op, result: result)
-			serviceSpawn(result, _, _, _) then self.flowFromOperands(func, op: op, result: result)
+			serviceSpawn(result, _, _, _, _, _, _, _, _, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			serviceSend(result, _, _, _, _, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			serviceReplyCell(result, _, _) then self.flowFromOperands(func, op: op, result: result)
 			immortalStructRecord(result, _, _) then self.flowFromOperands(func, op: op, result: result)
@@ -4608,9 +4608,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) then self.addWitnessRecordEdges(func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, callerIndex: callerIndex)
 
 			// ⭐ **A SPAWN CARRIES THE ALIAS EDGE TOO, AND NEEDS IT MORE THAN A DIRECT CALL DOES**: the spawn takes
-			// its own reference to a managed argument (`Parser.transferAsyncSpawnArgs`), so the value standing at
-			// the op is that RETAIN and never the parameter's own — without this arm nothing relates the two and
-			// the target's writes stop at its own frame.
+			// its own reference to a managed argument (`Parser.transferThreadArguments`), so the value
+			// standing at the op is that RETAIN and never the parameter's own — without this arm nothing
+			// relates the two and the target's writes stop at its own frame.
 			asyncCall(_, _, args, _, _, _, _, _) then self.addNamedCallRecordEdges(func, args: args, callerIndex: callerIndex)
 			indirectCall then self.addFunctionValueRecordEdges(func, op: op, callerIndex: callerIndex)
 
@@ -6409,7 +6409,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			witnessDispatch(result, _, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			witnessTryDispatch(result, _, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			errorFlagEncode(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
-			serviceSpawn(result, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
+			serviceSpawn(result, _, _, _, _, _, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			serviceSend(result, _, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			serviceReplyCell(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			immortalStructRecord(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
@@ -8333,11 +8333,204 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function acceptsAsSole(func IrFunction, value ValueId) returns bool
 		if not self.valueIsSoleOrAParameter(func, value: value, usesFreshReturns: true) 'notSole'
-			return self.valueIsSwappedOut(func, value: value)
+			return self.valueIsSwappedOut(func, value: value) or self.valueIsAFreshOccupantOfALocalCell(func, value: value)
 		end 'notSole'
 
 		return true
 	end 'acceptsAsSole'
+
+	// A by-reference local lives in a cell, and each read of it is a new SSA load, so soleness is
+	// proven over the whole cell: every fill is a fresh record (a store, or a callee filling it
+	// through a reassigned parameter, `MaxFreshRounds` deep), the cell never escapes, and its other
+	// reads keep nothing. A callee's summary cannot answer the fill: a reassigned by-reference
+	// parameter always reads as kept there. ⚠ `recordIsMintedHere` is deliberately not widened to
+	// cells, because the checks that rest on one SSA owner would then read a re-read cell as dead.
+	function valueIsAFreshOccupantOfALocalCell(func IrFunction, value ValueId) returns bool
+		view ir = self.module
+		self.indexDefinitions(func, ir: ir)
+		let occupant = self.sameRecordBase(func, ir: ir, value: value)
+		let defining = try self.definingOpIndexOf(occupant) otherwise return false
+
+		match slotReadOfOp(try ir.ops.get(defining) otherwise panic("ProvenanceTracer.valueIsAFreshOccupantOfALocalCell: op {defining} not in module.ops"), opIndex: defining) 'read'
+			load(_, cell, offset) then return offset == ParameterCellValueOffset and self.valueIsALocalCell(cell) and self.cellHoldsOnlyFreshRecords(func, cell: cell, except: singletonValue(occupant), depth: 0)
+
+			none or
+			store or
+			retainOf then return false
+		end 'read'
+	end 'valueIsAFreshOccupantOfALocalCell'
+
+	function cellHoldsOnlyFreshRecords(func IrFunction, cell ValueId, except ValueIdArray, depth ElementIndex) returns bool
+		var occupants = BoolArray.create()
+		occupants.refill(func.valueTags.count(), value: false)
+
+		if not self.cellIsFilledOnlyWithFreshRecords(func, cell: cell, aliases: occupants, except: except, depth: depth) 'aForeignRecordMayLandInIt'
+			return false
+		end 'aForeignRecordMayLandInIt'
+
+		return self.recordUseOfAliases(func, aliases: occupants) != RecordUse.kept
+	end 'cellHoldsOnlyFreshRecords'
+
+	function valueIsALocalCell(cell ValueId) returns bool
+		let defining = try self.definingOpIndexOf(cell) otherwise return false
+		let callee = try freshCalleeOf(try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.valueIsALocalCell: op {defining} not in module.ops")) otherwise return false
+		return callee.equals(ParameterCellAllocName)
+	end 'valueIsALocalCell'
+
+	function cellIsFilledOnlyWithFreshRecords(func IrFunction, cell ValueId, aliases BoolArray, except ValueIdArray, depth ElementIndex) returns bool
+		view ir = self.module
+		self.indexDefinitions(func, ir: ir)
+
+		for blockRef in func.blockRefs 'eachBlock'
+			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.cellIsFilledOnlyWithFreshRecords: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.bodyOps() 'eachOp'
+				if not self.cellOpFillsOnlyFreshRecords(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.cellIsFilledOnlyWithFreshRecords: opIdx {opIdx} not in module.ops"), cell: cell, aliases: aliases, except: except, depth: depth) 'aForeignFill'
+					return false
+				end 'aForeignFill'
+			end 'eachOp'
+
+			if block.hasTerminatorOp() and self.opNamesTheRecord(func, op: try ir.ops.get(block.terminatorIndex()) otherwise panic("ProvenanceTracer.cellIsFilledOnlyWithFreshRecords: terminatorIndex not in module.ops"), record: cell) 'theCellIsReturnedOrBranchedOn'
+				return false
+			end 'theCellIsReturnedOrBranchedOn'
+
+			for edge in block.branchEdges 'eachEdge'
+				for argument in edge.argIds 'eachArgument'
+					if self.sameRecordBase(func, ir: ir, value: argument) == cell 'theCellIsCarriedOn'
+						return false
+					end 'theCellIsCarriedOn'
+				end 'eachArgument'
+			end 'eachEdge'
+		end 'eachBlock'
+
+		return true
+	end 'cellIsFilledOnlyWithFreshRecords'
+
+	function cellOpFillsOnlyFreshRecords(func IrFunction, op MaxonOp, cell ValueId, aliases BoolArray, except ValueIdArray, depth ElementIndex) returns bool
+		if not self.opNamesTheRecord(func, op: op, record: cell) 'unrelated'
+			return true
+		end 'unrelated'
+
+		match op 'op'
+			loadIndirect(result, addr, offset, _) then return self.cellLoadKeepsItsOccupant(func, result: result, addr: addr, offset: offset, cell: cell, aliases: aliases, except: except)
+			storeIndirect(addr, offset, value, _) then return self.cellStoreIsFresh(func, addr: addr, offset: offset, value: value, cell: cell)
+			call(_, callee, args, argLabels, _, _, _, _) then return self.cellCallFillsOnlyFreshRecords(func, callee: callee, args: args, argLabels: argLabels, cell: cell, depth: depth)
+			tryCall(_, _, callee, args, argLabels, _, _, _, _) then return self.cellCallFillsOnlyFreshRecords(func, callee: callee, args: args, argLabels: argLabels, cell: cell, depth: depth)
+
+			literal or
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			witnessDispatch or
+			witnessTryDispatch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			existentialWitness or
+			holdValue or
+			holdEnd then return false
+		end 'op'
+	end 'cellOpFillsOnlyFreshRecords'
+
+	function cellLoadKeepsItsOccupant(func IrFunction, result ValueId, addr ValueId, offset ByteOffset, cell ValueId, aliases BoolArray, except ValueIdArray) returns bool
+		if self.sameRecordBase(func, ir: self.module, value: addr) != cell or offset != ParameterCellValueOffset 'notTheOccupantsSlot'
+			return false
+		end 'notTheOccupantsSlot'
+
+		if not except.contains(result) 'anotherReadOfTheCell'
+			self.addAlias(aliases, value: result)
+		end 'anotherReadOfTheCell'
+
+		return true
+	end 'cellLoadKeepsItsOccupant'
+
+	function cellStoreIsFresh(func IrFunction, addr ValueId, offset ByteOffset, value ValueId, cell ValueId) returns bool
+		if self.sameRecordBase(func, ir: self.module, value: value) == cell 'theCellIsStoredAway'
+			return false
+		end 'theCellIsStoredAway'
+
+		if self.sameRecordBase(func, ir: self.module, value: addr) != cell or offset != ParameterCellValueOffset 'notTheOccupantsSlot'
+			return false
+		end 'notTheOccupantsSlot'
+
+		return not self.valueTagCarriesProvenance(func, value: value) or self.storedValueIsFreshAndUnshared(func, value: value)
+	end 'cellStoreIsFresh'
+
+	function cellCallFillsOnlyFreshRecords(func IrFunction, callee ByteArray, args ValueIdArray, argLabels NameRoster, cell ValueId, depth ElementIndex) returns bool
+		if droppingBookkeepingCallee(callee) 'aRelease'
+			return true
+		end 'aRelease'
+
+		let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) otherwise return false
+		view sig = self.calls.resolution.signatureOf(callee)
+
+		for index in 0 upto args.count() 'eachArgument'
+			if self.sameRecordBase(func, ir: self.module, value: try args.get(index) otherwise panic("ProvenanceTracer.cellCallFillsOnlyFreshRecords: args.get OOB at {index}")) != cell 'notTheCell'
+				continue
+			end 'notTheCell'
+
+			let label = try argLabels.get(index) otherwise panic("ProvenanceTracer.cellCallFillsOnlyFreshRecords: argLabels.get OOB at {index} — a call's argument columns are parallel by construction")
+			let position = try argSlotPosition(sig.paramNames, argIndex: index as ParamCount, label: label) otherwise return false
+			let fresh = self.calleeFillsItsReferenceParameterOnlyWithFreshRecords(calleeIndex, position: position, depth: depth + 1)
+			self.indexDefinitions(func, ir: self.module)
+
+			if not fresh 'aForeignFill'
+				return false
+			end 'aForeignFill'
+		end 'eachArgument'
+
+		return true
+	end 'cellCallFillsOnlyFreshRecords'
+
+	function calleeFillsItsReferenceParameterOnlyWithFreshRecords(calleeIndex ElementIndex, position ParamCount, depth ElementIndex) returns bool
+		if depth > MaxFreshRounds 'tooDeep'
+			return false
+		end 'tooDeep'
+
+		view callee = self.functionAt(calleeIndex)
+
+		if bodyIsUnreadable(callee) or not maskHasParam(callee.reassignedParamMask, param: position) 'notFilledThroughACell'
+			return false
+		end 'notFilledThroughACell'
+
+		return self.cellHoldsOnlyFreshRecords(callee, cell: valueIdAtParamPosition(position), except: ValueIdArray.create(), depth: depth)
+	end 'calleeFillsItsReferenceParameterOnlyWithFreshRecords'
+
+	function opNamesTheRecord(func IrFunction, op MaxonOp, record ValueId) returns bool
+		var opOperands = ValueIdArray.create()
+		maxonOpOperandValues(op, into: opOperands)
+
+		for operand in opOperands 'eachOperand'
+			if operand == record or self.sameRecordBase(func, ir: self.module, value: operand) == record 'namesIt'
+				return true
+			end 'namesIt'
+		end 'eachOperand'
+
+		return false
+	end 'opNamesTheRecord'
 
 	function valueIsSwappedOut(func IrFunction, value ValueId) returns bool
 		view ir = self.module
@@ -8937,11 +9130,15 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'storeKeepsSlotExclusive'
 
 	function recordUseOf(func IrFunction, root ValueId) returns RecordUse
-		view ir = self.module
-		self.indexDefinitions(func, ir: ir)
 		var aliases = BoolArray.create()
 		aliases.refill(func.valueTags.count(), value: false)
 		self.addAlias(aliases, value: root)
+		return self.recordUseOfAliases(func, aliases: aliases)
+	end 'recordUseOf'
+
+	function recordUseOfAliases(func IrFunction, aliases BoolArray) returns RecordUse
+		view ir = self.module
+		self.indexDefinitions(func, ir: ir)
 		var worst = RecordUse.dropped
 		self.aliasesGrew = true
 
@@ -8949,14 +9146,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.aliasesGrew = false
 
 			for blockRef in func.blockRefs 'eachBlock'
-				view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.recordUseOf: blockRef from func.blockRefs not in module.blocks")
+				view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.recordUseOfAliases: blockRef from func.blockRefs not in module.blocks")
 
 				for opIdx in block.bodyOps() 'eachOp'
-					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.recordUseOf: opIdx {opIdx} not in module.ops"), aliases: aliases))
+					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.recordUseOfAliases: opIdx {opIdx} not in module.ops"), aliases: aliases))
 				end 'eachOp'
 
 				if block.hasTerminatorOp() 'terminated'
-					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, op: try ir.ops.get(block.terminatorIndex()) otherwise panic("ProvenanceTracer.recordUseOf: terminatorIndex not in module.ops"), aliases: aliases))
+					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, op: try ir.ops.get(block.terminatorIndex()) otherwise panic("ProvenanceTracer.recordUseOfAliases: terminatorIndex not in module.ops"), aliases: aliases))
 				end 'terminated'
 
 				for edge in block.branchEdges 'eachEdge'
@@ -8970,7 +9167,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'untilNoNewAlias'
 
 		return worst
-	end 'recordUseOf'
+	end 'recordUseOfAliases'
 
 	function useOfAliasIn(func IrFunction, op MaxonOp, aliases BoolArray) returns RecordUse
 		match op 'op'

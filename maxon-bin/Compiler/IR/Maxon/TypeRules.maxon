@@ -1066,40 +1066,22 @@ end 'tagIsBareNumericKeyword'
 // read its own header there for WHICH predicate it asks and why; naming the mechanism twice is how the two
 // copies come to disagree, which is why the exclusion lives at the door and not in this predicate.
 //
-// ⚠ **IT IS NOT THE ASYNC CHANNEL PREDICATE.** That is `tagRidesAsyncGprChannel` below, asked by the
-// argument, parameter and result doors (a managed pointer rides the integer channel; a `float` does not).
+// ⚠ **IT IS NOT AN ASYNC CHANNEL PREDICATE.** Those are `tagRidesAsyncArgumentChannel` (arguments) and
+// `tagRidesAsyncGprChannel` (the result) below, where a managed pointer rides the integer channel.
 // The two sets coincide on the scalars and answer different questions, so a reader who "reunifies" them
 // hands the async doors a rule about move bits.
 export function tagOwnsNoHeapValue(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.float
 end 'tagOwnsNoHeapValue'
 
-// ⭐⭐ **DOES THIS TAG RIDE THE GREEN THREAD'S GPR CHANNEL? — a WIDER question than the one above, and the
-// question the three async doors actually ask.** A spawn's arguments travel in the GT struct's inline
-// argument region (`GtOffArgInline`, i64 words the hand-assembled trampoline loads into the ABI's INTEGER
-// argument registers) and its result comes back in R8. **A managed value is a heap POINTER and is therefore
-// one i64 in a GPR exactly as an `int` is** — the register file was never the obstacle for it; its ownership
-// was, and `Runtime/AsyncReleaser.maxon` is where that is discharged.
+// ⭐⭐ **DOES THIS TAG FIT THE GREEN THREAD'S ONE-WORD RESULT?** An awaited result comes back as the single
+// i64 the trampoline stores from the integer return register into `gt.result`. A managed value is a heap
+// pointer, one word like an `int`; its ownership is discharged in `Runtime/AsyncReleaser.maxon`.
 //
-// ⛔ **A `float` IS STILL REFUSED, AND THAT IS A REGISTER-FILE FACT RATHER THAN AN OWNERSHIP ONE.** A float
-// argument is passed in an XMM register (`argFpRegisterAt`) and a float result is returned in **XMM0**
-// (`indirectResultRegister`), and the trampoline touches neither: it loads every slot into
-// `argRegisterAt(k)` and stores R8 alone into `gt.result` (`X64GtRuntime.buildGtTrampolineChunk`). Admitting
-// a float here would hand the callee an XMM register nobody filled and read a result nobody captured — a
-// silent wrong answer, not a leak. Building the second channel is a change to the hand-assembled trampoline
-// and to `__gt_await`'s single i64 exit; no spec case in the tree spawns or awaits a float.
-//
-// ⛔ **A BY-VALUE EXISTENTIAL AND OPAQUE TYPE PARAMETER ARE REFUSED FOR A THIRD REASON: A SLOT IS ONE WORD
-// AND EACH NEEDS A COMPANION.** Each is released through a TWO-argument entry whose first argument is a
-// companion the GT struct does not carry — `__drop_existential(witness, value)` off the fat pointer's witness
-// half, `__drop_type_param(descriptor, value)` off the enclosing instance's layout descriptor. The inline
-// argument region holds the value half only, so a releaser could name no drop for them
-// (`managedFieldDropCallee` PANICS on `interfaceRef` for exactly this reason).
-//
-// This predicate is the BY-VALUE door only. An argument at a parameter the callee REASSIGNS crosses as the
-// one-word address of a parameter cell the coroutine owns, and that cell holds an existential's witness
-// beside its value, so an interface value (and a `float`) crosses that way; an opaque type parameter does
-// not cross even in a cell (`ParameterCell.parameterCellCrossesASpawn`).
+// ⛔ A `float` result is returned in the FP return register, which the trampoline never stores: admitting
+// one would read a result nobody captured, a silent wrong answer. A by-value existential or opaque type
+// parameter is released through a companion (its witness, or the instance's layout descriptor) that one
+// word cannot carry.
 //
 // ⚠ Written as an exhaustive `match` and not as `tag != float`: the negative form FAILS OPEN — a tag
 // appended to `ValueTypeTag` (four have been, each "APPENDED AT THE END") would be admitted to a channel
@@ -1137,6 +1119,10 @@ export function tagRidesAsyncGprChannel(tag ValueTypeTag) returns bool
 		cstring gives true
 	end 'k'
 end 'tagRidesAsyncGprChannel'
+
+export function tagRidesAsyncArgumentChannel(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.float or tag == ValueTypeTag.interfaceRef or tagRidesAsyncGprChannel(tag)
+end 'tagRidesAsyncArgumentChannel'
 
 // The three operators whose MEANING follows their operands' type. `shl`/`shr` are absent: a
 // shift is integral by definition, on both sides.

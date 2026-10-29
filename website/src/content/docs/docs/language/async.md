@@ -57,9 +57,8 @@ not 80.
   arguments infer, as a call would be. A [qualified](/docs/language/namespaces/#qualified-names) callee reads as the direct call
   reads it, at any length: `async sub.Calc.seven()` and `async outer.inner.six()` start what those calls
   name.
-- An argument travels as one integer word: an integer, a `bool`, or a managed value's reference. A `float`
-  or a value held at an interface type is **E2015**, unless the callee reassigns that parameter — then the
-  argument rides a cell the coroutine owns.
+- An `async` call takes any number of arguments of any type, except a value held at an opaque type
+  parameter, which is **E2015**: start a function of a concrete type, or call it directly.
 - A callee may keep an argument it is handed (move it into a record it returns, for one); a coroutine
   dropped before it runs releases what it was handed instead.
 - **The arguments are shared, exactly as an ordinary call shares them.** The caller and its coroutines are
@@ -255,8 +254,8 @@ condition; use `await` or `sleep` to actually wait.
 
 ## Services — `spawn`
 
-A **service** is an ordinary `type` started with `spawn`. `spawn Type.factory(args)` calls a static
-factory of the type and runs the result on a new green thread, returning a **handle**. The handle's methods
+A **service** is an ordinary `type` started with `spawn`. `spawn Type.factory(args)` returns a **handle**
+and runs a static factory of the type on a new green thread, which keeps the state the factory builds. The handle's methods
 are exactly the type's `export` and `public` instance methods; each call on the handle is a **message** the
 service handles one at a time, in order.
 
@@ -302,6 +301,15 @@ end 'main'
 
 - **The same type is still a plain value.** `Calc.create()` without `spawn` is an ordinary record with
   ordinary calls, so a service's logic is unit-testable without threads.
+- **The factory runs on the service's thread.** Its output follows the spawner's until the spawner waits for the
+  service, and a coroutine it starts belongs to the service's strand.
+- **A factory that throws makes the `spawn` a throwing call.** The spawner waits until the factory has run on the
+  new service's thread, then receives either the handle or the factory's error, of the factory's own type. Write
+  `try spawn Type.factory(…)` with an `otherwise`, propagate it from a throwing function, or place it in a
+  block-form `try`; a `spawn` of a throwing factory that nothing catches is **E3057**, and `try` on a factory
+  that cannot throw is **E3055**. A factory that throws starts no service, and the factory's output
+  comes before anything the spawner prints after the `spawn`. A factory that cannot throw returns the handle at
+  once.
 - **Messages.** Every send is a throwing call, because it can fail at the send (see
   [Mailboxes and failed sends](#mailboxes-and-failed-sends)): write `try h.method(…)` with an `otherwise`,
   or propagate it. A send with no `try` is **E3057**, except inside a block-form `try` or a `test` body,
@@ -334,13 +342,15 @@ end 'main'
   declares its own. A factory the spawning file cannot see is **E3008** (**E3088** for a `module` one).
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
   `typealias StringBoxHandle = Box.handle with String`. A `spawn` on the bare generic name reads its type
-  arguments off the factory's arguments; a factory that fixes no type is **E2015**.
+  arguments off the factory's arguments; a factory that fixes no type is **E2015**. A factory argument held
+  at an opaque type parameter — a `T` value inside a generic function — is **E2015**; spawn from a function
+  of a concrete type.
 - **Overloaded factories.** A `spawn` binds the factory overload its arguments fit, as any call does, and
   that overload must start the service (**E3134** when it returns another type). Two overloads that fit
   equally are **E3007**, and arguments that bind no single overload of a generic factory are **E2015**.
 - A refusal of a `spawn`'s target or factory (**E3134**, **E3008**, **E2015**) points at the `spawn`
   keyword.
-- Services that `await` each other in a cycle are **E3139**.
+- Services that `await` each other in a cycle are **E3139**; a factory's `await` counts as its service's.
 - `spawn` is a contextual keyword; it remains usable as a name.
 
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
@@ -348,28 +358,30 @@ either side could write, because the two green threads may run at the same time 
 
 - A local `let` or `var`, a temporary or a literal argument the sender owns is **moved** into the service;
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
-  `spawn`'s factory keeps in the service's state. The handler owns what it was moved, so it may keep it or
-  write it.
+  `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may
+  keep it or write it.
 - A [read-only](/docs/language/memory-model/#read-only-values) value the sender does not own — a module-level `let`, a `let` field, a
   `SharedValue` or registry read, or a parameter nothing in the sending function writes — is **shared**: its graph is marked shared, so every
   count on it steps atomically, and neither side may write it. Sending a parameter the sending function
   writes, or any shared value the handler writes or keeps, is **E3138**. A borrowed `String` is copied at the
   send.
 - A tuple none of whose elements owns heap — `(Amount, Amount)`, say — is a value. When the sender is not its
-  one owner, it is copied wherever it crosses: a send, a factory argument the factory keeps,
+  one owner, it is copied wherever it crosses: a send, a factory argument,
   `SharedValue.publish` or `Key.register`. The service gets the copy and the sender keeps its own.
 - A value with an owner besides the sender that is not read-only — held in a container, read out of a field
   or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. So is
   an element a member hands back out of a field's container (`return self.queue.pop()`): it has left the
   container, and another owner may still hold it. A
-  borrowed factory argument the factory keeps is **E3138** too, a generic factory's argument at a type
-  parameter included; one the sender owns but also shares is caught by the run-time check of the
-  service's state below (exit code **96**). A field read off a temporary built inside the factory call's own
-  argument list crosses, because the `spawn` releases that temporary.
-- A `spawn` of a factory declared more than once, whose declarations keep an argument differently, is
-  **E2015**; give the factories distinct names.
-- A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
-  **E3135**. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
+  borrowed factory argument is **E3138** too, a generic factory's argument at a type
+  parameter included; one the sender owns but also shares is caught by the run-time check below (exit code
+  **96**). A field read off a temporary built inside the factory call's own argument list crosses, because the
+  `spawn` releases that temporary.
+- A parameter, a reply or a factory argument whose type cannot cross at all — a promise, a function value, an
+  opaque type parameter — is **E3135**. So is one whose type can hold a promise in any slot: a record with a
+  promise in a field, a union with a case carrying one, an array or list of promises, empty or not. A coroutine
+  belongs to the strand that started it, so a promise that crossed would be dropped, awaited or cancelled by a
+  strand that does not own it; `await` the promise and send or return the result. A service's own state may
+  hold promises its handlers start. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
   service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
   state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
@@ -393,20 +405,20 @@ either side could write, because the two green threads may run at the same time 
   reply whose graph holds a type the runtime cannot walk (an OS handle other than a socket) is **E3138** there. A generic service
   cannot be spawned over a value held at an interface type (**E2015**).
 
-**Module-level state.** A service handler — and anything it calls — may not read or write a module-level
+**Module-level state.** A service handler or factory — and anything it calls — may not read or write a module-level
 `var` (**E3143**). Keep a service's state in its own fields and hand results back through replies.
 
 A module-level `let` stays readable. In a program that spawns a service, every `let` record built before
 `main` is marked shared once the last global initializer has returned, so every count a handler steps on it
 is atomic; a record two `let`s reach counts both as its owners. A `let` whose graph no walk can mark — one
 holding an OS handle, a value held at an interface type, or a generic instance with no base layout — is
-**E3163** where a message can read it, and legal where only `main` does. A `spawn` a global initializer can
+**E3163** where a message or a factory can read it, and legal where only `main` does. A `spawn` a global initializer can
 reach is **E3164** (a [`default`](#program-wide-defaults--default) starts a program-wide service before
 `main`), a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
 a `var` whose initializer may take a `let`'s record is **E3078** (see
 [Top-Level Variables](/docs/language/variables/#top-level-variables)).
 
-**Output order.** Text printed by `main` and by a service handler may interleave in any order; sequence it
+**Output order.** Text printed by `main` and by a service handler or factory may interleave in any order; sequence it
 through awaited replies when order matters.
 
 ### Mailboxes and failed sends

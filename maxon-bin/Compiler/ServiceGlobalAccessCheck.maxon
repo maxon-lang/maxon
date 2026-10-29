@@ -221,14 +221,16 @@ function messageReachingAnUnnameableDispatch(survey ServiceProgramSurvey) return
 	panic("messageReachingAnUnnameableDispatch: no message's own cone holds a run-time dispatch, yet the widening marked a writer no named chain reaches — the widening marks nothing until a function some message names dispatches at run time, and this walk re-closes the messages one at a time")
 end 'messageReachingAnUnnameableDispatch'
 
-// The subject clause, one arm per road. The direct shape leads with the MESSAGE because that is the whole
-// sentence; the two indirect ones lead with the READER, because that is the line the caret sits on and the
-// reader needs to know why an ordinary function — which may touch a global all it likes — is being refused.
-function sharedGlobalAccessSubject(route SharedGlobalAccessRoute, verb String, reader ByteArray, message ByteArray, noun String) returns String
+// The subject clause, one arm per road. `seed` names the message or factory the road starts at
+// (`ServiceProgramSurvey.seedDescription`). The direct shape leads with the SEED because that is
+// the whole sentence; the two indirect ones lead with the READER, because that is the line the caret
+// sits on and the reader needs to know why an ordinary function — which may touch a global all it
+// likes — is being refused.
+function sharedGlobalAccessSubject(route SharedGlobalAccessRoute, verb String, reader ByteArray, seed String, noun String) returns String
 	return match route 'road'
-		itself gives "the message `{String.from(message)}` {verb} the {noun}"
-		throughCalls gives "`{String.from(reader)}` {verb} the {noun}, and the message `{String.from(message)}` reaches it"
-		throughAnUnnameableDispatch gives "`{String.from(reader)}` {verb} the {noun}, and the message `{String.from(message)}` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here"
+		itself gives "the {seed} {verb} the {noun}"
+		throughCalls gives "`{String.from(reader)}` {verb} the {noun}, and the {seed} reaches it"
+		throughAnUnnameableDispatch gives "`{String.from(reader)}` {verb} the {noun}, and the {seed} dispatches through a closure or a witness whose target this compiler cannot name, so it may land here"
 	end 'road'
 end 'sharedGlobalAccessSubject'
 
@@ -282,18 +284,18 @@ function reportSharedGlobalAccess(project Project, signatures ProgramSignatures,
 	let serviceName = try survey.serviceOf(blame.messageIndex) otherwise panic("reportSharedGlobalAccess: the blamed function {blame.messageIndex} is no service message — `blameForSharedGlobalAccess` walks back to a message seed")
 	let spawn = serviceSpawnSiteOf(signatures, typeName: serviceName)
 	let range = project.opRanges.get(survey.moduleVarUses.sites.opAt(row))
-	reportPositionedWithNote(project, code: ErrorCode.semanticModuleVarInServiceProgram, message: sharedGlobalAccessRefusal(blame.route, decl: decl, reader: reader.name, message: message.name), line: range.line, column: range.column, filePath: reader.sourceFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(serviceName), line: spawn.line, column: spawn.column, filePath: spawn.declFilePath))
+	reportPositionedWithNote(project, code: ErrorCode.semanticModuleVarInServiceProgram, message: sharedGlobalAccessRefusal(blame.route, decl: decl, reader: reader.name, seed: survey.seedDescription(blame.messageIndex, name: message.name)), line: range.line, column: range.column, filePath: reader.sourceFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(serviceName), line: spawn.line, column: spawn.column, filePath: spawn.declFilePath))
 end 'reportSharedGlobalAccess'
 
-function sharedGlobalAccessRefusal(route SharedGlobalAccessRoute, decl TopLevelDecl, reader ByteArray, message ByteArray) returns String
+function sharedGlobalAccessRefusal(route SharedGlobalAccessRoute, decl TopLevelDecl, reader ByteArray, seed String) returns String
 	let name = String.from(decl.name)
 	let noun = match decl.scope 'scope'
 		fileScope gives "module-level `var {name}`"
 		typeBody gives "static `var {name}`"
 	end 'scope'
 
-	var refusal = sharedGlobalAccessSubject(route, verb: "uses", reader: reader, message: message, noun: noun)
-	refusal.append(" — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `{name}` a `let`")
+	var refusal = sharedGlobalAccessSubject(route, verb: "uses", reader: reader, seed: seed, noun: noun)
+	refusal.append(" — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `{name}` a `let`")
 	return refusal
 end 'sharedGlobalAccessRefusal'
 
@@ -332,7 +334,7 @@ function reportUnmarkableLetRead(project Project, funcNames FunctionNameIndex, s
 	let message = functionAt(funcNames, index: blame.messageIndex)
 	let global = String.from(letGlobal.declName)
 	let range = project.opRanges.get(survey.globalUses.sites.opAt(row))
-	let subject = sharedGlobalAccessSubject(blame.route, verb: "reads", reader: reader.name, message: message.name, noun: "module-level `{global}`")
+	let subject = sharedGlobalAccessSubject(blame.route, verb: "reads", reader: reader.name, seed: survey.seedDescription(blame.messageIndex, name: message.name), noun: "module-level `{global}`")
 	let declaration = DiagnosticNote.at("`{global}` is declared here", line: letGlobal.nameLine, column: letGlobal.nameColumn, filePath: letGlobal.declFilePath)
 	reportPositionedWithNote(project, code: ErrorCode.semanticUnmarkableLetReadByAMessage, message: "{subject}, and it holds {noun}. A message runs on a green thread the scheduler may put on any OS thread, so the counts every message steps on `{global}` must be atomic, and no share walk can mark it so. Keep it in a field of the service that reads it", line: range.line, column: range.column, filePath: reader.sourceFilePath, note: declaration)
 end 'reportUnmarkableLetRead'

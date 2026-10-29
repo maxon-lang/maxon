@@ -224,7 +224,7 @@ end 'main'
 | an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
 | a [closure](/docs/language/functions/#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](/docs/language/async/#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
-| a `spawn` factory argument the factory keeps | moves into the service's state; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
+| a `spawn` factory argument | moves to the service's green thread; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**) or a tuple of heap-free elements, which is copied; every reader sees it read-only |
 
 ### Aliasing Between Arguments
@@ -296,7 +296,7 @@ decorator of that shape reaches the clone check.
   `SharedValue` or a registry `default`, and a read-only parameter sent in a message are marked shared before a
   second thread can see them. A shared value uses atomic counts, and nothing can write it, because it is read-only.
 - **A shared graph must be walkable.** A `SharedValue` or registry value that holds an OS handle, a function value
-  or a promise is **E3171**. A module `let` read by a message that the share walk cannot mark is **E3163**.
+  or a promise is **E3171**. A module `let` read by a message or a factory that the share walk cannot mark is **E3163**.
 - **The send check.** At run time, a mutable value moved to another thread must be solely owned; a value that is
   not stops the program with exit code **96**.
 
@@ -461,7 +461,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](/docs/language/a
 | [E3143](/docs/cli/error-codes/#e3143--semanticmodulevarinserviceprogram) | a module `var` reachable from another thread |
 | [E3152](/docs/cli/error-codes/#e3152--rawintrinsicoutsideruntimetier) | `__Raw` used outside `runtime/` |
 | [E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord) | a write through a read-only value |
-| [E3163](/docs/cli/error-codes/#e3163--semanticunmarkableletreadbyamessage) | a module `let` read by a message that the share walk cannot mark |
+| [E3163](/docs/cli/error-codes/#e3163--semanticunmarkableletreadbyamessage) | a module `let` read by a message or a factory that the share walk cannot mark |
 | [E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) | a shared value whose graph holds an OS handle, a function value or a promise |
 | [E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned) | a published value that is not solely owned |
 | [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) | raw memory or a raw handle used outside the library tier |

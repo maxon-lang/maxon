@@ -285,16 +285,16 @@ end 'main'
 error E2015: specs/stack-arguments/argument-slots-are-capped-and-the-cap-is-stated.maxon:4:10: Unsupported: a function with 65 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads one or calls a function that does, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
 ```
 
-<!-- test: a-spawn-keeps-the-lower-async-argument-ceiling -->
-An `async` call's arguments do not travel in the calling convention at all — they ride the green
-thread's inline argument region, which the hand-assembled trampoline reads back into the argument
-registers — so a spawn has no stack-argument path although an ordinary call does. The lower
-ceiling is diagnosed rather than overrunning the region.
+<!-- test: a-spawn-passes-its-overflow-arguments-on-the-new-threads-stack -->
+An `async` call's arguments past the callee's register files are written onto the new green thread's stack
+before its first resume, where the callee's incoming-argument loads find them, exactly as an ordinary call's
+outgoing area would hold them. Seven integers overflow x64's six integer registers by one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 function wide7(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer) returns bool
-	return a + b + c + d + e + f + g > 0
+	Scheduler.yield()
+	return a + b + c + d + e + f + g == 127
 end 'wide7'
 
 function main() returns ExitCode
@@ -305,8 +305,8 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/stack-arguments/a-spawn-keeps-the-lower-async-argument-ceiling.maxon:9:16: Unsupported: `async wide7(…)` passes 7 arguments — more than the 6 a spawn can carry. A spawned call's arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the argument registers, so a spawn has no stack-argument path even though an ordinary call does. Call it directly, or pass fewer arguments
+```exitcode
+0
 ```
 
 <!-- test: every-argument-of-a-wide-call-is-distinct -->

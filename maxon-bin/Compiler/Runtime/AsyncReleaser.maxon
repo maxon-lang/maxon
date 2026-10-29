@@ -49,11 +49,8 @@
 // separately**, because a throwing callee with a scalar error type has a `threw` worth branching on and
 // nothing to release.
 //
-// ⚠ **CAPACITY IS NOT THIS FILE'S TO BOUND.** `Parser.emitAsyncCall` already refuses `args.count() >
-// MaxAsyncArgs` with a positioned diagnostic and `LowerMaxonToStd.emitAsyncSpawn` keeps a structural panic
-// behind it, so a plan can never name a slot past the inline region. (`async-await.managed-args-many` passes
-// two arguments and so does not approach that gate — it is a guard against the spawn-site reference being
-// missing, not against arity.)
+// ⚠ **WHERE AN ARGUMENT SITS IS `AsyncArgumentSlots`' TO SAY**, for the spawn's stores and this
+// file's reads alike: the inline region, a separate argument image, or a service's start record.
 //
 // ⭐ **MULTI-M: THREE STEPS ON THIS ROAD, TWO OF THEM CLOSED BY CONSTRUCTION AND THE THIRD BY AN ORDERING
 // RULE.**
@@ -124,10 +121,11 @@ export function asyncResultConsumedFlag(disposition AsyncResultDisposition) retu
 	end 'disposition'
 end 'asyncResultConsumedFlag'
 
-// One slot of a spawn that owes a release: the byte offset it occupies inside the GT struct, and how it is
+// One slot of a spawn that owes a release: the byte offset it occupies from its base, and how it is
 // dropped. The offset is carried rather than the slot INDEX because the result and the error live at fixed
-// struct offsets while the arguments live in the inline region — three sources, one shape, so the emitter
-// below has one loop instead of three.
+// GT-struct offsets while the arguments live where `AsyncArgumentSlots` puts them in the argument
+// buffer or the start record — three sources, one shape, so the emitter below has one loop instead
+// of three.
 type AsyncManagedSlot
 	export let offset as ByteOffset
 	export var drop as FieldDropKind
@@ -159,9 +157,11 @@ export type AsyncSpawnTarget
 	export let callee as ByteArray
 	export let byReference as ParamPositionMask
 	export let declarationSite as ByteArray
+	export let target as Target
+	export let startsService as bool
 
-	export static function create(callee ByteArray, byReference ParamPositionMask, declarationSite ByteArray) returns AsyncSpawnTarget
-		return Self{callee: callee, byReference: byReference, declarationSite: declarationSite}
+	export static function create(callee ByteArray, byReference ParamPositionMask, declarationSite ByteArray, target Target, startsService bool) returns AsyncSpawnTarget
+		return Self{callee: callee, byReference: byReference, declarationSite: declarationSite, target: target, startsService: startsService}
 	end 'create'
 end 'AsyncSpawnTarget'
 
@@ -185,10 +185,15 @@ type AsyncReleasePlan
 	export var resultSlots as AsyncManagedSlotArray
 	export var errorSlots as AsyncManagedSlotArray
 	export let calleeThrows as bool
+	export let ownsImage as bool
 
-	static function create(argSlots AsyncManagedSlotArray, consumedArgSlots AsyncManagedSlotArray, cellSlots AsyncCellSlotArray, resultSlots AsyncManagedSlotArray, errorSlots AsyncManagedSlotArray, calleeThrows bool) returns AsyncReleasePlan
-		return Self{argSlots: argSlots, consumedArgSlots: consumedArgSlots, cellSlots: cellSlots, resultSlots: resultSlots, errorSlots: errorSlots, calleeThrows: calleeThrows}
+	static function create(argSlots AsyncManagedSlotArray, consumedArgSlots AsyncManagedSlotArray, cellSlots AsyncCellSlotArray, resultSlots AsyncManagedSlotArray, errorSlots AsyncManagedSlotArray, calleeThrows bool, ownsImage bool) returns AsyncReleasePlan
+		return Self{argSlots: argSlots, consumedArgSlots: consumedArgSlots, cellSlots: cellSlots, resultSlots: resultSlots, errorSlots: errorSlots, calleeThrows: calleeThrows, ownsImage: ownsImage}
 	end 'create'
+
+	function readsArguments() returns bool
+		return self.argSlots.count() != 0 or self.consumedArgSlots.count() != 0 or self.cellSlots.count() != 0 or self.ownsImage
+	end 'readsArguments'
 
 	// Is there nothing at all to release? Then the spawn writes NOTHING into `gt.releaser`
 	// (`LowerMaxonToStd.emitAsyncReleaserStore` returns early — the 0 is already there, from the
@@ -203,7 +208,7 @@ type AsyncReleasePlan
 	// therefore carries that test; what it does not do is call anything. See `emitGtReleaserCall`'s
 	// own header, which states the same cost from the other end.
 	function isInert() returns bool
-		return self.argSlots.count() == 0 and self.consumedArgSlots.count() == 0 and self.cellSlots.count() == 0 and self.resultSlots.count() == 0 and self.errorSlots.count() == 0
+		return self.argSlots.count() == 0 and self.consumedArgSlots.count() == 0 and self.cellSlots.count() == 0 and self.resultSlots.count() == 0 and self.errorSlots.count() == 0 and not self.ownsImage
 	end 'isInert'
 end 'AsyncReleasePlan'
 
@@ -257,8 +262,8 @@ end 'serviceReplyNeedsReleaser'
 // ⚠ **AN UNDECLARED MESSAGE ANSWERS THE INERT PLAN**, on `asyncReleasePlanFor`'s reason.
 function serviceReplyReleasePlanFor(messageName ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
 	var noSlots = AsyncManagedSlotArray.create()
-	let sig = try funcSignatures.get(messageName) otherwise return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true)
-	return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: asyncResultSlotsOf(messageName, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true)
+	let sig = try funcSignatures.get(messageName) otherwise return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true, ownsImage: false)
+	return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: asyncResultSlotsOf(messageName, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true, ownsImage: false)
 end 'serviceReplyReleasePlanFor'
 
 // Every MESSAGE a reply cell is minted for anywhere in the module, in first-seen source order, deduped —
@@ -355,20 +360,21 @@ end 'installServiceReplyReleasers'
 // by SemanticCheck's E3004, but the collect walk below runs over the module regardless of whether the
 // program is doomed, and a panic here would replace a positioned diagnostic with a compiler crash.
 function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
+	let sig = try funcSignatures.get(target.callee) otherwise return AsyncReleasePlan.create(AsyncManagedSlotArray.create(), consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: false, ownsImage: false)
 	let callee = target.callee
+	let placement = AsyncArgumentSlots.recorded(sig.paramTypes, byReference: target.byReference) if target.startsService else AsyncArgumentSlots.of(sig.paramTypes, byReference: target.byReference, capacity: asyncRegisterCapacityOf(target.target))
 	var argSlots = AsyncManagedSlotArray.create()
 	var consumedArgSlots = AsyncManagedSlotArray.create()
 	var cellSlots = AsyncCellSlotArray.create()
-	let sig = try funcSignatures.get(callee) otherwise return AsyncReleasePlan.create(argSlots, consumedArgSlots: consumedArgSlots, cellSlots: cellSlots, resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: false)
 	let consume = signatures.consumeOfDeclarationUnder(overloadRegistrationBaseName(callee), site: target.declarationSite)
 
-	// The ARGUMENTS, in PARAMETER order — which is the order the inline region holds them in, because
-	// `lowerAsyncCall` slots them (`slotCallArgs`) before `emitAsyncSpawn` stores them. A labelled spawn
-	// therefore needs no adjustment here: the label was resolved one tier up.
+	// The ARGUMENTS, in PARAMETER order, each at the offset `placement` gives it — the order the spawn
+	// stores them in, because the lowering slots them (`slotCallArgs`) before storing. A labelled
+	// spawn therefore needs no adjustment here: the label was resolved one tier up.
 	for i in 0 upto sig.paramCount() 'eachParam'
 		let paramType = try sig.paramTypes.get(i) otherwise panic("asyncReleasePlanFor: paramTypes.get OOB at {i}")
 		let aggregateName = try sig.paramAggregateNames.get(i) otherwise panic("asyncReleasePlanFor: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
-		let offset = GtOffArgInline + (i as ByteOffset) * GtArgSlotBytes
+		let offset = placement.offsetAt(i)
 
 		if parameterRidesACellIntoASpawn(target.byReference, param: i, paramType: paramType) 'theCoroutinesOwnCell'
 			cellSlots.push(AsyncCellSlot.create(offset, content: asyncCellContentOf(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)))
@@ -382,7 +388,7 @@ function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatu
 			continue
 		end 'aPromiseTheCalleeTakes'
 
-		let slots = asyncSlotsAt(offset, signatures: signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)
+		let slots = asyncParamSlots(placement, param: i, signatures: signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)
 
 		if consume.isConsumedAt(i) 'theCalleeTakesIt'
 			consumedArgSlots.append(slots)
@@ -391,7 +397,7 @@ function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatu
 		end 'theThreadHoldsIt'
 	end 'eachParam'
 
-	return AsyncReleasePlan.create(argSlots, consumedArgSlots: consumedArgSlots, cellSlots: cellSlots, resultSlots: asyncResultSlotsOf(callee, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: asyncErrorSlotsOf(callee, signatures: signatures), calleeThrows: throwsClauseIsThrowing(signatures.throwsOf(callee)))
+	return AsyncReleasePlan.create(argSlots, consumedArgSlots: consumedArgSlots, cellSlots: cellSlots, resultSlots: asyncResultSlotsOf(callee, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: asyncErrorSlotsOf(callee, signatures: signatures), calleeThrows: throwsClauseIsThrowing(signatures.throwsOf(callee)), ownsImage: placement.usesImage)
 end 'asyncReleasePlanFor'
 
 function asyncCellContentOf(signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns AsyncCellContent
@@ -428,6 +434,19 @@ function asyncResultSlotsOfType(resultType MaxonType, signatures ProgramSignatur
 	slots.push(AsyncManagedSlot.create(GtOffResult, drop: FieldDropKind.existential(GtOffReplyWitness - GtOffResult)))
 	return slots
 end 'asyncResultSlotsOfType'
+
+function asyncParamSlots(placement AsyncArgumentSlots, param ParamCount, signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns AsyncManagedSlotArray
+	let offset = placement.offsetAt(param)
+
+	if maxonTypeTag(slotType) != ValueTypeTag.interfaceRef 'aSingleWord'
+		return asyncSlotsAt(offset, signatures: signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName)
+	end 'aSingleWord'
+
+	let witnessOffset = try placement.witnessOffsetOf(param) otherwise panic("asyncParamSlots: parameter {param} is held at an interface type by value and the placement carries no witness slot for it")
+	var slots = AsyncManagedSlotArray.create()
+	slots.push(AsyncManagedSlot.create(offset, drop: FieldDropKind.existential(witnessOffset - offset)))
+	return slots
+end 'asyncParamSlots'
 
 // The 0-or-1 slot list for ONE single-word slot of the GT struct, so "a managed slot is an (offset, drop)
 // pair decided by `asyncSlotOwnsHeap`" is written once for the arguments and the result.
@@ -534,16 +553,18 @@ end 'asyncErasedUnionIsBoxed'
 // ⚠ It collects every spawned callee and NOT only the ones needing a releaser, because its caller runs
 // BEFORE `noteDestructorUsage` and the admission test is cheap while a second walk would not be. The
 // installer applies `asyncCalleeNeedsReleaser`.
-export function collectAsyncSpawnTargets(module MaxonModule, funcNames FunctionNameIndex) returns AsyncSpawnTargetArray
+export function collectAsyncSpawnTargets(module MaxonModule, funcNames FunctionNameIndex, target Target) returns AsyncSpawnTargetArray
 	var seen = AsyncReleaserSet.create()
 	var callees = NameRoster.create()
+	var seenFactories = AsyncReleaserSet.create()
+	var factories = NameRoster.create()
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectAsyncSpawnTargets: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				noteIfAsyncSpawn(try module.ops.get(opIdx) otherwise panic("collectAsyncSpawnTargets: opIdx {opIdx} not in module.ops"), seen: seen, targets: callees)
+				noteIfAsyncSpawn(try module.ops.get(opIdx) otherwise panic("collectAsyncSpawnTargets: opIdx {opIdx} not in module.ops"), seen: seen, targets: callees, seenFactories: seenFactories, factories: factories)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -551,20 +572,30 @@ export function collectAsyncSpawnTargets(module MaxonModule, funcNames FunctionN
 	var targets = AsyncSpawnTargetArray.create()
 
 	for callee in callees 'eachCallee'
-		targets.push(asyncSpawnTargetOf(callee, funcNames: funcNames))
+		targets.push(asyncSpawnTargetOf(callee, funcNames: funcNames, target: target))
 	end 'eachCallee'
+
+	for factory in factories 'eachFactory'
+		targets.push(serviceStartTargetOf(factory, funcNames: funcNames, target: target))
+	end 'eachFactory'
 
 	return targets
 end 'collectAsyncSpawnTargets'
 
-export function asyncSpawnTargetOf(callee ByteArray, funcNames FunctionNameIndex) returns AsyncSpawnTarget
+export function asyncSpawnTargetOf(callee ByteArray, funcNames FunctionNameIndex, target Target) returns AsyncSpawnTarget
 	let member = try funcNames.funcNamed(callee) otherwise panic("asyncSpawnTargetOf: '{String.from(callee)}' is spawned but no function of the module carries the name")
-	return AsyncSpawnTarget.create(callee, byReference: member.reassignedParamMask, declarationSite: member.declarationSite())
+	return AsyncSpawnTarget.create(callee, byReference: member.reassignedParamMask, declarationSite: member.declarationSite(), target: target, startsService: false)
 end 'asyncSpawnTargetOf'
 
-function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets NameRoster)
+export function serviceStartTargetOf(factory ByteArray, funcNames FunctionNameIndex, target Target) returns AsyncSpawnTarget
+	let member = try funcNames.funcNamed(factory) otherwise panic("serviceStartTargetOf: '{String.from(factory)}' is a spawned factory but no function of the module carries the name")
+	return AsyncSpawnTarget.create(factory, byReference: member.reassignedParamMask, declarationSite: member.declarationSite(), target: target, startsService: true)
+end 'serviceStartTargetOf'
+
+function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets NameRoster, seenFactories AsyncReleaserSet, factories NameRoster)
 	match op 'op'
 		asyncCall(_, callee, _, _, _, _, _, _) then noteAsyncCallee(callee, seen: seen, targets: targets)
+		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _, _) then noteAsyncCallee(callee, seen: seenFactories, targets: factories)
 
 		// Every other op names no SPAWNED callee, `await`/`tryAwait` included: the await side reaches its
 		// releaser through the GT struct at run time, which is the whole point of storing the address there.
@@ -601,7 +632,6 @@ function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets NameRoster)
 		// A SERVICE's green thread owns its state and its messages and releases them in its own loop
 		// (`ServiceLoop`), so it needs no per-callee releaser: the GT-struct release protocol this file
 		// implements is the `async` PROMISE's, and a service has no promise.
-		serviceSpawn or
 		serviceSend or
 		serviceReplyCell then break
 		immortalStructRecord or
@@ -640,9 +670,18 @@ end 'noteAsyncCallee'
 export function declareAsyncReleaserNeeds(usage RuntimeUsage, targets AsyncSpawnTargetArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
 	for target in targets 'eachCallee'
 		let plan = asyncReleasePlanFor(target, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
+
+		if target.startsService 'aStartRecordHoldsOnlyArguments'
+			recordCallUsage(MmAllocName, usage: usage)
+			recordCallUsage(MmDecrefName, usage: usage)
+			declareSlotDropNeeds(usage, slots: plan.argSlots)
+			declareCellSlotNeeds(usage, slots: plan.cellSlots, ownsImage: false)
+			continue
+		end 'aStartRecordHoldsOnlyArguments'
+
 		declareSlotDropNeeds(usage, slots: plan.argSlots)
 		declareSlotDropNeeds(usage, slots: plan.consumedArgSlots)
-		declareCellSlotNeeds(usage, slots: plan.cellSlots)
+		declareCellSlotNeeds(usage, slots: plan.cellSlots, ownsImage: plan.ownsImage)
 		declareSlotDropNeeds(usage, slots: plan.resultSlots)
 		declareSlotDropNeeds(usage, slots: plan.errorSlots)
 	end 'eachCallee'
@@ -658,8 +697,8 @@ function declareSlotDropNeeds(usage RuntimeUsage, slots AsyncManagedSlotArray)
 	end 'eachSlot'
 end 'declareSlotDropNeeds'
 
-function declareCellSlotNeeds(usage RuntimeUsage, slots AsyncCellSlotArray)
-	if slots.count() == 0 'noCellToAllocate'
+function declareCellSlotNeeds(usage RuntimeUsage, slots AsyncCellSlotArray, ownsImage bool)
+	if slots.count() == 0 and not ownsImage 'noCellToAllocate'
 		return
 	end 'noCellToAllocate'
 
@@ -679,6 +718,10 @@ end 'declareCellSlotNeeds'
 // band is `Compiler.compileToCodeResult`'s install block's to say, and is stated there once.
 export function installAsyncReleasers(module StdModule, targets AsyncSpawnTargetArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
 	for target in targets 'eachCallee'
+		if target.startsService 'theThunkReleasesItsOwn'
+			continue
+		end 'theThunkReleasesItsOwn'
+
 		let plan = asyncReleasePlanFor(target, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
 
 		if plan.isInert() 'nothingToRelease'
@@ -712,8 +755,7 @@ function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleaseP
 	// The ARGUMENTS and the parameter cells, unconditionally: the thread holds them whether it ran,
 	// parked or never started, and the reference the spawn took is owed back on every one of those
 	// paths.
-	var cur = emitCellSlotReleases(module, func: func, ids: ids, cur: emitSlotReleases(module, func: func, ids: ids, cur: entry, gt: gt, slots: plan.argSlots), gt: gt, slots: plan.cellSlots)
-	cur = emitUnranSlotReleases(module, func: func, ids: ids, cur: cur, gt: gt, slots: plan.consumedArgSlots)
+	var cur = emitArgumentReleases(module, func: func, ids: ids, entry: entry, gt: gt, plan: plan)
 
 	if plan.resultSlots.count() == 0 and plan.errorSlots.count() == 0 'argsOnly'
 		module.setTerminator(cur, op: StdOp.branch(done.id))
@@ -732,6 +774,70 @@ function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleaseP
 	module.functions.push(func)
 end 'synthesizeReleaser'
 
+// How a start thunk answers its spawner: `unreported` when the factory cannot throw and the spawner
+// already holds the handle, `throughCell` when the spawner awaits `cell` for the handle or the
+// factory's error.
+export union ServiceStartReport
+	unreported
+	throughCell(cell ValueId, errorFlag ValueId)
+end 'ServiceStartReport'
+
+export function finishServiceStart(module StdModule, func IrFunction, entry IrBlock, nextValue ValueId, record ValueId, mailbox ValueId, state ValueId, loopName ByteArray, target AsyncSpawnTarget, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner, report ServiceStartReport) returns ValueId
+	let plan = asyncReleasePlanFor(target, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
+	var ids = ValueMinter.resuming(nextValue)
+	var cur = emitCellSlotReleases(module, func: func, ids: ids, cur: emitSlotReleases(module, func: func, ids: ids, cur: entry, base: record, slots: plan.argSlots), base: record, slots: plan.cellSlots)
+
+	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(record)))
+
+	match report 'report'
+		unreported then enterServiceLoop(module, cur: cur, ids: ids, state: state, mailbox: mailbox, loopName: loopName)
+		throughCell(cell, errorFlag) then finishReportedStart(module, func: func, cur: cur, ids: ids, cell: cell, errorFlag: errorFlag, state: state, mailbox: mailbox, loopName: loopName)
+	end 'report'
+
+	module.functions.push(func)
+	return ids.nextId()
+end 'finishServiceStart'
+
+function enterServiceLoop(module StdModule, cur IrBlock, ids ValueMinter, state ValueId, mailbox ValueId, loopName ByteArray)
+	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: loopName, args: twoArgs(state, second: mailbox)))
+	module.setTerminator(cur, op: StdOp.retVoid)
+end 'enterServiceLoop'
+
+// The handle is minted before the branch and holds the mailbox share the start's initial counts
+// gave it, so the failure arm hands that share back by releasing the handle. That arm completes the
+// cell before the teardown, because `__mbox_service_exit` ends in `__gt_owner_done`, this thread's
+// last act.
+function finishReportedStart(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, cell ValueId, errorFlag ValueId, state ValueId, mailbox ValueId, loopName ByteArray)
+	var started = module.addBlock(func, label: b"svcstarted", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"svcfailed", heat: BlockHeat.cold)
+	let handle = emitHandleBoxHolding(module, block: cur, mbox: mailbox, boxBytes: ServiceHandleBoxSize, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: errorFlag, pred: StdCmpPred.eq, against: NoErrorFlag, whenTrue: started, whenFalse: failed, ids: ids)
+
+	module.appendOp(started, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(cell, second: handle, third: emitConst(module, block: started, value: NoErrorFlag, ids: ids))))
+	enterServiceLoop(module, cur: started, ids: ids, state: state, mailbox: mailbox, loopName: loopName)
+
+	module.appendOp(failed, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(cell, second: emitConst(module, block: failed, value: 0, ids: ids), third: errorFlag)))
+	module.appendOp(failed, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(handle)))
+	module.appendOp(failed, op: StdOp.call(ids.mint(), callee: MboxServiceExitName, args: argsOf(mailbox)))
+	module.setTerminator(failed, op: StdOp.retVoid)
+end 'finishReportedStart'
+
+function emitArgumentReleases(module StdModule, func IrFunction, ids ValueMinter, entry IrBlock, gt ValueId, plan AsyncReleasePlan) returns IrBlock
+	if not plan.readsArguments() 'noArgumentToRead'
+		return entry
+	end 'noArgumentToRead'
+
+	let argBuf = emitLoadField(module, block: entry, record: gt, offset: GtOffArgBuf, ids: ids)
+	var released = emitCellSlotReleases(module, func: func, ids: ids, cur: emitSlotReleases(module, func: func, ids: ids, cur: entry, base: argBuf, slots: plan.argSlots), base: argBuf, slots: plan.cellSlots)
+	var cur = emitUnranSlotReleases(module, func: func, ids: ids, cur: released, gt: gt, base: argBuf, slots: plan.consumedArgSlots)
+
+	if plan.ownsImage 'theImageIsTheThreads'
+		module.appendOp(cur, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(argBuf)))
+	end 'theImageIsTheThreads'
+
+	return cur
+end 'emitArgumentReleases'
+
 // The RESULT-or-ERROR arm, reached only on the drop path.
 //
 // ⛔ **A NON-THROWING CALLEE'S `gt.threw` IS GARBAGE AND IS NEVER READ.** `buildGtTrampolineChunk` stores R10
@@ -747,7 +853,7 @@ end 'synthesizeReleaser'
 // reason no `status` test is needed here.
 function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMinter, start IrBlock, done IrBlock, gt ValueId, plan AsyncReleasePlan)
 	if not plan.calleeThrows 'nonThrowing'
-		module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: start, gt: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
+		module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: start, base: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
 		return
 	end 'nonThrowing'
 
@@ -757,31 +863,32 @@ function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMi
 	module.appendOp(start, op: StdOp.loadIndirect(threw, addrId: gt, offset: GtOffThrew, valueType: StdType.i64))
 	emitBranchOnCompare(module, block: start, value: threw, pred: StdCmpPred.eq, against: 0, whenTrue: releaseSuccess, whenFalse: releaseError, ids: ids)
 
-	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: releaseSuccess, gt: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
+	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: releaseSuccess, base: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
 
 	// `errorSlots` is empty for a throwing callee whose error type is a SCALAR clause — there is a `threw`
 	// worth branching on and nothing in it to free — so this arm emits no drop at all and falls straight
 	// through. That is the "callee throws" / "error is managed" split, and it is why they are two facts.
-	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: releaseError, gt: gt, slots: plan.errorSlots), op: StdOp.branch(done.id))
+	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: releaseError, base: gt, slots: plan.errorSlots), op: StdOp.branch(done.id))
 end 'emitResultOrErrorRelease'
 
 // Drop each slot in turn, threading the continuation block — one `MmRuntime.emitNullGuardedDrop` per slot.
 // Returns the block execution continues in.
 //
-// ⭐ **IT IS THAT HELPER AND NOT A SECOND COPY OF IT.** A GT struct is a base address and a slot is a byte
-// offset into it, which is exactly what `emitNullGuardedDrop` already takes; `FieldDropKind.direct` is
-// exactly the release a slot's `dropCallee` wants. This loop therefore owns only the ITERATION.
+// ⭐ **IT IS THAT HELPER AND NOT A SECOND COPY OF IT.** A base — the GT struct, its argument buffer
+// or a start record — is an address and a slot is a byte offset into it, which is exactly what
+// `emitNullGuardedDrop` already takes; `FieldDropKind.direct` is exactly the release a slot's
+// `dropCallee` wants. This loop therefore owns only the ITERATION.
 //
 // ⚠ The null guard is what makes a PARTIALLY INITIALIZED GT safe: the result/error words are
 // written only by a thread that actually completed, and the spawn zeroes both
 // (`GtRuntime.gtFieldRoster`). A zero word means "nothing was ever put here", which is the one
 // reading a release must not act on. The argument slots are not zeroed, and need not be:
 // `emitAsyncSpawn` stores the releaser only after it has filled every one of them.
-function emitSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, slots AsyncManagedSlotArray) returns IrBlock
+function emitSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, base ValueId, slots AsyncManagedSlotArray) returns IrBlock
 	var block = cur
 
 	for slot in slots 'eachSlot'
-		block = emitNullGuardedDrop(module, cur: block, box: gt, offset: slot.offset, kind: slot.drop, ids: ids, func: func)
+		block = emitNullGuardedDrop(module, cur: block, box: base, offset: slot.offset, kind: slot.drop, ids: ids, func: func)
 	end 'eachSlot'
 
 	return block
@@ -790,7 +897,7 @@ end 'emitSlotReleases'
 // A reclaimed thread that ran has COMPLETED: a dropped one that had started is readied and run out, and a
 // never-run one is renounced in its queue. So `status` alone tells the callee's own release from the one
 // this releaser owes.
-function emitUnranSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, slots AsyncManagedSlotArray) returns IrBlock
+function emitUnranSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, base ValueId, slots AsyncManagedSlotArray) returns IrBlock
 	if slots.count() == 0 'nothingTheCalleeTakes'
 		return cur
 	end 'nothingTheCalleeTakes'
@@ -799,23 +906,23 @@ function emitUnranSlotReleases(module StdModule, func IrFunction, ids ValueMinte
 	var ran = module.addBlock(func, label: b"ran", heat: BlockHeat.normal)
 	let completed = emitGtStatusEquals(module, block: cur, status: emitLoadField(module, block: cur, record: gt, offset: GtOffStatus, ids: ids), want: GtStatus.completed, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(completed, thenBlockId: ran.id, elseBlockId: release.id))
-	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: release, gt: gt, slots: slots), op: StdOp.branch(ran.id))
+	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: release, base: base, slots: slots), op: StdOp.branch(ran.id))
 	return ran
 end 'emitUnranSlotReleases'
 
-function emitCellSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, slots AsyncCellSlotArray) returns IrBlock
+function emitCellSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, base ValueId, slots AsyncCellSlotArray) returns IrBlock
 	var block = cur
 
 	for slot in slots 'eachSlot'
-		block = emitCellSlotRelease(module, func: func, ids: ids, cur: block, gt: gt, slot: slot)
+		block = emitCellSlotRelease(module, func: func, ids: ids, cur: block, base: base, slot: slot)
 	end 'eachSlot'
 
 	return block
 end 'emitCellSlotReleases'
 
-function emitCellSlotRelease(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, slot AsyncCellSlot) returns IrBlock
+function emitCellSlotRelease(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, base ValueId, slot AsyncCellSlot) returns IrBlock
 	let cell = ids.mint()
-	module.appendOp(cur, op: StdOp.loadIndirect(cell, addrId: gt, offset: slot.offset, valueType: StdType.i64))
+	module.appendOp(cur, op: StdOp.loadIndirect(cell, addrId: base, offset: slot.offset, valueType: StdType.i64))
 	let nonNull = emitCompareWithConstant(module, block: cur, value: cell, pred: StdCmpPred.ne, against: 0, ids: ids)
 	var release = module.addBlock(func, label: b"releasecell", heat: BlockHeat.normal)
 	var cont = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)

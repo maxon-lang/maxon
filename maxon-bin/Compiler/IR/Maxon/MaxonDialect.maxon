@@ -2027,11 +2027,10 @@ export union MaxonOp
 	// SPAWN a green thread running `callee(args…)` and yield a Promise handle. The Maxon-tier twin of
 	// `call` — same (callee NAME, args, `name:` labels, ranges) shape, so lowering slots the labelled
 	// args into parameter order exactly as `lowerCall` does — but instead of RUNNING the call it
-	// lowers to `__gt_spawn(funcAddr(callee))`, spilling the scalar args into the spawned GT's inline
-	// arg region (`GtOffArgInline`). `result` is the i64 promise handle (the spawned GT's pointer).
-	// The parser rejects an async arg or result that does not ride the GPR channel
-	// (`tagRidesAsyncGprChannel`) before this op is emitted, so every `args` value and the callee's
-	// return are GPR words. `argImmutableNames` carries the same per-argument blame names a plain
+	// lowers to `__gt_spawn(funcAddr(callee))`, placing the args where `AsyncArgumentSlots` says: the
+	// spawned GT's inline region, or an argument image it points to. `result` is the i64 promise handle
+	// (the spawned GT's pointer). The parser refuses an arg outside `tagRidesAsyncArgumentChannel` and a
+	// result outside `tagRidesAsyncGprChannel` before this op is emitted. `argImmutableNames` carries the same per-argument blame names a plain
 	// `call` does — see there.
 	asyncCall(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mint CalleeMint) = MaxonOpMeta{category: OpCategory.awaiting}
 
@@ -2211,19 +2210,19 @@ export union MaxonOp
 	// `OpCategory.awaiting` places both logically beside `asyncCall`/`await` — the band of ops that hand
 	// work to a green thread — independent of this tail position.
 	//
-	// ⭐⭐ **`serviceSpawn(result, typeName, state, capacity)` — START `<T>`'s SERVICE AND ANSWER ITS
-	// MAILBOX.** `state` is the `<T>` box the factory just built, MOVED (`Parser.handOff`); `capacity`
-	// is the `spawn(capacity: n)` value or `DefaultMailboxCapacity`; `result` is the mailbox POINTER,
-	// an integer, which the parser then stores into the one field of a freshly allocated `<T>.handle`
-	// box. The synthesized function the runtime needs — `<T>.__loop` — and the mailbox's slot size are
-	// named by the TYPE alone, so the op carries neither: `LowerMaxonToStd` derives both from
-	// `typeName` at the one place that emits the spawn call, which is what keeps the spawn site and
-	// `ServiceLoop`'s synthesis from coming to name different symbols.
-	//
-	// ⚠ It binds NO callee (`maxonOpCalleeKind` answers `noCallee`): `<T>` reaches `UnusedExportCheck`
-	// through the ordinary `call <T>.<factory>` this op's `state` operand comes from, and `<T>.__loop` is
-	// the compiler's own name, which that pass tracks nothing under.
-	serviceSpawn(result ValueId, let typeName ByteArray, state ValueId, capacity ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	// ⭐⭐ **`serviceSpawn(result, typeName, state, capacity, callee, args, …, startReplies)` — START
+	// `<T>`'s SERVICE, WHOSE GREEN THREAD RUNS THE FACTORY `callee`.** `callee` through `mint` are a
+	// `call`'s columns, and the arguments move to the service (`Parser.transferThreadArguments`).
+	// `state` stands for the factory's result, and is read for the type and the instantiation the
+	// service's state stands at. `capacity` is the `spawn(capacity: n)` value or
+	// `DefaultMailboxCapacity`. `startReplies` is the parse's reading of the factory's `throws`
+	// clause, and the lowering reads it rather than deriving it again. Without it `result` is the
+	// mailbox POINTER, an integer the parser stores into a fresh `<T>.handle` box; with it `result` is
+	// a cell the parser awaits for the handle or the error. The start thunk, `<T>.__loop` and the
+	// mailbox's slot size are named by the TYPE and the factory, so the op carries none of them:
+	// `LowerMaxonToStd` derives them at the one place that emits the spawn call, which is what keeps
+	// the spawn site and `ServiceLoop`'s synthesis from coming to name different symbols.
+	serviceSpawn(result ValueId, let typeName ByteArray, state ValueId, capacity ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mint CalleeMint, startReplies bool) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// ⭐⭐ **`serviceSend(result, status, callee, handle, request, bytes, timeoutMs, timed)` — COPY ONE
 	// MESSAGE INTO THE MAILBOX, OR WAIT FOR ROOM.** `status` is the `MboxSendStatus` `__mbox_send`
@@ -2407,7 +2406,7 @@ export function cacheWriteMaxonOp(writer LibraryCacheWriter, value MaxonOp)
 		witnessTryDispatch(a0, a1, a2, a3, a4, a5, a6, a7) then cacheWriteMaxonOpWitnessTryDispatch(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7)
 		panicAbortValue(a0) then cacheWriteMaxonOpPanicAbortValue(writer, a0: a0)
 		errorFlagEncode(a0, a1, a2) then cacheWriteMaxonOpErrorFlagEncode(writer, a0: a0, a1: a1, a2: a2)
-		serviceSpawn(a0, a1, a2, a3) then cacheWriteMaxonOpServiceSpawn(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		serviceSpawn(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) then cacheWriteMaxonOpServiceSpawn(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7, a8: a8, a9: a9, a10: a10, a11: a11)
 		serviceSend(a0, a1, a2, a3, a4, a5, a6, a7) then cacheWriteMaxonOpServiceSend(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7)
 		serviceReplyCell(a0, a1, a2) then cacheWriteMaxonOpServiceReplyCell(writer, a0: a0, a1: a1, a2: a2)
 		immortalStructRecord(a0, a1, a2) then cacheWriteMaxonOpImmortalStructRecord(writer, a0: a0, a1: a1, a2: a2)
@@ -2606,11 +2605,19 @@ function cacheWriteMaxonOpErrorFlagEncode(writer LibraryCacheWriter, a0 ValueId,
 	writer.flag(a2)
 end 'cacheWriteMaxonOpErrorFlagEncode'
 
-function cacheWriteMaxonOpServiceSpawn(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueId, a3 ValueId)
+function cacheWriteMaxonOpServiceSpawn(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueId, a3 ValueId, a4 ByteArray, a5 ValueIdArray, a6 NameRoster, a7 SourceRangeArray, a8 WriteBlameArray, a9 ParamCount, a10 CalleeMint, a11 bool)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.bytes(a1)
 	writer.unsigned(a2 as CacheUnsigned)
 	writer.unsigned(a3 as CacheUnsigned)
+	writer.bytes(a4)
+	cacheWriteValueIdArray(writer, value: a5)
+	cacheWriteNameRoster(writer, value: a6)
+	cacheWriteSourceRangeArray(writer, value: a7)
+	cacheWriteWriteBlameArray(writer, value: a8)
+	writer.unsigned(a9 as CacheUnsigned)
+	writer.unsigned(a10.ordinal as CacheUnsigned)
+	writer.flag(a11)
 end 'cacheWriteMaxonOpServiceSpawn'
 
 function cacheWriteMaxonOpServiceSend(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueId, a4 ValueId, a5 ValueId, a6 ValueId, a7 bool)
@@ -2970,8 +2977,16 @@ function cacheReadMaxonOpServiceSpawn(reader LibraryCacheReader) returns MaxonOp
 	let a1 = try reader.bytes()
 	let a2 = (try reader.unsigned()) as ValueId
 	let a3 = (try reader.unsigned()) as ValueId
+	let a4 = try reader.bytes()
+	let a5 = try cacheReadValueIdArray(reader)
+	let a6 = try cacheReadNameRoster(reader)
+	let a7 = try cacheReadSourceRangeArray(reader)
+	let a8 = try cacheReadWriteBlameArray(reader)
+	let a9 = (try reader.unsigned()) as ParamCount
+	let a10 = try cacheReadCalleeMint(reader)
+	let a11 = try reader.flag()
 
-	return MaxonOp.serviceSpawn(a0, typeName: a1, state: a2, capacity: a3)
+	return MaxonOp.serviceSpawn(a0, typeName: a1, state: a2, capacity: a3, callee: a4, args: a5, argLabels: a6, argRanges: a7, argImmutableNames: a8, defaultedArgs: a9, mint: a10, startReplies: a11)
 end 'cacheReadMaxonOpServiceSpawn'
 
 function cacheReadMaxonOpServiceSend(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
@@ -3177,9 +3192,9 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		// The error-flag ENCODE is arithmetic on a value the parser already holds — it calls nothing.
 		errorFlagEncode gives MaxonCalleeKind.noCallee
 
-		// A `spawn` names a TYPE, not a function: the factory it calls is an ordinary `call` op emitted
-		// beside it, and the two functions the lowering names are the compiler's own.
-		serviceSpawn gives MaxonCalleeKind.noCallee
+		// A `spawn` names the factory its service's green thread runs; the start thunk and the loop the
+		// lowering names are the compiler's own.
+		serviceSpawn gives MaxonCalleeKind.direct
 
 		// A SEND names the message it delivers, which is what credits an export reachable no other way.
 		serviceSend gives MaxonCalleeKind.direct
@@ -3219,6 +3234,7 @@ export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 		call(_, callee, _, _, _, _, _, _) gives callee
 		tryCall(_, _, callee, _, _, _, _, _, _) gives callee
 		asyncCall(_, callee, _, _, _, _, _, _) gives callee
+		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _, _) gives callee
 		functionRef(_, funcName, _) gives funcName
 		serviceSend(_, _, callee, _, _, _, _, _) gives callee
 		default panic("maxonOpCalleeName: asked of an op that binds no callee name — `maxonOpCalleeKind` answers `noCallee` for it, and every caller gates on that")
@@ -3230,6 +3246,7 @@ export function maxonOpCalleeMint(op MaxonOp) returns CalleeMint
 		call(_, _, _, _, _, _, _, mint) gives mint
 		tryCall(_, _, _, _, _, _, _, _, mint) gives mint
 		asyncCall(_, _, _, _, _, _, _, mint) gives mint
+		serviceSpawn(_, _, _, _, _, _, _, _, _, _, mint, _) gives mint
 		serviceSend gives CalleeMint.notMinted
 		default panic("maxonOpCalleeMint: asked of an op that binds no direct callee — every caller gates on `maxonOpCalleeKind` answering `direct`")
 	end 'op'
@@ -3417,7 +3434,7 @@ end 'maxonOpLeavesByError'
 // The type a `spawn` starts — asked only of an op `maxonOpIsServiceSpawn` answered true for.
 export function maxonOpSpawnedServiceType(op MaxonOp) returns ByteArray
 	return match op 'op'
-		serviceSpawn(_, typeName, _, _) gives typeName
+		serviceSpawn(_, typeName, _, _, _, _, _, _, _, _, _, _) gives typeName
 		default panic("maxonOpSpawnedServiceType: asked of an op that starts no service — `maxonOpIsServiceSpawn` answers false for it, and every caller gates on that")
 	end 'op'
 end 'maxonOpSpawnedServiceType'
@@ -3435,6 +3452,7 @@ export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonO
 		call(result, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
 		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
 		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
+		serviceSpawn(result, typeName, state, capacity, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint, startReplies) gives MaxonOp.serviceSpawn(result, typeName: typeName, state: state, capacity: capacity, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies)
 
 		// ⚠ **`serviceSend` IS `direct` AND IS DELIBERATELY ABSENT.** Only overload resolution rewrites a
 		// callee, and a message's name can never be an overload set's key: `classifyServiceRoster` refuses
@@ -3689,6 +3707,7 @@ export function withRewrittenArgs(op MaxonOp, args ValueIdArray, argImmutableNam
 		call(result, callee, _, argLabels, argRanges, _, defaultedArgs, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
 		tryCall(result, errorFlag, callee, _, argLabels, argRanges, _, defaultedArgs, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
 		asyncCall(result, callee, _, argLabels, argRanges, _, defaultedArgs, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
+		serviceSpawn(result, typeName, state, capacity, callee, _, argLabels, argRanges, _, defaultedArgs, mint, startReplies) gives MaxonOp.serviceSpawn(result, typeName: typeName, state: state, capacity: capacity, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies)
 		indirectCall(result, callee, _, _) gives MaxonOp.indirectCall(result, callee: callee, args: args, argImmutableNames: argImmutableNames)
 		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the three direct-call variants and the indirect call carry one")
 
@@ -3702,6 +3721,7 @@ export function callArgImmutableNamesOf(op MaxonOp) returns WriteBlameArray
 		call(_, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
 		tryCall(_, _, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
 		asyncCall(_, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
+		serviceSpawn(_, _, _, _, _, _, _, _, argImmutableNames, _, _, _) gives argImmutableNames
 		indirectCall(_, _, _, argImmutableNames) gives argImmutableNames
 		default panic("callArgImmutableNamesOf: asked of an op that supplies no argument list — only the three direct-call variants and the indirect call carry one")
 	end 'op'

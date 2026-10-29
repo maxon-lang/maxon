@@ -246,14 +246,16 @@ end 'buildGtContextSwitchChunk'
 
 // `__gt_trampoline` — the entry a FRESH green thread jumps into on its first switch-in. NOT a normal call:
 // no incoming register arguments and no prologue built for it. It reads its own GT from rdx (which the
-// context switch left holding `to`), loads the async function + arg buffer from the GT, loads all
-// MaxAsyncArgs argument slots into the ABI argument registers, calls the function, captures its R8 result
+// context switch left holding `to`), loads the async function + arg buffer from the GT, loads both
+// argument register files from the buffer, calls the function, captures its R8 result
 // and marks the GT completed, then context-switches to the GT's waiter (always set by the strand runner that
 // switched it in).
 //
-// The stack is 16-aligned on entry (`__gt_spawn` sets `gt.sp` to the stack top, a page boundary),
-// so `sub rsp, ShadowSpaceBytes` — a multiple of 16 — keeps every `call` below aligned while
-// reserving the Win64 shadow space the user call may clobber.
+// The stack is 16-aligned on entry (`__gt_spawn` sets `gt.sp` to the stack top, a page boundary,
+// and a spawn with stack arguments lowers it by a multiple of 16), so `sub rsp, ShadowSpaceBytes` —
+// a multiple of 16 — keeps every `call` below aligned while reserving the Win64 shadow space the
+// user call may clobber. The stack arguments then sit just above that reservation, where a callee
+// reads an ordinary call's.
 function buildGtTrampolineChunk() returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
@@ -269,11 +271,16 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodePrologue(code, stackSize: ShadowSpaceBytes, probeScratchIsFree: false)
 
 	// Load every argument slot into its ABI argument register. The callee reads only the slots it declared;
-	// the rest are the arg buffer's slab zeros in unread registers. `argRegisterAt` is the ABI's own
-	// arg-register oracle, so this load order cannot drift from a call site's arg order.
-	for k in 0 upto MaxAsyncArgs 'args'
+	// the rest load whatever the buffer holds there (past the inline region, the GT fields after it)
+	// into registers nothing reads. `argRegisterAt` is the ABI's own arg-register oracle, so this load
+	// order cannot drift from a call site's arg order.
+	for k in 0 upto argRegisters.count() 'args'
 		encodeLoadRegBaseDisp(code, destReg: argRegisterAt(k as ParamCount), base: GtTrampArgBufReg, disp: (k * GtArgSlotBytes) as Imm32, wide: true)
 	end 'args'
+
+	for k in 0 upto argFpRegisters.count() 'floatArgs'
+		encodeMovsdRegBaseDisp(code, destReg: argFpRegisterAt(k as ParamCount), base: GtTrampArgBufReg, disp: (AsyncImageFpOffset + k * GtArgSlotBytes) as Imm32)
+	end 'floatArgs'
 
 	// Call the async function; capture its R8 result AND its R10 error flag into the GT; mark completed.
 	// R8 (result) and R10 (the dual-register error flag) are the throws ABI's two return registers and are

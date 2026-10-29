@@ -171,14 +171,10 @@ func @main {
     x64.pushReg r15
     x64.prologue 56
     x64.movRegImm32 rbx, 1024
-  __il_body#7:
-    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], r12
-  __il_cont#6:
-    x64.leaRegFunc rcx, [rip + Ping.__loop]
+    x64.leaRegFunc rcx, [rip + Ping.__start_Ping.create]
     x64.movRegImm32 rax, 16
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
@@ -249,10 +245,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-  __il_body#9:
+  __il_body:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
-  __il_cont#8:
+  __il_cont:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -329,6 +325,40 @@ func @Ping.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
+}
+
+func @Ping.__start_Ping.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  __il_body:
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 0], r13
+  __il_cont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.callDirect Ping.__loop
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.retIndirect
 }
 
 func @__sched_steal {
@@ -546,14 +576,10 @@ func @main {
     x64.pushReg r15
     x64.prologue 56
     x64.movRegImm32 rbx, 1024
-  __il_body#7:
-    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], r12
-  __il_cont#6:
-    x64.leaRegFunc rcx, [rip + Ping.__loop]
+    x64.leaRegFunc rcx, [rip + Ping.__start_Ping.create]
     x64.movRegImm32 rax, 16
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
@@ -624,10 +650,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-  __il_body#9:
+  __il_body:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
-  __il_cont#8:
+  __il_cont:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -704,6 +730,40 @@ func @Ping.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
+}
+
+func @Ping.__start_Ping.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  __il_body:
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 0], r13
+  __il_cont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.callDirect Ping.__loop
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.retIndirect
 }
 
 func @__sched_steal {
@@ -912,15 +972,11 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 1024
-  __il_body#7:
-    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x20
-  __il_cont#6:
-    arm64.leaFuncAddr x0, Ping.__loop
+    arm64.leaFuncAddr x0, Ping.__start_Ping.create
     arm64.movImm x2, 16
     arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
@@ -986,10 +1042,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-  __il_body#9:
+  __il_body:
     arm64.movRegReg x0, x25
     arm64.bl __write_stdout
-  __il_cont#8:
+  __il_cont:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x19, 0
@@ -1068,6 +1124,37 @@ func @Ping.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
+}
+
+func @Ping.__start_Ping.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+  __il_body:
+    arm64.movImm x21, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x21
+  __il_cont:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x20
+    arm64.bl Ping.__loop
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.retIndirect
 }
 
 func @__sched_steal {
@@ -1279,15 +1366,11 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 1024
-  __il_body#7:
-    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x20
-  __il_cont#6:
-    arm64.leaFuncAddr x0, Ping.__loop
+    arm64.leaFuncAddr x0, Ping.__start_Ping.create
     arm64.movImm x2, 16
     arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
@@ -1353,10 +1436,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-  __il_body#9:
+  __il_body:
     arm64.movRegReg x0, x25
     arm64.bl __write_stdout
-  __il_cont#8:
+  __il_cont:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x19, 0
@@ -1435,6 +1518,37 @@ func @Ping.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
+}
+
+func @Ping.__start_Ping.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+  __il_body:
+    arm64.movImm x21, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x21
+  __il_cont:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x20
+    arm64.bl Ping.__loop
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.retIndirect
 }
 
 func @__sched_steal {

@@ -79,8 +79,8 @@ handler owns what it was sent: it may keep it or write it, and nothing is writte
 green thread holds is a plain load/add/store, so a send that put one box into two green threads' hands without
 saying so would not be slow, it would corrupt the heap. Two refusals are static. A ROOT this frame does not
 solely own — a value a closure or a container also holds, or a borrowed parameter other than a `String` — is **E3138**, and a value
-that cannot have exactly one owner on the far side at all is **E3135**: a `Promise` (a handle its awaiter owns),
-a function value (a closure record its copies share), an opaque type parameter (no layout at the send).
+that cannot have exactly one owner on the far side at all is **E3135**: a `Promise` or any type that can hold one (a
+handle its awaiter owns, whose coroutine belongs to the strand that started it), a function value (a closure record its copies share), an opaque type parameter (no layout at the send).
 Every other aggregate — a container, a record with a managed field, a union with a managed payload, a value
 held at an interface type — is admitted after a runtime WALK over its graph at the send (an interface-typed
 value through its witness, whose table names the conformer's walk): no reachable refcounted record may have an
@@ -676,6 +676,231 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3135: <fragment>:17:10: parameter `op` of the message `Calc.apply` is a function value, a closure record that owns what it captures and does not cross to another thread, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+```
+
+<!-- test: error.message-param-array-of-promises-not-transferable -->
+A promise belongs to the strand that started its coroutine, so no type that can hold one crosses to a service: an
+array of promises is refused as a message parameter, however many it holds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias PromiseArray = Array with IntPromise
+
+function forever() returns Integer
+	sleep(ForeverMs)
+	return 1
+end 'forever'
+
+type Sink
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(ps PromiseArray)
+		self.n = self.n + (1 if ps.isEmpty() else 2)
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	var ps = PromiseArray.create()
+	ps.push(async forever())
+	try h.take(ps) otherwise panic("an open mailbox with room takes the send")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3135: <fragment>:24:10: parameter `ps` of the message `Sink.take` is a `PromiseArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+```
+
+<!-- test: error.message-param-empty-array-of-promises-not-transferable -->
+The type decides, not the value: the same message is refused when the array sent is empty.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias PromiseArray = Array with IntPromise
+
+type Sink
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(ps PromiseArray)
+		self.n = self.n + (1 if ps.isEmpty() else 2)
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	let ps = PromiseArray.create()
+	try h.take(ps) otherwise panic("an open mailbox with room takes the send")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3135: <fragment>:19:10: parameter `ps` of the message `Sink.take` is a `PromiseArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+```
+
+<!-- test: error.message-param-union-carrying-a-promise-not-transferable -->
+A union that has a case carrying a promise is refused as a message parameter even when the value sent is the
+case that carries none.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+union Slot
+	idle
+	held(p IntPromise)
+end 'Slot'
+
+type Sink
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(s Slot)
+		match s 'slot'
+			idle then self.n = self.n + 1
+			held then self.n = self.n + 2
+		end 'slot'
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	try h.take(Slot.idle) otherwise panic("an open mailbox with room takes the send")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3135: <fragment>:26:10: parameter `s` of the message `Sink.take` is a `Slot` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+```
+
+<!-- test: error.message-reply-record-holding-a-promise-not-transferable -->
+A reply is handed to the strand that awaits it, so a reply whose type holds a promise is refused as a parameter is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function forever() returns Integer
+	sleep(ForeverMs)
+	return 1
+end 'forever'
+
+type Holder
+	export var held as IntPromise
+
+	static function create() returns Self
+		return Self{held: async forever()}
+	end 'create'
+end 'Holder'
+
+type Sink
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function make() returns Holder
+		return Holder.create()
+	end 'make'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	h.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3135: <fragment>:31:10: the message `Sink.make` returns a `Holder` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose reply is handed to the green thread that awaits it. `await` the promise in the handler and return the result it yields, or drop the `returns` clause
+```
+
+<!-- test: error.spawn-factory-argument-promise-not-transferable -->
+A `spawn`'s factory runs on the service's strand, so a promise handed to it would cross to a strand that does not
+own its coroutine.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function forever() returns Integer
+	sleep(ForeverMs)
+	return 1
+end 'forever'
+
+type Sink
+	var n as Integer
+
+	static function create(p IntPromise) returns Self
+		let v = await p
+		return Self{n: v}
+	end 'create'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create(async forever())
+	h.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3135: <fragment>:24:28: argument 1 of `spawn Sink.create(…)` is a Promise, which is a green-thread handle its awaiter owns, and a send hands it to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message
+```
+
+<!-- test: error.spawn-factory-argument-record-holding-a-promise-not-transferable -->
+A record that holds a promise is refused as a factory argument as the promise itself is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function forever() returns Integer
+	sleep(ForeverMs)
+	return 1
+end 'forever'
+
+type Holder
+	export var held as IntPromise
+
+	static function create() returns Self
+		return Self{held: async forever()}
+	end 'create'
+end 'Holder'
+
+type Sink
+	var n as Integer
+
+	static function create(h Holder) returns Self
+		let done = h.held.isComplete()
+		return Self{n: 1 if done else 0}
+	end 'create'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create(Holder.create())
+	h.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3135: <fragment>:32:28: argument 1 of `spawn Sink.create(…)` is a `Holder` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and a send hands it to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message
 ```
 
 <!-- test: services.a-message-may-carry-a-value-at-an-interface-type -->
@@ -11036,7 +11261,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3007: <fragment>:29:24: Ambiguous overload for 'create': multiple overloads match. Candidates: (seed Whole), (start Whole)
+error E3007: <fragment>:29:10: Ambiguous overload for 'create': multiple overloads match. Candidates: (seed Whole), (start Whole)
 ```
 
 <!-- test: error.a-spawn-of-a-generic-factory-whose-arguments-tie-two-overloads-is-ambiguous -->
@@ -11070,7 +11295,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3007: <fragment>:24:20: Ambiguous overload for 'create': multiple overloads match. Candidates: (x T, n Whole), (x T, n Wide)
+error E3007: <fragment>:24:10: Ambiguous overload for 'create': multiple overloads match. Candidates: (x T, n Whole), (x T, n Wide)
 ```
 
 <!-- test: error.a-spawn-whose-bound-factory-starts-no-service-is-refused-ahead-of-a-message-roster-diagnostic -->
@@ -11190,7 +11415,7 @@ end 'main'
 ```
 
 <!-- test: a-spawn-of-factories-that-keep-an-argument-differently-moves-into-the-bound-one -->
-A `spawn` moves every argument its factory keeps. One `create` keeps its argument and the other only reads it, and the argument's type binds the first, so `shelf` is moved into the service.
+A `spawn` moves every argument to the service, whichever overload binds. One `create` keeps its argument and the other only reads it, and the argument's type binds the first, so `shelf` is moved into the service.
 ```maxon
 type Shelf
 	export let count as Integer
@@ -11235,8 +11460,8 @@ typealias Integer = int(i64.min to i64.max)
 4
 ```
 
-<!-- test: a-spawn-of-factories-that-keep-an-argument-differently-leaves-the-borrowed-one-with-the-caller -->
-The same factories with an argument that binds the `create` which only reads it: the caller keeps the `Label` and reads it after the spawn.
+<!-- test: a-spawn-of-factories-that-keep-an-argument-differently-moves-it-either-way -->
+The same factories with an argument that binds the `create` which only reads it: the `spawn` moves the `Label` to the service's thread all the same, so the caller hands over a `.clone()` to keep reading its own.
 ```maxon
 type Shelf
 	export let count as Integer
@@ -11272,7 +11497,7 @@ end 'Keeper'
 
 function main() returns ExitCode
 	let label = Label.create("abcdef")
-	let k = spawn Keeper.create(label)
+	let k = spawn Keeper.create(label.clone())
 	let kept = try await k.count() otherwise 0
 	return (kept + (label.text.byteLength() as Integer)) as ExitCode
 end 'main'
@@ -11319,7 +11544,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3007: <fragment>:31:23: Ambiguous overload for 'create': multiple overloads match. Candidates: (shelf Shelf), (other Shelf)
+error E3007: <fragment>:31:10: Ambiguous overload for 'create': multiple overloads match. Candidates: (shelf Shelf), (other Shelf)
 ```
 
 <!-- test: a-spawn-of-factories-that-keep-an-argument-differently-binds-by-an-alias-valued-argument -->
@@ -12864,8 +13089,8 @@ note: <fragment>:35:15: the `spawn` that makes `Worker` a service
 ```
 
 <!-- test: error.spawn-factory-delegating-to-a-factory-that-returns-its-parameter-refused -->
-`create` delegates to `adopt`, which builds nothing: it returns the `Worker` it was handed, which `main`
-still holds.
+`create` delegates to `adopt`, which builds nothing: it returns the `Worker` it was handed. The `spawn` moves that
+argument to the service's thread, so `main` may not read `seed` afterwards.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -12899,12 +13124,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3102: <fragment>:28:18: use of moved value 'seed': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: error.spawn-factory-argument-borrowed-from-a-parameter-refused -->
-`start` borrows `shelf` from `main`, and `create` keeps it in the service's state, so the state the `spawn`
-moves would share `shelf` with `main` across two green threads.
+`start` borrows `shelf` from `main`, and the `spawn` moves its factory's arguments to the service, so `shelf`
+would be shared with `main` across two green threads.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -13425,11 +13650,10 @@ end 'main'
 1 4
 ```
 
-<!-- test: error.a-generic-reply-whose-instantiation-reaches-an-os-handle-is-refused -->
-A reply typed `Array with T` is fresh in the handler's generic body and walkable there. The instantiation makes
-its elements `MachinePin`s, whose machine pin no per-type walk can prove sole — so the `spawn` that fixes
-`T` refuses it (E3138), rather than leaving a reply the loop cannot walk. A socket is not such a handle: its box
-counts its owners, and a `TcpListener` crosses when its sender holds it alone.
+<!-- test: error.a-generic-factory-argument-that-is-an-os-handle-is-refused -->
+The factory's argument fixes `T`, and it crosses to the service's thread. A `MachinePin`'s machine pin is walked by
+no per-type walk that could prove it sole, so the `spawn` refuses the argument (E3138). A socket is not such a
+handle: its box counts its owners, and a `TcpListener` crosses when its sender holds it alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -13457,7 +13681,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:21:10: the reply of the message `Maker.make` is a `Array with MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:21:29: argument `seed` of `spawn Maker.create(…)` is a `MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: services.a-reply-a-sibling-builds-in-a-local-is-fresh -->
@@ -13596,26 +13820,25 @@ error E3137: <fragment>:21:3: `Worker.measure` returns a value this frame does n
 note: <fragment>:32:15: the `spawn` that makes `Worker` a service
 ```
 
-<!-- test: error.spawn-factory-returning-a-local-a-function-stored-refused -->
-`create` builds its state in a local and hands it to `remember`, which keeps it in a module-level registry,
-so the state the `spawn` would move has a second owner.
+<!-- test: error.spawn-factory-reaching-a-module-var-through-a-function-is-refused -->
+`create` runs on the service's own green thread, and the function it calls keeps a record in a module-level
+registry that `main` reads: one word two threads share.
 ```maxon
 typealias Tally = int(0 to u64.max)
-typealias WorkerArray = Array with Worker
+typealias TallyArray = Array with Tally
 
-var registry = WorkerArray.create()
+var registry = TallyArray.create()
 
-function remember(worker Worker)
-	registry.push(worker)
+function remember(scale Tally)
+	registry.push(scale)
 end 'remember'
 
 type Worker
 	var scale as Tally
 
 	static function create(scale Tally) returns Self
-		var worker = Self{scale: scale}
-		remember(worker)
-		return worker
+		remember(scale)
+		return Self{scale: scale}
 	end 'create'
 
 	export function measure(n Tally) returns Tally
@@ -13632,7 +13855,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3143: <fragment>:8:2: `remember` uses the module-level `var registry`, and the factory `Worker.create` reaches it — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `registry` a `let`
+note: <fragment>:25:15: the `spawn` that makes `Worker` a service
 ```
 
 <!-- test: error.reply-a-sibling-returns-a-local-another-local-aliases-refused -->
@@ -16832,7 +17056,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:29:23: argument `b` of `spawn Worker.create(…)` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3138: <fragment>:29:30: argument `b` of `spawn Worker.create(…)` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
 ```
 
 <!-- test: services.a-viewed-var-of-an-immutable-record-is-shared-with-the-service -->
@@ -17228,7 +17452,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:20: argument type mismatch for 'n': expected 'Whole', got 'String'
+error E3005: <fragment>:24:10: argument type mismatch for 'n': expected 'Whole', got 'String'
 ```
 
 <!-- test: error.a-spawn-of-an-overloaded-factory-whose-arguments-fit-no-overload-reports-the-mismatch -->
@@ -17260,7 +17484,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:22:24: argument type mismatch for 'seed': expected 'Whole', got 'String'
+error E3005: <fragment>:22:10: argument type mismatch for 'seed': expected 'Whole', got 'String'
 ```
 
 <!-- test: a-message-parameter-spelled-through-its-directory-keeps-its-brand -->
@@ -18033,4 +18257,1209 @@ end 'main'
 ```maxoncstderr
 error E3137: <fragment>:30:3: `Maker.next` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Maker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:35:14: the `spawn` that makes `Maker` a service
+```
+
+<!-- test: services.a-promise-the-factory-starts-belongs-to-the-services-strand -->
+The factory runs on the new service's own green thread, so a coroutine it starts belongs to the service's strand and
+the service's teardown may reclaim it. Started in the spawner, the same coroutine would be dropped by a machine that
+does not hold its strand.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Napped = Promise with Integer
+
+function forever() returns Integer
+	sleep(ForeverMs)
+	return 1
+end 'forever'
+
+type Sleeper
+	var held as Napped
+
+	static function create() returns Self
+		return Self{held: async forever()}
+	end 'create'
+
+	export function arm() returns Integer
+		Scheduler.yield()
+		return 1
+	end 'arm'
+end 'Sleeper'
+
+function main() returns ExitCode
+	let s = spawn Sleeper.create()
+	let r = try s.arm() otherwise panic("an open mailbox with room takes the send")
+	let v = await r
+	print("v={v}\n")
+	s.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+v=1
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-factory-fills-a-promise-array-the-state-keeps -->
+Every coroutine a factory pushes into an array the state keeps is started on the service's strand, so dropping the
+service reclaims all of them.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Napped = Promise with Integer
+typealias NapArray = Array with Napped
+
+function forever() returns Integer
+	sleep(ForeverMs)
+	return 1
+end 'forever'
+
+type Sleepers
+	var held as NapArray
+
+	static function create(naps Count) returns Self
+		var napping = NapArray.create()
+
+		for _ in 0 upto naps 'eachNap'
+			napping.push(async forever())
+		end 'eachNap'
+
+		return Self{held: napping}
+	end 'create'
+
+	export function napping() returns Count
+		return self.held.count()
+	end 'napping'
+end 'Sleepers'
+
+function main() returns ExitCode
+	let s = spawn Sleepers.create(3)
+	let n = try await s.napping() otherwise panic("the service is running")
+	print("napping={n}\n")
+	s.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+napping=3
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-factorys-prints-follow-the-spawners-until-the-spawner-waits -->
+<!-- procs: 1 -->
+The factory is the service's first act, not the spawner's: on one processor the spawner keeps running past `spawn`,
+and the factory's output appears only once the spawner waits for the service.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Greeter
+	var greeted as Tally
+
+	static function create() returns Self
+		print("factory runs\n")
+		return Self{greeted: 1}
+	end 'create'
+
+	export function total() returns Tally
+		return self.greeted
+	end 'total'
+end 'Greeter'
+
+function main() returns ExitCode
+	let g = spawn Greeter.create()
+	print("spawn returned\n")
+	let n = try await g.total() otherwise return 1
+	print("total={n}\n")
+	g.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+spawn returned
+factory runs
+total=1
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-generic-factory-runs-on-the-service-with-its-arguments -->
+A generic factory keeps a managed argument at its type parameter and borrows a scalar one; both reach the factory on the
+service's thread, and the one it keeps is the service's to release.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Box uses T
+	var item as T
+	var extra as Whole
+
+	static function create(item T, extra Whole) returns Self
+		return Self{item: item, extra: extra}
+	end 'create'
+
+	export function extraOf() returns Whole
+		return self.extra
+	end 'extraOf'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create("a label long enough to be a heap string", extra: 7)
+	let n = try await h.extraOf() otherwise return 1
+	print("{n}\n")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: services.an-overloaded-factory-binds-by-its-arguments-and-starts-on-the-service -->
+The `spawn` binds the `create` overload its arguments fit, and the bound one is what the service's thread runs.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Sink
+	var seen as Whole
+
+	static function create(label String) returns Self
+		if label.isEmpty() 'unlabelled'
+			return Self{seen: 0}
+		end 'unlabelled'
+
+		return Self{seen: 1}
+	end 'create'
+
+	static function create(count Whole) returns Self
+		return Self{seen: count}
+	end 'create'
+
+	export function total() returns Whole
+		return self.seen
+	end 'total'
+end 'Sink'
+
+function main() returns ExitCode
+	let a = spawn Sink.create("a label long enough to be a heap string")
+	let b = spawn Sink.create(5)
+	let first = try await a.total() otherwise return 1
+	let second = try await b.total() otherwise return 2
+	print("{first} {second}\n")
+	a.shutdown()
+	b.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+1 5
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-factory-with-defaults-and-labels-runs-on-the-service -->
+Labels reorder the factory's arguments and defaults fill the omitted ones before the call crosses to the service's
+thread, so the service starts from exactly the values an ordinary call would have bound.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Calc
+	var value as Whole
+
+	static function create(first Whole, scale Whole = 10, offset Whole = 1) returns Self
+		return Self{value: first * scale + offset}
+	end 'create'
+
+	export function total() returns Whole
+		return self.value
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let a = spawn Calc.create(3, offset: 5, scale: 2)
+	let b = spawn Calc.create(4)
+	let first = try await a.total() otherwise return 1
+	let second = try await b.total() otherwise return 2
+	print("{first} {second}\n")
+	a.shutdown()
+	b.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+11 41
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-factory-takes-ten-arguments-of-mixed-kinds-on-the-service -->
+Ten arguments — integers, floats and a value held at an interface type — travel to the service's thread in the order and
+register class the factory declares them in, and the interface value is released with its own witness.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Area = float(f64.min to f64.max)
+
+interface Shape
+	function area() returns Area
+end 'Shape'
+
+type Square implements Shape
+	var side as Area
+
+	static function create(side Area) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Area
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Plot
+	var count as Whole
+	var span as Area
+
+	static function create(a Whole, b Area, shape Shape, c Whole, d Area, e Whole, f Area, g Whole, h Area, i Whole) returns Self
+		return Self{count: a + c + e + g + i, span: b + d + f + h + shape.area()}
+	end 'create'
+
+	export function show()
+		print("{self.count} {self.span:.1}\n")
+	end 'show'
+end 'Plot'
+
+function main() returns ExitCode
+	let p = spawn Plot.create(1, b: 0.5, shape: Square.create(2.0), c: 2, d: 1.5, e: 3, f: 2.5, g: 4, h: 3.5, i: 5)
+	try p.show() otherwise panic("an open mailbox with room takes the send")
+	p.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+15 12.0
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-throwing-factory-that-succeeds-starts-the-service -->
+A factory that throws is a throwing expression: the spawner parks until the factory has run on the new service's green
+thread and then holds the handle. The factory's output therefore comes before anything the spawner prints after the
+`spawn`.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Gate
+	var open as Whole
+
+	static function create(ok bool) returns Self throws StartError
+		print("factory runs\n")
+
+		if not ok 'closed'
+			throw StartError.refused
+		end 'closed'
+
+		return Self{open: 1}
+	end 'create'
+
+	export function state() returns Whole
+		return self.open
+	end 'state'
+end 'Gate'
+
+function main() returns ExitCode
+	let g = try spawn Gate.create(true) otherwise return 1
+	print("spawn returned\n")
+	let n = try await g.state() otherwise return 1
+	print("state={n}\n")
+	g.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+factory runs
+spawn returned
+state=1
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-throwing-factory-that-fails-throws-at-the-spawn -->
+<!-- procs: 1 -->
+A factory that throws starts no service: the spawner receives the factory's error, of the factory's own type, where it
+wrote the `spawn`, and the mailbox the spawn made is gone with the handle that never came.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+	exhausted
+end 'StartError'
+
+type Gate
+	var open as Whole
+
+	static function create(code Whole) returns Self throws StartError
+		print("factory runs\n")
+
+		if code == 1 'refusing'
+			throw StartError.refused
+		end 'refusing' else if code == 2 'exhausting'
+			throw StartError.exhausted
+		end 'exhausting'
+
+		return Self{open: code}
+	end 'create'
+
+	export function state() returns Whole
+		return self.open
+	end 'state'
+end 'Gate'
+
+function main() returns ExitCode
+	try spawn Gate.create(2) otherwise (e) 'failed'
+		print("handling\n")
+
+		match e 'which'
+			refused then print("refused\n")
+			exhausted then print("exhausted\n")
+		end 'which'
+
+		return 0
+	end 'failed'
+
+	print("started\n")
+	return 1
+end 'main'
+```
+```stdout
+factory runs
+handling
+exhausted
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-throwing-factory-with-a-payload-error-reports-the-payload -->
+A factory that throws a case of an error union carrying a payload, a heap string or an integer, hands that payload to the
+spawner's handler, which matches the case and reads it.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+union StartError implements Error
+	refused(reason String)
+	exhausted(limit Whole)
+end 'StartError'
+
+type Gate
+	var open as Whole
+
+	static function create(code Whole) returns Self throws StartError
+		if code == 1 'refusing'
+			throw StartError.refused("the gate was refused for a reason long enough to be a heap string")
+		end 'refusing' else if code == 2 'exhausting'
+			throw StartError.exhausted(code * 21)
+		end 'exhausting'
+
+		return Self{open: code}
+	end 'create'
+
+	export function state() returns Whole
+		return self.open
+	end 'state'
+end 'Gate'
+
+function attempt(code Whole)
+	try spawn Gate.create(code) otherwise (e) 'failed'
+		match e 'which'
+			refused(reason) then print("refused: {reason}\n")
+			exhausted(limit) then print("exhausted at {limit}\n")
+		end 'which'
+
+		return
+	end 'failed'
+
+	print("started\n")
+end 'attempt'
+
+function main() returns ExitCode
+	attempt(1)
+	attempt(2)
+	return 0
+end 'main'
+```
+```stdout
+refused: the gate was refused for a reason long enough to be a heap string
+exhausted at 42
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-throwing-factory-error-propagates-through-a-throwing-function -->
+A function declared to throw the factory's error propagates it with `try spawn` like any throwing call, and its caller
+handles it.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Gate
+	var open as Whole
+
+	static function create(ok bool) returns Self throws StartError
+		if not ok 'closed'
+			throw StartError.refused
+		end 'closed'
+
+		return Self{open: 1}
+	end 'create'
+
+	export function state() returns Whole
+		return self.open
+	end 'state'
+end 'Gate'
+
+function start(ok bool) returns Gate.handle throws StartError
+	return try spawn Gate.create(ok)
+end 'start'
+
+function main() returns ExitCode
+	let g = try start(true) otherwise return 1
+	let n = try await g.state() otherwise return 1
+	print("state={n}\n")
+	g.shutdown()
+
+	let h = try start(false) otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+
+		return 0
+	end 'failed'
+
+	h.shutdown()
+	return 1
+end 'main'
+```
+```stdout
+state=1
+refused
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-throwing-factory-in-a-try-block-routes-to-the-block-handler -->
+Inside a block-form `try`, a bare `spawn` of a throwing factory sends its error to the block's handler, as every other
+throwing call there does.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Gate
+	var open as Whole
+
+	static function create(ok bool) returns Self throws StartError
+		if not ok 'closed'
+			throw StartError.refused
+		end 'closed'
+
+		return Self{open: 1}
+	end 'create'
+
+	export function state() returns Whole
+		return self.open
+	end 'state'
+end 'Gate'
+
+function main() returns ExitCode
+	try 'starting'
+		let g = spawn Gate.create(true)
+		print("first started\n")
+		g.shutdown()
+		let h = spawn Gate.create(false)
+		h.shutdown()
+		print("unreachable\n")
+	end 'starting'
+	otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+	end 'failed'
+
+	return 0
+end 'main'
+```
+```stdout
+first started
+refused
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-throwing-generic-factory-starts-a-generic-service -->
+A generic service's throwing factory hands back the handle of the instantiation its arguments fix, and a failing one
+throws its error at the spawn.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Box uses T
+	var item as T
+	var extra as Whole
+
+	static function create(item T, extra Whole) returns Self throws StartError
+		if extra < 0 'negative'
+			throw StartError.refused
+		end 'negative'
+
+		return Self{item: item, extra: extra}
+	end 'create'
+
+	export function extraOf() returns Whole
+		return self.extra
+	end 'extraOf'
+end 'Box'
+
+function main() returns ExitCode
+	let h = try spawn Box.create("a label long enough to be a heap string", extra: 7) otherwise return 1
+	let n = try await h.extraOf() otherwise return 1
+	print("{n}\n")
+	h.shutdown()
+
+	try spawn Box.create(5, extra: -1) otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+
+		return 0
+	end 'failed'
+
+	return 1
+end 'main'
+```
+```stdout
+7
+refused
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-throwing-factory-takes-ten-arguments-of-mixed-kinds-on-the-service -->
+The spawner's wait costs the start record nothing: ten arguments — integers, floats and a value held at an interface
+type — reach a throwing factory in the order and register class it declares them in, and one that fails releases the
+interface value with its own witness.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Area = float(f64.min to f64.max)
+
+enum PlotError implements Error
+	empty
+end 'PlotError'
+
+interface Shape
+	function area() returns Area
+end 'Shape'
+
+type Square implements Shape
+	var side as Area
+
+	static function create(side Area) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Area
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Plot
+	var count as Whole
+	var span as Area
+
+	static function create(a Whole, b Area, shape Shape, c Whole, d Area, e Whole, f Area, g Whole, h Area, i Whole) returns Self throws PlotError
+		if a < 0 'empty'
+			throw PlotError.empty
+		end 'empty'
+
+		return Self{count: a + c + e + g + i, span: b + d + f + h + shape.area()}
+	end 'create'
+
+	export function summary() returns String
+		return "{self.count} {self.span:.1}"
+	end 'summary'
+end 'Plot'
+
+function main() returns ExitCode
+	let p = try spawn Plot.create(1, b: 0.5, shape: Square.create(2.0), c: 2, d: 1.5, e: 3, f: 2.5, g: 4, h: 3.5, i: 5) otherwise return 1
+	let line = try await p.summary() otherwise return 1
+	print("{line}\n")
+	p.shutdown()
+
+	try spawn Plot.create(-1, b: 0.5, shape: Square.create(2.0), c: 2, d: 1.5, e: 3, f: 2.5, g: 4, h: 3.5, i: 5) otherwise (e) 'failed'
+		match e 'which'
+			empty then print("empty\n")
+		end 'which'
+	end 'failed'
+
+	return 0
+end 'main'
+```
+```stdout
+15 12.0
+empty
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-service-spawns-a-throwing-factory-and-waits-for-its-start -->
+A message handler that spawns a throwing factory waits on its own green thread for the factory to run, and the wait
+is a blocking edge like any awaited reply: the handler receives the handle or the error, and the service it belongs to
+goes on serving.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Worker
+	var id as Whole
+
+	static function create(ok bool) returns Self throws StartError
+		if not ok 'closed'
+			throw StartError.refused
+		end 'closed'
+
+		return Self{id: 7}
+	end 'create'
+
+	export function ident() returns Whole
+		return self.id
+	end 'ident'
+end 'Worker'
+
+type Manager
+	var launched as Whole
+
+	static function create() returns Self
+		return Self{launched: 0}
+	end 'create'
+
+	export function launch(ok bool) returns Whole
+		let worker = try spawn(capacity: 8) Worker.create(ok) otherwise return 0
+		let id = try await worker.ident() otherwise return 0
+		worker.shutdown()
+		self.launched = self.launched + id
+		return self.launched
+	end 'launch'
+end 'Manager'
+
+function main() returns ExitCode
+	let manager = spawn Manager.create()
+	let first = try await manager.launch(true) otherwise return 1
+	let second = try await manager.launch(false) otherwise return 1
+	let third = try await manager.launch(true) otherwise return 1
+	print("{first} {second} {third}\n")
+	manager.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+7 0 14
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-failed-factory-releases-its-arguments -->
+A factory that throws leaves the arguments the spawn handed it where the start record held them, and the service's
+thread releases them: a managed argument the factory only reads and one it keeps both end with the program's last
+reference gone, and the leak gate reads zero.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias WholeArray = Array with Whole
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Ledger
+	var label as String
+	var total as Whole
+
+	static function create(label String, ids WholeArray) returns Self throws StartError
+		if ids.count() == 0 'empty'
+			throw StartError.refused
+		end 'empty'
+
+		return Self{label: label, total: ids.count() as Whole}
+	end 'create'
+
+	export function size() returns Whole
+		return (self.label.byteLength() as Whole) + self.total
+	end 'size'
+end 'Ledger'
+
+function main() returns ExitCode
+	let ids = WholeArray.create()
+
+	try spawn Ledger.create("a label long enough to be a heap string", ids: ids) otherwise (e) 'failed'
+		match e 'which'
+			refused then print("refused\n")
+		end 'which'
+	end 'failed'
+
+	let kept = try spawn Ledger.create("a label long enough to be a heap string", ids: [1, 2, 3]) otherwise return 1
+	let n = try await kept.size() otherwise return 1
+	print("{n}\n")
+	kept.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+refused
+42
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-throwing-factory-spawned-without-try-is-refused -->
+A throwing factory is a throwing call: a `spawn` of one that nothing catches is E3057, as an unhandled call to any
+throwing function is.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Gate
+	var open as Whole
+
+	static function create(ok bool) returns Self throws StartError
+		if not ok 'closed'
+			throw StartError.refused
+		end 'closed'
+
+		return Self{open: 1}
+	end 'create'
+
+	export function state() returns Whole
+		return self.open
+	end 'state'
+end 'Gate'
+
+function main() returns ExitCode
+	let g = spawn Gate.create(true)
+	g.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:25:10: throwing function requires try: 'Gate.create'
+```
+
+<!-- test: error.try-on-a-spawn-of-a-non-throwing-factory-is-refused -->
+A `try` needs a call that can fail: a factory that cannot throw makes `try spawn` the same E3055 `try` on any
+non-throwing call is.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Gate
+	var open as Whole
+
+	static function create() returns Self
+		return Self{open: 1}
+	end 'create'
+
+	export function state() returns Whole
+		return self.open
+	end 'state'
+end 'Gate'
+
+function main() returns ExitCode
+	let g = try spawn Gate.create() otherwise return 1
+	g.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3055: <fragment>:17:10: try requires a throwing function: 'Gate.create' does not throw'
+```
+
+<!-- test: services.a-factory-that-reassigns-its-parameters-runs-on-the-service -->
+A factory that reassigns a parameter takes it by reference: the spawn hands the service's thread a parameter cell of its
+own, the factory writes through it, and whatever the cell holds when the factory returns is released with the cell.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Tag
+	var label as String
+	var bonus as Whole
+
+	static function create(label String, bonus Whole) returns Self
+		label = "{label}!"
+		bonus = bonus + 1
+
+		return Self{label: label, bonus: bonus}
+	end 'create'
+
+	export function size() returns Whole
+		return (self.label.byteLength() as Whole) + self.bonus
+	end 'size'
+end 'Tag'
+
+function main() returns ExitCode
+	let tag = spawn Tag.create("a label long enough to be a heap string", bonus: 4)
+	let n = try await tag.size() otherwise return 1
+	print("{n}\n")
+	tag.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+45
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-parameter-reassigned-elsewhere-in-the-program-leaves-a-var-sent-or-stored-as-it-was -->
+A function that reassigns a parameter takes it by reference, which the whole program learns; a `var` handed to another
+function by the same name is no less the record's only owner, so the send still moves it and a `let` field still
+takes it.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Tag
+	var label as String
+
+	static function create(label String) returns Self
+		label = "{label}!"
+
+		return Self{label: label}
+	end 'create'
+
+	export function size() returns Whole
+		return self.label.byteLength() as Whole
+	end 'size'
+end 'Tag'
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+type Summer
+	var total as Whole
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function add(words Words) returns Whole
+		for word in words 'each'
+			self.total = self.total + (word.byteLength() as Whole)
+		end 'each'
+
+		return self.total
+	end 'add'
+end 'Summer'
+
+function main() returns ExitCode
+	let tag = spawn Tag.create("a label long enough to be a heap string")
+	let size = try await tag.size() otherwise return 1
+	tag.shutdown()
+
+	var stored = Words.create()
+	stored.push("first padded out long enough to heap allocate {1}")
+	let shelf = Shelf.create(stored)
+
+	let h = spawn Summer.create()
+	var items = Words.create()
+	items.push("second padded out long enough to heap allocate {2}")
+	var seen = 0 as Whole
+
+	for x in items 'each'
+		seen = seen + (x.byteLength() as Whole)
+	end 'each'
+
+	let r = try await h.add(items) otherwise 0
+	h.shutdown()
+	print("{size} {shelf.count()} {seen} {r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+40 1 48 48
+```
+
+<!-- test: services.a-cell-resident-var-pushed-to-before-the-send-is-moved -->
+`items` lives in a cell because `refill` reassigns its parameter. A later statement that reads the cell without naming
+it again in the same statement leaves its occupant the record's only owner, so the send still moves it.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Summer
+	var total as Whole
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function add(words Words) returns Whole
+		for word in words 'each'
+			self.total = self.total + (word.byteLength() as Whole)
+		end 'each'
+
+		return self.total
+	end 'add'
+end 'Summer'
+
+function refill(dest Words, first String)
+	dest = Words.create()
+	dest.push(first)
+end 'refill'
+
+function main() returns ExitCode
+	let h = spawn Summer.create()
+	var items = Words.create()
+	refill(items, first: "first padded out long enough to heap allocate {1}")
+	items.push("second padded out long enough to heap allocate {2}")
+
+	let r = try await h.add(items) otherwise 0
+	h.shutdown()
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+95
+```
+
+<!-- test: error.an-overloaded-factory-must-agree-on-its-throws-clause-for-a-spawn-to-pick-its-reply -->
+Whether a `spawn` waits for its factory's verdict is decided from the one `throws` clause kept for the factory's name when
+the `spawn` is parsed, so the overloads of a factory must agree on it: a set whose members differ is refused where it is
+declared, and no `spawn` of it can wait on a cell the start does not fill.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Sink
+	var seen as Whole
+
+	static function create(count Whole) returns Self
+		return Self{seen: count}
+	end 'create'
+
+	static function create(label String) returns Self throws StartError
+		if label.isEmpty() 'unlabelled'
+			throw StartError.refused
+		end 'unlabelled'
+
+		return Self{seen: 1}
+	end 'create'
+
+	export function total() returns Whole
+		return self.seen
+	end 'total'
+end 'Sink'
+
+function main() returns ExitCode
+	let a = try spawn Sink.create("a label long enough to be a heap string") otherwise return 1
+	let b = spawn Sink.create(5)
+	let first = try await a.total() otherwise return 2
+	let second = try await b.total() otherwise return 3
+	print("{first} {second}\n")
+	a.shutdown()
+	b.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:18: Unsupported: overloading 'Sink.create' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+```
+
+<!-- test: error.a-throwing-spawn-without-try-beside-a-refused-overload-set-is-still-reported -->
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+enum StartError implements Error
+	refused
+end 'StartError'
+
+type Sink
+	var seen as Whole
+
+	static function create(count Whole) returns Self
+		return Self{seen: count}
+	end 'create'
+
+	static function create(label String) returns Self throws StartError
+		if label.isEmpty() 'unlabelled'
+			throw StartError.refused
+		end 'unlabelled'
+
+		return Self{seen: 1}
+	end 'create'
+
+	export function total() returns Whole
+		return self.seen
+	end 'total'
+end 'Sink'
+
+type Gate
+	var seen as Whole
+
+	static function create(label String) returns Self throws StartError
+		if label.isEmpty() 'unlabelled'
+			throw StartError.refused
+		end 'unlabelled'
+
+		return Self{seen: 1}
+	end 'create'
+
+	export function total() returns Whole
+		return self.seen
+	end 'total'
+end 'Gate'
+
+function startSink() returns Whole
+	let sink = spawn Sink.create(5)
+	let total = try await sink.total() otherwise return 0
+	sink.shutdown()
+	return total
+end 'startSink'
+
+function startGate() returns Whole
+	let gate = spawn Gate.create("a label long enough to be a heap string")
+	let total = try await gate.total() otherwise return 0
+	gate.shutdown()
+	return total
+end 'startGate'
+
+function main() returns ExitCode
+	print("{startSink()} {startGate()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:18: Unsupported: overloading 'Sink.create' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+error E3057: <fragment>:52:13: throwing function requires try: 'Gate.create'
+```
+
+<!-- test: services.a-generic-body-spawns-a-generic-service-over-a-concrete-type-from-every-instantiation -->
+Spawn sites that share one service and differ in what their spawner knows each start it from the layout of the instance
+the arguments fix: two instantiations of a generic body and a concrete function all start `Worker with String`, and
+every start sees its own arguments.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Worker uses T
+	typealias Items = Array with T
+
+	var items as Items
+	var extra as Whole
+
+	static function create(seed T, extra Whole) returns Self
+		var items = Items.create()
+		items.push(seed)
+		return Self{items: items, extra: extra}
+	end 'create'
+
+	export function total() returns Whole
+		return (self.items.count() as Whole) + self.extra
+	end 'total'
+end 'Worker'
+
+type Pool uses T
+	typealias Items = Array with T
+
+	var jobs as Items
+
+	static function create() returns Self
+		return Self{jobs: Items.create()}
+	end 'create'
+
+	function add(job T)
+		self.jobs.push(job)
+	end 'add'
+
+	function launch() returns Whole
+		let w = spawn Worker.create("a label long enough to be a heap string", extra: self.jobs.count() as Whole)
+		let n = try await w.total() otherwise panic("the worker is running")
+		w.shutdown()
+		return n
+	end 'launch'
+end 'Pool'
+
+typealias NumberPool = Pool with Whole
+typealias WordPool = Pool with String
+
+function plain() returns Whole
+	let w = spawn Worker.create("another label long enough to be a heap string", extra: 100)
+	let n = try await w.total() otherwise panic("the worker is running")
+	w.shutdown()
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var numbers = NumberPool.create()
+	numbers.add(1)
+	numbers.add(2)
+	var words = WordPool.create()
+	words.add("a label long enough to be a heap string")
+	print("{plain()} {numbers.launch()} {words.launch()}\n")
+	return 0
+end 'main'
+```
+```stdout
+101 3 2
+```
+```exitcode
+0
 ```

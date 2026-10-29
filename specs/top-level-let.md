@@ -3223,7 +3223,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2004: <fragment>:21:2: Expected expression but got 'end'
-error E3138: <fragment>:25:10: the reply of the message `Maker.make` is a `Array with MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:25:29: argument `seed` of `spawn Maker.create(…)` is a `MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: error.a-spawn-refusal-beside-an-unrelated-error-builds-no-loop-for-the-refused-instance -->
@@ -3258,7 +3258,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:25:10: the reply of the message `Maker.make` is a `Array with MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:25:29: argument `seed` of `spawn Maker.create(…)` is a `MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 error E3004: <fragment>:21:9: call to undefined function 'nothere'
 ```
 

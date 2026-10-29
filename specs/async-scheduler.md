@@ -175,9 +175,9 @@ typealias Integer = int(i64.min to i64.max)
 42
 ```
 
-<!-- test: async-scheduler.error.a-float-argument-is-refused -->
-A `float` argument handed to a parameter the callee only reads would travel in an XMM register, which the
-trampoline never fills.
+<!-- test: async-scheduler.a-float-argument-rides-the-float-argument-registers -->
+A `float` argument handed to a parameter the callee only reads travels in the thread's float argument region,
+which the trampoline loads into the float argument registers.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
@@ -192,8 +192,98 @@ function main() returns ExitCode
 	return (await p) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:11:16: Unsupported: an `async` call argument must ride the green thread's integer channel — a `float` travels in an XMM register the hand-assembled trampoline never fills, a value held at an interface type is released through a witness table and one held at an opaque type parameter through a layout descriptor, and the green-thread struct carries neither. A managed String/struct/array argument is one heap pointer and is accepted, and so is a float or an interface value handed to a parameter the callee reassigns, which rides a cell the coroutine owns
+```exitcode
+42
+```
+
+<!-- test: async-scheduler.floats-and-integers-are-counted-by-register-file -->
+The integer and float argument files are counted independently, so a float between two integers is float
+slot 0 and the second integer is integer slot 1. Every argument carries a distinct weight, so one landing in
+the wrong register shows in the total.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function weigh(a Integer, x Real, b Integer, y Real, c Integer) returns Integer
+	Scheduler.yield()
+	let wholes = (trunc(x) as Integer) * 1000 + (trunc(y) as Integer) * 10000
+	return a + b * 10 + c * 100 + wholes
+end 'weigh'
+
+function main() returns ExitCode
+	let p = async weigh(1, x: 4.5, b: 2, y: 5.5, c: 3)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+54321
+```
+
+<!-- test: async-scheduler.an-integer-argument-is-widened-to-a-float-parameter -->
+An integer handed to a `float` parameter is converted at the spawn, as an ordinary call converts it, so the
+float argument region holds a double.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function half(x Real) returns Integer
+	Scheduler.yield()
+	return trunc(x / 2.0)
+end 'half'
+
+function main() returns ExitCode
+	let p = async half(84)
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: async-scheduler.an-integer-argument-is-widened-into-a-float-cell -->
+The same conversion at a parameter the callee reassigns, whose cell holds a double.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function half(x Real) returns Integer
+	Scheduler.yield()
+	x = x / 2.0
+	return trunc(x)
+end 'half'
+
+function main() returns ExitCode
+	let p = async half(84)
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: async-scheduler.a-float-argument-beside-a-reassigned-float-uses-both-files -->
+`x` is read and travels in float slot 0; `y` is reassigned, so its cell address travels in integer slot 0.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function blend(x Real, y Real) returns Integer
+	Scheduler.yield()
+	y = y + x
+	return trunc(y)
+end 'blend'
+
+function main() returns ExitCode
+	let p = async blend(1.5, y: 40.5)
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: async-scheduler.a-float-argument-the-callee-reassigns-rides-a-cell -->
@@ -218,9 +308,9 @@ end 'main'
 42
 ```
 
-<!-- test: async-scheduler.error.an-interface-argument-is-refused -->
-A value held at an interface type, handed to a parameter the callee only reads, is released through its
-witness table, which the green-thread struct does not carry.
+<!-- test: async-scheduler.a-value-held-at-an-interface-type-rides-two-integer-slots -->
+A value held at an interface type, handed to a parameter the callee only reads, travels as two words: the
+value in its integer slot and its witness table in the integer slot after the declared arguments.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -254,8 +344,455 @@ function main() returns ExitCode
 	return (await p) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:30:16: Unsupported: an `async` call argument must ride the green thread's integer channel — a `float` travels in an XMM register the hand-assembled trampoline never fills, a value held at an interface type is released through a witness table and one held at an opaque type parameter through a layout descriptor, and the green-thread struct carries neither. A managed String/struct/array argument is one heap pointer and is accepted, and so is a float or an interface value handed to a parameter the callee reassigns, which rides a cell the coroutine owns
+```exitcode
+36
+```
+
+<!-- test: async-scheduler.a-concrete-conformer-is-widened-to-an-interface-parameter-at-the-spawn -->
+The spawn names the witness table of the conformer the argument widens through.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function measure(s Shape) returns Integer
+	Scheduler.yield()
+	return s.area()
+end 'measure'
+
+function main() returns ExitCode
+	let p = async measure(Square.create(7))
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+49
+```
+
+<!-- test: async-scheduler.an-interface-argument-shares-the-files-with-floats-and-integers -->
+The witness table takes the integer slot after the last integer argument, the float between them takes
+float slot 0, and the callee reads all four.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function describe(a Integer, s Shape, x Real, b Integer) returns Integer
+	Scheduler.yield()
+	return a + s.area() * 10 + (trunc(x) as Integer) * 1000 + b * 100000
+end 'describe'
+
+function shapeOf(side Integer) returns Shape
+	return Square.create(side)
+end 'shapeOf'
+
+function main() returns ExitCode
+	let p = async describe(1, s: shapeOf(3), x: 2.5, b: 4)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+402091
+```
+
+<!-- test: async-scheduler.a-cancelled-spawn-releases-its-interface-argument -->
+A spawn dropped before it runs gives back the reference it took to the interface value, through the witness
+table stored beside it. The run is leak-free.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function measure(s Shape) returns Integer
+	Scheduler.yield()
+	return s.area()
+end 'measure'
+
+function shapeOf(side Integer) returns Shape
+	return Square.create(side)
+end 'shapeOf'
+
+function main() returns ExitCode
+	let p = async measure(shapeOf(5))
+	p.cancel()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-scheduler.an-interface-argument-past-the-last-register-rides-the-thread-stack -->
+Five integers and an interface value need seven integer slots: the value takes the sixth and its witness
+table the seventh, which is past the six integer argument registers x64 passes and so rides the new thread's
+stack.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function wide(a Integer, b Integer, c Integer, d Integer, e Integer, s Shape) returns Integer
+	Scheduler.yield()
+	return a + b + c + d + e + s.area()
+end 'wide'
+
+function shapeOf(side Integer) returns Shape
+	return Square.create(side)
+end 'shapeOf'
+
+function main() returns ExitCode
+	let p = async wide(1, b: 2, c: 3, d: 4, e: 5, s: shapeOf(3))
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+24
+```
+
+<!-- test: async-scheduler.eight-integer-arguments-fill-the-argument-registers -->
+Eight integers are every integer argument register arm64 passes and two more than x64 has, so the last two
+ride the stack there. Every argument carries a distinct weight.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function weigh(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
+	Scheduler.yield()
+	return a + b * 10 + c * 100 + d * 1000 + e * 10000 + f * 100000 + g * 1000000 + h * 10000000
+end 'weigh'
+
+function main() returns ExitCode
+	let p = async weigh(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+87654321
+```
+
+<!-- test: async-scheduler.ten-integer-arguments-spill-onto-the-thread-stack -->
+Ten integers overflow both targets' integer argument registers. The overflow words are copied onto the new
+thread's stack in the order the callee reads them.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function weigh(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer, j Integer) returns Integer
+	Scheduler.yield()
+	return a + b * 10 + c * 100 + d * 1000 + e * 10000 + f * 100000 + g * 1000000 + h * 10000000 + i * 100000000 + j * 1000000000
+end 'weigh'
+
+function main() returns ExitCode
+	let p = async weigh(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10987654321
+```
+
+<!-- test: async-scheduler.ten-float-arguments-spill-onto-the-thread-stack -->
+The same with ten floats: six or eight ride the float argument registers and the rest the stack.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function weigh(a Real, b Real, c Real, d Real, e Real, f Real, g Real, h Real, i Real, j Real) returns Integer
+	Scheduler.yield()
+	let low = (trunc(a) as Integer) + (trunc(b) as Integer) * 10 + (trunc(c) as Integer) * 100 + (trunc(d) as Integer) * 1000 + (trunc(e) as Integer) * 10000
+	let high = (trunc(f) as Integer) * 100000 + (trunc(g) as Integer) * 1000000 + (trunc(h) as Integer) * 10000000 + (trunc(i) as Integer) * 100000000 + (trunc(j) as Integer) * 1000000000
+	return low + high
+end 'weigh'
+
+function main() returns ExitCode
+	let p = async weigh(1.5, b: 2.5, c: 3.5, d: 4.5, e: 5.5, f: 6.5, g: 7.5, h: 8.5, i: 9.5, j: 10.5)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10987654321
+```
+
+<!-- test: async-scheduler.integers-floats-and-interface-values-past-both-register-files -->
+Ten integers, ten floats and two interface values: integers and floats overflow their own files
+independently, the overflow shares one run of stack words in argument order, and both witness tables are
+hidden integer arguments after the declared ones.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function show(i0 Integer, f0 Real, s0 Shape, i1 Integer, f1 Real, i2 Integer, f2 Real, i3 Integer, f3 Real, i4 Integer, f4 Real, i5 Integer, f5 Real, i6 Integer, f6 Real, i7 Integer, f7 Real, i8 Integer, f8 Real, i9 Integer, f9 Real, s1 Shape)
+	Scheduler.yield()
+	print("{i0} {i1} {i2} {i3} {i4} {i5} {i6} {i7} {i8} {i9} | {f0:.1} {f1:.1} {f2:.1} {f3:.1} {f4:.1} {f5:.1} {f6:.1} {f7:.1} {f8:.1} {f9:.1} | {s0.area()} {s1.area()}\n")
+end 'show'
+
+function main() returns ExitCode
+	let p = async show(1, f0: 0.5, s0: Square.create(3), i1: 2, f1: 1.5, i2: 3, f2: 2.5, i3: 4, f3: 3.5, i4: 5, f4: 4.5, i5: 6, f5: 5.5, i6: 7, f6: 6.5, i7: 8, f7: 7.5, i8: 9, f8: 8.5, i9: 10, f9: 9.5, s1: Square.create(4))
+	await p
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2 3 4 5 6 7 8 9 10 | 0.5 1.5 2.5 3.5 4.5 5.5 6.5 7.5 8.5 9.5 | 9 16
+```
+
+<!-- test: async-scheduler.managed-arguments-past-the-registers-are-released-by-the-thread -->
+Ten strings: the ones past the argument registers sit on the new thread's stack, and the thread's own copy of
+each is given back after the await. The run is leak-free.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function total(a String, b String, c String, d String, e String, f String, g String, h String, i String, j String) returns Integer
+	Scheduler.yield()
+	return a.byteLength() + b.byteLength() + c.byteLength() + d.byteLength() + e.byteLength() + f.byteLength() + g.byteLength() + h.byteLength() + i.byteLength() + j.byteLength()
+end 'total'
+
+function main() returns ExitCode
+	let p = async total("a", b: "bb", c: "ccc", d: "dddd", e: "eeeee", f: "ffffff", g: "ggggggg", h: "hhhhhhhh", i: "iiiiiiiii", j: "jjjjjjjjjj")
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+55
+```
+
+<!-- test: async-scheduler.a-cancelled-spawn-releases-the-arguments-it-holds-past-the-registers -->
+A spawn dropped before it runs gives back the strings, the interface value and the argument image alike. The
+run is leak-free.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function total(a String, b String, c String, d String, e String, f String, g String, x Real, y Real, h String, i String, s Shape) returns Integer
+	Scheduler.yield()
+	let held = a.byteLength() + b.byteLength() + c.byteLength() + d.byteLength() + e.byteLength() + f.byteLength() + g.byteLength() + h.byteLength() + i.byteLength()
+	return (held as Integer) + s.area() + (trunc(x + y) as Integer)
+end 'total'
+
+function main() returns ExitCode
+	let p = async total("a", b: "bb", c: "ccc", d: "dddd", e: "eeeee", f: "ffffff", g: "ggggggg", x: 1.5, y: 2.5, h: "hhhhhhhh", i: "iiiiiiiii", s: Square.create(3))
+	p.cancel()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-scheduler.parameters-the-callee-reassigns-ride-cells-past-the-registers -->
+Two parameters past the eighth argument are reassigned, so their cell addresses travel on the stack on both
+targets, and the coroutine owns the cells.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function bump(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer, j Integer) returns Integer
+	Scheduler.yield()
+	i = i + 100
+	j = j + 200
+	return a + b + c + d + e + f + g + h + i + j
+end 'bump'
+
+function main() returns ExitCode
+	let p = async bump(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+355
+```
+
+<!-- test: async-scheduler.an-interface-value-and-its-witness-both-ride-the-thread-stack -->
+Nine integers put the interface value on the stack on both targets, and its witness table follows it there.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function describe(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer, s Shape) returns Integer
+	Scheduler.yield()
+	return a + b + c + d + e + f + g + h + i + s.area() * 1000
+end 'describe'
+
+function main() returns ExitCode
+	let p = async describe(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, s: Square.create(5))
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+25045
+```
+
+<!-- test: async-scheduler.stack-arguments-survive-a-stack-grow-before-the-callee-reads-them -->
+The callee recurses far past the seed stack before it reads its last arguments, so the stack is relocated
+with the overflow words still on it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function deep(n Integer) returns Integer
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+
+	return 1 + deep(n - 1)
+end 'deep'
+
+function late(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer, j Integer) returns Integer
+	Scheduler.yield()
+	let levels = deep(4000)
+	return levels + a + b + c + d + e + f + g + h + i + j * 100
+end 'late'
+
+function main() returns ExitCode
+	let p = async late(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5045
 ```
 
 <!-- test: async-scheduler.a-generic-function-is-spawned-at-its-inferred-instance -->

@@ -76,8 +76,8 @@ typealias ParamShadowDepth = int(0 to u64.max)
 // One `ParamShadowDepth` per parameter of the body `Parser.scanBodyFacts` is walking.
 typealias ParamShadowColumn = Array with ParamShadowDepth
 
-// How many brackets are open around a token — inside one, a NEWLINE belongs to the top-level
-// initializer rather than ending it (see `initializerEndIndexIn`). A separate alias from `BlockDepth`
+// How many brackets are open around a token — inside one, a NEWLINE belongs to the statement
+// rather than ending it (see `statementEndIndexIn`). A separate alias from `BlockDepth`
 // because it counts a different thing: an array literal opens no block, and a block keyword opens no
 // bracket.
 typealias BracketDepth = int(0 to u64.max)
@@ -2050,13 +2050,15 @@ export union SourceParseError implements Error
 	registryRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber, let note DiagnosticNote)
 	extensionMemberHidesOwnMember(explanation String, line LineNumber, column ColumnNumber, let note DiagnosticNote)
 
-	// These three render exactly as `unsupported`, `serviceNotASpawnTarget` and
-	// `serviceArgumentNotUnique`. Each is its own arm to carry the declaration it is about, which
-	// `ParseStaging.consequenceNamedBy` reads to drop the refusal when that declaration was itself
-	// refused.
+	// These four render exactly as `unsupported`, `serviceNotASpawnTarget`, `serviceArgumentNotUnique`
+	// and `registryRefused(throwingFunctionRequiresTry)`. Each is its own arm to carry the declaration it
+	// is about, which `ParseStaging.consequenceNamedBy` reads to drop the refusal when that declaration
+	// was itself refused: the parser cannot reach `Project.poison`, so a throwing spawn's E3057 gets the
+	// verdict `refusesACalleeFrom` gives a plain call only by carrying its factory to the drop.
 	memberAccessOnNonStruct(feature String, line LineNumber, column ColumnNumber, origin ReceiverOrigin)
 	serviceTypeNotASpawnTarget(explanation String, typeName String, line LineNumber, column ColumnNumber)
 	serviceReplyGraphNotWalkable(explanation String, message String, line LineNumber, column ColumnNumber)
+	spawnStartRequiresTry(explanation String, factory ByteArray, line LineNumber, column ColumnNumber)
 end 'SourceParseError'
 
 // The declarations a receiver was derived from (its brand, the calls that produced it followed
@@ -4165,7 +4167,7 @@ export type PendingDefaultHelper
 	export let exprStart as ElementIndex
 
 	// The token the CAPTURE skipped to — the `,`/`)` that ends a parameter default (`expressionEndFrom`),
-	// the line end that ends a field one (`initializerEndIndexIn`). The drain parses one expression from
+	// the line end that ends a field one (`statementEndIndexIn`). The drain parses one expression from
 	// `exprStart` and must arrive exactly here: the capture already decided where the author's default
 	// ends, so any gap between the two is text the author wrote and the compiler was about to ignore.
 	// Recorded rather than recomputed at the drain — a second walk is a second answer, and this file has
@@ -4471,6 +4473,19 @@ union RecordedTryTarget
 	nothingRecorded
 	recorded(opIdx ElementIndex, target TryTarget)
 end 'RecordedTryTarget'
+
+union SpawnStartReply
+	noReply
+	viaCell(let callee ByteArray)
+end 'SpawnStartReply'
+
+// How a `spawn` of a throwing factory awaits its start. `caught` is the target of a `try`, which
+// awaits with a plain await op; `routed` awaits through the throw route a bare throwing call takes,
+// so a failure nothing catches is E3057.
+enum SpawnStartHandling
+	routed
+	caught
+end 'SpawnStartHandling'
 
 function recordedTryTargetOf(record RecordedTryTarget, opIdx ElementIndex) returns TryTarget
 	return match record 'record'
@@ -5664,9 +5679,40 @@ union CallInstanceSource
 	nowhere
 end 'CallInstanceSource'
 
+type ServiceSpawnLaunch
+	export let typeName as ByteArray
+	export let capacity as ValueId
+	export let mailbox as ValueId
+	export let tempFloor as ElementIndex
+	export let ownedFloor as ElementIndex
+
+	static function create(typeName ByteArray, capacity ValueId, mailbox ValueId, tempFloor ElementIndex, ownedFloor ElementIndex) returns Self
+		return Self{typeName: typeName, capacity: capacity, mailbox: mailbox, tempFloor: tempFloor, ownedFloor: ownedFloor}
+	end 'create'
+end 'ServiceSpawnLaunch'
+
+typealias SpawnArgumentBlameArray = Array with String
+
+union SpawnFactoryParams
+	unbound
+	declared(names NameRoster)
+end 'SpawnFactoryParams'
+
+union ThreadArgumentDoors
+	coroutine
+	factory(blames SpawnArgumentBlameArray)
+
+	function doorAt(callee ByteArray, column ElementIndex) returns ThreadHandOffDoor
+		return match self 'doors'
+			coroutine gives ThreadHandOffDoor.coroutine(callee)
+			factory(blames) gives ThreadHandOffDoor.spawnFactory(try blames.get(column) otherwise panic("ThreadArgumentDoors.doorAt: blames.get OOB at {column} — one blame is pushed per spawn argument"), argumentOf: serviceFactoryArgumentOf(callee))
+		end 'doors'
+	end 'doorAt'
+end 'ThreadArgumentDoors'
+
 union ServiceSpawnSite
 	notASpawn
-	at(spawnTok Token)
+	at(spawnTok Token, launch ServiceSpawnLaunch)
 
 	function isASpawn() returns bool
 		return match self 'site'
@@ -5678,9 +5724,16 @@ union ServiceSpawnSite
 	function token() returns Token throws AbsentError
 		match self 'site'
 			notASpawn then throw AbsentError.absent
-			at(spawnTok) then return spawnTok
+			at(spawnTok, _) then return spawnTok
 		end 'site'
 	end 'token'
+
+	function launch() returns ServiceSpawnLaunch throws AbsentError
+		match self 'site'
+			notASpawn then throw AbsentError.absent
+			at(_, launch) then return launch
+		end 'site'
+	end 'launch'
 end 'ServiceSpawnSite'
 
 // Shared: a payload-free union case is still a heap object, and these two are the answers at nearly every
@@ -9880,18 +9933,33 @@ function tokenKindIn(tokens TokenArray, index ElementIndex) returns TokenKind
 	return (try tokens.get(index) otherwise panic("tokenKindIn: index below count just checked but tokens.get({index}) failed")).kind
 end 'tokenKindIn'
 
-// One past the last token of a top-level initializer: an initializer runs to the END OF ITS LINE.
-// Maxon has no statement terminator, so the newline IS the boundary.
+enum BlockShift
+	none
+	opens
+	closes
+end 'BlockShift'
+
+typealias BlockShiftAt = function(ElementIndex) returns BlockShift
+
+function ignoreBlocks(_ ElementIndex) returns BlockShift
+	return BlockShift.none
+end 'ignoreBlocks'
+
+// One past the last token of the statement starting at `start`: it runs to the END OF ITS LINE, or
+// to the `end` that closes the block it sits in. Maxon has no statement terminator, so the newline
+// IS the boundary.
 //
-// ⚠ **EXCEPT INSIDE A BRACKET.** The lexer drops the layout inside `(`, `[` and `{` but keeps the
-// newlines of a `match` or block-form `otherwise` written there (`Lexer.dropBracketedLayout`), so such
-// a block reaches this scan with newlines in it; the depth counter keeps them inside the initializer.
+// ⚠ **EXCEPT INSIDE A BRACKET, OR A BLOCK THE STATEMENT OPENS.** The lexer drops the layout inside
+// `(`, `[` and `{` but keeps the newlines of a `match` or block-form `otherwise` written there
+// (`Lexer.dropBracketedLayout`), so such a block reaches this scan with newlines in it; the depth
+// counters keep them inside the statement. Only the blocks `blockShiftAt` reports are counted.
 //
 // It cannot run away: `tokenKindIn` answers `eof` past the end of the token array, so
 // an unterminated last line — or an unclosed bracket — stops at the file's end rather than walking off it.
-function initializerEndIndexIn(tokens TokenArray, start ElementIndex) returns ElementIndex
+function statementEndIndexIn(tokens TokenArray, start ElementIndex, blockShiftAt BlockShiftAt) returns ElementIndex
 	var i = start
-	var depth = 0 as BracketDepth
+	var brackets = 0 as BracketDepth
+	var blocks = 0 as BlockDepth
 
 	while true 'scan'
 		let kind = tokenKindIn(tokens, index: i)
@@ -9900,27 +9968,35 @@ function initializerEndIndexIn(tokens TokenArray, start ElementIndex) returns El
 			break
 		end 'fileEnd'
 
-		if tokenKindEndsALine(kind) and depth == 0 'lineEnd'
+		let shift = blockShiftAt(i)
+
+		if brackets == 0 and blocks == 0 and (tokenKindEndsALine(kind) or shift == BlockShift.closes) 'statementEnd'
 			break
-		end 'lineEnd'
+		end 'statementEnd'
 
 		if tokenKindOpensABracket(kind) 'openBracket'
-			depth = depth + 1
+			brackets = brackets + 1
 		end 'openBracket'
 
-		// Guarded, because `BracketDepth` is unsigned: a stray closer with no opener before it would wrap the
-		// counter to its maximum and the scan would swallow the rest of the FILE. Left at 0 it is simply
-		// not a bracket the initializer opened, and the line's own newline still ends the range — which
-		// is what the malformed initializer's diagnostic then names.
-		if tokenKindClosesABracket(kind) and depth > 0 'closeBracket'
-			depth = depth - 1
+		// Guarded, because both depths are unsigned: a stray closer with no opener before it would wrap
+		// the counter to its maximum and the scan would swallow the rest of the FILE.
+		if tokenKindClosesABracket(kind) and brackets > 0 'closeBracket'
+			brackets = brackets - 1
 		end 'closeBracket'
+
+		if shift == BlockShift.opens 'openBlock'
+			blocks = blocks + 1
+		end 'openBlock'
+
+		if shift == BlockShift.closes and blocks > 0 'closeBlock'
+			blocks = blocks - 1
+		end 'closeBlock'
 
 		i = i + 1
 	end 'scan'
 
 	return i
-end 'initializerEndIndexIn'
+end 'statementEndIndexIn'
 
 module function defaultDeclarationAt(tokens TokenArray, index ElementIndex) returns bool
 	if tokenKindIn(tokens, index: index) != TokenKind.default 'notTheKeyword'
@@ -9938,7 +10014,7 @@ module function defaultDeclarationFrom(tokens TokenArray, index ElementIndex, pa
 	let keyTok = try tokens.get(index + 1) otherwise panic("defaultDeclarationFrom: `defaultDeclarationAt` saw the key at {index + 1}")
 	let exprStart = index + 3
 
-	return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: initializerEndIndexIn(tokens, start: exprStart))
+	return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: statementEndIndexIn(tokens, start: exprStart, blockShiftAt: ignoreBlocks))
 end 'defaultDeclarationFrom'
 
 // ⭐⭐ **`test`'s SPELLING — AN IDENTIFIER, NEVER A KEYWORD, FOR `module`'s AND `spawn`'s REASON AND WITH
@@ -10272,7 +10348,7 @@ end 'GreenThreadHandOff'
 
 union ThreadHandOffDoor
 	message(blame String, argumentOf String)
-	spawnFactory(let blame String)
+	spawnFactory(let blame String, let argumentOf String)
 	publish(let key ByteArray)
 	coroutine(let callee ByteArray)
 	closureCapture(let name ByteArray)
@@ -10281,7 +10357,7 @@ end 'ThreadHandOffDoor'
 function handOffDoorBlame(door ThreadHandOffDoor) returns String
 	return match door 'door'
 		message(blame, _) gives blame
-		spawnFactory(blame) gives blame
+		spawnFactory(blame, _) gives blame
 		publish(key) gives "the value published to `{String.from(key)}`"
 		coroutine(callee) gives "the value handed to `async {String.from(callee)}(…)`"
 		closureCapture(name) gives "the value of `{String.from(name)}` a closure captures"
@@ -10318,13 +10394,11 @@ function handOffLeavesThisGreenThread(door ThreadHandOffDoor) returns bool
 	end 'door'
 end 'handOffLeavesThisGreenThread'
 
-// A `spawn`'s factory argument gets no proof of its own: it travels inside the service's
-// state, whose hand-off in `Parser.emitServiceSpawn` walks the whole graph once.
 function handOffProvesItsGraph(door ThreadHandOffDoor) returns bool
 	return match door 'door'
 		message or
-		publish gives true
 		spawnFactory or
+		publish gives true
 		coroutine or
 		closureCapture gives false
 	end 'door'
@@ -13649,6 +13723,8 @@ union TryTarget
 
 	send(let messageName ByteArray, let throwsClause ThrowsClause)
 
+	serviceStart(let factory ByteArray, let awaitedService ByteArray)
+
 	// A call to a callee nothing defines, or the await of a spawn of one: its `unresolved` result is a
 	// deferral to E3004, so every door passes it through (see `deferredUnresolvedMemberResult`).
 	deferred
@@ -13696,6 +13772,7 @@ function tryTargetNoun(target TryTarget, signatures ProgramSignatures) returns B
 		send(methodName, _) gives methodName
 		serviceReply(methodName, _) gives methodName
 		sentReply(methodName, _, _) gives methodName
+		serviceStart(factory, _) gives factory
 		deferred panic("tryTargetNoun: a deferred `try` target reached a diagnostic about what it produces — `requireCaughtResultIsSpokenFor` returns before asking for one, and `parseTry` asks only of a `void` result, which no deferred target has")
 	end 'kind'
 end 'tryTargetNoun'
@@ -13707,6 +13784,7 @@ function tryTargetProducesNoValueError(target TryTarget, signatures ProgramSigna
 		witness or
 		promise or
 		serviceReply or
+		serviceStart or
 		sentReply or
 		deferred then break
 	end 'kind'
@@ -14691,11 +14769,12 @@ end 'ClaimScope'
 
 type HeldAwait
 	export let opIdx as ElementIndex
+	export let target as TryTarget
 	export let clause as ThrowsClause
 	export let awaitTok as Token
 
-	static function create(opIdx ElementIndex, clause ThrowsClause, awaitTok Token) returns HeldAwait
-		return Self{opIdx: opIdx, clause: clause, awaitTok: awaitTok}
+	static function create(opIdx ElementIndex, target TryTarget, clause ThrowsClause, awaitTok Token) returns HeldAwait
+		return Self{opIdx: opIdx, target: target, clause: clause, awaitTok: awaitTok}
 	end 'create'
 end 'HeldAwait'
 
@@ -19722,6 +19801,11 @@ export type Parser
 	// See `lastWitnessDispatch`.
 	var lastAwait as RecordedTryTarget
 
+	// Set by `noteSpawnStartReply` as a `spawn`'s op is emitted, and read by `parseSpawn` right after
+	// its factory call returns. A `spawn` inside the factory's arguments finishes before the outer op
+	// is emitted, so the outer read sees its own spawn's record.
+	var lastSpawnStart as SpawnStartReply
+
 	var lastSend as RecordedSend
 
 	var unsettledSend as UnsettledSend
@@ -20229,6 +20313,7 @@ export type Parser
 			lastWitnessDispatch: RecordedTryTarget.nothingRecorded,
 			pendingRequirementParam: PendingUnstorableRequirement.none,
 			lastAwait: RecordedTryTarget.nothingRecorded,
+			lastSpawnStart: SpawnStartReply.noReply,
 			lastSend: RecordedSend.nothingRecorded,
 			unsettledSend: UnsettledSend.settled,
 			sentLeg: SentLegSlot.none,
@@ -23339,7 +23424,7 @@ export type Parser
 			return eq
 		end 'noDefault'
 
-		let regionEnd = initializerEndIndexIn(self.tokens, start: eq + 1)
+		let regionEnd = statementEndIndexIn(self.tokens, start: eq + 1, blockShiftAt: ignoreBlocks)
 		let helperName = fieldDefaultHelperName(typeName, fieldName: fieldName)
 		let scan = self.scanFixedElementCountIn(eq + 1, regionEnd: regionEnd)
 
@@ -27067,7 +27152,7 @@ export type Parser
 		end 'annotated'
 
 		let equalsTok = self.current()
-		let defaultEnd = initializerEndIndexIn(self.tokens, start: self.pos + 1)
+		let defaultEnd = statementEndIndexIn(self.tokens, start: self.pos + 1, blockShiftAt: ignoreBlocks)
 		try self.consume(TokenKind.equals)
 
 		let defaultStart = self.pos
@@ -28356,7 +28441,7 @@ export type Parser
 		try self.consume(TokenKind.equals)
 
 		let initStart = self.pos
-		let initEnd = initializerEndIndexIn(self.tokens, start: initStart)
+		let initEnd = statementEndIndexIn(self.tokens, start: initStart, blockShiftAt: ignoreBlocks)
 		self.pos = initEnd
 
 		// ⭐ **THE SCOPE IS READ OFF THE QUALIFIER, HERE, WHERE IT IS A PARAMETER** — the caller states which
@@ -37272,7 +37357,7 @@ export type Parser
 			//
 			// ⚠ It is the SAME reader as the expression position's, so the two cannot come to disagree about
 			// what a spawn is or which refusal it earns — `parseAwait`'s single-homing argument exactly.
-			_ = try self.parseSpawn(func)
+			_ = try self.parseSpawn(func, handling: SpawnStartHandling.routed)
 		end 'spawnStmt' else if form == StatementForm.callStmt 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded. `resultUsed: false` is what makes a VOID call legal
@@ -43766,6 +43851,7 @@ export type Parser
 			send or
 			deferred or
 			serviceReply or
+			serviceStart or
 			sentReply gives false
 		end 'shape'
 	end 'tryTargetAlwaysThrows'
@@ -43981,6 +44067,12 @@ export type Parser
 				deferred then return self.deferredValueOfChain(DeferredChainCalls.lastLinkIsACall)
 			end 'operand'
 		end 'awaitTarget'
+
+		// `try spawn T.f(…)`: the await of the start is the throwing operation, and the arm is terminal
+		// for the await's reason above.
+		if self.atSpawnPrefix() 'spawnTarget'
+			return try self.parseSpawn(func, handling: SpawnStartHandling.caught)
+		end 'spawnTarget'
 
 		return try self.parsePostfix(func, value: try self.parseTryCallReceiver(func), resultUsed: false)
 	end 'parseTryTargetExpression'
@@ -44366,6 +44458,7 @@ export type Parser
 			promise or
 			send or
 			sentReply or
+			serviceStart or
 			deferred then return facts
 		end 'target'
 	end 'holdTheSendOfAnAwait'
@@ -44476,6 +44569,7 @@ export type Parser
 			promise or
 			send or
 			serviceReply or
+			serviceStart or
 			deferred then return
 		end 'kind'
 	end 'requireSentReplyPropagates'
@@ -44795,6 +44889,7 @@ export type Parser
 			promise(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
 			send(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
 			serviceReply(messageName, _) then try requireThrowingClauseTryTarget(messageName, throwsClause: self.signatures.throwsOf(messageName), tryTok: tryTok)
+			serviceStart(factory, _) then try requireThrowingClauseTryTarget(factory, throwsClause: self.signatures.throwsOf(factory), tryTok: tryTok)
 			sentReply or
 			deferred then break
 		end 'kind'
@@ -46245,6 +46340,7 @@ export type Parser
 			promise or
 			send or
 			serviceReply or
+			serviceStart or
 			deferred gives CaughtErrorForm.singleCall
 			sentReply(messageName, _, sendErrorName) gives self.sentReplyCaughtForm(messageName, sendErrorName: sendErrorName, fused: fused)
 		end 'kind'
@@ -46664,7 +46760,7 @@ export type Parser
 			end 'theClaimedValue'
 
 			if routableOpIsAwait(self.routableOpAt(held.opIdx)) 'neverCaught'
-				try self.rejectPlainAwaitOfThrowing(held.clause, awaitTok: held.awaitTok)
+				try self.rejectPlainAwaitOfThrowing(held.target, clause: held.clause, awaitTok: held.awaitTok)
 			end 'neverCaught'
 		end 'eachHeldAwait'
 
@@ -47345,6 +47441,7 @@ export type Parser
 			promise(_, throwsClause) gives throwsClause
 			send(_, throwsClause) gives throwsClause
 			serviceReply(messageName, _) gives self.signatures.throwsOf(messageName)
+			serviceStart(factory, _) gives self.signatures.throwsOf(factory)
 			sentReply(_, _, sendErrorName) gives ThrowsClause.throwing(String.from(sendErrorName))
 			deferred gives ThrowsClause.none
 		end 'kind'
@@ -49085,7 +49182,9 @@ export type Parser
 			InterpolationScratch or
 			ClosureEnv or
 			ParameterCell or
-			WalkVisitTable then break
+			WalkVisitTable or
+			AsyncArgumentImage or
+			ServiceStartRecord then break
 		end 'tag'
 
 		self.artifact.recordAllocTagSite(tag)
@@ -50749,8 +50848,39 @@ export type Parser
 	end 'literalSuccession'
 
 	function holdIsOwedAt(value ValueId, position OperandSuccession) returns bool
-		return self.operandIsFollowed(position) and self.valueIsAStorageRead(value) and self.holdIsOwed(value)
+		return self.operandIsFollowed(position) and self.valueIsAStorageRead(value) and self.holdIsOwed(value) and self.restOfStatementMayWriteStorageOf(value)
 	end 'holdIsOwedAt'
+
+	// A cell is reachable only through its name, so a hold on a read of one is owed only where the
+	// rest of the statement names it, and an unneeded hold permanently downgrades the cell's epoch.
+	function restOfStatementMayWriteStorageOf(value ValueId) returns bool
+		view read = try cellOccupantReadOf(self.bodyState.cellOccupantReads, occupant: value) otherwise return true
+		return self.restOfStatementNames(read.binding.name)
+	end 'restOfStatementMayWriteStorageOf'
+
+	function restOfStatementNames(name ByteArray) returns bool
+		let statementEnd = statementEndIndexIn(self.tokens, start: self.pos, blockShiftAt: function(index) gives self.blockShiftAt(index))
+
+		for q in self.pos upto statementEnd 'walk'
+			if tokenCanBeAName(self.tokenAt(q)) and self.tokenAt(q).value.equals(name) 'namesTheBinding'
+				return true
+			end 'namesTheBinding'
+		end 'walk'
+
+		return false
+	end 'restOfStatementNames'
+
+	function blockShiftAt(index ElementIndex) returns BlockShift
+		if self.opensBlockAt(index) 'opens'
+			return BlockShift.opens
+		end 'opens'
+
+		if self.closesBlockAt(index) 'closes'
+			return BlockShift.closes
+		end 'closes'
+
+		return BlockShift.none
+	end 'blockShiftAt'
 
 	function holdStorageReadForStatement(value ValueId, kind HoldKind, range SourceRange, position OperandSuccession) returns ValueId
 		if not self.holdIsOwedAt(value, position: position) 'nothingToHold'
@@ -51825,6 +51955,7 @@ export type Parser
 			promise or
 			send or
 			serviceReply or
+			serviceStart or
 			sentReply then break
 		end 'kind'
 
@@ -63363,7 +63494,7 @@ export type Parser
 		// the only one that is not a lexer keyword (see `SpawnKeywordName` for the two live declarations of
 		// the word that forbid one).
 		if self.atSpawnPrefix() 'spawn'
-			return try self.parseSpawn(func)
+			return try self.parseSpawn(func, handling: SpawnStartHandling.routed)
 		end 'spawn'
 
 		if self.at(TokenKind.await) 'await'
@@ -63379,13 +63510,6 @@ export type Parser
 		return complemented
 	end 'emitNot'
 
-	// `await <unary>` — the operand grammar and the emit, written ONCE for the TWO positions that admit it:
-	// the prefix operator above, and the bare `await p` STATEMENT (`parseStatement`'s `awaitStmt` arm). The
-	// cursor sits on `await`.
-	//
-	// Single-homing it is the point. A statement-position copy is exactly the shape that drifts — it would
-	// be spelled `await <primary>` by whoever wrote it next and then `await async f()` would parse in one
-	// position and not the other, for no reason anyone could state.
 	// ⭐⭐ **`spawn <T>.<factory>(…)` — the ONE reader, for the TWO positions that admit it**
 	// (`parseAwait`'s precedent, and its reason: a statement-position copy is exactly the shape that
 	// drifts). The cursor sits on the word `spawn`, which `atSpawnPrefix` has already recognized. An
@@ -63412,9 +63536,9 @@ export type Parser
 	// nothing fixes it until the factory's ARGUMENTS have been read — so that question is deferred
 	// (`ServiceRosterKnowledge`) and re-asked below, after the call has emitted its ops. A `spawn` refused
 	// there leaves those ops behind; they reach nothing, because a `SourceParseError` discards the whole artifact
-	// (`ParseStaging.parseFile` salvages only `abortedParseArtifact`), and the state's `handOff` on
-	// the next line refuses on the same terms.
-	function parseSpawn(func IrFunction) returns ValueId throws SourceParseError
+	// (`ParseStaging.parseFile` salvages only `abortedParseArtifact`).
+	function parseSpawn(func IrFunction, handling SpawnStartHandling) returns ValueId throws SourceParseError
+		let tryTok = self.tokenAt(self.pos - 1)
 		let spawnTok = self.current()
 		self.advance()
 		let capacity = try self.parseSpawnCapacity(func, spawnTok: spawnTok)
@@ -63466,21 +63590,21 @@ export type Parser
 			typeIsAConstrainedGeneric then throw SourceParseError.unsupported(serviceTargetRefusalMessage(target, typeName: typeName, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
 		end 'target'
 
-		// ⭐⭐ **THE FACTORY IS CALLED DIRECTLY, THROUGH THE ORDINARY STATIC-CALL DOOR.** `spawn Calc.create(…)`
-		// is `Calc.create(…)` plus a transfer: the arguments, the labels, the defaults, the overload
-		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT and
-		// to an argument the factory keeps is this reader's — `spawned` makes the call move a kept argument
-		// into the state, or refuse it borrowed (`transferConsumedColumn`). `inferInstanceOf` because a
-		// generic target's type arguments exist nowhere but this argument list.
-		let factoryTempFloor = self.bodyState.pendingTempDrops.count()
-		let factoryOwnedFloor = self.bodyState.ownedBindings.count()
+		// ⭐⭐ **THE FACTORY CALL IS READ THROUGH THE ORDINARY STATIC-CALL DOOR.** The arguments, the
+		// labels, the defaults, the overload resolution and the diagnostics are all the ordinary call's;
+		// the door then emits a `serviceSpawn` op in place of the call (`emitServiceSpawnOp`), because
+		// the factory runs on the new service's green thread. Every argument moves there
+		// (`CallArgTarget.movedInto`): the factory runs after this frame may have released a borrowed
+		// argument, or a parameter cell it made. `inferInstanceOf` because a generic target's type
+		// arguments exist nowhere but this argument list.
+		let launch = ServiceSpawnLaunch.create(typeName, capacity: capacity, mailbox: self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId), tempFloor: self.bodyState.pendingTempDrops.count(), ownedFloor: self.bodyState.ownedBindings.count())
 
-		// A field read off a temporary crosses as a kept argument only because
-		// `releaseHandOffBuildTemps` below releases that temporary with the spawn — so the marks are
+		// A field read off a temporary crosses as an argument only because
+		// `releaseHandOffBuildTemps` releases that temporary with the spawn — so the marks are
 		// cleared to those this argument list makes, and an enclosing `spawn`'s are restored after it.
 		var outerTemporaryFieldReads = self.bodyState.temporaryFieldReads
 		self.bodyState.temporaryFieldReads = noValueMarks
-		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeName, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok), inferInstanceOf: FactoryInference.of(typeName), serviceSite: ServiceSpawnSite.at(spawnTok))
+		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeName, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok), inferInstanceOf: FactoryInference.of(typeName), serviceSite: ServiceSpawnSite.at(spawnTok, launch: launch))
 		self.bodyState.temporaryFieldReads = outerTemporaryFieldReads
 		try self.requireServiceRosterIsDispatchable(typeName, knowledge: ServiceRosterKnowledge.declarationOnly, spawnTok: spawnTok)
 		let instance = self.serviceStateInstanceOf(state)
@@ -63492,9 +63616,38 @@ export type Parser
 			at then try self.requireServiceRosterIsDispatchable(typeName, knowledge: ServiceRosterKnowledge.atInstance(instance), spawnTok: spawnTok)
 		end 'fixed'
 
-		self.releaseHandOffBuildTemps(factoryTempFloor, ownedFloor: factoryOwnedFloor, handedOff: singletonArgs(state), anchor: memberTok)
-		return try self.emitServiceSpawn(typeName, member: memberTok.value, state: state, capacity: capacity, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
+		match self.lastSpawnStart 'reply'
+			noReply then return try self.finishImmediateSpawn(typeName, launch: launch, instance: instance, spawnTok: spawnTok, memberTok: memberTok, handling: handling, tryTok: tryTok)
+			viaCell(callee) then return try self.awaitServiceStart(typeName, factory: callee, cell: launch.mailbox, instance: instance, spawnTok: spawnTok, handling: handling)
+		end 'reply'
 	end 'parseSpawn'
+
+	function finishImmediateSpawn(typeName ByteArray, launch ServiceSpawnLaunch, instance ServiceStateInstance, spawnTok Token, memberTok Token, handling SpawnStartHandling, tryTok Token) returns ValueId throws SourceParseError
+		match handling 'handling'
+			routed then break
+			caught then throw SourceParseError.tryOnNonThrowing(String.from(self.signatures.diagnosticCalleeSpelling(qualifiedMethodName(typeName, methodName: memberTok.value))), line: tryTok.line, column: tryTok.column)
+		end 'handling'
+
+		return self.emitServiceHandle(typeName, mailbox: launch.mailbox, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
+	end 'finishImmediateSpawn'
+
+	function awaitServiceStart(typeName ByteArray, factory ByteArray, cell ValueId, instance ServiceStateInstance, spawnTok Token, handling SpawnStartHandling) returns ValueId throws SourceParseError
+		let handleType = self.serviceHandleValueType(self.serviceHandleLayout(typeName), instance: instance)
+		let facts = AwaitedPromise.create(AwaitedResult.declared(MaxonReturnType.value(handleType)), tryTarget: TryTarget.serviceStart(factory, awaitedService: typeName))
+		let handle = try self.emitStartAwait(cell, facts: facts, awaitTok: spawnTok, handling: handling)
+		self.markValueOwnsHeap(handle, exclusivity: OwnedHeapExclusivity.sole)
+		return handle
+	end 'awaitServiceStart'
+
+	function emitStartAwait(cell ValueId, facts AwaitedPromise, awaitTok Token, handling SpawnStartHandling) returns ValueId throws SourceParseError
+		match handling 'handling'
+			routed then return try self.emitRoutedAwait(cell, facts: facts, awaitTok: awaitTok)
+			caught then break
+		end 'handling'
+
+		let (handle, _) = try self.emitAwaitOp(cell, facts: facts, awaitTok: awaitTok)
+		return handle
+	end 'emitStartAwait'
 
 	function spawnedTypeAt(headIndex ElementIndex, spawnTok Token) returns SpawnedType throws SourceParseError
 		let dots = self.dottedChainLengthAt(headIndex)
@@ -63582,7 +63735,8 @@ export type Parser
 			// An overloaded message is a limitation of the dispatch UNION, so E2015; a parameter that cannot
 			// cross a green thread is a rule that will never relax, so E3135.
 			messageIsOverloaded then throw SourceParseError.unsupported(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
-			messageParameterIsNotTransferable then throw SourceParseError.serviceValueNotTransferable(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
+			messageParameterIsNotTransferable or
+			messageReplyHoldsAPromise then throw SourceParseError.serviceValueNotTransferable(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
 
 			// A reply the cell cannot carry is neither of those: it is about what comes BACK, and it has its
 			// own code (E3140) so a corpus can pin each separately.
@@ -63607,26 +63761,17 @@ export type Parser
 		return serviceStateInstanceOfValueType(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'serviceStateInstanceOf'
 
-	// ⭐⭐ **THE SPAWN'S EMIT: MOVE THE STATE ACROSS, START THE SERVICE, AND WRAP ITS MAILBOX IN A HANDLE
-	// BOX.** Three acts, in an order that is not free:
-	//
-	//   1. **The state is MOVED** (`handOff`) — the service becomes its one owner, and this frame
-	//      stops owing its drop. A refusal here leaves nothing behind, which is `emitBinOp`'s ordering rule.
-	//   2. **`serviceSpawn` answers the MAILBOX**, a bare machine word, because that is all the runtime has
-	//      to hand back: it created the mailbox and the green thread, and neither is a managed record.
-	//   3. **The handle BOX is minted here and not in the runtime.** `emitBoxAllocWithDestructor` is the one
-	//      `__mm_alloc` door — it is where a box's destructor argument is decided, and this box's
-	//      (`__mbox_handle_destruct`) gives back the mailbox share the spawn's initial counts hold. Enrolling
-	//      the result through `trackOwnedTemp` is what makes a handle an ORDINARY owned value: `let h = …`
-	//      binds it, a second read after a move is E3102, an array element drop reaches it, and its
-	//      scope-exit drop is what shuts the service down. A runtime-minted box would need every one of
-	//      those taught to it.
-	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, capacity ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId throws SourceParseError
+	// ⭐⭐ **WRAP A STARTED SERVICE'S MAILBOX IN A HANDLE BOX** — for a factory that cannot throw, whose
+	// `serviceSpawn` answers the MAILBOX, a bare machine word. `emitBoxAllocWithDestructor` is the one
+	// `__mm_alloc` door — it is where a box's destructor argument is decided, and this box's
+	// (`__mbox_handle_destruct`) gives back the mailbox share the spawn's initial counts hold.
+	// Enrolling the result through `trackOwnedTemp` is what makes a handle an ORDINARY owned value:
+	// `let h = …` binds it, a second read after a move is E3102, an array element drop reaches it, and
+	// its scope-exit drop is what shuts the service down. A throwing factory's handle is minted on the
+	// service's green thread and comes back through the start's await, which marks it sole
+	// (`awaitServiceStart`).
+	function emitServiceHandle(typeName ByteArray, mailbox ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId
 		let range = SourceRange.between(spawnTok, last: memberTok)
-		let moved = try self.handOff(SoleHandedOffPosition, value: state, door: ThreadHandOffDoor.message(serviceSpawnStateBlame(typeName, member: member), argumentOf: serviceSpawnStateOf(typeName, member: member)), anchor: memberTok)
-
-		let mailbox = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSpawn(mailbox, typeName: typeName, state: moved, capacity: capacity), range: range)
 
 		view handle = self.serviceHandleLayout(typeName)
 		let handleType = self.serviceHandleValueType(handle, instance: instance)
@@ -63634,7 +63779,7 @@ export type Parser
 		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
 		self.emitIndirectStore(box, offset: ServiceHandleMailboxOffset, value: mailbox, storageType: MaxonType.integer, range: range)
 		return box
-	end 'emitServiceSpawn'
+	end 'emitServiceHandle'
 
 	// ⭐⭐ **THE TYPE A HANDLE VALUE CARRIES — AND FOR A GENERIC SERVICE IT IS AN INSTANCE OF THE ONE
 	// COMPANION, NOT A SECOND COMPANION.** `<T>.handle` is minted once, whatever `<T>` is instantiated at;
@@ -63657,6 +63802,13 @@ export type Parser
 		end 'lookup'
 	end 'serviceHandleLayout'
 
+	// `await <unary>` — the operand grammar and the emit, written ONCE for the TWO positions that admit it:
+	// the prefix operator above, and the bare `await p` STATEMENT (`parseStatement`'s `awaitStmt` arm). The
+	// cursor sits on `await`.
+	//
+	// Single-homing it is the point. A statement-position copy is exactly the shape that drifts — it would
+	// be spelled `await <primary>` by whoever wrote it next and then `await async f()` would parse in one
+	// position and not the other, for no reason anyone could state.
 	function parseAwait(func IrFunction) returns ValueId throws SourceParseError
 		let awaitTok = try self.consume(TokenKind.await)
 		let promise = try self.parseUnclaimedUnary(func)
@@ -72612,7 +72764,7 @@ export type Parser
 		match argument.door 'door'
 			message(_, argumentOf) then self.noteHandedOffSite(argument, destination: argumentOf.toByteArray(), kind: MoveDestinationKind.sentMessage)
 			publish(key) then self.noteHandedOffSite(argument, destination: key, kind: MoveDestinationKind.publishedValue)
-			spawnFactory or
+			spawnFactory(_, argumentOf) then self.noteHandedOffSite(argument, destination: argumentOf.toByteArray(), kind: MoveDestinationKind.sentMessage)
 			coroutine or
 			closureCapture then panic("fileHandedOffSite: a door whose graph is not proved at the hand-over has no view to refuse")
 		end 'door'
@@ -74119,7 +74271,7 @@ export type Parser
 
 		match serviceSite 'site'
 			notASpawn then break
-			at(spawnTok) then try self.requireBoundFactoryStartsAService(callee, pick: pick, typeName: base, spawnTok: spawnTok)
+			at(spawnTok, _) then try self.requireBoundFactoryStartsAService(callee, pick: pick, typeName: base, spawnTok: spawnTok)
 		end 'site'
 
 		view params = self.signatures.structTypeParamsOf(base)
@@ -91187,9 +91339,10 @@ export type Parser
 		match op 'reader'
 			call(result, callee, args, _, _, _, _, _) then return self.callReads(result, callee: callee, args: args, word: word)
 			tryCall(result, _, callee, args, _, _, _, _, _) then return self.callReads(result, callee: callee, args: args, word: word)
+			serviceSpawn(_, _, state, _, callee, args, _, _, _, _, _, _) then return self.callReads(state, callee: callee, args: args, word: word)
 			asyncCall or
 			serviceSend then return false
-			default panic("opReads: maxonOpCalleeKind answers direct for an op that is not call, tryCall, asyncCall or serviceSend")
+			default panic("opReads: maxonOpCalleeKind answers direct for an op that is not call, tryCall, serviceSpawn, asyncCall or serviceSend")
 		end 'reader'
 	end 'opReads'
 
@@ -92675,7 +92828,7 @@ export type Parser
 		// arguments are parsed. `bareNameKindFrom` is the classifier an initializer's call is judged by too.
 		let shadowedByADeclaration = self.signatures.bareNameKindFrom(callee, readerFilePath: self.job.path).namesAVisibleFunction()
 
-		let places = try self.parseCallArgs(func, target: CallArgTarget.callee(callee), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee, shadowedByADeclaration: shadowedByADeclaration), constructorInstance: constructorInstance)
+		let places = try self.parseCallArgs(func, target: CallArgTarget.movedInto(callee) if serviceSite.isASpawn() else CallArgTarget.callee(callee), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee, shadowedByADeclaration: shadowedByADeclaration), constructorInstance: constructorInstance)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
@@ -95666,6 +95819,12 @@ export type Parser
 		self.noteIdentityPrimitiveClone(result, callee: callee, args: args)
 		self.settleFloatResult(result)
 
+		// A `spawn`'s factory call is not adopted: its result is the service's state, on the service's
+		// thread.
+		if let launch = try serviceSite.launch() 'aFactoryCall'
+			return try self.emitServiceSpawnOp(launch, spawnTok: try serviceSite.token() otherwise panic("emitCall: a site that answers a launch answers its token"), writtenCallee: writtenCallee, callee: callee, state: result, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, defaultedArgs: defaultedArgs, mint: mint, pick: pick, constructed: constructed, inferInstanceOf: inferInstanceOf)
+		end 'aFactoryCall'
+
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE POINT.** Taken in the
 		// mint's own tail, the tag is still the opaque `T` — and an opaque tag ALWAYS answers "owns nothing"
 		// (`valueIsManagedHeap` tests byte-record and aggregate tags, and `typeParameter` is neither). The
@@ -95728,7 +95887,7 @@ export type Parser
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
-		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result, site: serviceSite, pick: pick.clone())
+		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result)
 		self.holdScratchCellsEmptiedWhenTheMemberTakesTheValue(placeBindings.pending, callResult: result, anchor: anchor)
 		self.recordDeferredArgumentBindings(placeBindings.pending, transfers: transfers, callResult: result)
 
@@ -97464,10 +97623,10 @@ export type Parser
 	function qualifiedAsyncSpawnCallee() returns AsyncSpawnCallee throws SourceParseError
 		// ⛔ **AN INSTANCE SPAWN IS REFUSED, and the two claimants `parseDottedPrimary` asks first are asked
 		// first here for its reason: a base bound to a VALUE claims the whole expression before any type
-		// reading.** `async obj.work()` needs a receiver slot the trampoline's inline argument region has no
-		// room for, receiver ownership across the green-thread boundary, and a classification for the
-		// receivers that are not plain calls at all — a String/array/builtin receiver lowers to a runtime
-		// call and an interface receiver to a `witnessDispatch`, and neither can be an `asyncCall`.
+		// reading.** `async obj.work()` needs receiver ownership across the green-thread boundary, and a
+		// classification for the receivers that are not plain calls at all — a String/array/builtin
+		// receiver lowers to a runtime call and an interface receiver to a `witnessDispatch`, and neither
+		// can be an `asyncCall`.
 		let baseTok = self.current()
 
 		if self.methodCallsAt(self.pos) or self.baseNamesAValueAt(self.pos) 'instanceSpawn'
@@ -97518,7 +97677,7 @@ export type Parser
 	end 'qualifiedAsyncSpawnCallee'
 
 	function instanceSpawnRefusal(baseTok Token) returns SourceParseError
-		return SourceParseError.unsupported("`async {String.from(baseTok.value)}.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument", line: baseTok.line, column: baseTok.column)
+		return SourceParseError.unsupported("`async {String.from(baseTok.value)}.…` spawns a method on a VALUE, and a spawn has no receiver: it starts a linked function by address on the argument words it is handed, and nothing carries a receiver or its ownership across the green-thread boundary. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument", line: baseTok.line, column: baseTok.column)
 	end 'instanceSpawnRefusal'
 
 	function consumeFunctionChainAsSpawnCallee(callee ByteArray) returns AsyncSpawnCallee
@@ -97586,7 +97745,7 @@ export type Parser
 		var argRanges = SourceRangeArray.create()
 		var argImmutableNames = WriteBlameArray.create()
 
-		// Read by the hand-off (`transferAsyncSpawnArgs`), which blames a refused argument at its own
+		// Read by the hand-off (`transferThreadArguments`), which blames a refused argument at its own
 		// token.
 		var argAnchors = TokenIndexArray.create()
 
@@ -97642,6 +97801,98 @@ export type Parser
 		return conventions
 	end 'spawnedCalleeConventions'
 
+	function spawnFactoryArgumentBlames(callee ByteArray, writtenCallee ByteArray, pick CallPick, argLabels NameRoster, count ElementIndex) returns SpawnArgumentBlameArray
+		var blames = SpawnArgumentBlameArray.create()
+		let params = self.spawnFactoryParams(writtenCallee, pick: pick)
+
+		for column in 0 upto count 'eachArg'
+			match params 'params'
+				unbound then blames.push(serviceFactoryArgumentOrdinalBlame(callee, column: column as ParamCount))
+				declared(names) then blames.push(self.declaredSpawnArgumentBlame(callee, names: names, argLabels: argLabels, column: column as ParamCount))
+			end 'params'
+		end 'eachArg'
+
+		return blames
+	end 'spawnFactoryArgumentBlames'
+
+	function declaredSpawnArgumentBlame(callee ByteArray, names NameRoster, argLabels NameRoster, column ParamCount) returns String
+		let position = try argSlotPosition(names, argIndex: column, label: callArgumentLabel(argLabels, argIndex: column)) otherwise return serviceFactoryArgumentOrdinalBlame(callee, column: column)
+		let named = try names.get(position) otherwise panic("declaredSpawnArgumentBlame: names.get OOB at {position} — `argSlotPosition` answers a position inside the roster it was given")
+		return serviceFactoryArgumentBlame(callee, paramName: named)
+	end 'declaredSpawnArgumentBlame'
+
+	function spawnFactoryParams(writtenCallee ByteArray, pick CallPick) returns SpawnFactoryParams
+		match pick 'pick'
+			bound(decl) then return SpawnFactoryParams.declared(decl.paramNames.clone())
+			unasked or
+			tied or
+			noMember then break
+		end 'pick'
+
+		view decls = self.signatures.overloadedDeclsOf(writtenCallee)
+
+		if decls.count() != 1 'noSingleDeclaration'
+			return SpawnFactoryParams.unbound
+		end 'noSingleDeclaration'
+
+		return SpawnFactoryParams.declared((try decls.get(0) otherwise panic("spawnFactoryParams: get(0) on a one-declaration array")).paramNames.clone())
+	end 'spawnFactoryParams'
+
+	function emitServiceSpawnOp(launch ServiceSpawnLaunch, spawnTok Token, writtenCallee ByteArray, callee ByteArray, state ValueId, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, rparenTok Token, defaultedArgs ParamCount, mint CalleeMint, pick CallPick, constructed ConstructorInstance, inferInstanceOf FactoryInference) returns ValueId throws SourceParseError
+		try self.requireSpawnArgumentsHoldNoPromise(callee, args: args, argRanges: argRanges)
+		try self.requireSpawnArgumentsRideTheStartRecord(callee, args: args, anchor: anchor)
+
+		var argAnchors = TokenIndexArray.create()
+
+		for range in argRanges 'eachRange'
+			argAnchors.push(self.argumentFirstTokenIndex(range))
+		end 'eachRange'
+
+		var blames = argImmutableNames.clone()
+		try self.transferThreadArguments(callee, doors: ThreadArgumentDoors.factory(self.spawnFactoryArgumentBlames(callee, writtenCallee: writtenCallee, pick: pick, argLabels: argLabels, count: args.count())), args: args, argImmutableNames: blames, argAnchors: argAnchors, anchor: anchor)
+		self.releaseHandOffBuildTemps(launch.tempFloor, ownedFloor: launch.ownedFloor, handedOff: ValueIdArray.create(), anchor: anchor)
+
+		if inferInstanceOf.isOf() 'aSpawnFactory'
+			match constructed 'inferred'
+				none then break
+				instance(gid) then self.stampInferredFactoryResult(state, gid: gid)
+			end 'inferred'
+		end 'aSpawnFactory'
+
+		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
+		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructed)
+		self.recordPick(pick, opIndex: self.artifact.module.opCount())
+		let startReplies = self.noteSpawnStartReply(launch.mailbox, callee: callee)
+		let spawnSpan = SourceRange.between(spawnTok, last: rparenTok)
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSpawn(launch.mailbox, typeName: launch.typeName, state: state, capacity: launch.capacity, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(blames), defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies), range: spawnSpan)
+		self.noteCallToken(spawnSpan, args: args, start: spawnSpan)
+		return state
+	end 'emitServiceSpawnOp'
+
+	// Called after `releaseHandOffBuildTemps`: the cell is enrolled here as an owned promise, and a
+	// release of the hand-off's temporaries that ran later would drain it.
+	function noteSpawnStartReply(cell ValueId, callee ByteArray) returns bool
+		if not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'startsAtOnce'
+			self.lastSpawnStart = SpawnStartReply.noReply
+			return false
+		end 'startsAtOnce'
+
+		self.markValuePromise(cell)
+		self.bodyState.pendingTempDrops.push(cell)
+		self.lastSpawnStart = SpawnStartReply.viaCell(callee)
+		return true
+	end 'noteSpawnStartReply'
+
+	function requireSpawnArgumentsRideTheStartRecord(callee ByteArray, args ValueIdArray, anchor Token) throws SourceParseError
+		for column in 0 upto args.count() as ParamCount 'eachArg'
+			let value = try args.get(column) otherwise panic("requireSpawnArgumentsRideTheStartRecord: args.get OOB at {column}")
+
+			if not tagRidesAsyncArgumentChannel(self.rangedAliasResolvedTag(self.tagOf(value), nameId: self.valueNameId(value))) 'unfittableArg'
+				throw SourceParseError.unsupported("argument {column + 1} of `spawn {String.from(callee)}(…)` is held at an opaque type parameter, which the service's start record cannot carry: it is released through a layout descriptor the record does not hold. Spawn from a function of a concrete type", line: anchor.line, column: anchor.column)
+			end 'unfittableArg'
+		end 'eachArg'
+	end 'requireSpawnArgumentsRideTheStartRecord'
+
 	function emitAsyncCall(writtenCallee ByteArray, anchor Token, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, rparenTok Token, spawnSite AsyncSpawnSite) returns ValueId throws SourceParseError
 		try self.requireCalleeIsNotRawSurface(writtenCallee, anchor: anchor)
 
@@ -97672,31 +97923,15 @@ export type Parser
 			// name column, so the bare tag cannot tell `Integer` from a `String`. `let r1 = await p1` produces
 			// exactly such a value, and `async step(r1)` — the whole shape of `specs/async-await.md`'s
 			// `sequence` — passes an argument that is an ordinary i64.
-			if not tagRidesAsyncGprChannel(self.rangedAliasResolvedTag(self.tagOf(argValue), nameId: self.valueNameId(argValue))) 'unfittableArg'
-				throw SourceParseError.unsupported("an `async` call argument must ride the green thread's integer channel — a `float` travels in an XMM register the hand-assembled trampoline never fills, a value held at an interface type is released through a witness table and one held at an opaque type parameter through a layout descriptor, and the green-thread struct carries neither. A managed String/struct/array argument is one heap pointer and is accepted, and so is a float or an interface value handed to a parameter the callee reassigns, which rides a cell the coroutine owns", line: anchor.line, column: anchor.column)
+			if not tagRidesAsyncArgumentChannel(self.rangedAliasResolvedTag(self.tagOf(argValue), nameId: self.valueNameId(argValue))) 'unfittableArg'
+				throw SourceParseError.unsupported("an `async` call argument held at an opaque type parameter cannot be spawned: it is released through a layout descriptor the green-thread struct does not carry. Spawn a function of a concrete type, or call it directly", line: anchor.line, column: anchor.column)
 			end 'unfittableArg'
 		end 'eachArg'
-
-		// ⛔ **AN `async` CALL HAS ITS OWN, LOWER ARGUMENT CEILING, AND IT IS A DIFFERENT MECHANISM'S LIMIT.**
-		// An ordinary call gained stack arguments; a SPAWN did not, and cannot here: the arguments do not travel
-		// in a calling convention at all but through the GT struct's INLINE argument region (`GtOffArgInline`,
-		// `MaxAsyncArgs` slots), which the HAND-ASSEMBLED trampoline reads back into the ABI argument registers
-		// one slot at a time (`X64GtRuntime.buildGtTrampolineChunk`). Passing a seventh would mean teaching that
-		// hand-written chunk to build a callee's outgoing stack-argument region on the green thread's stack —
-		// the async ABI, not the compiled one.
-		//
-		// ⚠ It is a positioned diagnostic HERE rather than a compiler PANIC in
-		// `LowerMaxonToStd.emitAsyncSpawn`, because ordinary source reaches it: the other two async refusals
-		// (an argument or a result the integer channel cannot carry) are positioned for the same reason.
-		// The panic stays as the structural backstop.
-		if args.count() > MaxAsyncArgs 'tooManyAsyncArgs'
-			throw SourceParseError.unsupported("`async {String.from(callee)}(…)` passes {args.count()} arguments — more than the {MaxAsyncArgs} a spawn can carry. A spawned call's arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the argument registers, so a spawn has no stack-argument path even though an ordinary call does. Call it directly, or pass fewer arguments", line: anchor.line, column: anchor.column)
-		end 'tooManyAsyncArgs'
 
 		// ⭐⭐ **THE GREEN THREAD IS A DURABLE SINK, SO THE SPAWN HANDS IT ITS OWN REFERENCE.** Runs AFTER
 		// both gates, so only arguments that fit the channel are ever transferred — and after
 		// `fillOmittedArgDefaults`, so a MANAGED default is transferred exactly as a written argument is.
-		try self.transferAsyncSpawnArgs(callee, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, anchor: anchor)
+		try self.transferThreadArguments(callee, doors: ThreadArgumentDoors.coroutine, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, anchor: anchor)
 
 		let result = match self.boundReturnOf(callee, pick: pick.clone()) 'spawned'
 			declared(returnType, scopeFilePath, _) gives try self.spawnAtItsPromiseInstance(callee, pick: pick, returnType: returnType, scopeFilePath: scopeFilePath, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
@@ -97768,20 +98003,24 @@ export type Parser
 
 	// ⭐⭐ **HAND THE GREEN THREAD ITS OWN REFERENCE TO EVERY MANAGED ARGUMENT** — the spawn-site half
 	// of the ownership pair whose other half is `__gt_release_<callee>`
-	// (`Runtime/AsyncReleaser.maxon`).
+	// (`Runtime/AsyncReleaser.maxon`), or for a `spawn`'s factory the start thunk that releases its
+	// record.
 	//
 	// ⚠ **WITHOUT IT THE ARGUMENT IS FREED BEFORE THE THREAD RUNS.** A spawn does not call its callee; it
 	// ENQUEUES one. The spawning statement then ends, this frame's scope-exit drop releases the argument, and
-	// the trampoline later loads a dangling pointer out of the inline argument region — a use-after-free
+	// the trampoline later loads a dangling pointer out of the argument buffer — a use-after-free
 	// whose symptom is a SIGSEGV inside `__gt_trampoline` once allocator churn puts the freed slot back in
 	// play, which is exactly what `specs/async-await.md`'s `managed-args-many` is a regression guard for.
 	//
-	// ⭐ **IT IS `handOff` THROUGH THE COROUTINE DOOR.** A temporary is MOVED — drained from the pending
-	// temporaries — and anything else, a named binding included, takes a reference of its own through
-	// `transferConsumedArg`, the door an ordinary consuming call comes through, so the caller still reads
-	// what it passed: a parameter co-owns, and a BORROWED String — an `.rdata` literal, a borrowed
-	// parameter — is PROMOTED to a fresh owned record, because increfing an immortal literal writes into
-	// read-only memory.
+	// A factory's arguments come through the factory door, which proves each graph as a message's door
+	// does (`handOffProvesItsGraph`).
+	//
+	// ⭐ **FOR AN `async` CALL IT IS `handOff` THROUGH THE COROUTINE DOOR.** A temporary is MOVED —
+	// drained from the pending temporaries — and anything else, a named binding included, takes a
+	// reference of its own through `transferConsumedArg`, the door an ordinary consuming call comes
+	// through, so the caller still reads what it passed: a parameter co-owns, and a BORROWED String —
+	// an `.rdata` literal, a borrowed parameter — is PROMOTED to a fresh owned record, because
+	// increfing an immortal literal writes into read-only memory.
 	//
 	// ⚠ **IT TRANSFERS EVERY MANAGED ARGUMENT, NOT ONLY THE DECLARED-CONSUMED ONES**, which is where it
 	// departs from `transferConsumedArgs`: an ordinary call's BORROWED argument needs no transfer because the
@@ -97791,12 +98030,12 @@ export type Parser
 	// `transferAsyncPromiseArgs`.
 	//
 	// The RESULT replaces the argument, for `transferConsumedArgs`' reason: a promoted borrowed String is a
-	// DIFFERENT record, and it is the one the inline argument region must carry.
-	function transferAsyncSpawnArgs(callee ByteArray, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, anchor Token) throws SourceParseError
+	// DIFFERENT record, and it is the one the thread's arguments must carry.
+	function transferThreadArguments(callee ByteArray, doors ThreadArgumentDoors, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, anchor Token) throws SourceParseError
 		var handed = HandedOffArgumentArray.create()
 
 		for i in 0 upto args.count() 'eachArgument'
-			handed.push(HandedOffArgument.create(i, value: try args.get(i) otherwise panic("transferAsyncSpawnArgs: args.get OOB at {i}"), anchor: self.handOffArgumentAnchor(argAnchors, index: i, fallback: anchor), door: ThreadHandOffDoor.coroutine(callee)))
+			handed.push(HandedOffArgument.create(i, value: try args.get(i) otherwise panic("transferThreadArguments: args.get OOB at {i}"), anchor: self.handOffArgumentAnchor(argAnchors, index: i, fallback: anchor), door: doors.doorAt(callee, column: i)))
 		end 'eachArgument'
 
 		view plans = try self.handOffArguments(handed, args: args)
@@ -97805,10 +98044,10 @@ export type Parser
 			let position = plan.argument.position
 
 			if handOffTakeEndsTheWriteBlame(plan.take) and position < argImmutableNames.count() 'theBindingIsNoLongerTheCallers'
-				try argImmutableNames.set(position, value: WriteBlame.unblamed) otherwise panic("transferAsyncSpawnArgs: argImmutableNames.set OOB at {position} below its own count")
+				try argImmutableNames.set(position, value: WriteBlame.unblamed) otherwise panic("transferThreadArguments: argImmutableNames.set OOB at {position} below its own count")
 			end 'theBindingIsNoLongerTheCallers'
 		end 'eachHandedOver'
-	end 'transferAsyncSpawnArgs'
+	end 'transferThreadArguments'
 
 	// Unlike an ordinary call, which leaves the hand-over to the overload it binds (`transferTakenColumn`), a
 	// spawn moves the promise now or refuses it: the coroutine can outlive this frame, so a declaration that
@@ -98096,13 +98335,13 @@ export type Parser
 		let claimed = claimCovers(self.bodyState.throwRouteClaim, destination: position)
 
 		if not claimed and position == ThrowRouteDestination.nowhere 'nothingCatchesIt'
-			try self.rejectPlainAwaitOfThrowing(clause, awaitTok: awaitTok)
+			try self.rejectPlainAwaitOfThrowing(facts.tryTarget, clause: clause, awaitTok: awaitTok)
 		end 'nothingCatchesIt'
 
 		let (result, opIdx) = try self.emitAwaitOp(promise, facts: facts, awaitTok: awaitTok)
 
 		if claimed 'heldByTheClaim'
-			self.heldAwaits.push(HeldAwait.create(opIdx, clause: clause, awaitTok: awaitTok))
+			self.heldAwaits.push(HeldAwait.create(opIdx, target: facts.tryTarget, clause: clause, awaitTok: awaitTok))
 		end 'heldByTheClaim' else 'routedNow'
 			self.routeThrowingOp(position, opIdx: opIdx, clause: clause, result: result)
 		end 'routedNow'
@@ -98130,9 +98369,22 @@ export type Parser
 	// E3057 for a plain `await` of a throwing promise nothing catches: asked by `emitRoutedAwait`, and
 	// by `closeClaim` for an await a claim held and never released. The clause is read through
 	// `tryTargetThrows`, the accessor the `try await` desugar binds its `otherwise (e)` at, so the
-	// refused form and the accepted one cannot disagree about whether a promise throws.
-	function rejectPlainAwaitOfThrowing(clause ThrowsClause, awaitTok Token) throws SourceParseError
+	// refused form and the accepted one cannot disagree about whether a promise throws. The await of a
+	// `spawn`'s start is reported as the factory call it is written as, which is why a held await
+	// keeps its target (`HeldAwait.target`).
+	function rejectPlainAwaitOfThrowing(target TryTarget, clause ThrowsClause, awaitTok Token) throws SourceParseError
 		if throwsClauseIsThrowing(clause) 'throwing'
+			match target 'kind'
+				serviceStart(factory, _) then throw SourceParseError.spawnStartRequiresTry(throwingCallRequiresTryMessage(self.signatures.diagnosticCalleeSpelling(factory)), factory: factory, line: awaitTok.line, column: awaitTok.column)
+				named or
+				witness or
+				promise or
+				send or
+				serviceReply or
+				sentReply or
+				deferred then break
+			end 'kind'
+
 			// `otherwise panic` and not a `match`: `throwsClauseIsThrowing` has just answered that this clause
 			// carries a name, so the `none` arm is unreachable by the line above it.
 			let errorType = try throwsClauseName(clause) otherwise panic("rejectPlainAwaitOfThrowing: a clause throwsClauseIsThrowing accepted has a name")
@@ -98213,6 +98465,7 @@ export type Parser
 			send or
 			deferred then return
 			serviceReply(_, awaitedService) then self.fileServiceAwaitSite(awaitedService, awaitTok: awaitTok)
+			serviceStart(_, awaitedService) then self.fileServiceAwaitSite(awaitedService, awaitTok: awaitTok)
 			sentReply(_, awaitedService, _) then self.fileServiceAwaitSite(awaitedService, awaitTok: awaitTok)
 		end 'target'
 	end 'recordServiceReplyAwait'
@@ -98227,11 +98480,11 @@ export type Parser
 	// (poisoned if it is a live binding, drained if a temporary), a borrowed struct/union is refused
 	// (E2015) and a scalar is inert, and a promise moves at every position the callee takes. The
 	// common callee `borrowsAll`, so this is one `match`.
-	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId, site ServiceSpawnSite, pick CallPick) returns PendingArgumentBindingArray throws SourceParseError
+	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId) returns PendingArgumentBindingArray throws SourceParseError
 		if declarations.count() < 2 'oneDeclarationDecides'
 			match self.consumeOfTheOneDeclaration(callee, declarations: declarations) 'c'
 				borrowsAll then break
-				consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, site: site, callee: callee)
+				consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
 			end 'c'
 
 			return noPendingArgumentBindings
@@ -98259,18 +98512,9 @@ export type Parser
 			let asPromise = self.takesAsAPromise(first, column: column, label: label, argValue: argValue)
 
 			if taking.everyDeclarationTakes() and self.everyTakerTakesAlike(takers, asPromise: asPromise, column: column, label: label, argValue: argValue) 'everyDeclarationTakesItAlike'
-				try self.transferConsumedColumn(first, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, site: site, callee: callee)
+				try self.transferConsumedColumn(first, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned)
 				continue
 			end 'everyDeclarationTakesItAlike'
-
-			if let spawnTok = try site.token() 'aSpawnCannotMoveConditionally'
-				match pick 'pick'
-					unasked then throw SourceParseError.unsupported("`spawn {String.from(callee)}(…)` — `{String.from(callee)}` is declared {declarations.count()} times, they do not all keep argument {column + 1} alike, and the arguments pick no single one of them. A `spawn` MOVES every argument its factory keeps into the service, so with no one declaration bound there is no one move to make. Give the arguments types that fit exactly one `{String.from(callee)}`", line: spawnTok.line, column: spawnTok.column)
-					bound or
-					tied or
-					noMember then break
-				end 'pick'
-			end 'aSpawnCannotMoveConditionally'
 
 			try self.transferTakenColumn(self.anyTakerTakesAsAPromise(takers, column: column, label: label, argValue: argValue), column: column, label: label, takingSites: taking.sites, args: args, argRanges: argRanges, anchor: anchor, consumedOwned: consumedOwned, transfers: transfers, callResult: callResult)
 		end 'eachArg'
@@ -98407,15 +98651,15 @@ export type Parser
 		return noTakingDeclaration
 	end 'consumeFactsTakeArgument'
 
-	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, site ServiceSpawnSite, callee ByteArray) throws SourceParseError
+	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws SourceParseError
 		var consumedOwned = ValueIdArray.create()
 
 		for column in 0 upto args.count() as ParamCount 'eachArg'
-			try self.transferConsumedColumn(info, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, site: site, callee: callee)
+			try self.transferConsumedColumn(info, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned)
 		end 'eachArg'
 	end 'transferConsumedArgs'
 
-	function transferConsumedColumn(info ParamConsumeInfo, column ParamCount, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, consumedOwned ValueIdArray, site ServiceSpawnSite, callee ByteArray) throws SourceParseError
+	function transferConsumedColumn(info ParamConsumeInfo, column ParamCount, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, consumedOwned ValueIdArray) throws SourceParseError
 		let label = try argLabels.get(column) otherwise panic("transferConsumedColumn: argLabels.get OOB at {column} — args and argLabels are pushed in lockstep")
 		let position = try argSlotPosition(info.paramNames, argIndex: column, label: label) otherwise return
 		let argValue = try args.get(column) otherwise panic("transferConsumedColumn: args.get OOB at {column}")
@@ -98434,21 +98678,13 @@ export type Parser
 
 		let range = try argRanges.get(column) otherwise panic("transferConsumedColumn: argRanges.get OOB at {column} — args and argRanges are pushed in lockstep")
 		let consumed = self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) or self.isOpaqueOwnedFeedArg(info, position: position, argValue: argValue)
-		let spawnedStateKeepsIt = site.isASpawn() and self.valueIsManagedHeap(argValue) and (consumed or info.typeParamFeedOf(position).isFeed())
 
-		if not consumed and not spawnedStateKeepsIt 'borrowed'
+		if not consumed 'borrowed'
 			try args.set(column, value: self.handleEscapingBorrowFeed(info, position: position, argValue: argValue, anchor: anchor)) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
 			return
 		end 'borrowed'
 
 		try self.requireConsumedArgumentStillOwned(argValue, consumedOwned: consumedOwned, range: range)
-
-		if spawnedStateKeepsIt 'aStateTheServiceKeeps'
-			let blame = serviceFactoryArgumentBlame(callee, paramName: try info.paramNames.get(position) otherwise panic("transferConsumedColumn: paramNames.get OOB at {position}"))
-			let handed = try self.handOff(SoleHandedOffPosition, value: argValue, door: ThreadHandOffDoor.spawnFactory(blame), anchor: self.tokenAt(self.argumentFirstTokenIndex(range)))
-			try args.set(column, value: handed) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
-			return
-		end 'aStateTheServiceKeeps'
 
 		let transferred = self.transferConsumedArg(argValue, anchor: anchor)
 		try args.set(column, value: transferred) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
@@ -98776,6 +99012,33 @@ export type Parser
 		return plans
 	end 'handOffArguments'
 
+	function requireSpawnArgumentsHoldNoPromise(callee ByteArray, args ValueIdArray, argRanges SourceRangeArray) throws SourceParseError
+		for column in 0 upto args.count() as ParamCount 'eachArg'
+			let value = try args.get(column) otherwise panic("requireSpawnArgumentsHoldNoPromise: args.get OOB at {column}")
+			let range = try argRanges.get(column) otherwise panic("requireSpawnArgumentsHoldNoPromise: argRanges.get OOB at {column} — args and argRanges are pushed in lockstep")
+
+			let door = ThreadHandOffDoor.spawnFactory(serviceFactoryArgumentOrdinalBlame(callee, column: column), argumentOf: serviceFactoryArgumentOf(callee))
+			let anchor = self.tokenAt(self.argumentFirstTokenIndex(range))
+
+			try self.requireNoPromiseLeaves(value, door: door, anchor: anchor)
+			try self.requireNoPromiseHolderLeaves(value, door: door, anchor: anchor)
+		end 'eachArg'
+	end 'requireSpawnArgumentsHoldNoPromise'
+
+	function requireNoPromiseLeaves(value ValueId, door ThreadHandOffDoor, anchor Token) throws SourceParseError
+		if handOffLeavesThisGreenThread(door) and self.valueIsPromise(value) 'aWaitToken'
+			throw SourceParseError.serviceValueNotTransferable(serviceUntransferableValueMessage(handOffDoorBlame(door), noun: PromiseParameterNoun), line: anchor.line, column: anchor.column)
+		end 'aWaitToken'
+	end 'requireNoPromiseLeaves'
+
+	function requireNoPromiseHolderLeaves(value ValueId, door ThreadHandOffDoor, anchor Token) throws SourceParseError
+		let held = self.spawnTypeArgumentOfValue(value)
+
+		if self.signatures.typeHoldsAPromise(held) 'aHolderOfAWaitToken'
+			throw SourceParseError.serviceValueNotTransferable(serviceUntransferableValueMessage(handOffDoorBlame(door), noun: promiseHolderNoun(self.signatures, held: held)), line: anchor.line, column: anchor.column)
+		end 'aHolderOfAWaitToken'
+	end 'requireNoPromiseHolderLeaves'
+
 	function handOffTakeOf(argument HandedOffArgument) returns HandOffTake throws SourceParseError
 		let value = argument.value
 		let door = argument.door
@@ -98783,9 +99046,7 @@ export type Parser
 
 		let filed = self.fileHandedOffSite(argument)
 
-		if handOffLeavesThisGreenThread(door) and self.valueIsPromise(value) 'aWaitToken'
-			throw SourceParseError.serviceValueNotTransferable(serviceUntransferableValueMessage(handOffDoorBlame(door), noun: PromiseParameterNoun), line: anchor.line, column: anchor.column)
-		end 'aWaitToken'
+		try self.requireNoPromiseLeaves(value, door: door, anchor: anchor)
 
 		try self.requireCellOccupantMayBeTaken(value, anchor: anchor)
 
@@ -98896,9 +99157,9 @@ export type Parser
 		return HandOffTake.movedOut(true)
 	end 'greenThreadTakeOf'
 
-	// A `spawn`'s factory argument with a possible second owner is not refused: the state that
-	// holds it is handed off in `emitServiceSpawn`, whose run-time soleness walk aborts on that
-	// owner (exit 96).
+	// A `spawn`'s factory argument with a possible second owner is not refused: its graph is proved
+	// before it crosses (`handOffProvesItsGraph`), and the run-time soleness walk aborts on that owner
+	// (exit 96).
 	function unprovenOwnerTakeOf(argument HandedOffArgument, filed FiledSite) returns HandOffTake throws SourceParseError
 		match argument.door 'door'
 			spawnFactory then break

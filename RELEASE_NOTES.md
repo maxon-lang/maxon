@@ -251,6 +251,26 @@ release's version as its heading when the release is cut.
   Fix: rename `deadlineMs:` to `dialDeadlineMs:` at each `TlsClient.connect` call, and call
   `options.setHandshakeDeadline(...)` where the old `deadlineMs` also had to bound the handshake (`0` waits
   without a limit).
+- A message parameter, a message reply or a `spawn` factory argument whose type can hold a promise is
+  E3135: a record with a promise in a field, a union with a case carrying one, or an array or list of
+  promises, empty or not; so is a bare promise handed to a factory. A coroutine belongs to the strand that
+  started it, so a promise that crossed was dropped, awaited or cancelled by a strand that does not own it,
+  and these programs compiled and aborted with `fatal error: promise dropped by a machine that does not
+  hold its strand`. A service's own state may still hold the promises its handlers start.
+  Fix: `await` the promise and send, return or pass the result it yields.
+- `spawn Type.factory(args)` runs the factory on the new service's own green thread instead of on the
+  spawner's, and its arguments move there the way a message's do. A coroutine the factory starts therefore
+  belongs to the service's strand, so a factory may keep promises in the state it builds. Programs that
+  compiled before are refused. A binding passed to a factory is moved whether or not the factory keeps it, so
+  reading it after the `spawn` is E3102, and a borrowed argument crosses on a message argument's terms, so
+  one read out of a `var` field or a container is E3138 even where the factory does not keep it. A factory,
+  or a function it calls, is held to the rules a message handler is: reading or writing a module-level or
+  `static` `var` is E3143, reading a module-level `let` no share walk can mark is E3163, and awaiting a
+  reply in a cycle of services is E3139. A factory argument held at an opaque type parameter (a `T` value
+  inside a generic function) is E2015.
+  Fix: pass `binding.clone()` to keep reading the binding, and `.clone()` a borrowed argument; keep the
+  value in a field of the service and reach it through a message; break the await cycle as E3139's entry
+  describes; spawn from a function of a concrete type.
 
 ## 0.5.0 — 2026-10-08
 

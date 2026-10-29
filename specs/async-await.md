@@ -4169,9 +4169,8 @@ end 'main'
 
 <!-- test: async-await.error.qualified-spawn-instance-receiver -->
 A base bound to a VALUE claims the whole expression before any type reading, and an instance spawn has
-nowhere to put the receiver: the arguments ride the green thread's inline argument region, which the
-trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its
-ownership.
+nowhere to put the receiver: a spawn starts a linked function by address on the argument words it is
+handed, and nothing carries a receiver or its ownership across the green-thread boundary.
 ```maxon
 typealias Tally = int(0 to 1000)
 
@@ -4195,7 +4194,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/async-await/async-await.error.qualified-spawn-instance-receiver.maxon:19:16: Unsupported: `async c.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument
+error E2015: specs/async-await/async-await.error.qualified-spawn-instance-receiver.maxon:19:16: Unsupported: `async c.…` spawns a method on a VALUE, and a spawn has no receiver: it starts a linked function by address on the argument words it is handed, and nothing carries a receiver or its ownership across the green-thread boundary. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument
 ```
 
 <!-- test: async-await.error.qualified-spawn-union-case -->

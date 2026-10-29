@@ -8795,7 +8795,7 @@ let ServiceLoopMemberName = b"__loop"
 
 // ⭐⭐ **`<T>.__loop` — THE SYNTHESIZED DISPATCH LOOP'S SYMBOL, SPELLED ONCE FOR ITS THREE READERS.**
 // `ServiceLoop.installServiceLoops` BUILDS the function under this name,
-// `LowerMaxonToStd.lowerServiceSpawn` emits the `funcAddr` that hands its address to `__svc_spawn`, and
+// the start thunk `LowerMaxonToStd.emitServiceStart` builds calls it, and
 // `DeadFunctionElimination` keeps it alive through exactly that edge. Three spellings would be three chances
 // to build one symbol and root another — a link failure at best, and at worst a service whose loop is pruned.
 //
@@ -8803,6 +8803,15 @@ let ServiceLoopMemberName = b"__loop"
 module function serviceLoopSymbol(typeName ByteArray) returns ByteArray
 	return qualifiedMethodName(typeName, methodName: ServiceLoopMemberName)
 end 'serviceLoopSymbol'
+
+let ServiceStartMemberPrefix = "__start_"
+
+module function serviceStartSymbol(loopSymbol ByteArray, factory ByteArray) returns ByteArray
+	return match splitQualifiedName(loopSymbol) 'split'
+		notQualified panic("serviceStartSymbol: '{String.from(loopSymbol)}' is not a loop symbol — `serviceLoopSymbolFor` answers `<owner>.__loop`")
+		parts(owner, _) gives qualifiedMethodName(owner, methodName: "{ServiceStartMemberPrefix}{String.from(factory)}".toByteArray())
+	end 'split'
+end 'serviceStartSymbol'
 
 module function isServiceLoopSymbol(name ByteArray) returns bool
 	return match splitQualifiedName(name) 'split'

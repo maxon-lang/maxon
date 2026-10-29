@@ -686,13 +686,52 @@ typealias Integer = int(i64.min to i64.max)
 0
 ```
 ```mm-trace
-mm_alloc Counter #1 size=8
+mm_alloc ServiceStartRecord #1 size=8
 mm_alloc Counter.handle #2 size=8
 mm_alloc tag=0 #3 size=8
 mm_decref tag=0 #3 rc=0
 mm_free tag=0 #3
 mm_decref Counter.handle #2 rc=0
 mm_free Counter.handle #2
-mm_decref Counter #1 rc=0
-mm_free Counter #1
+mm_alloc Counter #4 size=8
+mm_decref ServiceStartRecord #1 rc=0
+mm_free ServiceStartRecord #1
+mm_decref Counter #4 rc=0
+mm_free Counter #4
+```
+
+<!-- test: an-async-spawn-with-a-float-argument-names-its-argument-image -->
+<!-- procs: 1 -->
+An `async` call with a `float` argument cannot use the green thread's inline region, which holds integer words
+only, so its arguments go in a separate argument image, and a leak trace names that block `AsyncArgumentImage`
+instead of leaving it as `tag=0`. No argument spills past the registers on any target, so the image is its two
+register files and nothing more.
+<!-- MmTrace -->
+```maxon
+function scaled(count Integer, factor Factor) returns Integer
+	Scheduler.yield()
+
+	if factor > 2.5 'large'
+		return count * 3
+	end 'large'
+
+	return count
+end 'scaled'
+
+function main() returns ExitCode
+	let p = async scaled(12, factor: 3.0)
+	let total = await p
+	return total as ExitCode
+end 'main'
+
+typealias Factor = float(0.0 to 10.0)
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+36
+```
+```mm-trace
+mm_alloc AsyncArgumentImage #1 size=128
+mm_decref AsyncArgumentImage #1 rc=0
+mm_free AsyncArgumentImage #1
 ```

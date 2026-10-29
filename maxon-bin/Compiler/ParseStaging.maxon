@@ -293,6 +293,7 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		enumMatchNotExhaustive(_, typeName, _, _, _) gives namedConsequence(typeName.toByteArray())
 		serviceTypeNotASpawnTarget(_, typeName, _, _) gives namedConsequence(typeName.toByteArray())
 		serviceReplyGraphNotWalkable(_, message, _, _) gives ConsequenceOf.handlerBody(message.toByteArray())
+		spawnStartRequiresTry(_, factory, _, _) gives namedConsequence(overloadRegistrationBaseName(factory))
 		memberAccessOnNonStruct(_, _, _, origin) gives consequenceOfReceiverOrigin(origin)
 		returnTypeMismatch(_, _, _, _, _, _, origin) gives consequenceOfReceiverOrigin(origin)
 		unexpectedToken or
@@ -1654,7 +1655,8 @@ function artifactOwnedOp(op MaxonOp) returns MaxonOp
 	match op 'op'
 		call or
 		tryCall or
-		asyncCall then return artifactOwnedCall(op)
+		asyncCall or
+		serviceSpawn then return artifactOwnedCall(op)
 		literal or
 		globalAddr or
 		loadIndirect or
@@ -1664,7 +1666,6 @@ function artifactOwnedOp(op MaxonOp) returns MaxonOp
 		functionRef or
 		sizeofType or
 		constArrayLiteral or
-		serviceSpawn or
 		serviceSend or
 		serviceReplyCell or
 		immortalStructRecord or
@@ -1712,7 +1713,8 @@ function artifactOwnedCall(op MaxonOp) returns MaxonOp
 		call(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.call(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
 		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
 		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.asyncCall(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
-		default panic("artifactOwnedCall: reached with an op that is not a named call — `artifactOwnedOp` routes only `call`, `tryCall` and `asyncCall` here")
+		serviceSpawn(result, typeName, state, capacity, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint, startReplies) then return MaxonOp.serviceSpawn(result, typeName: typeName.clone(), state: state, capacity: capacity, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies)
+		default panic("artifactOwnedCall: reached with an op that is not a named call — `artifactOwnedOp` routes only `call`, `tryCall`, `asyncCall` and `serviceSpawn` here")
 	end 'call'
 end 'artifactOwnedCall'
 

@@ -1,0 +1,127 @@
+module function asyncRegisterCapacityOf(target Target) returns RegisterArgCapacity
+	return match target.cpu 'cpu'
+		x64 gives x64RegisterArgCapacity()
+		arm64 gives arm64RegisterArgCapacity()
+		wasm32 panic("asyncRegisterCapacityOf: wasm32 has no green-thread substrate to spawn onto — `targetProvidesFacility` denies `greenThreads` there, and reaching here means an `async` spawn got past that gate")
+	end 'cpu'
+end 'asyncRegisterCapacityOf'
+
+// Where each word of a spawn's arguments sits: the declared parameters, then one existential
+// witness per interface parameter. The spawn stores at these offsets and its releaser reads them
+// back, so the two cannot place a word differently.
+module type AsyncArgumentSlots
+	let floatMask as ArgFloatMask
+	let userCount as ParamCount
+	let offsets as ByteOffsetArray
+	let witnessParams as ParamCountArray
+	module let stackPositions as ParamCountArray
+	module let usesImage as bool
+
+	// An `async` spawn's placement. Without `usesImage` every word is an integer register word of the
+	// GT's inline region. With it the words live in a separate image `GtOffArgBuf` points at: the
+	// integer words, then the float words at `AsyncImageFpOffset`, then the stack words. A stack word
+	// is written twice, into the image and below `gt.sp`: the callee reads the second, and the
+	// releaser reads the first at the await or the drop.
+	module static function of(paramTypes MaxonTypeArray, byReference ParamPositionMask, capacity RegisterArgCapacity) returns Self
+		if capacity > AsyncImageRegisterSlots 'imageTooShallow'
+			panic("AsyncArgumentSlots.of: the target passes {capacity} arguments per register file but a spawn's argument image holds only {AsyncImageRegisterSlots} of each")
+		end 'imageTooShallow'
+
+		let mask = Self.floatMaskOf(paramTypes, byReference: byReference)
+		let userCount = paramTypes.count() as ParamCount
+		let witnessParams = Self.witnessParamsOf(paramTypes, byReference: byReference)
+		var offsets = ByteOffsetArray.create()
+		var stackPositions = ParamCountArray.create()
+		var usesImage = false
+
+		for position in 0 upto userCount + (witnessParams.count() as ParamCount) 'eachSlot'
+			let slot = abiFileSlotIndex(mask, index: position)
+
+			if abiArgIsOnStack(mask, index: position, capacity: capacity) 'onTheStack'
+				offsets.push(AsyncImageStackOffset + (stackPositions.count() as ByteOffset) * GtArgSlotBytes)
+				stackPositions.push(position)
+				usesImage = true
+				continue
+			end 'onTheStack'
+
+			if argMaskBit(mask, argIndex: position) 'inAFloatRegister'
+				offsets.push(AsyncImageFpOffset + (slot as ByteOffset) * GtArgSlotBytes)
+				usesImage = true
+				continue
+			end 'inAFloatRegister'
+
+			if slot >= GtInlineArgSlots 'pastTheInlineRegion'
+				usesImage = true
+			end 'pastTheInlineRegion'
+
+			offsets.push((slot as ByteOffset) * GtArgSlotBytes)
+		end 'eachSlot'
+
+		return Self{floatMask: mask, userCount: userCount, offsets: offsets, witnessParams: witnessParams, stackPositions: stackPositions, usesImage: usesImage}
+	end 'of'
+
+	// A service's start record: every word in order, floats included. The start thunk loads each word
+	// itself and calls the factory as an ordinary call, so no trampoline reads the record, and the
+	// thunk releases it.
+	module static function recorded(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns Self
+		let userCount = paramTypes.count() as ParamCount
+		let witnessParams = Self.witnessParamsOf(paramTypes, byReference: byReference)
+		var offsets = ByteOffsetArray.create()
+
+		for position in 0 upto userCount + (witnessParams.count() as ParamCount) 'eachSlot'
+			offsets.push((position as ByteOffset) * GtArgSlotBytes)
+		end 'eachSlot'
+
+		return Self{floatMask: Self.floatMaskOf(paramTypes, byReference: byReference), userCount: userCount, offsets: offsets, witnessParams: witnessParams, stackPositions: ParamCountArray.create(), usesImage: false}
+	end 'recorded'
+
+	static function floatMaskOf(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns ArgFloatMask
+		var stdTypes = StdTypeArray.create()
+
+		for word in cellPositionsAsWords(paramTypes, byReference: byReference) 'eachWord'
+			stdTypes.push(maxonTypeToStdType(word))
+		end 'eachWord'
+
+		return floatParamMaskOf(stdTypes)
+	end 'floatMaskOf'
+
+	static function witnessParamsOf(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns ParamCountArray
+		var witnessParams = ParamCountArray.create()
+
+		for position in 0 upto paramTypes.count() as ParamCount 'eachParam'
+			let paramType = try paramTypes.get(position) otherwise panic("AsyncArgumentSlots.witnessParamsOf: paramTypes.get OOB at {position} below its own count")
+
+			if paramCarriesAnExistentialWitness(paramType, param: position, byReference: byReference) 'carriesAWitness'
+				witnessParams.push(position)
+			end 'carriesAWitness'
+		end 'eachParam'
+
+		return witnessParams
+	end 'witnessParamsOf'
+
+	module function valueIsFloat(position ParamCount) returns bool
+		return argMaskBit(self.floatMask, argIndex: position)
+	end 'valueIsFloat'
+
+	module function offsetAt(position ParamCount) returns ByteOffset
+		return try self.offsets.get(position) otherwise panic("AsyncArgumentSlots.offsetAt: no slot for position {position} — a placement holds one per declared parameter and one per witness after them")
+	end 'offsetAt'
+
+	module function witnessOffsetOf(param ParamCount) returns ByteOffset throws AbsentError
+		for (iter, witnessParam) in self.witnessParams.withIterator() 'eachWitness'
+			if witnessParam == param 'found'
+				return self.offsetAt(self.userCount + (iter.index() as ParamCount))
+			end 'found'
+		end 'eachWitness'
+
+		throw AbsentError.absent
+	end 'witnessOffsetOf'
+
+	module function imageBytes() returns ByteOffset
+		return AsyncImageStackOffset + (self.stackPositions.count() as ByteOffset) * GtArgSlotBytes
+	end 'imageBytes'
+
+	module function stackBytes() returns StackSize
+		return alignUpStack((self.stackPositions.count() as StackSize) * GtArgSlotBytes, alignment: StackFrameAlignment)
+	end 'stackBytes'
+end 'AsyncArgumentSlots'

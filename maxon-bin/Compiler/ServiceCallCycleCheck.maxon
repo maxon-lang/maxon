@@ -196,6 +196,18 @@ module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArra
 	throw AbsentError.absent
 end 'messageOwnerNameOf'
 
+module function serviceFactoryOwnerOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray throws AbsentError
+	let base = overloadRegistrationBaseName(callee)
+
+	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
+		if qualifiedMethodName(candidate.typeName, methodName: candidate.member).equals(base) 'theFactory'
+			return candidate.typeName
+		end 'theFactory'
+	end 'eachCandidate'
+
+	throw AbsentError.absent
+end 'serviceFactoryOwnerOf'
+
 // One awaited service's closure and the edges it produces. Split from the walk above so each half is one
 // statement of one idea, and because the seed column has to be rebuilt per service anyway.
 function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, funcNames FunctionNameIndex, survey ServiceProgramSurvey)

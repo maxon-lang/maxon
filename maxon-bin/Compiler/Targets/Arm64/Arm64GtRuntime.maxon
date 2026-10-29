@@ -273,16 +273,18 @@ end 'arm64GtAppendPairs'
 // scheduler context that switched it in.
 //
 // It reads its own GT out of x1 (the switch left `to` there), loads the async function and its argument
-// buffer from the struct, fills every `MaxAsyncArgs` argument register, calls, captures x0 into
-// `gt.result` and x9 into `gt.threw`, marks the GT completed, and switches to its waiter. It never
-// returns; the `brk #0` is the trap for the impossible fall-through.
+// buffer from the struct, fills both argument register files from the buffer, calls, captures x0
+// into `gt.result` and x9 into `gt.threw`, marks the GT completed, and switches to its waiter. It
+// never returns; the `brk #0` is the trap for the impossible fall-through.
 //
 // ⚠ **x9 IS THE ERROR FLAG, NOT x1.** `Arm64FlagReturnReg` is x9 (`StdToArm64Conversion.lowerTryCall`
 // reads it), and a trampoline that captured x1 would store the callee's SECOND ARGUMENT REGISTER as
 // "did it throw" — a wrong answer on every `try await`, with nothing to crash on.
 //
 // ⚠ **NO SHADOW SPACE AND NO SP RESERVATION.** AAPCS64 obliges a caller to reserve nothing at all; SP is
-// `stackTop` here (page-aligned, so 16-aligned) and the callee opens its own frame.
+// `gt.sp` here — `stackTop` (page-aligned, so 16-aligned), lowered by a multiple of 16 when the
+// spawn wrote stack arguments, which the callee therefore finds at SP as it finds an ordinary
+// call's — and the callee opens its own frame.
 function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 
@@ -291,11 +293,16 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	arm64EmitLoadWord64At(asm, dest: Arm64GtTrampFuncPtrReg, base: Arm64GtTrampGtReg, byteOffset: GtOffFuncPtr as MachineWord)
 
 	// Every argument slot into its ABI argument register. The callee reads only the slots it declared; the
-	// rest are the argument buffer's slab zeros in unread registers, which is why there is no arity to
-	// carry. `arm64ArgRegisterAt` is the ABI's own oracle, so this order cannot drift from a call site's.
-	for k in 0 upto MaxAsyncArgs 'args'
-		arm64EmitLoadWord64At(asm, dest: arm64ArgRegisterAt(k as ParamCount), base: Arm64GtTrampArgBufReg, byteOffset: k * GtArgSlotBytes)
+	// rest load whatever the buffer holds there (past the inline region, the GT fields after it) into
+	// registers nothing reads, which is why there is no arity to carry. `arm64ArgRegisterAt` is the
+	// ABI's own oracle, so this order cannot drift from a call site's.
+	for k in 0 upto arm64ArgRegisters.count() 'args'
+		arm64EmitLoadWord64At(asm, dest: arm64ArgRegisterAt(k as ParamCount), base: Arm64GtTrampArgBufReg, byteOffset: (k * GtArgSlotBytes) as MachineWord)
 	end 'args'
+
+	for k in 0 upto arm64FpArgRegisters.count() 'floatArgs'
+		arm64EmitLoadFpAt(asm.code, dest: arm64RuntimeFpReg(arm64FpArgRegisterAt(k as ParamCount)), base: arm64RuntimeReg(Arm64GtTrampArgBufReg), byteOffset: (AsyncImageFpOffset + k * GtArgSlotBytes) as MachineWord)
+	end 'floatArgs'
 
 	arm64EmitBranchLinkReg(asm.code, reg: arm64RuntimeReg(Arm64GtTrampFuncPtrReg))
 	arm64EmitStoreWord64At(asm, src: Arm64IntReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffResult as MachineWord)

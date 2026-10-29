@@ -17,7 +17,7 @@ closure value or a witness dispatch included — neither reads nor writes a modu
 escape hatch: a word written once before any green thread exists has no second writer to race.
 
 ```text
-error E3143: <fragment>:12:3: the message `Counter.add` uses the module-level `var total` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
+error E3143: <fragment>:12:3: the message `Counter.add` uses the module-level `var total` — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
 note: <fragment>:17:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -115,7 +115,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:12:11: the message `Counter.add` uses the module-level `var total` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
+error E3143: <fragment>:12:11: the message `Counter.add` uses the module-level `var total` — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
 note: <fragment>:17:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -149,7 +149,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:5:10: `record` uses the module-level `var total`, and the message `Counter.add` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
+error E3143: <fragment>:5:10: `record` uses the module-level `var total`, and the message `Counter.add` reaches it — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
 note: <fragment>:21:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -194,7 +194,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:7:11: `bookKeeping` uses the module-level `var ledger`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
+error E3143: <fragment>:7:11: `bookKeeping` uses the module-level `var ledger`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
 note: <fragment>:28:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -270,7 +270,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:19:12: the message `Reader.size` uses the module-level `var label` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `label` a `let`
+error E3143: <fragment>:19:12: the message `Reader.size` uses the module-level `var label` — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `label` a `let`
 note: <fragment>:33:11: the `spawn` that makes `Reader` a service
 ```
 
@@ -317,7 +317,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 ```
 ```maxoncstderr
-error E3143: <fragment>:5:19: `holdsNothing` uses the module-level `var noEntries`, and the message `Counter.count` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `noEntries` a `let`
+error E3143: <fragment>:5:19: `holdsNothing` uses the module-level `var noEntries`, and the message `Counter.count` reaches it — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `noEntries` a `let`
 note: <fragment>:31:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -823,7 +823,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:20:23: the message `Counter.total` uses the module-level `var ledger` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
+error E3143: <fragment>:20:23: the message `Counter.total` uses the module-level `var ledger` — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
 note: <fragment>:25:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -1003,7 +1003,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:16:15: `Loud.greet` uses the module-level `var greetings`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `greetings` a `let`
+error E3143: <fragment>:16:15: `Loud.greet` uses the module-level `var greetings`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `greetings` a `let`
 note: <fragment>:40:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -1190,8 +1190,38 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-static-var-only-main-touches-in-a-program-that-spawns-a-service -->
-**A `static var` IS A MODULE `var` WITH A TYPE'S NAME ON IT.** `spawn` calls the factory on the spawner's own
-strand, so `Counter.created` is `main`'s and the program is legal.
+**A `static var` IS A MODULE `var` WITH A TYPE'S NAME ON IT.** `spawn` runs the factory on the new service's own
+thread, so only `main` may touch `Counter.created` and the program is legal.
+```maxon
+type Counter
+	static var created = 0 as Integer
+
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function add(by Integer)
+		self.n = self.n + by
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	Counter.created = Counter.created + 1
+	try h.add(5) otherwise panic("add")
+	return Counter.created as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+1
+```
+
+<!-- test: error.a-static-var-a-factory-writes -->
+The refused twin: the factory runs on the service's own thread, so a `static var` it writes is one word another OS
+thread uses, and it is named with its type.
 ```maxon
 type Counter
 	static var created = 0 as Integer
@@ -1211,12 +1241,13 @@ end 'Counter'
 function main() returns ExitCode
 	let h = spawn Counter.create()
 	try h.add(5) otherwise panic("add")
-	return Counter.created as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-1
+```maxoncstderr
+error E3143: <fragment>:8:21: the factory `Counter.create` uses the static `var Counter.created` — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `Counter.created` a `let`
+note: <fragment>:18:10: the `spawn` that makes `Counter` a service
 ```
 
 <!-- test: error.a-static-var-a-handler-reads -->
@@ -1229,7 +1260,6 @@ type Counter
 	var n as Integer
 
 	static function create() returns Self
-		Counter.created = Counter.created + 1
 		return Self{n: 0}
 	end 'create'
 
@@ -1247,8 +1277,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:13:26: the message `Counter.add` uses the static `var Counter.created` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `Counter.created` a `let`
-note: <fragment>:19:10: the `spawn` that makes `Counter` a service
+error E3143: <fragment>:12:26: the message `Counter.add` uses the static `var Counter.created` — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `Counter.created` a `let`
+note: <fragment>:18:10: the `spawn` that makes `Counter` a service
 ```
 
 <!-- test: a-static-let-in-a-program-that-spawns-a-service -->
@@ -1314,7 +1344,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:16:13: the message `Polite.greet` uses the module-level `var lookups` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `lookups` a `let`
+error E3143: <fragment>:16:13: the message `Polite.greet` uses the module-level `var lookups` — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `lookups` a `let`
 note: <fragment>:22:19: the `spawn` that makes `Polite` a service
 ```
 
@@ -1347,7 +1377,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:12:11: the message `CountingHandler.handle` uses the module-level `var calls` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `calls` a `let`
+error E3143: <fragment>:12:11: the message `CountingHandler.handle` uses the module-level `var calls` — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `calls` a `let`
 note: <fragment>:18:34: the `spawn` that makes `CountingHandler` a service
 ```
 
@@ -1386,6 +1416,6 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:6:11: `book` uses the module-level `var ledger`, and the message `Counter.add` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
+error E3143: <fragment>:6:11: `book` uses the module-level `var ledger`, and the message `Counter.add` reaches it — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
 note: <fragment>:26:10: the `spawn` that makes `Counter` a service
 ```

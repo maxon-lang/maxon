@@ -488,8 +488,8 @@ end 'ServiceStateInstance'
 // parser reads its own columns, the lowering reads the function's, and `ServiceLoop` reads them off an
 // `IrFunction` it is walking. What they CAN share is the classification, and they must — the loop that is
 // BUILT (`ServiceLoop.spawnedInstancesByService`) and the loop that is CALLED
-// (`LowerMaxonToStd.emitServiceSpawn`) are named from this answer, and two readings that drifted would be a
-// link failure against a `__loop` symbol nobody built.
+// (`LowerMaxonToStd.emitServiceStart`) are named from this answer, and two readings that drifted
+// would be a link failure against a `__loop` symbol nobody built.
 //
 // ⚠ **IT HAS NO MISS BEHAVIOUR, DELIBERATELY.** Whether a `monomorphic` answer is legal is a fact about the
 // SERVICE, not about the value, so each caller asserts it where that fact is in hand
@@ -573,6 +573,8 @@ module union ServiceRosterVerdict
 	// A reply whose graph, at the type an instantiation substitutes, reaches a type no per-type walk can be
 	// built for. E3138, the refusal the handler's `return` raises for a type its body declares.
 	messageReplyGraphIsNotWalkable(let methodName ByteArray, noun String)
+
+	messageReplyHoldsAPromise(let methodName ByteArray, noun String)
 
 	// A reply declared at a bare `T` that hands back the service's own state, at an instantiation resolving
 	// `T` to a managed type. E3137, the refusal a handler's `return` raises for a type its body declares.
@@ -755,6 +757,11 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 			refused(replyNoun) then return ServiceRosterVerdict.messageReplyIsNotCarriable(methodName, noun: replyNoun)
 		end 'replyCannotBeCarried'
 
+		match replyPromiseRefusal(signatures, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyHoldsAPromise'
+			acceptable then break
+			refused(promiseNoun) then return ServiceRosterVerdict.messageReplyHoldsAPromise(methodName, noun: promiseNoun)
+		end 'replyHoldsAPromise'
+
 		match instantiatedReplyGraphRefusal(signatures, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyGraphCannotBeWalked'
 			acceptable then break
 			refused(graphNoun) then return ServiceRosterVerdict.messageReplyGraphIsNotWalkable(methodName, noun: graphNoun)
@@ -821,6 +828,33 @@ function uncarriableReplyResultNoun(signatures ProgramSignatures, returnType Max
 
 	return uncarriableReplyNounOfType(declared)
 end 'uncarriableReplyResultNoun'
+
+function replyPromiseRefusal(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
+	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
+		return ServiceCrossing.acceptable
+	end 'nothingComesBack'
+
+	let declared = declaredReplyType(signatures, returnType: returnType, declFilePath: declFilePath)
+
+	let resolved = match knowledge 'known'
+		declarationOnly gives declared
+		atInstance(instance) gives signatures.instanceResolvedSlotType(declared, declFilePath: declFilePath, instance: instance)
+	end 'known'
+
+	if maxonTypeTag(resolved) == ValueTypeTag.typeParameter 'deferredToTheInstantiation'
+		return ServiceCrossing.acceptable
+	end 'deferredToTheInstantiation'
+
+	return promiseHolderCrossing(signatures, held: resolved)
+end 'replyPromiseRefusal'
+
+function promiseHolderCrossing(signatures ProgramSignatures, held MaxonType) returns ServiceCrossing
+	if signatures.typeHoldsAPromise(held) 'aHolderOfOne'
+		return ServiceCrossing.refused(promiseHolderNoun(signatures, held: held))
+	end 'aHolderOfOne'
+
+	return ServiceCrossing.acceptable
+end 'promiseHolderCrossing'
 
 // A non-void reply's declared type, resolved through the swept slot door.
 function declaredReplyType(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath) returns MaxonType
@@ -960,7 +994,9 @@ end 'uncarriableReplyErrorNoun'
 // cascade — which needs a value with one meaning and a known layout on the far side. Each shape
 // below fails that for its own reason:
 //   • a **Promise** is a green-thread handle owned by the awaiting thread; sending one hands a second thread
-//     a wait token whose completer is scheduled on the first (`E3100` linear await keys on the binding);
+//     a wait token whose completer is scheduled on the first (`E3100` linear await keys on the
+//     binding). A type that can hold one is refused with it (`promiseHolderCrossing`): the TYPE
+//     decides, since the value's contents are unknown at the declaration;
 //   • a **function value** is a bare code pointer, and a CAPTURING one reaches its environment block —
 //     which is `shared`, i.e. a box with a second referent by construction;
 //   • an **opaque type parameter** has no layout at the send, so the sender cannot know whether it is even
@@ -980,6 +1016,12 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 	if typeIsPromiseStorage(signatures, t: resolved) 'aPromise'
 		return ServiceCrossing.refused(PromiseParameterNoun)
 	end 'aPromise'
+
+	let holder = promiseHolderCrossing(signatures, held: resolved)
+
+	if holder.isRefused() 'aHolderOfOne'
+		return holder
+	end 'aHolderOfOne'
 
 	match maxonTypeTag(resolved) 'tag'
 		function then return ServiceCrossing.refused(FunctionValueCrossingNoun)
@@ -1021,10 +1063,14 @@ end 'untransferableParameterNoun'
 // NEEDED TO BE SHARED.** Every other untransferable shape is refused at the message's DECLARATION and can
 // never be an argument to an accepted one, because its TYPE would not match. A Promise is the exception:
 // its value is a bare INTEGER handle, so `keep(n Integer)` accepts one without a word from the type checker.
-// `Parser.handOffTakeOf` therefore asks about the VALUE, and it says the same thing this does.
+// `Parser.requireNoPromiseLeaves` therefore asks about the VALUE, and says the same thing this does.
 module let PromiseParameterNoun = "a Promise, which is a green-thread handle its awaiter owns"
 module let PromiseSharedNoun = "a promise, which owns a green thread that exactly one owner may reclaim"
 module let FunctionValueCrossingNoun = "a function value, a closure record that owns what it captures and does not cross to another thread"
+
+module function promiseHolderNoun(signatures ProgramSignatures, held MaxonType) returns String
+	return "a `{maxonTypeDisplayName(held, typeNames: signatures.indexTypeNames(), signatures: signatures)}` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it"
+end 'promiseHolderNoun'
 
 // ⭐ **THE OPAQUE-LAYOUT NOUN, shared by the bare `T` and by any instance whose arguments still name one** —
 // one finding about one shape.
@@ -1235,6 +1281,7 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 		rosterIsDispatchable then panic("serviceRosterRefusalMessage: asked for the words of a DISPATCHABLE roster on `type {String.from(typeName)}` — the caller refuses only the other arms")
 		messageIsOverloaded(methodName, declarationCount) then return "`{String.from(typeName)}.{String.from(methodName)}` is a message of the service `{String.from(typeName)}` and is declared {declarationCount} times. A message becomes ONE variant of the synthesized `{String.from(serviceRequestCompanionName(typeName))}` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names"
 		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
+		messageReplyHoldsAPromise(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` returns {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply is handed to the green thread that awaits it. `await` the promise in the handler and return the result it yields, or drop the `returns` clause"
 		messageReplyGraphIsNotWalkable(methodName, noun) then return serviceUnclosedRecordTransferMessage(serviceReplyBlame(typeName, methodName: methodName), sourceClause: NoTransferSourceClause, noun: noun)
 		messageReplyAliasesServiceState(methodName, replyTypeName) then return serviceGenericReplyAliasesStateRefusal(typeName, methodName: methodName, replyTypeName: replyTypeName)
 		messageDeclaresTheSendTimeoutLabel(methodName) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares a parameter named `{String.from(ServiceSendTimeoutLabel)}`, and this `spawn` makes `{String.from(typeName)}` a service. `{String.from(ServiceSendTimeoutLabel)}:` is reserved on every message call: it is the milliseconds a send waits for room in a full mailbox, and it never enters the request, so a call could not tell the parameter from the timeout. Rename the parameter"
@@ -1300,17 +1347,6 @@ module let NoTransferSourceClause = ""
 module function serviceTransferSourceClause(source String) returns String
 	return " (`{source}`)"
 end 'serviceTransferSourceClause'
-
-// ⭐ **WHAT A `spawn`'s STATE IS, in the words its refusal needs.** A spawn transfers exactly one value and
-// the author never named it — it is the factory's result — so the blame names the SPAWN instead, which is the
-// line they wrote.
-module function serviceSpawnStateBlame(typeName ByteArray, member ByteArray) returns String
-	return "the state `{serviceSpawnText(typeName, member: member)}` would start the service with"
-end 'serviceSpawnStateBlame'
-
-function serviceSpawnText(typeName ByteArray, member ByteArray) returns String
-	return "spawn {String.from(typeName)}.{String.from(member)}(…)"
-end 'serviceSpawnText'
 
 module function interfaceMessageUnimplementedRefusal(interfaceName ByteArray, handleName ByteArray, member ByteArray) returns String
 	return "`interface {String.from(interfaceName)}` requires `{String.from(member)}`, but no service implementing it declares `{String.from(member)}` as an `export` instance method, so `{String.from(handleName)}` has no such message to send. Implement it on the service"
@@ -1397,9 +1433,13 @@ module function serviceSendArgumentOf(typeName ByteArray, methodName ByteArray) 
 	return "of the message `{String.from(typeName)}.{String.from(methodName)}`"
 end 'serviceSendArgumentOf'
 
-module function serviceSpawnStateOf(typeName ByteArray, member ByteArray) returns String
-	return "of `{serviceSpawnText(typeName, member: member)}`"
-end 'serviceSpawnStateOf'
+module function serviceFactoryArgumentOf(callee ByteArray) returns String
+	return "of `spawn {String.from(callee)}(…)`"
+end 'serviceFactoryArgumentOf'
+
+module function serviceFactoryArgumentOrdinalBlame(callee ByteArray, column ParamCount) returns String
+	return "argument {column + 1} of `spawn {String.from(callee)}(…)`"
+end 'serviceFactoryArgumentOrdinalBlame'
 
 module function serviceFactoryArgumentBlame(callee ByteArray, paramName ByteArray) returns String
 	return "argument `{String.from(paramName)}` of `spawn {String.from(callee)}(…)`"

@@ -134,7 +134,7 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 		errorFlagEncode(result, _, _) then return result
 
 		// A `spawn` DEFINES the mailbox pointer the parser stores into the handle box.
-		serviceSpawn(result, _, _, _) then return result
+		serviceSpawn(result, _, _, _, _, _, _, _, _, _, _, _) then return result
 
 		// A SEND defines a VOID result — a reply travels through its `serviceReplyCell`, so there is none
 		// for that slot to carry, and it exists for the reason a void `call`'s does: every op in this
@@ -195,7 +195,7 @@ export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 		switch(subject, _, _) then into.push(subject)
 		panicAbortValue(messagePtr) then into.push(messagePtr)
 		errorFlagEncode(_, errorValue, _) then into.push(errorValue)
-		serviceSpawn(_, _, state, capacity) then appendPair(into, first: state, second: capacity)
+		serviceSpawn(_, _, _, capacity, _, args, _, _, _, _, _, _) then appendValuesAndOne(into, values: args, one: capacity)
 		existentialWitness(_, _, conformer) then into.push(conformer)
 		holdValue(_, held, _, args, _) then appendValuesAndOne(into, values: args, one: held)
 		holdEnd(_, held, _, args, _) then appendValuesAndOne(into, values: args, one: held)

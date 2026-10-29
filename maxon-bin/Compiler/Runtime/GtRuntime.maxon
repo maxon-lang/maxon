@@ -42,11 +42,10 @@
 // The context switch passes the `to` GT through in rdx / x1, so `__gt_trampoline` reads its own GT from there,
 // and its completion switch targets `GtOffWaiter`, which `emitGtExecute` stores before every switch-in.
 //
-// ⚠ THE GPR CHANNEL. The trampoline moves an async call's arguments through the integer arg registers and
-// its result through R8, so what crosses is an integer, a bool, or a managed value as its one box pointer.
-// A `float` has no channel here and is refused at the call (E2015, `SemanticCheck.requireAsyncScalarParams`
-// for a parameter and `Parser.requireAsyncResult` for the result) rather than left to read the wrong
-// register file, which an argument check cannot catch because an int legally coerces to a float parameter.
+// ⚠ THE RESULT CHANNEL. The trampoline loads both argument register files, but stores only the integer
+// return register into `gt.result`, so a result is an integer, a bool, or a managed value as its one box
+// pointer. A `float` result is refused at the call (E2015, `Parser.requireAsyncResult`) rather than left to
+// read the wrong register file.
 //
 // ⭐ RELOCATING STACKS. Each GT starts on a seed stack of `__gt_seed_bytes` (its record's kept one,
 // or a fresh `__gt_stack_alloc`), a size that follows the stacks recent threads finished with
@@ -251,7 +250,7 @@ let GtSavedRegisterBytes = Arm64GtSavedRegisterBytes
 // first, which is what `emitGtIsDropped` reads it for.
 export let GtOffWaiter = GtOffSavedRegs + GtSavedRegisterBytes
 
-export let GtOffArgBuf = GtOffWaiter + PointerFieldBytes  // a self-pointer to this struct's inline argument region (`GtOffArgInline`)
+export let GtOffArgBuf = GtOffWaiter + PointerFieldBytes  // the inline region (`GtOffArgInline`) or a spawn's argument image
 
 // --- The overlapped-read fields ---
 // The 32-byte Win32 OVERLAPPED the yielding ReadFile is issued against, EMBEDDED in the GT struct (four
@@ -312,16 +311,15 @@ export let GtOffIoMode = GtOffIoHandle + PointerFieldBytes
 // moves the two bounds above, so the three always name one stack.
 export let GtOffTibDeallocation = GtOffIoMode + PointerFieldBytes
 
-// ⭐ **THE INLINE ARGUMENT REGION.** MaxAsyncArgs i64 slots inside the GT struct, so a spawn needs
-// NO separate argument buffer — `__gt_spawn` sets `GtOffArgBuf` to a SELF-POINTER
-// `gt + GtOffArgInline`, and the trampoline dereferences that self-pointer as it would a separate
-// buffer.
+// ⭐ **THE INLINE ARGUMENT REGION.** `GtInlineArgSlots` i64 slots inside the GT struct —
+// `__gt_spawn` sets `GtOffArgBuf` to a SELF-POINTER `gt + GtOffArgInline`, and the trampoline
+// dereferences that self-pointer as it would a separate buffer. A spawn whose arguments do not fit
+// here repoints `GtOffArgBuf` at an argument image of its own (`AsyncArgumentSlots`).
 //
-// ⚠⚠ **THE REGION IS INLINE RATHER THAN A SEPARATELY ALLOCATED BUFFER.** A separate buffer is a SECOND
-// allocation and a SECOND lifetime per spawn, and the second lifetime is the expensive half — the releaser
-// reads these slots at the AWAIT or the DROP, long after the thread has finished, so a separate buffer would
-// have to be freed by whichever of `__gt_await`, `__gt_try_await` and `__gt_promise_drop` got there, on
-// every arm of each. Inline, the region's lifetime IS the struct's, and `__gt_reclaim` ends both.
+// ⚠⚠ **THE REGION IS INLINE SO THE COMMON SPAWN HAS ONE ALLOCATION AND ONE LIFETIME.** The releaser
+// reads these slots at the AWAIT or the DROP, long after the thread has finished; inline, the
+// region's lifetime IS the struct's, and `__gt_reclaim` ends both. An image is a second lifetime,
+// which the releaser ends once it has read it (`AsyncReleaser.emitArgumentReleases`).
 //
 // ⚠ **THE ARGUMENT SLOTS ARE NOT DEAD BY COMPLETION.** The trampoline reads each slot once at run-start, and
 // `__gt_release_<callee>` reloads the managed ones to drop them at the await or the drop, after the GT has
@@ -948,16 +946,14 @@ end 'gtSavedRegisterBytes'
 let X64GtSavedRegisterBytes = 120
 let Arm64GtSavedRegisterBytes = 144
 
-// The argument buffer holds MaxAsyncArgs i64 slots. The trampoline loads ALL of them into the GPR
-// argument registers unconditionally (a callee reads only the slots it declares; the rest are the
-// slab's zeros in unread registers), so there is no arg COUNT to carry and the trampoline needs no
-// count-guarded loads. MaxAsyncArgs equals the parser's parameter cap.
-export let MaxAsyncArgs = 6
+export let GtInlineArgSlots = 6
 
-// One argument buffer slot per argument, i64-wide. The stride the lowering STORES at, the trampoline LOADS
-// at, and `ArgBufBytes` sizes by — one fact, so the three cannot drift.
 export let GtArgSlotBytes = 8
-let ArgBufBytes = MaxAsyncArgs * GtArgSlotBytes
+let ArgBufBytes = GtInlineArgSlots * GtArgSlotBytes
+
+export let AsyncImageRegisterSlots = 8
+export let AsyncImageFpOffset = (AsyncImageRegisterSlots * GtArgSlotBytes) as ByteOffset
+export let AsyncImageStackOffset = AsyncImageFpOffset + (AsyncImageRegisterSlots * GtArgSlotBytes) as ByteOffset
 
 // One machine word ON THE STACK: what a `push r64` moves rsp by, what a `call`'s pushed return
 // address occupies, and the stride of every saved general-register word `__gt_context_switch` and

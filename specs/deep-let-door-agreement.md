@@ -404,3 +404,334 @@ end 'main'
 ```exitcode
 9
 ```
+
+<!-- test: a-cell-resident-var-moved-into-a-let-field-at-its-last-use-is-accepted -->
+`stored` lives in a cell because `refill` reassigns its parameter. `refill` stores only a record it built, so when the
+call that keeps the record is the variable's last use nothing else can name it, exactly as for a variable that is not a
+cell.
+
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+function refill(dest Words, first String)
+	dest = Words.create()
+	dest.push(first)
+end 'refill'
+
+function main() returns ExitCode
+	var stored = Words.create()
+	refill(stored, first: "first padded out long enough to heap allocate")
+	let shelf = Shelf.create(stored)
+	print("{shelf.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: error.a-cell-resident-var-a-callee-filled-from-a-variable-still-named-is-refused -->
+`adopt` stores its second parameter into the first, so the cell of `stored` holds the record `other` still names, and a
+write through `other` would reach the `let` field.
+
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+function adopt(dest Words, src Words)
+	dest = src
+end 'adopt'
+
+function main() returns ExitCode
+	var other = Words.create()
+	other.push("first padded out long enough to heap allocate")
+	var stored = Words.create()
+	adopt(stored, src: other)
+	let shelf = Shelf.create(stored)
+	other.push("second padded out long enough to heap allocate")
+	print("{shelf.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:26:20: cannot pass a value other names may still write to parameter 'words' of 'Shelf.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: error.a-cell-resident-var-a-callee-also-registered-is-refused -->
+`refillAndRemember` pushes the record it stores into the cell onto `registry` as well, so the `let` field would hold a
+record the `var` `registry` still reaches.
+
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+typealias WordsList = Array with Words
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+function refillAndRemember(dest Words, registry WordsList)
+	dest = Words.create()
+	dest.push("padded out long enough to heap allocate")
+	registry.push(dest)
+end 'refillAndRemember'
+
+function main() returns ExitCode
+	var registry = WordsList.create()
+	var stored = Words.create()
+	refillAndRemember(stored, registry: registry)
+	let shelf = Shelf.create(stored)
+	print("{shelf.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:28:20: cannot pass a value other names may still write to parameter 'words' of 'Shelf.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: error.a-cell-resident-var-kept-by-a-let-field-and-also-returned-is-refused -->
+The function hands the record to the caller beside the `Shelf` that keeps it, so the `let` field would not be the only
+name the record is reachable through; `stored` being a cell changes nothing.
+
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+function refill(dest Words, first String)
+	dest = Words.create()
+	dest.push(first)
+end 'refill'
+
+function register() returns (Shelf, Words)
+	var stored = Words.create()
+	refill(stored, first: "first padded out long enough to heap allocate")
+	let shelf = Shelf.create(stored)
+	return (shelf, stored)
+end 'register'
+
+function main() returns ExitCode
+	let (shelf, stored) = register()
+	print("{shelf.count()} {stored.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:25:20: cannot pass the `var` 'stored', which is read again, to parameter 'words' of 'Shelf.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: a-cell-resident-var-read-and-iterated-before-the-let-field-keeps-it-is-accepted -->
+Reading the record a cell holds, pushing to it and walking it all leave the variable the record's only name, so the call
+that keeps it at the variable's last use is accepted.
+
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+function refill(dest Words, first String)
+	dest = Words.create()
+	dest.push(first)
+end 'refill'
+
+function main() returns ExitCode
+	var stored = Words.create()
+	refill(stored, first: "first padded out long enough to heap allocate")
+	stored.push("second padded out long enough to heap allocate")
+	var total = 0 as Whole
+
+	for word in stored 'each'
+		total = total + (word.byteLength() as Whole)
+	end 'each'
+
+	let shelf = Shelf.create(stored)
+	print("{shelf.count()} {total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 91
+```
+
+<!-- test: a-cell-resident-var-filled-through-a-forwarding-callee-is-accepted -->
+`outer` hands the cell on to `inner`, which stores a record it built there; no record but that one can land in the cell,
+so the variable is still the only name for what it holds.
+
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+function inner(dest Words, first String)
+	dest = Words.create()
+	dest.push(first)
+end 'inner'
+
+function outer(dest Words, first String)
+	inner(dest, first: first)
+end 'outer'
+
+function main() returns ExitCode
+	var stored = Words.create()
+	outer(stored, first: "first padded out long enough to heap allocate")
+	let shelf = Shelf.create(stored)
+	print("{shelf.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: error.a-cell-resident-var-pushed-onto-a-container-before-the-let-field-keeps-it-is-refused -->
+The container `registry` holds the record the cell holds, so a `let` field taking it would share it with a `var`.
+
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+typealias WordsList = Array with Words
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+function refill(dest Words, first String)
+	dest = Words.create()
+	dest.push(first)
+end 'refill'
+
+function main() returns ExitCode
+	var registry = WordsList.create()
+	var stored = Words.create()
+	refill(stored, first: "first padded out long enough to heap allocate")
+	registry.push(stored)
+	let shelf = Shelf.create(stored)
+	print("{shelf.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:28:20: cannot pass a value other names may still write to parameter 'words' of 'Shelf.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: error.a-cell-resident-var-a-callee-handed-back-is-refused -->
+`fillAndHandBack` returns the record it stored into the cell, so `kept` and the cell name one record and a write through
+`kept` would reach the `let` field.
+
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Shelf
+	export let words as Words
+
+	static function create(words Words) returns Self
+		return Self{words: words}
+	end 'create'
+
+	function count() returns Whole
+		return self.words.count() as Whole
+	end 'count'
+end 'Shelf'
+
+function fillAndHandBack(dest Words) returns Words
+	dest = Words.create()
+	dest.push("padded out long enough to heap allocate")
+	return dest
+end 'fillAndHandBack'
+
+function main() returns ExitCode
+	var stored = Words.create()
+	var kept = fillAndHandBack(stored)
+	let shelf = Shelf.create(stored)
+	kept.push("another padded out long enough to heap allocate")
+	print("{shelf.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:26:20: cannot pass a value other names may still write to parameter 'words' of 'Shelf.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```

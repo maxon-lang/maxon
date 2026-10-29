@@ -14,7 +14,7 @@
 // to DECLARE what its bodies will call (`declareAsyncReleaserNeeds`) because they are Std-tier
 // bodies built AFTER the runtime-needs scan — rule 2 of `RuntimeUsage`'s header. This loop is built
 // BEFORE that scan, so every drop it emits is DISCOVERED: each payload's drop and the state's are
-// rooted by the ordinary walk, and the `funcAddr` `LowerMaxonToStd.lowerServiceSpawn` emits names
+// rooted by the ordinary walk, and the start thunk `LowerMaxonToStd.emitServiceStart` builds calls
 // the loop itself.
 //
 // ⛔⛔⛔ **EVERY TYPE THIS FILE RESOLVES OUT OF THE SIGNATURE INDEX STAYS IN THE INDEX'S NAME SPACE, AND
@@ -147,7 +147,7 @@ function noteSpawnedInstance(op MaxonOp, func IrFunction, services NameRoster, b
 	end 'startsNoService'
 
 	match op 'op'
-		serviceSpawn(_, spawnedType, state, _) then bucketSpawnedInstance(func, spawnedType: spawnedType, state: state, services: services, buckets: buckets, seen: seen)
+		serviceSpawn(_, spawnedType, state, _, _, _, _, _, _, _, _, _) then bucketSpawnedInstance(func, spawnedType: spawnedType, state: state, services: services, buckets: buckets, seen: seen)
 		default panic("noteSpawnedInstance: `maxonOpIsServiceSpawn` answered true for an op that is not a `serviceSpawn`")
 	end 'op'
 end 'noteSpawnedInstance'

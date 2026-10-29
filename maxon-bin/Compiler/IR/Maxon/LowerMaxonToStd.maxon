@@ -481,6 +481,12 @@ end 'singleFunctionValueTarget'
 // interface's table AND in the base's — and each table stamps its own relocation, so the dedup has to be on
 // the SLOT rather than on the table.
 typealias WitnessAdapterNameSet = Set with ByteArray
+typealias ServiceStartNameSet = Set with ByteArray
+
+union ServiceStartCell
+	absent
+	allocated(value ValueId)
+end 'ServiceStartCell'
 
 // ⭐⭐ **WHICH TABLE A WITNESS MINT IS FOR — the conformer's ONE SHARED table, or the table of ONE CONCRETE
 // INSTANCE of it.**
@@ -1380,6 +1386,7 @@ end 'LoweredFunction'
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
 	var stdModule as StdModule
+	var compileTarget as Target
 
 	// Whole-program parameter signatures (names + types), for `lowerCall`'s
 	// label→positional argument slotting.
@@ -1454,6 +1461,7 @@ type MaxonToStdLowering
 
 	// The witness-slot ABI adapters already requested — see `WitnessAdapterNameSet`.
 	var emittedWitnessAdapters as WitnessAdapterNameSet
+	var emittedServiceStarts as ServiceStartNameSet
 
 	// The adapters whose bodies are still to be built — see `WitnessAdapterRequest`. Drained ONCE, after the
 	// function walk, by `installWitnessSlotAdapters`.
@@ -1679,7 +1687,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		var signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), conventions: project.functionValueConventions, signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), conventions: project.functionValueConventions, signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), emittedServiceStarts: ServiceStartNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -2685,20 +2693,23 @@ type MaxonToStdLowering
 			self.appendExistentialWitnessArgs(out, argIds: argIds, sig: sig, callee: callee, byReference: byReference, dstBlock: dstBlock)
 		end 'existentialWitnesses'
 
-		if countSlots > 0 'fixedElementCount'
+		self.appendHiddenCallArgs(out, argIds: argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)
+		return out
+	end 'finalizeCallArgsWithLayout'
+
+	function appendHiddenCallArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, callee ByteArray, result ValueId, dstBlock IrBlock)
+		if self.fixedElementCountParamCountFor(callee) > 0 'fixedElementCount'
 			out.push(self.materializeFixedElementCountArgFor(argIds, result: result, callee: callee, dstBlock: dstBlock))
 		end 'fixedElementCount'
 
-		if witnessCount > 0 'witnesses'
+		if self.witnessCountOf(callee, sig: sig) > 0 'witnesses'
 			self.appendWitnessArgs(out, argIds: argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock)
 		end 'witnesses'
 
-		if needsLayout 'layout'
+		if self.layoutNeedingFuncs.contains(callee) 'layout'
 			out.push(self.materializeLayoutArgFor(argIds, result: result, callee: callee, dstBlock: dstBlock))
 		end 'layout'
-
-		return out
-	end 'finalizeCallArgsWithLayout'
+	end 'appendHiddenCallArgs'
 
 	function existentialByReferenceOf(callee ByteArray, sig FuncSignature) returns ParamPositionMask
 		if countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef) == 0 'noExistentialParameter'
@@ -4794,9 +4805,10 @@ type MaxonToStdLowering
 		match op 'callShape'
 			call(result, callee, args, argLabels, _, _, _, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, into: into)
 			tryCall(result, _, callee, args, argLabels, _, _, _, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, into: into)
+			serviceSpawn(_, _, state, _, callee, args, argLabels, _, _, _, _, _) then self.noteTableCandidateOfCall(state, callee: callee, args: args, argLabels: argLabels, into: into)
 			asyncCall or
 			serviceSend then return
-			default panic("noteTableCandidateOfOp: maxonOpCalleeKind answers direct for an op that is not call, tryCall, asyncCall or serviceSend")
+			default panic("noteTableCandidateOfOp: maxonOpCalleeKind answers direct for an op that is not call, tryCall, serviceSpawn, asyncCall or serviceSend")
 		end 'callShape'
 	end 'noteTableCandidateOfOp'
 
@@ -5199,13 +5211,15 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: tagged))
 	end 'appendMmAllocTag'
 
-	function appendParameterCellAlloc(result ValueId, dstBlock IrBlock)
+	// A box whose destructor releases nothing: whoever frees a parameter cell, an argument image or a
+	// start record has already released what it holds.
+	function appendTrivialAlloc(result ValueId, bytes FullRangeInt, tag MmTag, dstBlock IrBlock)
 		let size = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(size, value: ParameterCellBytes, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(size, value: bytes, valueType: StdType.i64))
 		let destructor = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(destructor, value: TrivialDestructor, valueType: StdType.i64))
-		self.appendMmAllocTag(result, args: twoArgs(size, second: destructor), tag: mmTagIndex(MmTag.ParameterCell), dstBlock: dstBlock)
-	end 'appendParameterCellAlloc'
+		self.appendMmAllocTag(result, args: twoArgs(size, second: destructor), tag: mmTagIndex(tag), dstBlock: dstBlock)
+	end 'appendTrivialAlloc'
 
 	// ⭐⭐ **THE TRACE TAG A PARSER-ALLOCATED BOX CARRIES.** Two sources, asked in this order:
 	//
@@ -5466,7 +5480,7 @@ type MaxonToStdLowering
 		end 'layoutWord'
 
 		if callee.equals(ParameterCellAllocName) 'parameterCell'
-			self.appendParameterCellAlloc(result, dstBlock: dstBlock)
+			self.appendTrivialAlloc(result, bytes: ParameterCellBytes, tag: MmTag.ParameterCell, dstBlock: dstBlock)
 			return
 		end 'parameterCell'
 
@@ -6107,52 +6121,39 @@ type MaxonToStdLowering
 	end 'indirectResultType'
 
 	// ⭐ **`async f(args…)` → SPAWN A GREEN THREAD**. The arguments are slotted to parameter order
-	// (`slotCallArgs`, exactly as `lowerCall`), then spilled into the GT struct's INLINE arg region — one
-	// `storeIndirect` per argument, the trampoline reading them back into the ABI argument registers. The
-	// callee's DIRECT `.text` address (`funcAddr`, NOT a `__fnref_` thunk: the trampoline calls it with user
-	// arguments only, its own `(userargs) -> R` shape) becomes `__gt_spawn(funcPtr)`, whose result is the Promise
-	// handle (the GT struct pointer). No float widening is possible — a float parameter has no place in the
-	// trampoline's integer channel and `SemanticCheck.requireAsyncScalarParams` refuses it — so the slotted
-	// args pass through as i64 without the float widening. A MANAGED argument is accepted and is one
-	// such i64: its box pointer.
+	// (`slotCallArgs`, exactly as `lowerCall`), then stored where `AsyncArgumentSlots` places them (see
+	// `emitAsyncSpawn`), the trampoline reading them back into the ABI argument registers. The callee's DIRECT
+	// `.text` address (`funcAddr`, NOT a `__fnref_` thunk: the trampoline calls it with user arguments only,
+	// its own `(userargs) -> R` shape) becomes `__gt_spawn(funcPtr)`, whose result is the Promise handle (the
+	// GT struct pointer). A MANAGED argument is one i64: its box pointer.
 	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, dstBlock IrBlock)
 		view sig = try self.funcSignatures.get(callee) otherwise panic("lowerAsyncCall: async callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.emitAsyncSpawn(result, callee: callee, argIds: argIds, dstBlock: dstBlock)
+			ordered(argIds) then self.emitAsyncSpawn(result, callee: callee, sig: sig, argIds: argIds, dstBlock: dstBlock)
 			refused then panic("lowerAsyncCall: '{String.from(callee)}' reached lowering with arguments SemanticCheck must have refused")
 		end 'slot'
 	end 'lowerAsyncCall'
 
-	// Emit the direct function address, the `__gt_spawn(funcPtr)` call, and the argument spills into the GT
-	// struct's INLINE arg region, given the arguments already slotted to parameter order. Split out of
-	// `lowerAsyncCall` so the slotting `match` uses statement arms (a panic on a mis-slotting SemanticCheck
-	// should have gated), the same shape `lowerCall` uses.
-	function emitAsyncSpawn(result ValueId, callee ByteArray, argIds ValueIdArray, dstBlock IrBlock)
-		// The inline region is a FIXED MaxAsyncArgs slots; one store per argument at `GtOffArgInline + k *
-		// GtArgSlotBytes`. A callee with more arguments than that would store PAST the region — a silent struct
-		// overrun the trampoline then mis-loads — so this stays as the STRUCTURAL BACKSTOP.
-		//
-		// ⚠ It is a backstop and not the only guard: `Parser.emitAsyncCall` refuses the same program with a
-		// positioned diagnostic naming `MaxAsyncArgs`. Reaching here means the parser's gate was bypassed (a
-		// synthesized spawn, a new async lowering path), which is a compiler bug and belongs in a panic.
-		if argIds.count() > MaxAsyncArgs 'overflow'
-			panic("emitAsyncSpawn: async callee '{String.from(callee)}' has {argIds.count()} arguments but the inline arg region holds only MaxAsyncArgs ({MaxAsyncArgs}) slots — `Parser.emitAsyncCall` refuses a source-level spawn past that, so this spawn reached lowering without passing it")
-		end 'overflow'
+	// Emit the direct function address, the `__gt_spawn(funcPtr)` call, and the argument spills where
+	// `AsyncArgumentSlots` places them, given the arguments already slotted to parameter order. Split
+	// out of `lowerAsyncCall` so the slotting `match` uses statement arms (a panic on a mis-slotting
+	// SemanticCheck should have gated), the same shape `lowerCall` uses.
+	function emitAsyncSpawn(result ValueId, callee ByteArray, sig FuncSignature, argIds ValueIdArray, dstBlock IrBlock)
+		let target = asyncSpawnTargetOf(callee, funcNames: self.funcNames, target: self.compileTarget)
+		let slots = AsyncArgumentSlots.of(sig.paramTypes, byReference: target.byReference, capacity: asyncRegisterCapacityOf(self.compileTarget))
+		let crossed = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
+		var values = ValueIdArray.create()
+		values.append(self.asyncArgumentsHanded(crossed, sig: sig, callee: callee, byReference: target.byReference, dstBlock: dstBlock))
+		self.appendExistentialWitnessArgs(values, argIds: argIds, sig: sig, callee: callee, byReference: target.byReference, dstBlock: dstBlock)
 
-		let target = asyncSpawnTargetOf(callee, funcNames: self.funcNames)
-		let handed = self.asyncArgumentsHanded(argIds, callee: callee, byReference: target.byReference, dstBlock: dstBlock)
-
-		// funcPtr = &callee ; result = __gt_spawn(funcPtr) — the Promise handle (the GT struct pointer). The arg
-		// region is INLINE in the struct, so there is no separate slab buffer to allocate.
+		// funcPtr = &callee ; result = __gt_spawn(funcPtr) — the Promise handle (the GT struct pointer).
 		let funcPtr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(funcPtr, funcName: callee))
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtSpawnName, args: argsOf(funcPtr)))
 
-		// Fill the struct's inline arg region: one store per argument at
-		// `result + GtOffArgInline + k * GtArgSlotBytes`. `__gt_spawn` set `GtOffArgBuf` to a
-		// self-pointer at `GtOffArgInline`, and the allocator's zeroing left the unfilled slots at 0
-		// (harmlessly loaded into unread argument registers).
+		// One store per argument word, into the inline region `__gt_spawn` pointed `GtOffArgBuf` at, or
+		// into an argument image `emitAsyncArgumentBase` repoints it to.
 		//
 		// ⚠⚠ **THE GT IS NOT DISCOVERABLE UNTIL `__gt_ready` BELOW, AND THAT ORDER IS THE WHOLE OF THIS
 		// SEQUENCE'S CORRECTNESS.** Run these stores AFTER `__gt_spawn` has enqueued the thread and a worker M
@@ -6160,10 +6161,14 @@ type MaxonToStdLowering
 		// each reading one integer argument summed to a DIFFERENT wrong total on every run. Publishing last
 		// removes the premise that a spawned GT is only enqueued, never run, until awaited — see
 		// `GtRuntime.GtReadyName`.
-		for k in 0 upto handed.count() 'eachArg'
-			let argId = try handed.get(k) otherwise panic("emitAsyncSpawn: handed.get OOB at {k}")
-			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(result, offset: GtOffArgInline + (k as ByteOffset) * GtArgSlotBytes, valueId: argId, valueType: StdType.i64))
+		let (argBase, argBaseOffset) = self.emitAsyncArgumentBase(result, slots: slots, dstBlock: dstBlock)
+
+		for k in 0 upto values.count() 'eachArg'
+			let argId = try values.get(k) otherwise panic("emitAsyncSpawn: values.get OOB at {k}")
+			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(argBase, offset: argBaseOffset + slots.offsetAt(k as ParamCount), valueId: argId, valueType: StdType.f64 if slots.valueIsFloat(k as ParamCount) else StdType.i64))
 		end 'eachArg'
+
+		self.emitAsyncStackArguments(result, slots: slots, values: values, dstBlock: dstBlock)
 
 		self.emitAsyncReleaserStore(result, target: target, dstBlock: dstBlock)
 
@@ -6172,9 +6177,39 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(readyResult, callee: GtReadyName, args: argsOf(result)))
 	end 'emitAsyncSpawn'
 
+	function emitAsyncArgumentBase(gt ValueId, slots AsyncArgumentSlots, dstBlock IrBlock) returns (ValueId, ByteOffset)
+		if not slots.usesImage 'theInlineRegionHoldsIt'
+			return (gt, GtOffArgInline)
+		end 'theInlineRegionHoldsIt'
+
+		let image = self.mintStdValueId()
+		self.appendTrivialAlloc(image, bytes: slots.imageBytes() as FullRangeInt, tag: MmTag.AsyncArgumentImage, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: image, valueType: StdType.i64))
+		return (image, 0 as ByteOffset)
+	end 'emitAsyncArgumentBase'
+
+	function emitAsyncStackArguments(gt ValueId, slots AsyncArgumentSlots, values ValueIdArray, dstBlock IrBlock)
+		if slots.stackPositions.isEmpty() 'nothingOverflows'
+			return
+		end 'nothingOverflows'
+
+		let resumeSp = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(resumeSp, addrId: gt, offset: GtOffSp, valueType: StdType.i64))
+		let reserved = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(reserved, value: slots.stackBytes() as FullRangeInt, valueType: StdType.i64))
+		let argSp = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(argSp, lhs: resumeSp, rhs: reserved, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: argSp, valueType: StdType.i64))
+
+		for (slot, position) in slots.stackPositions.withIterator() 'eachStackWord'
+			let argId = try values.get(position) otherwise panic("emitAsyncStackArguments: values.get OOB at {position}")
+			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(argSp, offset: (slot.index() as ByteOffset) * GtArgSlotBytes, valueId: argId, valueType: StdType.f64 if slots.valueIsFloat(position) else StdType.i64))
+		end 'eachStackWord'
+	end 'emitAsyncStackArguments'
+
 	// ⭐⭐ **LEAVE THE THREAD THE ADDRESS OF THE CODE THAT KNOWS HOW TO RELEASE IT.** `gt.releaser` is read by
 	// `__gt_await` (result CONSUMED) and by `__gt_promise_drop` (result NOT consumed), which is where the
-	// reference `Parser.transferAsyncSpawnArgs` took for each managed argument is given back.
+	// reference `Parser.transferThreadArguments` took for each managed argument is given back.
 	//
 	// **A CALLEE WITH NOTHING TO RELEASE STORES NOTHING AT ALL**, rather than storing 0: every
 	// record a spawn takes already holds 0 here (`GtOffReleaser` carries why), so the store would be
@@ -6185,12 +6220,11 @@ type MaxonToStdLowering
 	// of the two directions leaks silently.
 	// A position the callee takes by reference reads a cell ADDRESS, and a spawn's argument is moved
 	// into the green thread, so each such argument is handed a fresh parameter cell of its own.
-	function asyncArgumentsHanded(argIds ValueIdArray, callee ByteArray, byReference ParamPositionMask, dstBlock IrBlock) returns ValueIdArray
+	function asyncArgumentsHanded(argIds ValueIdArray, sig FuncSignature, callee ByteArray, byReference ParamPositionMask, dstBlock IrBlock) returns ValueIdArray
 		if byReference == NoParamPositions 'everyArgumentByValue'
 			return argIds
 		end 'everyArgumentByValue'
 
-		view sig = try self.funcSignatures.get(callee) otherwise panic("asyncArgumentsHanded: async callee '{String.from(callee)}' has no signature — `lowerAsyncCall` slotted its arguments against it")
 		var handed = ValueIdArray.create()
 
 		for (position, argId) in argIds.withIterator() 'eachArg'
@@ -6203,8 +6237,9 @@ type MaxonToStdLowering
 			end 'byValue'
 
 			let cell = self.mintStdValueId()
-			self.appendParameterCellAlloc(cell, dstBlock: dstBlock)
-			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(cell, offset: ParameterCellValueOffset, valueId: argId, valueType: self.stdTypeOf(argId)))
+			self.appendTrivialAlloc(cell, bytes: ParameterCellBytes, tag: MmTag.ParameterCell, dstBlock: dstBlock)
+			let occupant = self.floatDomainCrossedArg(argId, paramType: paramType, dstBlock: dstBlock)
+			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(cell, offset: ParameterCellValueOffset, valueId: occupant, valueType: self.stdTypeOf(argId) if occupant == argId else maxonTypeToStdType(paramType)))
 
 			if parameterCellHoldsAWitness(paramType) 'andItsWitness'
 				self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(cell, offset: ParameterCellWitnessOffset, valueId: self.witnessForExistentialValue(argId, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), site: callee, dstBlock: dstBlock), valueType: StdType.i64))
@@ -6226,35 +6261,151 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(gt, offset: GtOffReleaser, valueId: releaserPtr, valueType: StdType.i64))
 	end 'emitAsyncReleaserStore'
 
-	// ⭐⭐ **`spawn <T>.<factory>(…)` → `__svc_spawn(&<T>.__loop, state, slotBytes, capacity)`.**
-	// The op carries the TYPE and the state; the loop's address is derived here, from that one
-	// name, because deriving it at the parse would put the loop's symbol in a second place — and a
-	// `funcAddr` naming a symbol nothing built is a link failure with no line on it.
+	// ⭐⭐ **`spawn <T>.<factory>(…)` → `__svc_spawn(&<T>.__start_<factory>, record, slotBytes,
+	// capacity)`.** The op carries the TYPE, the state and the factory; the loop's and the start
+	// thunk's symbols are derived here, from those names, because deriving them at the parse would put
+	// each symbol in a second place — and a `funcAddr` naming a symbol nothing built is a link failure
+	// with no line on it.
 	//
-	// ⚠ The loop is ROOTED by this `funcAddr`, which `DeadFunctionElimination` treats as a static
-	// edge (`stdFunctionReferenceOf`). It is reachable from nothing else at all, which is what keeps a
-	// service-free program's output byte-identical.
+	// ⚠ The thunk is ROOTED by this `funcAddr`, which `DeadFunctionElimination` treats as a static
+	// edge (`stdFunctionReferenceOf`), and the loop by the thunk's call. Neither is reachable from
+	// anything else, which is what keeps a service-free program's output byte-identical.
 	function lowerServiceSpawn(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
-			serviceSpawn(result, typeName, state, capacity) then self.emitServiceSpawn(result, typeName: typeName, state: state, capacity: capacity, dstBlock: dstBlock)
+			serviceSpawn(result, typeName, state, capacity, callee, args, argLabels, _, _, _, _, startReplies) then self.emitServiceSpawn(result, typeName: typeName, state: state, capacity: capacity, callee: callee, args: args, argLabels: argLabels, replies: startReplies, dstBlock: dstBlock)
 			default panic("lowerServiceSpawn: expected a `serviceSpawn` op, got a different MaxonOp variant — `lowerOp` routes only `serviceSpawn` here")
 		end 's'
 	end 'lowerServiceSpawn'
 
 	// ⭐ **WHICH INSTANTIATION THE SPAWNED STATE STANDS AT** — this tier's two columns, handed to the ONE
-	// classifier `ServiceLoop.spawnedInstancesByService` also reads, so the loop this takes the address of
-	// is the loop that was built.
+	// classifier `ServiceLoop.spawnedInstancesByService` also reads, so the loop this names is the
+	// loop that was built.
 	function spawnedStateInstance(state ValueId) returns ServiceStateInstance
 		return serviceStateInstanceOfValueType(self.valueTagOf(state), nameId: try self.valueNameIds.get(state) otherwise panic("spawnedStateInstance: v{state} is not in '{String.from(self.currentFuncName())}'s dense value-name column"))
 	end 'spawnedStateInstance'
 
-	function emitServiceSpawn(result ValueId, typeName ByteArray, state ValueId, capacity ValueId, dstBlock IrBlock)
-		let loopPtr = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(loopPtr, funcName: serviceLoopSymbolFor(self.signatures, typeName: typeName, instance: self.spawnedStateInstance(state))))
+	function emitServiceSpawn(result ValueId, typeName ByteArray, state ValueId, capacity ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, replies bool, dstBlock IrBlock)
+		view sig = try self.funcSignatures.get(callee) otherwise panic("emitServiceSpawn: the spawned factory '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
+
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
+			ordered(argIds) then self.emitServiceStart(result, typeName: typeName, state: state, capacity: capacity, callee: callee, sig: sig, argIds: argIds, replies: replies, dstBlock: dstBlock)
+			refused then panic("emitServiceSpawn: '{String.from(callee)}' reached lowering with arguments SemanticCheck must have refused")
+		end 'slot'
+	end 'emitServiceSpawn'
+
+	function emitServiceStart(result ValueId, typeName ByteArray, state ValueId, capacity ValueId, callee ByteArray, sig FuncSignature, argIds ValueIdArray, replies bool, dstBlock IrBlock)
+		let target = serviceStartTargetOf(callee, funcNames: self.funcNames, target: self.compileTarget)
+		let crossed = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
+		var words = ValueIdArray.create()
+		words.append(self.asyncArgumentsHanded(crossed, sig: sig, callee: callee, byReference: target.byReference, dstBlock: dstBlock))
+		self.appendExistentialWitnessArgs(words, argIds: argIds, sig: sig, callee: callee, byReference: target.byReference, dstBlock: dstBlock)
+		self.appendHiddenCallArgs(words, argIds: argIds, sig: sig, callee: callee, result: state, dstBlock: dstBlock)
+
+		let slots = AsyncArgumentSlots.recorded(sig.paramTypes, byReference: target.byReference)
+		let cell = self.emitServiceStartCell(result, replies: replies, dstBlock: dstBlock)
+		let record = self.emitServiceStartRecord(words, slots: slots, cell: cell, dstBlock: dstBlock)
+		let loopName = serviceLoopSymbolFor(self.signatures, typeName: typeName, instance: self.spawnedStateInstance(state))
+		let thunkName = serviceStartSymbol(loopName, factory: callee)
+
+		if not self.emittedServiceStarts.contains(thunkName) 'notBuiltYet'
+			self.emittedServiceStarts.insert(thunkName.clone())
+			self.buildServiceStartThunk(thunkName, loopName: loopName, callee: callee, wordCount: words.count(), slots: slots, target: target, replies: replies)
+		end 'notBuiltYet'
+
+		let thunkPtr = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(thunkPtr, funcName: thunkName))
 		let slotBytes = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(slotBytes, value: requireServiceRequestLayout(self.signatures, typeName: typeName).boxSizeBytes() as FullRangeInt, valueType: StdType.i64))
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: fourArgs(loopPtr, second: state, third: slotBytes, fourth: capacity)))
-	end 'emitServiceSpawn'
+
+		let mailbox = match cell 'cell'
+			absent gives result
+			allocated gives self.mintStdValueId()
+		end 'cell'
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(mailbox, callee: SvcSpawnName, args: fourArgs(thunkPtr, second: record, third: slotBytes, fourth: capacity)))
+	end 'emitServiceStart'
+
+	// Only a throwing factory's spawn waits for its start. Its result is this cell, which the parser
+	// awaits and the start thunk completes with the handle or the factory's error
+	// (`AsyncReleaser.finishReportedStart`).
+	function emitServiceStartCell(result ValueId, replies bool, dstBlock IrBlock) returns ServiceStartCell
+		if not replies 'startsAtOnce'
+			return ServiceStartCell.absent
+		end 'startsAtOnce'
+
+		let releaser = self.mintStdValueId()
+		self.emitZeroConstAs(dstBlock, id: releaser)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtCellAllocName, args: argsOf(releaser)))
+		return ServiceStartCell.allocated(result)
+	end 'emitServiceStartCell'
+
+	function emitServiceStartRecord(words ValueIdArray, slots AsyncArgumentSlots, cell ServiceStartCell, dstBlock IrBlock) returns ValueId
+		var slotCount = words.count()
+
+		match cell 'cell'
+			absent then break
+			allocated then slotCount = slotCount + 1
+		end 'cell'
+
+		if slotCount == 0 'anEmptyRecordStillAllocates'
+			slotCount = 1
+		end 'anEmptyRecordStillAllocates'
+
+		let record = self.mintStdValueId()
+		self.appendTrivialAlloc(record, bytes: (slotCount * GtArgSlotBytes) as FullRangeInt, tag: MmTag.ServiceStartRecord, dstBlock: dstBlock)
+
+		for (k, word) in words.withIterator() 'eachWord'
+			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(record, offset: (k.index() as ByteOffset) * GtArgSlotBytes, valueId: word, valueType: StdType.f64 if slots.valueIsFloat(k.index() as ParamCount) else StdType.i64))
+		end 'eachWord'
+
+		match cell 'cell'
+			absent then break
+			allocated(value) then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(record, offset: (words.count() as ByteOffset) * GtArgSlotBytes, valueId: value, valueType: StdType.i64))
+		end 'cell'
+
+		return record
+	end 'emitServiceStartRecord'
+
+	// `<loop>.__start_<factory>(record, mailbox)`, where the service's green thread starts: it loads
+	// every word of the record, calls the factory, releases the arguments and the record, reports a
+	// throwing factory's outcome, and enters the loop. It runs on that green thread's stack, so it
+	// takes its stack guard. It reads nothing of the spawning function, so one body serves every spawn
+	// of that factory into that loop, and `emittedServiceStarts` dedups it by name.
+	function buildServiceStartThunk(name ByteArray, loopName ByteArray, callee ByteArray, wordCount ElementIndex, slots AsyncArgumentSlots, target AsyncSpawnTarget, replies bool)
+		let spawnersSpan = self.stdModule.spans.current
+		self.stdModule.spans.current = NoSpanId
+		var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
+		var entry = self.stdModule.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+		let record = 0 as ValueId
+		let mailbox = 1
+		self.stdModule.appendOp(entry, op: StdOp.param(record, index: 0, paramType: StdType.i64))
+		self.stdModule.appendOp(entry, op: StdOp.param(mailbox, index: 1, paramType: StdType.i64))
+		var factoryArgs = ValueIdArray.create()
+
+		for k in 0 upto wordCount 'eachWord'
+			let loaded = self.mintStdValueId()
+			self.stdModule.appendOp(entry, op: StdOp.loadIndirect(loaded, addrId: record, offset: (k as ByteOffset) * GtArgSlotBytes, valueType: StdType.f64 if slots.valueIsFloat(k as ParamCount) else StdType.i64))
+			factoryArgs.push(loaded)
+		end 'eachWord'
+
+		let started = self.mintStdValueId()
+		let report = self.emitServiceFactoryCall(started, callee: callee, args: factoryArgs, record: record, cellOffset: (wordCount as ByteOffset) * GtArgSlotBytes, replies: replies, entry: entry)
+		self.nextValueId = finishServiceStart(self.stdModule, func: func, entry: entry, nextValue: self.nextValueId, record: record, mailbox: mailbox, state: started, loopName: loopName, target: target, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames, report: report)
+		self.stdModule.spans.current = spawnersSpan
+	end 'buildServiceStartThunk'
+
+	function emitServiceFactoryCall(started ValueId, callee ByteArray, args ValueIdArray, record ValueId, cellOffset ByteOffset, replies bool, entry IrBlock) returns ServiceStartReport
+		if not replies 'startsAtOnce'
+			self.stdModule.appendOp(entry, op: StdOp.call(started, callee: callee, args: args))
+			return ServiceStartReport.unreported
+		end 'startsAtOnce'
+
+		let cell = self.mintStdValueId()
+		self.stdModule.appendOp(entry, op: StdOp.loadIndirect(cell, addrId: record, offset: cellOffset, valueType: StdType.i64))
+		let errorFlag = self.mintStdValueId()
+		self.stdModule.appendOp(entry, op: StdOp.tryCall(started, errorFlagId: errorFlag, callee: callee, args: args))
+		return ServiceStartReport.throughCell(cell, errorFlag: errorFlag)
+	end 'emitServiceFactoryCall'
 
 	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request, bytes, timeoutMs)`.** Everything else about a send
 	// happened at the parse: the arguments were MOVED into the request in the staging buffer, the request
@@ -6269,9 +6420,9 @@ type MaxonToStdLowering
 	end 'lowerServiceSend'
 
 	// ⭐⭐ **`serviceReplyCell` → `__gt_cell_alloc(&__gt_reply_release_<message>)`.** The op carries the
-	// MESSAGE's name and the one address is derived here, from that name, on `emitServiceSpawn`'s precedent
-	// and for its reason: deriving it at the parse would put the releaser's symbol in a second place, and a
-	// `funcAddr` naming a symbol nothing built is a link failure with no line on it.
+	// MESSAGE's name and the one address is derived here, from that name, on `lowerServiceSpawn`'s
+	// precedent and for its reason: deriving it at the parse would put the releaser's symbol in a second
+	// place, and a `funcAddr` naming a symbol nothing built is a link failure with no line on it.
 	//
 	// ⚠ **A MESSAGE WHOSE REPLY OWNS NO HEAP WRITES A NULL RELEASER, and that is the common case.**
 	// `__gt_cell_alloc` stores the releaser it is passed, so a plan `serviceReplyNeedsReleaser` answers false
