@@ -2702,10 +2702,16 @@ export enum TypeArgInstantiationKind
 	// from `uncopyableElement` because the `deepClone` walk that one reads takes a promise for a
 	// cloneable leaf, so a copy it admits gives two owners one green thread.
 	greenThreadElement
+
+	// Is or holds a promise, for a shared body's constructor feed: the one answer that decides both
+	// that the body keeps the feed, that its store is a refused-on-reuse move, and that a closure-captured
+	// `T` may not be given away (E3141). Apart from
+	// `greenThreadElement` because it must also see an instantiation reached through a declaration view.
+	greenThreadFeed
 end 'TypeArgInstantiationKind'
 
 // @generated library-cache begin
-let CacheCasesTypeArgInstantiationKind = [TypeArgInstantiationKind.consumeMoved, TypeArgInstantiationKind.uncopyableElement, TypeArgInstantiationKind.managedElement, TypeArgInstantiationKind.retainedFeed, TypeArgInstantiationKind.greenThreadElement]
+let CacheCasesTypeArgInstantiationKind = [TypeArgInstantiationKind.consumeMoved, TypeArgInstantiationKind.uncopyableElement, TypeArgInstantiationKind.managedElement, TypeArgInstantiationKind.retainedFeed, TypeArgInstantiationKind.greenThreadElement, TypeArgInstantiationKind.greenThreadFeed]
 
 function cacheReadTypeArgInstantiationKind(reader LibraryCacheReader) returns TypeArgInstantiationKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -2763,7 +2769,8 @@ function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 		retainedFeed then return false
 		uncopyableElement or
 		managedElement or
-		greenThreadElement then return true
+		greenThreadElement or
+		greenThreadFeed then return true
 	end 'kind'
 end 'kindIsARefusal'
 
@@ -2779,11 +2786,15 @@ end 'kindIsARefusal'
 // destructor against the parameter the view stands at (`MmRuntime.nestedViewDropKind`), so the reference its
 // constructor feed takes must be decided by the same parameter's instantiations.
 //
-// ⛔ The REFUSING kinds do not.
+// ⭐ **AND SO DOES `greenThreadFeed`, THE ONE REFUSING KIND THAT DOES.** A promise reached only through a
+// view still makes the shared body's store a move, so a reuse of the feed must be refused there too.
+//
+// ⛔ The other REFUSING kinds do not.
 function kindFollowsADeclarationView(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
 		consumeMoved or
-		retainedFeed then return true
+		retainedFeed or
+		greenThreadFeed then return true
 		uncopyableElement or
 		managedElement or
 		greenThreadElement then return false
@@ -4179,8 +4190,8 @@ end 'OpaqueSlotDeclaration'
 // rather than inferred.
 export enum FeedSink
 	// `Self{item: p}` in a receiverless constructor: the parameter is stored into a field of the value
-	// the call RETURNS. Each such store takes its own reference, so the shared body enrols the
-	// parameter owned and releases its own reference once (`bindParameters`).
+	// the call RETURNS. Each such store takes its own reference, or moves a promise, so the shared
+	// body keeps the parameter and settles its own reference per path (`bindParameters`).
 	constructedValue
 
 	// An opaque `Array` element (`items.push(p)`, wherever the array lives) or a reassigned opaque `T` field
@@ -38361,7 +38372,8 @@ export type ProgramSignatures
 			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 			managedElement then return self.typeArgIsManagedElement(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
-			greenThreadElement then return self.sourceCloneVerdictOfType(t) == SourceCloneVerdict.holdsAGreenThread
+			greenThreadElement or
+			greenThreadFeed then return self.sourceCloneVerdictOfType(t) == SourceCloneVerdict.holdsAGreenThread
 		end 'kind'
 	end 'typeArgHasKind'
 
@@ -38429,6 +38441,10 @@ export type ProgramSignatures
 		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.retainedFeed)
 	end 'typeParamFeedCanOwnAReference'
 
+	export function typeParamFeedGreenThreadInstantiation(param TypeParamId) returns TypeArgKindMatch
+		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.greenThreadFeed)
+	end 'typeParamFeedGreenThreadInstantiation'
+
 	// ⭐⭐ **IS `t` A HEAP AGGREGATE — the boundary a PUBLISHED SLOT is judged by.** A container that
 	// zeroes its slots at birth (`FixedArray.create()`'s `__managed_resize`) publishes a VALUE for a trivial
 	// argument and an ABSENCE for a managed one, so this asks the one question `containerElementIsManaged`
@@ -38467,7 +38483,8 @@ export type ProgramSignatures
 
 			consumeMoved or
 			managedElement or
-			retainedFeed then return false
+			retainedFeed or
+			greenThreadFeed then return false
 		end 'kind'
 	end 'kindExemptsAnUncopiedInstance'
 

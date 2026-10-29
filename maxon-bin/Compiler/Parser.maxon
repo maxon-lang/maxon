@@ -14646,6 +14646,28 @@ end 'PendingMergeGive'
 
 typealias PendingMergeGiveArray = Array with PendingMergeGive
 
+// A hidden owned binding beside a kept constructor feed, whose moved bit means "this path stored
+// or moved the feed". The feed's exit drop is `__release_type_param` and the unmoved guard's is
+// `__reclaim_type_param` (`emitDecrefOps`): their gates are complementary, so each path destroys
+// the value exactly once whether the instantiation is refcounted, a promise or trivial.
+type FeedDropGuard
+	export let feed as ValueId
+	export let guard as ValueId
+
+	static function create(feed ValueId, guard ValueId) returns Self
+		return Self{feed: feed, guard: guard}
+	end 'create'
+end 'FeedDropGuard'
+
+typealias FeedDropGuardArray = Array with FeedDropGuard
+
+enum LoopCarriedGuards
+	stayUnsettled
+	settleAlways
+end 'LoopCarriedGuards'
+
+let FeedDropGuardName = b"__feed_drop_guard"
+
 type LoopContext
 	export let label as ByteArray
 
@@ -15237,8 +15259,8 @@ function errorMatchInsideALoopRefusal(name ByteArray, at SourceRange) returns So
 	return SourceParseError.errorMatchNotExactlyOnce(String.from(name), reason: "this match is inside a loop the handler opened, which runs it zero times or more than once", line: at.line, column: at.column)
 end 'errorMatchInsideALoopRefusal'
 
-function capturedPromiseRefusal(anchor Token, door ByteArray) returns SourceParseError
-	return SourceParseError.promiseCannotBeBorrowed(String.from(door), cure: "This one is a closure's capture: the closure owns it for as long as the closure lives, and its body may run any number of times, so no run of it may give the promise away. Await it in the function that spawned it, or hand the closure what it needs as a parameter", line: anchor.line, column: anchor.column)
+function capturedPromiseRefusal(range SourceRange, door ByteArray) returns SourceParseError
+	return SourceParseError.promiseCannotBeBorrowed(String.from(door), cure: "This one is a closure's capture: the closure owns it for as long as the closure lives, and its body may run any number of times, so no run of it may give the promise away. Await it in the function that spawned it, or hand the closure what it needs as a parameter", line: range.line, column: range.column)
 end 'capturedPromiseRefusal'
 
 function unownedPromiseRefusal(anchor Token, door ByteArray) returns SourceParseError
@@ -18815,9 +18837,10 @@ type FunctionBodyState
 
 	// ⭐⭐ **WHICH OPAQUE PARAMETERS ARE `constructedValue` FEEDS THIS FRAME DOES NOT KEEP — the ones
 	// the CALL SITE has already settled:** a by-reference feed, or a feed of a `T` no instantiation of
-	// which can owe a reference (`bindParameters`). `Box.create(v T)` doing `Self{value: v}` hands `v`
-	// to the box the call RETURNS, and the concrete caller consumed its argument to pay for that; so
-	// this store owes no reference, and taking one would leak the caller's.
+	// which can owe a reference or hold a green thread (`bindParameters`). `Box.create(v T)` doing
+	// `Self{value: v}` hands `v` to the box the call RETURNS, and the concrete caller consumed its
+	// argument to pay for that; so this store owes no reference, and taking one would leak the
+	// caller's.
 	//
 	// ⚠ **IT CANNOT BE READ OFF `valueIsOpaqueOwned`**: `bindParameters` does not enrol such a
 	// parameter owned, so the ownership bit says "borrowed" for a value whose reference is already
@@ -18828,15 +18851,13 @@ type FunctionBodyState
 	// A SPARSE set, reset per function and SWAPPED across a closure body, exactly like the sibling value marks.
 	export var constructorFeedParams as ValueMarkColumn
 
-	// The `constructedValue` feeds this frame keeps: enrolled owned, and every store of one into a
-	// record takes its own reference through the descriptor, so the frame's own reference is released
-	// once at its exit.
+	// The `constructedValue` feeds this frame keeps: enrolled owned, each with a `FeedDropGuard`.
+	// Every store of one into a record takes its own reference through the descriptor, and the frame
+	// releases its own at exit, or at the store when some instantiation holds a green thread
+	// (`noteFeedStored`).
 	export var coOwningFeedParams as ValueMarkColumn
 
-	// The co-owning feeds a store took a reference for. Such a feed drops through
-	// `__release_type_param` (see `ReleaseTypeParamName`); one no store reached drops through
-	// `__drop_type_param`, since this frame is then its only owner.
-	export var storedFeedParams as ValueMarkColumn
+	export var feedDropGuards as FeedDropGuardArray
 
 	// ⭐⭐ **WHICH RECORDS THIS SHARED BODY BUILT HOLD A REFERENCE IT TOOK THROUGH THE DESCRIPTOR**
 	// — the exact set whose drop, IF IT HAPPENS HERE, must release that reference.
@@ -19326,7 +19347,7 @@ type FunctionBodyState
 			witnessCursorElements: noValueMarks,
 			constructorFeedParams: noValueMarks,
 			coOwningFeedParams: noValueMarks,
-			storedFeedParams: noValueMarks,
+			feedDropGuards: FeedDropGuardArray.create(),
 			recordsOwningOpaqueSlots: noValueMarks,
 			recordsHoldingReferencedOpaqueSlots: noValueMarks,
 			callReferencedAnOpaqueFeedSlot: false,
@@ -35494,10 +35515,12 @@ export type Parser
 			// ⚠⚠ **IT ASKS THE FEED'S SINK, NOT WHETHER THE FUNCTION HAS A RECEIVER.** A callee-storage feed
 			// is moved into that storage. A `Self{value: v}` CONSTRUCTOR feed is CO-OWNED instead: each
 			// store of it into a record takes its own reference (`opaqueSlotTakesItsOwnReference`) and this
-			// frame releases its own at exit, so a throw before the store still drops the consumed argument
-			// and two records built from it hold two references. A constructor feed is kept only when it is
-			// not by-reference and some instantiation can owe a reference (`typeParamFeedCanOwnAReference`);
-			// any other is left to the call site (`constructorFeedParams`). A has-a-receiver test standing
+			// frame settles its own per path (`FeedDropGuard`), so a throw before the store still drops
+			// the consumed argument and two records built from it hold two references. A constructor feed
+			// is kept only when some instantiation can owe a reference (`typeParamFeedCanOwnAReference`)
+			// or hold a green thread (`typeParamHoldsAGreenThread`); any other is left to the call
+			// site (`constructorFeedParams`). No by-reference feed is kept: it holds the caller's cell
+			// address, and enrolling it would release that address. A has-a-receiver test standing
 			// in for that distinction would be exact only while the recognizer saw `self`-headed stores
 			// alone; a STATIC that pushes its argument into a local `Array with T` and hands that array to
 			// the `Self` it returns feeds CALLEE STORAGE with no receiver at all, and reading the receiver
@@ -35517,7 +35540,9 @@ export type Parser
 
 			if self.tagOf(paramId) == ValueTypeTag.typeParameter and feed.isFeed() 'opaqueFeed'
 				let constructed = not feed.answers(FeedSinkQuery.calleeStorageSink)
-				let keptByThisFrame = not constructed or (not paramIsByRef and self.signatures.typeParamFeedCanOwnAReference(self.valueTypeParamId(paramId)))
+				let feedTypeParam = self.valueTypeParamId(paramId)
+				let feedMayBeMoved = constructed and self.typeParamHoldsAGreenThread(feedTypeParam)
+				let keptByThisFrame = not paramIsByRef and (not constructed or feedMayBeMoved or self.signatures.typeParamFeedCanOwnAReference(feedTypeParam))
 
 				if keptByThisFrame 'enrolled'
 					self.markValueOwnsHeap(paramId, exclusivity: OwnedHeapExclusivity.coOwned)
@@ -35525,13 +35550,111 @@ export type Parser
 
 					if constructed 'constructedFeed'
 						self.bodyState.coOwningFeedParams = withValueMarked(self.bodyState.coOwningFeedParams, value: paramId)
+						self.enrolFeedDropGuard(paramId)
 					end 'constructedFeed'
-				end 'enrolled' else 'settledByTheCaller'
+				end 'enrolled' else if constructed 'settledByTheCaller'
 					self.bodyState.constructorFeedParams = withValueMarked(self.bodyState.constructorFeedParams, value: paramId)
 				end 'settledByTheCaller'
 			end 'opaqueFeed'
 		end 'eachParam'
 	end 'bindParameters'
+
+	function enrolFeedDropGuard(feed ValueId)
+		let guard = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+		self.enrolOwnedBinding(VarInfo.createValueBinding(FeedDropGuardName, varType: MaxonType.integer, kind: BindingKind.let, boundValue: guard))
+		self.bodyState.feedDropGuards.push(FeedDropGuard.create(feed, guard: guard))
+	end 'enrolFeedDropGuard'
+
+	function feedGuardedBy(guard ValueId) returns ValueId throws AbsentError
+		for entry in self.bodyState.feedDropGuards 'eachGuard'
+			if entry.guard == guard 'thisGuard'
+				return entry.feed
+			end 'thisGuard'
+		end 'eachGuard'
+
+		throw AbsentError.absent
+	end 'feedGuardedBy'
+
+	function feedIsGuarded(feed ValueId) returns bool
+		for entry in self.bodyState.feedDropGuards 'eachGuard'
+			if entry.feed == feed 'thisFeed'
+				return true
+			end 'thisFeed'
+		end 'eachGuard'
+
+		return false
+	end 'feedIsGuarded'
+
+	// `stayUnsettled` leaves a guard a loop would carry live, because moving a pre-loop binding
+	// inside a loop body is unsound (`bindingIndexEscapesLoop`). That is sound only where no
+	// instantiation holds a green thread, so `__reclaim_type_param` never destroys; a green-thread
+	// feed's store is a real move instead (`noteFeedStored`), which the loop refuses with E3102.
+	function settleFeedDropGuardOf(feed ValueId, loopCarried LoopCarriedGuards)
+		for entry in self.bodyState.feedDropGuards 'eachGuard'
+			if entry.feed != feed 'anotherFeed'
+				continue
+			end 'anotherFeed'
+
+			let index = try self.liveOwnerIndexOf(entry.guard) otherwise return
+
+			if loopCarried == LoopCarriedGuards.stayUnsettled and self.bindingIndexEscapesLoop(index) 'aLoopWouldCarryIt'
+				return
+			end 'aLoopWouldCarryIt'
+
+			var owned = try self.bodyState.ownedBindings.get(index) otherwise panic("settleFeedDropGuardOf: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf`")
+			owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
+			return
+		end 'eachGuard'
+	end 'settleFeedDropGuardOf'
+
+	function typeParamHoldsAGreenThread(param TypeParamId) returns bool
+		return match self.signatures.typeParamFeedGreenThreadInstantiation(param) 'greenThread'
+			noInstance gives false
+			instance gives true
+		end 'greenThread'
+	end 'typeParamHoldsAGreenThread'
+
+	// Where `T` can hold a green thread the store is a real move, so the move machinery refuses a
+	// second store or a loop store (E3102). The release right after the caller's retain hands the
+	// record the frame's own reference: a no-op for a promise, and what keeps a String or aggregate
+	// instantiation from leaking one.
+	function noteFeedStored(feed ValueId, range SourceRange)
+		if not valueIsMarked(self.bodyState.coOwningFeedParams, value: feed) 'notAKeptFeed'
+			return
+		end 'notAKeptFeed'
+
+		if self.typeParamHoldsAGreenThread(self.valueTypeParamId(feed)) 'aMovedInstantiation'
+			self.emitOwnershipRuntimeCall(ReleaseTypeParamName, args: singletonArgs(feed), range: range)
+			self.moveOwnedValueOut(feed)
+			return
+		end 'aMovedInstantiation'
+
+		self.settleFeedDropGuardOf(feed, loopCarried: LoopCarriedGuards.stayUnsettled)
+	end 'noteFeedStored'
+
+	function capturedNameOf(value ValueId) returns ByteArray throws AbsentError
+		match self.bodyState.capturedSlots 'column'
+			unwritten then throw AbsentError.absent
+			entries(bySlot) then return (try self.bodyState.captureNames.get(try bySlot.get(value) otherwise throw AbsentError.absent) otherwise throw AbsentError.absent).clone()
+		end 'column'
+	end 'capturedNameOf'
+
+	// Keyed on the capture rather than the feed: a closure's captured opaque `T` is not a recognised
+	// feed, so no drop guard or move tracks it, and a closure run twice would give one promise away
+	// twice.
+	function requireCapturedOpaqueHoldsNoGreenThread(value ValueId, range SourceRange) throws SourceParseError
+		let door = try self.capturedNameOf(value) otherwise return
+
+		match self.signatures.typeParamFeedGreenThreadInstantiation(self.valueTypeParamId(value)) 'greenThread'
+			noInstance then return
+			instance(site) then try self.refuseCaptureOfAnInstantiation(site, door: door, range: range)
+		end 'greenThread'
+	end 'requireCapturedOpaqueHoldsNoGreenThread'
+
+	function refuseCaptureOfAnInstantiation(site InstantiationSiteLookup, door ByteArray, range SourceRange) throws SourceParseError
+		self.blameLibraryRefusalOnInstantiation(site)
+		throw capturedPromiseRefusal(range, door: door)
+	end 'refuseCaptureOfAnInstantiation'
 
 	// ⭐⭐ **SEED AND WIRE THE COMPANION WITNESS PARAMETERS** — one hidden machine word per
 	// interface-typed user parameter not taken by reference (its cell carries the witness), appended
@@ -48371,6 +48494,11 @@ export type Parser
 	end 'holdConditionalRefusal'
 
 	function emitDecrefOps(value ValueId, range SourceRange)
+		if let feed = try self.feedGuardedBy(value) 'aFeedDropGuard'
+			self.emitOwnershipRuntimeCall(ReclaimTypeParamName, args: singletonArgs(feed), range: range)
+			return
+		end 'aFeedDropGuard'
+
 		if self.valueIsImmortalFunction(value) 'anImmortalRecord'
 			return
 		end 'anImmortalRecord'
@@ -48877,11 +49005,11 @@ export type Parser
 		end 'promise'
 
 		// Ahead of the `dropCallees` memo, whose key is the tag and the type parameter's name: it cannot
-		// tell a stored feed from an unstored value of the same `T`, so an answer cached for one would be
+		// tell a guarded feed from an unguarded value of the same `T`, so an answer cached for one would be
 		// served to the other.
-		if valueIsMarked(self.bodyState.storedFeedParams, value: value) 'aStoredFeed'
+		if self.feedIsGuarded(value) 'aGuardedFeed'
 			return ReleaseTypeParamName
-		end 'aStoredFeed'
+		end 'aGuardedFeed'
 
 		let carriesLayoutParam = self.bodyState.carriesLayoutParam()
 		var key = ((self.tagOf(value).ordinal as ImageableVerdictKey) shl ImageableVerdictTagShift) or (self.valueNameId(value) as ImageableVerdictKey)
@@ -49935,7 +50063,7 @@ export type Parser
 
 	function unownedPromiseRefusalOf(promise ValueId, anchor Token, door ByteArray) returns SourceParseError
 		if valueIsMarked(self.bodyState.capturedPromiseReads, value: promise) 'theClosuresOwnCapture'
-			return capturedPromiseRefusal(anchor, door: door)
+			return capturedPromiseRefusal(SourceRange.ofToken(anchor), door: door)
 		end 'theClosuresOwnCapture'
 
 		return unownedPromiseRefusal(anchor, door: door)
@@ -50236,6 +50364,7 @@ export type Parser
 		var owned = try self.bodyState.ownedBindings.get(index) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 
 		owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
+		self.settleFeedDropGuardOf(value, loopCarried: LoopCarriedGuards.settleAlways)
 		self.bodyState.movedBindingValues = withValueMarked(self.bodyState.movedBindingValues, value: value)
 
 		// ⭐⭐ **E3077's COMPILER-ONLY DOOR: BEING MOVED OUT OF IS A USE OF MUTABILITY HERE, AND IN NEITHER
@@ -51016,6 +51145,7 @@ export type Parser
 		// borrowed `first()` and owned `last()` PANICKED the parser in `promoteBorrowedGive`, while the same
 		// program written as an `if`/`return` pair compiled and ran, because only the return road asked.
 		if self.tagOf(value) == ValueTypeTag.typeParameter 'opaqueElement'
+			try self.requireCapturedOpaqueHoldsNoGreenThread(value, range: range)
 			return self.coOwnBorrowedOpaque(value, range: range)
 		end 'opaqueElement'
 
@@ -72957,12 +73087,13 @@ export type Parser
 			return try self.moveConcreteValueInto(arg, argBareLocal: argBareLocal, range: range)
 		end 'substitutedToAConcreteType'
 
+		try self.requireCapturedOpaqueHoldsNoGreenThread(arg, range: range)
+
 		if self.opaqueSlotTakesItsOwnReference(arg) 'referenceThroughTheDescriptor'
 			// A RECORD slot makes the record the reference's owner, so it owes the release if IT is dropped here —
 			// recorded at the one line that takes the reference, which is what makes the store half and the drop
 			// half one act rather than two that agree. A CELL releases its occupant itself (`cellOwnsItsOccupant`).
 			self.markOpaqueSlotOwner(slot)
-			self.noteCoOwningFeedKept(arg)
 			return self.coOwnBorrowedOpaque(arg, range: range)
 		end 'referenceThroughTheDescriptor'
 
@@ -72982,12 +73113,6 @@ export type Parser
 
 		return arg
 	end 'moveOpaqueValueInto'
-
-	function noteCoOwningFeedKept(value ValueId)
-		if valueIsMarked(self.bodyState.coOwningFeedParams, value: value) 'aCoOwningFeed'
-			self.bodyState.storedFeedParams = withValueMarked(self.bodyState.storedFeedParams, value: value)
-		end 'aCoOwningFeed'
-	end 'noteCoOwningFeedKept'
 
 	function markOpaqueSlotOwner(slot DurableOpaqueSlot)
 		match slot 'owner'
@@ -73090,6 +73215,7 @@ export type Parser
 		self.markValueCoOwnsHeap(value)
 		let retained = self.emitRuntimeCall(RetainTypeParamName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 		self.carryFromSharedRecord(retained, from: value, source: self.bodyState, path: ValueCarryPath.copy)
+		self.noteFeedStored(value, range: range)
 		return retained
 	end 'coOwnBorrowedOpaque'
 
@@ -73130,7 +73256,7 @@ export type Parser
 	// layout descriptor, which a body carrying no descriptor (a `static` over a trivial instantiation)
 	// does not have — so co-owning there unconditionally converts a working program into a refusal.
 	// Those doors take a reference where a move is provably wrong (across a loop back edge), and for a
-	// constructor feed whose `T` some instantiation can owe a reference for (`coOwningFeedParams`).
+	// kept constructor feed (`coOwningFeedParams`).
 	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, range SourceRange) returns ValueId throws SourceParseError
 		if self.valueIsDeferred(arg) 'aDeferredCallResult'
 			return arg
@@ -89627,6 +89753,7 @@ export type Parser
 		// asks. That the two ask ONE routine is the invariant, not a tidiness: a slot filled at one
 		// width and read at another corrupts the environment silently.
 		let captureType = self.resolveFloatAliasType(binding.varType, scopeFilePath: self.job.path)
+
 		let range = SourceRange.ofToken(anchor)
 		let slot = self.captureSlotFor(name, captureType: captureType, anchor: anchor)
 		let captured = self.emitIndirectLoad(captureType, box: self.closureEnvValue(), offset: envSlotOffset(slot), storageType: self.wordSlotStorageType(captureType), range: range)
@@ -98953,7 +99080,6 @@ export type Parser
 			// A co-owning constructor feed takes a reference wherever it is forwarded: this frame keeps its
 			// own (`coOwningFeedParams`).
 			if valueIsMarked(self.bodyState.coOwningFeedParams, value: argValue) or self.moveOfValueEscapesLoop(argValue) 'referenceRatherThanMove'
-				self.noteCoOwningFeedKept(argValue)
 				return self.coOwnBorrowedOpaque(argValue, range: SourceRange.ofToken(anchor))
 			end 'referenceRatherThanMove'
 

@@ -85,6 +85,8 @@ function everyParamPosition() returns ParamPositionMask
 	return every
 end 'everyParamPosition'
 
+// `__retain_type_param` answers a fresh clone for a byte record; naming its operand's origin anyway
+// over-approximates sharing, which can only make a verdict less pure.
 function retainsItsOperand(callee ByteArray) returns bool
 	return callee.equals(MmRetainName) or callee.equals(ManagedRetainName) or callee.equals(StrRetainName) or callee.equals(RetainTypeParamName)
 end 'retainsItsOperand'
@@ -1605,8 +1607,10 @@ type EffectSummaryBuilder
 	// A drop runs destructors the IR does not show: a promise's cancels its green thread, and a
 	// mailbox, file, directory or socket handle's closes an OS resource. A drop is bookkeeping only
 	// when the dropped value's type graph cannot hold one; a type parameter or an existential might.
+	// `__release_type_param` is absent: on a path where it can drop a feed's last owner, the feed's
+	// drop guard also emits `__reclaim_type_param`, which is here.
 	function releasesWhatItMayNotOwn(func IrFunction, callee ByteArray, args ValueIdArray) returns bool
-		if callee.equals(DropTypeParamName) or callee.equals(DropExistentialName) 'releasesAnUnknownType'
+		if callee.equals(DropTypeParamName) or callee.equals(ReclaimTypeParamName) or callee.equals(DropExistentialName) 'releasesAnUnknownType'
 			return true
 		end 'releasesAnUnknownType'
 

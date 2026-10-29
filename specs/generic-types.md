@@ -4652,3 +4652,936 @@ refused
 ```exitcode
 0
 ```
+
+<!-- test: a-generic-factory-drops-an-argument-on-every-path-that-did-not-store-it -->
+A generic factory that stores `item` on one branch and `spare` on the other drops whichever it did not store on
+every path, whether it returns or throws. The same body over a `String` and over a promise leaks neither the
+string nor the promise's green thread, on the path that stored the argument and on the path that did not.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+enum KeepError implements Error
+	refused
+end 'KeepError'
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, spare T, keep bool, refuse bool) returns Self throws KeepError
+		if keep 'kept'
+			let built = Self{slot: item, origin: 1}
+
+			if refuse 'refusedKept'
+				throw KeepError.refused
+			end 'refusedKept'
+
+			return built
+		end 'kept'
+
+		let fallback = Self{slot: spare, origin: 2}
+
+		if refuse 'refusedFallback'
+			throw KeepError.refused
+		end 'refusedFallback'
+
+		return fallback
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+typealias TextHolder = Holder with String
+typealias PromiseHolder = Holder with IntPromise
+
+function attemptText(keep bool, refuse bool) returns String
+	let built = try TextHolder.create(longText("item"), spare: longText("spare"), keep: keep, refuse: refuse) otherwise return "refused"
+	return "{built.slot} {built.source()}"
+end 'attemptText'
+
+function attemptPromise(keep bool, refuse bool) returns Whole
+	let built = try PromiseHolder.create(async work(1), spare: async work(2), keep: keep, refuse: refuse) otherwise return 0
+	return built.source()
+end 'attemptPromise'
+
+function main() returns ExitCode
+	print("{attemptText(true, refuse: false)}\n")
+	print("{attemptText(false, refuse: false)}\n")
+	print("{attemptText(true, refuse: true)}\n")
+	print("{attemptText(false, refuse: true)}\n")
+	print("{attemptPromise(true, refuse: false)}\n")
+	print("{attemptPromise(false, refuse: false)}\n")
+	print("{attemptPromise(true, refuse: true)}\n")
+	print("{attemptPromise(false, refuse: true)}\n")
+	return 0
+end 'main'
+```
+```stdout
+item payload long enough to allocate 1
+spare payload long enough to allocate 2
+refused
+refused
+1
+2
+0
+0
+```
+```exitcode
+0
+```
+
+<!-- test: a-generic-factory-pushes-a-type-parameter-argument-it-also-reassigns -->
+<!-- process: own -->
+A generic factory that reassigns its `T` parameter and pushes it into an array it builds owns neither the
+caller's cell nor a second reference to the pushed value: the caller's variable and the array each keep what
+they hold, and the leak gate is clean. It runs alone because, batched with
+`a-float-element-is-admitted-on-a-buffer-base`, a type member that reassigns its parameter loses that
+program's `FixedArray` index proof (a false E3057).
+```maxon
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Hold uses U
+	typealias Items = Array with U
+	export var items as Items
+
+	static function of(first U, replacement U, swap bool) returns Hold
+		var xs = Items.create()
+
+		if swap 'swapped'
+			first = replacement
+		end 'swapped'
+
+		xs.push(first)
+		return Hold{items: xs}
+	end 'of'
+end 'Hold'
+
+typealias TextHold = Hold with String
+
+function main() returns ExitCode
+	var original = longText("original")
+	let swapped = TextHold.of(original, replacement: longText("replacement"), swap: true)
+	var other = longText("kept")
+	let kept = TextHold.of(other, replacement: longText("unused"), swap: false)
+
+	for s in swapped.items 'each'
+		print("{s}\n")
+	end 'each'
+
+	for s in kept.items 'eachKept'
+		print("{s}\n")
+	end 'eachKept'
+
+	return 0
+end 'main'
+```
+```stdout
+replacement payload long enough to allocate
+kept payload long enough to allocate
+```
+```exitcode
+0
+```
+
+<!-- test: a-concrete-factory-pushes-a-string-argument-it-also-reassigns -->
+<!-- process: own -->
+The concrete twin of the case above: a `String` parameter that is reassigned and then pushed into an array the
+factory builds, with the caller's variable and the array each keeping what they hold. It runs alone because,
+batched with `a-float-element-is-admitted-on-a-buffer-base`, a type member that reassigns its parameter loses
+that program's `FixedArray` index proof (a false E3057).
+```maxon
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Hold
+	typealias Items = Array with String
+	export var items as Items
+
+	static function of(first String, replacement String, swap bool) returns Hold
+		var xs = Items.create()
+
+		if swap 'swapped'
+			first = replacement
+		end 'swapped'
+
+		xs.push(first)
+		return Hold{items: xs}
+	end 'of'
+end 'Hold'
+
+function main() returns ExitCode
+	var original = longText("original")
+	let swapped = Hold.of(original, replacement: longText("replacement"), swap: true)
+	var other = longText("kept")
+	let kept = Hold.of(other, replacement: longText("unused"), swap: false)
+
+	for s in swapped.items 'each'
+		print("{s}\n")
+	end 'each'
+
+	for s in kept.items 'eachKept'
+		print("{s}\n")
+	end 'eachKept'
+
+	return 0
+end 'main'
+```
+```stdout
+replacement payload long enough to allocate
+kept payload long enough to allocate
+```
+```exitcode
+0
+```
+
+<!-- test: a-generic-factory-drops-an-argument-stored-on-only-some-paths-into-a-join -->
+A generic factory that stores `item` into a local record on one branch and goes on to the code both branches
+share drops it on the path that skipped the store, whether the factory then returns or throws. The same body over
+a `String` and over a promise leaks neither the string nor the promise's green thread.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+enum KeepError implements Error
+	refused
+end 'KeepError'
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	typealias Pieces = Array with Self
+
+	static function create(item T, spare T, keep bool, refuse bool) returns Self throws KeepError
+		var pieces = Pieces.create()
+		var made = 2 as Whole
+
+		if keep 'kept'
+			pieces.push(Self{slot: item, origin: 1})
+			made = 3
+		end 'kept'
+
+		if refuse 'refused'
+			throw KeepError.refused
+		end 'refused'
+
+		return Self{slot: spare, origin: made}
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+typealias TextHolder = Holder with String
+typealias PromiseHolder = Holder with IntPromise
+
+function attemptText(keep bool, refuse bool) returns String
+	let built = try TextHolder.create(longText("item"), spare: longText("spare"), keep: keep, refuse: refuse) otherwise return "refused"
+	return "{built.slot} {built.source()}"
+end 'attemptText'
+
+function attemptPromise(keep bool, refuse bool) returns Whole
+	let built = try PromiseHolder.create(async work(1), spare: async work(2), keep: keep, refuse: refuse) otherwise return 0
+	return built.source()
+end 'attemptPromise'
+
+function main() returns ExitCode
+	print("{attemptText(true, refuse: false)}\n")
+	print("{attemptText(false, refuse: false)}\n")
+	print("{attemptText(true, refuse: true)}\n")
+	print("{attemptText(false, refuse: true)}\n")
+	print("{attemptPromise(true, refuse: false)}\n")
+	print("{attemptPromise(false, refuse: false)}\n")
+	print("{attemptPromise(true, refuse: true)}\n")
+	print("{attemptPromise(false, refuse: true)}\n")
+	return 0
+end 'main'
+```
+```stdout
+spare payload long enough to allocate 3
+spare payload long enough to allocate 2
+refused
+refused
+3
+2
+0
+0
+```
+```exitcode
+0
+```
+
+<!-- test: a-generic-factory-drops-an-argument-stored-in-a-loop-only-when-it-breaks -->
+A generic factory that stores `item` in a loop only on the iteration that breaks drops it when the loop runs out
+instead, with the record it stored beforehand released either way. The same body over a `String` and over a
+promise leaks neither.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, spare T, stopAt Whole) returns Self
+		var found = Self{slot: spare, origin: 0}
+		var round = 1 as Whole
+
+		while round < 4 'scan'
+			if round == stopAt 'hit'
+				found = Self{slot: item, origin: round}
+				break
+			end 'hit'
+
+			round = round + 1
+		end 'scan'
+
+		return found
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+typealias TextHolder = Holder with String
+typealias PromiseHolder = Holder with IntPromise
+
+function attemptText(stopAt Whole) returns String
+	let built = TextHolder.create(longText("item"), spare: longText("spare"), stopAt: stopAt)
+	return "{built.slot} {built.source()}"
+end 'attemptText'
+
+function attemptPromise(stopAt Whole) returns Whole
+	let built = PromiseHolder.create(async work(1), spare: async work(2), stopAt: stopAt)
+	return built.source()
+end 'attemptPromise'
+
+function main() returns ExitCode
+	print("{attemptText(2)}\n")
+	print("{attemptText(9)}\n")
+	print("{attemptPromise(2)}\n")
+	print("{attemptPromise(9)}\n")
+	return 0
+end 'main'
+```
+```stdout
+item payload long enough to allocate 2
+spare payload long enough to allocate 0
+2
+0
+```
+```exitcode
+0
+```
+
+<!-- test: a-generic-factory-instantiated-only-at-a-promise-drops-it-when-it-throws-first -->
+A generic factory instantiated at a promise alone, with no managed instantiation beside it, drops the promise it
+was handed on the path that throws before storing it, and keeps it in the record on the path that stores it.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+enum KeepError implements Error
+	refused
+end 'KeepError'
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, refuse bool) returns Self throws KeepError
+		if refuse 'refused'
+			throw KeepError.refused
+		end 'refused'
+
+		return Self{slot: item, origin: 1}
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+typealias PromiseHolder = Holder with IntPromise
+
+function attempt(refuse bool) returns Whole
+	let built = try PromiseHolder.create(async work(1), refuse: refuse) otherwise return 0
+	return built.source()
+end 'attempt'
+
+function main() returns ExitCode
+	print("{attempt(false)}\n")
+	print("{attempt(true)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1
+0
+```
+```exitcode
+0
+```
+
+<!-- test: a-generic-factory-stores-a-type-parameter-argument-it-also-reassigns -->
+<!-- process: own -->
+A generic factory that reassigns its `T` parameter and then stores it in the record it builds leaves the caller's
+variable and the record each holding their own reference, and the leak gate is clean. It runs alone because,
+batched with `a-float-element-is-admitted-on-a-buffer-base`, a type member that reassigns its parameter loses
+that program's `FixedArray` index proof (a false E3057).
+```maxon
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Wrap uses U
+	export var item as U
+
+	static function of(first U, replacement U, swap bool) returns Wrap
+		if swap 'swapped'
+			first = replacement
+		end 'swapped'
+
+		return Wrap{item: first}
+	end 'of'
+end 'Wrap'
+
+typealias TextWrap = Wrap with String
+
+function main() returns ExitCode
+	var original = longText("original")
+	let swapped = TextWrap.of(original, replacement: longText("replacement"), swap: true)
+	var other = longText("kept")
+	let kept = TextWrap.of(other, replacement: longText("unused"), swap: false)
+	print("{swapped.item}\n")
+	print("{kept.item}\n")
+	print("{original}\n")
+	print("{other}\n")
+	return 0
+end 'main'
+```
+```stdout
+replacement payload long enough to allocate
+kept payload long enough to allocate
+replacement payload long enough to allocate
+kept payload long enough to allocate
+```
+```exitcode
+0
+```
+
+<!-- test: a-string-only-generic-factory-stores-its-argument-in-every-loop-iteration -->
+A generic factory whose type parameter no instantiation fills with a promise stores its `T` argument on every
+iteration of a loop, as the same body over a `String` does: each store holds its own reference, the record the
+loop leaves holds the last, and the leak gate is clean.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, spare T, n Whole) returns Self
+		var found = Self{slot: spare, origin: 0}
+		var round = 0 as Whole
+
+		while round < n 'scan'
+			found = Self{slot: item, origin: round + 1}
+			round = round + 1
+		end 'scan'
+
+		return found
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+typealias TextHolder = Holder with String
+
+function attemptText(n Whole) returns String
+	let built = TextHolder.create(longText("item"), spare: longText("spare"), n: n)
+	return "{built.slot} {built.source()}"
+end 'attemptText'
+
+function main() returns ExitCode
+	print("{attemptText(0)}\n")
+	print("{attemptText(2)}\n")
+	return 0
+end 'main'
+```
+```stdout
+spare payload long enough to allocate 0
+item payload long enough to allocate 2
+```
+```exitcode
+0
+```
+
+<!-- test: a-string-only-generic-factory-reads-its-argument-through-a-closure -->
+The same body over a `String` alone captures its `T` argument in a closure and hands it back, on the path that
+stores the result and on the path that does not, without a leak.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, spare T, keep bool) returns Self
+		let f = function() gives item
+
+		if keep 'kept'
+			return Self{slot: f(), origin: 1}
+		end 'kept'
+
+		return Self{slot: spare, origin: 2}
+	end 'create'
+end 'Holder'
+
+typealias TextHolder = Holder with String
+
+function main() returns ExitCode
+	let a = TextHolder.create(longText("item"), spare: longText("spare"), keep: true)
+	let b = TextHolder.create(longText("item"), spare: longText("spare"), keep: false)
+	print("{a.slot}\n{b.slot}\n")
+	return 0
+end 'main'
+```
+```stdout
+item payload long enough to allocate
+spare payload long enough to allocate
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-generic-factory-over-a-promise-stores-its-argument-in-a-loop -->
+A shared generic body means what it means at a concrete type: a `T` argument stored on every iteration of a loop is
+refused when some instantiation of `T` is a promise, exactly as the same body over a promise parameter is.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, spare T, n Whole) returns Self
+		var found = Self{slot: spare, origin: 0}
+		var round = 0 as Whole
+
+		while round < n 'scan'
+			found = Self{slot: item, origin: round + 1}
+			round = round + 1
+		end 'scan'
+
+		return found
+	end 'create'
+end 'Holder'
+
+typealias PromiseHolder = Holder with IntPromise
+
+function main() returns ExitCode
+	let built = PromiseHolder.create(async work(1), spare: async work(2), n: 1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:23: use of moved value 'item': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: error.a-concrete-factory-stores-a-promise-argument-in-a-loop -->
+The concrete twin of the case above, refused with the same sentence.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder
+	public var slot as IntPromise
+	var origin as Whole
+
+	static function create(item IntPromise, spare IntPromise, n Whole) returns Self
+		var found = Self{slot: spare, origin: 0}
+		var round = 0 as Whole
+
+		while round < n 'scan'
+			found = Self{slot: item, origin: round + 1}
+			round = round + 1
+		end 'scan'
+
+		return found
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let built = Holder.create(async work(1), spare: async work(2), n: 1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:23: use of moved value 'item': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: error.a-generic-factory-over-a-promise-stores-its-argument-twice -->
+A `T` argument stored in two records is refused when some instantiation of `T` is a promise, as a promise
+parameter stored twice is: a green thread has one owner.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T) returns Self
+		let first = Self{slot: item, origin: 1}
+		return Self{slot: item, origin: first.origin + 1}
+	end 'create'
+end 'Holder'
+
+typealias PromiseHolder = Holder with IntPromise
+
+function main() returns ExitCode
+	let built = PromiseHolder.create(async work(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:21: use of moved value 'item': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-concrete-factory-stores-a-promise-argument-twice -->
+The concrete twin of the case above, refused with the same sentence.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder
+	public var slot as IntPromise
+	var origin as Whole
+
+	static function create(item IntPromise) returns Self
+		let first = Self{slot: item, origin: 1}
+		return Self{slot: item, origin: first.origin + 1}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let built = Holder.create(async work(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:21: use of moved value 'item': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-generic-factory-over-a-promise-hands-its-argument-back-through-a-closure -->
+A `T` argument captured by a closure that gives it away is refused when some instantiation of `T` is a promise,
+as a captured promise is: the closure owns its capture and its body may run any number of times.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, spare T, keep bool) returns Self
+		let f = function() gives item
+
+		if keep 'kept'
+			return Self{slot: f(), origin: 1}
+		end 'kept'
+
+		return Self{slot: spare, origin: 2}
+	end 'create'
+end 'Holder'
+
+typealias PromiseHolder = Holder with IntPromise
+
+function main() returns ExitCode
+	let built = PromiseHolder.create(async work(1), spare: async work(2), keep: false)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:15:22: a promise cannot be borrowed through 'item': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. This one is a closure's capture: the closure owns it for as long as the closure lives, and its body may run any number of times, so no run of it may give the promise away. Await it in the function that spawned it, or hand the closure what it needs as a parameter
+```
+
+<!-- test: error.a-factory-reached-through-a-declaration-view-of-a-promise-stores-its-argument-twice -->
+A promise reaches a shared body only through a view: `Holder with U` inside `Outer uses U`, with `Holder` never
+written at a promise and no field of `Outer` holding one. Its factory storing the `T` argument twice is refused
+with the sentence the same factory gets when `Holder` is written at the promise.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T) returns Self
+		let first = Self{slot: item, origin: 1}
+		return Self{slot: item, origin: first.origin + 1}
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+type Outer uses U
+	typealias Inner = Holder with U
+	public var count as Whole
+
+	static function build(item U) returns Self
+		let made = Inner.create(item)
+		return Self{count: made.source()}
+	end 'build'
+end 'Outer'
+
+typealias PromiseOuter = Outer with IntPromise
+
+function main() returns ExitCode
+	let built = PromiseOuter.build(async work(1))
+	print("{built.count}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:21: use of moved value 'item': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-factory-reached-through-a-declaration-view-of-a-promise-stores-its-argument-in-a-loop -->
+The loop twin of the case above: a `T` argument stored on every iteration is refused through the view with the
+sentence it gets when `Holder` is written at the promise.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, spare T, n Whole) returns Self
+		var found = Self{slot: spare, origin: 0}
+		var round = 0 as Whole
+
+		while round < n 'scan'
+			found = Self{slot: item, origin: round + 1}
+			round = round + 1
+		end 'scan'
+
+		return found
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+type Outer uses U
+	typealias Inner = Holder with U
+	public var count as Whole
+
+	static function build(item U, spare U) returns Self
+		let made = Inner.create(item, spare: spare, n: 1)
+		return Self{count: made.source()}
+	end 'build'
+end 'Outer'
+
+typealias PromiseOuter = Outer with IntPromise
+
+function main() returns ExitCode
+	let built = PromiseOuter.build(async work(1), spare: async work(2))
+	print("{built.count}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:23: use of moved value 'item': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-factory-reached-through-a-declaration-view-of-a-string-stores-its-argument-twice-and-in-a-loop -->
+The same two factories reached through the same view at a `String` store their argument twice and on every
+iteration, as the bodies over a `String` do, and the leak gate is clean.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+function longText(tag String) returns String
+	var sb = StringBuilder.create()
+	sb.append(tag)
+	sb.append(" payload long enough to allocate")
+	return sb.build()
+end 'longText'
+
+type Twice uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T) returns Self
+		let first = Self{slot: item, origin: 1}
+		return Self{slot: item, origin: first.origin + 1}
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Twice'
+
+type Looped uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T, spare T, n Whole) returns Self
+		var found = Self{slot: spare, origin: 0}
+		var round = 0 as Whole
+
+		while round < n 'scan'
+			found = Self{slot: item, origin: round + 1}
+			round = round + 1
+		end 'scan'
+
+		return found
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Looped'
+
+type Outer uses U
+	typealias InnerTwice = Twice with U
+	typealias InnerLooped = Looped with U
+	public var count as Whole
+
+	static function build(item U, spare U) returns Self
+		let twice = InnerTwice.create(item)
+		let looped = InnerLooped.create(item, spare: spare, n: 2)
+		return Self{count: twice.source() + looped.source()}
+	end 'build'
+end 'Outer'
+
+typealias TextOuter = Outer with String
+
+function main() returns ExitCode
+	let built = TextOuter.build(longText("item"), spare: longText("spare"))
+	print("{built.count}\n")
+	return 0
+end 'main'
+```
+```stdout
+4
+```
+```exitcode
+0
+```

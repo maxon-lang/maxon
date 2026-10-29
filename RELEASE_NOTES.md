@@ -271,6 +271,10 @@ release's version as its heading when the release is cut.
   Fix: pass `binding.clone()` to keep reading the binding, and `.clone()` a borrowed argument; keep the
   value in a field of the service and reach it through a message; break the await cycle as E3139's entry
   describes; spawn from a function of a concrete type.
+- A generic body the program instantiates with a promise, or a type holding one, is held to a promise's
+  rules: a `T` parameter it stores in a record twice, or inside a loop, is E3102, and a closure in it that
+  stores or returns a captured `T` is E3141.
+  Fix: store the parameter once, outside any loop, and hand the closure the value as a parameter.
 
 ## 0.5.0 — 2026-10-08
 

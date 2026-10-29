@@ -839,12 +839,26 @@ export let DropTypeParamName = b"__drop_type_param"
 // DIFFERENT record.
 export let RetainTypeParamName = b"__retain_type_param"
 
-// `__release_type_param(descriptor, value)` releases the reference a shared generic body kept on a
-// constructor feed it stored (`storedFeedParams`). It destroys through `destroyFunc@40` only when
-// `retainFunc@64` is non-zero: a zero retain word means the store took no reference and the record
+// `__release_type_param(descriptor, value)` releases the reference a shared generic body keeps on a
+// constructor feed (`Parser.FeedDropGuard`). It destroys through `destroyFunc@40` only when
+// `retainFunc@64` is non-zero: a zero retain word means a store takes no reference and the record
 // owns the value itself, so a destroy would free it under the record — for a promise, cancel its
 // thread.
 export let ReleaseTypeParamName = b"__release_type_param"
+
+// `__reclaim_type_param(descriptor, value)` is a feed drop guard's exit drop, reached on a path
+// that neither stored nor moved the feed. It destroys through `destroyFunc@40` only when
+// `retainFunc@64` is zero and that word is not: the one case `__release_type_param` leaves alone,
+// where this frame is the value's only owner.
+export let ReclaimTypeParamName = b"__reclaim_type_param"
+
+export function dropsAnOpaqueTypeParamValue(callee ByteArray) returns bool
+	return callee.equals(DropTypeParamName) or callee.equals(ReleaseTypeParamName) or callee.equals(ReclaimTypeParamName)
+end 'dropsAnOpaqueTypeParamValue'
+
+export function isTypeParamOwnershipCallee(callee ByteArray) returns bool
+	return dropsAnOpaqueTypeParamValue(callee) or callee.equals(RetainTypeParamName)
+end 'isTypeParamOwnershipCallee'
 
 // ⭐ **THE EXISTENTIAL'S DROP.** `__drop_existential(witness, value)` releases
 // the VALUE half of a fat pointer through the destructor its WITNESS table names
@@ -1335,6 +1349,14 @@ export function installReleaseTypeParamRuntime(module StdModule, usage RuntimeUs
 	buildRecordGatedAction(module, symbolName: ReleaseTypeParamName, wordOffset: LAYOUT_OFFSET_RETAIN_FUNC, action: RecordGatedAction.destroyWhenRetainable)
 end 'installReleaseTypeParamRuntime'
 
+export function installReclaimTypeParamRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesReclaimTypeParam 'noReclaim'
+		return
+	end 'noReclaim'
+
+	buildRecordGatedAction(module, symbolName: ReclaimTypeParamName, wordOffset: LAYOUT_OFFSET_RETAIN_FUNC, action: RecordGatedAction.destroyWhenUnretained)
+end 'installReclaimTypeParamRuntime'
+
 // ⭐ **INSTALL `__drop_existential`** — its own bit for
 // `installDropTypeParamRuntime`'s reason: an interface-typed FIELD drops through it in a program that
 // instantiates no generic at all, so gating it on the descriptor drop's bit would leave that call unlinked.
@@ -1414,6 +1436,10 @@ module union RecordGatedAction
 	// non-zero — `__release_type_param`, gated on `retainFunc@64` (see `ReleaseTypeParamName`).
 	destroyWhenRetainable
 
+	// DESTROY `value` through `destroyFunc@40` when the loaded word is ZERO and that word is not —
+	// `__reclaim_type_param`, gated on `retainFunc@64` (see `ReclaimTypeParamName`).
+	destroyWhenUnretained
+
 	// Take a SECOND owner of `value` through the loaded word with a `callIndirect` — `__retain_existential`,
 	// `__retain_type_param`, `__mm_clone_existential`.
 	// A `(i64, i64) -> i64` that ANSWERS WITH WHAT THE WORD HANDED BACK, which is the whole difference: the
@@ -1430,10 +1456,11 @@ end 'RecordGatedAction'
 
 // ⭐⭐ **`<symbolName>(record, value)` — THE SINGLE-VALUE ANALOGUE of the managed-element destroy gate
 // (`emitDestroyRangeIfManaged`).** Load a function-pointer word out of `record` at `wordOffset` and, when it
-// is non-zero, act on `value` as `action` says; a zero word is inert. `value` is a LIVE owner (or a live
+// is non-zero, act on `value` as `action` says; a zero word is inert, except to
+// `destroyWhenUnretained`, which acts only on a zero word. `value` is a LIVE owner (or a live
 // borrow) at every call site, so unlike the array walk it needs no per-slot null guard.
 //
-// **EIGHT ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
+// **NINE ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
 //   • `__drop_type_param(descriptor, value)` — a shared generic body dropping a consumed
 //     opaque type-parameter binding (a `push`/forward feed parameter left live on some path). The record is
 //     the enclosing instance's LAYOUT DESCRIPTOR and the word is `destroyFunc@40` — the same word the
@@ -1451,16 +1478,18 @@ end 'RecordGatedAction'
 //     `T`. The record is the LAYOUT DESCRIPTOR and the word is `retainFunc@64`, filled from the same
 //     `ExistentialOwnershipProtocol` the witness pair is (`retainCalleeForProtocol`).
 //   • `__release_type_param(descriptor, value)` — a shared generic body releasing the reference it
-//     kept on a stored constructor feed. The record is the LAYOUT DESCRIPTOR; the gating word is
+//     keeps on a constructor feed. The record is the LAYOUT DESCRIPTOR; the gating word is
 //     `retainFunc@64` and the destroying one `destroyFunc@40` (see `ReleaseTypeParamName`).
+//   • `__reclaim_type_param(descriptor, value)` — the same two words with the retain gate inverted:
+//     the feed drop guard's destroy of a value no store took (see `ReclaimTypeParamName`).
 //   • `__mm_sole_existential(witness, value, visits) -> visits` / `__mm_share_existential(…)` — a value held
 //     at an interface type walked before it crosses to another green thread, through the table's
 //     `soleWalkFunc@24` / `shareWalkFunc@32`.
 //   • `__mm_clone_existential(witness, value) -> value'` — the DEEP COPY of an interface-typed field's value
 //     half, through the same table's `cloneFunc@40`.
 //
-// All eight are "a per-type fact nobody can name statically, read out of a record at run time", so
-// one emitter builds all eight: the element-destructor ABI (`emitElementDestructorCall`) and the
+// All nine are "a per-type fact nobody can name statically, read out of a record at run time", so
+// one emitter builds all nine: the element-destructor ABI (`emitElementDestructorCall`) and the
 // zero-means-nothing-to-do convention are then stated once and cannot drift between them.
 //
 // ⚠ **THE RETAIN'S AND THE WALK'S TAKEN PATHS RETURN FROM `doact` RATHER THAN FALLING INTO `done`**, so the two
@@ -1486,17 +1515,36 @@ module function buildRecordGatedAction(module StdModule, symbolName ByteArray, w
 	let value = 1
 
 	let word = emitRecordWordLoad(module, block: entry, record: record, offset: wordOffset, ids: ids)
-	emitBranchOnCompare(module, block: entry, value: word, pred: StdCmpPred.ne, against: 0, whenTrue: doAct, whenFalse: done, ids: ids)
 
 	match action 'act'
-		destroyThroughWord then emitRecordGatedDestroyTail(module, doAct: doAct, done: done, word: word, value: value, ids: ids)
-		destroyWhenRetainable then emitRecordGatedDestroyTail(module, doAct: doAct, done: done, word: emitRecordWordLoad(module, block: doAct, record: record, offset: LAYOUT_OFFSET_DESTROY_FUNC, ids: ids), value: value, ids: ids)
-		retainThroughWord then emitRecordGatedAnsweringTail(module, doAct: doAct, done: done, word: word, args: argsOf(value), inert: value, ids: ids)
-		walkThroughWord then emitRecordGatedAnsweringTail(module, doAct: doAct, done: done, word: word, args: twoArgs(value, second: RecordGatedVisitsParam), inert: RecordGatedVisitsParam, ids: ids)
+		destroyThroughWord then emitDestroyWhenPresent(module, entry: entry, doAct: doAct, done: done, gateWord: word, destroyWord: word, value: value, ids: ids)
+		destroyWhenRetainable then emitDestroyWhenPresent(module, entry: entry, doAct: doAct, done: done, gateWord: word, destroyWord: emitRecordWordLoad(module, block: doAct, record: record, offset: LAYOUT_OFFSET_DESTROY_FUNC, ids: ids), value: value, ids: ids)
+		destroyWhenUnretained then emitDestroyWhenAbsent(module, func: func, entry: entry, doAct: doAct, done: done, record: record, retainWord: word, value: value, ids: ids)
+		retainThroughWord then emitAnswerWhenPresent(module, entry: entry, doAct: doAct, done: done, word: word, args: argsOf(value), inert: value, ids: ids)
+		walkThroughWord then emitAnswerWhenPresent(module, entry: entry, doAct: doAct, done: done, word: word, args: twoArgs(value, second: RecordGatedVisitsParam), inert: RecordGatedVisitsParam, ids: ids)
 	end 'act'
 
 	module.functions.push(func)
 end 'buildRecordGatedAction'
+
+function emitDestroyWhenPresent(module StdModule, entry IrBlock, doAct IrBlock, done IrBlock, gateWord ValueId, destroyWord ValueId, value ValueId, ids ValueMinter)
+	emitBranchOnCompare(module, block: entry, value: gateWord, pred: StdCmpPred.ne, against: 0, whenTrue: doAct, whenFalse: done, ids: ids)
+	emitRecordGatedDestroyTail(module, doAct: doAct, done: done, word: destroyWord, value: value, ids: ids)
+end 'emitDestroyWhenPresent'
+
+function emitAnswerWhenPresent(module StdModule, entry IrBlock, doAct IrBlock, done IrBlock, word ValueId, args ValueIdArray, inert ValueId, ids ValueMinter)
+	emitBranchOnCompare(module, block: entry, value: word, pred: StdCmpPred.ne, against: 0, whenTrue: doAct, whenFalse: done, ids: ids)
+	emitRecordGatedAnsweringTail(module, doAct: doAct, done: done, word: word, args: args, inert: inert, ids: ids)
+end 'emitAnswerWhenPresent'
+
+function emitDestroyWhenAbsent(module StdModule, func IrFunction, entry IrBlock, doAct IrBlock, done IrBlock, record ValueId, retainWord ValueId, value ValueId, ids ValueMinter)
+	var check = module.addBlock(func, label: b"check", heat: BlockHeat.normal)
+	emitBranchOnCompare(module, block: entry, value: retainWord, pred: StdCmpPred.eq, against: 0, whenTrue: check, whenFalse: done, ids: ids)
+
+	let destroyWord = emitRecordWordLoad(module, block: check, record: record, offset: LAYOUT_OFFSET_DESTROY_FUNC, ids: ids)
+	emitBranchOnCompare(module, block: check, value: destroyWord, pred: StdCmpPred.ne, against: 0, whenTrue: doAct, whenFalse: done, ids: ids)
+	emitRecordGatedDestroyTail(module, doAct: doAct, done: done, word: destroyWord, value: value, ids: ids)
+end 'emitDestroyWhenAbsent'
 
 // The visit table a `walkThroughWord` entry is handed, after the record and the value.
 let RecordGatedVisitsParam = 2
@@ -1531,7 +1579,8 @@ end 'emitRecordGatedAnsweringTail'
 function recordGatedReturnType(action RecordGatedAction) returns StdReturnType
 	return match action 'a'
 		destroyThroughWord or
-		destroyWhenRetainable gives StdReturnType.void
+		destroyWhenRetainable or
+		destroyWhenUnretained gives StdReturnType.void
 		retainThroughWord or
 		walkThroughWord gives StdReturnType.value(StdType.i64)
 	end 'a'
@@ -1541,6 +1590,7 @@ function recordGatedParamCount(action RecordGatedAction) returns ParamCount
 	return match action 'a'
 		destroyThroughWord or
 		destroyWhenRetainable or
+		destroyWhenUnretained or
 		retainThroughWord gives 2 as ParamCount
 		walkThroughWord gives 3 as ParamCount
 	end 'a'

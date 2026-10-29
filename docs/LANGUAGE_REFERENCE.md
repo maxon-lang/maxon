@@ -5216,9 +5216,13 @@ holding, exactly once. Three refusals follow:
   hold one promise, so only one of them may be consumed; where the compiler cannot see that both name one slot,
   the program aborts at run time with exit code **118** instead, and so does `p.isComplete()` on such a read.
   An `async` call that hands a promise to a parameter the callee only reads is **E3141** too, and so is a
-  store of a conditional expression (`h.p = a if c else b`): store on each branch instead.
+  store of a conditional expression (`h.p = a if c else b`): store on each branch instead. So is a closure
+  giving away a promise it captured, since its body may run any number of times — in a generic body, a
+  captured `T` stored or returned where the program instantiates `T` with a promise. Await it in the function
+  that spawned it, or hand the closure what it needs as a parameter.
 - **E3102** — a promise already moved into storage is used again afterwards, or one promise is passed at two
-  arguments of one call where a parameter takes it.
+  arguments of one call where a parameter takes it. A generic factory's `T` parameter stored twice, or in a
+  loop, is this too where the program instantiates `T` with a promise.
 - **E2015** — a promise read outside a loop is given away inside it, or inside a `while` condition. Read it
   inside the loop instead.
 
