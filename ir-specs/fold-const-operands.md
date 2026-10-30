@@ -70,15 +70,14 @@ func @main {
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 r12, 6
     x64.movRegImm32 r13, 7
-    x64.leaRegRdata r14, [rip + __layout_Array_FullRangeInt]
   __il_body#12:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_resize
-    x64.movRegImm32 r15, 0
+    x64.movRegImm32 r14, 0
   __il_body#14:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
+    x64.movRegReg rdx, r14
     x64.movRegReg rax, r12
     x64.movRegReg r9, r13
     x64.callDirect __managed_fill
@@ -99,12 +98,26 @@ func @main {
   tryok#15:
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, forhdr
-    x64.jmp ifcont
+    x64.jcc equal, __il_cont
+  __us_test#50:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr#18
+  __us_test#51:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 16]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, forhdr#18
+  __us_test#52:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc equal, forhdr#18
+  __us_test#53:
+    x64.leaRegRegImm32 rax, r15, -24
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr#18
+    x64.jmp __us_test#54
   fill:
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r13
-    x64.callDirect __retain_type_param
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#27
@@ -112,9 +125,9 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#27
-  __im_bounds:
+  __im_bounds#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegReg r15, rax
+    x64.cmpRegReg r14, rax
     x64.jcc aboveEqual, __im_slow#27
   __im_buffer:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -125,41 +138,78 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#27
-  __im_store:
+  __im_store#32:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
     x64.cmpRegImm32 rcx, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
-    x64.jmp forstep
-  __im_stride:
+    x64.jcc notEqual, __im_stride#35
+  __im_word#33:
+    x64.storeBaseIndexScaleReg.word64 [rax + r14*8 + 0], r13
+    x64.jmp forstep#20
+  __im_stride#35:
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, __im_slow#27
-  __im_byte:
-    x64.leaRegRegReg rax, rax, r15
-    x64.storeBaseDispReg.byte [rax + 0], r8
-    x64.jmp forstep
+  __im_byte#34:
+    x64.leaRegRegReg rax, rax, r14
+    x64.storeBaseDispReg.byte [rax + 0], r13
+    x64.jmp forstep#20
   __im_slow#27:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
-    x64.movRegReg rax, r8
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep
+    x64.jcc notEqual, tryerr#23
+  forstep#20:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr#18:
+    x64.cmpRegImm32 r14, 6
+    x64.jcc below, fill
+    x64.jmp __il_cont
+  __us_test#54:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 24]
+    x64.movRegReg rdx, r14
+    x64.jmp forhdr#36
+  __im_bounds#47:
+    x64.cmpRegReg rdx, r12
+    x64.jcc aboveEqual, __im_slow#40
+  __im_store#44:
+    x64.cmpRegImm32 r13, 8
+    x64.jcc notEqual, __im_stride#43
+  __im_word#41:
+    x64.movRegImm32 rax, 7
+    x64.storeBaseIndexScaleReg.word64 [r15 + rdx*8 + 0], rax
+    x64.jmp forstep#37
+  __im_stride#43:
+    x64.cmpRegImm32 r13, 1
+    x64.jcc notEqual, __im_slow#40
+  __im_byte#42:
+    x64.leaRegRegReg rax, r15, rdx
+    x64.movRegImm32 rcx, 7
+    x64.storeBaseDispReg.byte [rax + 0], rcx
+    x64.jmp forstep#37
+  __im_slow#40:
+    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rax, 7
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#37
+  critsplit#60:
+    x64.loadRegSlot rbx, slot7
+    x64.movRegReg r14, rbx
   tryerr#23:
     x64.leaRegRdata rax, [rip + __str_rec_6]  ; "panic at Array.maxon:454: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.leaRegRdata rax, [rip + __str_rec_7]  ; "Array.fillPublished: set OOB at "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot7, rcx
+    x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r14
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
     x64.callDirect __uint_to_string
     x64.storeSlotReg slot6, r8
     x64.leaRegRdata rax, [rip + __str_rec_8]  ; " \xe2\x80\x94 the window is inside the published length"
@@ -181,20 +231,20 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot1, r8
-    x64.leaRegRegImm32 r15, r8, 56
-    x64.movRegReg rcx, r15
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.movRegReg rcx, r14
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r15, r12
-    x64.loadRegSlot rdx, slot7
+    x64.leaRegRegReg rbx, r14, r12
+    x64.loadRegSlot rdx, slot8
     x64.movRegReg rcx, rbx
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
     x64.loadRegSlot rax, slot6
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
+    x64.movRegReg rdx, r15
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot6
     x64.leaRegRegReg rbx, rbx, rax
@@ -203,22 +253,19 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot4
-    x64.leaRegRegReg rbx, rbx, rax
+    x64.leaRegRegReg rcx, rbx, rax
     x64.loadRegSlot rax, slot2
     x64.loadRegSlot rdx, slot3
-    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot2
-    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot1
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
     x64.loadRegSlot rax, slot0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm rax, 18446744073709551613
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect mrt_panic
@@ -231,15 +278,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  forstep:
-    x64.leaRegRegImm32 r15, r15, 1
-  forhdr:
-    x64.cmpRegImm32 r15, 6
-    x64.jcc below, fill
-  ifcont:
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r13
-    x64.callDirect __drop_type_param
+  forstep#37:
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegImm32 rdx, rax, 1
+  forhdr#36:
+    x64.storeSlotReg slot7, rdx
+    x64.cmpRegImm32 rdx, 6
+    x64.jcc below, __im_bounds#47
   __il_cont:
     x64.movRegImm32 rdx, 5
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -278,7 +323,7 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
-  critsplit:
+  critsplit#56:
     x64.movRegReg rax, r8
     x64.jmp tryok#1
   __rc_panic:
@@ -585,15 +630,14 @@ func @main {
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 r12, 6
     x64.movRegImm32 r13, 7
-    x64.leaRegRdata r14, [rip + __layout_Array_FullRangeInt]
   __il_body#12:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_resize
-    x64.movRegImm32 r15, 0
+    x64.movRegImm32 r14, 0
   __il_body#14:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
+    x64.movRegReg rdx, r14
     x64.movRegReg rax, r12
     x64.movRegReg r9, r13
     x64.callDirect __managed_fill
@@ -614,12 +658,26 @@ func @main {
   tryok#15:
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, forhdr
-    x64.jmp ifcont
+    x64.jcc equal, __il_cont
+  __us_test#50:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr#18
+  __us_test#51:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 16]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, forhdr#18
+  __us_test#52:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc equal, forhdr#18
+  __us_test#53:
+    x64.leaRegRegImm32 rax, r15, -24
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr#18
+    x64.jmp __us_test#54
   fill:
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r13
-    x64.callDirect __retain_type_param
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#27
@@ -627,9 +685,9 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#27
-  __im_bounds:
+  __im_bounds#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegReg r15, rax
+    x64.cmpRegReg r14, rax
     x64.jcc aboveEqual, __im_slow#27
   __im_buffer:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -640,41 +698,78 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#27
-  __im_store:
+  __im_store#32:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
     x64.cmpRegImm32 rcx, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
-    x64.jmp forstep
-  __im_stride:
+    x64.jcc notEqual, __im_stride#35
+  __im_word#33:
+    x64.storeBaseIndexScaleReg.word64 [rax + r14*8 + 0], r13
+    x64.jmp forstep#20
+  __im_stride#35:
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, __im_slow#27
-  __im_byte:
-    x64.leaRegRegReg rax, rax, r15
-    x64.storeBaseDispReg.byte [rax + 0], r8
-    x64.jmp forstep
+  __im_byte#34:
+    x64.leaRegRegReg rax, rax, r14
+    x64.storeBaseDispReg.byte [rax + 0], r13
+    x64.jmp forstep#20
   __im_slow#27:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
-    x64.movRegReg rax, r8
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep
+    x64.jcc notEqual, tryerr#23
+  forstep#20:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr#18:
+    x64.cmpRegImm32 r14, 6
+    x64.jcc below, fill
+    x64.jmp __il_cont
+  __us_test#54:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 24]
+    x64.movRegReg rdx, r14
+    x64.jmp forhdr#36
+  __im_bounds#47:
+    x64.cmpRegReg rdx, r12
+    x64.jcc aboveEqual, __im_slow#40
+  __im_store#44:
+    x64.cmpRegImm32 r13, 8
+    x64.jcc notEqual, __im_stride#43
+  __im_word#41:
+    x64.movRegImm32 rax, 7
+    x64.storeBaseIndexScaleReg.word64 [r15 + rdx*8 + 0], rax
+    x64.jmp forstep#37
+  __im_stride#43:
+    x64.cmpRegImm32 r13, 1
+    x64.jcc notEqual, __im_slow#40
+  __im_byte#42:
+    x64.leaRegRegReg rax, r15, rdx
+    x64.movRegImm32 rcx, 7
+    x64.storeBaseDispReg.byte [rax + 0], rcx
+    x64.jmp forstep#37
+  __im_slow#40:
+    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rax, 7
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#37
+  critsplit#60:
+    x64.loadRegSlot rbx, slot7
+    x64.movRegReg r14, rbx
   tryerr#23:
     x64.leaRegRdata rax, [rip + __str_rec_6]  ; "panic at Array.maxon:454: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.leaRegRdata rax, [rip + __str_rec_7]  ; "Array.fillPublished: set OOB at "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot7, rcx
+    x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r14
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
     x64.callDirect __uint_to_string
     x64.storeSlotReg slot6, r8
     x64.leaRegRdata rax, [rip + __str_rec_8]  ; " \xe2\x80\x94 the window is inside the published length"
@@ -696,20 +791,20 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot1, r8
-    x64.leaRegRegImm32 r15, r8, 56
-    x64.movRegReg rcx, r15
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.movRegReg rcx, r14
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r15, r12
-    x64.loadRegSlot rdx, slot7
+    x64.leaRegRegReg rbx, r14, r12
+    x64.loadRegSlot rdx, slot8
     x64.movRegReg rcx, rbx
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
     x64.loadRegSlot rax, slot6
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
+    x64.movRegReg rdx, r15
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot6
     x64.leaRegRegReg rbx, rbx, rax
@@ -718,22 +813,19 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot4
-    x64.leaRegRegReg rbx, rbx, rax
+    x64.leaRegRegReg rcx, rbx, rax
     x64.loadRegSlot rax, slot2
     x64.loadRegSlot rdx, slot3
-    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot2
-    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot1
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
     x64.loadRegSlot rax, slot0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm rax, 18446744073709551613
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect mrt_panic
@@ -746,15 +838,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  forstep:
-    x64.leaRegRegImm32 r15, r15, 1
-  forhdr:
-    x64.cmpRegImm32 r15, 6
-    x64.jcc below, fill
-  ifcont:
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r13
-    x64.callDirect __drop_type_param
+  forstep#37:
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegImm32 rdx, rax, 1
+  forhdr#36:
+    x64.storeSlotReg slot7, rdx
+    x64.cmpRegImm32 rdx, 6
+    x64.jcc below, __im_bounds#47
   __il_cont:
     x64.movRegImm32 rdx, 5
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -792,7 +882,7 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
-  critsplit:
+  critsplit#56:
     x64.movRegReg rax, r8
     x64.jmp tryok#1
   __rc_panic:
@@ -1100,15 +1190,14 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x20, 6
     arm64.movImm x21, 7
-    arm64.leaRdata x22, __layout_Array_FullRangeInt
   __il_body#12:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl __managed_resize
-    arm64.movImm x23, 0
+    arm64.movImm x22, 0
   __il_body#14:
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
+    arm64.movRegReg x1, x22
     arm64.movRegReg x2, x20
     arm64.movRegReg x3, x21
     arm64.bl __managed_fill
@@ -1132,13 +1221,26 @@ func @main {
     arm64.ret
   tryok#15:
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, forhdr
-    arm64.b ifcont
+    arm64.cbz x0, __il_cont
+  __us_test#50:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne forhdr#18
+  __us_test#51:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 16]
+    arm64.cmp x20, 0
+    arm64.b.lt forhdr#18
+  __us_test#52:
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
+    arm64.cmp x23, 0
+    arm64.b.eq forhdr#18
+  __us_test#53:
+    arm64.sub x0, x23, 24
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.cmp x0, 0
+    arm64.b.ne forhdr#18
+    arm64.b __us_test#54
   fill:
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x21
-    arm64.bl __retain_type_param
-    arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow#27
@@ -1146,9 +1248,9 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow#27
-  __im_bounds:
+  __im_bounds#29:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x23, x0
+    arm64.cmp x22, x0
     arm64.b.hs __im_slow#27
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
@@ -1159,41 +1261,74 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
     arm64.b.ne __im_slow#27
-  __im_store:
+  __im_store#32:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
     arm64.cmp x1, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.storeBaseIndexScaleReg.word64 [x0 + x23*8 + 0], x2
-    arm64.b forstep
-  __im_stride:
+    arm64.b.ne __im_stride#35
+  __im_word#33:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x22*8 + 0], x21
+    arm64.b forstep#20
+  __im_stride#35:
     arm64.cmp x1, 1
     arm64.b.ne __im_slow#27
-  __im_byte:
-    arm64.add x0, x0, x23
-    arm64.storeBaseDispReg.byte [x0 + 0], x2
-    arm64.b forstep
+  __im_byte#34:
+    arm64.add x0, x0, x22
+    arm64.storeBaseDispReg.byte [x0 + 0], x21
+    arm64.b forstep#20
   __im_slow#27:
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
     arm64.bl __managed_mem_set
     arm64.cmp x9, 0
-    arm64.b.eq forstep
+    arm64.b.ne tryerr#23
+  forstep#20:
+    arm64.add x22, x22, 1
+  forhdr#18:
+    arm64.cmp x22, 6
+    arm64.b.lo fill
+    arm64.b __il_cont
+  __us_test#54:
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 24]
+    arm64.b forhdr#36
+  __im_bounds#47:
+    arm64.cmp x22, x20
+    arm64.b.hs __im_slow#40
+  __im_store#44:
+    arm64.cmp x24, 8
+    arm64.b.ne __im_stride#43
+  __im_word#41:
+    arm64.storeBaseIndexScaleReg.word64 [x23 + x22*8 + 0], x21
+    arm64.b forstep#37
+  __im_stride#43:
+    arm64.cmp x24, 1
+    arm64.b.ne __im_slow#40
+  __im_byte#42:
+    arm64.add x0, x23, x22
+    arm64.storeBaseDispReg.byte [x0 + 0], x21
+    arm64.b forstep#37
+  __im_slow#40:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl __managed_mem_set
+    arm64.cmp x9, 0
+    arm64.b.eq forstep#37
   tryerr#23:
     arm64.leaRdata x0, __str_rec_6  ; "panic at Array.maxon:454: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.leaRdata x0, __str_rec_7  ; "Array.fillPublished: set OOB at "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x22
     arm64.movRegReg x1, x24
     arm64.bl __uint_to_string
-    arm64.movRegReg x23, x0
+    arm64.movRegReg x22, x0
     arm64.leaRdata x0, __str_rec_8  ; " \xe2\x80\x94 the window is inside the published length"
     arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
@@ -1201,8 +1336,8 @@ func @main {
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot2, x0
-    arm64.add x1, x20, x22
-    arm64.add x1, x1, x23
+    arm64.add x1, x20, x23
+    arm64.add x1, x1, x22
     arm64.add x1, x1, x26
     arm64.add x0, x1, x0
     arm64.storeSlotReg slot0, x0
@@ -1218,25 +1353,22 @@ func @main {
     arm64.add x19, x28, x20
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x22
-    arm64.bl __str_copy
-    arm64.add x19, x19, x22
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x24
     arm64.movRegReg x2, x23
     arm64.bl __str_copy
     arm64.add x19, x19, x23
     arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x19, x19, x22
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x25
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
-    arm64.add x19, x19, x26
+    arm64.add x0, x19, x26
     arm64.loadRegSlot x2, slot2
-    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot2
-    arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot1
     arm64.storeBaseDispReg.word64 [x19 + 0], x28
     arm64.loadRegSlot x0, slot0
@@ -1262,15 +1394,11 @@ func @main {
     arm64.loadRegSlot x28, slot12
     arm64.epilogue 128
     arm64.ret
-  forstep:
-    arm64.add x23, x23, 1
-  forhdr:
-    arm64.cmp x23, 6
-    arm64.b.lo fill
-  ifcont:
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x21
-    arm64.bl __drop_type_param
+  forstep#37:
+    arm64.add x22, x22, 1
+  forhdr#36:
+    arm64.cmp x22, 6
+    arm64.b.lo __im_bounds#47
   __il_cont:
     arm64.movImm x1, 5
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -1602,15 +1730,14 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x20, 6
     arm64.movImm x21, 7
-    arm64.leaRdata x22, __layout_Array_FullRangeInt
   __il_body#12:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl __managed_resize
-    arm64.movImm x23, 0
+    arm64.movImm x22, 0
   __il_body#14:
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
+    arm64.movRegReg x1, x22
     arm64.movRegReg x2, x20
     arm64.movRegReg x3, x21
     arm64.bl __managed_fill
@@ -1634,13 +1761,26 @@ func @main {
     arm64.ret
   tryok#15:
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, forhdr
-    arm64.b ifcont
+    arm64.cbz x0, __il_cont
+  __us_test#50:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne forhdr#18
+  __us_test#51:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 16]
+    arm64.cmp x20, 0
+    arm64.b.lt forhdr#18
+  __us_test#52:
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
+    arm64.cmp x23, 0
+    arm64.b.eq forhdr#18
+  __us_test#53:
+    arm64.sub x0, x23, 24
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.cmp x0, 0
+    arm64.b.ne forhdr#18
+    arm64.b __us_test#54
   fill:
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x21
-    arm64.bl __retain_type_param
-    arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow#27
@@ -1648,9 +1788,9 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow#27
-  __im_bounds:
+  __im_bounds#29:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x23, x0
+    arm64.cmp x22, x0
     arm64.b.hs __im_slow#27
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
@@ -1661,41 +1801,74 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
     arm64.b.ne __im_slow#27
-  __im_store:
+  __im_store#32:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
     arm64.cmp x1, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.storeBaseIndexScaleReg.word64 [x0 + x23*8 + 0], x2
-    arm64.b forstep
-  __im_stride:
+    arm64.b.ne __im_stride#35
+  __im_word#33:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x22*8 + 0], x21
+    arm64.b forstep#20
+  __im_stride#35:
     arm64.cmp x1, 1
     arm64.b.ne __im_slow#27
-  __im_byte:
-    arm64.add x0, x0, x23
-    arm64.storeBaseDispReg.byte [x0 + 0], x2
-    arm64.b forstep
+  __im_byte#34:
+    arm64.add x0, x0, x22
+    arm64.storeBaseDispReg.byte [x0 + 0], x21
+    arm64.b forstep#20
   __im_slow#27:
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
     arm64.bl __managed_mem_set
     arm64.cmp x9, 0
-    arm64.b.eq forstep
+    arm64.b.ne tryerr#23
+  forstep#20:
+    arm64.add x22, x22, 1
+  forhdr#18:
+    arm64.cmp x22, 6
+    arm64.b.lo fill
+    arm64.b __il_cont
+  __us_test#54:
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 24]
+    arm64.b forhdr#36
+  __im_bounds#47:
+    arm64.cmp x22, x20
+    arm64.b.hs __im_slow#40
+  __im_store#44:
+    arm64.cmp x24, 8
+    arm64.b.ne __im_stride#43
+  __im_word#41:
+    arm64.storeBaseIndexScaleReg.word64 [x23 + x22*8 + 0], x21
+    arm64.b forstep#37
+  __im_stride#43:
+    arm64.cmp x24, 1
+    arm64.b.ne __im_slow#40
+  __im_byte#42:
+    arm64.add x0, x23, x22
+    arm64.storeBaseDispReg.byte [x0 + 0], x21
+    arm64.b forstep#37
+  __im_slow#40:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl __managed_mem_set
+    arm64.cmp x9, 0
+    arm64.b.eq forstep#37
   tryerr#23:
     arm64.leaRdata x0, __str_rec_6  ; "panic at Array.maxon:454: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.leaRdata x0, __str_rec_7  ; "Array.fillPublished: set OOB at "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x22
     arm64.movRegReg x1, x24
     arm64.bl __uint_to_string
-    arm64.movRegReg x23, x0
+    arm64.movRegReg x22, x0
     arm64.leaRdata x0, __str_rec_8  ; " \xe2\x80\x94 the window is inside the published length"
     arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
@@ -1703,8 +1876,8 @@ func @main {
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot2, x0
-    arm64.add x1, x20, x22
-    arm64.add x1, x1, x23
+    arm64.add x1, x20, x23
+    arm64.add x1, x1, x22
     arm64.add x1, x1, x26
     arm64.add x0, x1, x0
     arm64.storeSlotReg slot0, x0
@@ -1720,25 +1893,22 @@ func @main {
     arm64.add x19, x28, x20
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x22
-    arm64.bl __str_copy
-    arm64.add x19, x19, x22
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x24
     arm64.movRegReg x2, x23
     arm64.bl __str_copy
     arm64.add x19, x19, x23
     arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x19, x19, x22
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x25
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
-    arm64.add x19, x19, x26
+    arm64.add x0, x19, x26
     arm64.loadRegSlot x2, slot2
-    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot2
-    arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot1
     arm64.storeBaseDispReg.word64 [x19 + 0], x28
     arm64.loadRegSlot x0, slot0
@@ -1764,15 +1934,11 @@ func @main {
     arm64.loadRegSlot x28, slot12
     arm64.epilogue 128
     arm64.ret
-  forstep:
-    arm64.add x23, x23, 1
-  forhdr:
-    arm64.cmp x23, 6
-    arm64.b.lo fill
-  ifcont:
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x21
-    arm64.bl __drop_type_param
+  forstep#37:
+    arm64.add x22, x22, 1
+  forhdr#36:
+    arm64.cmp x22, 6
+    arm64.b.lo __im_bounds#47
   __il_cont:
     arm64.movImm x1, 5
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]

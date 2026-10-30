@@ -1,7 +1,8 @@
 // InlineLeaves — the Std→Std inliner. Two admission rules, one splice:
 //
 //   • THE LEAF RULE: a direct call to a TINY LEAF function — no call outside a `BlockHeat.cold`
-//     block, inside `MaxInlinedLeafOps`, or `MaxInlinedColdCallLeafOps` when it holds a cold call —
+//     block but the ones its tables resolve (`TableCallProbe`), inside `MaxInlinedLeafOps`, or
+//     `MaxInlinedColdCallLeafOps` when it holds a cold call —
 //     is replaced at EVERY site by a copy of the body (a body that fits only without its parameter
 //     cascades, at every site that declines them — see `MaxInlinedLeafOps`). The call is nearly all of such a function's
 //     cost: MEASURED on the self-compile, `regMaskContains` — `((mask shr regNum) and 1) != 0` plus
@@ -23,7 +24,8 @@
 // ONE ROUND PER PAIR: the called-once rule is applied to each callee once, in waves that splice a callee
 // only after every called-once callee inside it; the leaf rule then decides eligibility on the bodies as
 // they stand and splices every admitted site outside the eligible leaves themselves
-// (`admittedBodyStaysAsMeasured`). Neither cascades further.
+// (`admittedBodyStaysAsMeasured`). Neither cascades further, except along the calls a table
+// devirtualization produced (`followTableChains`).
 //
 // ⭐⭐ **THE PASS RUNS TWICE OVER ONE MODULE AND THE TWO RUNS PARTITION THE PAIRS** — the pipeline's over
 // every caller, the band's over the callers `Compiler.compileToCodeResult` appended below the pipeline.
@@ -66,16 +68,20 @@
 // the number for THIS compile instead of a guess.
 let MaxInlinedLeafOps = 24 as ElementIndex
 
-// A larger call-free budget the pass MEASURES but does not use — reported beside the refusals so
-// that "would a bigger one be better?" is answered from the compile being asked about rather than
-// re-derived.
+// A larger budget for a leaf whose only hot calls are ones its tables resolve, which the pass
+// MEASURES but does not use — reported beside the refusals so that "would a bigger one be better?"
+// is answered from the compile being asked about rather than re-derived.
 let ReportedLargerLeafBudget = 32 as ElementIndex
 
 // The budget for a leaf whose calls all sit in cold blocks, counting every op, cold ones included.
 // A checked get/set's cold slow arm is what pushes a hot accessor helper past `MaxInlinedLeafOps`.
-// Raising the call-free budget to match grows code with no speed gain, and leaving cold ops
+// Raising `MaxInlinedLeafOps` to match grows code with no speed gain, and leaving cold ops
 // uncounted leaves the cold part of an admitted body unbounded.
 let MaxInlinedColdCallLeafOps = 32 as ElementIndex
+
+// The budget for a witness-slot adapter, which may hold the impl the called-once rule merged
+// into it.
+let MaxInlinedForwarderOps = 48 as ElementIndex
 
 // The block labels this pass mints. They reach the rendered Target IR, so they are short and
 // prefixed `__il_` (inline-leaves — disjoint from `InsertRangeChecks`' `__rc_` and
@@ -158,8 +164,8 @@ enum InlineOpRole
 	// call site's argument instead.
 	parameter
 
-	// A call of ANY kind. The leaf rule admits it only in a cold block (`callFit`), and the
-	// called-once rule copies it.
+	// A call of ANY kind. The leaf rule admits it only in a cold block (`callFit`) or where
+	// `TableCallProbe` admits it, and the called-once rule copies it.
 	calling
 
 	// An op the dialect itself marks unsupported inside an inline body. See `inlineOpRole`.
@@ -173,7 +179,7 @@ end 'InlineOpRole'
 // column after, so the dialect's table stays the one source and the walk pays one probe per op.
 typealias OpRoleColumn = Array with OpRole
 
-type StdOpMetaMemo
+module type StdOpMetaMemo
 	var known as BoolArray
 	var roles as OpRoleColumn
 	var unsupported as BoolArray
@@ -200,7 +206,12 @@ type StdOpMetaMemo
 		return InlineOpRole.body
 	end 'bodyRole'
 
-	function hasRole(op StdOp, role OpRole) returns bool
+	module function holdsACall(op StdOp) returns bool
+		let variant = self.learned(op)
+		return try self.calls.get(variant) otherwise panic("StdOpMetaMemo.holdsACall: calls.get OOB at {variant} after learning it")
+	end 'holdsACall'
+
+	module function hasRole(op StdOp, role OpRole) returns bool
 		let variant = self.learned(op)
 		return (try self.roles.get(variant) otherwise panic("StdOpMetaMemo.hasRole: roles.get OOB at {variant} after learning it")) == role
 	end 'hasRole'
@@ -391,8 +402,9 @@ enum LeafVerdict
 	tooManyOps
 
 	// Everything else, and the list is the whole eligibility rule read backwards: a call outside a
-	// cold block, a calling terminator, an `isUnsupportedInInlineBody` op, a by-reference parameter, a
-	// body that carries the green-thread stack guard, an entry block carrying phis, a block still in
+	// cold block other than the hot calls `TableCallProbe` admits, a calling terminator, an
+	// `isUnsupportedInInlineBody` op, a by-reference parameter, a body carrying the green-thread stack
+	// guard unless it is a witness-slot adapter, an entry block carrying phis, a block still in
 	// `Terminator.unset` (a body the lowering never emitted), or no body at all.
 	notALeaf
 end 'LeafVerdict'
@@ -408,6 +420,7 @@ type LeafBodyScan
 	export var cascadeOpCount = 0 as ElementIndex
 	export var reliesOnDeclinedCascades = false
 	export var convention = ReturnConvention.neither
+	export var tableUses = TableUseArray.create()
 
 	static function create(verdict LeafVerdict, opCount ElementIndex) returns LeafBodyScan
 		return Self{verdict: verdict, opCount: opCount}
@@ -437,8 +450,9 @@ end 'LeafOpTally'
 //
 // ⭐⭐ **PRE-SPLICE IS ALSO THE SEMANTICS, NOT MERELY THE SCHEDULE.** Because the verdicts are all taken
 // before the first splice, a caller that BECOMES call-free by being inlined into does not become a leaf
-// in this compile. That is the "one round, no cascade" rule, and it is what bounds the work at one copy
-// per site — stated here rather than left to be inferred from the order of two loops.
+// in this compile. That is the "one round, no cascade" rule; the one later copy into a caller is
+// `followTableChains`, which follows only calls a table devirtualization produced, for at most
+// `MaxChainRounds` rounds.
 type LeafPlan
 	var verdicts as LeafVerdictArray
 	var conventions as ConventionArray
@@ -462,6 +476,8 @@ type LeafPlan
 	export var eligibleCount as ElementIndex
 	export var tooManyOpsCount as ElementIndex
 	export var tooManyOpsWithinLargerBudget as ElementIndex
+	var tableUsesByCallee as TableUsesByCallee
+	export var slots as RdataSlotIndex
 
 	static function create(funcCount ElementIndex) returns LeafPlan
 		var valueBounds = ValueIdArray.create()
@@ -484,7 +500,9 @@ type LeafPlan
 			reliesOnDeclinedCascades: reliesOnDeclinedCascades,
 			eligibleCount: 0,
 			tooManyOpsCount: 0,
-			tooManyOpsWithinLargerBudget: 0
+			tooManyOpsWithinLargerBudget: 0,
+			tableUsesByCallee: TableUsesByCallee.create(),
+			slots: RdataSlotIndex.create()
 		}
 	end 'create'
 
@@ -511,6 +529,10 @@ type LeafPlan
 		try self.eligibleFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: eligibleFuncs.set OOB at {funcIndex}")
 		self.measure(funcIndex, module: module, func: func)
 
+		if scan.tableUses.count() != 0 'readsTables'
+			self.tableUsesByCallee.upsert(funcIndex, value: scan.tableUses)
+		end 'readsTables'
+
 		if scan.reliesOnDeclinedCascades 'aCascadeBoundBody'
 			try self.reliesOnDeclinedCascades.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: reliesOnDeclinedCascades.set OOB at {funcIndex}")
 			try self.withinLargerBudget.set(funcIndex, value: scan.opCount + scan.cascadeOpCount <= ReportedLargerLeafBudget) otherwise panic("LeafPlan.recordEligible: withinLargerBudget.set OOB at {funcIndex}")
@@ -529,6 +551,18 @@ type LeafPlan
 		try self.blockCounts.set(funcIndex, value: func.blockRefs.count()) otherwise panic("LeafPlan.measure: blockCounts.set OOB at {funcIndex}")
 	end 'measure'
 
+	function readsAnyTable() returns bool
+		return self.tableUsesByCallee.count() != 0
+	end 'readsAnyTable'
+
+	function readsTables(funcIndex ElementIndex) returns bool
+		return self.tableUsesByCallee.contains(funcIndex)
+	end 'readsTables'
+
+	function tablesReadBy(funcIndex ElementIndex) returns TableUseArray
+		return try self.tableUsesByCallee.get(funcIndex) otherwise panic("LeafPlan.tablesReadBy: function {funcIndex} reads no table — ask `readsTables` first")
+	end 'tablesReadBy'
+
 	function recordTooManyOps(funcIndex ElementIndex, opCount ElementIndex)
 		self.tooManyOpsCount = self.tooManyOpsCount + 1
 
@@ -543,6 +577,10 @@ type LeafPlan
 	function verdictOf(funcIndex ElementIndex) returns LeafVerdict
 		return try self.verdicts.get(funcIndex) otherwise panic("LeafPlan.verdictOf: function index {funcIndex} is outside the {self.verdicts.count()}-function module this plan was built over")
 	end 'verdictOf'
+
+	function keepsItsMeasuredBody(funcIndex ElementIndex) returns bool
+		return self.verdictOf(funcIndex) == LeafVerdict.eligible
+	end 'keepsItsMeasuredBody'
 
 	function conventionOf(funcIndex ElementIndex) returns ReturnConvention
 		return try self.conventions.get(funcIndex) otherwise panic("LeafPlan.conventionOf: function index {funcIndex} is outside the {self.conventions.count()}-function module this plan was built over")
@@ -561,18 +599,30 @@ type LeafPlan
 	end 'blockCountOf'
 end 'LeafPlan'
 
-function buildLeafPlan(module StdModule, namedByIrRequest BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
+function buildLeafPlan(project Project, module StdModule, namedByIrRequest BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
 	var plan = LeafPlan.create(module.funcCount())
 	var reference = StdFunctionReference.create()
+	var probe = TableCallProbe.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		let func = module.getFunc(funcIndex)
+		view func = module.getFunc(funcIndex)
+
+		// Before the scan: the called-once rule may have merged an impl into its witness adapter,
+		// leaving a constant-descriptor retain that would otherwise refuse the adapter as a leaf.
+		if func.blockRefs.count() != 0 'hasABody'
+			let rewritten = devirtualizeTableCalls(project, module: module, func: func, byName: byName, meta: meta, slots: plan.slots)
+
+			if rewritten.count() != 0 'leftDeadOps'
+				dropDeadPureOps(module, func: func)
+			end 'leftDeadOps'
+		end 'hasABody'
 
 		// Splicing every site of a leaf a ```RequiredRuntime block names would drop the body that block
 		// asks the printer for; a callee this round does not admit is not a leaf here either
 		// (`roundAdmitsCallee`).
 		let declined = isIrRequested(namedByIrRequest, funcIndex: funcIndex) or not roundAdmitsCallee(round, callee: func, runtimeTier: runtimeTier)
-		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if declined else scanLeafBody(module, func: func, meta: meta, byName: byName, reference: reference)
+		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if declined else scanLeafBody(module, func: func, meta: meta, byName: byName, reference: reference, probe: probe)
+
 		plan.record(funcIndex, scan: scan, module: module, func: func)
 	end 'eachFunc'
 
@@ -591,14 +641,15 @@ end 'buildLeafPlan'
 //
 // ⭐ **THE SHAPE RULES ARE ASKED IN THE SAME WALK AS THE LEAF RULE, so a body's ops are read once**; the shape
 // helpers below are shared with `scanSpliceableShape`, which asks them of a called-once candidate and
-// nothing else. A leaf scan RETURNS at the first hot-path call — the commonest op there is — where
-// the shape scan has to read the whole body for its refusal reason.
-function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference) returns LeafBodyScan
+// nothing else. A leaf scan RETURNS at the first hot-path call its tables cannot resolve — the
+// commonest op there is — where the shape scan has to read the whole body for its refusal reason.
+function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference, probe TableCallProbe) returns LeafBodyScan
 	// The row's cost rules are waived here and nowhere else in this scan — see `callFit` and the
 	// budget below.
 	let alwaysSpliced = func.mustBeSplicedAtEverySite
+	probe.begin(func)
 
-	match functionShape(func) 'shape'
+	match functionShape(func, frameGuardAdmitted: probe.isForwarder()) 'shape'
 		spliceable then break
 		refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
 	end 'shape'
@@ -625,7 +676,13 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 			// ⭐ **RETURNED FROM, NOT FLAGGED — a call is the commonest op there is, and this scan runs over
 			// the whole module.** Bailing at the first refusing op is what keeps a 5,000-op function from
 			// being walked to the end to learn something its second op already said.
-			match leafOpFit(role, op: op, module: module, block: block, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference) 'fit'
+			var opFit = leafOpFit(role, op: op, module: module, block: block, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference)
+
+			if opFit == LeafOpFit.refuses and role == InlineOpRole.calling and not alwaysSpliced and probe.admitsHotCall(op, module: module, func: func) 'aCallTheTablesResolve'
+				opFit = LeafOpFit.fits
+			end 'aCallTheTablesResolve'
+
+			match opFit 'fit'
 				fits then break
 				coldCall then holdsColdCall = true
 				refuses then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
@@ -646,13 +703,22 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 		end 'terminated'
 	end 'eachBlock'
 
-	let budget = MaxInlinedColdCallLeafOps if holdsColdCall else MaxInlinedLeafOps
+	if not probe.settles() and not alwaysSpliced 'hotCallsWithNoTableToResolve'
+		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
+	end 'hotCallsWithNoTableToResolve'
+
+	let budget = MaxInlinedForwarderOps if probe.isForwarder() else (MaxInlinedColdCallLeafOps if holdsColdCall else MaxInlinedLeafOps)
 
 	if tally.body > budget and not alwaysSpliced 'tooBig'
 		return LeafBodyScan.create(LeafVerdict.tooManyOps, opCount: tally.body)
 	end 'tooBig'
 
 	var scan = LeafBodyScan.create(LeafVerdict.eligible, opCount: tally.body)
+
+	if probe.reads.count() != 0 'readsTables'
+		scan.tableUses = probe.reads.clone()
+	end 'readsTables'
+
 	scan.cascadeOpCount = tally.cascade
 	scan.reliesOnDeclinedCascades = tally.body + tally.cascade > budget and not alwaysSpliced
 	scan.convention = returnConventionOf(module, func: func, meta: meta)
@@ -757,7 +823,8 @@ end 'LeafOpFit'
 // `__Raw.splicedAtEverySite()` BODY GETS DIFFERENTLY.**
 //
 //   • A `calling` op refuses UNLESS this body and the callee both declare the row, or the call sits
-//     in a cold block (`callFit`). The row's edge is spliced away before this body is copied
+//     in a cold block (`callFit`); `scanLeafBody` then admits the hot calls `TableCallProbe`
+//     resolves. The row's edge is spliced away before this body is copied
 //     anywhere (`spliceAlwaysSplicedCallees`), and the cascade terminates because a cycle among those
 //     edges is refused rather than capped (`AlwaysSplicedPlan`). A cold call is copied verbatim and
 //     puts the body under `MaxInlinedColdCallLeafOps`.
@@ -823,7 +890,7 @@ end 'SpliceableShape'
 // walk of the blocks. The called-once rule asks it of every candidate; the leaf rule asks the same
 // helpers inside its own walk (`scanLeafBody`).
 function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMemo, site SiteShape) returns SpliceableShape
-	match functionShape(func) 'shape'
+	match functionShape(func, frameGuardAdmitted: false) 'shape'
 		spliceable then break
 		refused(reason) then return SpliceableShape.refused(reason)
 	end 'shape'
@@ -862,11 +929,12 @@ end 'scanSpliceableShape'
 
 // The function-level shape facts: a by-reference parameter is an ADDRESS whose aliasing the copy cannot
 // keep, and two different claims about a FRAME the splice would erase — the green-thread stack guard
-// (`IrFunction.needsGreenThreadStackGuard`) and a body whose whole product IS its frame
+// (`IrFunction.needsGreenThreadStackGuard`; refused except for a witness-slot adapter, whose sites
+// are refused where the caller skips the guard) and a body whose whole product IS its frame
 // (`IrFunction.keepsItsOwnFrame`).
 //
 // ⭐ ONE site serves BOTH the leaf rule and the called-once rule, which share this scan.
-function functionShape(func IrFunction) returns SpliceableShape
+function functionShape(func IrFunction, frameGuardAdmitted bool) returns SpliceableShape
 	if func.blockRefs.count() == 0 'noBody'
 		return SpliceableShape.refused(CalledOnceRefusal.unloweredBody)
 	end 'noBody'
@@ -875,7 +943,7 @@ function functionShape(func IrFunction) returns SpliceableShape
 		return SpliceableShape.refused(CalledOnceRefusal.byReferenceParameter)
 	end 'byReference'
 
-	if func.needsGreenThreadStackGuard 'guardedFrame'
+	if func.needsGreenThreadStackGuard and not frameGuardAdmitted 'guardedFrame'
 		return SpliceableShape.refused(CalledOnceRefusal.greenThreadStackGuard)
 	end 'guardedFrame'
 
@@ -973,6 +1041,7 @@ type InlineLeafStats
 	// Sites refused because the callee is the compiler's own scaffolding and this caller is not — see
 	// `splicingWouldWidenTheSafePoint`.
 	export var sitesRefusedBySafePoint as SiteCount
+	export var sitesRefusedByStackGuard as SiteCount
 
 	export var sitesRefusedByReturnConvention as SiteCount
 
@@ -980,11 +1049,14 @@ type InlineLeafStats
 	// `ReportedLargerLeafBudget`'s reason: it is the number the row is graded on, and it should come from the
 	// compile being asked about rather than be re-derived from a corpus later.
 	export var declinedParamGuards as SiteCount
+	export var sitesRefusedByTables as SiteCount
+	export var tableCallers as FuncIndexArray
+	var tableCallersNoted as CutOffCallerSet
 	var callersCutOffFromAContinuation as FuncIndexArray
 	var callersCutOffNoted as CutOffCallerSet
 
 	static function create() returns InlineLeafStats
-		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, sitesRefusedByReturnConvention: 0, declinedParamGuards: 0, callersCutOffFromAContinuation: FuncIndexArray.create(), callersCutOffNoted: CutOffCallerSet.create()}
+		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, sitesRefusedByStackGuard: 0, sitesRefusedByReturnConvention: 0, declinedParamGuards: 0, sitesRefusedByTables: 0, tableCallers: FuncIndexArray.create(), tableCallersNoted: CutOffCallerSet.create(), callersCutOffFromAContinuation: FuncIndexArray.create(), callersCutOffNoted: CutOffCallerSet.create()}
 	end 'create'
 
 	function noteCallerCutOffFromAContinuation(funcIndex ElementIndex)
@@ -1009,6 +1081,19 @@ type InlineLeafStats
 		self.callersCutOffNoted = CutOffCallerSet.create()
 	end 'dropWhatNoPathReaches'
 
+	function noteCallerReceivedTables(funcIndex ElementIndex)
+		if self.tableCallersNoted.contains(funcIndex) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.tableCallersNoted.insert(funcIndex)
+		self.tableCallers.push(funcIndex)
+	end 'noteCallerReceivedTables'
+
+	function noteTableRefusal()
+		self.sitesRefusedByTables = self.sitesRefusedByTables + 1
+	end 'noteTableRefusal'
+
 	function noteDeclinedParamGuards(count GuardCount)
 		self.declinedParamGuards = self.declinedParamGuards + (count as SiteCount)
 	end 'noteDeclinedParamGuards'
@@ -1024,6 +1109,10 @@ type InlineLeafStats
 	function noteSafePointRefusal()
 		self.sitesRefusedBySafePoint = self.sitesRefusedBySafePoint + 1
 	end 'noteSafePointRefusal'
+
+	function noteStackGuardRefusal()
+		self.sitesRefusedByStackGuard = self.sitesRefusedByStackGuard + 1
+	end 'noteStackGuardRefusal'
 
 	function noteReturnConventionRefusal()
 		self.sitesRefusedByReturnConvention = self.sitesRefusedByReturnConvention + 1
@@ -1262,7 +1351,8 @@ end 'AlwaysSplicedCycle'
 // hold no helpers at all — a builder composes its emitters freely and pays nothing for it, and that parity
 // is what the row exists to restore.
 //
-// ⛔⛔ **IT IS THIS PASS'S ONE EXCEPTION TO "ONE ROUND, NO CASCADE", AND WHAT BOUNDS IT IS A DAG.** The
+// ⛔⛔ **IT IS ONE OF THIS PASS'S TWO EXCEPTIONS TO "ONE ROUND, NO CASCADE"**; the other is
+// `followTableChains`, bounded by `MaxChainRounds`. What bounds this one is a DAG. The
 // depth is the length of a chain of DECLARED rows rather than anything a program controls, and a CYCLE is
 // refused where it is met rather than capped at a depth: a cap splices some levels, leaves a call standing
 // at the boundary and reports nothing, which is the silent wrong answer this row exists to make impossible.
@@ -1479,7 +1569,7 @@ function isClosedToTheCallerWalk(closed BoolArray, funcIndex ElementIndex) retur
 end 'isClosedToTheCallerWalk'
 
 function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
-	var plan = buildLeafPlan(module, namedByIrRequest: namedByIrRequest, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
+	var plan = buildLeafPlan(project, module: module, namedByIrRequest: namedByIrRequest, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
 
 	if plan.eligibleCount == 0 'nothingToInline'
 		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
@@ -1499,6 +1589,11 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	var origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount())
 	var stats = InlineLeafStats.create()
 	var admission = SpliceAdmission.leaves(plan)
+
+	if plan.readsAnyTable() 'tablesToResolve'
+		plan.slots.ensureBuilt(project.globalData)
+	end 'tablesToResolve'
+
 	let closedToTheCallerWalk = spliceAlwaysSplicedCallees(project, module: module, byName: byName, plan: plan, always: always, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, round: round)
 
 	// ⭐ **THE ROUND'S CALLERS, NOT THE MODULE'S** — a pipeline function's sites were offered to the
@@ -1522,7 +1617,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 
 		// An eligible leaf's own sites stay calls: a cold call into another leaf spliced here would grow
 		// a body `LeafPlan.measure` already took, and every later copy of it fails `buildValueColumn`.
-		if plan.verdictOf(funcIndex) == LeafVerdict.eligible 'admittedBodyStaysAsMeasured'
+		if plan.keepsItsMeasuredBody(funcIndex) 'admittedBodyStaysAsMeasured'
 			continue
 		end 'admittedBodyStaysAsMeasured'
 
@@ -1530,6 +1625,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 		splicer.run()
 	end 'eachFunc'
 
+	followTableChains(project, module: module, byName: byName, plan: plan, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta)
 	stats.dropWhatNoPathReaches(module)
 	let inlined = stats.inlinedSites
 	let eligible = plan.eligibleCount
@@ -1537,20 +1633,63 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let sizeRefusalsAtLargerBudget = stats.sitesRefusedBySizeWithinLargerBudget
 	let selfCalls = stats.selfCallSites
 	let safePointRefusals = stats.sitesRefusedBySafePoint
+	let stackGuardRefusals = stats.sitesRefusedByStackGuard
 	let conventionRefusals = stats.sitesRefusedByReturnConvention
 	let declinedGuards = stats.declinedParamGuards
 	let calleesSizeRefused = plan.tooManyOpsCount
+	let tableCallerCount = stats.tableCallers.count()
+	let tableRefusals = stats.sitesRefusedByTables
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
 
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops, or {MaxInlinedColdCallLeafOps} with a cold call ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops, or {MaxInlinedColdCallLeafOps} with a cold call ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {stackGuardRefusals} site(s) refused as a body that needs the green-thread stack guard spliced into a caller that skips it, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead, {tableCallerCount} caller(s) took a body reading a table, {tableRefusals} site(s) refused because a table is not constant there")
 	end 'debugging'
 end 'spliceLeaves'
+
+let MaxChainRounds = 8 as ElementIndex
+
+// A copied body's devirtualized call can name another table-reading leaf, so each round splices
+// only the ops the previous one rewrote or appended. A caller `keepsItsMeasuredBody` is skipped:
+// every later copy of a grown body fails `buildValueColumn`.
+function followTableChains(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo)
+	for callerIndex in stats.tableCallers 'eachCaller'
+		if plan.keepsItsMeasuredBody(callerIndex) 'admittedBodyStaysAsMeasured'
+			continue
+		end 'admittedBodyStaysAsMeasured'
+
+		var func = module.getFunc(callerIndex)
+		var offered = OfferedOpSet.create()
+
+		for _ in 0 upto MaxChainRounds 'eachRound'
+			let rewritten = devirtualizeTableCalls(project, module: module, func: func, byName: byName, meta: meta, slots: plan.slots)
+
+			for opIdx in rewritten 'eachRewrittenOp'
+				offered.insert(opIdx)
+			end 'eachRewrittenOp'
+
+			if offered.count() == 0 'nothingToFollow'
+				break
+			end 'nothingToFollow'
+
+			var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: callerIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
+			splicer.restrictTo(offered)
+			splicer.run()
+			offered = splicer.appendedOps()
+		end 'eachRound'
+
+		if offered.count() != 0 'roundsExhausted'
+			_ = devirtualizeTableCalls(project, module: module, func: func, byName: byName, meta: meta, slots: plan.slots)
+		end 'roundsExhausted'
+
+		dropDeadPureOps(module, func: func)
+	end 'eachCaller'
+end 'followTableChains'
 
 // ⛔⛔ **THE ROW'S PROMISE, ASKED OF THE FINISHED MODULE — AND THAT PLACEMENT IS THE WHOLE OF WHAT MAKES
 // IT UNBYPASSABLE.** `__Raw.splicedAtEverySite()` is a body saying it must not exist as a function, and
 // every rule the row does NOT override still refuses it: the safe-point boundary, a by-reference
-// parameter, the green-thread stack guard, an op the dialect will not copy, a ```RequiredRuntime
+// parameter, the green-thread stack guard (outside a witness-slot adapter), an op the dialect will
+// not copy, a ```RequiredRuntime
 // request for the body itself. What must never happen is that one of them refuses QUIETLY — the
 // family would then ship at exactly the cost the port was written to remove, with a call where its
 // author promised none and nothing anywhere saying so.
@@ -1675,7 +1814,7 @@ function whyTheSpliceWasRefused(project Project, module StdModule, calleeIndex E
 		none then break
 	end 'cycle'
 
-	match functionShape(module.getFunc(calleeIndex)) 'shape'
+	match functionShape(module.getFunc(calleeIndex), frameGuardAdmitted: false) 'shape'
 		refused(reason) then return calledOnceRefusalText(reason)
 		spliceable then break
 	end 'shape'
@@ -3082,6 +3221,12 @@ type SiteSplicer
 	var copiedBlockIsReachable as bool
 	var argumentConsts as ConstValueMap
 	var argumentConstsCollected as bool
+	var tableDefs as StdValueDefs
+	var callerDefsBuilt as bool
+	var tableArith as StdArithOperands
+	var restricted as bool
+	var offered as OfferedOpSet
+	var appended as OfferedOpSet
 
 	// The def enumerator's sink, the op cloner and the variant memo, shared by every function's splices:
 	// this type is constructed per function.
@@ -3110,6 +3255,12 @@ type SiteSplicer
 			copiedBlockIsReachable: false,
 			argumentConsts: ConstValueMap.create(),
 			argumentConstsCollected: false,
+			tableDefs: StdValueDefs.create(),
+			callerDefsBuilt: false,
+			tableArith: StdArithOperands.create(),
+			restricted: false,
+			offered: OfferedOpSet.create(),
+			appended: OfferedOpSet.create(),
 			def: def,
 			cloner: cloner,
 			meta: meta
@@ -3335,7 +3486,9 @@ type SiteSplicer
 		view block = self.blockAt(blockRef)
 
 		for pos in 0 upto block.bodyOpCount() 'eachOp'
-			match self.module.getOp(try block.bodyOpAt(pos) otherwise panic("SiteSplicer.collectSites: bodyOpAt OOB at {pos} inside its own count")) 'kind'
+			let opRef = try block.bodyOpAt(pos) otherwise panic("SiteSplicer.collectSites: bodyOpAt OOB at {pos} inside its own count")
+
+			match self.module.getOp(opRef) 'kind'
 				const or
 				binOp or
 				unaryOp or
@@ -3456,8 +3609,8 @@ type SiteSplicer
 				osPathQuery or
 				osSocketOverlapped or
 				osSocketServe then break
-				call(_, callee, args) then self.considerSite(pos, callee: callee, args: args, shape: SiteShape.call)
-				tryCall(_, _, callee, args) then self.considerSite(pos, callee: callee, args: args, shape: SiteShape.tryCall)
+				call(_, callee, args) then self.considerSite(pos, opRef: opRef, callee: callee, args: args, shape: SiteShape.call)
+				tryCall(_, _, callee, args) then self.considerSite(pos, opRef: opRef, callee: callee, args: args, shape: SiteShape.tryCall)
 			end 'kind'
 		end 'eachOp'
 
@@ -3472,7 +3625,11 @@ type SiteSplicer
 	// synthesized destructor cascades — which are installed AFTER the pipeline and so are absent from
 	// `module.functions` at this point. They are therefore never inlined BY CONSTRUCTION rather than by
 	// a roster this file would have to keep. (`mrt_panic` is not a call at all: it is an `osPanic` op.)
-	function considerSite(pos ElementIndex, callee ByteArray, args ValueIdArray, shape SiteShape)
+	function considerSite(pos ElementIndex, opRef ElementIndex, callee ByteArray, args ValueIdArray, shape SiteShape)
+		if self.restricted and not self.offered.contains(opRef) 'notAnOfferedSite'
+			return
+		end 'notAnOfferedSite'
+
 		let calleeIndex = try self.byName.byName.get(callee) otherwise return
 
 		if calleeIndex == self.funcIndex 'selfCall'
@@ -3508,16 +3665,52 @@ type SiteSplicer
 			return
 		end 'cascadesStayAtThisSite'
 
+		if plan.readsTables(calleeIndex) and not self.callerHoldsTheTables(plan, calleeIndex: calleeIndex, args: args) 'tablesAreNotConstantHere'
+			self.stats.noteTableRefusal()
+			return
+		end 'tablesAreNotConstantHere'
+
 		self.recordLeafSiteUnlessItWidensTheSafePoint(pos, calleeIndex: calleeIndex)
 	end 'considerEligibleLeafSite'
 
+	function callerHoldsTheTables(plan LeafPlan, calleeIndex ElementIndex, args ValueIdArray) returns bool
+		if not self.callerDefsBuilt 'defsNotBuilt'
+			self.tableDefs.rebuild(self.module, func: self.func)
+			self.callerDefsBuilt = true
+		end 'defsNotBuilt'
+
+		return tableUsesResolveAtSite(plan.tablesReadBy(calleeIndex), args: args, project: self.project, module: self.module, defs: self.tableDefs, arith: self.tableArith, slots: plan.slots, byName: self.byName)
+	end 'callerHoldsTheTables'
+
+	module function restrictTo(allowed OfferedOpSet)
+		self.restricted = true
+
+		for opIdx in allowed 'eachOfferedOp'
+			self.offered.insert(opIdx)
+		end 'eachOfferedOp'
+	end 'restrictTo'
+
+	module function appendedOps() returns OfferedOpSet
+		return self.appended
+	end 'appendedOps'
+
 	// The leaf rule's half of `splicingWouldWidenTheSafePoint`. Asked per SITE rather than per callee: one
 	// eligible leaf is spliced at every site it has, and its callers need not agree about provenance.
+	// It also refuses a witness-slot adapter that needs the green-thread stack guard at a caller that
+	// skips it, where the copy would run unguarded.
 	function recordLeafSiteUnlessItWidensTheSafePoint(pos ElementIndex, calleeIndex ElementIndex)
-		if splicingWouldWidenTheSafePoint(self.module.getFunc(calleeIndex), caller: self.func, runtimeTier: self.project.libraryFacts.runtimeTier) 'wouldWidenTheSafePoint'
+		view calleeFunc = self.module.getFunc(calleeIndex)
+		let runtimeTier = self.project.libraryFacts.runtimeTier
+
+		if splicingWouldWidenTheSafePoint(calleeFunc, caller: self.func, runtimeTier: runtimeTier) 'wouldWidenTheSafePoint'
 			self.stats.noteSafePointRefusal()
 			return
 		end 'wouldWidenTheSafePoint'
+
+		if calleeFunc.needsGreenThreadStackGuard and skipsGreenThreadStackGuard(self.func, runtimeTier: runtimeTier) 'wouldDropTheStackGuard'
+			self.stats.noteStackGuardRefusal()
+			return
+		end 'wouldDropTheStackGuard'
 
 		self.recordSite(pos, calleeIndex: calleeIndex)
 	end 'recordLeafSiteUnlessItWidensTheSafePoint'
@@ -3708,6 +3901,7 @@ type SiteSplicer
 	// that followed it, and — if this is the block's last site — the block's whole exit.
 	function splice(predRef ElementIndex, contRef ElementIndex, calleeIndex ElementIndex, callee ByteArray, args ValueIdArray, results SiteResults, siteSpan SpanId)
 		requireCallNamesCallee(callee, calleeIndex: calleeIndex, caller: self.func, byName: self.byName)
+		let opsBefore = self.module.opCount()
 		var calleeFunc = self.module.getFunc(calleeIndex)
 
 		if args.count() as ParamCount != calleeFunc.paramCount 'arity'
@@ -3744,7 +3938,29 @@ type SiteSplicer
 		// restored first: this branch is the caller's call statement, not any line inside the callee.
 		self.module.spans.current = siteSpan
 		self.module.setTerminator(self.blockAt(predRef), op: StdOp.branch(blocks.targetOf(self.calleeEntryBlockId(calleeFunc))))
+		self.noteChainOutcome(calleeIndex, opsBefore: opsBefore)
 	end 'splice'
+
+	function noteChainOutcome(calleeIndex ElementIndex, opsBefore ElementIndex)
+		if self.calleeReadsTables(calleeIndex) 'aTableBodyWasCopied'
+			self.stats.noteCallerReceivedTables(self.funcIndex)
+		end 'aTableBodyWasCopied'
+
+		if not self.restricted 'notAChainRound'
+			return
+		end 'notAChainRound'
+
+		for opIdx in opsBefore upto self.module.opCount() 'eachAppendedOp'
+			self.appended.insert(opIdx)
+		end 'eachAppendedOp'
+	end 'noteChainOutcome'
+
+	function calleeReadsTables(calleeIndex ElementIndex) returns bool
+		return match self.admission 'rule'
+			leaves(plan) gives plan.readsTables(calleeIndex)
+			calledOnce gives false
+		end 'rule'
+	end 'calleeReadsTables'
 
 	// The dense value column, total over the callee's id space up to the bound its admission measured:
 	// parameters map to the site's arguments, everything else to a fresh caller id. A debug binding's

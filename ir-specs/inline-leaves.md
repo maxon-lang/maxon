@@ -2652,8 +2652,6 @@ func @walk {
   tryok#35:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  visit:
-    x64.leaRegRdata r12, [rip + __layout_ArrayIterator_Byte$0_255$1]
   __il_body#14:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "panic at Array.maxon:497: "
@@ -2686,16 +2684,12 @@ func @walk {
     x64.jcc notEqual, critsplit#44
   __im_slow#16:
     x64.callDirect __managed_cursor_current
-    x64.movRegReg rdx, r8
-    x64.jmp __im_cont
+    x64.jmp __il_cont#13
   critsplit#44:
-    x64.movRegReg rdx, rax
-    x64.jmp __im_cont
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#13
   critsplit#43:
-    x64.movRegReg rdx, rax
-  __im_cont:
-    x64.movRegReg rcx, r12
-    x64.callDirect __retain_type_param
+    x64.movRegReg r8, rax
   __il_cont#13:
     x64.leaRegRegReg rax, rbx, r8
   __il_body#23:
@@ -2728,7 +2722,7 @@ func @walk {
     x64.movRegImm32 rax, 0
   __il_cont#26:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, visit
+    x64.jcc equal, __il_body#14
   whileexit:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Byte$0_255$1
@@ -2901,8 +2895,6 @@ func @walk {
   tryok#35:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  visit:
-    x64.leaRegRdata r12, [rip + __layout_ArrayIterator_Byte$0_255$1]
   __il_body#14:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "panic at Array.maxon:497: "
@@ -2935,16 +2927,12 @@ func @walk {
     x64.jcc notEqual, critsplit#44
   __im_slow#16:
     x64.callDirect __managed_cursor_current
-    x64.movRegReg rdx, r8
-    x64.jmp __im_cont
+    x64.jmp __il_cont#13
   critsplit#44:
-    x64.movRegReg rdx, rax
-    x64.jmp __im_cont
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#13
   critsplit#43:
-    x64.movRegReg rdx, rax
-  __im_cont:
-    x64.movRegReg rcx, r12
-    x64.callDirect __retain_type_param
+    x64.movRegReg r8, rax
   __il_cont#13:
     x64.leaRegRegReg rax, rbx, r8
   __il_body#23:
@@ -2977,7 +2965,7 @@ func @walk {
     x64.movRegImm32 rax, 0
   __il_cont#26:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, visit
+    x64.jcc equal, __il_body#14
   whileexit:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Byte$0_255$1
@@ -3161,8 +3149,6 @@ func @walk {
   tryok#35:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-  visit:
-    arm64.leaRdata x20, __layout_ArrayIterator_Byte$0_255$1
   __il_body#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.leaRdata x1, __str_rec_1  ; "panic at Array.maxon:497: "
@@ -3195,16 +3181,12 @@ func @walk {
     arm64.b.ne critsplit#44
   __im_slow#16:
     arm64.bl __managed_cursor_current
-    arm64.movRegReg x1, x0
-    arm64.b __im_cont
+    arm64.b __il_cont#13
   critsplit#44:
-    arm64.movRegReg x1, x2
-    arm64.b __im_cont
+    arm64.movRegReg x0, x2
+    arm64.b __il_cont#13
   critsplit#43:
-    arm64.movRegReg x1, x2
-  __im_cont:
-    arm64.movRegReg x0, x20
-    arm64.bl __retain_type_param
+    arm64.movRegReg x0, x2
   __il_cont#13:
     arm64.add x0, x19, x0
   __il_body#23:
@@ -3238,7 +3220,7 @@ func @walk {
     arm64.movImm x0, 0
   __il_cont#26:
     arm64.cmp x0, 0
-    arm64.b.eq visit
+    arm64.b.eq __il_body#14
   whileexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_ArrayIterator_Byte$0_255$1
@@ -3417,8 +3399,6 @@ func @walk {
   tryok#35:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-  visit:
-    arm64.leaRdata x20, __layout_ArrayIterator_Byte$0_255$1
   __il_body#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.leaRdata x1, __str_rec_1  ; "panic at Array.maxon:497: "
@@ -3451,16 +3431,12 @@ func @walk {
     arm64.b.ne critsplit#44
   __im_slow#16:
     arm64.bl __managed_cursor_current
-    arm64.movRegReg x1, x0
-    arm64.b __im_cont
+    arm64.b __il_cont#13
   critsplit#44:
-    arm64.movRegReg x1, x2
-    arm64.b __im_cont
+    arm64.movRegReg x0, x2
+    arm64.b __il_cont#13
   critsplit#43:
-    arm64.movRegReg x1, x2
-  __im_cont:
-    arm64.movRegReg x0, x20
-    arm64.bl __retain_type_param
+    arm64.movRegReg x0, x2
   __il_cont#13:
     arm64.add x0, x19, x0
   __il_body#23:
@@ -3494,7 +3470,7 @@ func @walk {
     arm64.movImm x0, 0
   __il_cont#26:
     arm64.cmp x0, 0
-    arm64.b.eq visit
+    arm64.b.eq __il_body#14
   whileexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_ArrayIterator_Byte$0_255$1

@@ -1,0 +1,557 @@
+// Compile-time resolution of calls through constant `.rdata` tables: a witness dispatch and a
+// descriptor-gated `*_type_param` action. A generic body stays one shared function that reads its
+// tables from parameters, so its calls resolve only in a copy spliced into a caller that passes
+// constant tables.
+module typealias OfferedOpSet = Set with ElementIndex
+module typealias RdataSlotTargetArray = Array with RdataSlotTarget
+module typealias RdataSlotTargetsByLabel = Map with (String, RdataSlotTargetArray)
+typealias PatchedOffsetsByLabel = Map with (String, ByteOffsetArray)
+module typealias TableUseArray = Array with TableUse
+module typealias TableUsesByCallee = Map with (ElementIndex, TableUseArray)
+
+let MaxAddressChain = 8 as ElementIndex
+let RdataWordBytes = 8 as ByteOffset
+let DescriptorActionArity = 2
+
+module type RdataSlotTarget
+	export let offset as ByteOffset
+	export let funcName as ByteArray
+
+	module static function create(offset ByteOffset, funcName ByteArray) returns RdataSlotTarget
+		return Self{offset: offset, funcName: funcName}
+	end 'create'
+end 'RdataSlotTarget'
+
+module union RdataWord
+	callee(name ByteArray)
+	inert
+	unreadable
+end 'RdataWord'
+
+module type RdataSlotIndex
+	var byLabel as RdataSlotTargetsByLabel
+	var dataWordsByLabel as PatchedOffsetsByLabel
+	var built as bool
+
+	module static function create() returns RdataSlotIndex
+		return Self{byLabel: RdataSlotTargetsByLabel.create(), dataWordsByLabel: PatchedOffsetsByLabel.create(), built: false}
+	end 'create'
+
+	module function ensureBuilt(globalData GlobalDataTable)
+		if self.built 'alreadyBuilt'
+			return
+		end 'alreadyBuilt'
+
+		for reloc in globalData.pendingRdataRelocs 'eachSlot'
+			let target = RdataSlotTarget.create(reloc.offsetInLabel, funcName: reloc.funcName.clone())
+
+			if var known = try self.byLabel.get(reloc.rdataLabel) 'sharedLabel'
+				known.push(target)
+				continue
+			end 'sharedLabel'
+
+			var targets = RdataSlotTargetArray.create()
+			targets.push(target)
+			self.byLabel.upsert(reloc.rdataLabel, value: targets)
+		end 'eachSlot'
+
+		for reloc in globalData.pendingRdataAbsRelocs 'eachAbsoluteWord'
+			self.noteDataWord(reloc.rdataLabel, offset: reloc.offsetInLabel)
+		end 'eachAbsoluteWord'
+
+		for reloc in globalData.pendingRdataSelfRelRelocs 'eachRelativeWord'
+			self.noteDataWord(reloc.rdataLabel, offset: reloc.offsetInLabel)
+		end 'eachRelativeWord'
+
+		self.built = true
+	end 'ensureBuilt'
+
+	function noteDataWord(label String, offset ByteOffset)
+		if var known = try self.dataWordsByLabel.get(label) 'sharedLabel'
+			known.push(offset)
+			return
+		end 'sharedLabel'
+
+		var offsets = ByteOffsetArray.create()
+		offsets.push(offset)
+		self.dataWordsByLabel.upsert(label, value: offsets)
+	end 'noteDataWord'
+
+	// Sound because `.rdata` is never written at run time and every table's relocs are recorded when
+	// its label is registered, before this pass: a word no reloc patches is its payload bytes.
+	// ⚠ A reloc channel `ensureBuilt` does not read would let a patched word with zero payload bytes
+	// answer `inert`.
+	module function wordAt(globalData GlobalDataTable, label String, offset ByteOffset) returns RdataWord
+		if not self.built 'notBuilt'
+			panic("RdataSlotIndex.wordAt: asked about '{label}' before `ensureBuilt` — an unbuilt index would read every function slot as an empty word")
+		end 'notBuilt'
+
+		if let targets = try self.byLabel.get(label) 'hasFunctionSlots'
+			for target in targets 'eachTarget'
+				if target.offset == offset 'thisSlot'
+					return RdataWord.callee(target.funcName.clone())
+				end 'thisSlot'
+
+				if rdataWordsOverlap(target.offset, second: offset) 'straddlesASlot'
+					return RdataWord.unreadable
+				end 'straddlesASlot'
+			end 'eachTarget'
+		end 'hasFunctionSlots'
+
+		if let patched = try self.dataWordsByLabel.get(label) 'hasDataWords'
+			for patchedOffset in patched 'eachDataWord'
+				if rdataWordsOverlap(patchedOffset, second: offset) 'patchedByTheWriter'
+					return RdataWord.unreadable
+				end 'patchedByTheWriter'
+			end 'eachDataWord'
+		end 'hasDataWords'
+
+		let payload = globalData.payloadOf(label)
+
+		if offset + RdataWordBytes > payload.count() as ByteOffset 'pastThePayload'
+			return RdataWord.unreadable
+		end 'pastThePayload'
+
+		for i in 0 upto RdataWordBytes 'eachByte'
+			let byte = try payload.get(offset + i) otherwise panic("RdataSlotIndex.wordAt: payload '{label}' holds {payload.count()} byte(s) but byte {offset + i} was checked to lie inside it")
+
+			if byte != 0 'nonZero'
+				return RdataWord.unreadable
+			end 'nonZero'
+		end 'eachByte'
+
+		return RdataWord.inert
+	end 'wordAt'
+end 'RdataSlotIndex'
+
+function rdataWordsOverlap(first ByteOffset, second ByteOffset) returns bool
+	return first < second + RdataWordBytes and second < first + RdataWordBytes
+end 'rdataWordsOverlap'
+
+type AddressRoot
+	export let root as ValueId
+	export let offset as ByteOffset
+
+	static function create(root ValueId, offset ByteOffset) returns AddressRoot
+		return Self{root: root, offset: offset}
+	end 'create'
+end 'AddressRoot'
+
+function addressRootOf(module StdModule, defs StdValueDefs, arith StdArithOperands, value ValueId) returns AddressRoot
+	var current = value
+	var offset = 0 as ByteOffset
+
+	for _ in 0 upto MaxAddressChain 'eachStep'
+		if not defs.arithDefining(current, module: module, arith: arith) 'notArithmetic'
+			break
+		end 'notArithmetic'
+
+		if not arith.isBinaryArithImm() or arith.opcode != StdBinOpcode.add or arith.imm < 0 'notAnOffset'
+			break
+		end 'notAnOffset'
+
+		let step = arith.imm as ByteOffset
+		offset = offset + step
+		current = arith.lhs
+	end 'eachStep'
+
+	return AddressRoot.create(current, offset: offset)
+end 'addressRootOf'
+
+module enum DescriptorAction
+	retain
+	drop
+	release
+	reclaim
+end 'DescriptorAction'
+
+union DescriptorOutcome
+	inert
+	direct(name ByteArray)
+end 'DescriptorOutcome'
+
+module union TableUseKind
+	witnessSlot
+	descriptorAction(action DescriptorAction)
+end 'TableUseKind'
+
+module type TableUse
+	export let kind as TableUseKind
+	export let position as ParamCount
+	export let wordOffset as ByteOffset
+
+	module static function create(kind TableUseKind, position ParamCount, wordOffset ByteOffset) returns TableUse
+		return Self{kind: kind, position: position, wordOffset: wordOffset}
+	end 'create'
+end 'TableUse'
+
+module type TableCallProbe
+	var call as StdCallOperands
+	var witness as StdWitnessOperands
+	var arith as StdArithOperands
+	var defs as StdValueDefs
+	var defsBuilt as bool
+	var forwarder as bool
+	var forwardedCalls as ElementIndex
+	var allocations as ElementIndex
+	export var reads as TableUseArray
+
+	module static function create() returns TableCallProbe
+		return Self{call: StdCallOperands.create(), witness: StdWitnessOperands.create(), arith: StdArithOperands.create(), defs: StdValueDefs.create(), defsBuilt: false, forwarder: false, forwardedCalls: 0, allocations: 0, reads: TableUseArray.create()}
+	end 'create'
+
+	module function begin(func IrFunction)
+		self.defsBuilt = false
+		self.forwarder = isWitnessSlotAdapterName(func.name)
+		self.forwardedCalls = 0
+		self.allocations = 0
+		self.reads = TableUseArray.create()
+	end 'begin'
+
+	module function isForwarder() returns bool
+		return self.forwarder
+	end 'isForwarder'
+
+	module function settles() returns bool
+		if self.forwarder 'anAdapter'
+			return self.forwardedCalls <= 1
+		end 'anAdapter'
+
+		return self.allocations == 0 or self.reads.count() != 0
+	end 'settles'
+
+	module function admitsHotCall(op StdOp, module StdModule, func IrFunction) returns bool
+		if self.forwarder 'anAdapter'
+			classifyCallOperands(op, call: self.call)
+
+			if not self.call.namesACallee() 'notADirectCall'
+				return false
+			end 'notADirectCall'
+
+			self.forwardedCalls = self.forwardedCalls + 1
+			return self.forwardedCalls == 1
+		end 'anAdapter'
+
+		classifyWitnessOperands(op, w: self.witness)
+
+		if self.witness.isDispatch() 'aWitnessDispatch'
+			return self.noteWitnessDispatch(func)
+		end 'aWitnessDispatch'
+
+		classifyCallOperands(op, call: self.call)
+
+		if not self.call.namesACallee() or self.call.throwsToAFlag() 'notAPlainCall'
+			return false
+		end 'notAPlainCall'
+
+		if self.call.callee.equals(MmAllocName) 'anAllocation'
+			self.allocations = self.allocations + 1
+			return true
+		end 'anAllocation'
+
+		if isDescriptorCall(self.call) 'aDescriptorCall'
+			return self.noteDescriptorCall(module, func: func, action: descriptorActionOf(self.call.callee))
+		end 'aDescriptorCall'
+
+		return false
+	end 'admitsHotCall'
+
+	function noteWitnessDispatch(func IrFunction) returns bool
+		if self.witness.witnessAddr >= valueIdAtParamPosition(func.paramCount) 'notAParameter'
+			return false
+		end 'notAParameter'
+
+		self.reads.push(TableUse.create(TableUseKind.witnessSlot, position: paramPositionOfValueId(self.witness.witnessAddr), wordOffset: witnessMethodSlotOffset(self.witness.methodIndex)))
+		return true
+	end 'noteWitnessDispatch'
+
+	function noteDescriptorCall(module StdModule, func IrFunction, action DescriptorAction) returns bool
+		let descriptor = self.call.firstArg
+		var root = AddressRoot.create(descriptor, offset: 0)
+
+		if descriptor >= valueIdAtParamPosition(func.paramCount) 'derivedFromAParameter'
+			if not self.defsBuilt 'defsNotBuilt'
+				self.defs.rebuild(module, func: func)
+				self.defsBuilt = true
+			end 'defsNotBuilt'
+
+			root = addressRootOf(module, defs: self.defs, arith: self.arith, value: descriptor)
+		end 'derivedFromAParameter'
+
+		if root.root >= valueIdAtParamPosition(func.paramCount) 'notRootedAtAParameter'
+			return false
+		end 'notRootedAtAParameter'
+
+		self.reads.push(TableUse.create(TableUseKind.descriptorAction(action), position: paramPositionOfValueId(root.root), wordOffset: root.offset))
+		return true
+	end 'noteDescriptorCall'
+end 'TableCallProbe'
+
+function resolveRdataWord(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, value ValueId, kind RdataPayloadKind, wordOffset ByteOffset) returns RdataWord
+	let found = addressRootOf(module, defs: defs, arith: arith, value: value)
+
+	if not defs.isDefinedByAnOp(found.root) 'notDefinedByAnOp'
+		return RdataWord.unreadable
+	end 'notDefinedByAnOp'
+
+	view definer = module.getOp(defs.definingOp(found.root))
+
+	if stdOpLabelKindOf(definer) != StdOpLabelKind.rdata 'notAnRdataAddress'
+		return RdataWord.unreadable
+	end 'notAnRdataAddress'
+
+	let label = String.from(stdOpLabel(definer))
+
+	if project.globalData.payloadKindOf(label) != kind 'wrongKindOfTable'
+		return RdataWord.unreadable
+	end 'wrongKindOfTable'
+
+	return slots.wordAt(project.globalData, label: label, offset: found.offset + wordOffset)
+end 'resolveRdataWord'
+
+module function tableUsesResolveAtSite(reads TableUseArray, args ValueIdArray, project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, byName FunctionNameIndex) returns bool
+	for tableUse in reads 'eachUse'
+		let arg = try args.get(tableUse.position) otherwise panic("tableUsesResolveAtSite: a callee reads a table through parameter {tableUse.position} but the site passes {args.count()} argument(s)")
+
+		if not tableUseResolves(tableUse, arg: arg, project: project, module: module, defs: defs, arith: arith, slots: slots, byName: byName) 'unresolved'
+			return false
+		end 'unresolved'
+	end 'eachUse'
+
+	return true
+end 'tableUsesResolveAtSite'
+
+function tableUseResolves(tableUse TableUse, arg ValueId, project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, byName FunctionNameIndex) returns bool
+	match tableUse.kind 'kind'
+		witnessSlot then return witnessSlotServes(resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: arg, kind: RdataPayloadKind.witnessTable, wordOffset: tableUse.wordOffset), byName: byName)
+		descriptorAction(action) then return descriptorActionResolves(project, module: module, defs: defs, arith: arith, slots: slots, action: action, descriptor: arg, baseOffset: tableUse.wordOffset)
+	end 'kind'
+end 'tableUseResolves'
+
+function witnessSlotServes(word RdataWord, byName FunctionNameIndex) returns bool
+	return match word 'word'
+		callee(name) gives byName.byName.contains(name)
+		inert or
+		unreadable gives false
+	end 'word'
+end 'witnessSlotServes'
+
+function descriptorActionResolves(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, action DescriptorAction, descriptor ValueId, baseOffset ByteOffset) returns bool
+	let outcome = try resolveDescriptorAction(project, module: module, defs: defs, arith: arith, slots: slots, action: action, descriptor: descriptor, baseOffset: baseOffset) otherwise return false
+
+	match outcome 'outcome'
+		inert or
+		direct then return true
+	end 'outcome'
+end 'descriptorActionResolves'
+
+// Each outcome must be what the runtime's `buildRecordGatedAction` entry does with these two words;
+// a divergence miscompiles every spliced copy silently.
+function resolveDescriptorAction(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, action DescriptorAction, descriptor ValueId, baseOffset ByteOffset) returns DescriptorOutcome throws AbsentError
+	let retainWord = resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: descriptor, kind: RdataPayloadKind.layoutDescriptor, wordOffset: baseOffset + LAYOUT_OFFSET_RETAIN_FUNC)
+	let destroyWord = resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: descriptor, kind: RdataPayloadKind.layoutDescriptor, wordOffset: baseOffset + LAYOUT_OFFSET_DESTROY_FUNC)
+
+	match action 'action'
+		retain then return try outcomeOfWord(retainWord)
+		drop then return try outcomeOfWord(destroyWord)
+		release then return try releaseOutcome(retainWord, destroyWord: destroyWord)
+		reclaim then return try reclaimOutcome(retainWord, destroyWord: destroyWord)
+	end 'action'
+end 'resolveDescriptorAction'
+
+function outcomeOfWord(word RdataWord) returns DescriptorOutcome throws AbsentError
+	match word 'word'
+		callee(name) then return DescriptorOutcome.direct(name.clone())
+		inert then return DescriptorOutcome.inert
+		unreadable then throw AbsentError.absent
+	end 'word'
+end 'outcomeOfWord'
+
+function releaseOutcome(retainWord RdataWord, destroyWord RdataWord) returns DescriptorOutcome throws AbsentError
+	let gate = try outcomeOfWord(retainWord)
+
+	match gate 'gate'
+		inert then return DescriptorOutcome.inert
+		direct then break
+	end 'gate'
+
+	let destroy = try outcomeOfWord(destroyWord)
+
+	// A retain word with an inert destroy word is refused: the runtime would call address zero. No
+	// source program reaches it — the two words are non-zero together except in a promise's
+	// descriptor, whose retain word is zero.
+	match destroy 'destroy'
+		inert then throw AbsentError.absent
+		direct(name) then return DescriptorOutcome.direct(name.clone())
+	end 'destroy'
+end 'releaseOutcome'
+
+function reclaimOutcome(retainWord RdataWord, destroyWord RdataWord) returns DescriptorOutcome throws AbsentError
+	let gate = try outcomeOfWord(retainWord)
+
+	match gate 'gate'
+		direct then return DescriptorOutcome.inert
+		inert then return try outcomeOfWord(destroyWord)
+	end 'gate'
+end 'reclaimOutcome'
+
+module function devirtualizeTableCalls(project Project, module StdModule, func IrFunction, byName FunctionNameIndex, meta StdOpMetaMemo, slots RdataSlotIndex) returns OfferedOpSet
+	var rewritten = OfferedOpSet.create()
+	var candidates = OpIndexArray.create()
+	var call = StdCallOperands.create()
+	var witness = StdWitnessOperands.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		view block = module.getBlock(blockRef)
+
+		for opIdx in block.bodyOps() 'eachOp'
+			view op = module.getOp(opIdx)
+
+			if meta.holdsACall(op) and opIsTableCall(op, call: call, witness: witness) 'aCandidate'
+				candidates.push(opIdx)
+			end 'aCandidate'
+		end 'eachOp'
+	end 'eachBlock'
+
+	if candidates.count() == 0 'nothingToResolve'
+		return rewritten
+	end 'nothingToResolve'
+
+	slots.ensureBuilt(project.globalData)
+	var defs = StdValueDefs.build(module, func: func)
+	var arith = StdArithOperands.create()
+
+	for opIdx in candidates 'eachCandidate'
+		view op = module.getOp(opIdx)
+		classifyWitnessOperands(op, w: witness)
+
+		if witness.isDispatch() 'aWitnessDispatch'
+			if devirtualizeWitnessDispatch(project, module: module, defs: defs, arith: arith, slots: slots, byName: byName, witness: witness, opIdx: opIdx) 'rewrittenToACall'
+				rewritten.insert(opIdx)
+			end 'rewrittenToACall'
+
+			continue
+		end 'aWitnessDispatch'
+
+		classifyCallOperands(op, call: call)
+
+		if devirtualizeDescriptorCall(project, module: module, defs: defs, arith: arith, slots: slots, call: call, opIdx: opIdx) 'rewrittenToTheAction'
+			rewritten.insert(opIdx)
+		end 'rewrittenToTheAction'
+	end 'eachCandidate'
+
+	return rewritten
+end 'devirtualizeTableCalls'
+
+function opIsTableCall(op StdOp, call StdCallOperands, witness StdWitnessOperands) returns bool
+	classifyWitnessOperands(op, w: witness)
+
+	if witness.isDispatch() 'aWitnessDispatch'
+		return true
+	end 'aWitnessDispatch'
+
+	classifyCallOperands(op, call: call)
+	return isDescriptorCall(call)
+end 'opIsTableCall'
+
+function isDescriptorCall(call StdCallOperands) returns bool
+	return call.namesACallee() and not call.throwsToAFlag() and call.argCount == DescriptorActionArity and isTypeParamOwnershipCallee(call.callee)
+end 'isDescriptorCall'
+
+function descriptorActionOf(callee ByteArray) returns DescriptorAction
+	if callee.equals(RetainTypeParamName) 'aRetain'
+		return DescriptorAction.retain
+	end 'aRetain'
+
+	if callee.equals(DropTypeParamName) 'aDrop'
+		return DescriptorAction.drop
+	end 'aDrop'
+
+	if callee.equals(ReleaseTypeParamName) 'aRelease'
+		return DescriptorAction.release
+	end 'aRelease'
+
+	if callee.equals(ReclaimTypeParamName) 'aReclaim'
+		return DescriptorAction.reclaim
+	end 'aReclaim'
+
+	panic("descriptorActionOf: '{String.from(callee)}' is not a descriptor-gated ownership callee")
+end 'descriptorActionOf'
+
+function devirtualizeWitnessDispatch(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, byName FunctionNameIndex, witness StdWitnessOperands, opIdx ElementIndex) returns bool
+	var target = ByteArray.create()
+
+	match resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: witness.witnessAddr, kind: RdataPayloadKind.witnessTable, wordOffset: witnessMethodSlotOffset(witness.methodIndex)) 'word'
+		callee(name) then target = name.clone()
+		inert or
+		unreadable then return false
+	end 'word'
+
+	let calleeIndex = try byName.byName.get(target) otherwise return false
+	view calleeFunc = module.getFunc(calleeIndex)
+
+	if calleeFunc.paramCount != witness.args.count() as ParamCount or floatParamMaskOf(calleeFunc.paramTypes) != witness.argFloatMask 'differentAbi'
+		return false
+	end 'differentAbi'
+
+	if stdReturnTypeIsVoid(calleeFunc.returnType) != witness.resultIsVoid or stdReturnTypeIsFloat(calleeFunc.returnType) != witness.resultIsFloat 'differentResult'
+		return false
+	end 'differentResult'
+
+	let direct = StdOp.tryCall(witness.resultId, errorFlagId: witness.errorFlagId, callee: target, args: witness.args.clone()) if witness.throwsToAFlag() else StdOp.call(witness.resultId, callee: target, args: witness.args.clone())
+	try module.ops.set(opIdx, value: direct) otherwise panic("devirtualizeWitnessDispatch: ops.set({opIdx}) OOB")
+	return true
+end 'devirtualizeWitnessDispatch'
+
+function devirtualizeDescriptorCall(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, call StdCallOperands, opIdx ElementIndex) returns bool
+	let outcome = try resolveDescriptorAction(project, module: module, defs: defs, arith: arith, slots: slots, action: descriptorActionOf(call.callee), descriptor: call.firstArg, baseOffset: 0) otherwise return false
+	try module.ops.set(opIdx, value: descriptorReplacement(outcome, call: call)) otherwise panic("devirtualizeDescriptorCall: ops.set({opIdx}) OOB")
+	return true
+end 'devirtualizeDescriptorCall'
+
+function descriptorReplacement(outcome DescriptorOutcome, call StdCallOperands) returns StdOp
+	return match outcome 'outcome'
+		inert gives StdOp.binOpImm(call.resultId, lhs: call.secondArg, imm: 0, opcode: StdBinOpcode.add, operandType: StdType.i64)
+		direct(name) gives StdOp.call(call.resultId, callee: name.clone(), args: singletonArgs(call.secondArg))
+	end 'outcome'
+end 'descriptorReplacement'
+
+let MaxDeadSweeps = 4 as ElementIndex
+
+// Sound only while no `isPure` op can trap or allocate: one that could would vanish with its
+// result.
+module function dropDeadPureOps(module StdModule, func IrFunction)
+	var def = StdDefinedValues.create()
+
+	for _ in 0 upto MaxDeadSweeps 'eachSweep'
+		var read = StdValueUseSet.create()
+		collectFunctionValueUses(module, func: func, referenced: read)
+		var doomed = StdValueUseSet.create()
+
+		for blockRef in func.blockRefs 'eachBlockOfDefs'
+			view block = module.getBlock(blockRef)
+
+			for opIdx in block.bodyOps() 'eachDefiningOp'
+				view op = module.getOp(opIdx)
+
+				if not op.rawValue.isPure 'mustStay'
+					continue
+				end 'mustStay'
+
+				stdOpDefinedValue(op, def: def)
+
+				if def.definesNothing() or def.definesPair() or read.contains(def.first) 'notDead'
+					continue
+				end 'notDead'
+
+				doomed.insert(def.first)
+			end 'eachDefiningOp'
+		end 'eachBlockOfDefs'
+
+		if doomed.isEmpty() 'nothingDead'
+			break
+		end 'nothingDead'
+
+		removeOpsDefining(module, func: func, doomed: doomed)
+	end 'eachSweep'
+end 'dropDeadPureOps'

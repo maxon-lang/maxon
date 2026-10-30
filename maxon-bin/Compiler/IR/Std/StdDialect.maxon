@@ -4617,6 +4617,180 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 	end 'c'
 end 'classifyCallOperands'
 
+module enum StdWitnessShape
+	other
+	dispatch
+	throwingDispatch
+end 'StdWitnessShape'
+
+module type StdWitnessOperands
+	var shape as StdWitnessShape
+	export var resultId as ValueId
+	export var errorFlagId as ValueId
+	export var witnessAddr as ValueId
+	export var methodIndex as WitnessMethodIndex
+	export var resultIsVoid as bool
+	export var resultIsFloat as bool
+	export var argFloatMask as ArgFloatMask
+	export var args as ValueIdArray
+
+	module static function create() returns StdWitnessOperands
+		return Self{shape: StdWitnessShape.other, resultId: 0, errorFlagId: 0, witnessAddr: 0, methodIndex: 0, resultIsVoid: false, resultIsFloat: false, argFloatMask: 0, args: ValueIdArray.create()}
+	end 'create'
+
+	module function isDispatch() returns bool
+		return self.shape != StdWitnessShape.other
+	end 'isDispatch'
+
+	module function throwsToAFlag() returns bool
+		return self.shape == StdWitnessShape.throwingDispatch
+	end 'throwsToAFlag'
+
+	function recordOther()
+		self.shape = StdWitnessShape.other
+	end 'recordOther'
+
+	function recordDispatch(dispatchShape StdWitnessShape, defined ValueId, flag ValueId, table ValueId, method WitnessMethodIndex, returned StdReturnType, floatMask ArgFloatMask, arguments ValueIdArray)
+		self.shape = dispatchShape
+		self.resultId = defined
+		self.errorFlagId = flag
+		self.witnessAddr = table
+		self.methodIndex = method
+		self.resultIsVoid = stdReturnTypeIsVoid(returned)
+		self.resultIsFloat = stdReturnTypeIsFloat(returned)
+		self.argFloatMask = floatMask
+		self.args.clear()
+		self.args.append(arguments)
+	end 'recordDispatch'
+end 'StdWitnessOperands'
+
+module function classifyWitnessOperands(op StdOp, w StdWitnessOperands)
+	match op 'c'
+		call or
+		tryCall or
+		const or
+		binOp or
+		unaryOp or
+		cmp or
+		binOpImm or
+		cmpImm or
+		div or
+		mod or
+		condBranch or
+		branch or
+		ret or
+		param or
+		retVoid or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		osAllocPages or
+		osWriteStdout or
+		rdataAddr or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		switch or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osGuardPages or
+		osCommitPages or
+		osReservePages or
+		atomicCas or
+		atomicRmw or
+		tlsAlloc or
+		tlsSetValue or
+		tlsSlotLoad or
+		osThreadToken or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		loadAcquire or
+		storeRelease or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe then w.recordOther()
+		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then w.recordDispatch(StdWitnessShape.dispatch, defined: resultId, flag: 0, table: witnessAddr, method: methodIndex, returned: resultType, floatMask: argFloatMask, arguments: args)
+		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then w.recordDispatch(StdWitnessShape.throwingDispatch, defined: resultId, flag: errorFlagId, table: witnessAddr, method: methodIndex, returned: resultType, floatMask: argFloatMask, arguments: args)
+	end 'c'
+end 'classifyWitnessOperands'
+
 // Which live op defines each value of one function — `stdOpDefinedValue` inverted, for a reader that
 // holds a VALUE and needs the op computing it: a shape recogniser walking an address or a compare back
 // to the loads it reads. A block arg is defined by no op.

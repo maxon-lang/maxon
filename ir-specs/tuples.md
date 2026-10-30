@@ -4248,43 +4248,88 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, forhdr
     x64.jmp forjoin
-  each:
-    x64.leaRegRdata r13, [rip + __witness_ArrayIterator_Tally.Iterator]
-    x64.leaRegRdata rcx, [rip + __layout_WithIterIterator_ArrayIterator_Tally_Tally]
   __il_body#10:
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
-    x64.callDirect __retain_type_param
-    x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callMem [r13 + 48]
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#41:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
+    x64.cmpRegReg rax, rdi
+    x64.jcc aboveEqual, __im_slow#43
+  __im_load:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 24]
+    x64.cmpRegImm32 rdi, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rdi + rax*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rdi, 1
+    x64.jcc notEqual, __im_slow#43
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.leaRegRegReg rax, rdi, rax
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#58
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#59
+  __im_slow#43:
+    x64.callDirect __managed_cursor_current
+    x64.jmp __il_cont#9
+  critsplit#59:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#9
+  critsplit#58:
+    x64.movRegReg r8, rax
   __il_cont#9:
     x64.leaRegRegReg rax, rbx, r8
   __il_body#11:
-    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
   __il_cont#8:
     x64.leaRegRegReg rbx, rax, rcx
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Tally
-  forstep:
-    x64.leaRegRdata rax, [rip + __witness_ArrayIterator_Tally.Iterator]
   __il_body#15:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callMem [rax + 56]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#17
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#51:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow#55
+    x64.jmp __im_move
+  tryerr#53:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#50
+  __im_move:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  tryok#52:
+    x64.movRegImm32 rax, 0
+  __il_cont#50:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_cont#14
   tryok#16:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#14
-  tryerr#17:
-    x64.movRegReg rax, r10
   __il_cont#14:
     x64.movRegReg rcx, rax
   forhdr:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, each
+    x64.jcc equal, __il_body#10
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_Tally_Tally
@@ -4322,13 +4367,10 @@ func @main {
     x64.movRegReg rdx, r14
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r12, rbx
+    x64.leaRegRegReg rcx, r12, rbx
     x64.loadRegSlot rax, slot3
     x64.loadRegSlot rdx, slot4
-    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot3
-    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rax, slot2
     x64.storeBaseDispReg.word64 [rax + 0], r15
     x64.loadRegSlot rcx, slot1
@@ -4357,6 +4399,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#55:
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#53
+    x64.jmp tryok#52
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
@@ -4480,43 +4527,88 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, forhdr
     x64.jmp forjoin
-  each:
-    x64.leaRegRdata r13, [rip + __witness_ArrayIterator_Tally.Iterator]
-    x64.leaRegRdata rcx, [rip + __layout_WithIterIterator_ArrayIterator_Tally_Tally]
   __il_body#10:
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
-    x64.callDirect __retain_type_param
-    x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callMem [r13 + 48]
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#41:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
+    x64.cmpRegReg rax, rdi
+    x64.jcc aboveEqual, __im_slow#43
+  __im_load:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 24]
+    x64.cmpRegImm32 rdi, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rdi + rax*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rdi, 1
+    x64.jcc notEqual, __im_slow#43
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.leaRegRegReg rax, rdi, rax
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#58
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#59
+  __im_slow#43:
+    x64.callDirect __managed_cursor_current
+    x64.jmp __il_cont#9
+  critsplit#59:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#9
+  critsplit#58:
+    x64.movRegReg r8, rax
   __il_cont#9:
     x64.leaRegRegReg rax, rbx, r8
   __il_body#11:
-    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
   __il_cont#8:
     x64.leaRegRegReg rbx, rax, rcx
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Tally
-  forstep:
-    x64.leaRegRdata rax, [rip + __witness_ArrayIterator_Tally.Iterator]
   __il_body#15:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callMem [rax + 56]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#17
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#51:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow#55
+    x64.jmp __im_move
+  tryerr#53:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#50
+  __im_move:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  tryok#52:
+    x64.movRegImm32 rax, 0
+  __il_cont#50:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_cont#14
   tryok#16:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#14
-  tryerr#17:
-    x64.movRegReg rax, r10
   __il_cont#14:
     x64.movRegReg rcx, rax
   forhdr:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, each
+    x64.jcc equal, __il_body#10
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_Tally_Tally
@@ -4554,13 +4646,10 @@ func @main {
     x64.movRegReg rdx, r14
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r12, rbx
+    x64.leaRegRegReg rcx, r12, rbx
     x64.loadRegSlot rax, slot3
     x64.loadRegSlot rdx, slot4
-    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot3
-    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rax, slot2
     x64.storeBaseDispReg.word64 [rax + 0], r15
     x64.loadRegSlot rcx, slot1
@@ -4589,6 +4678,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#55:
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#53
+    x64.jmp tryok#52
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
@@ -4713,45 +4807,88 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq forhdr
     arm64.b forjoin
-  each:
-    arm64.leaRdata x22, __witness_ArrayIterator_Tally.Iterator
-    arm64.leaRdata x0, __layout_WithIterIterator_ArrayIterator_Tally_Tally
   __il_body#10:
-    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
-    arm64.bl __retain_type_param
-    arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x22 + 48]
-    arm64.blr x16
+    arm64.bl __mm_retain
+    arm64.movRegReg x22, x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+  __il_body#41:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
+    arm64.cmp x2, x4
+    arm64.b.hs __im_slow#43
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 24]
+    arm64.cmp x4, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x4 + x2*8 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x4, 1
+    arm64.b.ne __im_slow#43
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.add x2, x4, x2
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#58
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#59
+  __im_slow#43:
+    arm64.bl __managed_cursor_current
+    arm64.b __il_cont#9
+  critsplit#59:
+    arm64.movRegReg x0, x2
+    arm64.b __il_cont#9
+  critsplit#58:
+    arm64.movRegReg x0, x2
   __il_cont#9:
     arm64.add x0, x20, x0
   __il_body#11:
-    arm64.loadRegBaseDisp.word64 x1, [x23 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x22 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
     arm64.cmp x1, 0
     arm64.b.lt __rc_panic
   __il_cont#8:
     arm64.add x20, x0, x1
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x22
     arm64.bl __destruct_ArrayIterator_Tally
-  forstep:
-    arm64.leaRdata x1, __witness_ArrayIterator_Tally.Iterator
   __il_body#15:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 56]
-    arm64.blr x16
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#17
+  __il_body#51:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#55
+    arm64.b __im_move
+  tryerr#53:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#50
+  __im_move:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  tryok#52:
+    arm64.movImm x0, 0
+  __il_cont#50:
+    arm64.cmp x0, 0
+    arm64.b.ne __il_cont#14
   tryok#16:
     arm64.movImm x0, 0
-    arm64.b __il_cont#14
-  tryerr#17:
-    arm64.movRegReg x0, x9
   __il_cont#14:
     arm64.movRegReg x1, x0
   forhdr:
     arm64.cmp x1, 0
-    arm64.b.eq each
+    arm64.b.eq __il_body#10
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_WithIterIterator_ArrayIterator_Tally_Tally
@@ -4786,12 +4923,10 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x20, x21, x20
-    arm64.movRegReg x0, x20
+    arm64.add x0, x21, x20
     arm64.movRegReg x1, x24
     arm64.movRegReg x2, x25
     arm64.bl __str_copy
-    arm64.add x0, x20, x25
     arm64.storeBaseDispReg.word64 [x27 + 0], x28
     arm64.storeBaseDispReg.word64 [x27 + 8], x26
     arm64.movImm x0, 18446744073709551613
@@ -4822,6 +4957,11 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
+  __im_slow#55:
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#53
+    arm64.b tryok#52
   __rc_panic:
     arm64.leaRdata x0, __str_blob_38  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -4953,45 +5093,88 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq forhdr
     arm64.b forjoin
-  each:
-    arm64.leaRdata x22, __witness_ArrayIterator_Tally.Iterator
-    arm64.leaRdata x0, __layout_WithIterIterator_ArrayIterator_Tally_Tally
   __il_body#10:
-    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
-    arm64.bl __retain_type_param
-    arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x22 + 48]
-    arm64.blr x16
+    arm64.bl __mm_retain
+    arm64.movRegReg x22, x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+  __il_body#41:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
+    arm64.cmp x2, x4
+    arm64.b.hs __im_slow#43
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 24]
+    arm64.cmp x4, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x4 + x2*8 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x4, 1
+    arm64.b.ne __im_slow#43
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.add x2, x4, x2
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#58
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#59
+  __im_slow#43:
+    arm64.bl __managed_cursor_current
+    arm64.b __il_cont#9
+  critsplit#59:
+    arm64.movRegReg x0, x2
+    arm64.b __il_cont#9
+  critsplit#58:
+    arm64.movRegReg x0, x2
   __il_cont#9:
     arm64.add x0, x20, x0
   __il_body#11:
-    arm64.loadRegBaseDisp.word64 x1, [x23 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x22 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
     arm64.cmp x1, 0
     arm64.b.lt __rc_panic
   __il_cont#8:
     arm64.add x20, x0, x1
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x22
     arm64.bl __destruct_ArrayIterator_Tally
-  forstep:
-    arm64.leaRdata x1, __witness_ArrayIterator_Tally.Iterator
   __il_body#15:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 56]
-    arm64.blr x16
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#17
+  __il_body#51:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#55
+    arm64.b __im_move
+  tryerr#53:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#50
+  __im_move:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  tryok#52:
+    arm64.movImm x0, 0
+  __il_cont#50:
+    arm64.cmp x0, 0
+    arm64.b.ne __il_cont#14
   tryok#16:
     arm64.movImm x0, 0
-    arm64.b __il_cont#14
-  tryerr#17:
-    arm64.movRegReg x0, x9
   __il_cont#14:
     arm64.movRegReg x1, x0
   forhdr:
     arm64.cmp x1, 0
-    arm64.b.eq each
+    arm64.b.eq __il_body#10
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_WithIterIterator_ArrayIterator_Tally_Tally
@@ -5026,12 +5209,10 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x20, x21, x20
-    arm64.movRegReg x0, x20
+    arm64.add x0, x21, x20
     arm64.movRegReg x1, x24
     arm64.movRegReg x2, x25
     arm64.bl __str_copy
-    arm64.add x0, x20, x25
     arm64.storeBaseDispReg.word64 [x27 + 0], x28
     arm64.storeBaseDispReg.word64 [x27 + 8], x26
     arm64.movImm x0, 18446744073709551613
@@ -5062,6 +5243,11 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
+  __im_slow#55:
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#53
+    arm64.b tryok#52
   __rc_panic:
     arm64.leaRdata x0, __str_blob_38  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -5226,18 +5412,52 @@ func @xorKeyStream {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, forhdr
     x64.jmp forjoin
-  eachByte:
-    x64.leaRegRdata r13, [rip + __witness_ArrayIterator_Byte.Iterator]
-    x64.leaRegRdata rcx, [rip + __layout_WithIterIterator_ArrayIterator_Byte_Byte]
   __il_body#34:
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
-    x64.callDirect __retain_type_param
-    x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callMem [r13 + 48]
+    x64.callDirect __mm_retain
     x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#63:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
+    x64.cmpRegReg rax, rdi
+    x64.jcc aboveEqual, __im_slow#65
+  __im_load#66:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 24]
+    x64.cmpRegImm32 rdi, 8
+    x64.jcc notEqual, __im_stride#69
+  __im_word#67:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rdi + rax*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride#69:
+    x64.cmpRegImm32 rdi, 1
+    x64.jcc notEqual, __im_slow#65
+  __im_byte#68:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.leaRegRegReg rax, rdi, rax
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#81
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#82
+  __im_slow#65:
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg r14, r8
+    x64.jmp __il_body#35
+  critsplit#82:
+    x64.movRegReg r14, rax
+    x64.jmp __il_body#35
+  critsplit#81:
+    x64.movRegReg r14, rax
   __il_body#35:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic#37
@@ -5248,7 +5468,7 @@ func @xorKeyStream {
     x64.cmpRegReg rdx, rax
     x64.jcc below, ifcont
   finished:
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Byte
   exitdrop:
     x64.movRegReg rcx, r12
@@ -5267,7 +5487,7 @@ func @xorKeyStream {
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg rdx, rax
     x64.jcc aboveEqual, __im_slow#17
-  __im_load:
+  __im_load#18:
     x64.loadRegSlot rax, slot1
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
@@ -5291,11 +5511,11 @@ func @xorKeyStream {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#11
-  critsplit:
+  critsplit#79:
     x64.movRegReg rax, r8
   tryok#10:
     x64.movRegReg rdx, rax
-    x64.xorRegReg rdx, rax, r13
+    x64.xorRegReg rdx, rax, r14
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#14
   __rc_chk:
@@ -5347,25 +5567,36 @@ func @xorKeyStream {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_push
   __im_cont:
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Byte
-  forstep:
-    x64.leaRegRdata rax, [rip + __witness_ArrayIterator_Byte.Iterator]
   __il_body#39:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callMem [rax + 56]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#41
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#73:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow#77
+    x64.jmp __im_move
+  tryerr#75:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#72
+  __im_move:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  tryok#74:
+    x64.movRegImm32 rax, 0
+  __il_cont#72:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_cont#38
   tryok#40:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#38
-  tryerr#41:
-    x64.movRegReg rax, r10
   __il_cont#38:
     x64.movRegReg rcx, rax
   forhdr:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, eachByte
+    x64.jcc equal, __il_body#34
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_Byte_Byte
@@ -5378,6 +5609,11 @@ func @xorKeyStream {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#77:
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#75
+    x64.jmp tryok#74
   __rc_panic#37:
     x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
@@ -5721,18 +5957,52 @@ func @xorKeyStream {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, forhdr
     x64.jmp forjoin
-  eachByte:
-    x64.leaRegRdata r13, [rip + __witness_ArrayIterator_Byte.Iterator]
-    x64.leaRegRdata rcx, [rip + __layout_WithIterIterator_ArrayIterator_Byte_Byte]
   __il_body#34:
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
-    x64.callDirect __retain_type_param
-    x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callMem [r13 + 48]
+    x64.callDirect __mm_retain
     x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#63:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
+    x64.cmpRegReg rax, rdi
+    x64.jcc aboveEqual, __im_slow#65
+  __im_load#66:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 24]
+    x64.cmpRegImm32 rdi, 8
+    x64.jcc notEqual, __im_stride#69
+  __im_word#67:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rdi + rax*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride#69:
+    x64.cmpRegImm32 rdi, 1
+    x64.jcc notEqual, __im_slow#65
+  __im_byte#68:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.leaRegRegReg rax, rdi, rax
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#81
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#82
+  __im_slow#65:
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg r14, r8
+    x64.jmp __il_body#35
+  critsplit#82:
+    x64.movRegReg r14, rax
+    x64.jmp __il_body#35
+  critsplit#81:
+    x64.movRegReg r14, rax
   __il_body#35:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic#37
@@ -5743,7 +6013,7 @@ func @xorKeyStream {
     x64.cmpRegReg rdx, rax
     x64.jcc below, ifcont
   finished:
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Byte
   exitdrop:
     x64.movRegReg rcx, r12
@@ -5762,7 +6032,7 @@ func @xorKeyStream {
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg rdx, rax
     x64.jcc aboveEqual, __im_slow#17
-  __im_load:
+  __im_load#18:
     x64.loadRegSlot rax, slot1
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
@@ -5786,11 +6056,11 @@ func @xorKeyStream {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#11
-  critsplit:
+  critsplit#79:
     x64.movRegReg rax, r8
   tryok#10:
     x64.movRegReg rdx, rax
-    x64.xorRegReg rdx, rax, r13
+    x64.xorRegReg rdx, rax, r14
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#14
   __rc_chk:
@@ -5842,25 +6112,36 @@ func @xorKeyStream {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_push
   __im_cont:
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Byte
-  forstep:
-    x64.leaRegRdata rax, [rip + __witness_ArrayIterator_Byte.Iterator]
   __il_body#39:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callMem [rax + 56]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#41
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#73:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow#77
+    x64.jmp __im_move
+  tryerr#75:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#72
+  __im_move:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  tryok#74:
+    x64.movRegImm32 rax, 0
+  __il_cont#72:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_cont#38
   tryok#40:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#38
-  tryerr#41:
-    x64.movRegReg rax, r10
   __il_cont#38:
     x64.movRegReg rcx, rax
   forhdr:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, eachByte
+    x64.jcc equal, __il_body#34
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_Byte_Byte
@@ -5873,6 +6154,11 @@ func @xorKeyStream {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#77:
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#75
+    x64.jmp tryok#74
   __rc_panic#37:
     x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
@@ -6214,19 +6500,52 @@ func @xorKeyStream {
     arm64.cmp x0, 0
     arm64.b.eq forhdr
     arm64.b forjoin
-  eachByte:
-    arm64.leaRdata x23, __witness_ArrayIterator_Byte.Iterator
-    arm64.leaRdata x0, __layout_WithIterIterator_ArrayIterator_Byte_Byte
   __il_body#34:
-    arm64.loadRegBaseDisp.word64 x1, [x22 + 0]
-    arm64.bl __retain_type_param
-    arm64.movRegReg x24, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x23 + 48]
-    arm64.blr x16
+    arm64.bl __mm_retain
     arm64.movRegReg x23, x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+  __il_body#63:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
+    arm64.cmp x2, x4
+    arm64.b.hs __im_slow#65
+  __im_load#66:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 24]
+    arm64.cmp x4, 8
+    arm64.b.ne __im_stride#69
+  __im_word#67:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x4 + x2*8 + 0]
+    arm64.b __im_loaded
+  __im_stride#69:
+    arm64.cmp x4, 1
+    arm64.b.ne __im_slow#65
+  __im_byte#68:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.add x2, x4, x2
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#81
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#82
+  __im_slow#65:
+    arm64.bl __managed_cursor_current
+    arm64.movRegReg x24, x0
+    arm64.b __il_body#35
+  critsplit#82:
+    arm64.movRegReg x24, x2
+    arm64.b __il_body#35
+  critsplit#81:
+    arm64.movRegReg x24, x2
   __il_body#35:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic#37
@@ -6236,7 +6555,7 @@ func @xorKeyStream {
     arm64.cmp x1, x0
     arm64.b.lo ifcont
   finished:
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x23
     arm64.bl __destruct_ArrayIterator_Byte
   exitdrop:
     arm64.movRegReg x0, x22
@@ -6255,7 +6574,7 @@ func @xorKeyStream {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x1, x0
     arm64.b.hs __im_slow#17
-  __im_load:
+  __im_load#18:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
     arm64.cmp x0, 8
     arm64.b.ne __im_stride#21
@@ -6277,7 +6596,7 @@ func @xorKeyStream {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#11
   tryok#10:
-    arm64.eor x1, x0, x23
+    arm64.eor x1, x0, x24
     arm64.cmp x1, 0
     arm64.b.lt __rc_panic#14
   __rc_chk:
@@ -6323,26 +6642,36 @@ func @xorKeyStream {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
   __im_cont:
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x23
     arm64.bl __destruct_ArrayIterator_Byte
-  forstep:
-    arm64.leaRdata x1, __witness_ArrayIterator_Byte.Iterator
   __il_body#39:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 56]
-    arm64.blr x16
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#41
+  __il_body#73:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#77
+    arm64.b __im_move
+  tryerr#75:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#72
+  __im_move:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  tryok#74:
+    arm64.movImm x0, 0
+  __il_cont#72:
+    arm64.cmp x0, 0
+    arm64.b.ne __il_cont#38
   tryok#40:
     arm64.movImm x0, 0
-    arm64.b __il_cont#38
-  tryerr#41:
-    arm64.movRegReg x0, x9
   __il_cont#38:
     arm64.movRegReg x1, x0
   forhdr:
     arm64.cmp x1, 0
-    arm64.b.eq eachByte
+    arm64.b.eq __il_body#34
   forexit:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_WithIterIterator_ArrayIterator_Byte_Byte
@@ -6356,6 +6685,11 @@ func @xorKeyStream {
     arm64.loadRegSlot x25, slot6
     arm64.epilogue 80
     arm64.ret
+  __im_slow#77:
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#75
+    arm64.b tryok#74
   __rc_panic#37:
     arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -6707,19 +7041,52 @@ func @xorKeyStream {
     arm64.cmp x0, 0
     arm64.b.eq forhdr
     arm64.b forjoin
-  eachByte:
-    arm64.leaRdata x23, __witness_ArrayIterator_Byte.Iterator
-    arm64.leaRdata x0, __layout_WithIterIterator_ArrayIterator_Byte_Byte
   __il_body#34:
-    arm64.loadRegBaseDisp.word64 x1, [x22 + 0]
-    arm64.bl __retain_type_param
-    arm64.movRegReg x24, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x23 + 48]
-    arm64.blr x16
+    arm64.bl __mm_retain
     arm64.movRegReg x23, x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+  __il_body#63:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
+    arm64.cmp x2, x4
+    arm64.b.hs __im_slow#65
+  __im_load#66:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 24]
+    arm64.cmp x4, 8
+    arm64.b.ne __im_stride#69
+  __im_word#67:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x4 + x2*8 + 0]
+    arm64.b __im_loaded
+  __im_stride#69:
+    arm64.cmp x4, 1
+    arm64.b.ne __im_slow#65
+  __im_byte#68:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.add x2, x4, x2
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#81
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#82
+  __im_slow#65:
+    arm64.bl __managed_cursor_current
+    arm64.movRegReg x24, x0
+    arm64.b __il_body#35
+  critsplit#82:
+    arm64.movRegReg x24, x2
+    arm64.b __il_body#35
+  critsplit#81:
+    arm64.movRegReg x24, x2
   __il_body#35:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic#37
@@ -6729,7 +7096,7 @@ func @xorKeyStream {
     arm64.cmp x1, x0
     arm64.b.lo ifcont
   finished:
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x23
     arm64.bl __destruct_ArrayIterator_Byte
   exitdrop:
     arm64.movRegReg x0, x22
@@ -6748,7 +7115,7 @@ func @xorKeyStream {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x1, x0
     arm64.b.hs __im_slow#17
-  __im_load:
+  __im_load#18:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
     arm64.cmp x0, 8
     arm64.b.ne __im_stride#21
@@ -6770,7 +7137,7 @@ func @xorKeyStream {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#11
   tryok#10:
-    arm64.eor x1, x0, x23
+    arm64.eor x1, x0, x24
     arm64.cmp x1, 0
     arm64.b.lt __rc_panic#14
   __rc_chk:
@@ -6816,26 +7183,36 @@ func @xorKeyStream {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
   __im_cont:
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x23
     arm64.bl __destruct_ArrayIterator_Byte
-  forstep:
-    arm64.leaRdata x1, __witness_ArrayIterator_Byte.Iterator
   __il_body#39:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 56]
-    arm64.blr x16
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#41
+  __il_body#73:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#77
+    arm64.b __im_move
+  tryerr#75:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#72
+  __im_move:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  tryok#74:
+    arm64.movImm x0, 0
+  __il_cont#72:
+    arm64.cmp x0, 0
+    arm64.b.ne __il_cont#38
   tryok#40:
     arm64.movImm x0, 0
-    arm64.b __il_cont#38
-  tryerr#41:
-    arm64.movRegReg x0, x9
   __il_cont#38:
     arm64.movRegReg x1, x0
   forhdr:
     arm64.cmp x1, 0
-    arm64.b.eq eachByte
+    arm64.b.eq __il_body#34
   forexit:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_WithIterIterator_ArrayIterator_Byte_Byte
@@ -6849,6 +7226,11 @@ func @xorKeyStream {
     arm64.loadRegSlot x25, slot6
     arm64.epilogue 80
     arm64.ret
+  __im_slow#77:
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#75
+    arm64.b tryok#74
   __rc_panic#37:
     arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -7102,10 +7484,11 @@ func @main {
 ```
 
 <!-- test: a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element -->
-When two loops read `withIterator()` pairs, `WithIterIterator.current` is not spliced into either, and each
-loop receives the pair from a call. The pair arrives in registers and its drop, on the early `return` and at
-the end of the step alike, becomes the releases of its slots: neither loop holds an `__mm_alloc` call or a
-destructor cascade for the pair. Prints `count=6 sum=61`.
+The ```RequiredRuntime block asks for `WithIterIterator.current`'s body, and a body a request names is spliced
+by neither inlining rule, so each of the two loops reading `withIterator()` pairs receives its pair from a call
+to the one shared `current`. That body returns the pair in registers, and the pair's drop, on the early
+`return` and at the end of the step alike, becomes the releases of its slots: neither loop nor `current` holds
+an `__mm_alloc` call or a destructor cascade for the pair. Prints `count=6 sum=61`.
 ```maxon
 typealias ByteSum = int(0 to u64.max)
 
@@ -7149,6 +7532,9 @@ end 'main'
 ```stdout
 count=6 sum=61
 ```
+```RequiredRuntime
+WithIterIterator.current
+```
 ```TargetIr:x64-windows
 data {
   __slab_arena_list@0 = i64 0
@@ -7188,12 +7574,12 @@ func @xorKeyStream {
     x64.callDirect WithIterIterator.current
     x64.storeSlotReg slot0, r8
     x64.movRegReg r15, r10
-  __il_body:
+  __il_body#33:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic#35
-  __il_cont:
+  __il_cont#32:
     x64.leaRegRegReg rdx, r13, rax
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg rdx, rax
@@ -7224,7 +7610,7 @@ func @xorKeyStream {
   __im_word#19:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.jmp tryok
+    x64.jmp tryok#10
   __im_stride#21:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#17
@@ -7232,15 +7618,15 @@ func @xorKeyStream {
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp tryok
+    x64.jmp tryok#10
   __im_slow#17:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
+    x64.jcc notEqual, tryerr#11
   critsplit:
     x64.movRegReg rax, r8
-  tryok:
+  tryok#10:
     x64.movRegReg rdx, rax
     x64.xorRegReg rdx, rax, r15
     x64.cmpRegImm32 rdx, 0
@@ -7290,11 +7676,29 @@ func @xorKeyStream {
   __im_cont:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_ArrayIterator_Byte
-  forstep:
-    x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_Byte.Iterator]
-    x64.movRegReg rcx, r14
-    x64.callDirect WithIterIterator.advance
-    x64.movRegReg rax, r10
+  __il_body#37:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+  __il_body#41:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow#45
+    x64.jmp __im_move
+  tryerr#43:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#40
+  __im_move:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  tryok#42:
+    x64.movRegImm32 rax, 0
+  __il_cont#40:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr
+  tryok#38:
+    x64.movRegImm32 rax, 0
   forhdr:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, eachByte
@@ -7310,6 +7714,11 @@ func @xorKeyStream {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#45:
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#43
+    x64.jmp tryok#42
   __rc_panic#35:
     x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
@@ -7321,7 +7730,7 @@ func @xorKeyStream {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr:
+  tryerr#11:
     x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 40
@@ -7439,13 +7848,32 @@ func @main {
     x64.storeSlotReg slot8, rax
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_ArrayIterator_Byte
-  forstep:
-    x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_Byte.Iterator]
-    x64.movRegReg rcx, rbx
-    x64.callDirect WithIterIterator.advance
-    x64.loadRegSlot rax, slot8
-    x64.movRegReg r15, rax
-    x64.movRegReg rax, r10
+  __il_body#19:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#23:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_move
+  tryerr:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#22
+  __im_move:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  tryok#24:
+    x64.movRegImm32 rax, 0
+  __il_cont#22:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_cont#18
+  tryok#20:
+    x64.movRegImm32 rax, 0
+  __il_cont#18:
+    x64.loadRegSlot rcx, slot8
+    x64.movRegReg r15, rcx
   forhdr:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, eachValue
@@ -7496,13 +7924,10 @@ func @main {
     x64.movRegReg rdx, rbx
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot7
-    x64.leaRegRegReg r12, r12, rax
+    x64.leaRegRegReg rcx, r12, rax
     x64.loadRegSlot rax, slot5
     x64.loadRegSlot rdx, slot6
-    x64.movRegReg rcx, r12
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot5
-    x64.leaRegRegReg rax, r12, rax
     x64.loadRegSlot rax, slot4
     x64.storeBaseDispReg.word64 [rax + 0], r15
     x64.loadRegSlot rcx, slot3
@@ -7540,6 +7965,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok#24
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
@@ -7552,5 +7982,1448 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+}
+
+func @WithIterIterator.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.movRegReg rcx, rax
+    x64.callDirect __retain_type_param
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callMem [r12 + 48]
+    x64.movRegReg rax, r8
+    x64.movRegReg r8, r13
+    x64.movRegReg r10, rax
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @xorKeyStream {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, r9
+    x64.leaRegRdata rdx, [rip + __layout_Array_Byte]
+    x64.movRegReg rcx, rax
+    x64.callDirect Array.withIterator
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forhdr
+    x64.jmp forjoin
+  eachByte:
+    x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_Byte.Iterator]
+    x64.leaRegRdata rax, [rip + __layout_WithIterIterator_ArrayIterator_Byte_Byte]
+    x64.movRegReg rcx, r14
+    x64.callDirect WithIterIterator.current
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg r15, r10
+  __il_body#33:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#35
+  __il_cont#32:
+    x64.leaRegRegReg rdx, r13, rax
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc below, ifcont
+  finished:
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_ArrayIterator_Byte
+  exitdrop:
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  exitterminal:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#17
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#21
+  __im_word#19:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.jmp tryok#10
+  __im_stride#21:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#17
+  __im_byte#20:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp tryok#10
+  __im_slow#17:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#11
+  critsplit:
+    x64.movRegReg rax, r8
+  tryok#10:
+    x64.movRegReg rdx, rax
+    x64.xorRegReg rdx, rax, r15
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#14
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#14
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#24
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegReg rax, rcx
+    x64.jcc aboveEqual, __im_slow#24
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#24
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#24
+  __im_store:
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 24]
+    x64.cmpRegImm32 rsi, 8
+    x64.jcc notEqual, __im_stride#31
+  __im_word#29:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rax*8 + 0], rdx
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.jmp __im_cont
+  __im_stride#31:
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc notEqual, __im_slow#24
+  __im_byte#30:
+    x64.leaRegRegReg rcx, rcx, rax
+    x64.storeBaseDispReg.byte [rcx + 0], rdx
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.jmp __im_cont
+  __im_slow#24:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  __im_cont:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_ArrayIterator_Byte
+  __il_body#37:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+  __il_body#41:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow#45
+    x64.jmp __im_move
+  tryerr#43:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#40
+  __im_move:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  tryok#42:
+    x64.movRegImm32 rax, 0
+  __il_cont#40:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr
+  tryok#38:
+    x64.movRegImm32 rax, 0
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, eachByte
+  forexit:
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  forjoin:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#45:
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#43
+    x64.jmp tryok#42
+  __rc_panic#35:
+    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 136
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegImm32 rax, 4
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.leaRegRdata rax, [rip + __barr_blob_1]
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegImm32 rax, 5
+    x64.storeBaseDispReg.word64 [r13 + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect xorKeyStream
+    x64.movRegImm32 r9, 2
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect xorKeyStream
+    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "count="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot11, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot10, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __str_rec_11]  ; " sum="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot9, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+  __il_body#6:
+    x64.movRegImm32 r15, 0
+    x64.leaRegRdata rdx, [rip + __layout_Array_Byte]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.withIterator
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forhdr
+    x64.jmp __il_cont#5
+  eachValue:
+    x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_Byte.Iterator]
+    x64.leaRegRdata rax, [rip + __layout_WithIterIterator_ArrayIterator_Byte_Byte]
+    x64.movRegReg rcx, rbx
+    x64.callDirect WithIterIterator.current
+    x64.leaRegRegReg rax, r15, r10
+  __il_body#15:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __il_cont#14:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot8, rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_ArrayIterator_Byte
+  __il_body#19:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#23:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_move
+  tryerr:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#22
+  __im_move:
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+  tryok#24:
+    x64.movRegImm32 rax, 0
+  __il_cont#22:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_cont#18
+  tryok#20:
+    x64.movRegImm32 rax, 0
+  __il_cont#18:
+    x64.loadRegSlot rcx, slot8
+    x64.movRegReg r15, rcx
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, eachValue
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  __il_cont#5:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot7, r8
+    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot6, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegReg rcx, r12, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.loadRegSlot rdx, slot11
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r12
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.loadRegSlot rax, slot7
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rcx, r12, rax
+    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rdx, slot6
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot10
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+  __il_body#13:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont#4:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+  exitdrop#2:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+  exitdrop#3:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+  exitterminal:
+    x64.movRegReg r8, rbx
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok#24
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @WithIterIterator.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.movRegReg rcx, rax
+    x64.callDirect __retain_type_param
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callMem [r12 + 48]
+    x64.movRegReg rax, r8
+    x64.movRegReg r8, r13
+    x64.movRegReg r10, rax
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @xorKeyStream {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x3
+    arm64.leaRdata x1, __layout_Array_Byte
+    arm64.movRegReg x0, x2
+    arm64.bl Array.withIterator
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.b.eq forhdr
+    arm64.b forjoin
+  eachByte:
+    arm64.leaRdata x1, __witness_ArrayIterator_Byte.Iterator
+    arm64.leaRdata x2, __layout_WithIterIterator_ArrayIterator_Byte_Byte
+    arm64.movRegReg x0, x22
+    arm64.bl WithIterIterator.current
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x24, x9
+  __il_body#33:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#35
+  __il_cont#32:
+    arm64.add x1, x21, x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x1, x0
+    arm64.b.lo ifcont
+  finished:
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_ArrayIterator_Byte
+  exitdrop:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  exitterminal:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#17
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride#21
+  __im_word#19:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+    arm64.b tryok#10
+  __im_stride#21:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#17
+  __im_byte#20:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b tryok#10
+  __im_slow#17:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#11
+  tryok#10:
+    arm64.eor x1, x0, x24
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#14
+  __rc_chk:
+    arm64.cmp x1, 255
+    arm64.b.gt __rc_panic#14
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
+    arm64.cmp x2, 0
+    arm64.b.lt __im_slow#24
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
+    arm64.cmp x0, x2
+    arm64.b.hs __im_slow#24
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow#24
+  __im_viewed:
+    arm64.sub x3, x2, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow#24
+  __im_store:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 24]
+    arm64.cmp x3, 8
+    arm64.b.ne __im_stride#31
+  __im_word#29:
+    arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.b __im_cont
+  __im_stride#31:
+    arm64.cmp x3, 1
+    arm64.b.ne __im_slow#24
+  __im_byte#30:
+    arm64.add x2, x2, x0
+    arm64.storeBaseDispReg.byte [x2 + 0], x1
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.b __im_cont
+  __im_slow#24:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  __im_cont:
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_ArrayIterator_Byte
+  __il_body#37:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+  __il_body#41:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#45
+    arm64.b __im_move
+  tryerr#43:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#40
+  __im_move:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  tryok#42:
+    arm64.movImm x0, 0
+  __il_cont#40:
+    arm64.cmp x0, 0
+    arm64.b.ne forhdr
+  tryok#38:
+    arm64.movImm x0, 0
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.b.eq eachByte
+  forexit:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  forjoin:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#45:
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#43
+    arm64.b tryok#42
+  __rc_panic#35:
+    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryerr#11:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_42  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 144
+    arm64.storeSlotReg slot15, x28
+    arm64.storeSlotReg slot14, x27
+    arm64.storeSlotReg slot13, x26
+    arm64.storeSlotReg slot12, x25
+    arm64.storeSlotReg slot11, x24
+    arm64.storeSlotReg slot10, x23
+    arm64.storeSlotReg slot9, x22
+    arm64.storeSlotReg slot8, x21
+    arm64.storeSlotReg slot7, x20
+    arm64.storeSlotReg slot6, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movImm x0, 4
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot2, x21
+    arm64.leaRdata x0, __barr_blob_1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movImm x0, 5
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl xorKeyStream
+    arm64.movImm x3, 2
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl xorKeyStream
+    arm64.leaRdata x0, __str_rec_10  ; "count="
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_11  ; " sum="
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+  __il_body#6:
+    arm64.movImm x26, 0
+    arm64.leaRdata x1, __layout_Array_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl Array.withIterator
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.b.eq forhdr
+    arm64.b __il_cont#5
+  eachValue:
+    arm64.leaRdata x1, __witness_ArrayIterator_Byte.Iterator
+    arm64.leaRdata x2, __layout_WithIterIterator_ArrayIterator_Byte_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl WithIterIterator.current
+    arm64.add x1, x26, x9
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic
+  __il_cont#14:
+    arm64.add x26, x1, x2
+    arm64.bl __destruct_ArrayIterator_Byte
+  __il_body#19:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#23:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow
+    arm64.b __im_move
+  tryerr:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#22
+  __im_move:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  tryok#24:
+    arm64.movImm x0, 0
+  __il_cont#22:
+    arm64.cmp x0, 0
+    arm64.b.ne forhdr
+  tryok#20:
+    arm64.movImm x0, 0
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.b.eq eachValue
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  __il_cont#5:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x19
+    arm64.bl __uint_to_string
+    arm64.movRegReg x26, x0
+    arm64.leaRdata x0, __str_rec_12  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot5, x0
+    arm64.add x1, x21, x22
+    arm64.add x1, x1, x25
+    arm64.add x1, x1, x26
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot3, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot4, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x28, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x20, x20, x22
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x20, x20, x25
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x0, x20, x26
+    arm64.loadRegSlot x2, slot5
+    arm64.movRegReg x1, x27
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot4
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+  __il_body#13:
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __write_stdout
+  __il_cont#4:
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __managed_decref
+  exitdrop#2:
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __managed_decref
+  exitdrop#3:
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+  exitterminal:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot6
+    arm64.loadRegSlot x20, slot7
+    arm64.loadRegSlot x21, slot8
+    arm64.loadRegSlot x22, slot9
+    arm64.loadRegSlot x23, slot10
+    arm64.loadRegSlot x24, slot11
+    arm64.loadRegSlot x25, slot12
+    arm64.loadRegSlot x26, slot13
+    arm64.loadRegSlot x27, slot14
+    arm64.loadRegSlot x28, slot15
+    arm64.epilogue 144
+    arm64.ret
+  __im_slow:
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok#24
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot6
+    arm64.loadRegSlot x20, slot7
+    arm64.loadRegSlot x21, slot8
+    arm64.loadRegSlot x22, slot9
+    arm64.loadRegSlot x23, slot10
+    arm64.loadRegSlot x24, slot11
+    arm64.loadRegSlot x25, slot12
+    arm64.loadRegSlot x26, slot13
+    arm64.loadRegSlot x27, slot14
+    arm64.loadRegSlot x28, slot15
+    arm64.epilogue 144
+    arm64.ret
+}
+
+func @WithIterIterator.current {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x2
+    arm64.bl __retain_type_param
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.blr x16
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x9, x1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @xorKeyStream {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x3
+    arm64.leaRdata x1, __layout_Array_Byte
+    arm64.movRegReg x0, x2
+    arm64.bl Array.withIterator
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.b.eq forhdr
+    arm64.b forjoin
+  eachByte:
+    arm64.leaRdata x1, __witness_ArrayIterator_Byte.Iterator
+    arm64.leaRdata x2, __layout_WithIterIterator_ArrayIterator_Byte_Byte
+    arm64.movRegReg x0, x22
+    arm64.bl WithIterIterator.current
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x24, x9
+  __il_body#33:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#35
+  __il_cont#32:
+    arm64.add x1, x21, x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x1, x0
+    arm64.b.lo ifcont
+  finished:
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_ArrayIterator_Byte
+  exitdrop:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  exitterminal:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#17
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride#21
+  __im_word#19:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+    arm64.b tryok#10
+  __im_stride#21:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#17
+  __im_byte#20:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b tryok#10
+  __im_slow#17:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#11
+  tryok#10:
+    arm64.eor x1, x0, x24
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#14
+  __rc_chk:
+    arm64.cmp x1, 255
+    arm64.b.gt __rc_panic#14
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
+    arm64.cmp x2, 0
+    arm64.b.lt __im_slow#24
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
+    arm64.cmp x0, x2
+    arm64.b.hs __im_slow#24
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow#24
+  __im_viewed:
+    arm64.sub x3, x2, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow#24
+  __im_store:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 24]
+    arm64.cmp x3, 8
+    arm64.b.ne __im_stride#31
+  __im_word#29:
+    arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.b __im_cont
+  __im_stride#31:
+    arm64.cmp x3, 1
+    arm64.b.ne __im_slow#24
+  __im_byte#30:
+    arm64.add x2, x2, x0
+    arm64.storeBaseDispReg.byte [x2 + 0], x1
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.b __im_cont
+  __im_slow#24:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  __im_cont:
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_ArrayIterator_Byte
+  __il_body#37:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+  __il_body#41:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#45
+    arm64.b __im_move
+  tryerr#43:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#40
+  __im_move:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  tryok#42:
+    arm64.movImm x0, 0
+  __il_cont#40:
+    arm64.cmp x0, 0
+    arm64.b.ne forhdr
+  tryok#38:
+    arm64.movImm x0, 0
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.b.eq eachByte
+  forexit:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  forjoin:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#45:
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#43
+    arm64.b tryok#42
+  __rc_panic#35:
+    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryerr#11:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_42  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 144
+    arm64.storeSlotReg slot15, x28
+    arm64.storeSlotReg slot14, x27
+    arm64.storeSlotReg slot13, x26
+    arm64.storeSlotReg slot12, x25
+    arm64.storeSlotReg slot11, x24
+    arm64.storeSlotReg slot10, x23
+    arm64.storeSlotReg slot9, x22
+    arm64.storeSlotReg slot8, x21
+    arm64.storeSlotReg slot7, x20
+    arm64.storeSlotReg slot6, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movImm x0, 4
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot2, x21
+    arm64.leaRdata x0, __barr_blob_1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movImm x0, 5
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl xorKeyStream
+    arm64.movImm x3, 2
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl xorKeyStream
+    arm64.leaRdata x0, __str_rec_10  ; "count="
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_11  ; " sum="
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+  __il_body#6:
+    arm64.movImm x26, 0
+    arm64.leaRdata x1, __layout_Array_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl Array.withIterator
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.b.eq forhdr
+    arm64.b __il_cont#5
+  eachValue:
+    arm64.leaRdata x1, __witness_ArrayIterator_Byte.Iterator
+    arm64.leaRdata x2, __layout_WithIterIterator_ArrayIterator_Byte_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl WithIterIterator.current
+    arm64.add x1, x26, x9
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic
+  __il_cont#14:
+    arm64.add x26, x1, x2
+    arm64.bl __destruct_ArrayIterator_Byte
+  __il_body#19:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#23:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow
+    arm64.b __im_move
+  tryerr:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#22
+  __im_move:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  tryok#24:
+    arm64.movImm x0, 0
+  __il_cont#22:
+    arm64.cmp x0, 0
+    arm64.b.ne forhdr
+  tryok#20:
+    arm64.movImm x0, 0
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.b.eq eachValue
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+  __il_cont#5:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x19
+    arm64.bl __uint_to_string
+    arm64.movRegReg x26, x0
+    arm64.leaRdata x0, __str_rec_12  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot5, x0
+    arm64.add x1, x21, x22
+    arm64.add x1, x1, x25
+    arm64.add x1, x1, x26
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot3, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot4, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x28, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x20, x20, x22
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x20, x20, x25
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x0, x20, x26
+    arm64.loadRegSlot x2, slot5
+    arm64.movRegReg x1, x27
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot4
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+  __il_body#13:
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __write_stdout
+  __il_cont#4:
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __managed_decref
+  exitdrop#2:
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __managed_decref
+  exitdrop#3:
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+  exitterminal:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot6
+    arm64.loadRegSlot x20, slot7
+    arm64.loadRegSlot x21, slot8
+    arm64.loadRegSlot x22, slot9
+    arm64.loadRegSlot x23, slot10
+    arm64.loadRegSlot x24, slot11
+    arm64.loadRegSlot x25, slot12
+    arm64.loadRegSlot x26, slot13
+    arm64.loadRegSlot x27, slot14
+    arm64.loadRegSlot x28, slot15
+    arm64.epilogue 144
+    arm64.ret
+  __im_slow:
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok#24
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot6
+    arm64.loadRegSlot x20, slot7
+    arm64.loadRegSlot x21, slot8
+    arm64.loadRegSlot x22, slot9
+    arm64.loadRegSlot x23, slot10
+    arm64.loadRegSlot x24, slot11
+    arm64.loadRegSlot x25, slot12
+    arm64.loadRegSlot x26, slot13
+    arm64.loadRegSlot x27, slot14
+    arm64.loadRegSlot x28, slot15
+    arm64.epilogue 144
+    arm64.ret
+}
+
+func @WithIterIterator.current {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x2
+    arm64.bl __retain_type_param
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.blr x16
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x9, x1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
 }
 ```

@@ -892,8 +892,9 @@ its own suppression machinery:
   refuses on purpose, and what `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins.
 
 ⭐ **AND THE REORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE — A PROOF, NOT A MEASUREMENT.**
-`inlineManagedPrimitives` rewrites only bodies that hold a `__managed_*` CALL; a leaf holds **no call by
-rule** (`LeafOpRole.calling` refuses the callee outright). So no body it can reach is one the leaf inliner
+`inlineManagedPrimitives` rewrites only bodies that hold a `__managed_*` CALL; a leaf holds **no
+`__managed_*` call**: the hot calls it admits are `__mm_alloc`, a descriptor-gated `*_type_param` action, a
+witness dispatch through a parameter and an adapter's one forwarded call. So no body it can reach is one the leaf inliner
 would have accepted, and the eligible set can only grow. MEASURED anyway, because a proof about two
 passes is worth checking: eligible callees **469 → 530**, sites inlined **4,138 → 4,921**, panic-rule
 refusals unchanged at **7 sites / 6 callees**, self-calls unchanged at **14** — and
@@ -2070,12 +2071,14 @@ range checks. **Measure the corpus first**; this may be a row with nothing behin
 
 `for (iter, x) in array.withIterator()` allocates nothing per element, in a body that returns early
 too: `ValueTupleReturn` elides the `(iter, x)` pair each step builds, takes it in two registers where
-several loops share one `WithIterIterator.current` call, and releases its slots one by one where an
+`WithIterIterator.current` stays a call, and releases its slots one by one where an
 element is managed (`ir-specs/tuples.md`: `a-with-iterator-loop-over-an-array-allocates-nothing-per-element`,
 `a-with-iterator-loop-that-returns-early-allocates-nothing-per-element`,
 `a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element`).
-Each step reaches the cursor through its witness table: about 21 x64 instructions per element,
-against 6 for `for x in array`.
+A loop whose tables are constant splices `current`, resolving the cursor's witness slot and the
+descriptor's ownership words at compile time, so each step makes no call (~45 x64 instructions per
+element; `ir-specs/witness-devirtualization.md`). The shared call stands only where a request keeps the
+body.
 
 ## What is deliberately absent from this roadmap
 

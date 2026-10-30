@@ -249,8 +249,14 @@ end 'witnessSlotImplKey'
 // exact failure the separator exists to prevent. The prefix keeps the adapter's symbol out of the `.rdata`
 // label space the key it is built on belongs to, so a function and a blob can never contest a name.
 export function witnessSlotAdapterSymbol(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns ByteArray
-	return "__adapt_{String.from(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: methodName))}".toByteArray()
+	return "{String.from(WitnessSlotAdapterPrefix)}{String.from(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: methodName))}".toByteArray()
 end 'witnessSlotAdapterSymbol'
+
+let WitnessSlotAdapterPrefix = b"__adapt_"
+
+export function isWitnessSlotAdapterName(name ByteArray) returns bool
+	return bytesStartWith(name, prefix: WitnessSlotAdapterPrefix)
+end 'isWitnessSlotAdapterName'
 
 // ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT INSTEAD OF ONLY ARGUED ABOVE IT.**
 // The property lives three files away — an interface name and a method name are each a single token, so the

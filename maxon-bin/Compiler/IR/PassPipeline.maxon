@@ -65,8 +65,9 @@ export union PassKind
 	// **209** call sites, `Parser.advance` **106** and `String.byteLength` **92**.
 	//
 	// ⭐ **THIS ORDER COSTS `inlineLeaves` NO CALLEE WHOSE `__managed_*` CALL IS ON ITS HOT PATH.** This
-	// pass rewrites only bodies holding a `__managed_*` CALL, and the leaf rule refuses a call outside a
-	// cold block (`InlineLeaves.callFit`), so no such body is one the leaf inliner would have accepted.
+	// pass rewrites only bodies holding a `__managed_*` CALL, and the leaf rule refuses such a call
+	// outside a cold block (`InlineLeaves.callFit`; `TableCallProbe` admits no `__managed_*` call), so
+	// no such body is one the leaf inliner would have accepted.
 	// A body whose `__managed_*` calls all sit in cold blocks is the exception: it can be a leaf under
 	// `MaxInlinedColdCallLeafOps` before this pass, and this pass's expansion of those calls can grow it
 	// past that budget.
@@ -96,7 +97,8 @@ export union PassKind
 	// eligibility recomputed on an already-spliced module admits a caller that became call-free BY being
 	// inlined into, which `LeafPlan`'s header refuses on purpose and which
 	// `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins. That would need suppressing
-	// machinery; the ordering above needs none, and one round stays one round.
+	// machinery; the ordering above needs none, and one round stays one round. The pass's own bounded
+	// exception, along calls a table devirtualization produced, is `InlineLeaves.followTableChains`.
 	//
 	// `promoteStackRecords` runs last, so no `stackRecordAddr` exists here (which is what its
 	// `isUnsupportedInInlineBody` would otherwise refuse a callee for).
