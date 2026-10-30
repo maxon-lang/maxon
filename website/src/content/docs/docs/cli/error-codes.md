@@ -361,7 +361,7 @@ Two arguments of one call target the same parameter.
 
 ### E3055 — `tryRequiresThrowingFunction`
 
-'try' is applied to a call that cannot throw. A divide whose divisor is proven non-zero and a `FixedArray` `get`/`set` whose index is proven inside the size cannot throw: the proof is a constant, a ranged type whose range lies inside, a counted-loop counter between compile-time bounds, or a value computed from those. Drop the `try … otherwise`. So is `try spawn Type.factory(…)` of a factory that cannot throw: that `spawn` returns the handle at once.
+'try' is applied to a call that cannot throw. A `/` or `mod` whose divisor is proven non-zero and a `FixedArray` `get`/`set` whose index is proven inside the size cannot throw: the proof is a constant, a ranged type whose range lies inside, a counted-loop counter between compile-time bounds, or a value computed from those, such as their sum, difference or product. Drop the `try … otherwise`. So is `try spawn Type.factory(…)` of a factory that cannot throw: that `spawn` returns the handle at once.
 
 ### E3057 — `throwingFunctionRequiresTry`
 

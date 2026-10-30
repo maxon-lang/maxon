@@ -896,9 +896,9 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-  __rc_ok:
+  __il_body:
     x64.movRegImm32 rax, 0
-  __il_cont#27:
+  __il_cont#6:
     x64.leaRegRegImm32 rax, rax, 1
     x64.leaRegRegImm32 rax, rax, 2
     x64.leaRegRegImm32 rax, rax, 3
@@ -1719,7 +1719,7 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-  __rc_ok#24:
+  __il_body:
     x64.movRegImm32 rax, 0
   __il_cont:
     x64.leaRegRegImm32 rax, rax, 1
@@ -2525,7 +2525,7 @@ func @main {
     x64.leaRegRegImm32 rax, rax, 7
     x64.leaRegRegImm32 rax, rax, 21
     x64.leaRegRegImm32 r8, rax, -21
-  __rc_ok#1:
+  __rc_ok:
     x64.popReg rbp
     x64.ret
 }

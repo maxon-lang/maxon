@@ -468,7 +468,8 @@ let IntDivideBase = 32
 // three blocks where a bare one costs none, and the ladder DOUBLES both.
 let CheckedDivideBase = 16
 
-// Masks the opaque seed into a divisor whose value is in 1..8: `(acc and DivisorMask) + 1`.
+// Bounds the opaque seed into a divisor whose value is in 1..8: `(a mod (DivisorMask + 1)) + 1`, which
+// for the non-negative seed is the same value as `(a and DivisorMask) + 1`.
 //
 // BOTH HALVES ARE LOAD-BEARING. A CONSTANT divisor folds to a shift and measures no `idiv` at all, so
 // it must derive from the seed. And it must not reach ZERO, which is not a matter of
@@ -476,16 +477,15 @@ let CheckedDivideBase = 16
 // corpus is a claim about the shape of real code, and real code does not divide by zero. Being
 // non-negative also keeps it clear of `i64.min / -1`, the `idiv` path's other trap.
 //
-// ⚠⚠ **THE MASK IS NOT SUFFICIENT BY ITSELF.** `(acc and 7) + 1` is in 1..8 to a READER, and
-// to the compiler it is an ordinary runtime value — so after division became fallible, every group in
-// this knob was **E3057** and the corpus stopped generating. The value being non-zero was never the
-// question; the compiler being able to SEE it non-zero is, and the language's answer to that is a
-// declared range. Hence `ScaleDivisorAlias` below: the mask keeps the number in the range, the CAST is
-// what tells the compiler, and together they keep this knob measuring the BARE `idiv` it exists for.
+// ⚠⚠ **THE DIVISOR IS DERIVED WITH `mod`, NOT `and`, SO ITS STATIC RANGE STAYS WIDE.** `(a and 7) + 1`
+// carries the interval 1..8, which would prove the checked knob's divisor non-zero (its `try` is then
+// E3055) and the bare knob's cast guard dead. `(a mod 8) + 1` over a full-range `a` carries -6..8: the
+// checked knob stays a checked divide, and in the bare knob the CAST into `ScaleDivisorAlias` below is
+// a real guard and what proves the divisor non-zero, so that knob measures the BARE `idiv` it exists for.
 let DivisorMask = 7
 
 // The divisor both divide knobs actually get, once the accumulator is pinned: `(seed and DivisorMask) + 1`,
-// which is the very expression the two emitters write. Stated here so the quotient and the remainder they
+// the value the two emitters' `mod` form computes for the non-negative seed. Stated here so the quotient and the remainder they
 // are witnessed against come from ONE reading of that mask rather than one apiece.
 //
 // Its type states what the mask guarantees — `+ 1` over a masked value cannot be zero — which is also
@@ -511,8 +511,8 @@ function corpusSeedRemainder() returns TrackedValue
 end 'corpusSeedRemainder'
 
 // The declared range the masked divisor is cast into — the language's escape hatch from a checked
-// divide (`specs/division.md`'s `ranged-divisor-is-a-bare-idiv`). `1 to 8` is exactly what
-// `DivisorMask` admits, so the guard the cast records can never fire; and an upper bound of 8 rather
+// divide (`specs/division.md`'s `ranged-divisor-is-a-bare-idiv`). `1 to 8` is exactly what the
+// divisor's derivation produces from the non-negative seed, so the guard the cast records can never fire at run time; and an upper bound of 8 rather
 // than `i64.max` is deliberate — it keeps the range HONEST about what the mask produces, at the cost of
 // one extra `cmp` per group that the ladder measures along with everything else.
 let ScaleDivisorAlias = "ScaleDivisor"
@@ -524,7 +524,7 @@ let ScaleDividendAlias = "ScaleDividend"
 // ⚠ **THE CORPUS REACHES EVERY GUARD DOOR BUT THIS ONE**, and the precision matters: a write-up
 // claiming "the rung0 and rung5 binaries each contain exactly ONE range-check panic blob" reads as far
 // less coverage than there is. MEASURED, the two binaries hold **33 and 1,025** — 32 and 1,024 of them
-// `ScaleDivisor`, the divide knob's `((acc and DivisorMask) + 1) as ScaleDivisor`, which is an
+// `ScaleDivisor`, the divide knob's `((a mod 8) + 1) as ScaleDivisor`, which is an
 // ALIAS-NAMED cast site that DOUBLES with `IntDivideBase`, plus the one fixed `CoverageNarrowAlias`
 // cast. So the cast door, `guardSiteAt` and the guard CHAIN are priced here.
 // ⛔ Never write that count down anywhere: state the COMMAND that re-derives it,
@@ -3034,13 +3034,13 @@ function intDivideSource(groupCount KnobSize) returns String
 	out.append(witnessedDriverHeader(DivideDriver))
 	out.append("\t{DivideDividendGlobal} = a as {ScaleDividendAlias}\n")
 
-	// The dividend is the pinned seed and the divisor is derived from it by a mask this line wrote, so
+	// The dividend is the pinned seed and the divisor is derived from it by the `mod` this line writes, so
 	// both the quotient and the remainder are known here — and knowing them SEPARATELY is what makes
 	// this witness see the RAX/RDX split it exists for: a lowering that read the quotient out of the
 	// remainder's register moves one fold and not the other.
 	for i in 0 upto groupCount as ElementIndex 'eachGroup'
-		// The CAST is what keeps this the BARE `idiv` knob — see `DivisorMask`'s second ⚠.
-		out.append("\tlet d{i} = ((a and {DivisorMask}) + 1) as {ScaleDivisorAlias}\n")
+		// The CAST is what keeps this the BARE `idiv` knob — see `DivisorMask`'s ⚠⚠ paragraph.
+		out.append("\tlet d{i} = ((a mod {DivisorMask + 1}) + 1) as {ScaleDivisorAlias}\n")
 		out.append("\tacc = acc + {asScaleInt("({DivideDividendGlobal} / d{i})")}{neutralizeText(corpusSeedQuotient())}\n")
 		out.append(accProbe("\t"))
 		out.append("\tacc = acc + {asScaleInt("({DivideDividendGlobal} mod d{i})")}{neutralizeText(corpusSeedRemainder())}\n")
@@ -3074,11 +3074,11 @@ function checkedDivideSource(groupCount KnobSize) returns String
 	out.append(witnessedDriverHeader(CheckedDivideDriver))
 
 	// The same two answers as the bare knob, through the checked door — and the `otherwise` arm is
-	// UNREACHABLE by construction (the mask leaves the divisor in 1..8), so a `try` that took its
+	// UNREACHABLE by construction (the non-negative seed leaves the divisor in 1..8), so a `try` that took its
 	// fallback would fold 0 where a quotient belongs and this witness would say so. That is the one thing
 	// a corpus which is compiled and never run could not check about a fallible divide.
 	for i in 0 upto groupCount as ElementIndex 'eachGroup'
-		out.append("\tlet d{i} = (a and {DivisorMask}) + 1\n")
+		out.append("\tlet d{i} = (a mod {DivisorMask + 1}) + 1\n")
 		out.append("\tacc = acc + (try (a / d{i}) otherwise 0){neutralizeText(corpusSeedQuotient())}\n")
 		out.append(accProbe("\t"))
 		out.append("\tacc = acc + (try (a mod d{i}) otherwise 0){neutralizeText(corpusSeedRemainder())}\n")

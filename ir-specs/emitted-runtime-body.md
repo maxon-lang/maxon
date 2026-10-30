@@ -368,7 +368,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#42:
-    x64.leaRegRdata rcx, [rip + __str_blob_155]  ; "panic at FilePath.maxon:334: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_154]  ; "panic at FilePath.maxon:334: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -380,7 +380,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#44:
-    x64.leaRegRdata rcx, [rip + __str_blob_156]  ; "panic at FilePath.maxon:337: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_155]  ; "panic at FilePath.maxon:337: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -392,7 +392,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_157]  ; "panic at FilePath.maxon:375: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_156]  ; "panic at FilePath.maxon:375: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -679,7 +679,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#42:
-    x64.leaRegRdata rcx, [rip + __str_blob_154]  ; "panic at FilePath.maxon:334: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_153]  ; "panic at FilePath.maxon:334: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -691,7 +691,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#44:
-    x64.leaRegRdata rcx, [rip + __str_blob_155]  ; "panic at FilePath.maxon:337: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_154]  ; "panic at FilePath.maxon:337: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -703,7 +703,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_156]  ; "panic at FilePath.maxon:375: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_155]  ; "panic at FilePath.maxon:375: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -980,7 +980,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#42:
-    arm64.leaRdata x0, __str_blob_154  ; "panic at FilePath.maxon:334: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_153  ; "panic at FilePath.maxon:334: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -991,7 +991,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#44:
-    arm64.leaRdata x0, __str_blob_155  ; "panic at FilePath.maxon:337: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_154  ; "panic at FilePath.maxon:337: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1002,7 +1002,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#24:
-    arm64.leaRdata x0, __str_blob_156  ; "panic at FilePath.maxon:375: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_155  ; "panic at FilePath.maxon:375: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1278,7 +1278,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#42:
-    arm64.leaRdata x0, __str_blob_154  ; "panic at FilePath.maxon:334: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_153  ; "panic at FilePath.maxon:334: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1289,7 +1289,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#44:
-    arm64.leaRdata x0, __str_blob_155  ; "panic at FilePath.maxon:337: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_154  ; "panic at FilePath.maxon:337: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1300,7 +1300,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#24:
-    arm64.leaRdata x0, __str_blob_156  ; "panic at FilePath.maxon:375: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_155  ; "panic at FilePath.maxon:375: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

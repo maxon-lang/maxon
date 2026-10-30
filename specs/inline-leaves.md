@@ -188,6 +188,52 @@ Stack trace:
   in mrt_start
 ```
 
+<!-- test: a-leaf-relying-on-declined-cascades-keeps-them-at-an-unproven-site -->
+A leaf that fits its op budget only because its entry cascades are not counted is spliced where the caller
+proves every argument and stays a call anywhere else, so the cascade it keeps is still the one that refuses.
+`blend` is called twice, so the called-once rule does not admit it. The first call passes literals the `Stride`
+range contains. In the second, `p` is the sum of five `Stride`s: a value the compiler wears `Stride` on without
+proving it, which is at least `5` at run time. That call is not spliced, and the callee's own guard refuses the
+argument from `blend`'s frame.
+
+```maxon
+typealias Word = bits(64)
+typealias Stride = int(1 to 4)
+
+function blend(a Word, b Word, p Stride, q Stride, r Stride) returns Word
+	let x = (a shl p) xor (b shr q)
+	let y = (b shl q) xor (a shr r)
+	let z = (x and y) or (x xor y)
+
+	return (z shl r) xor ((x shr p) and (y shr q))
+end 'blend'
+
+function main() returns ExitCode
+	let s = (CommandLine.args().count() + 1) as Stride
+	let wide = s + s + s + s + s
+
+	if blend(0xF0, b: 0x0F, p: 1, q: 2, r: 3) != 3864 'proven'
+		return 2
+	end 'proven'
+
+	if blend(0xF0, b: 0x0F, p: wide, q: 2, r: 3) == 0 'zero'
+		return 3
+	end 'zero'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-leaf-relying-on-declined-cascades-keeps-them-at-an-unproven-site.test:5: Range check failed: value outside typealias 'Stride'
+Stack trace:
+  in blend
+  in main
+  in mrt_start
+```
+
 <!-- test: a-leaf-with-a-store-is-copied-whole -->
 A `ValueMinter.mint`-shaped leaf — read a field, add one, write it back — has a store and no panic, so
 it is copied whole. Called three times in ONE block, which is also the shape a carve-then-rewalk splice

@@ -652,6 +652,31 @@ end 'main'
 error E3055: <fragment>:10:10: try requires a throwing function: this `mod` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch
 ```
 
+<!-- test: error.try-over-a-total-quotient-names-the-operator -->
+#### A `try` over a `/` whose divisor is proven non-zero is the same refusal
+A divisor that is a sum of ranged values carries the interval their ranges give, so `n + 1` over
+`int(0 to 100)` is `1 … 101` and excludes 0. The divide is then a bare `binOp` with no call to rewrite,
+and the `try` is still answered as E3055 naming the OPERATOR, exactly as the guarded `mod` above is: a
+divide that cannot fail is one mistake whichever spelling the author used, not "the expression after `try` is not a call".
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Count = int(0 to 100)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let x = ident(70) as Count
+	let n = ident(7) as Count
+	let q = try (x / (n + 1)) otherwise 5
+	return q as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3055: <fragment>:12:10: try requires a throwing function: this `/` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch
+```
+
 <!-- test: mod-by-a-ranged-divisor-below-minus-one-is-a-bare-idiv -->
 #### A range that excludes BOTH `0` and `-1` still buys the unguarded divide
 The proof is what keeps the guard off the common path, so its precision is worth a case: `int(i64.min

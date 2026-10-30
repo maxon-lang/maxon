@@ -284,6 +284,10 @@ release's version as its heading when the release is cut.
 - The `ByteWord` alias is removed; `readOrderedWord` returns, and `appendOrderedWord` takes, an
   `OrderedWord`, the same `bits(64)`.
   Fix: write `OrderedWord` wherever `ByteWord` appeared.
+- A sum, difference or product of values whose ranges are known carries the range those ranges give. A
+  `FixedArray` `get` or `set` indexed by it that lands inside the size cannot throw, and neither can a `/`
+  or `mod` by one that excludes 0, so a `try` on either is E3055.
+  Fix: drop the `try … otherwise` and write the access or the division bare.
 
 ## 0.5.0 — 2026-10-08
 

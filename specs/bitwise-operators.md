@@ -1703,18 +1703,10 @@ end 'main'
 ```
 
 
-<!-- test: bitwise-operators.a-counted-loop-count-is-not-proven -->
-⛔⛔ **THE COUNT A COUNTED LOOP COULD PROVE AND DELIBERATELY DOES NOT — AND THE EMITTED CODE
-(`--emit-ir`) SHOWS THE DECISION.** `i` here is provably `0 … 63`, exactly the counts the instruction takes as written, but it DENOTES
-no alias — its written type is the bare `int` its bounds were written at — so `shiftCountIsProvenUnguarded`
-answers `undeclared` for it and the whole `(count and -64) != 0` saturation is emitted for a case that cannot
-happen.
-
-The counted-loop analysis gives that counter an interval, and reading it here is SOUND and deletes those
-seven ops — but the saving is inside the self-compile's noise, where the compiler's own code layout moves
-further under an unrelated edit than the elision does. The corpus's counted shift counts are few and cold,
-so it stays out until a program that pays for them exists. The case's emitted code shows the saturation;
-nothing in the suite pins it.
+<!-- test: bitwise-operators.a-counted-loop-count-is-proven -->
+A counted loop's counter denotes no alias, but the loop proves it an interval, and `i` here is `0 … 63`,
+exactly the counts the instruction takes as written. The shift is emitted bare, and the answer is the
+same one the saturating form gives: all 64 bits set.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1729,6 +1721,63 @@ end 'main'
 ```
 ```stdout
 t=-1
+```
+
+<!-- test: bitwise-operators.a-count-computed-from-ranged-operands-is-proven-by-their-ranges -->
+A count that is a product, sum or difference of ranged operands lies in the interval their ranges give, and the shift is bare exactly when that interval is inside `0 … 63`. `row * 16` is `16 … 48`, `16 - nibbles * 4` is `4 … 12` and `a + b` is `0 … 40`: all three run bare and give the plain answers. `a * 4` over `0 … 20` reaches 80, so its guard stays and a count of 80 or 64 shifts every bit out (masked, `1 shl 80` would be `1 shl 16` and `1 shl 64` would be 1).
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Row = int(1 to 3)
+typealias Nibbles = int(1 to 3)
+typealias Steps = int(0 to 20)
+
+function rowShift(value Num, row Row) returns Num
+	return value shl (row * 16)
+end 'rowShift'
+
+function nibbleShift(value Num, nibbles Nibbles) returns Num
+	return value shr (16 - nibbles * 4)
+end 'nibbleShift'
+
+function sumShift(value Num, a Steps, b Steps) returns Num
+	return value shl (a + b)
+end 'sumShift'
+
+function pastShift(value Num, a Steps) returns Num
+	return value shl (a * 4)
+end 'pastShift'
+
+function main() returns ExitCode
+	if rowShift(1, row: 3) != 281474976710656 'row'
+		return 1
+	end 'row'
+	if rowShift(1, row: 1) != 65536 'rowOne'
+		return 2
+	end 'rowOne'
+	if nibbleShift(65536, nibbles: 1) != 16 'nibble'
+		return 3
+	end 'nibble'
+	if nibbleShift(65536, nibbles: 3) != 4096 'nibbleThree'
+		return 4
+	end 'nibbleThree'
+	if sumShift(1, a: 20, b: 20) != 1099511627776 'sum'
+		return 5
+	end 'sum'
+	if pastShift(1, a: 15) != 1152921504606846976 'pastEdge'
+		return 6
+	end 'pastEdge'
+	if pastShift(1, a: 16) != 0 'pastSixtyFour'
+		return 7
+	end 'pastSixtyFour'
+	if pastShift(1, a: 20) != 0 'pastEighty'
+		return 8
+	end 'pastEighty'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: bitwise-operators.a-negation-over-a-narrow-alias-is-a-signed-number -->

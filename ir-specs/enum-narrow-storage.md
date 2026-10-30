@@ -960,21 +960,9 @@ func @main {
     x64.movRegImm32 rax, 0
   trycont:
     x64.leaRegRegImm32 r12, rax, 2
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at enum-rdata-i8-array.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -1047,21 +1035,9 @@ func @main {
     x64.movRegImm32 rax, 0
   trycont:
     x64.leaRegRegImm32 r12, rax, 2
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at enum-rdata-i8-array.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -1129,20 +1105,9 @@ func @main {
     arm64.movImm x0, 0
   trycont:
     arm64.add x20, x0, 2
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at enum-rdata-i8-array.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
@@ -1212,20 +1177,9 @@ func @main {
     arm64.movImm x0, 0
   trycont:
     arm64.add x20, x0, 2
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at enum-rdata-i8-array.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
@@ -1586,21 +1540,9 @@ func @main {
     x64.movRegReg rax, r8
   trycont:
     x64.leaRegRegImm32 r12, rax, 100100
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at enum-rdata-i32-array.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

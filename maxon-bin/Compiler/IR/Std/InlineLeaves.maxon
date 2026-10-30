@@ -2,7 +2,8 @@
 //
 //   • THE LEAF RULE: a direct call to a TINY LEAF function — no call outside a `BlockHeat.cold`
 //     block, inside `MaxInlinedLeafOps`, or `MaxInlinedColdCallLeafOps` when it holds a cold call —
-//     is replaced at EVERY site by a copy of the body. The call is nearly all of such a function's
+//     is replaced at EVERY site by a copy of the body (a body that fits only without its parameter
+//     cascades, at every site that declines them — see `MaxInlinedLeafOps`). The call is nearly all of such a function's
 //     cost: MEASURED on the self-compile, `regMaskContains` — `((mask shr regNum) and 1) != 0` plus
 //     its entry guard — was 21% of the profile's self time from 14 static sites, because the body is
 //     smaller than the protocol around it (the argument moves, the `call`, the frame, the `ret`).
@@ -53,7 +54,10 @@
 
 // ⭐ **THE OP BUDGET, AND WHAT IT ADMITS — MEASURED, at this tier, not guessed from the target dump.**
 // Counted over all of a callee's blocks with terminators included and `param` ops excluded (a `param`
-// becomes the call's argument rather than an instruction).
+// becomes the call's argument rather than an instruction). The entry param-guard cascades are charged
+// apart (`LeafOpTally`): a site whose arguments prove every guarded parameter in range copies none of
+// them. A body that fits only without its cascades is therefore spliced only at such a site, and stays
+// a call with its cascades everywhere else.
 //
 // ⭐ **WHAT HOLDS 24 UP IS THE SITE COUNT.** MEASURED on the self-compile: at 24, 3,673 sites inline
 // across 418 eligible callees; at 16, 3,286 sites across 349 callees — 24 buys 387 sites and 69 callees
@@ -378,7 +382,8 @@ end 'inlineOpRole'
 
 // --- the per-callee verdict ---
 enum LeafVerdict
-	// The body may be spliced at any direct call site that is not its own function.
+	// The body may be spliced at any direct call site that is not its own function, unless it fits the
+	// budget only without its entry cascades (see `MaxInlinedLeafOps`).
 	eligible
 
 	// Inside every other rule but past its op budget. Kept apart from `notALeaf` because it is the
@@ -396,14 +401,34 @@ typealias LeafVerdictArray = Array with LeafVerdict
 
 // What one scan of a candidate body found. A record rather than two out-params because the verdict is a
 // JOIN of several facts and the budget question needs the op count even when the answer is `eligible`.
+// `opCount` leaves out the entry param-guard cascades, whose ops `cascadeOpCount` holds.
 type LeafBodyScan
 	export let verdict as LeafVerdict
 	export var opCount as ElementIndex
+	export var cascadeOpCount = 0 as ElementIndex
+	export var reliesOnDeclinedCascades = false
 
 	static function create(verdict LeafVerdict, opCount ElementIndex) returns LeafBodyScan
 		return Self{verdict: verdict, opCount: opCount}
 	end 'create'
 end 'LeafBodyScan'
+
+type LeafOpTally
+	export var body as ElementIndex
+	export var cascade as ElementIndex
+
+	static function create() returns LeafOpTally
+		return Self{body: 0, cascade: 0}
+	end 'create'
+
+	function charge(cost ElementIndex, inACascade bool)
+		if inACascade 'costsOnlyWhereNotDeclined'
+			self.cascade = self.cascade + cost
+		end 'costsOnlyWhereNotDeclined' else 'costsEverySite'
+			self.body = self.body + cost
+		end 'costsEverySite'
+	end 'charge'
+end 'LeafOpTally'
 
 // ⭐ **EVERY FUNCTION'S VERDICT, COMPUTED ONCE, ON THE PRE-SPLICE BODY.** Recomputing spliceability per
 // SITE is `callSites × calleeSize`; here the scan is one walk of the module and every site is a column
@@ -427,9 +452,11 @@ type LeafPlan
 	// callees' origin rows are indexed.
 	export var eligibleFuncs as BoolArray
 
-	// `verdicts == tooManyOps` AND inside `ReportedLargerLeafBudget` — a BIT rather than the op count it
-	// is derived from, because the count has exactly one reader and this is what that reader asks.
+	// A callee a site can refuse for size — `tooManyOps`, or eligible only where its entry cascades are
+	// declined — whose ops, cascades included, fit `ReportedLargerLeafBudget`. A BIT rather than the op
+	// count it is derived from, because the count has exactly one reader and this is what that reader asks.
 	var withinLargerBudget as BoolArray
+	var reliesOnDeclinedCascades as BoolArray
 	export var eligibleCount as ElementIndex
 	export var tooManyOpsCount as ElementIndex
 	export var tooManyOpsWithinLargerBudget as ElementIndex
@@ -443,12 +470,15 @@ type LeafPlan
 		eligibleFuncs.resize(funcCount)
 		var withinLargerBudget = BoolArray.create()
 		withinLargerBudget.resize(funcCount)
+		var reliesOnDeclinedCascades = BoolArray.create()
+		reliesOnDeclinedCascades.resize(funcCount)
 		return Self{
 			verdicts: LeafVerdictArray.create(),
 			valueBounds: valueBounds,
 			blockCounts: blockCounts,
 			eligibleFuncs: eligibleFuncs,
 			withinLargerBudget: withinLargerBudget,
+			reliesOnDeclinedCascades: reliesOnDeclinedCascades,
 			eligibleCount: 0,
 			tooManyOpsCount: 0,
 			tooManyOpsWithinLargerBudget: 0
@@ -466,17 +496,26 @@ type LeafPlan
 		self.verdicts.push(scan.verdict)
 
 		match scan.verdict 'tally'
-			eligible then self.recordEligible(funcIndex, module: module, func: func)
+			eligible then self.recordEligible(funcIndex, scan: scan, module: module, func: func)
 			tooManyOps then self.recordTooManyOps(funcIndex, opCount: scan.opCount)
 			notALeaf then break
 		end 'tally'
 	end 'record'
 
-	function recordEligible(funcIndex ElementIndex, module StdModule, func IrFunction)
+	function recordEligible(funcIndex ElementIndex, scan LeafBodyScan, module StdModule, func IrFunction)
 		self.eligibleCount = self.eligibleCount + 1
 		try self.eligibleFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: eligibleFuncs.set OOB at {funcIndex}")
 		self.measure(funcIndex, module: module, func: func)
+
+		if scan.reliesOnDeclinedCascades 'aCascadeBoundBody'
+			try self.reliesOnDeclinedCascades.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: reliesOnDeclinedCascades.set OOB at {funcIndex}")
+			try self.withinLargerBudget.set(funcIndex, value: scan.opCount + scan.cascadeOpCount <= ReportedLargerLeafBudget) otherwise panic("LeafPlan.recordEligible: withinLargerBudget.set OOB at {funcIndex}")
+		end 'aCascadeBoundBody'
 	end 'recordEligible'
+
+	function reliesOnDeclinedCascadesAt(funcIndex ElementIndex) returns bool
+		return try self.reliesOnDeclinedCascades.get(funcIndex) otherwise panic("LeafPlan.reliesOnDeclinedCascadesAt: function index {funcIndex} is outside the {self.reliesOnDeclinedCascades.count()}-function module this plan was built over")
+	end 'reliesOnDeclinedCascadesAt'
 
 	// The width of the value column a splice of this callee builds, and the block count it was admitted
 	// with. Re-taken for a body `spliceAlwaysSplicedCallees` grew, because `buildValueColumn` compares every
@@ -556,7 +595,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 		refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
 	end 'shape'
 
-	var ops = 0 as ElementIndex
+	var tally = LeafOpTally.create()
 	var holdsColdCall = false
 
 	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
@@ -564,8 +603,10 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 
 		match blockShape(block, blockIndex: blockIndex) 'blockShape'
 			spliceable then break
-			refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+			refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
 		end 'blockShape'
+
+		let inACascade = blockIsInAnEntryCascade(func, block: block)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			// Bound ONCE: this runs on every op of every function in the module, and the role is a `match`
@@ -579,32 +620,47 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 			match leafOpFit(role, op: op, module: module, block: block, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference) 'fit'
 				fits then break
 				coldCall then holdsColdCall = true
-				refuses then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+				refuses then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
 			end 'fit'
 
-			ops = ops + countedBodyOps(role)
+			tally.charge(countedBodyOps(role), inACascade: inACascade)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminated'
-			ops = ops + 1
+			tally.charge(1, inACascade: inACascade)
 
 			// A terminator that calls refuses the leaf rule whatever its block's heat.
 			match terminatorRole(module.getOp(block.terminatorIndex()), func: func, meta: meta) 'termRole'
 				body then break
 				calling or
-				refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+				refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
 			end 'termRole'
 		end 'terminated'
 	end 'eachBlock'
 
 	let budget = MaxInlinedColdCallLeafOps if holdsColdCall else MaxInlinedLeafOps
 
-	if ops > budget and not alwaysSpliced 'tooBig'
-		return LeafBodyScan.create(LeafVerdict.tooManyOps, opCount: ops)
+	if tally.body > budget and not alwaysSpliced 'tooBig'
+		return LeafBodyScan.create(LeafVerdict.tooManyOps, opCount: tally.body)
 	end 'tooBig'
 
-	return LeafBodyScan.create(LeafVerdict.eligible, opCount: ops)
+	var scan = LeafBodyScan.create(LeafVerdict.eligible, opCount: tally.body)
+	scan.cascadeOpCount = tally.cascade
+	scan.reliesOnDeclinedCascades = tally.body + tally.cascade > budget and not alwaysSpliced
+	return scan
 end 'scanLeafBody'
+
+function blockIsInAnEntryCascade(func IrFunction, block IrBlock) returns bool
+	for guard in func.paramGuards 'eachGuard'
+		for owned in guard.ownedBlockIds 'eachOwnedBlock'
+			if owned == block.id 'inThisCascade'
+				return true
+			end 'inThisCascade'
+		end 'eachOwnedBlock'
+	end 'eachGuard'
+
+	return false
+end 'blockIsInAnEntryCascade'
 
 // What one body op costs against the budget: everything but a `param`, which becomes the call site's
 // argument rather than an instruction. A panic op still counts — it is real code in the callee, and the
@@ -861,9 +917,9 @@ type InlineLeafStats
 		self.callersCutOffNoted = CutOffCallerSet.create()
 	end 'dropWhatNoPathReaches'
 
-	function noteDeclinedParamGuard()
-		self.declinedParamGuards = self.declinedParamGuards + 1
-	end 'noteDeclinedParamGuard'
+	function noteDeclinedParamGuards(count GuardCount)
+		self.declinedParamGuards = self.declinedParamGuards + (count as SiteCount)
+	end 'noteDeclinedParamGuards'
 
 	function noteInlined()
 		self.inlinedSites = self.inlinedSites + 1
@@ -919,15 +975,23 @@ type DeclinedGuards
 	// the columns are written in exactly one place and it is the first decline.
 	export var anyDeclined as bool
 
+	export var declinedCount as GuardCount
+
 	static function create(blockIdSpace BlockId, guardCount GuardCount) returns DeclinedGuards
-		return Self{declined: BoolArray.create(), forward: BlockIdArray.create(), blockIdSpace: blockIdSpace, guardCount: guardCount, anyDeclined: false}
+		return Self{declined: BoolArray.create(), forward: BlockIdArray.create(), blockIdSpace: blockIdSpace, guardCount: guardCount, anyDeclined: false, declinedCount: 0}
 	end 'create'
+
+	function declinesEveryGuard() returns bool
+		return self.declinedCount == self.guardCount
+	end 'declinesEveryGuard'
 
 	function decline(guard RangeCheckParamGuard)
 		if not self.anyDeclined 'stillShared'
 			self.seedColumns()
 			self.anyDeclined = true
 		end 'stillShared'
+
+		self.declinedCount = self.declinedCount + 1
 
 		try self.forward.set(guard.headBlockId, value: guard.okBlockId) otherwise panic("DeclinedGuards.decline: cascade head {guard.headBlockId} is outside the callee's block-id space")
 
@@ -2892,6 +2956,8 @@ type SiteSplicer
 	var siteBuffersSeeded as bool
 	var aReturnReachesTheContinuation as bool
 	var copiedBlockIsReachable as bool
+	var argumentConsts as ConstValueMap
+	var argumentConstsCollected as bool
 
 	// The def enumerator's sink, the op cloner and the variant memo, shared by every function's splices:
 	// this type is constructed per function.
@@ -2918,6 +2984,8 @@ type SiteSplicer
 			siteBuffersSeeded: false,
 			aReturnReachesTheContinuation: false,
 			copiedBlockIsReachable: false,
+			argumentConsts: ConstValueMap.create(),
+			argumentConstsCollected: false,
 			def: def,
 			cloner: cloner,
 			meta: meta
@@ -3265,7 +3333,7 @@ type SiteSplicer
 				osPathQuery or
 				osSocketOverlapped or
 				osSocketServe then break
-				call(_, callee, _) then self.considerSite(pos, callee: callee)
+				call(_, callee, args) then self.considerSite(pos, callee: callee, args: args)
 			end 'kind'
 		end 'eachOp'
 
@@ -3280,7 +3348,7 @@ type SiteSplicer
 	// synthesized destructor cascades — which are installed AFTER the pipeline and so are absent from
 	// `module.functions` at this point. They are therefore never inlined BY CONSTRUCTION rather than by
 	// a roster this file would have to keep. (`mrt_panic` is not a call at all: it is an `osPanic` op.)
-	function considerSite(pos ElementIndex, callee ByteArray)
+	function considerSite(pos ElementIndex, callee ByteArray, args ValueIdArray)
 		let calleeIndex = try self.byName.byName.get(callee) otherwise return
 
 		if calleeIndex == self.funcIndex 'selfCall'
@@ -3292,18 +3360,27 @@ type SiteSplicer
 		end 'selfCall'
 
 		match self.admission 'rule'
-			leaves(plan) then self.considerLeafSite(pos, calleeIndex: calleeIndex, plan: plan)
+			leaves(plan) then self.considerLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args)
 			calledOnce(wave) then self.considerCalledOnceSite(pos, calleeIndex: calleeIndex, wave: wave)
 		end 'rule'
 	end 'considerSite'
 
-	function considerLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan)
+	function considerLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray)
 		match plan.verdictOf(calleeIndex) 'verdict'
-			eligible then self.recordLeafSiteUnlessItWidensTheSafePoint(pos, calleeIndex: calleeIndex)
+			eligible then self.considerEligibleLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args)
 			tooManyOps then self.stats.noteSizeRefusal(plan.isWithinLargerBudget(calleeIndex))
 			notALeaf then break
 		end 'verdict'
 	end 'considerLeafSite'
+
+	function considerEligibleLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray)
+		if plan.reliesOnDeclinedCascadesAt(calleeIndex) and not self.declinedGuards(self.module.getFunc(calleeIndex), args: args).declinesEveryGuard() 'cascadesStayAtThisSite'
+			self.stats.noteSizeRefusal(plan.isWithinLargerBudget(calleeIndex))
+			return
+		end 'cascadesStayAtThisSite'
+
+		self.recordLeafSiteUnlessItWidensTheSafePoint(pos, calleeIndex: calleeIndex)
+	end 'considerEligibleLeafSite'
 
 	// The leaf rule's half of `splicingWouldWidenTheSafePoint`. Asked per SITE rather than per callee: one
 	// eligible leaf is spliced at every site it has, and its callers need not agree about provenance.
@@ -3513,7 +3590,9 @@ type SiteSplicer
 		// The splice's site nests under whatever site the call's own block carries — the caller's text, or a
 		// body an earlier splice copied in.
 		let spliceSite = self.func.recordInlineSite(InlineSite.create(callee, parent: self.blockAt(predRef).inlineSite, callSpan: siteSpan, calleeSourceFile: calleeFunc.sourceFilePath))
-		var blocks = self.mintCopiedBlocks(calleeFunc, guards: self.declinedGuards(calleeFunc, args: args), spliceSite: spliceSite)
+		let declined = self.declinedGuards(calleeFunc, args: args)
+		self.stats.noteDeclinedParamGuards(declined.declinedCount)
+		var blocks = self.mintCopiedBlocks(calleeFunc, guards: declined, spliceSite: spliceSite)
 		self.attachContinuationArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
 		self.aReturnReachesTheContinuation = false
 		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst)
@@ -3586,20 +3665,35 @@ type SiteSplicer
 			end 'notProvenHere'
 
 			declined.decline(guard)
-			self.stats.noteDeclinedParamGuard()
 		end 'eachGuard'
 
 		return declined
 	end 'declinedGuards'
 
-	// ⭐⭐ **DOES *THIS* FRAME ALREADY KNOW THE ARGUMENT IS IN THE CALLEE'S RANGE? — THE TWO PROOFS, AND
-	// THERE ARE EXACTLY TWO.** Both are compared with the containment every range door in the compiler
-	// already uses (`TypeRules`), so this pass reaches no verdict of its own and cannot come to disagree
-	// with the guard it is declining.
+	// ⭐⭐ **DOES *THIS* FRAME ALREADY KNOW THE ARGUMENT IS IN THE CALLEE'S RANGE? — THE THREE PROOFS.** Each
+	// is compared with the containment every range door in the compiler already uses (`TypeRules`), so
+	// this pass reaches no verdict of its own and cannot come to disagree with the guard it is declining.
 	function callerProvesArg(args ValueIdArray, guard RangeCheckParamGuard) returns bool
 		let arg = try args.get(guard.index) otherwise panic("SiteSplicer.callerProvesArg: a callee guarding parameter {guard.index} is called from '{String.from(self.func.name)}' with {args.count()} argument(s) — the arity check has already refused a mismatch")
-		return self.callerParamProves(arg, alias: guard.alias) or self.provenRangeProves(arg, alias: guard.alias)
+		return self.callerParamProves(arg, alias: guard.alias) or self.provenRangeProves(arg, alias: guard.alias) or self.constantProves(arg, alias: guard.alias)
 	end 'callerProvesArg'
+
+	// **PROOF THREE: THE ARGUMENT IS A CONSTANT INSIDE THE RANGE.** The caller's constants are collected
+	// once, by the first guard that asks, for `provenRangeProves`' reason: nearly no caller splices a
+	// callee that guards anything.
+	function constantProves(arg ValueId, alias RangedTypeAlias) returns bool
+		if not self.argumentConstsCollected 'notCollectedYet'
+			self.argumentConsts = collectConstValues(self.module, opIndices: self.module.liveOpIndices(self.func), def: StdFoldableDef.create())
+			self.argumentConstsCollected = true
+		end 'notCollectedYet'
+
+		if not self.argumentConsts.contains(arg) 'notAConstant'
+			return false
+		end 'notAConstant'
+
+		let value = self.argumentConsts.constantOf(arg)
+		return rangeCoversIntBounds(alias, low: value, high: value)
+	end 'constantProves'
 
 	// **PROOF ONE: THE ARGUMENT IS ONE OF THIS FUNCTION'S OWN NARROWED PARAMETERS.** Its cascade stands at
 	// this function's entry, which dominates every call the body makes, so the value in hand has already

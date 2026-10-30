@@ -115,6 +115,11 @@ function pathKeepsTheRecord(path ValueCarryPath) returns bool
 	end 'path'
 end 'pathKeepsTheRecord'
 
+enum IntervalProvenance
+	operandRanges
+	literalCounters
+end 'IntervalProvenance'
+
 enum ValueFact
 	unprovenAlias
 	aboveSignedMax
@@ -4657,6 +4662,7 @@ end 'ValueProducer'
 
 union RoutableOp
 	notRoutable
+	division(op MaxonBinOp)
 	call(result ValueId, let callee ByteArray, receiver ReceiverArgument)
 	tryChannelCall(result ValueId, let callee ByteArray, receiver ReceiverArgument)
 	witness(result ValueId)
@@ -4673,6 +4679,7 @@ function tryChannelCallOf(op RoutableOp, opIndex ElementIndex, wanted TryChannel
 	return match op 'op'
 		tryChannelCall(result, callee, _) gives DiscardedCallee.named(callee, result: result, opIndex: opIndex) if tryChannelWants(wanted, result: result) else DiscardedCallee.notACall
 		notRoutable or
+		division or
 		call or
 		witness or
 		send or
@@ -4698,6 +4705,7 @@ function routableOpIsAwait(op RoutableOp) returns bool
 	return match op 'op'
 		await gives true
 		notRoutable or
+		division or
 		call or
 		tryChannelCall or
 		send or
@@ -42241,9 +42249,9 @@ export type Parser
 	end 'operandAliasAnswer'
 
 	// ⭐⭐ **STAMP AN ADOPTED TYPEALIAS ONTO A FRESHLY MINTED ARITHMETIC RESULT — as a NAME, never as a
-	// PROOF.** The result IS that alias at every coercion door, and it satisfies nothing: `a + a2` over
-	// `Score` may land outside `Score`, so every range guard that fires for an unnamed value still fires.
-	// `retypeValue` rather than a re-mint, because the value was minted one line earlier by the emitter that
+	// PROOF.** The result IS that alias at every coercion door, and the name satisfies nothing: `a + a2`
+	// over `Score` may land outside `Score`. What add, sub and mul over known ranges do prove is the
+	// interval `adoptBinaryResultAlias` records beside the name. `retypeValue` rather than a re-mint, because the value was minted one line earlier by the emitter that
 	// calls this and has no other reader yet.
 	//
 	// The gate is the INTEGRAL reading of the RESULT, not the operator: a comparison's `boolean` and a
@@ -42281,10 +42289,7 @@ export type Parser
 
 		if let ranged = try requireDeclaredAlias(self.castAliasNamedBy(self.artifact.typeNames.intern(alias.identity))) 'aRangedOperand'
 			if not aliasIsFloat(ranged) and not aliasIsClosedUnderWordArithmetic(ranged) and not rangeCoversIntBounds(ranged, low: bounds.lo, high: bounds.hi) 'resultLeavesTheAlias'
-				if not bounds.isTop() 'aKnownInterval'
-					self.recordProvenIntRange(result, low: bounds.lo, high: bounds.hi)
-				end 'aKnownInterval'
-
+				self.recordResultInterval(result, low: bounds.lo, high: bounds.hi, provenance: IntervalProvenance.operandRanges)
 				return
 			end 'resultLeavesTheAlias'
 		end 'aRangedOperand'
@@ -42299,14 +42304,30 @@ export type Parser
 	end 'adoptUnaryResultAlias'
 
 	function adoptBinaryResultAlias(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, alias OperandAlias, resultTag ValueTypeTag)
-		if op != MaxonBinOp.bitOr and op != MaxonBinOp.bitXor 'closedByConstruction'
-			self.adoptOperandAlias(result, alias: alias, resultTag: resultTag)
+		if op == MaxonBinOp.bitOr or op == MaxonBinOp.bitXor 'aWordCombination'
+			let bounds = try self.operandPairInterval(op, lhs: lhs, rhs: rhs) otherwise Interval.create()
+			self.adoptWhereClosedElseBound(result, alias: alias, resultTag: resultTag, bounds: bounds)
 			return
-		end 'closedByConstruction'
+		end 'aWordCombination'
 
-		let bounds = try self.operandPairInterval(op, lhs: lhs, rhs: rhs) otherwise Interval.create()
-		self.adoptWhereClosedElseBound(result, alias: alias, resultTag: resultTag, bounds: bounds)
+		self.adoptOperandAlias(result, alias: alias, resultTag: resultTag)
+
+		if tagIsInteger(resultTag) and (op == MaxonBinOp.add or op == MaxonBinOp.sub or op == MaxonBinOp.mul) 'anIntervalArithmetic'
+			let bounds = try self.operandPairInterval(op, lhs: lhs, rhs: rhs) otherwise return
+			self.recordResultInterval(result, low: bounds.lo, high: bounds.hi, provenance: IntervalProvenance.operandRanges)
+		end 'anIntervalArithmetic'
 	end 'adoptBinaryResultAlias'
+
+	function recordResultInterval(result ValueId, low FullRangeInt, high FullRangeInt, provenance IntervalProvenance)
+		if low == i64.min and high == i64.max 'saysNothing'
+			return
+		end 'saysNothing'
+
+		match provenance 'provenance'
+			operandRanges then self.recordProvenIntRange(result, low: low, high: high)
+			literalCounters then self.markLiteralInterval(result, low: low, high: high)
+		end 'provenance'
+	end 'recordResultInterval'
 
 	function unaryResultInterval(op MaxonUnaryOp, operand ValueId) returns Interval throws AbsentError
 		var origin = Interval.create()
@@ -42331,9 +42352,9 @@ export type Parser
 			return constant
 		end 'aKnownConstant'
 
-		if let counted = try self.counterIntervalOf(value) 'aCountedNumber'
-			return counted
-		end 'aCountedNumber'
+		if let proven = try self.provenIntervalOf(value) 'aProvenInterval'
+			return proven
+		end 'aProvenInterval'
 
 		view ranged = try requireDeclaredAlias(self.valueDenotedAlias(value)) otherwise throw AbsentError.absent
 
@@ -42346,12 +42367,12 @@ export type Parser
 		return interval
 	end 'operandIntervalOf'
 
-	// ⭐⭐ **RECORD THE INTERVAL A COUNTED LOOP PROVES FOR ITS COUNTER** — see `ProvenIntRange` for
-	// what an interval nothing NAMES may and may not decide, and `mintCountedBodyCounter` for why the value
-	// it is recorded against is the BODY's block-arg rather than the loop header's phi.
+	// ⭐⭐ **RECORD AN INTERVAL A VALUE IS PROVEN TO LIE IN** — see `ProvenIntRange` for what an interval
+	// nothing NAMES may and may not decide, and `mintCountedBodyCounter` for why a counter's interval is
+	// recorded against the BODY's block-arg rather than the loop header's phi.
 	function recordProvenIntRange(value ValueId, low FullRangeInt, high FullRangeInt)
 		// The column is installed on the first interval, exactly as `recordValueDeclaredAliasName`'s is and
-		// for its reason: a function with no counted loop never allocates one.
+		// for its reason: a function that proves no interval never allocates one.
 		var proven = self.countedValueRangesForWrite()
 		proven.upsert(value, value: ProvenIntRange.create(low, high: high))
 	end 'recordProvenIntRange'
@@ -42379,9 +42400,9 @@ export type Parser
 		self.recordProvenIntRange(value, low: alias.low, high: alias.high)
 	end 'recordDeclaredAliasRange'
 
-	// ⭐ **DOES THE INTERVAL A COUNTED LOOP PROVED FOR `value` LIE INSIDE `target`?** The map probe and the
-	// one containment, spelled here so the joiner below reads as the two sentences it is. A function with no
-	// counted loop answers off the unwritten column and allocates nothing.
+	// ⭐ **DOES THE INTERVAL RECORDED FOR `value` LIE INSIDE `target`?** The map probe and the one
+	// containment, spelled here so the joiner below reads as the two sentences it is. A function that
+	// proves no interval answers off the unwritten column and allocates nothing.
 	function countedRangeCovers(value ValueId, target RangedTypeAlias) returns bool
 		let proven = try provenIntRangeOf(self.bodyState.countedValueRanges, value: value) otherwise return false
 		return rangeCoversIntBounds(target, low: proven.low, high: proven.high)
@@ -42390,8 +42411,8 @@ export type Parser
 	// ⭐⭐ **IS `value` PROVABLY INSIDE `target`? — THE WHOLE OF EVERY RUNTIME GUARD'S DEATH TEST, AND THE
 	// ONE PLACE THE TWO KINDS OF PROOF ARE JOINED FOR A GUARD.** A value proves its range two ways and only two: it
 	// DENOTES a declared alias whose range the destination covers (the induction
-	// `rangeCoversDenotedRange`'s header states), or a counted loop proved an interval for it that nothing
-	// names. Both answers mean the same thing to a guard — the compare cannot fail — so they are
+	// `rangeCoversDenotedRange`'s header states), or an interval nothing names was recorded for it
+	// (`recordProvenIntRange`). Both answers mean the same thing to a guard — the compare cannot fail — so they are
 	// joined once, and no door reaches a verdict of its own. The proofs that decide whether a divide or a
 	// `FixedArray` accessor can fail join the same two facts in `knownValueOf`.
 	//
@@ -42408,11 +42429,10 @@ export type Parser
 	//     (`recordMergeAliasProof`), which republishes that merge's DECLARED name to every reader including
 	//     the one above. An interval may not put a name into circulation that no edge declared.
 	//
-	// The other readers are outside this joiner for reasons of their own, not for the line above's.
-	// `shiftCountIsProvenUnguarded` asks the SAME kind of question — can a runtime guard fire? — and reading
-	// the interval there is SOUND; it is left out because the win could not be told from build-to-build
-	// layout noise (its header carries all six timings). `emitPrimitiveClone` is unaffected either way: a
-	// receiver that denotes no ALIAS is handed back untouched, and an interval gives it no alias to shed.
+	// `shiftCountIsProvenUnguarded` asks the SAME kind of question — can a runtime guard fire? — and joins
+	// the same two facts against the counts a shift takes as written rather than against an alias.
+	// `emitPrimitiveClone` is outside this joiner: a receiver that denotes no ALIAS is handed back
+	// untouched, and an interval gives it no alias to shed.
 	//
 	// ⛔ **EACH WITHHOLD IS PINNED BY A CASE THAT GOES RED IF IT IS UNDONE**, because a rule this file merely
 	// asserts is one nothing checks (`specs/range-check-panic.md`):
@@ -44380,8 +44400,9 @@ export type Parser
 		//
 		// This does not open `try` to arbitrary parenthesized expressions. The group is an ordinary
 		// expression, transparent to the claim, and the rewrite takes the op producing its value: a
-		// possibly-zero divide left a `call __checked_div` and is converted, while `try (4 + 5)` left a
-		// `binOp` and is refused as not a call. So the accepted set is exactly "the group's outermost
+		// possibly-zero divide left a `call __checked_div` and is converted, a divide whose divisor is proven
+		// nonzero left a bare division `binOp` and is E3055, and `try (4 + 5)` left a `binOp` and is refused
+		// as not a call. So the accepted set is exactly "the group's outermost
 		// operation is fallible", derived from the rule every other try shape uses. A group over a bare
 		// name emits no op at all, which `parseTry`'s `targetOpFloor` catches (see `opProducingTheValue`,
 		// and `safety.md`'s two `error.try-over-a-parenthesized-…` cases).
@@ -44563,6 +44584,7 @@ export type Parser
 		return match self.routableOpAt(idx) 'producer'
 			call(result, callee, _) gives DiscardedCallee.named(callee, result: result, opIndex: idx) if result == value else DiscardedCallee.notACall
 			notRoutable or
+			division or
 			tryChannelCall or
 			witness or
 			send or
@@ -44594,6 +44616,7 @@ export type Parser
 
 		match op 'rewrite'
 			send then return self.rewriteSendToTryChannel(opIdx)
+			division(divisionOp) then throw SourceParseError.tryOnTotalDivision(divisionOperatorSpelling(divisionOp), line: tryTok.line, column: tryTok.column)
 			notRoutable or
 			tryChannelCall then throw self.notACallTryTarget(tryTok)
 			call then try self.requireCallCanFail(opIdx, tryTok: tryTok)
@@ -44917,6 +44940,7 @@ export type Parser
 			witness gives self.commitWitnessTryDispatchRewrite(opIdx, flag: flag)
 			await (result, promise) gives self.commitTryAwaitRewrite(opIdx, result: result, flag: flag, promise: promise)
 			notRoutable or
+			division or
 			send or
 			tryChannelCall panic("rewriteToTryChannel: the op at {opIdx} is neither a call, a witness dispatch nor an await — both callers classify it with `routableOpAt` first")
 		end 'rewrite'
@@ -47038,6 +47062,7 @@ export type Parser
 
 		match self.routableOpAt(opIdx) 'held'
 			notRoutable or
+			division or
 			tryChannelCall then return
 			send(result) then self.routeSend(destination, opIdx: opIdx, result: result)
 			call(result, callee, _) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.signatures.throwsOf(callee), result: result)
@@ -47065,10 +47090,10 @@ export type Parser
 			tryCall(result, _, callee, args, _, _, _, _, _) gives RoutableOp.tryChannelCall(result, callee: callee, receiver: receiverArgumentOf(args))
 			witnessDispatch(result, _, _, _, _, _, _, _) gives RoutableOp.witness(result)
 			await (result, promise) gives RoutableOp.await(result, promise: promise)
+			binOp(_, _, _, op) gives RoutableOp.division(op) if divisionOperator(op) else RoutableOp.notRoutable
 			literal or
 			ret or
 			retVoid or
-			binOp or
 			unaryOp or
 			compare or
 			condBranch or
@@ -47335,6 +47360,7 @@ export type Parser
 		match op 'op'
 			send then return self.rewriteSendToTryChannel(opIdx).1
 			notRoutable or
+			division or
 			call or
 			witness or
 			await or
@@ -62394,8 +62420,9 @@ export type Parser
 	//   it at run time — to the SAME answer. That the two agree is not a coincidence: both are
 	//   readings of `evalShift`.
 	//
-	//   ⭐ **PROVEN is the third answer, and it is a TYPE's** — see `shiftCountIsProvenUnguarded`. A
-	//   count the parser cannot see the VALUE of, it may still see the BOUNDS of; when those bounds
+	//   ⭐ **PROVEN is the third answer, from a type or a recorded interval** — see
+	//   `shiftCountIsProvenUnguarded`. A count the parser cannot see the VALUE of, it may still see the
+	//   BOUNDS of; when those bounds
 	//   lie inside the counts the instruction takes as written, the saturation is dead code and the
 	//   shift is emitted bare. It is the same instruction a folded in-range count gets below, because
 	//   it is the same fact — only who established it differs.
@@ -62486,12 +62513,15 @@ export type Parser
 		return result
 	end 'emitShift'
 
-	// ⭐⭐ **DOES THIS COUNT'S DECLARED TYPE ALREADY PROVE THE GUARD DEAD?** — the one question that
-	// lets a count the parser cannot FOLD reach the instruction unguarded.
+	// ⭐⭐ **DO THIS COUNT'S BOUNDS ALREADY PROVE THE GUARD DEAD?** — the one question that lets a count
+	// the parser cannot FOLD reach the instruction unguarded. The bounds are its declared alias's or,
+	// failing that, an interval recorded for it, such as a counted loop's counter's or that of a sum,
+	// difference or product of ranged operands. `provenIntervalOf` withholds an unsigned-topped interval, whose upper bound is
+	// not a signed number.
 	//
 	// `emitGuardedShift`'s ops exist to fold a count OUTSIDE `MinShiftCount..MaxUnguardedShiftCount` back
 	// to the answer `evalShift` defines — that function's header states what they cost, and this one does
-	// not restate it. A count whose alias cannot HOLD such a value is already inside, so every one of
+	// not restate it. A count whose bounds cannot HOLD such a value is already inside, so every one of
 	// them is dead: computed, and then thrown away by a mask that is always zero. `RegBits.RegNum`
 	// (`int(0 to 63)`) is the shape that pays for it — `regMaskContains` is one `shr` carrying the whole
 	// of that cost, at fourteen inlined call sites.
@@ -62515,15 +62545,11 @@ export type Parser
 	//
 	// ⚠ **WHAT THE `true` ANSWER RESTS ON** is the induction `TypeRules.rangeCoversDenotedRange`'s header
 	// states: a value denoting alias `A` is IN `A`'s range, because a cast site guards its result, a
-	// parameter is guarded at the callee's entry and a `return` before its `ret`. Its one recorded
-	// producer of a value that crossed no door — `Array.resize`'s zero-initialized slot — cannot reach a
-	// wrong shift through here, because what it exposes is `0` and `0` is itself a count the instruction
-	// takes as written.
+	// parameter is guarded at the callee's entry and a `return` before its `ret`.
 	//
 	// ⛔⛔ **`valueDenotedAlias`, NOT `declaredAliasOfValue` — A MERGE'S DECLARED ALIAS IS NOT A PROOF,
-	// AND SPENDING IT AS ONE HERE COSTS THE ANSWER.** The list the
-	// paragraph above ends with names `Array.resize` as the one producer that crossed no door; **a phi
-	// is the second, and it is far more reachable** — an ASSIGNMENT is a door on no tier, so a `var`
+	// AND SPENDING IT AS ONE HERE COSTS THE ANSWER.** A phi crosses no door: an ASSIGNMENT is a door on
+	// no tier, so a `var`
 	// of a ranged alias reassigned around a loop carries whatever the body computed while its header
 	// phi keeps the alias's NAME. This function is a PROOF reader by its own name, so it takes the
 	// proof-aware spelling every other proof reader takes (`divisorProof`, `recordRangedReturnSite`,
@@ -62537,32 +62563,20 @@ export type Parser
 	// `bitwise-operators.md`'s `a-merged-count-is-not-proven-*` cases, which go RED on this line alone
 	// (sabotage-proved: restoring `declaredAliasOfValue` fails exactly those two, at their `'shl'`
 	// assertion, and nothing else in the suite).
-	// ⛔⛔ **A COUNTED LOOP'S INTERVAL IS DELIBERATELY *NOT* READ HERE, AND WHAT KEEPS IT OUT IS THAT NOTHING
-	// COULD MEASURE IT.** `1 shl i` inside `for i in 0 upto 64` is a count provably in `0 … 63` that
-	// denotes no alias, so the arm below answers `undeclared` for it and the whole `(count and -64) != 0`
-	// saturation is emitted for a case that cannot happen. Reading the counted loop's interval here is SOUND and deletes
-	// those seven ops. It was built and timed, and the reading came back inside the noise:
 	//
-	//   • WITH the join, the self-compile read **71.9 / 71.9 s**; without it, from the closest sibling
-	//     build, **71.0 / 71.0 s** — +1.3%, and 92% of the movement in `phase:regalloc` (`--metrics`).
-	//   • ⚠ **AND TWO LOGICALLY IDENTICAL COMPILERS, differing only in ~15 lines of comment and one
-	//     private method, read 68.5 / 68.8 s against those same 71.0 / 71.0 s — 3.4%.** That is
-	//     the compiler's own code LAYOUT moving under an unrelated edit, and it is larger than the effect
-	//     under study. All six runs were interleaved in one session and each pair is reproducible to 0.3 s;
-	//     the spread is between builds, not within one.
-	//
-	// ⇒ The instrument cannot resolve this at the size it comes in, and a win that cannot be shown is not
-	// one to land on top of a row that is already measured at −13%. It stays out until a program that
-	// actually pays for counted shift counts exists to measure it on — the corpus's are few and cold.
-	// `specs/bitwise-operators.md`'s `a-counted-loop-count-is-not-proven` pins the saturation that
-	// survives, so the decision is a committed fragment rather than a paragraph.
+	// The interval arm is pinned by `specs/bitwise-operators.md`'s `a-counted-loop-count-is-proven`.
 	function shiftCountIsProvenUnguarded(count ValueId) returns bool
-		return match self.valueDenotedAlias(count) 'count'
-			// A bare `int`, a loop counter, an arithmetic result, a merge nothing proved: none states any
-			// bounds this value must satisfy, so none proves anything, and the guard stays where it was.
+		let declaredProves = match self.valueDenotedAlias(count) 'count'
 			undeclared gives false
 			declared(alias) gives not aliasIsFloat(alias) and shiftCountIsUnguarded(alias.low) and shiftCountIsUnguarded(alias.high)
 		end 'count'
+
+		if declaredProves 'aDeclaredRange'
+			return true
+		end 'aDeclaredRange'
+
+		let bounds = try self.provenIntervalOf(count) otherwise return false
+		return shiftCountIsUnguarded(bounds.lo) and shiftCountIsUnguarded(bounds.hi)
 	end 'shiftCountIsProvenUnguarded'
 
 	// A shift whose count the compiler could neither fold NOR PROVE (`shiftCountIsProvenUnguarded`) —
@@ -62592,8 +62606,8 @@ export type Parser
 	//
 	// Cost, on top of the shift: 4 ops for the mask, plus 2 (zero-fill) or 1 (sign-fill). Only a
 	// count the compiler can neither SEE nor BOUND pays it — every `x shr 8` and `x shl 3` is folded
-	// and untouched, and so is every `x shr n` whose `n` denotes an alias inside the counts the
-	// instruction takes as written (`emitShift`, via `shiftCountIsProvenUnguarded`).
+	// and untouched, and so is every `x shr n` whose `n` denotes an alias or carries a recorded interval
+	// inside the counts the instruction takes as written (`emitShift`, via `shiftCountIsProvenUnguarded`).
 	//
 	// ⭐⭐ **A NEGATIVE COUNT PANICS, WHICH THE SATURATION BELOW DOES NOT SAY.** Go: *"if the shift count
 	// is negative at run time, a run-time panic occurs"*, and the runnable oracle does exactly that
@@ -65303,15 +65317,14 @@ export type Parser
 	//
 	//   • provably zero (a folded `0`, `0.0` or `-0.0`) — E3103 at compile time. A divide that can
 	//     only ever fail is a bug, and a catchable error would offer the program a recovery from one.
-	//   • provably non-zero (a non-zero folded constant, or a ranged type whose range excludes 0) — a
-	//     bare `binOp`: no guard, no branch, no call. This is the language's escape hatch and it costs
-	//     nothing.
+	//   • provably non-zero (a non-zero folded constant, or a ranged type or recorded interval that
+	//     excludes 0) — a bare `binOp`: no guard, no branch, no call. This is the language's escape hatch
+	//     and it costs nothing; a `try` on it is E3055.
 	//   • anything else — the divide throws `__DivisionByZeroError`, so it must be caught: by a `try`,
 	//     an enclosing `try` block or a test body's implied handler, and otherwise it is E3057.
 	//
 	// The throwing form is emitted call-shaped, and that is structural: only a `call`, a witness
-	// dispatch or an `await` can be rewritten into the try channel (`routableOpAt`), so a `binOp`
-	// divide is unreachable from `try`. Riding the ordinary `call` → `tryCall` ABI also gives it the
+	// dispatch or an `await` can be rewritten into the try channel (`routableOpAt`). Riding the ordinary `call` → `tryCall` ABI also gives it the
 	// `try` requirement, the `otherwise (e)` binding, the propagate path, the router and the fork's
 	// drop sets every other throwing callee has.
 	//
@@ -65868,7 +65881,7 @@ export type Parser
 		end 'notAnIntegerMask'
 
 		let mask = try self.bitAndMaskBound(lhs, rhs: rhs) otherwise return
-		self.recordProvenIntRange(result, low: 0, high: mask)
+		self.recordResultInterval(result, low: 0, high: mask, provenance: IntervalProvenance.operandRanges)
 	end 'recordBitAndMaskRange'
 
 	function bitAndMaskBound(lhs ValueId, rhs ValueId) returns FullRangeInt throws AbsentError
@@ -65903,12 +65916,7 @@ export type Parser
 		let left = try self.literalIntervalOf(lhs) otherwise return
 		let right = try self.literalIntervalOf(rhs) otherwise return
 		let bounds = try binOpBounds(op, left: left, right: right) otherwise return
-
-		if bounds.isTop() 'saysNothing'
-			return
-		end 'saysNothing'
-
-		self.markLiteralInterval(result, low: bounds.lo, high: bounds.hi)
+		self.recordResultInterval(result, low: bounds.lo, high: bounds.hi, provenance: IntervalProvenance.literalCounters)
 	end 'recordLiteralRangeOfBinOp'
 
 	function markLiteralInterval(value ValueId, low FullRangeInt, high FullRangeInt)
@@ -65930,20 +65938,12 @@ export type Parser
 		end 'eachGive'
 
 		match joined 'state'
-			integers(low, high) then self.markMergedSignedInterval(phi, low: low, high: high)
+			integers(low, high) then self.recordResultInterval(phi, low: low, high: high, provenance: IntervalProvenance.literalCounters)
 			unsignedIntegers(low, high) then self.markUnsignedBounds(phi, low: low, high: high)
 			unknown or
 			floats then return
 		end 'state'
 	end 'recordLiteralRangeOfMerge'
-
-	function markMergedSignedInterval(phi ValueId, low FullRangeInt, high FullRangeInt)
-		if low == i64.min and high == i64.max 'saysNothing'
-			return
-		end 'saysNothing'
-
-		self.markLiteralInterval(phi, low: low, high: high)
-	end 'markMergedSignedInterval'
 
 	function constantIntervalOf(value ValueId) returns Interval throws AbsentError
 		if not self.constIsKnown(value) or valueIsMarked(self.bodyState.unsignedMaxLiterals, value: value) or valueIsMarked(self.bodyState.unsignedPatternValues, value: value) 'notASignedConstant'
@@ -65972,11 +65972,20 @@ export type Parser
 			throw AbsentError.absent
 		end 'nothingKnown'
 
+		return try self.provenIntervalOf(value)
+	end 'counterIntervalOf'
+
+	function provenIntervalOf(value ValueId) returns Interval throws AbsentError
 		let proven = try provenIntRangeOf(self.bodyState.countedValueRanges, value: value) otherwise throw AbsentError.absent
+
+		if rangeIsUnsignedTopped(proven.low, high: proven.high) 'notASignedInterval'
+			throw AbsentError.absent
+		end 'notASignedInterval'
+
 		var interval = Interval.create()
 		interval.setBounds(proven.low, high: proven.high)
 		return interval
-	end 'counterIntervalOf'
+	end 'provenIntervalOf'
 
 	function markUnnamedFoldAboveSignedMax(result ValueId)
 		if self.tagOf(result) != ValueTypeTag.integer or self.constOf(result) >= 0 'namedOrWithinTheSignedRange'
@@ -75630,6 +75639,7 @@ export type Parser
 			call(result, callee, receiver) gives receiverSourceOfCall(result, value: value, callee: callee, receiver: receiver)
 			tryChannelCall(result, callee, receiver) gives receiverSourceOfCall(result, value: value, callee: callee, receiver: receiver)
 			notRoutable or
+			division or
 			witness or
 			send or
 			await gives ReceiverSource.unknown

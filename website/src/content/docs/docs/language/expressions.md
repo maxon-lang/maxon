@@ -49,8 +49,8 @@ Dividing by zero is not undefined behaviour and does not crash: `/` and `mod` wh
 
 - **The divisor is provably non-zero** — a non-zero literal (`x / 4`), a value whose ranged type excludes 0,
   or a value whose known range excludes 0: the counter of a counted `for` loop between compile-time bounds
-  (`i` in `for i in 1 upto 10`), or a `let` computed from such values — and the divide compiles as-is, with
-  no check. A `try` on it is **E3055**.
+  (`i` in `for i in 1 upto 10`), or a sum, difference or product of values with known ranges (constants,
+  ranged types, such counters) — and the divide compiles as-is, with no check. A `try` on it is **E3055**.
 - **The divisor might be zero** — the divide throws, and must be written `try (a / b) otherwise …` (or
   propagated from a function that `throws`), unless a [`try` block](/docs/language/error-handling/#try-blocks) or a
   [`test` body](/docs/language/testing/#uncaught-errors-in-tests) handles it. A bare divide anywhere else is **E3057**
@@ -284,7 +284,8 @@ whether the index lies inside `0 to N-1`:
   on it is **E3055**. An index is proven when it is a constant inside the size, a value whose ranged type
   lies inside (`typealias Slot = int(0 to 3) implements ElementIndex` for a `FixedArray with 4`), the
   counter of a counted `for` loop whose bounds are known at compile time and lie inside (literals,
-  `countof(T)`, folded constants), or a `let` computed from such values whose computed range lies inside.
+  `countof(T)`, folded constants), or a sum, difference or product of values with known ranges whose
+  computed range lies inside.
 - **A constant index at or past the size** is **E3005** (`Value 4 is outside the range of the indices of
   'FixedArray with 4' (int(0 to 3))`).
 - **Any other index** is checked at run time and throws `ArrayError.indexOutOfBounds`, so the call needs

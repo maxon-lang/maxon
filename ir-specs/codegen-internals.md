@@ -768,31 +768,31 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#15
-  __im_load#16:
+    x64.jcc belowEqual, __im_slow#12
+  __im_load#13:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#19
-  __im_word#17:
+    x64.jcc notEqual, __im_stride#16
+  __im_word#14:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp tryok#1
-  __im_stride#19:
+  __im_stride#16:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#15
-  __im_byte#18:
+    x64.jcc notEqual, __im_slow#12
+  __im_byte#15:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp tryok#1
-  __im_slow#15:
+  __im_slow#12:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#35
+    x64.jcc equal, critsplit#32
   tryerr#2:
     x64.movRegImm32 r12, 0
     x64.jmp trycont#3
-  critsplit#35:
+  critsplit#32:
     x64.movRegReg rax, r8
   tryok#1:
     x64.movRegReg r12, rax
@@ -800,31 +800,31 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow#22
-  __im_load#23:
+    x64.jcc belowEqual, __im_slow#19
+  __im_load#20:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#26
-  __im_word#24:
+    x64.jcc notEqual, __im_stride#23
+  __im_word#21:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.jmp tryok#4
-  __im_stride#26:
+  __im_stride#23:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#22
-  __im_byte#25:
+    x64.jcc notEqual, __im_slow#19
+  __im_byte#22:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 1]
     x64.jmp tryok#4
-  __im_slow#22:
+  __im_slow#19:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#36
+    x64.jcc equal, critsplit#33
   tryerr#5:
     x64.movRegImm32 r13, 0
     x64.jmp trycont#6
-  critsplit#36:
+  critsplit#33:
     x64.movRegReg rax, r8
   tryok#4:
     x64.movRegReg r13, rax
@@ -832,55 +832,38 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 2
-    x64.jcc belowEqual, __im_slow#29
-  __im_load#30:
+    x64.jcc belowEqual, __im_slow#26
+  __im_load#27:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#33
-  __im_word#31:
+    x64.jcc notEqual, __im_stride#30
+  __im_word#28:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.jmp trycont#9
-  __im_stride#33:
+  __im_stride#30:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#29
-  __im_byte#32:
+    x64.jcc notEqual, __im_slow#26
+  __im_byte#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 2]
     x64.jmp trycont#9
-  __im_slow#29:
+  __im_slow#26:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#37
+    x64.jcc equal, critsplit#34
   tryerr#8:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#9
-  critsplit#37:
+  critsplit#34:
     x64.movRegReg rax, r8
   trycont#9:
     x64.leaRegRegReg rcx, r12, r13
     x64.leaRegRegReg r12, rcx, rax
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at rdata-byte-array-uses-i8.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -1384,31 +1367,31 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#15
-  __im_load#16:
+    x64.jcc belowEqual, __im_slow#12
+  __im_load#13:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#19
-  __im_word#17:
+    x64.jcc notEqual, __im_stride#16
+  __im_word#14:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp tryok#1
-  __im_stride#19:
+  __im_stride#16:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#15
-  __im_byte#18:
+    x64.jcc notEqual, __im_slow#12
+  __im_byte#15:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp tryok#1
-  __im_slow#15:
+  __im_slow#12:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#35
+    x64.jcc equal, critsplit#32
   tryerr#2:
     x64.movRegImm32 r12, 0
     x64.jmp trycont#3
-  critsplit#35:
+  critsplit#32:
     x64.movRegReg rax, r8
   tryok#1:
     x64.movRegReg r12, rax
@@ -1416,31 +1399,31 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow#22
-  __im_load#23:
+    x64.jcc belowEqual, __im_slow#19
+  __im_load#20:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#26
-  __im_word#24:
+    x64.jcc notEqual, __im_stride#23
+  __im_word#21:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.jmp tryok#4
-  __im_stride#26:
+  __im_stride#23:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#22
-  __im_byte#25:
+    x64.jcc notEqual, __im_slow#19
+  __im_byte#22:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 1]
     x64.jmp tryok#4
-  __im_slow#22:
+  __im_slow#19:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#36
+    x64.jcc equal, critsplit#33
   tryerr#5:
     x64.movRegImm32 r13, 0
     x64.jmp trycont#6
-  critsplit#36:
+  critsplit#33:
     x64.movRegReg rax, r8
   tryok#4:
     x64.movRegReg r13, rax
@@ -1448,55 +1431,38 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 2
-    x64.jcc belowEqual, __im_slow#29
-  __im_load#30:
+    x64.jcc belowEqual, __im_slow#26
+  __im_load#27:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#33
-  __im_word#31:
+    x64.jcc notEqual, __im_stride#30
+  __im_word#28:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.jmp trycont#9
-  __im_stride#33:
+  __im_stride#30:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#29
-  __im_byte#32:
+    x64.jcc notEqual, __im_slow#26
+  __im_byte#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 2]
     x64.jmp trycont#9
-  __im_slow#29:
+  __im_slow#26:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#37
+    x64.jcc equal, critsplit#34
   tryerr#8:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#9
-  critsplit#37:
+  critsplit#34:
     x64.movRegReg rax, r8
   trycont#9:
     x64.leaRegRegReg rcx, r12, r13
     x64.leaRegRegReg r12, rcx, rax
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at rdata-typealias-byte-array-uses-i8.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

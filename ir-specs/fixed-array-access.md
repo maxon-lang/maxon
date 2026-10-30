@@ -637,7 +637,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 8
     x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
-  __il_body:
+  __il_body#21:
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [rax + 40]
     x64.callDirect __managed_create
@@ -698,7 +698,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rcx + 48], rax
   __im_cont#15:
     x64.leaRegRdata rax, [rip + __fnrec_readAt]
-  __rc_ok:
+  __il_body#23:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
   __il_cont#22:
@@ -779,7 +779,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 8
     x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
-  __il_body:
+  __il_body#21:
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [rax + 40]
     x64.callDirect __managed_create
@@ -840,7 +840,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rcx + 48], rax
   __im_cont#15:
     x64.leaRegRdata rax, [rip + __fnrec_readAt]
-  __rc_ok:
+  __il_body#23:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
   __il_cont#22:
@@ -913,7 +913,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
     arm64.leaRdata x0, __layout_FixedArray_N8_Word
-  __il_body:
+  __il_body#21:
     arm64.movImm x1, 8
     arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
     arm64.movRegReg x0, x1
@@ -976,7 +976,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 48], x2
   __im_cont#15:
     arm64.leaRdata x0, __fnrec_readAt
-  __rc_ok:
+  __il_body#23:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
   __il_cont#22:
@@ -1051,7 +1051,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
     arm64.leaRdata x0, __layout_FixedArray_N8_Word
-  __il_body:
+  __il_body#21:
     arm64.movImm x1, 8
     arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
     arm64.movRegReg x0, x1
@@ -1114,7 +1114,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 48], x2
   __im_cont#15:
     arm64.leaRdata x0, __fnrec_readAt
-  __rc_ok:
+  __il_body#23:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
   __il_cont#22:
@@ -1243,7 +1243,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 8
     x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
-  __il_body:
+  __il_body#10:
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [rax + 40]
     x64.callDirect __managed_create
@@ -1255,7 +1255,7 @@ func @main {
     x64.leaRegRdata rax, [rip + __fnrec_writeAt]
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 77
-  __rc_ok:
+  __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow
@@ -1367,7 +1367,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 8
     x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
-  __il_body:
+  __il_body#10:
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [rax + 40]
     x64.callDirect __managed_create
@@ -1379,7 +1379,7 @@ func @main {
     x64.leaRegRdata rax, [rip + __fnrec_writeAt]
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 77
-  __rc_ok:
+  __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow
@@ -1483,7 +1483,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
     arm64.leaRdata x0, __layout_FixedArray_N8_Word
-  __il_body:
+  __il_body#10:
     arm64.movImm x1, 8
     arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
     arm64.movRegReg x0, x1
@@ -1497,7 +1497,7 @@ func @main {
     arm64.leaRdata x0, __fnrec_writeAt
     arm64.movImm x1, 6
     arm64.movImm x2, 77
-  __rc_ok:
+  __il_body#12:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow
@@ -1602,7 +1602,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
     arm64.leaRdata x0, __layout_FixedArray_N8_Word
-  __il_body:
+  __il_body#10:
     arm64.movImm x1, 8
     arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
     arm64.movRegReg x0, x1
@@ -1616,7 +1616,7 @@ func @main {
     arm64.leaRdata x0, __fnrec_writeAt
     arm64.movImm x1, 6
     arm64.movImm x2, 77
-  __rc_ok:
+  __il_body#12:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow

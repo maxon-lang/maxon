@@ -176,22 +176,22 @@ func @main {
     x64.storeBaseDispReg.byte [r14 + 16], r13
   __il_cont#4:
     x64.movRegImm32 rcx, 3
-  __il_body#41:
+  __il_body#38:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#43
-  sharedView#42:
+    x64.jcc equal, ifcont#40
+  sharedView#39:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#40
-  ifcont#43:
+    x64.jmp __il_cont#37
+  ifcont#40:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#40:
+  __il_cont#37:
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
     x64.leaRegFunc rax, [rip + __clone_Map_Count$0_1000000_Count$0_1000000]
     x64.leaRegRdata r12, [rip + __witness_int.Hashable]
     x64.leaRegRdata r13, [rip + __witness_int.Equatable]
     x64.leaRegRdata r15, [rip + __layout_Map_Count$0_1000000_Count$0_1000000]
-  __il_body#16:
+  __il_body#13:
     x64.callMem [r12 + 48]
     x64.movRegReg rcx, rbx
     x64.movRegImm32 rdx, 3
@@ -201,11 +201,11 @@ func @main {
     x64.movRegReg rdi, r15
     x64.callDirect Map.findSlot
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body#20
-  tryerr#18:
+    x64.jcc equal, __il_body#17
+  tryerr#15:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#15
-  __il_body#20:
+    x64.jmp __il_cont#12
+  __il_body#17:
     x64.movRegImm rax, 9223372036854775808
     x64.cmpRegReg r8, rax
     x64.jcc above, __rc_panic
@@ -221,7 +221,7 @@ func @main {
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r8*8 + 0]
-    x64.jmp __il_body#45
+    x64.jmp __il_body#42
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
@@ -229,69 +229,69 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, r8
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_body#45
+    x64.jmp __il_body#42
   __im_slow:
     x64.movRegReg rdx, r8
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#22
-  critsplit#55:
+    x64.jcc notEqual, tryerr#19
+  critsplit#52:
     x64.movRegReg rax, r8
-  __il_body#45:
+  __il_body#42:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#50
-  matcharm#47:
+    x64.jcc notEqual, matchnext#47
+  matcharm#44:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#15
-  matchnext#50:
+    x64.jmp __il_cont#12
+  matchnext#47:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#51
-  matcharm#46:
+    x64.jcc notEqual, matchnext#48
+  matcharm#43:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#15
-  matchnext#51:
+    x64.jmp __il_cont#12
+  matchnext#48:
     x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, matchdead
-  matcharm#48:
+  matcharm#45:
     x64.movRegImm32 rax, 0
-  __il_cont#15:
+  __il_cont#12:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#54
-  __il_body#33:
+    x64.jcc notEqual, critsplit#51
+  __il_body#30:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#35
-  sharedView#34:
+    x64.jcc equal, ifcont#32
+  sharedView#31:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#32
-  ifcont#35:
+    x64.jmp __il_cont#29
+  ifcont#32:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#32:
+  __il_cont#29:
     x64.loadRegBaseDisp.byte rax, [rax + 16]
     x64.jmp scmerge
-  critsplit#54:
+  critsplit#51:
     x64.movRegReg rax, rcx
   scmerge:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#53
-  __il_body#37:
+    x64.jcc notEqual, critsplit#50
+  __il_body#34:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#39
-  sharedView#38:
+    x64.jcc equal, ifcont#36
+  sharedView#35:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#36
-  ifcont#39:
+    x64.jmp __il_cont#33
+  ifcont#36:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#36:
+  __il_cont#33:
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 3
     x64.setccReg above, rax
     x64.jmp __il_cont#6
-  critsplit#53:
+  critsplit#50:
     x64.movRegReg rax, rcx
   __il_cont#6:
     x64.cmpRegImm32 rax, 0
@@ -335,7 +335,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#22:
+  tryerr#19:
     x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -457,22 +457,22 @@ func @main {
     x64.storeBaseDispReg.byte [r14 + 16], r13
   __il_cont#4:
     x64.movRegImm32 rcx, 3
-  __il_body#41:
+  __il_body#38:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#43
-  sharedView#42:
+    x64.jcc equal, ifcont#40
+  sharedView#39:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#40
-  ifcont#43:
+    x64.jmp __il_cont#37
+  ifcont#40:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#40:
+  __il_cont#37:
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
     x64.leaRegFunc rax, [rip + __clone_Map_Count$0_1000000_Count$0_1000000]
     x64.leaRegRdata r12, [rip + __witness_int.Hashable]
     x64.leaRegRdata r13, [rip + __witness_int.Equatable]
     x64.leaRegRdata r15, [rip + __layout_Map_Count$0_1000000_Count$0_1000000]
-  __il_body#16:
+  __il_body#13:
     x64.callMem [r12 + 48]
     x64.movRegReg rcx, rbx
     x64.movRegImm32 rdx, 3
@@ -482,11 +482,11 @@ func @main {
     x64.movRegReg rdi, r15
     x64.callDirect Map.findSlot
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body#20
-  tryerr#18:
+    x64.jcc equal, __il_body#17
+  tryerr#15:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#15
-  __il_body#20:
+    x64.jmp __il_cont#12
+  __il_body#17:
     x64.movRegImm rax, 9223372036854775808
     x64.cmpRegReg r8, rax
     x64.jcc above, __rc_panic
@@ -502,7 +502,7 @@ func @main {
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r8*8 + 0]
-    x64.jmp __il_body#45
+    x64.jmp __il_body#42
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
@@ -510,69 +510,69 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, r8
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_body#45
+    x64.jmp __il_body#42
   __im_slow:
     x64.movRegReg rdx, r8
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#22
-  critsplit#55:
+    x64.jcc notEqual, tryerr#19
+  critsplit#52:
     x64.movRegReg rax, r8
-  __il_body#45:
+  __il_body#42:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#50
-  matcharm#47:
+    x64.jcc notEqual, matchnext#47
+  matcharm#44:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#15
-  matchnext#50:
+    x64.jmp __il_cont#12
+  matchnext#47:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#51
-  matcharm#46:
+    x64.jcc notEqual, matchnext#48
+  matcharm#43:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#15
-  matchnext#51:
+    x64.jmp __il_cont#12
+  matchnext#48:
     x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, matchdead
-  matcharm#48:
+  matcharm#45:
     x64.movRegImm32 rax, 0
-  __il_cont#15:
+  __il_cont#12:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#54
-  __il_body#33:
+    x64.jcc notEqual, critsplit#51
+  __il_body#30:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#35
-  sharedView#34:
+    x64.jcc equal, ifcont#32
+  sharedView#31:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#32
-  ifcont#35:
+    x64.jmp __il_cont#29
+  ifcont#32:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#32:
+  __il_cont#29:
     x64.loadRegBaseDisp.byte rax, [rax + 16]
     x64.jmp scmerge
-  critsplit#54:
+  critsplit#51:
     x64.movRegReg rax, rcx
   scmerge:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#53
-  __il_body#37:
+    x64.jcc notEqual, critsplit#50
+  __il_body#34:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#39
-  sharedView#38:
+    x64.jcc equal, ifcont#36
+  sharedView#35:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#36
-  ifcont#39:
+    x64.jmp __il_cont#33
+  ifcont#36:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#36:
+  __il_cont#33:
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 3
     x64.setccReg above, rax
     x64.jmp __il_cont#6
-  critsplit#53:
+  critsplit#50:
     x64.movRegReg rax, rcx
   __il_cont#6:
     x64.cmpRegImm32 rax, 0
@@ -616,7 +616,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#22:
+  tryerr#19:
     x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -739,21 +739,21 @@ func @main {
     arm64.storeBaseDispReg.byte [x22 + 16], x21
   __il_cont#4:
     arm64.movImm x19, 3
-  __il_body#41:
+  __il_body#38:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#43
-  sharedView#42:
+    arm64.cbz x0, ifcont#40
+  sharedView#39:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#40
-  ifcont#43:
+    arm64.b __il_cont#37
+  ifcont#40:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#40:
+  __il_cont#37:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.leaFuncAddr x0, __clone_Map_Count$0_1000000_Count$0_1000000
     arm64.leaRdata x21, __witness_int.Hashable
     arm64.leaRdata x23, __witness_int.Equatable
     arm64.leaRdata x24, __layout_Map_Count$0_1000000_Count$0_1000000
-  __il_body#16:
+  __il_body#13:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x21 + 48]
     arm64.blr x16
@@ -766,11 +766,11 @@ func @main {
     arm64.bl Map.findSlot
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
-    arm64.b.eq __il_body#20
-  tryerr#18:
+    arm64.b.eq __il_body#17
+  tryerr#15:
     arm64.movImm x0, 0
-    arm64.b __il_cont#15
-  __il_body#20:
+    arm64.b __il_cont#12
+  __il_body#17:
     arm64.movImm x0, 9223372036854775808
     arm64.cmp x1, x0
     arm64.b.hi __rc_panic
@@ -786,7 +786,7 @@ func @main {
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b __il_body#45
+    arm64.b __il_body#42
   __im_stride:
     arm64.cmp x2, 1
     arm64.b.ne __im_slow
@@ -794,62 +794,62 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __il_body#45
+    arm64.b __il_body#42
   __im_slow:
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#22
-  __il_body#45:
+    arm64.b.ne tryerr#19
+  __il_body#42:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#50
-  matcharm#47:
+    arm64.b.ne matchnext#47
+  matcharm#44:
     arm64.movImm x0, 0
-    arm64.b __il_cont#15
-  matchnext#50:
+    arm64.b __il_cont#12
+  matchnext#47:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#51
-  matcharm#46:
+    arm64.b.ne matchnext#48
+  matcharm#43:
     arm64.movImm x0, 1
-    arm64.b __il_cont#15
-  matchnext#51:
+    arm64.b __il_cont#12
+  matchnext#48:
     arm64.cmp x0, 2
     arm64.b.ne matchdead
-  matcharm#48:
+  matcharm#45:
     arm64.movImm x0, 0
-  __il_cont#15:
+  __il_cont#12:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#54
-  __il_body#33:
+    arm64.cbnz x0, critsplit#51
+  __il_body#30:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#35
-  sharedView#34:
+    arm64.cbz x0, ifcont#32
+  sharedView#31:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#32
-  ifcont#35:
+    arm64.b __il_cont#29
+  ifcont#32:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#32:
+  __il_cont#29:
     arm64.loadRegBaseDisp.byte x0, [x0 + 16]
     arm64.b scmerge
-  critsplit#54:
+  critsplit#51:
     arm64.movRegReg x0, x1
   scmerge:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#53
-  __il_body#37:
+    arm64.cbnz x0, critsplit#50
+  __il_body#34:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#39
-  sharedView#38:
+    arm64.cbz x0, ifcont#36
+  sharedView#35:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#36
-  ifcont#39:
+    arm64.b __il_cont#33
+  ifcont#36:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#36:
+  __il_cont#33:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 3
     arm64.cset x0, hi
     arm64.b __il_cont#6
-  critsplit#53:
+  critsplit#50:
     arm64.movRegReg x0, x1
   __il_cont#6:
     arm64.cbz x0, ifcont#3
@@ -892,7 +892,7 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  tryerr#22:
+  tryerr#19:
     arm64.leaRdata x0, __str_blob_24  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1018,21 +1018,21 @@ func @main {
     arm64.storeBaseDispReg.byte [x22 + 16], x21
   __il_cont#4:
     arm64.movImm x19, 3
-  __il_body#41:
+  __il_body#38:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#43
-  sharedView#42:
+    arm64.cbz x0, ifcont#40
+  sharedView#39:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#40
-  ifcont#43:
+    arm64.b __il_cont#37
+  ifcont#40:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#40:
+  __il_cont#37:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.leaFuncAddr x0, __clone_Map_Count$0_1000000_Count$0_1000000
     arm64.leaRdata x21, __witness_int.Hashable
     arm64.leaRdata x23, __witness_int.Equatable
     arm64.leaRdata x24, __layout_Map_Count$0_1000000_Count$0_1000000
-  __il_body#16:
+  __il_body#13:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x21 + 48]
     arm64.blr x16
@@ -1045,11 +1045,11 @@ func @main {
     arm64.bl Map.findSlot
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
-    arm64.b.eq __il_body#20
-  tryerr#18:
+    arm64.b.eq __il_body#17
+  tryerr#15:
     arm64.movImm x0, 0
-    arm64.b __il_cont#15
-  __il_body#20:
+    arm64.b __il_cont#12
+  __il_body#17:
     arm64.movImm x0, 9223372036854775808
     arm64.cmp x1, x0
     arm64.b.hi __rc_panic
@@ -1065,7 +1065,7 @@ func @main {
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b __il_body#45
+    arm64.b __il_body#42
   __im_stride:
     arm64.cmp x2, 1
     arm64.b.ne __im_slow
@@ -1073,62 +1073,62 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __il_body#45
+    arm64.b __il_body#42
   __im_slow:
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#22
-  __il_body#45:
+    arm64.b.ne tryerr#19
+  __il_body#42:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#50
-  matcharm#47:
+    arm64.b.ne matchnext#47
+  matcharm#44:
     arm64.movImm x0, 0
-    arm64.b __il_cont#15
-  matchnext#50:
+    arm64.b __il_cont#12
+  matchnext#47:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#51
-  matcharm#46:
+    arm64.b.ne matchnext#48
+  matcharm#43:
     arm64.movImm x0, 1
-    arm64.b __il_cont#15
-  matchnext#51:
+    arm64.b __il_cont#12
+  matchnext#48:
     arm64.cmp x0, 2
     arm64.b.ne matchdead
-  matcharm#48:
+  matcharm#45:
     arm64.movImm x0, 0
-  __il_cont#15:
+  __il_cont#12:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#54
-  __il_body#33:
+    arm64.cbnz x0, critsplit#51
+  __il_body#30:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#35
-  sharedView#34:
+    arm64.cbz x0, ifcont#32
+  sharedView#31:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#32
-  ifcont#35:
+    arm64.b __il_cont#29
+  ifcont#32:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#32:
+  __il_cont#29:
     arm64.loadRegBaseDisp.byte x0, [x0 + 16]
     arm64.b scmerge
-  critsplit#54:
+  critsplit#51:
     arm64.movRegReg x0, x1
   scmerge:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#53
-  __il_body#37:
+    arm64.cbnz x0, critsplit#50
+  __il_body#34:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#39
-  sharedView#38:
+    arm64.cbz x0, ifcont#36
+  sharedView#35:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#36
-  ifcont#39:
+    arm64.b __il_cont#33
+  ifcont#36:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#36:
+  __il_cont#33:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 3
     arm64.cset x0, hi
     arm64.b __il_cont#6
-  critsplit#53:
+  critsplit#50:
     arm64.movRegReg x0, x1
   __il_cont#6:
     arm64.cbz x0, ifcont#3
@@ -1171,7 +1171,7 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  tryerr#22:
+  tryerr#19:
     arm64.leaRdata x0, __str_blob_24  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0

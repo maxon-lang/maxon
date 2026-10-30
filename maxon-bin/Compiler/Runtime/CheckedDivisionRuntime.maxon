@@ -233,28 +233,27 @@ end 'divisionOperatorForKind'
 // ⭐ **HOW A DIAGNOSTIC SPELLS A DIVISION OPERATOR** — one mapping, because three messages quote it and a
 // divide reported as `mod` (or the reverse) would send the reader to the wrong line: E3057's "throwing
 // division requires try" (`SemanticCheck`), E3055's "cannot fail" for the total remainder
-// (`Parser.requireThrowingNamedTryTarget`), and E3103's provable-zero refusal — which reads it straight off
-// the operator token (`opTok.kind.rawValue`).
+// (`Parser.requireThrowingNamedTryTarget`) and for a bare divide whose divisor is proven non-zero
+// (`Parser.commitTryTargetRewrite`), and E3103's provable-zero refusal — which reads it straight off the
+// operator token (`opTok.kind.rawValue`).
 //
-// The spelling is `TokenKind`'s for exactly that reason: E3103 has a token in hand and the other two have
-// only a callee, so `TokenKind` is the one source that keeps all three saying the same word. A `%` synonym
-// for `mod` would move every one of them at once.
+// The spelling is `TokenKind`'s for exactly that reason: E3103 has a token in hand and the others have
+// only a callee or an opcode, so `TokenKind` is the one source that keeps all of them saying the same
+// word. A `%` synonym for `mod` would move every one of them at once.
 //
-// It takes the OPERATOR and not the KIND, and that is the fix for a second copy of the classification: the
-// kind → spelling form matched `quotient` / `remainder to guardedRemainder` a second time, so the grouping
-// this file's own header calls load-bearing was written twice with nothing holding the two together. A
-// fourth kind would have broken both matches and could have been answered DIFFERENTLY in each — a
-// diagnostic naming the wrong operator, which is the exact failure this mapping exists to prevent.
-function divisionOperatorSpelling(op MaxonBinOp) returns String
-	if op == MaxonBinOp.div 'quotient'
+// It takes the OPERATOR and not the KIND so that `divisionOperatorForKind` stays the one classification of
+// a kind as a quotient or a remainder; a second match over the kind could answer a fourth kind differently
+// and name the wrong operator.
+export function divisionOperatorSpelling(op MaxonBinOp) returns String
+	if op == MaxonBinOp.div or op == MaxonBinOp.divUnsigned 'quotient'
 		return TokenKind.slash.rawValue
 	end 'quotient'
 
-	if op == MaxonBinOp.mod 'remainder'
+	if op == MaxonBinOp.mod or op == MaxonBinOp.modUnsigned 'remainder'
 		return TokenKind.mod.rawValue
 	end 'remainder'
 
-	panic("divisionOperatorSpelling: '{op.rawValue}' is not a division operator — its only caller feeds it `divisionOperatorForKind`'s answer, which is `div` or `mod` and panics on anything else")
+	panic("divisionOperatorSpelling: '{op.rawValue}' is not a division operator — its callers feed it `divisionOperatorForKind`'s answer or an opcode `divisionOperator` accepted")
 end 'divisionOperatorSpelling'
 
 // The kind a diagnostic holds → the word the author wrote, through the one classification above.

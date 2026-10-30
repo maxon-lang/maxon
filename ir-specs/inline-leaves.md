@@ -85,7 +85,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 0
-  __rc_ok:
+  __il_body:
     x64.callDirect __probe_wide_caller
   __il_cont:
     x64.epilogue 32
@@ -177,7 +177,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 0
-  __rc_ok:
+  __il_body:
     x64.callDirect __probe_wide_caller
   __il_cont:
     x64.epilogue 32
@@ -263,7 +263,7 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 0
-  __rc_ok:
+  __il_body:
     arm64.bl __probe_wide_caller
   __il_cont:
     arm64.epilogue 16
@@ -345,7 +345,7 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 0
-  __rc_ok:
+  __il_body:
     arm64.bl __probe_wide_caller
   __il_cont:
     arm64.epilogue 16
@@ -480,7 +480,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 0
-  __rc_ok:
+  __il_body:
     x64.callDirect __probe_chain_caller
   __il_cont:
     x64.epilogue 32
@@ -554,7 +554,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 0
-  __rc_ok:
+  __il_body:
     x64.callDirect __probe_chain_caller
   __il_cont:
     x64.epilogue 32
@@ -622,7 +622,7 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 0
-  __rc_ok:
+  __il_body:
     arm64.bl __probe_chain_caller
   __il_cont:
     arm64.epilogue 16
@@ -686,7 +686,7 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 0
-  __rc_ok:
+  __il_body:
     arm64.bl __probe_chain_caller
   __il_cont:
     arm64.epilogue 16
@@ -801,7 +801,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 0
-  __rc_ok:
+  __il_body:
     x64.callDirect __probe_tls_caller
   __il_cont:
     x64.epilogue 32
@@ -871,7 +871,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 0
-  __rc_ok:
+  __il_body:
     x64.callDirect __probe_tls_caller
   __il_cont:
     x64.epilogue 32
@@ -935,7 +935,7 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 0
-  __rc_ok:
+  __il_body:
     arm64.bl __probe_tls_caller
   __il_cont:
     arm64.epilogue 16
@@ -1000,7 +1000,7 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 0
-  __rc_ok:
+  __il_body:
     arm64.bl __probe_tls_caller
   __il_cont:
     arm64.epilogue 16
@@ -1530,7 +1530,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 7
-  __rc_ok#14:
+  __il_body:
     x64.movRegImm32 r13, 0
     x64.jmp forhdr
   eachByte:
@@ -1586,7 +1586,7 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
-  __rc_ok#2:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -1631,7 +1631,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 7
-  __rc_ok#14:
+  __il_body:
     x64.movRegImm32 r13, 0
     x64.jmp forhdr
   eachByte:
@@ -1686,7 +1686,7 @@ func @main {
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
-  __rc_ok#2:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -1727,7 +1727,7 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 7
-  __rc_ok#14:
+  __il_body:
     arm64.movImm x21, 0
     arm64.b forhdr
   eachByte:
@@ -1782,7 +1782,7 @@ func @main {
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#2:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -1824,7 +1824,7 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 7
-  __rc_ok#14:
+  __il_body:
     arm64.movImm x21, 0
     arm64.b forhdr
   eachByte:
@@ -1879,7 +1879,7 @@ func @main {
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#2:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -1897,5 +1897,652 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
+}
+```
+
+<!-- test: a-product-of-ranged-operands-shifts-without-a-guard -->
+A shift count that is a product, sum or difference of ranged operands is bounded by the arithmetic of their ranges, and when that bound lies inside the counts the instruction takes as written the shift is emitted bare. `rotateRow` is the bitsliced AES row rotation: `row * rowBits` is `16 … 48`, `nibbles * nibbleBits` is `4 … 12` and `rowBits - amount` is `4 … 12`, so none of its four shifts needs the negative-count branch or the saturation ops. `row as RowIndex` and `nibbles as NibbleCount` are the counted loop's interval elided against the parameter's own cascade, so `rotateRow` is spliced into `shiftRows` with neither its entry cascades nor a single saturation op.
+```maxon
+typealias Word = bits(64)
+typealias RowIndex = int(1 to 3)
+typealias NibbleCount = int(1 to 3)
+
+let rowBits = 16
+let nibbleBits = 4
+let rowCount = 4
+let rowMask = 0xFFFF as Word
+
+function rotateRow(word Word, row RowIndex, nibbles NibbleCount) returns Word
+	let rowShift = row * rowBits
+	let amount = nibbles * nibbleBits
+	let chunk = (word shr rowShift) and rowMask
+	let rotated = ((chunk shl amount) or (chunk shr (rowBits - amount))) and rowMask
+
+	return rotated shl rowShift
+end 'rotateRow'
+
+function shiftRows(word Word, inverse bool) returns Word
+	var shifted = word and rowMask
+
+	for row in 1 upto rowCount 'eachRow'
+		let nibbles = row if inverse else rowCount - row
+		shifted = shifted or rotateRow(word, row: row as RowIndex, nibbles: nibbles as NibbleCount)
+	end 'eachRow'
+
+	return shifted
+end 'shiftRows'
+
+function main() returns ExitCode
+	let word = 0x0123456789ABCDEF
+	let forward = shiftRows(word, inverse: false)
+	let backward = shiftRows(forward, inverse: true)
+
+	if backward != word 'roundTrip'
+		return 1
+	end 'roundTrip'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```TargetIr:x64-windows
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
+}
+
+func @shiftRows {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, 65535
+    x64.movRegImm32 rsi, 1
+    x64.movRegReg r8, rcx
+    x64.jmp forhdr
+  eachRow:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ternarytrue
+  ternaryfalse:
+    x64.movRegImm32 rcx, 4
+    x64.subRegReg rcx, rcx, rsi
+    x64.jmp __il_body
+  ternarytrue:
+    x64.movRegReg rcx, rsi
+  __il_body:
+    x64.imulRegRegImm32 rdi, rsi, 16
+    x64.imulRegRegImm32 r9, rcx, 4
+    x64.movRegReg rcx, rdi
+    x64.movRegReg r10, rax
+    x64.shrRegCl r10, rax
+    x64.andRegImm32 r10, r10, 65535
+    x64.movRegReg rcx, r9
+    x64.movRegReg r11, r10
+    x64.shlRegCl r11, r10
+    x64.movRegImm32 rbx, 16
+    x64.subRegReg rbx, rbx, r9
+    x64.movRegReg rcx, rbx
+    x64.shrRegCl r10, r10
+    x64.orRegReg r11, r11, r10
+    x64.andRegImm32 r11, r11, 65535
+    x64.movRegReg rcx, rdi
+    x64.shlRegCl r11, r11
+  __il_cont:
+    x64.orRegReg r8, r8, r11
+  forstep:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr:
+    x64.cmpRegImm32 rsi, 4
+    x64.jcc less, eachRow
+  forexit:
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm rbx, 81985529216486895
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect shiftRows
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect shiftRows
+    x64.cmpRegReg r8, rbx
+    x64.jcc equal, ifcont
+  roundTrip:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @shiftRows {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, 65535
+    x64.movRegImm32 rsi, 1
+    x64.movRegReg r8, rcx
+    x64.jmp forhdr
+  eachRow:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ternarytrue
+  ternaryfalse:
+    x64.movRegImm32 rcx, 4
+    x64.subRegReg rcx, rcx, rsi
+    x64.jmp __il_body
+  ternarytrue:
+    x64.movRegReg rcx, rsi
+  __il_body:
+    x64.imulRegRegImm32 rdi, rsi, 16
+    x64.imulRegRegImm32 r9, rcx, 4
+    x64.movRegReg rcx, rdi
+    x64.movRegReg r10, rax
+    x64.shrRegCl r10, rax
+    x64.andRegImm32 r10, r10, 65535
+    x64.movRegReg rcx, r9
+    x64.movRegReg r11, r10
+    x64.shlRegCl r11, r10
+    x64.movRegImm32 rbx, 16
+    x64.subRegReg rbx, rbx, r9
+    x64.movRegReg rcx, rbx
+    x64.shrRegCl r10, r10
+    x64.orRegReg r11, r11, r10
+    x64.andRegImm32 r11, r11, 65535
+    x64.movRegReg rcx, rdi
+    x64.shlRegCl r11, r11
+  __il_cont:
+    x64.orRegReg r8, r8, r11
+  forstep:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr:
+    x64.cmpRegImm32 rsi, 4
+    x64.jcc less, eachRow
+  forexit:
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm rbx, 81985529216486895
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect shiftRows
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect shiftRows
+    x64.cmpRegReg r8, rbx
+    x64.jcc equal, ifcont
+  roundTrip:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @shiftRows {
+  entry:
+    arm64.prologue 16
+    arm64.and x2, x0, 65535
+    arm64.movImm x3, 1
+    arm64.b forhdr
+  eachRow:
+    arm64.cbnz x1, ternarytrue
+  ternaryfalse:
+    arm64.movImm x4, 4
+    arm64.sub x4, x4, x3
+    arm64.b __il_body
+  ternarytrue:
+    arm64.movRegReg x4, x3
+  __il_body:
+    arm64.lsl x5, x3, 4
+    arm64.lsl x4, x4, 2
+    arm64.lsrv x6, x0, x5
+    arm64.and x6, x6, 65535
+    arm64.lslv x7, x6, x4
+    arm64.movImm x8, 16
+    arm64.sub x4, x8, x4
+    arm64.lsrv x4, x6, x4
+    arm64.orr x4, x7, x4
+    arm64.and x4, x4, 65535
+    arm64.lslv x4, x4, x5
+  __il_cont:
+    arm64.orr x2, x2, x4
+  forstep:
+    arm64.add x3, x3, 1
+  forhdr:
+    arm64.cmp x3, 4
+    arm64.b.lt eachRow
+  forexit:
+    arm64.movRegReg x0, x2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 81985529216486895
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl shiftRows
+    arm64.movImm x1, 1
+    arm64.bl shiftRows
+    arm64.cmp x0, x19
+    arm64.b.eq ifcont
+  roundTrip:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @shiftRows {
+  entry:
+    arm64.prologue 16
+    arm64.and x2, x0, 65535
+    arm64.movImm x3, 1
+    arm64.b forhdr
+  eachRow:
+    arm64.cbnz x1, ternarytrue
+  ternaryfalse:
+    arm64.movImm x4, 4
+    arm64.sub x4, x4, x3
+    arm64.b __il_body
+  ternarytrue:
+    arm64.movRegReg x4, x3
+  __il_body:
+    arm64.lsl x5, x3, 4
+    arm64.lsl x4, x4, 2
+    arm64.lsrv x6, x0, x5
+    arm64.and x6, x6, 65535
+    arm64.lslv x7, x6, x4
+    arm64.movImm x8, 16
+    arm64.sub x4, x8, x4
+    arm64.lsrv x4, x6, x4
+    arm64.orr x4, x7, x4
+    arm64.and x4, x4, 65535
+    arm64.lslv x4, x4, x5
+  __il_cont:
+    arm64.orr x2, x2, x4
+  forstep:
+    arm64.add x3, x3, 1
+  forhdr:
+    arm64.cmp x3, 4
+    arm64.b.lt eachRow
+  forexit:
+    arm64.movRegReg x0, x2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 81985529216486895
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl shiftRows
+    arm64.movImm x1, 1
+    arm64.bl shiftRows
+    arm64.cmp x0, x19
+    arm64.b.eq ifcont
+  roundTrip:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+
+<!-- test: a-leaf-whose-entry-cascades-every-site-declines-is-inlined -->
+A leaf is measured WITHOUT the entry range-check cascades of its ranged parameters, and a site is spliced only where the caller proves every argument, so no cascade is copied. `blend`'s body is inside the 24-op budget and its three cascades are what push it past; both of its calls pass literals the `Stride` range contains. Both sites are spliced, and the pin holds no `callDirect blend` and no `__rc_panic` naming `Stride`.
+```maxon
+typealias Word = bits(64)
+typealias Stride = int(1 to 4)
+
+function blend(a Word, b Word, p Stride, q Stride, r Stride) returns Word
+	let x = (a shl p) xor (b shr q)
+	let y = (b shl q) xor (a shr r)
+	let z = (x and y) or (x xor y)
+
+	return (z shl r) xor ((x shr p) and (y shr q))
+end 'blend'
+
+function main() returns ExitCode
+	let first = blend(0xF0, b: 0x0F, p: 1, q: 2, r: 3)
+	let second = blend(first, b: 0x3C, p: 4, q: 1, r: 2)
+
+	if first != 3864 'first'
+		return 1
+	end 'first'
+
+	if second != 249825 'second'
+		return 2
+	end 'second'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```TargetIr:x64-windows
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+
+<!-- test: a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site -->
+`blend` fits the budget only without its cascades, so a site is spliced only where the caller proves every argument. `blend` is called twice, so the called-once rule does not admit it. The first call passes literals the `Stride` range contains and is spliced with no cascade. The second passes `s + s` over a `Stride`: the sum is `2 … 8`, outside `Stride`, so its cascade must stay and the call is left as a call. The pin holds exactly one `callDirect blend`.
+```maxon
+typealias Word = bits(64)
+typealias Stride = int(1 to 4)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(v Integer, depth Integer) returns Integer
+	if depth == 0 'done'
+		return v
+	end 'done'
+
+	return opaque(v, depth: depth - 1)
+end 'opaque'
+
+function blend(a Word, b Word, p Stride, q Stride, r Stride) returns Word
+	let x = (a shl p) xor (b shr q)
+	let y = (b shl q) xor (a shr r)
+	let z = (x and y) or (x xor y)
+
+	return (z shl r) xor ((x shr p) and (y shr q))
+end 'blend'
+
+function main() returns ExitCode
+	let s = opaque(1, depth: 3) as Stride
+
+	if blend(0xF0, b: 0x0F, p: 1, q: 2, r: 3) != 3864 'proven'
+		return 1
+	end 'proven'
+
+	if blend(0xF0, b: 0x0F, p: s + s, q: 2, r: 3) != 7960 'unproven'
+		return 2
+	end 'unproven'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```TargetIr:x64-windows
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
+}
+
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ifcont
+  done:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rdx, rdx, -1
+    x64.callDirect opaque
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @blend {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rdi, rcx
+    x64.cmpRegImm32 rax, 1
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rax, 4
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
+    x64.cmpRegImm32 r9, 1
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 r9, 4
+    x64.jcc greater, __rc_panic#5
+  __rc_ok#4:
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 rsi, 4
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
+    x64.movRegReg rcx, rax
+    x64.movRegReg r8, rdi
+    x64.shlRegCl r8, rdi
+    x64.movRegReg rcx, r9
+    x64.movRegReg r10, rdx
+    x64.shrRegCl r10, rdx
+    x64.xorRegReg r8, r8, r10
+    x64.movRegReg rcx, r9
+    x64.shlRegCl rdx, rdx
+    x64.movRegReg rcx, rsi
+    x64.shrRegCl rdi, rdi
+    x64.xorRegReg rdx, rdx, rdi
+    x64.movRegReg rdi, r8
+    x64.andRegReg rdi, r8, rdx
+    x64.movRegReg r10, r8
+    x64.xorRegReg r10, r8, rdx
+    x64.orRegReg rdi, rdi, r10
+    x64.movRegReg rcx, rsi
+    x64.shlRegCl rdi, rdi
+    x64.movRegReg rcx, rax
+    x64.shrRegCl r8, r8
+    x64.movRegReg rcx, r9
+    x64.shrRegCl rdx, rdx
+    x64.andRegReg r8, r8, rdx
+    x64.xorRegReg rdi, rdi, r8
+    x64.movRegReg r8, rdi
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 3
+    x64.callDirect opaque
+    x64.cmpRegImm32 r8, 1
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 4
+    x64.jcc greater, __rc_panic
+  ifcont#2:
+    x64.movRegImm32 rcx, 240
+    x64.movRegImm32 rdx, 15
+    x64.leaRegRegReg rax, r8, r8
+    x64.movRegImm32 r9, 2
+    x64.movRegImm32 rsi, 3
+    x64.callDirect blend
+    x64.cmpRegImm32 r8, 7960
+    x64.jcc equal, ifcont#4
+  unproven:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:23: Range check failed: value outside typealias 'Stride'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 ```
