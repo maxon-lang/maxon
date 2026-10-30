@@ -243,6 +243,7 @@ export let MmOwnName = b"__mm_own"
 // SLOTS address other records.** `__mm_own`'s blit is sound only for a box of scalars; see `buildMmOwnDeep`.
 export let MmOwnDeepName = b"__mm_own_deep"
 export let MmAllocName = b"__mm_alloc"
+
 // `(size, destructor)`; a `--debugstream` build passes a trace tag as a third argument.
 export let MmAllocBaseArgCount = 2 as ParamCount
 export let MmDecrefName = b"__mm_decref"
@@ -1447,8 +1448,12 @@ export type CountedLoop
 	// The induction variable — the header's block arg, readable in `body` and in every block it threads into.
 	export var index as ValueId
 
-	export static function create(header IrBlock, body IrBlock, done IrBlock, index ValueId) returns CountedLoop
-		return Self{header: header, body: body, done: done, index: index}
+	// The header's other block args: the `initial` values `openCountedLoop` was given, carried round by
+	// `closeCountedLoop`'s `carriedNext` and readable in `body` and `done`.
+	export var carried as ValueIdArray
+
+	export static function create(header IrBlock, body IrBlock, done IrBlock, index ValueId, carried ValueIdArray) returns CountedLoop
+		return Self{header: header, body: body, done: done, index: index, carried: carried}
 	end 'create'
 end 'CountedLoop'
 
@@ -1458,18 +1463,29 @@ end 'CountedLoop'
 //
 // `label` prefixes the three block labels (`<label>h`, `<label>b`, `<label>d`) so a function holding several
 // loops reads back as several loops under `--emit-ir-runtime`.
-export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter) returns CountedLoop
+export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter, initial ValueIdArray = ValueIdArray.create()) returns CountedLoop
 	var header = module.addBlock(func, label: "{String.from(label)}h".toByteArray(), heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: "{String.from(label)}b".toByteArray(), heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	emitBranchCarrying(module, from: cur, to: header, values: argsOf(from))
+
+	var entryValues = argsOf(from)
+	var carried = ValueIdArray.create()
+
+	for initialValue in initial 'eachCarried'
+		let arg = ids.mint()
+		header.blockArgs.push(IrBlockArg.create(arg, argType: StdType.i64))
+		carried.push(arg)
+		entryValues.push(initialValue)
+	end 'eachCarried'
+
+	emitBranchCarrying(module, from: cur, to: header, values: entryValues)
 
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: to, whenTrue: done, whenFalse: body, ids: ids)
 
-	return CountedLoop.create(header, body: body, done: done, index: i)
+	return CountedLoop.create(header, body: body, done: done, index: i, carried: carried)
 end 'openCountedLoop'
 
 // Close a counted loop: `tail` is the block the caller's per-iteration work ENDED in (`loop.body` when that
@@ -1479,10 +1495,21 @@ end 'openCountedLoop'
 // op `foldConstOperands` produces, minted by the one party that already knows the operand is a compile-time
 // constant — so the fold has nothing to find here, and the emitted trip carries one `add` rather than a
 // `movRegImm32` AND an add, in the hottest loops the language has.
-export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter)
+export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter, carriedNext ValueIdArray = ValueIdArray.create())
+	if carriedNext.count() != loop.carried.count() 'sameCarried'
+		panic("closeCountedLoop: {carriedNext.count()} carried values for a loop opened with {loop.carried.count()}")
+	end 'sameCarried'
+
 	let next = ids.mint()
 	module.appendOp(tail, op: StdOp.binOpImm(next, lhs: loop.index, imm: step, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	emitBranchCarrying(module, from: tail, to: loop.header, values: argsOf(next))
+
+	var backValues = argsOf(next)
+
+	for carriedValue in carriedNext 'eachCarried'
+		backValues.push(carriedValue)
+	end 'eachCarried'
+
+	emitBranchCarrying(module, from: tail, to: loop.header, values: backValues)
 end 'closeCountedLoop'
 
 // `byteCount and -8` — how many of `byteCount`'s bytes a run of WHOLE machine words covers. Derived from the

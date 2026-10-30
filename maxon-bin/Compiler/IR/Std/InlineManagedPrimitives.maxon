@@ -861,16 +861,14 @@ type PrimitiveInliner
 		return self.finish(frame.carve)
 	end 'expandWordPut'
 
-	// The overflow-free bound `ManagedWordRuntime.buildWordGet` states.
+	// The span check is `ManagedWordRuntime.emitWordSpanGuards`', shared with the runtime word read.
 	function guardWordSpan(cur IrBlock, arr ValueId, at ValueId, width WordBytes, slow IrBlock) returns IrBlock
-		let length = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordLengthOffset, ids: self.valueIds())
-		let pastEnd = emitIndexOutOfRange(self.module, block: cur, index: at, length: length, ids: self.valueIds())
-		var inside = self.guard(cur, refused: pastEnd, slow: slow, next: InlineBoundsLabel)
+		var inside = self.module.addBlock(self.func, label: InlineBoundsLabel, heat: BlockHeat.normal)
+		var next = self.module.addBlock(self.func, label: InlineLoadLabel, heat: BlockHeat.normal)
 
-		let remaining = emitBin(self.module, block: inside, a: length, b: at, opcode: StdBinOpcode.sub, ids: self.valueIds())
-		let tooShort = emitCompareWithConstant(self.module, block: inside, value: remaining, pred: StdCmpPred.lt, against: wordByteCount(width), ids: self.valueIds())
+		emitWordSpanGuards(self.module, entry: cur, inside: inside, next: next, refused: slow, arr: arr, at: at, width: width, ids: self.valueIds())
 
-		return self.guard(inside, refused: tooShort, slow: slow, next: InlineLoadLabel)
+		return next
 	end 'guardWordSpan'
 
 	function guardByteStride(cur IrBlock, arr ValueId, slow IrBlock) returns IrBlock

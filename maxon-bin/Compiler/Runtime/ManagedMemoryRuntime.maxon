@@ -2914,8 +2914,8 @@ let BoundsCompareOperandType = StdType.u64
 // A user index is OUT OF RANGE for a length-`length` array when it is NEGATIVE or at/above the length — the
 // ONE home of the "reject this index" test `__managed_get`/`__managed_set`/`__managed_remove`/
 // `__managed_mem_swap` share, along with the cursor's four fallible members (`emitCursorPositionOutOfRange`,
-// whose limit is the SOURCE record's `length@8`), the byte-order reads (`ManagedWordRuntime.buildWordGet`,
-// `InlineManagedPrimitives.guardWordSpan`) and — exported for it — `ListRuntime.__list_get`, whose
+// whose limit is the SOURCE record's `length@8`), the byte-order reads (`ManagedWordRuntime.emitWordSpanGuards`)
+// and — exported for it — `ListRuntime.__list_get`, whose
 // index is a position into a `count`-long chain: the same question over the same two words, differing only
 // in what the caller does with the answer.
 //
@@ -3803,9 +3803,10 @@ end 'emitGetLoadAndReturn'
 
 // `__managed_get_unchecked(arr, index) -> value` — the for-in element read, and a `FixedArray` `get` at
 // a proven index. See `ManagedGetUncheckedName` for why the bounds check and the empty-slot check are
-// absent rather than missing. Its two callers each hold the bound: `Parser.parseForStatement` supplies a
-// counter it minted itself and compared against a live `__managed_count` in the same iteration, and
-// `LowerMaxonToStd.lowerSlottedOrProvenCall` an index the parser proved inside the fixed size.
+// absent rather than missing. Its three callers each hold the bound: `Parser.parseForStatement` supplies a
+// counter it minted itself and compared against a live `__managed_count` in the same iteration,
+// `LowerMaxonToStd.lowerSlottedOrProvenCall` an index the parser proved inside the fixed size, and
+// `ManagedWordRuntime.buildWordGet` an index its `emitWordSpanGuards` check put inside the record.
 function buildManagedGetUnchecked(module StdModule)
 	var func = IrFunction.createFromStd(ManagedGetUncheckedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)

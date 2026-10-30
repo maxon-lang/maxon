@@ -32,6 +32,7 @@ let OrderedWordIntrinsicPrefix = "__Builtins."
 let WordBitsPerByte = 8
 let WordByteMask = 0xFF
 let WordZero = 0
+let WordFirstByteIndex = 0
 
 export function wordAccessType(width WordBytes) returns StdType
 	return match width 'w'
@@ -150,8 +151,6 @@ export function installWordEntries(module StdModule)
 	end 'eachWidth'
 end 'installWordEntries'
 
-// Bounded as `at < length`, then `length - at >= width`, and never as `at + width <= length`: an `at`
-// near `u64.max` would wrap that sum into range and read outside the buffer.
 function buildWordGet(module StdModule, order WordByteOrder, width WordBytes)
 	var func = IrFunction.createFromStd(wordEntryName(WordAccess.get, order: order, width: width), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)
@@ -164,51 +163,41 @@ function buildWordGet(module StdModule, order WordByteOrder, width WordBytes)
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
 	let at = 1
-	let count = wordByteCount(width)
 
-	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let pastEnd = emitIndexOutOfRange(module, block: entry, index: at, length: length, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(pastEnd, thenBlockId: oob.id, elseBlockId: short.id))
-
-	let remaining = emitBin(module, block: short, a: length, b: at, opcode: StdBinOpcode.sub, ids: ids)
-	emitBranchOnCompare(module, block: short, value: remaining, pred: StdCmpPred.lt, against: count, whenTrue: oob, whenFalse: read, ids: ids)
-
+	emitWordSpanGuards(module, entry: entry, inside: short, next: read, refused: oob, arr: arr, at: at, width: width, ids: ids)
 	emitOobReturn(module, block: oob, ids: ids)
 
-	var header = module.addBlock(func, label: b"wgh", heat: BlockHeat.normal)
-	var fetch = module.addBlock(func, label: b"wgb", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"wgfail", heat: BlockHeat.normal)
-	var place = module.addBlock(func, label: b"wgstep", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"wgd", heat: BlockHeat.normal)
+	let first = emitConst(module, block: read, value: WordFirstByteIndex, ids: ids)
+	let total = emitConst(module, block: read, value: wordByteCount(width), ids: ids)
+	let empty = emitConst(module, block: read, value: WordZero, ids: ids)
+	var loop = openCountedLoop(module, func: func, cur: read, from: first, to: total, label: b"wg", ids: ids, initial: argsOf(empty))
 
-	let index = ids.mint()
-	let word = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(word, argType: StdType.i64))
-
-	let zero = emitConst(module, block: read, value: WordZero, ids: ids)
-	emitBranchCarrying(module, from: read, to: header, values: twoArgs(zero, second: zero))
-	emitBranchOnCompare(module, block: header, value: index, pred: StdCmpPred.ge, against: count, whenTrue: done, whenFalse: fetch, ids: ids)
-
-	let slot = emitBin(module, block: fetch, a: at, b: index, opcode: StdBinOpcode.add, ids: ids)
+	let slot = emitBin(module, block: loop.body, a: at, b: loop.index, opcode: StdBinOpcode.add, ids: ids)
 	let byte = ids.mint()
-	let byteFlag = ids.mint()
-	module.appendOp(fetch, op: StdOp.tryCall(byte, errorFlagId: byteFlag, callee: ManagedGetName, args: twoArgs(arr, second: slot)))
-	emitBranchOnCompare(module, block: fetch, value: byteFlag, pred: StdCmpPred.ne, against: NoErrorFlag, whenTrue: failed, whenFalse: place, ids: ids)
+	module.appendOp(loop.body, op: StdOp.call(byte, callee: ManagedGetUncheckedName, args: twoArgs(arr, second: slot)))
 
-	module.setTerminator(failed, op: StdOp.errorReturn(byte, errorFlagId: byteFlag))
+	let shift = emitWordByteShift(module, block: loop.body, index: loop.index, order: order, width: width, ids: ids)
+	let placed = emitBin(module, block: loop.body, a: byte, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+	let word = try loop.carried.get(0) otherwise panic("buildWordGet: the loop was opened with one carried value, the accumulated word")
+	let merged = emitBin(module, block: loop.body, a: word, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
+	closeCountedLoop(module, loop: loop, tail: loop.body, step: SingleStep, ids: ids, carriedNext: argsOf(merged))
 
-	let shift = emitWordByteShift(module, block: place, index: index, order: order, width: width, ids: ids)
-	let placed = emitBin(module, block: place, a: byte, b: shift, opcode: StdBinOpcode.shl, ids: ids)
-	let merged = emitBin(module, block: place, a: word, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
-	let nextIndex = ids.mint()
-	module.appendOp(place, op: StdOp.binOpImm(nextIndex, lhs: index, imm: SingleStep, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	emitBranchCarrying(module, from: place, to: header, values: twoArgs(nextIndex, second: merged))
-
-	emitOkReturn(module, block: done, value: word, ids: ids)
+	emitOkReturn(module, block: loop.done, value: word, ids: ids)
 
 	module.functions.push(func)
 end 'buildWordGet'
+
+// Bounded as `at < length`, then `length - at >= width`, and never as `at + width <= length`: an `at`
+// near `u64.max` would wrap that sum into range and read outside the buffer.
+export function emitWordSpanGuards(module StdModule, entry IrBlock, inside IrBlock, next IrBlock, refused IrBlock, arr ValueId, at ValueId, width WordBytes, ids ValueMinter)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let pastEnd = emitIndexOutOfRange(module, block: entry, index: at, length: length, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(pastEnd, thenBlockId: refused.id, elseBlockId: inside.id))
+
+	let remaining = emitBin(module, block: inside, a: length, b: at, opcode: StdBinOpcode.sub, ids: ids)
+	let tooShort = emitCompareWithConstant(module, block: inside, value: remaining, pred: StdCmpPred.lt, against: wordByteCount(width), ids: ids)
+	module.setTerminator(inside, op: StdOp.condBranch(tooShort, thenBlockId: refused.id, elseBlockId: next.id))
+end 'emitWordSpanGuards'
 
 function buildWordPut(module StdModule, order WordByteOrder, width WordBytes)
 	var func = IrFunction.createFromStd(wordEntryName(WordAccess.put, order: order, width: width), returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
@@ -220,7 +209,7 @@ function buildWordPut(module StdModule, order WordByteOrder, width WordBytes)
 	let word = 1
 	let count = wordByteCount(width)
 
-	let first = emitConst(module, block: entry, value: WordZero, ids: ids)
+	let first = emitConst(module, block: entry, value: WordFirstByteIndex, ids: ids)
 	let total = emitConst(module, block: entry, value: count, ids: ids)
 	var loop = openCountedLoop(module, func: func, cur: entry, from: first, to: total, label: b"wp", ids: ids)
 

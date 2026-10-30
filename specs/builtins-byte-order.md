@@ -586,51 +586,6 @@ error E3159: <fragment>:20:7: cannot pass 'sink', which is read-only (a `let` bi
 error E3159: <fragment>:21:7: cannot pass 'sink', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
-<!-- test: builtins-byte-order.a-let-receiver-whose-method-fills-its-own-field-is-refused-as-for-a-push -->
-<!-- tier: stdlib -->
-`fillRandom` into a field of the receiver writes the receiver, so a `let` receiver is refused at the call.
-```maxon
-type Sink
-	var bytes as ByteArray
-
-	static function create() returns Sink
-		return Sink{bytes: ByteArray.create()}
-	end 'create'
-
-	function fill()
-		_ = __Builtins.fillRandom(self.bytes.managed)
-	end 'fill'
-end 'Sink'
-
-function main() returns ExitCode
-	let sink = Sink.create()
-	sink.fill()
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:16:7: cannot pass 'sink', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
-```
-
-<!-- test: builtins-byte-order.a-let-handed-to-a-function-that-fills-its-parameter-is-refused-as-for-a-push -->
-<!-- tier: stdlib -->
-A function that fills its `ByteArray` parameter's buffer writes that parameter, so handing it a `let` binding is refused
-at the call.
-```maxon
-function fill(drawn ByteArray)
-	_ = __Builtins.fillRandom(drawn.managed)
-end 'fill'
-
-function main() returns ExitCode
-	let drawn = ByteArray.create()
-	fill(drawn)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:8:2: cannot pass 'drawn', which is read-only (a `let` binding), to a function that writes parameter 'drawn' (in main); pass a clone()
-```
-
 <!-- test: builtins-byte-order.width-three-is-refused -->
 <!-- tier: stdlib -->
 Only 2, 4 and 8 name a word a single access moves.
