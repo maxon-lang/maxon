@@ -52,7 +52,7 @@ end 'lcg'
 // pattern: 0=random, 1=ascending, 2=descending.
 function buildI64(n Count, pattern I64) returns I64Array
 	var a = I64Array.create()
-	var r = 2463534242
+	var r = 2463534242 as I64
 
 	for i in 0 upto n 'fill'
 		if pattern == 1 'asc'
@@ -82,16 +82,16 @@ end 'cloneI64'
 
 function buildStr(n Count, pattern I64) returns StrArray
 	var a = StrArray.create()
-	var r = 2463534242
+	var r = 2463534242 as I64
 
 	for i in 0 upto n 'fill'
-		var v = 0
+		var v = 0 as I64
 
 		if pattern == 1 'asc'
-			v = i
+			v = i as I64
 		end 'asc' else 'notAsc'
 			if pattern == 2 'desc'
-				v = n - i
+				v = (n - i) as I64
 			end 'desc' else 'rand'
 				r = lcg(r)
 				v = r and 0xFFFF
@@ -120,7 +120,7 @@ function benchI64(pattern I64, patName String, n Count, iters I64)
 	// Clone-only baseline, subtracted so we report sort time alone.
 	var sink = 0 as Count
 	let cloneStart = Clock.nowMs()
-	var ci = 0
+	var ci = 0 as I64
 
 	while ci < iters 'cloneLoop'
 		var c = cloneI64(master)
@@ -135,7 +135,7 @@ function benchI64(pattern I64, patName String, n Count, iters I64)
 	end 'guard'
 
 	let start = Clock.nowMs()
-	var it = 0
+	var it = 0 as I64
 
 	while it < iters 'loop'
 		var work = cloneI64(master)
@@ -152,7 +152,7 @@ function benchStr(pattern I64, patName String, n Count, iters I64)
 	let master = buildStr(n, pattern: pattern)
 	var sink = 0 as Count
 	let cloneStart = Clock.nowMs()
-	var ci = 0
+	var ci = 0 as I64
 
 	while ci < iters 'cloneLoop'
 		var c = cloneStr(master)
@@ -167,7 +167,7 @@ function benchStr(pattern I64, patName String, n Count, iters I64)
 	end 'guard'
 
 	let start = Clock.nowMs()
-	var it = 0
+	var it = 0 as I64
 
 	while it < iters 'loop'
 		var work = cloneStr(master)
@@ -181,7 +181,7 @@ function benchStr(pattern I64, patName String, n Count, iters I64)
 end 'benchStr'
 
 function main() returns ExitCode
-	let n = 20000 as Count
+	let n = 20000
 	let iters = 100
 	print("lang,type,pattern,n,iters,total_ms\n")
 	benchI64(0, patName: "random", n: n, iters: iters)
