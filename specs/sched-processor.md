@@ -431,7 +431,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.schedIdleProcessorCount' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.schedIdleProcessorCount' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: sched-processor.error.idle-processor-count-is-refused-on-wasm -->
@@ -457,7 +457,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.schedGtRecordsCarved' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.schedGtRecordsCarved' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: sched-processor.error.gt-records-carved-is-refused-on-wasm -->

@@ -180,5 +180,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:13: '__Builtins.parallelBoundary' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:13: '__Builtins.parallelBoundary' takes exactly 0 arguments, but 1 was given
 ```

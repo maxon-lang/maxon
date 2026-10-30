@@ -553,6 +553,84 @@ end 'main'
 error E3159: <fragment>:4:23: cannot write through 'managed': 'managed' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
+<!-- test: builtins-byte-order.a-let-receiver-whose-method-appends-to-its-own-field-is-refused-as-for-a-push -->
+<!-- tier: stdlib -->
+A method that appends to a field of its own receiver writes the receiver, so a `let` receiver is refused at the call
+whichever way the field is spelled, exactly as for a method that pushes.
+```maxon
+type Sink
+	var bytes as ByteArray
+
+	static function create() returns Sink
+		return Sink{bytes: ByteArray.create()}
+	end 'create'
+
+	function put()
+		__Builtins.appendLittleEndian(self.bytes, 1, 2)
+	end 'put'
+
+	function putBare()
+		__Builtins.appendLittleEndian(bytes, 1, 2)
+	end 'putBare'
+end 'Sink'
+
+function main() returns ExitCode
+	let sink = Sink.create()
+	sink.put()
+	sink.putBare()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:20:7: cannot pass 'sink', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3159: <fragment>:21:7: cannot pass 'sink', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: builtins-byte-order.a-let-receiver-whose-method-fills-its-own-field-is-refused-as-for-a-push -->
+<!-- tier: stdlib -->
+`fillRandom` into a field of the receiver writes the receiver, so a `let` receiver is refused at the call.
+```maxon
+type Sink
+	var bytes as ByteArray
+
+	static function create() returns Sink
+		return Sink{bytes: ByteArray.create()}
+	end 'create'
+
+	function fill()
+		_ = __Builtins.fillRandom(self.bytes.managed)
+	end 'fill'
+end 'Sink'
+
+function main() returns ExitCode
+	let sink = Sink.create()
+	sink.fill()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:16:7: cannot pass 'sink', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: builtins-byte-order.a-let-handed-to-a-function-that-fills-its-parameter-is-refused-as-for-a-push -->
+<!-- tier: stdlib -->
+A function that fills its `ByteArray` parameter's buffer writes that parameter, so handing it a `let` binding is refused
+at the call.
+```maxon
+function fill(drawn ByteArray)
+	_ = __Builtins.fillRandom(drawn.managed)
+end 'fill'
+
+function main() returns ExitCode
+	let drawn = ByteArray.create()
+	fill(drawn)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:8:2: cannot pass 'drawn', which is read-only (a `let` binding), to a function that writes parameter 'drawn' (in main); pass a clone()
+```
+
 <!-- test: builtins-byte-order.width-three-is-refused -->
 <!-- tier: stdlib -->
 Only 2, 4 and 8 name a word a single access moves.
@@ -613,7 +691,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:4:13: '__Builtins.appendLittleEndian' takes exactly 3 argument, but 2 were given
+error E3036: <fragment>:4:13: '__Builtins.appendLittleEndian' takes exactly 3 arguments, but 2 were given
 ```
 
 <!-- test: builtins-byte-order.library-tier-only -->

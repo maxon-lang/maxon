@@ -225,7 +225,7 @@ end 'main'
 typealias NameId = int(0 to 65535)
 ```
 ```maxoncstderr
-error E3036: <fragment>:4:16: '__DebugStream.event' takes exactly 6 argument, but 3 were given
+error E3036: <fragment>:4:16: '__DebugStream.event' takes exactly 6 arguments, but 3 were given
 ```
 
 <!-- test: debugstream-log-events.error.phase-begin-wants-numbers -->

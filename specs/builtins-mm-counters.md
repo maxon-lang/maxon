@@ -978,7 +978,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.mmAllocTotal' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.mmAllocTotal' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.alloc-live-arity-checked -->
@@ -990,7 +990,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.mmAllocLive' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.mmAllocLive' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.alloc-bytes-arity-checked -->
@@ -1002,7 +1002,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.mmAllocBytes' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.mmAllocBytes' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.raw-alloc-total-arity-checked -->
@@ -1014,7 +1014,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.mmRawAllocTotal' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.mmRawAllocTotal' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.raw-alloc-live-arity-checked -->
@@ -1026,7 +1026,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.mmRawAllocLive' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.mmRawAllocLive' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.raw-alloc-bytes-arity-checked -->
@@ -1038,7 +1038,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.mmRawAllocBytes' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.mmRawAllocBytes' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.thread-alloc-total-arity-checked -->
@@ -1050,7 +1050,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.threadAllocTotal' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.threadAllocTotal' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.thread-free-total-arity-checked -->
@@ -1062,7 +1062,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.threadFreeTotal' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.threadFreeTotal' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.thread-alloc-bytes-arity-checked -->
@@ -1074,7 +1074,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.threadAllocBytes' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.threadAllocBytes' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.process-alloc-total-arity-checked -->
@@ -1086,7 +1086,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.processAllocTotal' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.processAllocTotal' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.process-free-total-arity-checked -->
@@ -1098,7 +1098,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.processFreeTotal' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.processFreeTotal' takes exactly 0 arguments, but 1 was given
 ```
 
 <!-- test: builtins-mm-counters.process-alloc-bytes-arity-checked -->
@@ -1110,5 +1110,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:20: '__Builtins.processAllocBytes' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.processAllocBytes' takes exactly 0 arguments, but 1 was given
 ```

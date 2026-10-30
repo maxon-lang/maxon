@@ -3497,6 +3497,13 @@ module function reservedNameReason(name String, reason ReservedCalleeReason) ret
 	end 'reason'
 end 'reservedNameReason'
 
+function builtinArityMessage(name String, expected ParamCount, got ParamCount) returns String
+	let wanted = "1 argument" if expected == 1 else "{expected} arguments"
+	let given = "1 was given" if got == 1 else "{got} were given"
+
+	return "'{name}' takes exactly {wanted}, but {given}"
+end 'builtinArityMessage'
+
 // The E2015 sentence, written once for the two `SourceParseError` cases that carry it — see
 // `tupleElementRejected` for why there are two cases and only one sentence.
 function unsupportedFeatureDiagnostic(feature String, line LineNumber, column ColumnNumber, path FilePath) returns Diagnostic
@@ -3588,7 +3595,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// `SemanticCheck.checkArgTypes` emits this exact code and message for a call argument, so the
 		// four coercion sites speak with one voice.
 		implicitNarrowing(sourceType, targetType, line, column) gives Diagnostic.create(ErrorCode.semanticUnsafeCast, message: implicitNarrowingMessage(sourceType, targetType: targetType), line: line, column: column, filePath: path)
-		builtinArity(name, expected, got, line, column) gives Diagnostic.create(ErrorCode.callArgCountMismatch, message: "'{name}' takes exactly {expected} argument, but {got} were given", line: line, column: column, filePath: path)
+		builtinArity(name, expected, got, line, column) gives Diagnostic.create(ErrorCode.callArgCountMismatch, message: builtinArityMessage(name, expected: expected, got: got), line: line, column: column, filePath: path)
 		builtinOperandType(name, required, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{name}' requires a {required}, but its argument is {got}", line: line, column: column, filePath: path)
 
 		// The SIGNATURE-checked builtins (the `__Managed*` family) report through the sentence used for
