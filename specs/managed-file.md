@@ -855,7 +855,7 @@ function main() returns ExitCode
 	arr.push(66)
 	arr.push(67)
 	arr.push(68)
-	let view = try arr.slice(0, endIndex: 4) otherwise panic("slice: 0..4 of a length-4 array")
+	var view = try arr.slice(0, endIndex: 4) otherwise panic("slice: 0..4 of a length-4 array")
 
 	// Guard the PREMISE rather than the sentinel's value: if a slice ever stops being a zero-copy view this
 	// case stops testing its subject, and it must go red then rather than quiet.
