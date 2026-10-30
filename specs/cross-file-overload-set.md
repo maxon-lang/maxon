@@ -646,6 +646,46 @@ end 'main'
 error E3008: <fragment>:20:14: function 'Rec.create' is not exported
 ```
 
+<!-- test: a-function-body-call-to-a-set-with-nested-aliases-means-the-narrower-member -->
+`Count` implements `Integer`, so both `create`s fit a `Count` argument and the one declared over `Count` is the closer, as it is for the same call at file scope. A body call means that member. It prints `7 1007 7 9`, exit 0.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias Count = int(0 to 100) implements Integer
+
+export type Rec
+	export var v as Integer
+
+	export static function create(n Count) returns Self
+		return Self{v: n}
+	end 'create'
+
+	export static function create(n Integer) returns Self
+		return Self{v: n + 1000}
+	end 'create'
+end 'Rec'
+
+// --- file: main.maxon
+function viaParameter(n Count) returns Integer
+	return Rec.create(n).v
+end 'viaParameter'
+
+function main() returns ExitCode
+	let n = 7 as Count
+	let a = Rec.create(n)
+	let b = Rec.create(7 as Integer)
+	let c = Rec.create(7 as Count)
+	print("{a.v} {b.v} {c.v} {viaParameter(9)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 1007 7 9
+```
+
 <!-- test: a-defaulted-parameter-of-a-factory-in-another-file-fills-in-a-global-initializer -->
 `main.maxon`'s initializer omits `create`'s defaulted `n`, so the compiler calls the default's helper, which `types.maxon` declares. The helper is the compiler's call and no name `main.maxon` wrote, so the initializer is not refused for a file that cannot name it. It prints `6`.
 ```maxon
