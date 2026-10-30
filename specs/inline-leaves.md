@@ -842,7 +842,7 @@ module function __probe_checked_twice(seed MachineWord) returns MachineWord thro
 	return low + high - seed - 1
 end '__probe_checked_twice'
 
-function __probe_checked_entry(seed ExitCode) returns ExitCode
+function __probe_checked_entry(seed Count) returns ExitCode
 	let first = try __probe_checked_twice(seed as MachineWord) otherwise 99
 	let second = try __probe_checked_twice(seed as MachineWord) otherwise 99
 
@@ -853,7 +853,7 @@ function __probe_checked_entry(seed ExitCode) returns ExitCode
 	return first as ExitCode
 end '__probe_checked_entry'
 // --- stdlib-overlay: Builtins.maxon
-export function probeChecked(seed ExitCode) returns ExitCode
+export function probeChecked(seed Count) returns ExitCode
 	return __probe_checked_entry(seed)
 end 'probeChecked'
 // --- file: main.maxon
