@@ -1653,7 +1653,6 @@ function buildRuntimeInitChunk() returns FunctionCodeChunk
 	let SlotGuaranteeBytes = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
-	emitProgramStartedMark(asm)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: SignalStackBytes)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGuaranteeBytes), srcReg: X64Register.rax, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotGuaranteeBytes))
@@ -1665,10 +1664,6 @@ function buildRuntimeInitChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildRuntimeInitChunk'
-
-function emitProgramStartedMark(asm X64RuntimeAsm)
-	emitStoreGlobalImm(asm, label: ProgramStartedLabel, value: ProgramStartedMark as MachineWord, width: X64AccessWidth.byte, through: X64Register.rcx)
-end 'emitProgramStartedMark'
 
 module function emitStoreGlobalImm(asm X64RuntimeAsm, label ByteArray, value MachineWord, width X64AccessWidth, through X64Register)
 	if through == X64Register.rax 'theValueWouldOverwriteTheAddress'
@@ -2020,8 +2015,6 @@ end 'buildLinuxSignalStackSizeChunk'
 function buildLinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0
 	var asm = X64RuntimeAsm.beginFunction(LinuxSigactionSlots)
-
-	emitProgramStartedMark(asm)
 
 	if carriesHostLock 'ownsABlock'
 		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxMainThreadBlockName)

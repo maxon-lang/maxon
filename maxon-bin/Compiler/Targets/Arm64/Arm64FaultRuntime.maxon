@@ -521,7 +521,6 @@ function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns Fu
 	let SlotSigaction = 0
 	var asm = Arm64RuntimeAsm.beginFunction(DarwinSigactionBytes / SpillSlotBytes)
 
-	arm64EmitProgramStartedMark(asm)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
@@ -543,12 +542,6 @@ function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns Fu
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildArm64DarwinRuntimeInitChunk'
-
-function arm64EmitProgramStartedMark(asm Arm64RuntimeAsm)
-	arm64EmitDataAddr(asm, dest: Arm64Register.x9, label: ProgramStartedLabel)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x10, value: ProgramStartedMark as MachineWord)
-	arm64EmitStoreByte(asm, src: Arm64Register.x10, base: Arm64Register.x9)
-end 'arm64EmitProgramStartedMark'
 
 // Publish `handlerName` for `signal` through the struct already standing in `actSlot`.
 function arm64EmitDarwinSigactionInstall(asm Arm64RuntimeAsm, handlerName ByteArray, signal Imm32, actSlot StackSize)
@@ -587,8 +580,6 @@ end 'arm64EmitDarwinSigactionCall'
 function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0
 	var asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots)
-
-	arm64EmitProgramStartedMark(asm)
 
 	if carriesHostLock 'ownsABlock'
 		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxMainThreadBlockName)

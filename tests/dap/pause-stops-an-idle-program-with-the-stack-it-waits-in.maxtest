@@ -1,0 +1,77 @@
+let IdlePauseCaseLabel = "pause-stops-an-idle-program-with-the-stack-it-waits-in"
+
+type IdlePauseSession implements DapSession
+	let executable as FilePath
+	export var stopReason as String
+	export var frameNames as StringArray
+	export var stepAnswered as bool
+	export var attempts as Count
+
+	static function create(executable FilePath) returns IdlePauseSession
+		return Self{executable: executable, stopReason: "", frameNames: StringArray.create(), stepAnswered: true, attempts: 0}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(ConfigurationDoneCommand)
+
+		var threadId = IdleFirstThreadId as DapNumber
+		var idle = false
+
+		// A pause can land while `main` still runs, before it parks on `await`.
+		while not idle and self.attempts < IdleMaxPauses 'untilIdle'
+			self.attempts = self.attempts + 1
+			_ = try client.request(PauseCommand, argumentsJson: dapThreadArguments(threadId))
+
+			let stopped = try client.awaitEvent(StoppedEvent)
+			self.stopReason = dapBodyString(stopped, key: "reason")
+			threadId = dapBodyNumber(stopped, key: "threadId")
+			self.frameNames = dapStackFrameNames(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId)))
+			idle = not namesHoldTheProgram(self.frameNames)
+
+			if not idle 'stillRunningTheProgram'
+				_ = try client.request(ContinueCommand, argumentsJson: dapThreadArguments(threadId))
+				sleep(IdleRetryMs)
+			end 'stillRunningTheProgram'
+		end 'untilIdle'
+
+		self.stepAnswered = dapSuccess(try client.request(NextCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'IdlePauseSession'
+
+test 'pause stops a program idle in the scheduler, walks the runtime frames it waits in and refuses to step out of them'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: IdlePauseCaseLabel, fixture: IdleFixtureName)
+	var session = IdlePauseSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.equal(session.stopReason, expected: PauseReason, message: "a pause of a program that is waiting on its timers is a `{PauseReason}` stop; it said `{session.stopReason}`")
+	try Expect.isTrue(session.attempts < IdleMaxPauses, message: "the program never went idle in {IdleMaxPauses} pauses, so the stop below is not the idle program's: {session.frameNames.count()} frames")
+	try Expect.equal(session.frameNames.count() > 0, expected: idleWaitKeepsTheFrameChain(), message: "a program idle in the scheduler runs no code of its own: its stack is the runtime frames it waits in, and it is empty only on a host whose idle wait sits in a system library the frame chain does not survive; it walked {session.frameNames.count()} frames")
+
+	if idleWaitKeepsTheFrameChain() 'aWalkableHost'
+		try Expect.isTrue(session.frameNames.contains(RuntimeEntryFrameName), message: "the walked stack ends in the runtime's entry frame `{RuntimeEntryFrameName}`, and none of the {session.frameNames.count()} frames is that")
+	end 'aWalkableHost'
+
+	try Expect.isFalse(session.stepAnswered, message: "a `next` from a pause that stands in no code of the program's own has no line to step to, and must be refused rather than started")
+end 'pause stops a program idle in the scheduler, walks the runtime frames it waits in and refuses to step out of them'
+
+let IdleFirstThreadId = 1
+let IdleMaxPauses = 20
+let IdleRetryMs = 100
+let RuntimeEntryFrameName = "mrt_start"
+
+function namesHoldTheProgram(names StringArray) returns bool
+	return names.contains("main") or names.contains("answerLater")
+end 'namesHoldTheProgram'
+
+function idleWaitKeepsTheFrameChain() returns bool
+	#if os(Windows)
+		return false
+	#else
+		return true
+	#endif
+end 'idleWaitKeepsTheFrameChain'

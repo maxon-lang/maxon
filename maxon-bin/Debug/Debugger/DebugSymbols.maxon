@@ -301,6 +301,34 @@ function codeOffsetIn(address DebugAddress) returns MxdbgCodeOffset
 	return LargestCodeOffsetASidecarNames as MxdbgCodeOffset if address > LargestCodeOffsetASidecarNames else address as MxdbgCodeOffset
 end 'codeOffsetIn'
 
+export enum DebugFramePresenter
+	program
+	runtime
+end 'DebugFramePresenter'
+
+union DebugFrameOffset
+	outside
+	at(offset MxdbgCodeOffset)
+end 'DebugFrameOffset'
+
+function frameOffsetOf(pc DebugAddress, textBase DebugAddress, biased bool) returns DebugFrameOffset
+	if pc < textBase 'notInThisImage'
+		return DebugFrameOffset.outside
+	end 'notInThisImage'
+
+	let intoImage = pc - textBase
+
+	if intoImage > LargestCodeOffsetASidecarNames 'pastWhatACodeOffsetCanName'
+		return DebugFrameOffset.outside
+	end 'pastWhatACodeOffsetCanName'
+
+	let raw = intoImage as MxdbgCodeOffset
+
+	// Only the outer frames are return addresses (`callSiteLookup` owns that bias); the innermost
+	// frame's pc is the stop itself and is read where it stands.
+	return DebugFrameOffset.at(MxdbgReader.callSiteLookup(raw) if biased else raw)
+end 'frameOffsetOf'
+
 export type DebugSymbols
 	var reader as MxdbgReader
 	let code as ByteArray
@@ -410,7 +438,14 @@ export type DebugSymbols
 	end 'completionPool'
 
 	export function stopRecordFor(reason String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef, hidden DebugTally, entryCaller DebugEntryCaller) returns DebugStop
-		var frames = self.frameListFor(stop, textBase: textBase, entryCaller: entryCaller)
+		var frames = self.frameListFor(stop, textBase: textBase, entryCaller: entryCaller, presenter: DebugFramePresenter.program)
+
+		// A program idle in the scheduler runs none of its own code; the runtime frames are the only
+		// answer to where it waits.
+		if frames.count() == 0 and reason == PauseStopReasonName 'pausedInNoProgramCode'
+			frames = self.frameListFor(stop, textBase: textBase, entryCaller: entryCaller, presenter: DebugFramePresenter.runtime)
+		end 'pausedInNoProgramCode'
+
 		var fault = StatedText.stated(debugFaultDescription(stop.fault)) if reason == FaultStopReasonName else StatedText.unstated
 		let offset = stop.pc - textBase
 
@@ -448,17 +483,17 @@ export type DebugSymbols
 	// A frame no function of this program covers is skipped, never the end of the walk: a parked green
 	// thread's chain starts inside the switch that parked it, and a fault's may start in library or
 	// runtime code.
-	export function frameListFor(stop EngineStop, textBase DebugAddress, entryCaller DebugEntryCaller) returns DebugFrameArray
+	export function frameListFor(stop EngineStop, textBase DebugAddress, entryCaller DebugEntryCaller, presenter DebugFramePresenter) returns DebugFrameArray
 		var frames = DebugFrameArray.create()
-		self.appendFramesFor(frames, pc: stop.pc, framePointer: stop.framePointer, textBase: textBase, biased: false)
+		self.appendFramesFor(frames, pc: stop.pc, framePointer: stop.framePointer, textBase: textBase, biased: false, presenter: presenter)
 
 		match entryCaller 'atAnEntry'
 			none then break
-			at(returnAddress) then self.appendFramesFor(frames, pc: returnAddress, framePointer: stop.framePointer, textBase: textBase, biased: true)
+			at(returnAddress) then self.appendFramesFor(frames, pc: returnAddress, framePointer: stop.framePointer, textBase: textBase, biased: true, presenter: presenter)
 		end 'atAnEntry'
 
 		for (iter, returnAddress) in stop.returnAddresses.withIterator() 'eachCaller'
-			self.appendFramesFor(frames, pc: returnAddress, framePointer: stop.callerFramePointerOf(iter.index()), textBase: textBase, biased: true)
+			self.appendFramesFor(frames, pc: returnAddress, framePointer: stop.callerFramePointerOf(iter.index()), textBase: textBase, biased: true, presenter: presenter)
 		end 'eachCaller'
 
 		return frames
@@ -609,6 +644,16 @@ export type DebugSymbols
 		end 'enclosing'
 	end 'functionAtIsTheProgramsOwn'
 
+	export function framesHoldTheProgram(frames DebugFrameArray) returns bool
+		for frame in frames 'eachFrame'
+			if frame.inlined or self.functionAtIsTheProgramsOwn(frame.offset) 'theProgramsOwn'
+				return true
+			end 'theProgramsOwn'
+		end 'eachFrame'
+
+		return false
+	end 'framesHoldTheProgram'
+
 	export function returnIsIntoTheProgramsOwn(offset DebugAddress) returns bool
 		return offsetIsTheProgramsOwnIn(self.reader, offset: MxdbgReader.callSiteLookup(codeOffsetIn(offset)))
 	end 'returnIsIntoTheProgramsOwn'
@@ -701,28 +746,26 @@ export type DebugSymbols
 		return DebugFunctionNameLookup.named(innermost.functionName)
 	end 'innermostName'
 
-	function appendFramesFor(frames DebugFrameArray, pc DebugAddress, framePointer DebugAddress, textBase DebugAddress, biased bool)
-		if pc < textBase 'notInThisImage'
-			return
-		end 'notInThisImage'
+	function appendFramesFor(frames DebugFrameArray, pc DebugAddress, framePointer DebugAddress, textBase DebugAddress, biased bool, presenter DebugFramePresenter)
+		match frameOffsetOf(pc, textBase: textBase, biased: biased) 'placed'
+			outside then return
+			at(offset) then self.appendFramesAt(frames, offset: offset, framePointer: framePointer, presenter: presenter)
+		end 'placed'
+	end 'appendFramesFor'
 
-		let intoImage = pc - textBase
-
-		if intoImage > LargestCodeOffsetASidecarNames 'pastWhatACodeOffsetCanName'
-			return
-		end 'pastWhatACodeOffsetCanName'
-
-		let raw = intoImage as MxdbgCodeOffset
-
-		// Only the outer frames are return addresses (`callSiteLookup` owns that bias); the innermost
-		// frame's pc is the stop itself and is read where it stands.
-		let offset = MxdbgReader.callSiteLookup(raw) if biased else raw
-
+	function appendFramesAt(frames DebugFrameArray, offset MxdbgCodeOffset, framePointer DebugAddress, presenter DebugFramePresenter)
 		match self.reader.functionContaining(offset) 'enclosing'
 			none then return
-			found(fn) then self.appendKnownFrames(frames, fn: fn, offset: offset, framePointer: framePointer)
+			found(fn) then self.presentFunction(frames, fn: fn, offset: offset, framePointer: framePointer, presenter: presenter)
 		end 'enclosing'
-	end 'appendFramesFor'
+	end 'appendFramesAt'
+
+	function presentFunction(frames DebugFrameArray, fn MxdbgFunctionInfo, offset MxdbgCodeOffset, framePointer DebugAddress, presenter DebugFramePresenter)
+		match presenter 'presented'
+			program then self.appendKnownFrames(frames, fn: fn, offset: offset, framePointer: framePointer)
+			runtime then frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: fn.displayName, path: DebugSourcePath.unknown, spot: DebugSourceSpot.unknown, offset: offset as DebugAddress, inlined: false, site: MxdbgInlineSiteLookup.none, framePointer: framePointer))
+		end 'presented'
+	end 'presentFunction'
 
 	function appendKnownFrames(frames DebugFrameArray, fn MxdbgFunctionInfo, offset MxdbgCodeOffset, framePointer DebugAddress)
 		if fn.lineCount == 0 'noSourceToShow'

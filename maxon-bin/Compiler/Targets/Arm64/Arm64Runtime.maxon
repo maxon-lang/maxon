@@ -180,6 +180,8 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	// The program, with its ExitCode in x0 either way: `main` bracketed by the managed globals, or, with green
 	// threads, `__gt_run_main` handed the main thread's entry, which runs that same bracket on `main`'s own
 	// green thread — `BackendDispatch.appendProgramCall`'s two arms.
+	emitArm64ProgramStartedMark(code, rdataRelocs: rdataRelocs)
+
 	if drainGreenThreads 'mainIsAGreenThread'
 		arm64EmitLeaFuncAddr(code, funcAdrpRelocs: funcAdrpRelocs, dest: arm64RuntimeReg(Arm64Register.x0), funcName: MainThreadEntryName)
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GtRunMainName)
@@ -322,8 +324,8 @@ end 'emitArm64ArgvCapture'
 // dyld enters `mrt_start` with `argc` in x0 and `argv` in x1 — the two registers an AAPCS64 `main(argc,
 // argv)` would have received, which is exactly how the platform's own start-up files read them.
 function emitArm64ArgvFromEntryRegisters(code ByteArray, rdataRelocs RdataRelocationArray)
-	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0)
-	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1)
+	emitArm64DataStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0, opcode: Arm64OpStrX, scale: Arm64SlotScale)
+	emitArm64DataStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1, opcode: Arm64OpStrX, scale: Arm64SlotScale)
 end 'emitArm64ArgvFromEntryRegisters'
 
 // ⭐⭐ **THE LINUX KERNEL PUTS THE VECTOR ON THE STACK, NOT IN REGISTERS.** `execve` enters `_start` with
@@ -336,7 +338,7 @@ end 'emitArm64ArgvFromEntryRegisters'
 //
 // ⚠ **THE ENTRY `sp` IS READ INTO x17 (IP1) FIRST.** A `ldr` off SP would encode, but the `add` for
 // `sp+8` and the ADRP+ADD address pair both want an ordinary GPR, and x16 (IP0) is already the address
-// scratch `emitArm64ArgvStore` claims. x17 is the other intra-procedure-call temporary, free at process
+// scratch `emitArm64DataStore` claims. x17 is the other intra-procedure-call temporary, free at process
 // entry and claimed by nothing here. The capture runs before any `bl` (see the stub), so nothing has
 // perturbed sp when this reads it.
 function emitArm64ArgvFromEntryStack(code ByteArray, rdataRelocs RdataRelocationArray)
@@ -344,8 +346,8 @@ function emitArm64ArgvFromEntryStack(code ByteArray, rdataRelocs RdataRelocation
 	arm64EmitMovFromSp(code, dest: stackTop)
 	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(Arm64Register.x0), baseReg: stackTop, byteOffset: 0, scale: Arm64SlotScale)
 	arm64EmitAddImmSigned(code, rd: arm64RuntimeReg(Arm64Register.x1), rn: stackTop, imm: LinuxEntryArgvOffset)
-	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0)
-	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1)
+	emitArm64DataStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0, opcode: Arm64OpStrX, scale: Arm64SlotScale)
+	emitArm64DataStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1, opcode: Arm64OpStrX, scale: Arm64SlotScale)
 end 'emitArm64ArgvFromEntryStack'
 
 // ⭐⭐ **`envp` IS `argv + (argc + 1) * 8`, AND THE `+ 1` IS argv's OWN NUL TERMINATOR.** The Linux kernel
@@ -357,7 +359,7 @@ end 'emitArm64ArgvFromEntryStack'
 // pointer to the environment; the only way to it is this arithmetic, which is why the capture cannot be
 // deferred to the first `getenv`-shaped call the way the other lanes' can.
 //
-// ⚠ **x17 (IP1) HOLDS THE ENTRY `sp`, AND x16 (IP0) IS `emitArm64ArgvStore`'s ADDRESS SCRATCH** — the same
+// ⚠ **x17 (IP1) HOLDS THE ENTRY `sp`, AND x16 (IP0) IS `emitArm64DataStore`'s ADDRESS SCRATCH** — the same
 // division of the two intra-procedure-call temporaries `emitArm64ArgvFromEntryStack` makes, and for the same
 // reason: this runs before any `bl`, so nothing has perturbed sp and neither temporary is claimed.
 function emitArm64EnvpCapture(code ByteArray, rdataRelocs RdataRelocationArray, os Os)
@@ -378,15 +380,20 @@ function emitArm64EnvpFromEntryStack(code ByteArray, rdataRelocs RdataRelocation
 	arm64EmitAddImmSigned(code, rd: envp, rn: envp, imm: LinuxEntryEnvpSkippedWords)
 	arm64EmitLslImm(code, rd: envp, rn: envp, sh: LinuxEntryWordScaleBits)
 	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: envp, rn: stackTop, rm: envp)
-	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: LinuxEnvpLabel, src: Arm64Register.x0)
+	emitArm64DataStore(code, rdataRelocs: rdataRelocs, label: LinuxEnvpLabel, src: Arm64Register.x0, opcode: Arm64OpStrX, scale: Arm64SlotScale)
 end 'emitArm64EnvpFromEntryStack'
 
 // A word index scales to a byte offset by the machine word width, spelled as a shift because `lsl` is what
 // the instruction takes: the log2 of `SpillSlotBytes`.
 let LinuxEntryWordScaleBits = 3
 
-// One captured register into one `.data` word.
-function emitArm64ArgvStore(code ByteArray, rdataRelocs RdataRelocationArray, label ByteArray, src Arm64Register)
+// One register into one `.data` slot, through x16.
+function emitArm64DataStore(code ByteArray, rdataRelocs RdataRelocationArray, label ByteArray, src Arm64Register, opcode MachineWord, scale MachineWord)
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: arm64RuntimeReg(Arm64Register.x16), label: label, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
-	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(Arm64Register.x16), byteOffset: 0, scale: Arm64SlotScale)
-end 'emitArm64ArgvStore'
+	arm64EmitScaledMem(code, opcode: opcode, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(Arm64Register.x16), byteOffset: 0, scale: scale)
+end 'emitArm64DataStore'
+
+function emitArm64ProgramStartedMark(code ByteArray, rdataRelocs RdataRelocationArray)
+	arm64EmitMovImm(code, rd: arm64RuntimeReg(Arm64Register.x17), value: ProgramStartedMark as MachineWord)
+	emitArm64DataStore(code, rdataRelocs: rdataRelocs, label: ProgramStartedLabel, src: Arm64Register.x17, opcode: Arm64OpStrB, scale: ByteAccessStride)
+end 'emitArm64ProgramStartedMark'

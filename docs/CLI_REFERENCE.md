@@ -1591,6 +1591,8 @@ lives: every word that names one re-lists the roster first, and an id whose thre
   attempt budget.
 - `not-running` — for a word that needs a stop while the program is running.
 - `fault-is-terminal` — for a step from a `fault` stop.
+- `paused-in-no-program-code` — for a step from a `pause` stop that stands in no code of the program's
+  own.
 - `unwritable` — for a byte the debugger could not write into the program's code.
 - `detach-refused` — for a `detach` the kernel refused to carry out; the program's state is unknown and
   only `quit` remains.
@@ -1615,9 +1617,11 @@ id when a green thread was running, and its `function` when its position lies in
 
 **Every stop stops the whole program.** A debug event holds every thread of the program until the driver
 answers it, so the roster, a parked thread's stack and the memory a `print` reads are one consistent
-picture, and `continue` or a step releases them together. A stop of a program whose threads are all idle — a
-`pause` with nothing running user code — reports no pc: `threads` and `gt-backtrace` answer as usual,
-while a walk of the stopping thread has nothing to describe.
+picture, and `continue` or a step releases them together. A `pause` of a program whose threads are all
+idle stands in no code of the program's own: its backtrace lists the runtime frames the stopping thread
+waits in, down to `mrt_start`, and `threads` and `gt-backtrace` answer as usual. On Windows the idle wait
+sits in a system library that breaks the frame chain, so that backtrace is empty. A `step`, `next`
+or `finish` from such a stop is refused `paused-in-no-program-code`.
 
 Two costs are worth knowing. A held thread is refused each time a machine reaches it, and that machine
 pauses and looks again, so a hold is a polite spin rather than a parked thread. And a `pause` asks the

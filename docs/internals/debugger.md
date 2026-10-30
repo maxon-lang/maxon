@@ -50,10 +50,12 @@ condition holds is reported as the breakpoint and answers the pause; a stop the 
 its own is reported as the pause. On macOS the entry stop and a pause both arrive as a halt of the stub's:
 the first halt is the entry, and a halt with no pause pending is resumed unseen. A program's own `SIGINT`
 is passed on to it. Any stop the debugger reports ends a step still outstanding on another thread. A
-pause that lands while the program is still being started (in the loader, or ahead of
-`mrt_runtime_init`) lets the program run and asks again, until the pause's deadline. The runtime's
-`__mrt_program_started` byte, written first by `mrt_runtime_init`, tells the two apart; a binary whose
-sidecar lacks the byte is paused where it lands.
+pause that lands while the program is still being started (in the loader, or in `mrt_start` ahead of
+its call into the program) lets the program run and asks again, until the pause's deadline. The
+runtime's `__mrt_program_started` byte, which the entry stub writes just before that call (ahead of
+`__gt_run_main`, or of `__module_init` and `main`), tells the two apart; a binary whose sidecar lacks the
+byte is paused where it lands. A pause that stands in no frame of the program's own presents the runtime
+frames it stands in instead.
 
 **Detaching** restores every byte the debugger wrote and lets the program run on. Under `ptrace`, a stop
 signal still owed by a thread is taken first, and every signal owed to the program is delivered with the

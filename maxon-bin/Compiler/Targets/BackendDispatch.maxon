@@ -206,8 +206,10 @@ export function dataSectionRoster(userGlobals DataSectionEntryArray, usage Runti
 	return roster
 end 'dataSectionRoster'
 
-// Written by every native lane's `mrt_runtime_init` and read by `DebugEngine.runtimeNotYetStarted`. A
-// lane that lays the byte out and never writes it has every pause retried until the deadline and refused.
+// Written by every native lane's entry stub just before its call into the program, and read by
+// `DebugEngine.runtimeNotYetStarted`. A lane that lays the byte out and never writes it has every pause
+// retried until the deadline and refused. The store precedes `__gt_run_main`, so it lands before any
+// worker M exists, which `sealedBeforeWorkers` rests on.
 export let ProgramStartedLabel = b"__mrt_program_started"
 export let ProgramStartedMark = 1
 
@@ -560,6 +562,8 @@ end 'prependEntryStub'
 // returns `main`'s ExitCode in R8 once that thread has completed. Either way R8 carries the ExitCode on to the
 // exit path, which is the same after both.
 function appendProgramCall(module TargetModule, block IrBlock, initGlobals bool, greenThreads bool, entryFunction ByteArray)
+	appendProgramStartedMark(module, block: block)
+
 	if greenThreads 'mainIsAGreenThread'
 		module.appendOp(block, op: TargetOp.leaRegFunc(x64PhysReg(X64Register.rcx), funcName: MainThreadEntryName))
 		module.appendOp(block, op: TargetOp.callDirect(GtRunMainName))
@@ -576,6 +580,20 @@ function appendMainCall(module TargetModule, block IrBlock, initGlobals bool, re
 	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
 	appendGlobalCleanupGate(module, block: block, releasesGlobals: releasesGlobals)
 end 'appendMainCall'
+
+function appendProgramStartedMark(module TargetModule, block IrBlock)
+	let mark = x64PhysReg(X64Register.rax)
+
+	module.appendOp(block, op: TargetOp.movRegImm32(mark, value: ProgramStartedMark as MachineWord))
+	appendGlobalStore(module, block: block, label: ProgramStartedLabel, src: mark, width: X64AccessWidth.byte)
+end 'appendProgramStartedMark'
+
+function appendGlobalStore(module TargetModule, block IrBlock, label ByteArray, src TargetVReg, width X64AccessWidth)
+	let slot = x64PhysReg(X64Register.rdx)
+
+	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: label))
+	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: src, width: width))
+end 'appendGlobalStore'
 
 // The main thread's entry (`MainThreadEntryName`): `__gt_trampoline` calls it on `main`'s fresh
 // green-thread stack, and it returns `main`'s ExitCode in R8 for the trampoline to capture. It
@@ -801,14 +819,11 @@ function appendLinuxArgvCapture(module TargetModule, block IrBlock, captureArgv 
 
 	let argc = x64PhysReg(X64Register.rax)
 	let argv = x64PhysReg(X64Register.rcx)
-	let slot = x64PhysReg(X64Register.rdx)
 
 	module.appendOp(block, op: TargetOp.loadRegBaseDisp(argc, base: x64PhysReg(X64Register.rsp), disp: 0, width: X64AccessWidth.word64))
 	module.appendOp(block, op: TargetOp.leaRegRegImm32(argv, base: x64PhysReg(X64Register.rsp), disp: LinuxEntryArgvOffset))
-	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: CommandLineArgcLabel))
-	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: argc, width: X64AccessWidth.word64))
-	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: CommandLineArgvLabel))
-	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: argv, width: X64AccessWidth.word64))
+	appendGlobalStore(module, block: block, label: CommandLineArgcLabel, src: argc, width: X64AccessWidth.word64)
+	appendGlobalStore(module, block: block, label: CommandLineArgvLabel, src: argv, width: X64AccessWidth.word64)
 end 'appendLinuxArgvCapture'
 
 // ⭐⭐ **THE ENVIRONMENT VECTOR, WHICH IS REACHABLE ONLY HERE AND ONLY BY ARITHMETIC.** `envp` follows argv's
@@ -821,15 +836,13 @@ end 'appendLinuxArgvCapture'
 // program that asks for its arguments.
 function appendLinuxEnvpCapture(module TargetModule, block IrBlock)
 	let envp = x64PhysReg(X64Register.rax)
-	let slot = x64PhysReg(X64Register.rdx)
 
 	module.appendOp(block, op: TargetOp.loadRegBaseDisp(envp, base: x64PhysReg(X64Register.rsp), disp: 0, width: X64AccessWidth.word64))
 	module.appendOp(block, op: TargetOp.leaRegRegImm32(envp, base: envp, disp: LinuxEntryEnvpSkippedWords))
 
 	// The scale is the machine word, because what is being indexed is a vector of POINTERS.
 	module.appendOp(block, op: TargetOp.leaRegBaseIndexScale(envp, base: x64PhysReg(X64Register.rsp), index: envp, scale: MemoryIndexScale.byEight))
-	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: LinuxEnvpLabel))
-	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: envp, width: X64AccessWidth.word64))
+	appendGlobalStore(module, block: block, label: LinuxEnvpLabel, src: envp, width: X64AccessWidth.word64)
 end 'appendLinuxEnvpCapture'
 
 // Move `func` to the front of the module's function list so it lays out first in

@@ -5473,7 +5473,9 @@ The `mrt_` band, from the other side of `isRuntimeFunction`'s two prefixes: the 
 stub every program has and no other case's `TargetIr` pin shows.
 
 ⭐⭐ **THE FIRST THING IT DOES IS INSTALL THE FAULT HANDLER** — `mrt_runtime_init`, ahead of any user code,
-so a division that traps before `main` has run still reaches a diagnostic. The stub touches the CONSOLE not
+so a division that traps before `main` has run still reaches a diagnostic. Just before its call into the
+program it writes `__mrt_program_started`, the byte the debugger reads to tell a pause that landed before
+the program from one inside it. The stub touches the CONSOLE not
 at all: encoding is decided per WRITE, inside `mrt_write_stream`, which asks each standard stream whether
 its handle is a console and converts to UTF-16 for the ones that are. Nothing process-wide is set, so a
 program that never writes to a console changes nothing about the one it was launched from.
@@ -5514,6 +5516,9 @@ func @mrt_start {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.callDirect mrt_runtime_init
+    x64.movRegImm32 rax, 1
+    x64.leaRegGlobal rdx, __mrt_program_started
+    x64.storeBaseDispReg.byte [rdx + 0], rax
     x64.callDirect main
     x64.movReg32Reg32 rcx, r8
     x64.iatCall 0
@@ -5547,6 +5552,9 @@ func @mrt_start {
     x64.leaRegGlobal rdx, __mrt_envp
     x64.storeBaseDispReg.word64 [rdx + 0], rax
     x64.callDirect mrt_runtime_init
+    x64.movRegImm32 rax, 1
+    x64.leaRegGlobal rdx, __mrt_program_started
+    x64.storeBaseDispReg.byte [rdx + 0], rax
     x64.callDirect main
     x64.movReg32Reg32 rdi, r8
     x64.x64Syscall 231
@@ -5577,8 +5585,9 @@ func @main {
 }
 
 chunk @mrt_start {
-    0000: 00 00 00 94 00 00 00 94 10 00 00 90 10 02 40 f9
-    0010: 00 02 3f d6 00 00 20 d4
+    0000: 00 00 00 94 31 00 80 d2 10 00 00 90 10 02 00 91
+    0010: 11 02 00 39 00 00 00 94 10 00 00 90 10 02 40 f9
+    0020: 00 02 3f d6 00 00 20 d4
 }
 ```
 
@@ -5601,8 +5610,9 @@ func @main {
 chunk @mrt_start {
     0000: f1 03 00 91 20 02 40 f9 00 08 00 91 00 f0 7d d3
     0010: 20 02 00 8b 10 00 00 90 10 02 00 91 00 02 00 f9
-    0020: 00 00 00 94 00 00 00 94 c8 0b 80 d2 01 00 00 d4
-    0030: 00 00 20 d4
+    0020: 00 00 00 94 31 00 80 d2 10 00 00 90 10 02 00 91
+    0030: 11 02 00 39 00 00 00 94 c8 0b 80 d2 01 00 00 d4
+    0040: 00 00 20 d4
 }
 ```
 

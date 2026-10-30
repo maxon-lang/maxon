@@ -62,6 +62,7 @@ let RunningMessage = "the program is running: it must stop before it can be step
 let NotStartedMessage = "the program is parked before its first line: `continue` starts it"
 let ContinueVerb = "continue"
 let PauseVerb = "pause"
+let PausedInNoProgramCodeReason = "paused-in-no-program-code"
 let DetachVerb = "detach"
 let DetachClearedWhatItCould = "; every breakpoint the debugger could write back is cleared"
 let DetachedMessage = "the session has detached from the program, so it runs on by itself and can no longer be inspected or controlled: only `quit` remains"
@@ -1595,6 +1596,13 @@ export type DebugConversation
 			return
 		end 'theFaultingInstructionWouldRunAgain'
 
+		// A step is measured in the program's lines and frames, and this stop stands in none of them.
+		if held.record.reason == DbgStopReasonPause and not self.symbols.framesHoldTheProgram(held.stop.frames) 'aPauseInNoProgramCode'
+			replies.push(motionRefused(WalkVerb, reason: PausedInNoProgramCodeReason))
+
+			return
+		end 'aPauseInNoProgramCode'
+
 		if mode == DebugWalkMode.outOfTheFrame and not hasACallerFrame(held.stop) 'theOutermostFrame'
 			replies.push(DebugReply.failed("'{FinishCommandWord}' has no frame to return to: the stopped frame{debugNamePhrase(held.stop.functionName, lead: " in ")} is the outermost frame of this stack", suggestion: StatedText.unstated))
 
@@ -1922,7 +1930,7 @@ export type DebugConversation
 		match self.engine.walkGreenThread(handle) 'answered'
 			refused(reason) then return ThreadWalk.refused(thread, reason: reason)
 			gone(ending) then return ThreadWalk.gone(ending)
-			walked(record) then return ThreadWalk.frames(thread, walked: self.symbols.frameListFor(record, textBase: self.engine.imageTextBase(), entryCaller: DebugEntryCaller.none))
+			walked(record) then return ThreadWalk.frames(thread, walked: self.symbols.frameListFor(record, textBase: self.engine.imageTextBase(), entryCaller: DebugEntryCaller.none, presenter: DebugFramePresenter.program))
 		end 'answered'
 	end 'walkResolvedThread'
 
