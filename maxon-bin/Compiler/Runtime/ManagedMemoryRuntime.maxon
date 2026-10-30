@@ -368,6 +368,7 @@ let EaseDivisor = 4
 // stay disjoint: they are two prefix TESTS installing two different runtimes.
 export let ManagedCreateName = b"__managed_create"
 export let ManagedPushName = b"__managed_push"
+export let PushedElementCount = 1
 export let ManagedGetName = b"__managed_get"
 
 // ⭐ **THE ELEMENT READ A `for x in arr` LOOP MAKES — NON-THROWING, and that is the whole
@@ -1024,7 +1025,7 @@ end 'cursorSourceMethodName'
 // silently inherits the array family's noun. Asking the NARROW predicate is disjointness **by
 // construction**, so the order of those tests does not matter at all.
 export function isThrowingArrayAccessorCallee(callee ByteArray) returns bool
-	return callee.equals(ManagedGetName) or callee.equals(ManagedSetName) or callee.equals(ManagedFirstName) or callee.equals(ManagedRemoveName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName)
+	return callee.equals(ManagedGetName) or callee.equals(ManagedSetName) or callee.equals(ManagedFirstName) or callee.equals(ManagedRemoveName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) or isWordGetCallee(callee)
 end 'isThrowingArrayAccessorCallee'
 
 // The `__ManagedMemory`-specific members, as one list with two readers: `isThrowingManagedMemoryRuntimeCallee` (THAT
@@ -1151,6 +1152,10 @@ export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) 'slice'
 		return SliceMethod
 	end 'slice'
+
+	if isWordGetCallee(callee) 'wordRead'
+		return wordGetSourceMethodName(callee)
+	end 'wordRead'
 
 	panic("arrayAccessorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `Array` accessor — this map is asked ONLY behind `isThrowingArrayAccessorCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every accessor `installManagedMemoryRuntime` installs, so the second case fails at INSTALL and never in front of a user")
 end 'arrayAccessorSourceMethodName'
@@ -1285,6 +1290,7 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	buildManagedCursorNavigator(module, name: ManagedCursorAdvanceName, step: CursorStep.forward)
 	buildManagedCursorNavigator(module, name: ManagedCursorRetreatName, step: CursorStep.backward)
 	buildManagedCursorNavigator(module, name: ManagedCursorSeekName, step: CursorStep.absolute)
+	installWordEntries(module)
 
 	// The MANAGED-element copies — installed under their OWN bit, so a trivial-array
 	// program (the common one) does not carry them. `usesManagedElementCopy` implies `usesManagedMemory` (they are
@@ -2251,14 +2257,11 @@ end 'emitFieldPlacement'
 // single-BYTE stride (`es == ByteStringElementSize`) to their own arms, and every other stride — 2, 4, the
 // unset 0, and every NEGATIVE sub-byte width — to `otherArm`, which is the generic path unchanged.
 //
-// ⚠⚠ **WHY THOSE TWO AND NOT ALSO 2 AND 4: THE wasm LOWERING ADMITS EXACTLY A BYTE AND A WORD**
-// (`Targets/Wasm/StdToWasm.wasmMemAccessType` — `i1`/`u8` or `i64`/`f64`, everything between PANICS, and
-// `Targets/Shared/StdLoweringShared.accessWidthFor` draws the same line for the native backends). A 2- or
-// 4-byte element therefore has no single load/store to take, and it stays on the byte loop. That is a
-// deliberate SCOPE, not a residual: widening the tier's memory access to 16/32 bits is a change to those
-// two doors and to the `as`-cast signedness rule they defer to, and it belongs with that rule rather than
-// here. The two strides this DOES cover are every `int`, every pointer, every managed element and every
-// byte — which is the whole of the hot path the fast arms exist for.
+// ⚠ **A 2- OR 4-BYTE STRIDE TAKES THE BYTE LOOP**, although every target has a zero-extending 16- and
+// 32-bit access (`u16`/`u32` in `Targets/Shared/StdLoweringShared.accessWidthFor` and
+// `Targets/Wasm/StdToWasm.wasmMemAccessOf`); this dispatch does not route either stride to one. The two
+// strides this DOES cover are every `int`, every pointer, every managed element and every byte — which is
+// the whole of the hot path the fast arms exist for.
 //
 // ⭐ **IT IS ONE FUNCTION BECAUSE NO READER OF THE LIST MAY DISAGREE WITH ANOTHER ABOUT IT.** Its readers
 // are the load and the store — two halves of a round trip, where a pair of comparisons written twice is one
@@ -2281,7 +2284,7 @@ end 'emitFieldPlacement'
 //
 // ⚠ **THE INLINE PASS ONE TIER UP ASKS FOR AN ARM** rather than spelling a locally-derived word
 // stride beside `StdType.i64` and `ByteStringElementSize` beside `StdType.u8` once per arm of each
-// of its three expanders. `CopyChunk` further up this file is this
+// of its expanders. `CopyChunk` further up this file is this
 // same union for the contiguous copies, and exists for the same reason.
 //
 // The word stamp is DERIVED from `LayoutDescriptor.MachineWordBytes` — the owner of "how wide is a value
@@ -2456,7 +2459,7 @@ end 'emitSingleOpElementLoad'
 // `exit` is caller-owned and passed IN (the `emitLoadElem` shape). The returned value is the JOIN block's
 // own block argument, and that join's only successor is `exit` — so it dominates `exit`, and `exit`
 // itself needs no argument.
-function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, buffer ValueId, index ValueId, es ValueId, ids ValueMinter) returns ValueId
+export function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, buffer ValueId, index ValueId, es ValueId, ids ValueMinter) returns ValueId
 	var wordArm = module.addBlock(func, label: b"ldword", heat: BlockHeat.normal)
 	var byteArm = module.addBlock(func, label: b"ldbyte", heat: BlockHeat.normal)
 	var generic = module.addBlock(func, label: b"ldgen", heat: BlockHeat.normal)
@@ -2517,7 +2520,7 @@ end 'emitSingleOpElementStore'
 // or 4-byte element, an unset stride and every sub-byte width take.
 //
 // Threads `cur` and returns the join every arm reaches.
-function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter) returns IrBlock
+export function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter) returns IrBlock
 	var wordArm = module.addBlock(func, label: b"stword", heat: BlockHeat.normal)
 	var byteArm = module.addBlock(func, label: b"stbyte", heat: BlockHeat.normal)
 	var otherStride = module.addBlock(func, label: b"stother", heat: BlockHeat.normal)
@@ -2911,7 +2914,8 @@ let BoundsCompareOperandType = StdType.u64
 // A user index is OUT OF RANGE for a length-`length` array when it is NEGATIVE or at/above the length — the
 // ONE home of the "reject this index" test `__managed_get`/`__managed_set`/`__managed_remove`/
 // `__managed_mem_swap` share, along with the cursor's four fallible members (`emitCursorPositionOutOfRange`,
-// whose limit is the SOURCE record's `length@8`) and — exported for it — `ListRuntime.__list_get`, whose
+// whose limit is the SOURCE record's `length@8`), the byte-order reads (`ManagedWordRuntime.buildWordGet`,
+// `InlineManagedPrimitives.guardWordSpan`) and — exported for it — `ListRuntime.__list_get`, whose
 // index is a position into a `count`-long chain: the same question over the same two words, differing only
 // in what the caller does with the answer.
 //
@@ -3747,23 +3751,43 @@ function buildManagedPush(module StdModule)
 	let arr = 0
 	let value = 1
 
-	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let one = emitConst(module, block: entry, value: 1, ids: ids)
-	let required = emitBin(module, block: entry, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
-	let grown = ids.mint()
-	module.appendOp(entry, op: StdOp.call(grown, callee: ManagedGrowName, args: twoArgs(arr, second: required)))
-
-	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
-	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	var afterStore = emitStoreElemAt(module, func: func, cur: entry, buffer: buffer, index: length, value: value, es: es, ids: ids)
-
-	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: afterStore, record: arr, offset: ManagedRecordLengthOffset, value: newLen)
-	module.setTerminator(afterStore, op: StdOp.retVoid)
+	let site = emitGrowForAppend(module, block: entry, arr: arr, count: PushedElementCount, ids: ids)
+	var afterStore = emitStoreElemAt(module, func: func, cur: entry, buffer: site.buffer, index: site.length, value: value, es: site.es, ids: ids)
+	emitAppendReturn(module, block: afterStore, arr: arr, site: site, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedPush'
+
+export type AppendSite
+	export let length as ValueId
+	export let added as ValueId
+	export let buffer as ValueId
+	export let es as ValueId
+
+	static function create(length ValueId, added ValueId, buffer ValueId, es ValueId) returns Self
+		return Self{length: length, added: added, buffer: buffer, es: es}
+	end 'create'
+end 'AppendSite'
+
+export function emitGrowForAppend(module StdModule, block IrBlock, arr ValueId, count FullRangeInt, ids ValueMinter) returns AppendSite
+	let length = emitLoadField(module, block: block, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let added = emitConst(module, block: block, value: count, ids: ids)
+	let required = emitBin(module, block: block, a: length, b: added, opcode: StdBinOpcode.add, ids: ids)
+	let grown = ids.mint()
+	module.appendOp(block, op: StdOp.call(grown, callee: ManagedGrowName, args: twoArgs(arr, second: required)))
+
+	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
+	let buffer = emitLoadField(module, block: block, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: block, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+
+	return AppendSite.create(length, added: added, buffer: buffer, es: es)
+end 'emitGrowForAppend'
+
+export function emitAppendReturn(module StdModule, block IrBlock, arr ValueId, site AppendSite, ids ValueMinter)
+	let newLength = emitBin(module, block: block, a: site.length, b: site.added, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: arr, offset: ManagedRecordLengthOffset, value: newLength)
+	module.setTerminator(block, op: StdOp.retVoid)
+end 'emitAppendReturn'
 
 // `__managed_get(arr, index) -> (value, flag)` — bounds-checked element read (throws indexOutOfBounds).
 function buildManagedGet(module StdModule, greenThreads bool)

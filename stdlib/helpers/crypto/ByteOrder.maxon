@@ -1,4 +1,3 @@
-public typealias ByteWord = bits(64)
 public typealias ByteWordWidth = int(1 to 16) implements Count
 
 public enum ByteOrder
@@ -10,7 +9,7 @@ typealias ByteWordPosition = int(0 to 15)
 typealias ByteWordShift = int(0 to 120)
 
 let byteOrderBitsPerByte = 8
-let byteOrderByteMask = 0xFF as ByteWord
+let byteOrderByteMask = 0xFF as OrderedWord
 
 function byteWordShift(index Count, width ByteWordWidth, order ByteOrder) returns ByteWordShift
 	let position = match order 'position'
@@ -21,16 +20,76 @@ function byteWordShift(index Count, width ByteWordWidth, order ByteOrder) return
 	return (position * byteOrderBitsPerByte) as ByteWordShift
 end 'byteWordShift'
 
+function byteOrderMovesInOneAccess(width ByteWordWidth) returns bool
+	return width == 2 or width == 4 or width == 8
+end 'byteOrderMovesInOneAccess'
+
+function byteOrderWordFitsBelow(off ElementIndex, width ByteWordWidth, limit ElementIndex) returns bool
+	return limit >= width and off <= limit - width
+end 'byteOrderWordFitsBelow'
+
+function readBigEndianInOneAccess(source ByteArray, off ElementIndex, width ByteWordWidth) returns OrderedWord throws ArrayError
+	return match width 'width'
+		2 gives try __Builtins.readBigEndian(source, off, 2)
+		4 gives try __Builtins.readBigEndian(source, off, 4)
+		8 gives try __Builtins.readBigEndian(source, off, 8)
+		default panic("readOrderedWord: a width of {width} is not moved in one access")
+	end 'width'
+end 'readBigEndianInOneAccess'
+
+function readLittleEndianInOneAccess(source ByteArray, off ElementIndex, width ByteWordWidth) returns OrderedWord throws ArrayError
+	return match width 'width'
+		2 gives try __Builtins.readLittleEndian(source, off, 2)
+		4 gives try __Builtins.readLittleEndian(source, off, 4)
+		8 gives try __Builtins.readLittleEndian(source, off, 8)
+		default panic("readOrderedWord: a width of {width} is not moved in one access")
+	end 'width'
+end 'readLittleEndianInOneAccess'
+
+function appendBigEndianInOneAccess(output ByteArray, word OrderedWord, width ByteWordWidth)
+	match width 'width'
+		2 then __Builtins.appendBigEndian(output, word, 2)
+		4 then __Builtins.appendBigEndian(output, word, 4)
+		8 then __Builtins.appendBigEndian(output, word, 8)
+		default panic("appendOrderedWord: a width of {width} is not moved in one access")
+	end 'width'
+end 'appendBigEndianInOneAccess'
+
+function appendLittleEndianInOneAccess(output ByteArray, word OrderedWord, width ByteWordWidth)
+	match width 'width'
+		2 then __Builtins.appendLittleEndian(output, word, 2)
+		4 then __Builtins.appendLittleEndian(output, word, 4)
+		8 then __Builtins.appendLittleEndian(output, word, 8)
+		default panic("appendOrderedWord: a width of {width} is not moved in one access")
+	end 'width'
+end 'appendLittleEndianInOneAccess'
+
 /// Appends the low `width` bytes of `word` in `order`; a byte past the eighth is zero.
-public function appendOrderedWord(output ByteArray, word ByteWord, width ByteWordWidth, order ByteOrder)
+public function appendOrderedWord(output ByteArray, word OrderedWord, width ByteWordWidth, order ByteOrder)
+	if byteOrderMovesInOneAccess(width) 'oneAccess'
+		match order 'order'
+			bigEndian then appendBigEndianInOneAccess(output, word: word, width: width)
+			littleEndian then appendLittleEndianInOneAccess(output, word: word, width: width)
+		end 'order'
+
+		return
+	end 'oneAccess'
+
 	for index in 0 upto (width as Count) 'eachByte'
 		output.push(((word shr byteWordShift(index, width: width, order: order)) and byteOrderByteMask) as Byte)
 	end 'eachByte'
 end 'appendOrderedWord'
 
 /// The `width` bytes at `off` as a word, in `order`; a byte at or past `limit` reads as zero.
-public function readOrderedWord(source ByteArray, off ElementIndex, width ByteWordWidth, limit ElementIndex, order ByteOrder) returns ByteWord
-	var word = 0 as ByteWord
+public function readOrderedWord(source ByteArray, off ElementIndex, width ByteWordWidth, limit ElementIndex, order ByteOrder) returns OrderedWord
+	if byteOrderMovesInOneAccess(width) and byteOrderWordFitsBelow(off, width: width, limit: limit) 'oneAccess'
+		return match order 'order'
+			bigEndian gives try readBigEndianInOneAccess(source, off: off, width: width) otherwise panic("readOrderedWord: a word inside the limit the caller sized is missing")
+			littleEndian gives try readLittleEndianInOneAccess(source, off: off, width: width) otherwise panic("readOrderedWord: a word inside the limit the caller sized is missing")
+		end 'order'
+	end 'oneAccess'
+
+	var word = 0 as OrderedWord
 
 	for index in 0 upto (width as Count) 'eachByte'
 		let at = off + index
@@ -40,7 +99,7 @@ public function readOrderedWord(source ByteArray, off ElementIndex, width ByteWo
 			byte = try source.get(at) otherwise panic("readOrderedWord: a byte inside the limit the caller sized is missing")
 		end 'inside'
 
-		word = word or ((byte as ByteWord) shl byteWordShift(index, width: width, order: order))
+		word = word or ((byte as OrderedWord) shl byteWordShift(index, width: width, order: order))
 	end 'eachByte'
 
 	return word

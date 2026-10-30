@@ -61,7 +61,7 @@ module type TlsReader
 		return (try readWord(width.rawValue as ByteWordWidth)) as TlsWireValue
 	end 'readUnsigned'
 
-	function readWord(width ByteWordWidth) returns ByteWord throws TlsCodecError
+	function readWord(width ByteWordWidth) returns OrderedWord throws TlsCodecError
 		if remaining() < width 'truncated'
 			throw TlsCodecError.decodeError
 		end 'truncated'
@@ -126,7 +126,7 @@ module type TlsReader
 end 'TlsReader'
 
 module function appendUnsigned(output ByteArray, value TlsWireValue, width TlsWireWidth)
-	appendOrderedWord(output, word: value as ByteWord, width: width.rawValue as ByteWordWidth, order: ByteOrder.bigEndian)
+	appendOrderedWord(output, word: value as OrderedWord, width: width.rawValue as ByteWordWidth, order: ByteOrder.bigEndian)
 end 'appendUnsigned'
 
 module function appendVector(output ByteArray, prefix TlsLengthPrefix, contents ByteArray) throws TlsEncodeError
@@ -134,6 +134,6 @@ module function appendVector(output ByteArray, prefix TlsLengthPrefix, contents 
 		throw TlsEncodeError.vectorTooLong
 	end 'overflow'
 
-	appendOrderedWord(output, word: contents.count() as ByteWord, width: prefix.width(), order: ByteOrder.bigEndian)
+	appendOrderedWord(output, word: contents.count() as OrderedWord, width: prefix.width(), order: ByteOrder.bigEndian)
 	output.append(contents)
 end 'appendVector'

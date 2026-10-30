@@ -160,13 +160,7 @@ function curve25519Byte(bytes ByteArray, index ElementIndex) returns WorkspaceLi
 end 'curve25519Byte'
 
 function curve25519ReadWord(bytes ByteArray, first ElementIndex) returns WorkspaceLimb
-	var word = curve25519ZeroWord
-
-	for k in 0 upto curve25519ReadBytes 'eachByte'
-		word = word or (curve25519Byte(bytes, index: first + k) shl (k * curve25519BitsPerByte))
-	end 'eachByte'
-
-	return word
+	return (try __Builtins.readLittleEndian(bytes, first, curve25519ReadBytes) otherwise panic("curve25519: word index past the bytes the caller checked")) as WorkspaceLimb
 end 'curve25519ReadWord'
 
 function curve25519Parity(encoded ByteArray) returns WorkspaceLimb
@@ -529,9 +523,7 @@ function scalarBytes(ws WorkspaceLimbs, slot Count) returns ByteArray
 	bytes.reserve(curve25519KeyBytes)
 
 	for index in 0 upto curve25519ScalarWordCount 'eachWord'
-		for offset in 0 upto curve25519ReadBytes 'eachByte'
-			bytes.push(((workspaceLimbAt(ws, index: base + index) shr (offset * curve25519BitsPerByte)) and curve25519ByteMask) as Byte)
-		end 'eachByte'
+		__Builtins.appendLittleEndian(bytes, workspaceLimbAt(ws, index: base + index) as OrderedWord, curve25519ReadBytes)
 	end 'eachWord'
 
 	return bytes

@@ -192,17 +192,18 @@ let opI64GtU = 0x56
 let opI64LeU = 0x58
 let opI64GeU = 0x5A
 
-// ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply or bitwise-or either — the absence is
-// DELIBERATE. `div`/`mod` are the two Std ops with no operand type, and the rest were selected by
-// an operand type whose narrowness describes STORAGE, not arithmetic; this backend computes every
-// integer op at MACHINE WIDTH (`StdToWasm.wasmMachineValTypeOf`), so no 32-bit arithmetic is ever
-// emitted. The file's rule is that an opcode is here because StdToWasm needs it, and no 32-bit
-// arithmetic op is. What is left is address arithmetic (`add`/`sub` over an i32 linear-memory
-// address, and the frame stack's `and`/`shl` masking a ring slot into one) and `logicalNot`'s bit
-// flip (`xor`).
+// ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply either — the absence is DELIBERATE. `div`/`mod`
+// are the two Std ops with no operand type, and the rest were selected by an operand type whose
+// narrowness describes STORAGE, not arithmetic; this backend computes every integer ALU and compare op
+// at MACHINE WIDTH (`StdToWasm.wasmMachineValTypeOf`). The file's rule is that an opcode is here
+// because StdToWasm needs it. What is left is address arithmetic (`add`/`sub` over an i32 linear-memory
+// address, and the frame stack's `and`/`shl` masking a ring slot into one), `logicalNot`'s bit flip
+// (`xor`), and the 32-bit byte swap's `rotl`/`and`/`or`, whose rotates must wrap at bit 32.
 let opI32Add = 0x6A
 let opI32And = 0x71
+let opI32Or = 0x72
 let opI32Shl = 0x74
+let opI32Rotl = 0x77
 let opI32Sub = 0x6B
 let opI32Xor = 0x73
 
@@ -219,6 +220,7 @@ let opI64Xor = 0x85
 let opI64Shl = 0x86
 let opI64ShrS = 0x87
 let opI64ShrU = 0x88
+let opI64Rotl = 0x89
 
 let opI32WrapI64 = 0xA7
 let opI64ExtendI32S = 0xAC
@@ -295,23 +297,22 @@ let opF64ReinterpretI64 = 0xBF
 // The memory-access band. A load/store
 // carries a MEMARG — an
 // `align` ULEB then an `offset` ULEB. The WORD forms below (an `int`/pointer is i64, a `float` is f64)
-// serve globals and heap-record fields; the BYTE forms that follow serve a heap String's per-byte
-// access. StdToWasm's `wasmMemAccessType` is the one door mapping a Std type to the width — and to the
-// `as`-cast for the narrow integers still beyond the backend.
+// serve globals and heap-record fields; the NARROW forms that follow serve a heap String's per-byte
+// access and the byte-order intrinsics' 16- and 32-bit words. StdToWasm's `wasmMemAccessOf` is the one
+// door mapping a Std type to the form — and to the `as`-cast for the signed narrow integers it refuses.
 let opI64Load = 0x29
 let opF64Load = 0x2B
 let opI64Store = 0x37
 let opF64Store = 0x39
 
-// The NARROW byte forms. A String's bytes are accessed one at a time
-// (`buffer[i]`), so a `loadIndirect`/`storeIndirect` of `u8` lowers here: `i32.load8_u` ZERO-extends
-// the byte into the i32 a byte-width value occupies (see wasmValTypeOf — everything ≤ 32 bits is an
-// i32 local), and `i32.store8` writes the LOW byte of the i32 operand. Only the `u8`/`i1` byte forms
-// join the word forms above, because the shared native `accessWidthFor` door lowers only BYTE
-// (`i1`/`u8`) and WORD (`i64`/`f64`) accesses today — a wider narrow integer needs the `as` cast
-// which the wasm backend refuses identically (StdToWasm's `wasmMemAccessType`).
+// The NARROW forms. Each load ZERO-extends into the i32 a value of 32 bits or fewer occupies (see
+// wasmValTypeOf — everything ≤ 32 bits is an i32 local), and each store writes the LOW bytes of its
+// i32 operand. Zero-extension is correct because the only narrow types `wasmMemAccessOf` admits are
+// unsigned (`i1`, `u8`, `u16`, `u32`).
 let opI32Load8U = 0x2D
+let opI32Load16U = 0x2F
 let opI32Store8 = 0x3A
+let opI32Store16 = 0x3B
 let opI32Load = 0x28
 let opI32Store = 0x36
 
@@ -336,9 +337,9 @@ let wasmBulkMemoryMemZero = 0x00
 // A memarg's `align` is the log2 of the access's byte width — the NATURAL alignment. It is a
 // hint only: it never changes semantics (a wasm load/store is defined at any address, aligned or
 // not) and validation requires only that it not EXCEED the natural alignment, so the natural
-// value is always legal and is the canonical choice. The word forms are 8-byte (word64) accesses,
-// so their hint is 3 (2^3 = 8); a byte access is 1-byte, so its hint is 0 (2^0 = 1).
+// value is always legal and is the canonical choice.
 let wasmMemAlignByte = 0
+let wasmMemAlignWord16 = 1
 let wasmMemAlignWord32 = 2
 let wasmMemAlignWord64 = 3
 
@@ -536,6 +537,10 @@ export type WasmBody
 		self.buf.push(opI64ShrU)
 	end 'i64ShrU'
 
+	export function i64Rotl()
+		self.buf.push(opI64Rotl)
+	end 'i64Rotl'
+
 	// i64 compares (two i64 → i32 bool).
 	export function i64Eq()
 		self.buf.push(opI64Eq)
@@ -610,12 +615,11 @@ export type WasmBody
 	// ⚠ **THE i32 SET IS NOT THE i64 SET'S TWIN — it is only what LINEAR-MEMORY ADDRESS arithmetic and
 	// the 0/1 bool need**. An integer OPERATION is emitted at the machine word whatever its
 	// Std operand type says (`StdToWasm.wasmMachineValTypeOf`), so there is no width to pick between: the
-	// i32 ALU that remains is `add`/`sub` for an address computed from a base, `xor` for `logicalNot`'s
-	// bit flip, and `eqz`. The multiply, the bitwise pair, the three shifts and the six compares were
-	// selectable only by a NARROW operand type, and a narrow operand type is a storage class rather
-	// than an arithmetic one — selecting on it truncated `ExitCode * 2` to 32 bits and read an
-	// `ExitCode > 100` as SIGNED. Same rule as the `i32.div_s`/`i32.rem_s` note above: an opcode is
-	// here because StdToWasm needs it.
+	// i32 ALU that remains is `add`/`sub` for an address computed from a base, `and`/`shl` masking a ring
+	// slot, `xor` for `logicalNot`'s bit flip, `eqz`, and the 32-bit byte swap's `rotl`/`and`/`or`. A
+	// NARROW operand type is a storage class rather than an arithmetic one, so selecting an i32 op on it
+	// would truncate `ExitCode * 2` to 32 bits and read `ExitCode > 100` as SIGNED. Same rule as the
+	// `i32.div_s`/`i32.rem_s` note above: an opcode is here because StdToWasm needs it.
 	export function i32Add()
 		self.buf.push(opI32Add)
 	end 'i32Add'
@@ -639,6 +643,14 @@ export type WasmBody
 	export function i32Shl()
 		self.buf.push(opI32Shl)
 	end 'i32Shl'
+
+	export function i32Or()
+		self.buf.push(opI32Or)
+	end 'i32Or'
+
+	export function i32Rotl()
+		self.buf.push(opI32Rotl)
+	end 'i32Rotl'
 
 	export function i32GeU()
 		self.buf.push(opI32GeU)
@@ -785,6 +797,14 @@ export type WasmBody
 	export function i32Store8(offset Wasm32Index)
 		self.pushMemAccess(opI32Store8, align: wasmMemAlignByte, offset: offset)
 	end 'i32Store8'
+
+	export function i32Load16U(offset Wasm32Index)
+		self.pushMemAccess(opI32Load16U, align: wasmMemAlignWord16, offset: offset)
+	end 'i32Load16U'
+
+	export function i32Store16(offset Wasm32Index)
+		self.pushMemAccess(opI32Store16, align: wasmMemAlignWord16, offset: offset)
+	end 'i32Store16'
 
 	export function i32Load(offset Wasm32Index)
 		self.pushMemAccess(opI32Load, align: wasmMemAlignWord32, offset: offset)

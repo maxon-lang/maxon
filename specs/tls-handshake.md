@@ -1556,7 +1556,7 @@ function main() returns ExitCode
 	var client = try TlsClientHandshake.create(config, entropy: first, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise return 3
 	let records = client.session().takeRecords()
 	let record = try records.get(0) otherwise return 4
-	let framed = readOrderedWord(record, off: 3, width: 2, limit: record.count(), order: ByteOrder.bigEndian) == (record.count() - 5) as ByteWord
+	let framed = readOrderedWord(record, off: 3, width: 2, limit: record.count(), order: ByteOrder.bigEndian) == (record.count() - 5) as OrderedWord
 	let body = try record.slice(5, endIndex: record.count()) otherwise return 5
 	let message = try TlsHandshakeCodec.decode(body, protocol: TlsProtocol.tls13) otherwise return 6
 

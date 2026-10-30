@@ -1,0 +1,225 @@
+export enum WordByteOrder
+	littleEndian
+	bigEndian
+end 'WordByteOrder'
+
+export enum WordAccess
+	get
+	put
+end 'WordAccess'
+
+export type OrderedWordIntrinsic
+	export let access as WordAccess
+	export let order as WordByteOrder
+
+	export static function create(access WordAccess, order WordByteOrder) returns Self
+		return Self{access: access, order: order}
+	end 'create'
+end 'OrderedWordIntrinsic'
+
+export type WordEntry
+	export let access as WordAccess
+	export let order as WordByteOrder
+	export let width as WordBytes
+
+	export static function create(access WordAccess, order WordByteOrder, width WordBytes) returns Self
+		return Self{access: access, order: order, width: width}
+	end 'create'
+end 'WordEntry'
+
+let WordEntryPrefix = b"__managed_word_"
+let OrderedWordIntrinsicPrefix = "__Builtins."
+let WordBitsPerByte = 8
+let WordByteMask = 0xFF
+let WordZero = 0
+
+export function wordAccessType(width WordBytes) returns StdType
+	return match width 'w'
+		two gives StdType.u16
+		four gives StdType.u32
+		eight gives StdType.i64
+	end 'w'
+end 'wordAccessType'
+
+function orderedWordIntrinsicName(intrinsic OrderedWordIntrinsic) returns ByteArray
+	let verb = match intrinsic.access 'a'
+		get gives "read"
+		put gives "append"
+	end 'a'
+
+	let endian = match intrinsic.order 'o'
+		littleEndian gives "LittleEndian"
+		bigEndian gives "BigEndian"
+	end 'o'
+
+	return "{OrderedWordIntrinsicPrefix}{verb}{endian}".toByteArray()
+end 'orderedWordIntrinsicName'
+
+export function orderedWordIntrinsicNamed(callee ByteArray) returns OrderedWordIntrinsic throws AbsentError
+	for access in WordAccess.allCases 'eachAccess'
+		for order in WordByteOrder.allCases 'eachOrder'
+			let intrinsic = OrderedWordIntrinsic.create(access, order: order)
+
+			if callee.equals(orderedWordIntrinsicName(intrinsic)) 'named'
+				return intrinsic
+			end 'named'
+		end 'eachOrder'
+	end 'eachAccess'
+
+	throw AbsentError.absent
+end 'orderedWordIntrinsicNamed'
+
+export function isOrderedWordIntrinsic(callee ByteArray) returns bool
+	let intrinsic = try orderedWordIntrinsicNamed(callee) otherwise return false
+	return callee.equals(orderedWordIntrinsicName(intrinsic))
+end 'isOrderedWordIntrinsic'
+
+export function wordBytesOfCount(count FullRangeInt) returns WordBytes throws AbsentError
+	for width in WordBytes.allCases 'eachWidth'
+		if wordByteCount(width) == count 'matches'
+			return width
+		end 'matches'
+	end 'eachWidth'
+
+	throw AbsentError.absent
+end 'wordBytesOfCount'
+
+export function wordEntryName(access WordAccess, order WordByteOrder, width WordBytes) returns ByteArray
+	let verb = match access 'a'
+		get gives "get"
+		put gives "put"
+	end 'a'
+
+	let endian = match order 'o'
+		littleEndian gives "le"
+		bigEndian gives "be"
+	end 'o'
+
+	return "{String.from(WordEntryPrefix)}{verb}_{endian}{wordByteCount(width)}".toByteArray()
+end 'wordEntryName'
+
+export function wordEntryNamed(callee ByteArray) returns WordEntry throws AbsentError
+	if not bytesStartWith(callee, prefix: WordEntryPrefix) 'notAWordEntry'
+		throw AbsentError.absent
+	end 'notAWordEntry'
+
+	for access in WordAccess.allCases 'eachAccess'
+		for order in WordByteOrder.allCases 'eachOrder'
+			for width in WordBytes.allCases 'eachWidth'
+				if callee.equals(wordEntryName(access, order: order, width: width)) 'named'
+					return WordEntry.create(access, order: order, width: width)
+				end 'named'
+			end 'eachWidth'
+		end 'eachOrder'
+	end 'eachAccess'
+
+	throw AbsentError.absent
+end 'wordEntryNamed'
+
+export function isWordGetCallee(callee ByteArray) returns bool
+	let entry = try wordEntryNamed(callee) otherwise return false
+	return entry.access == WordAccess.get
+end 'isWordGetCallee'
+
+export function isWordPutCallee(callee ByteArray) returns bool
+	let entry = try wordEntryNamed(callee) otherwise return false
+	return entry.access == WordAccess.put
+end 'isWordPutCallee'
+
+export function wordGetSourceMethodName(callee ByteArray) returns ByteArray
+	let entry = try wordEntryNamed(callee) otherwise panic("wordGetSourceMethodName: '{String.from(callee)}' is not a word entry — this map is asked only behind `isWordGetCallee`")
+
+	return orderedWordIntrinsicName(OrderedWordIntrinsic.create(entry.access, order: entry.order))
+end 'wordGetSourceMethodName'
+
+function wordByteShift(index FullRangeInt, order WordByteOrder, width WordBytes) returns FullRangeInt
+	let position = match order 'o'
+		littleEndian gives index
+		bigEndian gives wordByteCount(width) - 1 - index
+	end 'o'
+
+	return position * WordBitsPerByte
+end 'wordByteShift'
+
+export function installWordEntries(module StdModule)
+	for width in WordBytes.allCases 'eachWidth'
+		for order in WordByteOrder.allCases 'eachOrder'
+			buildWordGet(module, order: order, width: width)
+			buildWordPut(module, order: order, width: width)
+		end 'eachOrder'
+	end 'eachWidth'
+end 'installWordEntries'
+
+// Bounded as `at < length`, then `length - at >= width`, and never as `at + width <= length`: an `at`
+// near `u64.max` would wrap that sum into range and read outside the buffer.
+function buildWordGet(module StdModule, order WordByteOrder, width WordBytes)
+	var func = IrFunction.createFromStd(wordEntryName(WordAccess.get, order: order, width: width), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	var short = module.addBlock(func, label: b"short", heat: BlockHeat.normal)
+	var read = module.addBlock(func, label: b"read", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let arr = 0
+	let at = 1
+	let count = wordByteCount(width)
+
+	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let pastEnd = emitIndexOutOfRange(module, block: entry, index: at, length: length, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(pastEnd, thenBlockId: oob.id, elseBlockId: short.id))
+
+	let remaining = emitBin(module, block: short, a: length, b: at, opcode: StdBinOpcode.sub, ids: ids)
+	emitBranchOnCompare(module, block: short, value: remaining, pred: StdCmpPred.lt, against: count, whenTrue: oob, whenFalse: read, ids: ids)
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let buffer = emitLoadField(module, block: read, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: read, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	var word = emitConst(module, block: read, value: WordZero, ids: ids)
+	var cur = read
+
+	for index in 0 upto count 'eachByte'
+		var next = module.addBlock(func, label: b"wgstep", heat: BlockHeat.normal)
+		let offset = emitConst(module, block: cur, value: index, ids: ids)
+		let slot = emitBin(module, block: cur, a: at, b: offset, opcode: StdBinOpcode.add, ids: ids)
+		let byte = emitLoadElemAt(module, func: func, cur: cur, exit: next, buffer: buffer, index: slot, es: es, ids: ids)
+		let shift = emitConst(module, block: next, value: wordByteShift(index, order: order, width: width), ids: ids)
+		let placed = emitBin(module, block: next, a: byte, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+		word = emitBin(module, block: next, a: word, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
+		cur = next
+	end 'eachByte'
+
+	emitOkReturn(module, block: cur, value: word, ids: ids)
+
+	module.functions.push(func)
+end 'buildWordGet'
+
+function buildWordPut(module StdModule, order WordByteOrder, width WordBytes)
+	var func = IrFunction.createFromStd(wordEntryName(WordAccess.put, order: order, width: width), returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 2)
+	let arr = 0
+	let word = 1
+	let count = wordByteCount(width)
+
+	let site = emitGrowForAppend(module, block: entry, arr: arr, count: count, ids: ids)
+	let mask = emitConst(module, block: entry, value: WordByteMask, ids: ids)
+	var cur = entry
+
+	for index in 0 upto count 'eachByte'
+		let shift = emitConst(module, block: cur, value: wordByteShift(index, order: order, width: width), ids: ids)
+		let moved = emitBin(module, block: cur, a: word, b: shift, opcode: StdBinOpcode.shrLogical, ids: ids)
+		let byte = emitBin(module, block: cur, a: moved, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+		let offset = emitConst(module, block: cur, value: index, ids: ids)
+		let slot = emitBin(module, block: cur, a: site.length, b: offset, opcode: StdBinOpcode.add, ids: ids)
+		cur = emitStoreElemAt(module, func: func, cur: cur, buffer: site.buffer, index: slot, value: byte, es: site.es, ids: ids)
+	end 'eachByte'
+
+	emitAppendReturn(module, block: cur, arr: arr, site: site, ids: ids)
+
+	module.functions.push(func)
+end 'buildWordPut'

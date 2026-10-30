@@ -32,7 +32,6 @@ let nistAllOnes = u64.max as WorkspaceLimb
 let nistZero = 0 as WorkspaceLimb
 let nistOne = 1 as WorkspaceLimb
 let nistTwo = 2
-let nistByteMask = 0xFF as WorkspaceLimb
 
 let nistUncompressedTag = 0x04 as Byte
 let nistDerSequenceTag = 0x30
@@ -118,14 +117,8 @@ function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) re
 
 	for index in 0 upto limbCount 'eachLimb'
 		let first = start + count - (index + 1) * nistLimbBytes
-		var word = nistZero
 
-		for offset in 0 upto nistLimbBytes 'eachByte'
-			let byte = try bytes.get(first + offset) otherwise panic("nist: byte index past the checked length")
-			word = (word shl nistBitsPerByte) or (byte as WorkspaceLimb)
-		end 'eachByte'
-
-		limbs.push(word)
+		limbs.push((try __Builtins.readBigEndian(bytes, first, nistLimbBytes) otherwise panic("nist: byte index past the checked length")) as WorkspaceLimb)
 	end 'eachLimb'
 
 	return limbs
@@ -136,12 +129,7 @@ function nistBytesFromLimbs(limbs WorkspaceLimbs) returns ByteArray
 	bytes.reserve(limbs.count() * nistLimbBytes)
 
 	for step in 0 upto limbs.count() 'eachLimb'
-		let limb = workspaceLimbAt(limbs, index: limbs.count() - 1 - step)
-
-		for offset in 0 upto nistLimbBytes 'eachByte'
-			let shift = (nistLimbBytes - 1 - offset) * nistBitsPerByte
-			bytes.push(((limb shr shift) and nistByteMask) as Byte)
-		end 'eachByte'
+		__Builtins.appendBigEndian(bytes, workspaceLimbAt(limbs, index: limbs.count() - 1 - step) as OrderedWord, nistLimbBytes)
 	end 'eachLimb'
 
 	return bytes

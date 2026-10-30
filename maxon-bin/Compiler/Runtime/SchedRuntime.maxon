@@ -7970,8 +7970,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
 
 	// The safe-point run is one byte per entry at the entry's own index, reached through the header
 	// column that records where the variable-length names end — read as the whole header word and
-	// shifted down, because the Std tier has no 32-bit access
-	// (`BacktraceFormat.SymtabHeaderFlagsOffsetShift`). The byte shares its top bit with
+	// shifted down (`BacktraceFormat.SymtabHeaderFlagsOffsetShift`). The byte shares its top bit with
 	// `SymtabScaffoldingBit`; unmasked, a scaffolding function the table marks never-safe would pass
 	// the zero test.
 	let header = emitLoadField(module, block: flagged, record: symtable, offset: 0, ids: ids)
@@ -8056,8 +8055,7 @@ end 'arm64LookbackBlockLabel'
 let SingleDigitLimit = 9 as FullRangeInt
 
 // The instruction word `wordsBack` words before `pc`, read through the naturally aligned 64-bit word that
-// holds it: the Std tier has no 32-bit memory access (`StdLoweringShared.accessWidthFor`), and an AArch64
-// PC is 4-aligned, so the wanted half is selected by the address's own bit 2.
+// holds it: an AArch64 PC is 4-aligned, so the wanted half is selected by the address's own bit 2.
 function emitLoadInstructionWord(module StdModule, block IrBlock, pc ValueId, wordsBack FullRangeInt, ids ValueMinter) returns ValueId
 	let addr = emitBin(module, block: block, a: pc, b: emitConst(module, block: block, value: wordsBack * Arm64InstructionBytes, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	let aligned = emitBin(module, block: block, a: addr, b: emitConst(module, block: block, value: 0 - (SpillSlotBytes as FullRangeInt), ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)

@@ -9108,6 +9108,12 @@ let BuiltinsWriteStderrName = b"__Builtins.writeStderr"
 // `float.fromString("0.1")` and the literal `0.1` the same number.
 let BuiltinsBitsToFloatName = b"__Builtins.bitsToFloat"
 
+let OrderedWordArity = 3
+let OrderedWordAliasName = b"OrderedWord"
+let OrderedWordWidthRequirement = "constant width of 2, 4 or 8"
+let OrderedWordSourceRequirement = "ByteArray"
+let NotACompileTimeConstant = "a value not known at compile time"
+
 let BuiltinsFloatToBitsName = b"__Builtins.floatToBits"
 
 // ⭐⭐ **`__Builtins.ucdByteAt("__ucd_bmp", offset: cp)` / `ucdI64At("__ucd_supp", index: i)` — THE
@@ -41923,14 +41929,15 @@ export type Parser
 		end 'result'
 	end 'resultMayHoldARecord'
 
-	// The receiver writes `writes` deferred, as `noteReceiverWrite` would have filed them.
+	// The container writes `writes` deferred, as `noteContainerWrite` would have filed them.
 	function spelledReceiverWrites(writes DeferredReceiverWrites) returns ReceiverWriteSiteArray
 		var spelled = ReceiverWriteSiteArray.create()
 
 		for i in 0 upto writes.receivers.count() 'eachWrite'
 			let methodIndex = try writes.methodIndices.get(i) otherwise panic("spelledReceiverWrites: methodIndices.get OOB at {i} — the columns are pushed together")
 			let methodTok = self.tokenAt(methodIndex)
-			spelled.push(ReceiverWriteSite.create(try writes.receivers.get(i) otherwise panic("spelledReceiverWrites: receivers.get OOB at {i}"), place: self.receiverSpellingBefore(methodIndex), line: methodTok.line, column: methodTok.column, token: self.callEndAfter(methodIndex)))
+			let place = self.tokenTextFrom(try writes.placeStarts.get(i) otherwise panic("spelledReceiverWrites: placeStarts.get OOB at {i} — the columns are pushed together"), endIndex: try writes.placeEnds.get(i) otherwise panic("spelledReceiverWrites: placeEnds.get OOB at {i} — the columns are pushed together")).toByteArray()
+			spelled.push(ReceiverWriteSite.create(try writes.receivers.get(i) otherwise panic("spelledReceiverWrites: receivers.get OOB at {i}"), place: place, line: methodTok.line, column: methodTok.column, token: self.callEndAfter(methodIndex)))
 		end 'eachWrite'
 
 		return spelled
@@ -77765,6 +77772,7 @@ export type Parser
 	//
 	// An unknown method is refused by name here rather than mangled into a callee no file declares.
 	function dispatchManagedSocketMethod(func IrFunction, recv MethodReceiver) returns ValueId throws SourceParseError
+		let methodIndex = self.pos
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
@@ -77783,7 +77791,9 @@ export type Parser
 		end 'sendFrom'
 
 		if methodTok.value.equals(ManagedSocketRecvMethod) 'recv'
-			let buffer = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFileManagedParamName, methodTok: methodTok)
+			try self.consume(TokenKind.leftParen)
+			let buffer = try self.parseManagedMemoryFillArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok, methodIndex: methodIndex)
+			try self.consume(TokenKind.rightParen)
 			return self.emitLibraryAliasedRuntimeCall(ManagedSocketRecvName, args: pairArgs(recv.value, second: buffer), alias: BytePosAliasName, range: range)
 		end 'recv'
 
@@ -78030,6 +78040,16 @@ export type Parser
 		try self.requireManagedMemoryValue(value, paramName: paramName, anchor: methodTok)
 		return value
 	end 'parseManagedMemoryArg'
+
+	function parseManagedMemoryFillArg(func IrFunction, paramName ByteArray, methodTok Token, methodIndex ElementIndex) returns ValueId throws SourceParseError
+		let valueTok = self.current()
+		let valueStart = self.pos
+		let value = try self.parseManagedMemoryArg(func, paramName: paramName, methodTok: methodTok)
+
+		self.noteArgumentWrite(func, written: value, blame: self.argumentBlame(valueTok, valueStart: valueStart, value: value), placeStart: valueStart, placeEnd: self.pos, calleeTok: methodTok, calleeIndex: methodIndex)
+
+		return value
+	end 'parseManagedMemoryFillArg'
 
 	// One `int` argument of a signature-checked builtin — `size`, `count`, `elementSize`, a stat buffer's
 	// address, a stat field index, a byte offset, a byte value. Same anchor rule as its `__ManagedMemory`
@@ -78570,6 +78590,7 @@ export type Parser
 	// An unknown method is refused by name here rather than mangled into a callee no file declares —
 	// `compilerOwnedStaticSurface`'s argument for the statics, on the instance side.
 	function dispatchManagedFileMethod(func IrFunction, recv MethodReceiver) returns ValueId throws SourceParseError
+		let methodIndex = self.pos
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
@@ -78588,12 +78609,12 @@ export type Parser
 		// lets a `"…".toByteArray().managed` temporary drop at the end of the statement, as it does today for
 		// `openRead`'s path).
 		if methodTok.value.equals(ManagedFileReadMethod) 'read'
-			let (managed, size) = try self.parseManagedFileFillArgs(func, methodTok: methodTok)
+			let (managed, size) = try self.parseManagedFileFillArgs(func, methodTok: methodTok, methodIndex: methodIndex)
 			return self.emitLibraryAliasedRuntimeCall(ManagedFileReadName, args: tripleArgs(recv.value, second: managed, third: size), alias: FileSizeAliasName, range: range)
 		end 'read'
 
 		if methodTok.value.equals(ManagedFileReadAppendingMethod) 'readAppending'
-			let (managed, size) = try self.parseManagedFileFillArgs(func, methodTok: methodTok)
+			let (managed, size) = try self.parseManagedFileFillArgs(func, methodTok: methodTok, methodIndex: methodIndex)
 			return self.emitLibraryAliasedRuntimeCall(ManagedFileReadAppendingName, args: tripleArgs(recv.value, second: managed, third: size), alias: FileSizeAliasName, range: range)
 		end 'readAppending'
 
@@ -78607,9 +78628,9 @@ export type Parser
 		throw SourceParseError.unsupported("`{String.from(ManagedFileTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these five: `size()`, `read(managed, size)`, `readAppending(managed, size)`, `write(managed)` and `close()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedFileMethod'
 
-	function parseManagedFileFillArgs(func IrFunction, methodTok Token) returns (ValueId, ValueId) throws SourceParseError
+	function parseManagedFileFillArgs(func IrFunction, methodTok Token, methodIndex ElementIndex) returns (ValueId, ValueId) throws SourceParseError
 		try self.consume(TokenKind.leftParen)
-		let managed = try self.parseManagedMemoryArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok)
+		let managed = try self.parseManagedMemoryFillArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok, methodIndex: methodIndex)
 
 		// ⭐ **THE THIRD RAW-BYTE FILL** — `__mf_read` and `__mf_read_append` blit a file's contents into
 		// the caller's buffer, so the buffer's element has to admit every value a byte has, exactly as
@@ -84803,39 +84824,36 @@ export type Parser
 		panic("{drift}")
 	end 'dispatchArrayMethod'
 
-	// ⭐⭐ **REFUSE A RECEIVER-WRITING METHOD ON AN IMMUTABLE RECEIVER (E3159) — ONE RULE, ONE HOME, FOR
-	// EVERY CONTAINER.** A read-only method on either kind of receiver, and any method on a writable
-	// one, pass straight through. What stays per-container is only WHICH METHOD NAMES WRITE THE RECEIVER,
-	// which the caller passes as `mutatesReceiver`; the writability of the binding and the refusal live
-	// here, so no container can give its own answer to the same question. The refusal is filed
-	// (`noteWriteThroughRefusal`) for `ProvenanceTracer.reportWriteRefusals` to report, not thrown.
+	// ⭐⭐ **REFUSE A WRITE TO AN IMMUTABLE CONTAINER (E3159) — ONE RULE, ONE HOME, FOR EVERY CONTAINER AND
+	// EVERY CALL THAT WRITES ONE.** The container is a method's receiver (`noteReceiverWrite`) or the buffer
+	// argument a writing builtin fills (`noteArgumentWrite`: the append intrinsics, `fillRandom`, `read`,
+	// `readAppending`, `recv`), spelled by the tokens `[placeStart, placeEnd)`. The writability of the
+	// binding and the refusal live here, so no container and no builtin can give its own answer to the same
+	// question. The refusal is filed (`noteWriteThroughRefusal`) for `ProvenanceTracer.reportWriteRefusals`
+	// to report, not thrown.
 	//
 	// ⭐⭐ **IT ALSO RECORDS THE WRITE IT PERMITS, AND THE TWO HALVES ARE ONE DECISION.** A write through a
-	// receiver that denotes a PARAMETER's record is a mutation of that parameter, which is exactly what the
+	// container that denotes a PARAMETER's record is a mutation of that parameter, which is exactly what the
 	// call-site half (`SemanticCheck.buildParamMutationSummary`) must know about the enclosing function.
-	// `receiverOwner` is the narrow answer read ALONE at a method's receiver slot (NO for a self-field
-	// write; see `receiverOwnerMask`); `receiverStorage` is which parameter's
-	// record this receiver denotes, which the immutable-global column's union below needs and which the
-	// receiver slot must not read. See `IrFunction`'s table, which is where the columns are defined.
+	// `owner` is the narrow answer read ALONE at a method's receiver slot (NO for a self-field write; see
+	// `receiverOwnerMask` and `argumentOwnerMask`); `storage` is which parameter's record this container
+	// denotes, which the immutable-global column's union below needs and which the receiver slot must not
+	// read. See `IrFunction`'s table, which is where the columns are defined.
 	//
-	// ⭐ **AND IT FILES THE WRITE FOR `StorageProvenance`, WHICH ASKS WHAT THIS DOOR CANNOT.** A receiver no
+	// ⭐ **AND IT FILES THE WRITE FOR `StorageProvenance`, WHICH ASKS WHAT THIS DOOR CANNOT.** A container no
 	// binding names here — `pass(a).push(9)`, or a `var` made from a call — may still be a `let`'s record or a
 	// parameter's, and only the whole-program summary of what a call hands back can say which
 	// (`ProvenanceTracer.checkReceiverWrites`, `collectProvenanceParamEdges`).
-	function noteReceiverWrite(func IrFunction, receiver ValueId, immutableReceiverName WriteBlame, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask, methodTok Token, methodIndex ElementIndex, mutatesReceiver bool)
-		if not mutatesReceiver 'readOnlyMethod'
+	function noteContainerWrite(func IrFunction, written ValueId, blame WriteBlame, owner ParamPositionMask, storage ParamPositionMask, placeStart ElementIndex, placeEnd ElementIndex, callTok Token, callIndex ElementIndex)
+		if blame.isBlamed() 'immutableRecord'
+			self.noteWriteThroughRefusal(func, blame: blame, place: self.tokenTextFrom(placeStart, endIndex: placeEnd), anchor: callTok)
 			return
-		end 'readOnlyMethod'
-
-		if immutableReceiverName.isBlamed() 'immutableReceiver'
-			self.noteWriteThroughRefusal(func, blame: immutableReceiverName, place: String.from(self.receiverSpellingBefore(methodIndex)), anchor: methodTok)
-			return
-		end 'immutableReceiver'
+		end 'immutableRecord'
 
 		var deferred = self.deferredProvenanceOf(func)
-		deferred.noteReceiverWrite(receiver, methodIndex: methodIndex)
+		deferred.noteReceiverWrite(written, methodIndex: callIndex, placeStart: placeStart, placeEnd: placeEnd)
 
-		func.writtenParamMask = func.writtenParamMask or receiverOwner
+		func.writtenParamMask = func.writtenParamMask or owner
 
 		// ⭐ **THE IMMUTABLE-GLOBAL COLUMN TAKES THE UNION OF BOTH**, because it asks the widest of the three questions —
 		// "does this body write the record this parameter denotes, at all?" — and each of the other two is
@@ -84843,8 +84861,49 @@ export type Parser
 		// answers are already in hand here, decided about the same receiver at the same instant, so the union
 		// costs nothing and cannot fall out of step with either. ⚠ It is keyed on `mutatesReceiver`:
 		// `ml.insertLast(x)` frees no node but does write the record, which is exactly the question this column asks.
-		func.writesThroughParamMask = func.writesThroughParamMask or receiverOwner or receiverStorage
+		func.writesThroughParamMask = func.writesThroughParamMask or owner or storage
+	end 'noteContainerWrite'
+
+	// What stays per-container is only WHICH METHOD NAMES WRITE THE RECEIVER, which the caller passes as
+	// `mutatesReceiver`; a read-only method passes straight through.
+	function noteReceiverWrite(func IrFunction, receiver ValueId, immutableReceiverName WriteBlame, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask, methodTok Token, methodIndex ElementIndex, mutatesReceiver bool)
+		if not mutatesReceiver 'readOnlyMethod'
+			return
+		end 'readOnlyMethod'
+
+		let place = self.receiverPlaceBefore(methodIndex)
+		self.noteContainerWrite(func, written: receiver, blame: immutableReceiverName, owner: receiverOwner, storage: receiverStorage, placeStart: place.0, placeEnd: place.1, callTok: methodTok, callIndex: methodIndex)
 	end 'noteReceiverWrite'
+
+	function noteFirstArgumentWrite(func IrFunction, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, calleeTok Token, calleeIndex ElementIndex)
+		let written = try args.get(0) otherwise panic("noteFirstArgumentWrite: a write names the argument it writes, and the call has none")
+		let placeStart = try argAnchors.get(0) otherwise panic("noteFirstArgumentWrite: an argument pushed into `args` pushes its anchor with it")
+		let placeEnd = (try argAnchors.get(1) otherwise self.pos) - 1
+
+		self.noteArgumentWrite(func, written: written, blame: immutableArgNameAt(argImmutableNames, index: 0), placeStart: placeStart, placeEnd: placeEnd, calleeTok: calleeTok, calleeIndex: calleeIndex)
+	end 'noteFirstArgumentWrite'
+
+	function noteArgumentWrite(func IrFunction, written ValueId, blame WriteBlame, placeStart ElementIndex, placeEnd ElementIndex, calleeTok Token, calleeIndex ElementIndex)
+		let subjectName = self.storageSubjectNameAt(placeStart)
+		let storage = self.subjectStorageMask(func, subjectName: subjectName)
+		let owner = self.argumentOwnerMask(subjectName, storage: storage, spansOneToken: placeEnd == placeStart + 1)
+
+		self.noteContainerWrite(func, written: written, blame: blame, owner: owner, storage: storage, placeStart: placeStart, placeEnd: placeEnd, callTok: calleeTok, callIndex: calleeIndex)
+	end 'noteArgumentWrite'
+
+	function argumentOwnerMask(subjectName StorageSubject, storage ParamPositionMask, spansOneToken bool) returns ParamPositionMask
+		if not spansOneToken 'aChainOffAName'
+			return NoParamPositions
+		end 'aChainOffAName'
+
+		let name = try subjectName.storageName() otherwise return NoParamPositions
+
+		if self.storageSubjectBindingOf(name).isSelfField 'ownedByTheTypeNotTheCaller'
+			return NoParamPositions
+		end 'ownedByTheTypeNotTheCaller'
+
+		return storage
+	end 'argumentOwnerMask'
 
 	function noteWriteThroughRefusal(func IrFunction, blame WriteBlame, place String, anchor Token)
 		let root = blame.rootName().toByteArray()
@@ -84889,16 +84948,16 @@ export type Parser
 		return q
 	end 'callEndAfter'
 
-	// The receiver of the method at `methodIndex` as the author spelled it: the chain of names ending at the dot
-	// before the method, or the method's own name when what precedes the dot is no such chain.
-	function receiverSpellingBefore(methodIndex ElementIndex) returns ByteArray
+	// The tokens, as `[start, end)`, that spell the receiver of the method at `methodIndex`: the chain of names ending at
+	// the dot before the method, or the method's own name when what precedes the dot is no such chain.
+	function receiverPlaceBefore(methodIndex ElementIndex) returns (ElementIndex, ElementIndex)
 		if methodIndex < 2 'noReceiver'
-			return self.tokenAt(methodIndex).value
+			return (methodIndex, methodIndex + 1)
 		end 'noReceiver'
 
-		let start = try self.callChainStartEndingAt(methodIndex - 2) otherwise return self.tokenAt(methodIndex).value
-		return self.tokenTextFrom(start, endIndex: methodIndex - 1).toByteArray()
-	end 'receiverSpellingBefore'
+		let start = try self.callChainStartEndingAt(methodIndex - 2) otherwise return (methodIndex, methodIndex + 1)
+		return (start, methodIndex - 1)
+	end 'receiverPlaceBefore'
 
 	function callChainStartEndingAt(last ElementIndex) returns ElementIndex throws AbsentError
 		var at = last
@@ -91891,8 +91950,8 @@ export type Parser
 	// (`emitCellLoad`, `emitCellStore`) — so a second spelling would silently corrupt the slot.
 	//
 	// An env slot is `EnvSlotBytes` wide by construction (`envSlotOffset` strides by it). `exitCode`
-	// is the one scalar whose `StdType` (u32) is narrower than the word, and `accessWidthFor` refuses
-	// a u32 memory access; the value is unsigned, so a word access zero-extends it unambiguously. Not
+	// is the one scalar whose `StdType` (u32) is narrower than the word, and the slot is a whole word; the
+	// value is unsigned, so a word access zero-extends it unambiguously. Not
 	// folded into `fieldStorageType`: a struct field is packed against its neighbours, and widening it
 	// there would move every following field.
 	//
@@ -93091,6 +93150,7 @@ export type Parser
 		// The `callee` bytes the caller passed were read off this very token, so refusing it here would
 		// refuse every call to a name the declaration accepts.
 		try self.requireCalleeIsNotRawSurface(callee, anchor: anchor)
+		let calleeIndex = self.pos
 		try self.consumeNameToken(NamePosition.declaration)
 		try self.consume(TokenKind.leftParen)
 
@@ -93390,6 +93450,7 @@ export type Parser
 				let buffer = try args.get(0) otherwise panic("fillRandom: args.count() == FillRandomArity just checked but get(0) failed")
 				try self.requireManagedMemoryValue(buffer, paramName: ManagedFileManagedParamName, anchor: anchor)
 				try self.requireRawByteFillFitsItsElement(self.valueInstanceId(buffer), methodTok: anchor)
+				self.noteFirstArgumentWrite(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: anchor, calleeIndex: calleeIndex)
 				return self.emitLibraryAliasedRuntimeCall(RandomFillName, args: singletonArgs(buffer), alias: FullRangeIntAliasName, range: SourceRange.ofToken(anchor))
 			end 'fillRandom'
 
@@ -93717,6 +93778,11 @@ export type Parser
 			if callee.equals(BuiltinsBitsToFloatName) 'bitsToFloat'
 				return try self.emitBitsToFloat(args, calleeTok: anchor)
 			end 'bitsToFloat'
+
+			if isOrderedWordIntrinsic(callee) 'orderedWord'
+				let intrinsic = try orderedWordIntrinsicNamed(callee) otherwise panic("parseCallNamed: '{String.from(callee)}' passed `isOrderedWordIntrinsic` and names no ordered-word intrinsic")
+				return try self.emitOrderedWordAccess(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, callee: callee, intrinsic: intrinsic, calleeTok: anchor, calleeIndex: calleeIndex, resultUsed: resultUsed)
+			end 'orderedWord'
 
 			// ⭐⭐ **THE INTRINSICS OF `stdlib/Subprocess.maxon`'s FLOOR — the `subprocess*` band plus
 			// `managedIsNull`, which the arm below says in so many words is not a subprocess entry.** Each row is a
@@ -94471,6 +94537,47 @@ export type Parser
 
 		return self.emitFullRangeFloatBits(operand, range: SourceRange.ofToken(calleeTok))
 	end 'emitBitsToFloat'
+
+	function emitOrderedWordAccess(func IrFunction, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, callee ByteArray, intrinsic OrderedWordIntrinsic, calleeTok Token, calleeIndex ElementIndex, resultUsed bool) returns ValueId throws SourceParseError
+		try requireBuiltinArity(args, builtinName: callee, arity: OrderedWordArity, calleeTok: calleeTok)
+
+		let buffer = try args.get(0) otherwise panic("emitOrderedWordAccess: args.count() == OrderedWordArity just checked but get(0) failed")
+		let integer = try args.get(1) otherwise panic("emitOrderedWordAccess: args.count() == OrderedWordArity just checked but get(1) failed")
+		let widthOperand = try args.get(2) otherwise panic("emitOrderedWordAccess: args.count() == OrderedWordArity just checked but get(2) failed")
+		let width = try self.requireOrderedWordOperands(buffer, integer: integer, widthOperand: widthOperand, callee: callee, calleeTok: calleeTok)
+		let entry = wordEntryName(intrinsic.access, order: intrinsic.order, width: width)
+		let range = SourceRange.ofToken(calleeTok)
+
+		if intrinsic.access == WordAccess.put and resultUsed 'noValueToUse'
+			throw SourceParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		match intrinsic.access 'access'
+			get then return self.emitLibraryAliasedRuntimeCall(entry, args: pairArgs(buffer, second: integer), alias: OrderedWordAliasName, range: range)
+			put then break
+		end 'access'
+
+		self.noteFirstArgumentWrite(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex)
+		return self.emitRuntimeCall(entry, args: pairArgs(buffer, second: integer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitOrderedWordAccess'
+
+	function requireOrderedWordOperands(buffer ValueId, integer ValueId, widthOperand ValueId, callee ByteArray, calleeTok Token) returns WordBytes throws SourceParseError
+		if not self.valueIsByteArray(buffer) 'notAByteArray'
+			throw SourceParseError.builtinOperandType(String.from(callee), required: OrderedWordSourceRequirement, got: self.valueDisplayTypeName(buffer), line: calleeTok.line, column: calleeTok.column)
+		end 'notAByteArray'
+
+		let integerTag = self.rangedAliasResolvedTag(self.tagOf(integer), nameId: self.valueNameId(integer))
+
+		if not tagIsInteger(integerTag) 'notAnInteger'
+			throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWordAt(integer, tag: integerTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAnInteger'
+
+		if not self.constIsKnown(widthOperand) 'notConstant'
+			throw SourceParseError.builtinOperandType(String.from(callee), required: OrderedWordWidthRequirement, got: NotACompileTimeConstant, line: calleeTok.line, column: calleeTok.column)
+		end 'notConstant'
+
+		return try wordBytesOfCount(self.constOf(widthOperand)) otherwise throw SourceParseError.builtinOperandType(String.from(callee), required: OrderedWordWidthRequirement, got: "{self.constOf(widthOperand)}", line: calleeTok.line, column: calleeTok.column)
+	end 'requireOrderedWordOperands'
 
 	function emitFullRangeFloatBits(bits ValueId, range SourceRange) returns ValueId
 		let value = self.emitUnaryOp(bits, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)

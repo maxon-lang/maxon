@@ -281,6 +281,9 @@ release's version as its heading when the release is cut.
   rules: a `T` parameter it stores in a record twice, or inside a loop, is E3102, and a closure in it that
   stores or returns a captured `T` is E3141.
   Fix: store the parameter once, outside any loop, and hand the closure the value as a parameter.
+- The `ByteWord` alias is removed; `readOrderedWord` returns, and `appendOrderedWord` takes, an
+  `OrderedWord`, the same `bits(64)`.
+  Fix: write `OrderedWord` wherever `ByteWord` appeared.
 
 ## 0.5.0 — 2026-10-08
 

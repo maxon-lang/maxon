@@ -244,6 +244,29 @@ enum WasmRandomFillUnit
 	byte
 end 'WasmRandomFillUnit'
 
+enum WasmMemAccess
+	byte
+	halfword
+	word32
+	word64
+	float64
+end 'WasmMemAccess'
+
+let ByteSwapByteBits = 8
+let ByteSwapThreeByteBits = 24
+let ByteSwapByteMask = 0xFF
+let ByteSwapMaskBytes02 = 0x00FF00FF
+let ByteSwapMaskBytes13 = 0xFF00FF00
+let ByteSwap64RotateTop = 56
+let ByteSwap64RotateUpper = 40
+let ByteSwap64RotateLower = 24
+let ByteSwap64RotateBottom = 8
+// `0xFF000000FF000000`: a literal above `i64.max` is not a `FullRangeInt`, the type the mask travels as.
+let ByteSwap64MaskTop = i64.min + 0x7F000000FF000000
+let ByteSwap64MaskUpper = 0x00FF000000FF0000
+let ByteSwap64MaskLower = 0x0000FF000000FF00
+let ByteSwap64MaskBottom = 0x000000FF000000FF
+
 // The imports' backtrace names. A WIT field name is not one —
 // `[method]output-stream.blocking-write-and-flush` is an interface path, and wasmtime would print it
 // verbatim in the frame line of an engine trap (a fault, a stack overflow) — so each import carries a
@@ -1673,6 +1696,9 @@ function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns 
 		fneg or
 		bitcastI64ToF64 gives WasmValType.f64
 		fpToSi or
+		byteSwap16 or
+		byteSwap32 or
+		byteSwap64 or
 		bitcastF64ToI64 gives WasmValType.i64
 	end 'k'
 end 'unaryResultValType'
@@ -2950,10 +2976,65 @@ type WasmFuncEmitter
 			fneg then self.emitMathIntrinsic(operand, operandType: operandType, opcode: opcode)
 			bitcastF64ToI64 then self.emitBitcastF64ToI64(operand, operandType: operandType)
 			bitcastI64ToF64 then self.emitBitcastI64ToF64(operand, operandType: operandType)
+			byteSwap16 then self.emitByteSwap16(operand, operandType: operandType)
+			byteSwap32 then self.emitByteSwap32(operand, operandType: operandType)
+			byteSwap64 then self.emitByteSwap64(operand, operandType: operandType)
 		end 'op'
 
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitUnaryOp'
+
+	function emitByteSwap16(operand ValueId, operandType StdType)
+		requireIntegerOperand(operandType, what: "byteSwap16")
+		self.pushOperandAt(operand, targetVt: WasmValType.i64)
+		self.body.i64Const(ByteSwapByteMask)
+		self.body.i64And()
+		self.body.i64Const(ByteSwapByteBits)
+		self.body.i64Shl()
+		self.pushOperandAt(operand, targetVt: WasmValType.i64)
+		self.body.i64Const(ByteSwapByteBits)
+		self.body.i64ShrU()
+		self.body.i64Const(ByteSwapByteMask)
+		self.body.i64And()
+		self.body.i64Or()
+	end 'emitByteSwap16'
+
+	// In i32 because each rotate must wrap at bit 32; an i64 rotate would carry zero bytes from the
+	// upper half into the result.
+	function emitByteSwap32(operand ValueId, operandType StdType)
+		requireIntegerOperand(operandType, what: "byteSwap32")
+		self.emitRotatedMask32(operand, rotate: ByteSwapByteBits, mask: ByteSwapMaskBytes02)
+		self.emitRotatedMask32(operand, rotate: ByteSwapThreeByteBits, mask: ByteSwapMaskBytes13)
+		self.body.i32Or()
+		self.body.i64ExtendI32U()
+	end 'emitByteSwap32'
+
+	function emitRotatedMask32(operand ValueId, rotate FullRangeInt, mask FullRangeInt)
+		self.pushOperandAt(operand, targetVt: WasmValType.i32)
+		self.emitIntConst(false, value: rotate)
+		self.body.i32Rotl()
+		self.emitIntConst(false, value: mask)
+		self.body.i32And()
+	end 'emitRotatedMask32'
+
+	function emitByteSwap64(operand ValueId, operandType StdType)
+		requireIntegerOperand(operandType, what: "byteSwap64")
+		self.emitRotatedMask64(operand, rotate: ByteSwap64RotateTop, mask: ByteSwap64MaskTop)
+		self.emitRotatedMask64(operand, rotate: ByteSwap64RotateUpper, mask: ByteSwap64MaskUpper)
+		self.body.i64Or()
+		self.emitRotatedMask64(operand, rotate: ByteSwap64RotateLower, mask: ByteSwap64MaskLower)
+		self.body.i64Or()
+		self.emitRotatedMask64(operand, rotate: ByteSwap64RotateBottom, mask: ByteSwap64MaskBottom)
+		self.body.i64Or()
+	end 'emitByteSwap64'
+
+	function emitRotatedMask64(operand ValueId, rotate FullRangeInt, mask FullRangeInt)
+		self.pushOperandAt(operand, targetVt: WasmValType.i64)
+		self.body.i64Const(rotate)
+		self.body.i64Rotl()
+		self.body.i64Const(mask)
+		self.body.i64And()
+	end 'emitRotatedMask64'
 
 	// int -> f64 (`promoteToFloat`, or `promoteUnsignedToFloat` as `uiToFp`). ⚠ `operandType` is the
 	// SOURCE, an INTEGER — the opcode names the RESULT (see StdUnaryOpcode's header). Both
@@ -3012,6 +3093,9 @@ type WasmFuncEmitter
 			logicalNot or
 			siToFp or
 			uiToFp or
+			byteSwap16 or
+			byteSwap32 or
+			byteSwap64 or
 			fpToSi then panic("emitMathIntrinsic: Std unary opcode {opcode.name} is not a math intrinsic — `emitUnaryOp` routes only floor/ceil/round/sqrt/abs/fneg here")
 
 			// ONE arm for both directions: a reinterpretation computes nothing whichever way the bits
@@ -3578,8 +3662,7 @@ type WasmFuncEmitter
 
 	// `loadIndirect` → push the base address as an i32, then `<width>.load offset=<offset>`. The
 	// static `offset` (0 for a plain global, non-zero for a struct/heap-record field riding this op)
-	// folds into the memarg. The width is `valueType`'s: a `u8`/`i1` BYTE (a heap String's bytes,
-	// zero-extended) or an `i64`/`f64` WORD — the set `wasmMemAccessType` admits.
+	// folds into the memarg. The width is `valueType`'s, as `wasmMemAccessOf` maps it.
 	//
 	// ⚠ THE BASE IS COERCED TO i32 (`pushOperandAt`), NOT pushed bare. A `globalAddr`/`rdataAddr`
 	// result is already i32, so the coercion is a no-op and this stays byte-identical — but a heap or
@@ -3590,14 +3673,14 @@ type WasmFuncEmitter
 		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
 		let memOffset = wasmMemOffset(offset)
 
-		// The access VALTYPE also names the width: i32 return ⟺ a BYTE access (the only i32-backed
-		// types accepted are byte-width — see `wasmMemAccessType`), which zero-extends via
-		// `i32.load8_u`; a word loads as i64/f64.
-		match wasmMemAccessType(valueType, what: "loadIndirect") 'w'
-			i32 then self.body.i32Load8U(memOffset)
-			i64 then self.body.i64Load(memOffset)
-			f64 then self.body.f64Load(memOffset)
-			f32 then panic("emitLoadIndirect: wasmMemAccessType never returns f32")
+		// Every narrow form loads into an i32 and zero-extends: the result local is i32
+		// (`wasmValTypeOf`), and a use widens it with `i64.extend_i32_u` (`coerceOnStack`).
+		match wasmMemAccessOf(valueType, what: "loadIndirect") 'w'
+			byte then self.body.i32Load8U(memOffset)
+			halfword then self.body.i32Load16U(memOffset)
+			word32 then self.body.i32Load(memOffset)
+			word64 then self.body.i64Load(memOffset)
+			float64 then self.body.f64Load(memOffset)
 		end 'w'
 
 		self.body.localSet(resultId as Wasm32Index)
@@ -3633,15 +3716,16 @@ type WasmFuncEmitter
 
 	function emitStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType)
 		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
-		let storeVt = wasmMemAccessType(valueType, what: "storeIndirect")
-		self.pushOperandAt(valueId, targetVt: storeVt)
+		let access = wasmMemAccessOf(valueType, what: "storeIndirect")
+		self.pushOperandAt(valueId, targetVt: wasmMemAccessValType(access))
 		let memOffset = wasmMemOffset(offset)
 
-		match storeVt 'w'
-			i32 then self.body.i32Store8(memOffset)
-			i64 then self.body.i64Store(memOffset)
-			f64 then self.body.f64Store(memOffset)
-			f32 then panic("emitStoreIndirect: wasmMemAccessType never returns f32")
+		match access 'w'
+			byte then self.body.i32Store8(memOffset)
+			halfword then self.body.i32Store16(memOffset)
+			word32 then self.body.i32Store(memOffset)
+			word64 then self.body.i64Store(memOffset)
+			float64 then self.body.f64Store(memOffset)
 		end 'w'
 	end 'emitStoreIndirect'
 
@@ -4155,32 +4239,37 @@ function narrowToImm32(value FullRangeInt) returns Imm32
 	return low as Imm32
 end 'narrowToImm32'
 
-// The wasm valtype a `loadIndirect`/`storeIndirect` of `valueType` transfers — and, because a byte
-// access and a word access take different opcodes, the ONE DOOR that also decides WHICH the callers
-// emit. It mirrors the shared native `accessWidthFor`: the language can put only a BYTE (`i1`/`u8`)
-// or a WORD (`i64`/`f64`) behind a load/store today, so a byte returns i32 (the `i32.load8_u` /
-// `i32.store8` forms — everything ≤ 32 bits is an i32 local) and a word returns i64/f64. The
-// returned valtype is UNAMBIGUOUS about width because the only i32-backed types admitted are
-// byte-width: an i32 return ⟺ a byte access. Every other width panics rather than picking a nearby
-// one — a narrow integer needs the `as` cast, whose SIGNEDNESS then decides the
-// sign/zero-extending load — exactly the line `accessWidthFor` draws for the native backends. An f32
-// cannot occur (Maxon's `float` is f64). A `bool`/`u8` byte zero-extends, which is why the one byte
-// load form (`i32.load8_u`) is unsigned; a signed byte (`i8`) is gated below.
-function wasmMemAccessType(valueType StdType, what String) returns WasmValType
-	match valueType 'w'
+// The load/store form a `loadIndirect`/`storeIndirect` of `valueType` takes — the ONE DOOR both
+// callers ask, mirroring the shared native `accessWidthFor`. Every narrow form zero-extends, so only
+// the unsigned narrow types (`i1`, `u8`, `u16`, `u32`) are admitted beside the words (`i64`, `f64`); a
+// signed narrow integer panics rather than picking a nearby width, because it needs the `as` cast,
+// whose SIGNEDNESS then decides the sign/zero-extending load. An f32 cannot occur (Maxon's `float` is
+// f64).
+function wasmMemAccessOf(valueType StdType, what String) returns WasmMemAccess
+	return match valueType 'w'
 		i1 or
-		u8 then return WasmValType.i32
-		i64 then return WasmValType.i64
-		f64 then return WasmValType.f64
+		u8 gives WasmMemAccess.byte
+		u16 gives WasmMemAccess.halfword
+		u32 gives WasmMemAccess.word32
+		i64 gives WasmMemAccess.word64
+		f64 gives WasmMemAccess.float64
 		i8 or
 		i16 or
-		i32 then panic("wasm: {what} of {valueType.name} — a narrow signed integer needs the `as` cast, whose signedness picks the sign/zero-extending load; only i1/u8 (byte) and i64/f64 (word) are lowered, mirroring the native accessWidthFor")
-		u16 or
-		u32 or
-		u64 then panic("wasm: {what} of {valueType.name} — an unsigned integer wider than a byte needs the `as` cast; only u8 (byte) and i64/f64 (word) are lowered")
-		f32 then panic("wasm: {what} of an f32 — Maxon's `float` is f64, so nothing produces an f32")
+		i32 panic("wasm: {what} of {valueType.name} — a narrow signed integer needs the `as` cast, whose signedness picks the sign/zero-extending load; only i1/u8, u16, u32 (zero-extending) and i64/f64 (word) are lowered, mirroring the native accessWidthFor")
+		u64 panic("wasm: {what} of {valueType.name} — an unsigned 64-bit integer needs the `as` cast; only i1/u8, u16, u32 and i64/f64 are lowered")
+		f32 panic("wasm: {what} of an f32 — Maxon's `float` is f64, so nothing produces an f32")
 	end 'w'
-end 'wasmMemAccessType'
+end 'wasmMemAccessOf'
+
+function wasmMemAccessValType(access WasmMemAccess) returns WasmValType
+	return match access 'w'
+		byte or
+		halfword or
+		word32 gives WasmValType.i32
+		word64 gives WasmValType.i64
+		float64 gives WasmValType.f64
+	end 'w'
+end 'wasmMemAccessValType'
 
 // A linear-memory ABSOLUTE address: a section base plus a byte offset within it, as the signed
 // `Imm32` an `i32.const` carries. Shared by `globalAddr` (`.data`), `rdataAddr` and the String

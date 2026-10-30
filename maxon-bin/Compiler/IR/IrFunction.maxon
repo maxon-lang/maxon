@@ -2362,41 +2362,52 @@ export type DeferredWriteThroughs
 	// @generated library-cache end
 end 'DeferredWriteThroughs'
 
-// Container methods that write their receiver (`Parser.noteReceiverWrite`), each by its method's token, from which
-// the place, the position and the token the call ends at are all read when it is filed.
+// Container writes to a record a call names (`Parser.noteContainerWrite`), each by the token of the call, from which
+// the position and the token the call ends at are read when it is filed, and by the tokens that spell the place,
+// `[placeStart, placeEnd)`, spelled only then.
 export type DeferredReceiverWrites
 	export var receivers as ValueIdArray
 	export var methodIndices as TokenIndexArray
+	export var placeStarts as TokenIndexArray
+	export var placeEnds as TokenIndexArray
 
 	export static function create() returns DeferredReceiverWrites
-		return Self{receivers: ValueIdArray.create(), methodIndices: TokenIndexArray.create()}
+		return Self{receivers: ValueIdArray.create(), methodIndices: TokenIndexArray.create(), placeStarts: TokenIndexArray.create(), placeEnds: TokenIndexArray.create()}
 	end 'create'
 
-	export function record(receiver ValueId, methodIndex ElementIndex)
+	export function record(receiver ValueId, methodIndex ElementIndex, placeStart ElementIndex, placeEnd ElementIndex)
 		self.receivers.push(receiver)
 		self.methodIndices.push(methodIndex)
+		self.placeStarts.push(placeStart)
+		self.placeEnds.push(placeEnd)
 	end 'record'
 
 	export function clear()
 		self.receivers.clear()
 		self.methodIndices.clear()
+		self.placeStarts.clear()
+		self.placeEnds.clear()
 	end 'clear'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteValueIdArray(writer, value: self.receivers)
 		cacheWriteTokenIndexArray(writer, value: self.methodIndices)
+		cacheWriteTokenIndexArray(writer, value: self.placeStarts)
+		cacheWriteTokenIndexArray(writer, value: self.placeEnds)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns DeferredReceiverWrites throws LibraryCacheDamage
 		let f_receivers = try cacheReadValueIdArray(reader)
 		let f_methodIndices = try cacheReadTokenIndexArray(reader)
+		let f_placeStarts = try cacheReadTokenIndexArray(reader)
+		let f_placeEnds = try cacheReadTokenIndexArray(reader)
 
-		return Self{receivers: f_receivers, methodIndices: f_methodIndices}
+		return Self{receivers: f_receivers, methodIndices: f_methodIndices, placeStarts: f_placeStarts, placeEnds: f_placeEnds}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(DeferredReceiverWrites) as CacheSize16
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(DeferredReceiverWrites) as CacheSize32
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2634,12 +2645,12 @@ export type DeferredProvenance
 		self.writeThroughs.record(target, stored: stored, fieldName: fieldName, placeStart: placeStart, placeEnd: placeEnd, line: line, column: column, token: token)
 	end 'noteWriteThrough'
 
-	export function noteReceiverWrite(receiver ValueId, methodIndex ElementIndex)
+	export function noteReceiverWrite(receiver ValueId, methodIndex ElementIndex, placeStart ElementIndex, placeEnd ElementIndex)
 		if self.receiverWrites is self.empty.deferredReceiverWrites 'firstWrite'
 			self.receiverWrites = DeferredReceiverWrites.create()
 		end 'firstWrite'
 
-		self.receiverWrites.record(receiver, methodIndex: methodIndex)
+		self.receiverWrites.record(receiver, methodIndex: methodIndex, placeStart: placeStart, placeEnd: placeEnd)
 	end 'noteReceiverWrite'
 
 	// What a summary is traced from, into `sites`: the receiver writes as the parser spelled them, and the name binds.

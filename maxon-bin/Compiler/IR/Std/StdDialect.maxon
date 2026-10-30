@@ -700,7 +700,47 @@ export enum StdUnaryOpcode
 	bitcastF64ToI64
 	bitcastI64ToF64
 	uiToFp
+	byteSwap16
+	byteSwap32
+	byteSwap64
 end 'StdUnaryOpcode'
+
+export enum WordBytes
+	two
+	four
+	eight
+end 'WordBytes'
+
+export function wordByteCount(width WordBytes) returns FullRangeInt
+	return match width 'w'
+		two gives 2
+		four gives 4
+		eight gives 8
+	end 'w'
+end 'wordByteCount'
+
+export function wordSwapOpcode(width WordBytes) returns StdUnaryOpcode
+	return match width 'w'
+		two gives StdUnaryOpcode.byteSwap16
+		four gives StdUnaryOpcode.byteSwap32
+		eight gives StdUnaryOpcode.byteSwap64
+	end 'w'
+end 'wordSwapOpcode'
+
+export function byteSwapWidth(opcode StdUnaryOpcode) returns WordBytes throws AbsentError
+	for width in WordBytes.allCases 'eachWidth'
+		if wordSwapOpcode(width) == opcode 'swapsThisWidth'
+			return width
+		end 'swapsThisWidth'
+	end 'eachWidth'
+
+	throw AbsentError.absent
+end 'byteSwapWidth'
+
+export function stdOpcodeIsByteSwap(opcode StdUnaryOpcode) returns bool
+	let width = try byteSwapWidth(opcode) otherwise return false
+	return wordSwapOpcode(width) == opcode
+end 'stdOpcodeIsByteSwap'
 
 // The one answer to "does this unary opcode read a float?", beside the enum because it is a
 // property of the opcode and not of any one target. Three callers ask it and none may re-derive it:
@@ -717,6 +757,9 @@ export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 		logicalNot or
 		siToFp or
 		uiToFp or
+		byteSwap16 or
+		byteSwap32 or
+		byteSwap64 or
 
 		// ⚠ `bitcastI64ToF64`'s result is an f64, so anything reading the opcode's name for its answer
 		// gets `true` and colours the operand into an XMM register that holds an i64.

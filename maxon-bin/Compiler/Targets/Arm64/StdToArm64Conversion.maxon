@@ -1438,7 +1438,7 @@ export type StdToArm64Lowering
 		end 'i'
 	end 'lowerShiftImm'
 
-	// Lower a Std unary op. All three integer forms are single-instruction on arm64 with an independent
+	// Lower a Std unary op. These three integer forms are single-instruction on arm64 with an independent
 	// destination (arm64 reads the zero register as the other operand of `neg`/`mvn`), so plain defs.
 	//   • `neg`        — `neg dest, src` (two's complement).
 	//   • `bitNot`     — `mvn dest, src` (one's complement of all 64 bits): `not 5` == -6.
@@ -1487,6 +1487,9 @@ export type StdToArm64Lowering
 			// Its INVERSE — `FMOV Dd, Xn`, the same general↔vector form read the other way, and again
 			// NOT the `FMOV Dd, Dn` a plain FP copy would use.
 			bitcastI64ToF64 then self.emit(dstRef, op: TargetOp.arm64FmovFpGpr(dest, src: src))
+			byteSwap16 or
+			byteSwap32 or
+			byteSwap64 then self.emit(dstRef, op: TargetOp.arm64Rev(dest, src: src, width: try byteSwapWidth(opcode) otherwise panic("lowerUnaryOp: `{opcode.name}` reached the byte-swap arm and swaps no width")))
 		end 'op'
 	end 'lowerUnaryOp'
 

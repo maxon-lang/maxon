@@ -810,6 +810,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		orRegReg or
 		xorRegReg or
 		notReg or
+		byteSwapReg or
 		andRegImm32 or
 		orRegImm32 or
 		xorRegImm32 or
@@ -884,6 +885,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		arm64Lsrv or
 		arm64Neg or
 		arm64Mvn or
+		arm64Rev or
 		arm64AddImm or
 		arm64SubImm or
 		arm64AndImm or
@@ -1006,6 +1008,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		orRegReg(dest, lhs, rhs) gives "orRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		xorRegReg(dest, lhs, rhs) gives "xorRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		notReg(dest, src) gives "notReg {vregName(dest)}, {vregName(src)}"
+		byteSwapReg(dest, src, width) gives "byteSwapReg.{wordByteCount(width)} {vregName(dest)}, {vregName(src)}"
 		andRegImm32(dest, lhs, imm) gives "andRegImm32 {vregName(dest)}, {vregName(lhs)}, {imm}"
 		orRegImm32(dest, lhs, imm) gives "orRegImm32 {vregName(dest)}, {vregName(lhs)}, {imm}"
 		xorRegImm32(dest, lhs, imm) gives "xorRegImm32 {vregName(dest)}, {vregName(lhs)}, {imm}"
@@ -1108,6 +1111,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64Lsrv(dest, lhs, rhs) gives "lsrv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Neg(dest, src) gives "neg {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Mvn(dest, src) gives "mvn {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Rev(dest, src, width) gives "rev.{wordByteCount(width)} {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64AddImm(dest, src, imm) gives "add {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
 		arm64SubImm(dest, src, imm) gives "sub {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
 		arm64AndImm(dest, src, imm) gives "and {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
@@ -1380,6 +1384,8 @@ end 'registerName'
 function accessWidthName(width X64AccessWidth) returns String
 	return match width 'w'
 		byte gives "byte"
+		word16 gives "word16"
+		word32 gives "word32"
 		word64 gives "word64"
 	end 'w'
 end 'accessWidthName'

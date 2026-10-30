@@ -209,6 +209,10 @@ let Arm64OpLdrRegOffsetD = 0xFC606800
 let Arm64OpStrRegOffsetD = 0xFC206800
 let Arm64OpLdrRegOffsetB = 0x38606800
 let Arm64OpStrRegOffsetB = 0x38206800
+let Arm64OpLdrRegOffsetH = 0x78606800
+let Arm64OpStrRegOffsetH = 0x78206800
+let Arm64OpLdrRegOffsetW = 0xB8606800
+let Arm64OpStrRegOffsetW = 0xB8206800
 
 // The `S` bit (12): set, the index is shifted by log2(the access size); clear, not shifted at all.
 let Arm64RegOffsetScaleBit = 0x1000
@@ -228,6 +232,9 @@ let Arm64OpMovReg = 0xAA0003E0
 // SOURCE through the Rm field (bit 16) with XZR in the Rn field — the zero register is NOT folded into
 // the opcode, so the source must land at Rm, not Rn.
 let Arm64OpOrn = 0xAA200000
+let Arm64OpRevW = 0x5AC00800
+let Arm64OpRevX = 0xDAC00C00
+let Arm64ByteSwapHalfwordShift = 16
 
 // The XZR register field value in a data-processing op (31 — the same field value SP takes in a
 // load/store base, context deciding which; named apart from `Arm64SpBaseField` for readability).
@@ -257,7 +264,7 @@ export let Arm64ExclusiveLoadBits = 0x08400000
 export let Arm64ExclusiveLookbackWords = 4
 
 // An AArch64 instruction is one 32-bit word, and two of them share one naturally aligned 64-bit load — which
-// is how the predicate reads them, the Std tier having no 32-bit access at all.
+// is how the predicate reads them.
 export let Arm64InstructionBytes = 4
 export let Arm64InstructionWordMask = 0xFFFFFFFF
 let Arm64ImmShift = 10
@@ -416,6 +423,8 @@ let Arm64OpLdrD = 0xFD400000
 // file's declarations are otherwise file-private.
 export let Arm64OpStrB = 0x39000000
 export let Arm64OpLdrB = 0x39400000
+let Arm64OpStrH = 0x79000000
+let Arm64OpLdrH = 0x79400000
 let Arm64LoadStoreImm12Shift = 10
 let Arm64LoadStoreImm12Mask = 0xFFF
 
@@ -976,6 +985,20 @@ export function arm64EmitAsrImm(code ByteArray, rd MachineWord, rn MachineWord, 
 	arm64EmitBitfield(code, opcode: Arm64OpSbfm, rd: rd, rn: rn, immr: shift, imms: Arm64WordBitMax)
 end 'arm64EmitAsrImm'
 
+function arm64EmitByteSwap(code ByteArray, rd MachineWord, rn MachineWord, width WordBytes)
+	let opcode = match width 'w'
+		two or
+		four gives Arm64OpRevW
+		eight gives Arm64OpRevX
+	end 'w'
+
+	emitArm64Insn(code, insn: opcode or (rn shl Arm64RnShift) or rd)
+
+	if width == WordBytes.two 'halfword'
+		arm64EmitLsrImm(code, rd: rd, rn: rd, sh: Arm64ByteSwapHalfwordShift)
+	end 'halfword'
+end 'arm64EmitByteSwap'
+
 // A shift count as a machine word, clamped into the 0..63 the 64-bit shift forms accept — a count
 // out of that range is an ISel bug (a shift-by-≥64 is unspecified and was never a valid Std op).
 function shiftCountBits(sh ShiftCount) returns MachineWord
@@ -1339,11 +1362,11 @@ export function arm64DispHasScaledForm(disp Imm32, width X64AccessWidth) returns
 end 'arm64DispHasScaledForm'
 
 // A `[base + disp]` load at the op's width (the data-section access forms). A `word64` load moves
-// through a GPR ldr or an FP ldr per the dest's class (an f64 global is 64 bits either way); a `byte`
-// load is LDRB (zero-extending — a bool must arrive zero-extended, or the upper bits are garbage) and
-// GPR-only.
+// through a GPR ldr or an FP ldr per the dest's class (an f64 global is 64 bits either way); a narrower
+// load is LDRB, LDRH or a W-register LDR (zero-extending — a bool must arrive zero-extended, or the upper
+// bits are garbage) and GPR-only.
 //
-// Both widths go through the SAME scaled-field builder, at their own scale: a byte access is the scaled
+// Every width goes through the SAME scaled-field builder, at its own scale: a byte access is the scaled
 // form with scale 1, so its 0..4095 reach is `arm64ScaledImm12`'s range check rather than a second
 // hand-written one that could come to disagree with the ISEL's predicate.
 function arm64EmitDataLoad(code ByteArray, dest TargetVReg, base MachineWord, disp Imm32, width X64AccessWidth)
@@ -1351,6 +1374,8 @@ function arm64EmitDataLoad(code ByteArray, dest TargetVReg, base MachineWord, di
 
 	match width 'w'
 		byte then arm64EmitScaledMem(code, opcode: Arm64OpLdrB, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width) as MachineWord)
+		word16 then arm64EmitScaledMem(code, opcode: Arm64OpLdrH, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width) as MachineWord)
+		word32 then arm64EmitScaledMem(code, opcode: Arm64OpLdrW, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width) as MachineWord)
 		word64 then arm64EmitWord64Load(code, dest: dest, base: base, byteOffset: byteOffset)
 	end 'w'
 end 'arm64EmitDataLoad'
@@ -1360,6 +1385,8 @@ function arm64EmitDataStore(code ByteArray, base MachineWord, disp Imm32, src Ta
 
 	match width 'w'
 		byte then arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width) as MachineWord)
+		word16 then arm64EmitScaledMem(code, opcode: Arm64OpStrH, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width) as MachineWord)
+		word32 then arm64EmitScaledMem(code, opcode: Arm64OpStrW, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width) as MachineWord)
 		word64 then arm64EmitWord64Store(code, base: base, byteOffset: byteOffset, src: src)
 	end 'w'
 end 'arm64EmitDataStore'
@@ -1391,6 +1418,8 @@ function arm64EmitIndexedLoad(code ByteArray, dest TargetVReg, base MachineWord,
 
 	match width 'w'
 		byte then arm64EmitRegOffsetMem(code, opcode: Arm64OpLdrRegOffsetB, scaleBit: scaleBit, rt: arm64GprField(dest), base: base, index: index)
+		word16 then arm64EmitRegOffsetMem(code, opcode: Arm64OpLdrRegOffsetH, scaleBit: scaleBit, rt: arm64GprField(dest), base: base, index: index)
+		word32 then arm64EmitRegOffsetMem(code, opcode: Arm64OpLdrRegOffsetW, scaleBit: scaleBit, rt: arm64GprField(dest), base: base, index: index)
 		word64 then arm64EmitIndexedWord64(code, gprOpcode: Arm64OpLdrRegOffsetX, fpOpcode: Arm64OpLdrRegOffsetD, scaleBit: scaleBit, reg: dest, base: base, index: index)
 	end 'w'
 end 'arm64EmitIndexedLoad'
@@ -1400,6 +1429,8 @@ function arm64EmitIndexedStore(code ByteArray, base MachineWord, index MachineWo
 
 	match width 'w'
 		byte then arm64EmitRegOffsetMem(code, opcode: Arm64OpStrRegOffsetB, scaleBit: scaleBit, rt: arm64GprField(src), base: base, index: index)
+		word16 then arm64EmitRegOffsetMem(code, opcode: Arm64OpStrRegOffsetH, scaleBit: scaleBit, rt: arm64GprField(src), base: base, index: index)
+		word32 then arm64EmitRegOffsetMem(code, opcode: Arm64OpStrRegOffsetW, scaleBit: scaleBit, rt: arm64GprField(src), base: base, index: index)
 		word64 then arm64EmitIndexedWord64(code, gprOpcode: Arm64OpStrRegOffsetX, fpOpcode: Arm64OpStrRegOffsetD, scaleBit: scaleBit, reg: src, base: base, index: index)
 	end 'w'
 end 'arm64EmitIndexedStore'
@@ -1699,6 +1730,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		orRegReg or
 		xorRegReg or
 		notReg or
+		byteSwapReg or
 		andRegImm32 or
 		orRegImm32 or
 		xorRegImm32 or
@@ -1761,6 +1793,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		arm64Lsrv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpLsrv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64Neg(dest, src) then emitArm64Rrr(code, opcode: Arm64OpSub, rd: arm64GprField(dest), rn: Arm64XzrField, rm: arm64GprField(src))
 		arm64Mvn(dest, src) then emitArm64Rrr(code, opcode: Arm64OpOrn, rd: arm64GprField(dest), rn: Arm64XzrField, rm: arm64GprField(src))
+		arm64Rev(dest, src, width) then arm64EmitByteSwap(code, rd: arm64GprField(dest), rn: arm64GprField(src), width: width)
 		arm64AddImm(dest, src, imm) then arm64EmitAddImmSigned(code, rd: arm64GprField(dest), rn: arm64GprField(src), imm: imm)
 		arm64SubImm(dest, src, imm) then arm64EmitSubImmSigned(code, rd: arm64GprField(dest), rn: arm64GprField(src), imm: imm)
 		arm64AndImm(dest, src, imm) then arm64EmitLogicalImm(code, opcode: Arm64OpAndImm, rd: arm64GprField(dest), rn: arm64GprField(src), value: imm32ToWord(imm))
@@ -2118,22 +2151,12 @@ let CovCounterStep = 1
 
 // `LDAXR x16, [Xn]` (or `LDAXRB w16, [Xn]`) — the head of every loop.
 function arm64EmitLdaxr(code ByteArray, rn MachineWord, width X64AccessWidth)
-	let sized = match width 'w'
-		byte gives Arm64OpLdaxrB
-		word64 gives Arm64OpLdaxrB or Arm64OrderedSize64
-	end 'w'
-
-	emitArm64Insn(code, insn: sized or (rn shl Arm64RnShift) or Arm64AtomicValue)
+	emitArm64Insn(code, insn: arm64OrderedSized(Arm64OpLdaxrB, width: width) or (rn shl Arm64RnShift) or Arm64AtomicValue)
 end 'arm64EmitLdaxr'
 
 // `STLXR w17, Xt, [Xn]` (or `STLXRB w17, Wt, [Xn]`) — the tail of every loop, status into x17.
 function arm64EmitStlxr(code ByteArray, rt MachineWord, rn MachineWord, width X64AccessWidth)
-	let sized = match width 'w'
-		byte gives Arm64OpStlxrB
-		word64 gives Arm64OpStlxrB or Arm64OrderedSize64
-	end 'w'
-
-	emitArm64Insn(code, insn: sized or (Arm64AtomicStatus shl Arm64StlxrRsShift) or (rn shl Arm64RnShift) or rt)
+	emitArm64Insn(code, insn: arm64OrderedSized(Arm64OpStlxrB, width: width) or (Arm64AtomicStatus shl Arm64StlxrRsShift) or (rn shl Arm64RnShift) or rt)
 end 'arm64EmitStlxr'
 
 // ⭐ **ONE `LDAR`/`STLR`, WIDTH-DISPATCHED.** The two opcodes differ only in the L bit, and the two
@@ -2145,13 +2168,17 @@ end 'arm64EmitStlxr'
 // word — and `arm64GprField` refuses an FP vreg at its own site rather than encoding a wrong register
 // number, so the day one appears it is a panic and not a silent misread.
 export function arm64EmitOrderedAccess(code ByteArray, byteOpcode MachineWord, rt MachineWord, rn MachineWord, width X64AccessWidth)
-	let sized = match width 'w'
+	emitArm64Insn(code, insn: arm64OrderedSized(byteOpcode, width: width) or (rn shl Arm64RnShift) or rt)
+end 'arm64EmitOrderedAccess'
+
+function arm64OrderedSized(byteOpcode MachineWord, width X64AccessWidth) returns MachineWord
+	return match width 'w'
 		byte gives byteOpcode
+		word16 or
+		word32 panic("arm64: no {width.name} ordered or exclusive access — every atomic and ordered access the compiler emits is a byte or a 64-bit word")
 		word64 gives byteOpcode or Arm64OrderedSize64
 	end 'w'
-
-	emitArm64Insn(code, insn: sized or (rn shl Arm64RnShift) or rt)
-end 'arm64EmitOrderedAccess'
+end 'arm64OrderedSized'
 
 // `arm64AtomicCas(dest, addr, expected, replacement)`:
 //

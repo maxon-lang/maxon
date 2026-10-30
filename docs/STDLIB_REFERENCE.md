@@ -63,6 +63,7 @@ end 'main'
 | `IterStep` | `int(0 to u64.max)` | Interfaces |
 | `RangeBound` | `int(i64.min to i64.max)` | Range |
 | `HashDigest` | `bits(64)` | Hasher |
+| `OrderedWord` | `bits(64)` — a word read from or appended to a `ByteArray` in a byte order | Builtins |
 | `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos` | `int(0 to u64.max)` | Clock |

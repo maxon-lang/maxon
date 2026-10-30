@@ -81,6 +81,26 @@ function ghashFoldSpill(word GhashWord) returns GhashWord
 	return (word shl (ghashWordBits - ghashTapLow)) xor (word shl (ghashWordBits - ghashTapMid)) xor (word shl (ghashWordBits - ghashTapHigh))
 end 'ghashFoldSpill'
 
+function ghashReadWord(source ByteArray, at ElementIndex) returns GhashWord
+	return (try __Builtins.readBigEndian(source, at, aesGcmWordBytes) otherwise panic("aesgcm: a word inside an array the caller sized is missing")) as GhashWord
+end 'ghashReadWord'
+
+function ghashBlockWords(data ByteArray, blockStart ElementIndex) returns GhashBlock
+	let limit = data.count()
+
+	if blockStart + aesGcmBlockBytes <= limit 'whole'
+		let high = ghashReadWord(data, at: blockStart)
+		let low = ghashReadWord(data, at: blockStart + aesGcmWordBytes)
+
+		return (high, low)
+	end 'whole'
+
+	let high = readOrderedWord(data, off: blockStart, width: aesGcmWordBytes, limit: limit, order: ByteOrder.bigEndian) as GhashWord
+	let low = readOrderedWord(data, off: blockStart + aesGcmWordBytes, width: aesGcmWordBytes, limit: limit, order: ByteOrder.bigEndian) as GhashWord
+
+	return (high, low)
+end 'ghashBlockWords'
+
 type GhashKey
 	var h0 as GhashWord
 	var h1 as GhashWord
@@ -90,8 +110,8 @@ type GhashKey
 	var h2r as GhashWord
 
 	static function create(hashSubkey ByteArray) returns GhashKey
-		let h1 = readOrderedWord(hashSubkey, off: 0, width: aesGcmWordBytes, limit: hashSubkey.count(), order: ByteOrder.bigEndian) as GhashWord
-		let h0 = readOrderedWord(hashSubkey, off: aesGcmWordBytes, width: aesGcmWordBytes, limit: hashSubkey.count(), order: ByteOrder.bigEndian) as GhashWord
+		let h1 = ghashReadWord(hashSubkey, at: 0)
+		let h0 = ghashReadWord(hashSubkey, at: aesGcmWordBytes)
 		let h0r = ghashReverse(h0)
 		let h1r = ghashReverse(h1)
 
@@ -139,8 +159,7 @@ type GhashKey
 		let limit = data.count()
 
 		while blockStart < limit 'eachBlock'
-			let blockHigh = readOrderedWord(data, off: blockStart, width: aesGcmWordBytes, limit: limit, order: ByteOrder.bigEndian) as GhashWord
-			let blockLow = readOrderedWord(data, off: blockStart + aesGcmWordBytes, width: aesGcmWordBytes, limit: limit, order: ByteOrder.bigEndian) as GhashWord
+			let (blockHigh, blockLow) = ghashBlockWords(data, blockStart: blockStart)
 			(high, low) = multiply((high xor blockHigh, low xor blockLow))
 			blockStart = blockStart + aesGcmBlockBytes
 		end 'eachBlock'
@@ -154,8 +173,8 @@ type GhashKey
 		let (digestHigh, digestLow) = multiply(lengths)
 		var digest = ByteArray.create()
 		digest.reserve(aesGcmBlockBytes)
-		appendOrderedWord(digest, word: digestHigh as ByteWord, width: aesGcmWordBytes, order: ByteOrder.bigEndian)
-		appendOrderedWord(digest, word: digestLow as ByteWord, width: aesGcmWordBytes, order: ByteOrder.bigEndian)
+		__Builtins.appendBigEndian(digest, digestHigh as OrderedWord, aesGcmWordBytes)
+		__Builtins.appendBigEndian(digest, digestLow as OrderedWord, aesGcmWordBytes)
 
 		return digest
 	end 'finish'

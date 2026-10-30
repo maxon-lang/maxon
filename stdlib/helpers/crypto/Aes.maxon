@@ -127,12 +127,15 @@ function aesPackColumns(c0 AesWord, c1 AesWord, c2 AesWord, c3 AesWord) returns 
 	return (aesInterleave(c0, odd: c2), aesInterleave(c1, odd: c3))
 end 'aesPackColumns'
 
+function aesReadWord(source ByteArray, at ElementIndex) returns AesWord
+	return (try __Builtins.readLittleEndian(source, at, aesWordBytes) otherwise panic("aes: a word inside an array the caller sized is missing")) as AesWord
+end 'aesReadWord'
+
 function aesPackBlock(source ByteArray, off ElementIndex) returns AesPair
-	let limit = source.count()
-	let c0 = readOrderedWord(source, off: off, width: aesWordBytes, limit: limit, order: ByteOrder.littleEndian) as AesWord
-	let c1 = readOrderedWord(source, off: off + aesWordBytes, width: aesWordBytes, limit: limit, order: ByteOrder.littleEndian) as AesWord
-	let c2 = readOrderedWord(source, off: off + 2 * aesWordBytes, width: aesWordBytes, limit: limit, order: ByteOrder.littleEndian) as AesWord
-	let c3 = readOrderedWord(source, off: off + 3 * aesWordBytes, width: aesWordBytes, limit: limit, order: ByteOrder.littleEndian) as AesWord
+	let c0 = aesReadWord(source, at: off)
+	let c1 = aesReadWord(source, at: off + aesWordBytes)
+	let c2 = aesReadWord(source, at: off + 2 * aesWordBytes)
+	let c3 = aesReadWord(source, at: off + 3 * aesWordBytes)
 
 	return aesPackColumns(c0, c1: c1, c2: c2, c3: c3)
 end 'aesPackBlock'
@@ -151,10 +154,10 @@ function aesXorKeyStream(output ByteArray, data ByteArray, keystream ByteArray, 
 end 'aesXorKeyStream'
 
 function aesAppendBlock(output ByteArray, low AesWord, high AesWord)
-	appendOrderedWord(output, word: aesDeinterleave(low, parity: 0) as ByteWord, width: aesWordBytes, order: ByteOrder.littleEndian)
-	appendOrderedWord(output, word: aesDeinterleave(high, parity: 0) as ByteWord, width: aesWordBytes, order: ByteOrder.littleEndian)
-	appendOrderedWord(output, word: aesDeinterleave(low, parity: 1) as ByteWord, width: aesWordBytes, order: ByteOrder.littleEndian)
-	appendOrderedWord(output, word: aesDeinterleave(high, parity: 1) as ByteWord, width: aesWordBytes, order: ByteOrder.littleEndian)
+	__Builtins.appendLittleEndian(output, aesDeinterleave(low, parity: 0) as OrderedWord, aesWordBytes)
+	__Builtins.appendLittleEndian(output, aesDeinterleave(high, parity: 0) as OrderedWord, aesWordBytes)
+	__Builtins.appendLittleEndian(output, aesDeinterleave(low, parity: 1) as OrderedWord, aesWordBytes)
+	__Builtins.appendLittleEndian(output, aesDeinterleave(high, parity: 1) as OrderedWord, aesWordBytes)
 end 'aesAppendBlock'
 
 function aesPackSlot(source ByteArray, blocks AesBlockSlots, slot AesBlockSlots) returns AesPair
@@ -529,7 +532,7 @@ function aesKeySchedule(key ByteArray, rounds AesRoundCount) returns AesWords
 	words.reserve(totalWords)
 
 	for i in 0 upto keyWords 'keyWords'
-		words.push(readOrderedWord(key, off: i * aesWordBytes, width: aesWordBytes, limit: key.count(), order: ByteOrder.littleEndian) as AesWord)
+		words.push(aesReadWord(key, at: i * aesWordBytes))
 	end 'keyWords'
 
 	var previous = try words.get(keyWords - 1) otherwise panic("aes: key word index unreachable")
@@ -665,7 +668,7 @@ public type Aes
 			for slot in 0 upto batch 'eachCounter'
 				counterBlocks.append(nonce)
 				let blockCounter = (firstBlock + done + slot) as AesCounter
-				appendOrderedWord(counterBlocks, word: blockCounter as ByteWord, width: aesCounterBytes, order: ByteOrder.bigEndian)
+				__Builtins.appendBigEndian(counterBlocks, blockCounter as OrderedWord, aesCounterBytes)
 			end 'eachCounter'
 
 			keystream.clear()

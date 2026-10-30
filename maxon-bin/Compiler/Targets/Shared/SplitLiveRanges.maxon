@@ -7513,6 +7513,7 @@ module function opIsConstMaterialization(module TargetModule, opIdx ElementIndex
 		orRegReg or
 		xorRegReg or
 		notReg or
+		byteSwapReg or
 		andRegImm32 or
 		orRegImm32 or
 		xorRegImm32 or
@@ -7571,6 +7572,7 @@ module function opIsConstMaterialization(module TargetModule, opIdx ElementIndex
 		arm64Lsrv or
 		arm64Neg or
 		arm64Mvn or
+		arm64Rev or
 		arm64AddImm or
 		arm64SubImm or
 		arm64AndImm or
@@ -8666,6 +8668,7 @@ function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineW
 		orRegReg or
 		xorRegReg or
 		notReg or
+		byteSwapReg or
 		andRegImm32 or
 		orRegImm32 or
 		xorRegImm32 or
@@ -8717,6 +8720,7 @@ function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineW
 		arm64Lsrv or
 		arm64Neg or
 		arm64Mvn or
+		arm64Rev or
 		arm64AddImm or
 		arm64SubImm or
 		arm64AndImm or
@@ -8918,6 +8922,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		orRegReg(dest, lhs, rhs) then return TargetOp.orRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		xorRegReg(dest, lhs, rhs) then return TargetOp.xorRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		notReg(dest, src) then return TargetOp.notReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		byteSwapReg(dest, src, width) then return TargetOp.byteSwapReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), width: width)
 		andRegImm32(dest, lhs, imm) then return TargetOp.andRegImm32(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), imm: imm)
 		orRegImm32(dest, lhs, imm) then return TargetOp.orRegImm32(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), imm: imm)
 		xorRegImm32(dest, lhs, imm) then return TargetOp.xorRegImm32(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), imm: imm)
@@ -9003,6 +9008,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64Lsrv(dest, lhs, rhs) then return TargetOp.arm64Lsrv(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		arm64Neg(dest, src) then return TargetOp.arm64Neg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Mvn(dest, src) then return TargetOp.arm64Mvn(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64Rev(dest, src, width) then return TargetOp.arm64Rev(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), width: width)
 		arm64AddImm(dest, src, imm) then return TargetOp.arm64AddImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
 		arm64SubImm(dest, src, imm) then return TargetOp.arm64SubImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
 		arm64AndImm(dest, src, imm) then return TargetOp.arm64AndImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)

@@ -701,6 +701,8 @@ export union TargetOp
 	// `logicalNot` (an `xor`) do (see StdOpMeta.clobbersFlags).
 	notReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
+	byteSwapReg(dest TargetVReg, src TargetVReg, width WordBytes) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+
 	// The IMMEDIATE forms of the three word ALU ops (group-1 `81 /ext id`, sign-extended
 	// imm32). Produced from a `binOpImm`, so the literal needs no register. Still
 	// two-address (`and dest, imm` modifies dest in place) ⇒ REUSE-of-`lhs` def, unlike
@@ -774,8 +776,8 @@ export union TargetOp
 	// no flags.
 	leaRegGlobal(dest TargetVReg, let label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// `mov dest, [base + disp]` (word64) or `movzx dest, byte [base + disp]` (byte) — load,
-	// zero-extending a byte to the full 64-bit register so a bool reads as a clean 0/1.
+	// `mov dest, [base + disp]` at the op's width — load, zero-extending a narrow width to the full
+	// 64-bit register so a bool reads as a clean 0/1.
 	//
 	// `dest` and `base` are INDEPENDENT (no reuse): the destination of a load need not be its
 	// address register, so no seed copy is ever emitted. `isMemory: true`, `isStore: false` —
@@ -783,7 +785,7 @@ export union TargetOp
 	// flags.
 	//
 	// The width rides an OPCODE FIELD rather than splitting the variant, per the dialect's own
-	// rule: the byte and word64 forms share this exact operand shape AND this exact metadata,
+	// rule: every width shares this exact operand shape AND this exact metadata,
 	// and differ only in which encoder runs.
 	loadRegBaseDisp(dest TargetVReg, base TargetVReg, disp Imm32, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
@@ -1148,6 +1150,7 @@ export union TargetOp
 	// INDEPENDENT of `src` (arm64 reads the zero register as the other operand), so a PLAIN def.
 	arm64Neg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Mvn(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64Rev(dest TargetVReg, src TargetVReg, width WordBytes) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// The IMMEDIATE forms of the ALU ops (`add`/`sub` #imm12, the `and`/`orr`/`eor` bitmask-immediate
 	// forms, and the constant shifts `lsl`/`asr`/`lsr` #imm). arm64's are 3-address — `dest` is
@@ -1852,17 +1855,19 @@ end 'TargetOp'
 // range is contiguous by construction.
 export let CoverageImageGlobal = "__cov_image"
 
-// The memory-access widths the `.data` load/store encoders have. TWO, because two are what the
-// language can put in a global today: an `int` (`i64`, 8 bytes) and a `bool` (`i1`, 1 byte).
+// The memory-access widths the load/store encoders have: a byte (`bool`, `u8`), the zero-extending
+// 16- and 32-bit words (`u16`, `u32`) and the 64-bit word (`int`, `float`).
 //
 // A TARGET-tier enum rather than reusing `StdType`, and the narrowness is the point: it is the
-// exact domain `encodeLoadRegBaseDisp`/`encodeMovzxRegByteBaseDisp` cover, so the conversion from
-// a Std type is a CHECKED decision at one door (`accessWidthFor`) that names what it cannot yet
-// encode. Passing a `StdType` straight through would let an `i16` or an `f64` reach an encoder with
-// no form for it and emit a silently wrong-width access. It grows a case per width the encoders
-// grow a form for.
+// exact domain x64's `emitDataLoad`/`emitDataStore` and arm64's `arm64EmitDataLoad`/
+// `arm64EmitDataStore` cover, so the conversion from a Std type is a CHECKED decision at one door
+// (`accessWidthFor`) that names what it cannot yet encode. Passing a `StdType` straight through would
+// let an `i16` or an `f64` reach an encoder with no form for it and emit a silently wrong-width access.
+// It grows a case per width the encoders grow a form for.
 export enum X64AccessWidth
 	byte
+	word16
+	word32
 	word64
 end 'X64AccessWidth'
 
@@ -1877,11 +1882,15 @@ end 'X64AccessWidth'
 export typealias AccessWidthBytes = int(1 to 8)
 
 let SingleByteAccessBytes = 1 as AccessWidthBytes
+let Word16AccessBytes = 2 as AccessWidthBytes
+let Word32AccessBytes = 4 as AccessWidthBytes
 let Word64AccessBytes = 8 as AccessWidthBytes
 
 export function accessWidthBytes(width X64AccessWidth) returns AccessWidthBytes
 	return match width 'w'
 		byte gives SingleByteAccessBytes
+		word16 gives Word16AccessBytes
+		word32 gives Word32AccessBytes
 		word64 gives Word64AccessBytes
 	end 'w'
 end 'accessWidthBytes'

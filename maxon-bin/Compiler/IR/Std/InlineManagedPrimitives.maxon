@@ -65,8 +65,8 @@
 
 // ⭐⭐ **THE TWO STRIDES THESE FAST ARMS ARE THE WHOLE OF: ONE MACHINE WORD, AND ONE BYTE.**
 // `element_size@24` is SIGNED and runtime-valued — a byte stride when positive, `-(bits per element)` when
-// the elements are sub-byte packed (`ManagedMemoryRuntime`'s header) — and a target moves exactly two of
-// those widths in ONE memory op (`emitStrideDispatch`'s header states the list and why it is those two).
+// the elements are sub-byte packed (`ManagedMemoryRuntime`'s header) — and a fast arm moves exactly two of
+// those widths in ONE memory op (`emitStrideDispatch`'s header states the list).
 // Every other stride (2, 4, the unset 0, and every packed one) goes to the runtime, whose
 // `emitLoadElemAt`/`emitStoreElemAt` own that arithmetic and its zero-extension rules.
 //
@@ -136,8 +136,6 @@ let InlineOwnedLabel = b"__im_owned"
 let InlineBufferLabel = b"__im_buffer"
 let InlineViewedLabel = b"__im_viewed"
 let InlineStoreLabel = b"__im_store"
-
-let PushedElementCount = 1
 
 // The stride fork's own three: the block that asks the SECOND of `emitStrideDispatch`'s two questions, and
 // the entry of each accepted arm. Named here rather than left to the runtime's `esbyte` default so every
@@ -565,6 +563,10 @@ type PrimitiveInliner
 			return self.expandPush(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
 		end 'push'
 
+		if isWordPutCallee(callee) 'wordPut'
+			return self.expandWordPut(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+		end 'wordPut'
+
 		if callee.equals(ManagedCreateName) 'create'
 			self.freshRecords.insert(resultId)
 		end 'create'
@@ -591,6 +593,10 @@ type PrimitiveInliner
 		if callee.equals(ManagedMemSetName) 'memSet'
 			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId), bound: StoreBound.limitedBy(ManagedRecordCapacityOffset))
 		end 'memSet'
+
+		if isWordGetCallee(callee) 'wordGet'
+			return self.expandWordGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+		end 'wordGet'
 
 		return blockRef
 	end 'expandThrowingCall'
@@ -811,6 +817,76 @@ type PrimitiveInliner
 		return self.finish(frame.carve)
 	end 'expandElementStore'
 
+	function expandWordGet(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns ElementIndex
+		let arr = argAt(args, index: 0, callee: callee)
+		let at = argAt(args, index: 1, callee: callee)
+		let entry = try wordEntryNamed(callee) otherwise panic("expandWordGet: '{String.from(callee)}' passed `isWordGetCallee` and is not a word entry")
+
+		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: BlockHeat.cold)
+		var spanned = self.guardWordSpan(self.blockAt(blockRef), arr: arr, at: at, width: entry.width, slow: frame.slow)
+		var load = self.guardByteStride(spanned, arr: arr, slow: frame.slow)
+
+		let buffer = emitLoadField(self.module, block: load, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
+		let slot = self.emitSlotAt(load, buffer: buffer, index: at, stride: SingleOpStride.byte)
+		let raw = self.valueIds().mint()
+		self.module.appendOp(load, op: StdOp.loadIndirect(raw, addrId: slot, offset: 0, valueType: wordAccessType(entry.width)))
+
+		let value = self.inOrder(load, word: raw, order: entry.order, width: entry.width)
+		let noError = emitConst(self.module, block: load, value: NoErrorFlag, ids: self.valueIds())
+		self.module.setTerminator(load, op: StdOp.branch(frame.carve.cont.id))
+		attachEdge(load, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
+
+		return self.finish(frame.carve)
+	end 'expandWordGet'
+
+	function expandWordPut(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId) returns ElementIndex
+		let arr = argAt(args, index: 0, callee: callee)
+		let word = argAt(args, index: 1, callee: callee)
+		let entry = try wordEntryNamed(callee) otherwise panic("expandWordPut: '{String.from(callee)}' passed `isWordPutCallee` and is not a word entry")
+
+		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: BlockHeat.cold)
+
+		var head = self.blockAt(blockRef)
+		let length = emitLoadField(self.module, block: head, record: arr, offset: ManagedRecordLengthOffset, ids: self.valueIds())
+		let spanLessOne = emitConst(self.module, block: head, value: wordByteCount(entry.width) - 1, ids: self.valueIds())
+		let lastIndex = emitBin(self.module, block: head, a: length, b: spanLessOne, opcode: StdBinOpcode.add, ids: self.valueIds())
+		let guarded = self.emitElementStoreGuards(head, arr: arr, index: lastIndex, bound: StoreBound.limitedBy(ManagedRecordCapacityOffset), slow: frame.slow, occupantOwesNoDrop: true)
+		var store = self.guardByteStride(self.blockAt(guarded.blockRef), arr: arr, slow: frame.slow)
+
+		let slot = self.emitSlotAt(store, buffer: guarded.buffer, index: length, stride: SingleOpStride.byte)
+		let stored = self.inOrder(store, word: word, order: entry.order, width: entry.width)
+		self.module.appendOp(store, op: StdOp.storeIndirect(slot, offset: 0, valueId: stored, valueType: wordAccessType(entry.width)))
+		self.emitAppendExit(store, arr: arr, length: length, appended: wordByteCount(entry.width), frame: frame)
+
+		return self.finish(frame.carve)
+	end 'expandWordPut'
+
+	// The overflow-free bound `ManagedWordRuntime.buildWordGet` states.
+	function guardWordSpan(cur IrBlock, arr ValueId, at ValueId, width WordBytes, slow IrBlock) returns IrBlock
+		let length = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordLengthOffset, ids: self.valueIds())
+		let pastEnd = emitIndexOutOfRange(self.module, block: cur, index: at, length: length, ids: self.valueIds())
+		var inside = self.guard(cur, refused: pastEnd, slow: slow, next: InlineBoundsLabel)
+
+		let remaining = emitBin(self.module, block: inside, a: length, b: at, opcode: StdBinOpcode.sub, ids: self.valueIds())
+		let tooShort = emitCompareWithConstant(self.module, block: inside, value: remaining, pred: StdCmpPred.lt, against: wordByteCount(width), ids: self.valueIds())
+
+		return self.guard(inside, refused: tooShort, slow: slow, next: InlineLoadLabel)
+	end 'guardWordSpan'
+
+	function guardByteStride(cur IrBlock, arr ValueId, slow IrBlock) returns IrBlock
+		let elementSize = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: self.valueIds())
+		let notBytes = emitCompareWithConstant(self.module, block: cur, value: elementSize, pred: StdCmpPred.ne, against: singleOpStrideBytes(SingleOpStride.byte), ids: self.valueIds())
+
+		return self.guard(cur, refused: notBytes, slow: slow, next: InlineByteLabel)
+	end 'guardByteStride'
+
+	function inOrder(cur IrBlock, word ValueId, order WordByteOrder, width WordBytes) returns ValueId
+		return match order 'o'
+			littleEndian gives word
+			bigEndian gives emitUnary(self.module, block: cur, operand: word, opcode: wordSwapOpcode(width), operandType: StdType.i64, ids: self.valueIds())
+		end 'o'
+	end 'inOrder'
+
 	function emitVoidOkExit(cur IrBlock, frame InlineFrame, errorFlagId ManagedCallFlag)
 		// The ok exit of a throwing VOID entry: the placeholder value the ABI never moves, and the flag,
 		// are both `NoErrorFlag` — one `const`, exactly as `emitVoidOkReturn` spells it in the runtime.
@@ -901,12 +977,15 @@ type PrimitiveInliner
 
 	function emitPushArm(cur IrBlock, arr ValueId, buffer ValueId, length ValueId, value ValueId, stride SingleOpStride, frame InlineFrame)
 		self.emitSlotStore(cur, buffer: buffer, index: length, value: value, stride: stride)
+		self.emitAppendExit(cur, arr: arr, length: length, appended: PushedElementCount, frame: frame)
+	end 'emitPushArm'
 
-		let one = emitConst(self.module, block: cur, value: PushedElementCount, ids: self.valueIds())
-		let newLength = emitBin(self.module, block: cur, a: length, b: one, opcode: StdBinOpcode.add, ids: self.valueIds())
+	function emitAppendExit(cur IrBlock, arr ValueId, length ValueId, appended FullRangeInt, frame InlineFrame)
+		let added = emitConst(self.module, block: cur, value: appended, ids: self.valueIds())
+		let newLength = emitBin(self.module, block: cur, a: length, b: added, opcode: StdBinOpcode.add, ids: self.valueIds())
 		emitStoreField(self.module, block: cur, record: arr, offset: ManagedRecordLengthOffset, value: newLength)
 		self.emitVoidOkExit(cur, frame: frame, errorFlagId: ManagedCallFlag.none)
-	end 'emitPushArm'
+	end 'emitAppendExit'
 
 	function emitSlotStore(cur IrBlock, buffer ValueId, index ValueId, value ValueId, stride SingleOpStride)
 		let slot = self.emitSlotAt(cur, buffer: buffer, index: index, stride: stride)

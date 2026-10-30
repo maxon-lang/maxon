@@ -2163,9 +2163,9 @@ export type StdToX64Lowering
 		end 'i'
 	end 'lowerShiftImm8'
 
-	// Lower a Std unary op to x64. All three are genuinely two-address (`dest = <op> src`,
-	// in place), so each declares `dest` a REUSE-of-`src` def and the allocator supplies the
-	// copy only when `src` outlives — no ISel seed `mov`.
+	// Lower a Std unary op to x64. `neg`, `bitNot`, `logicalNot` and the byte swaps are genuinely
+	// two-address (`dest = <op> src`, in place), so each declares `dest` a REUSE-of-`src` def and the
+	// allocator supplies the copy only when `src` outlives — no ISel seed `mov`.
 	//
 	// The two readings of the source keyword `not` land on two DIFFERENT instructions, and
 	// the Maxon tier already chose between them from the operand's type:
@@ -2189,6 +2189,9 @@ export type StdToX64Lowering
 		match opcode 'op'
 			neg then self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(dest, src: src))
 			bitNot then self.targetModule.appendOp(dstBlock, op: TargetOp.notReg(dest, src: src))
+			byteSwap16 or
+			byteSwap32 or
+			byteSwap64 then self.targetModule.appendOp(dstBlock, op: TargetOp.byteSwapReg(dest, src: src, width: try byteSwapWidth(opcode) otherwise panic("lowerUnaryOp: `{opcode.name}` reached the byte-swap arm and swaps no width")))
 			logicalNot then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegImm32(dest, lhs: src, imm: LogicalNotMask))
 
 			// The CONVERSIONS — three of the four ops in the dialect that read one register file

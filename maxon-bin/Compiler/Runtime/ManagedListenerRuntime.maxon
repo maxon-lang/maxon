@@ -50,8 +50,7 @@ let ListenBacklog = 128
 // ⭐ **THE SCRATCH `getsockname` FILLS, AND WHY IT IS BIGGER THAN THE ADDRESS.** The call writes a
 // `sockaddr_in` or `sockaddr_in6` AND reads back an in-out `socklen_t`, so one block carries both: the
 // address at 0, and the length — seeded with the larger address size, `sockaddr_in6`'s — one word past
-// it. This tier has no narrow store, so the 32-bit length is written as the low half of that word
-// (`emitStoreDwordPair`).
+// it. The 32-bit length is written as the low half of that word (`emitStoreDwordPair`).
 let ListenerNameAddressOffset = 0
 let ListenerNameLengthOffset = 32
 let ListenerNameScratchBytes = 40
@@ -64,8 +63,8 @@ let ListenerNameScratchBytes = 40
 let SinPortHighOffset = 2
 let SinPortLowOffset = 3
 
-// A byte's worth of shift as a MULTIPLIER, so the big-endian halfword is composed rather than loaded: this
-// tier has no 16-bit load, and a bare 256 at a field position says nothing about which byte it places.
+// A byte's worth of shift as a MULTIPLIER, so the big-endian halfword is composed from its two bytes: a
+// bare 256 at a field position says nothing about which byte it places.
 let SinPortHighScale = 256
 
 // ⭐ **THE `__ManagedListenerError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the

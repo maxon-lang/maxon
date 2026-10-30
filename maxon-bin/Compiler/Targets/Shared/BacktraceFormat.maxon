@@ -67,14 +67,13 @@ export let SymbolTableAlignment = 4
 export let SymtabOffEntries = SymbolTableHeaderBytes as Imm32  // the entry array starts just past the header
 
 // ⭐ **HOW THE SAFE-POINT PREDICATE READS THAT COLUMN: ONE 64-BIT LOAD OF THE WHOLE HEADER, THEN A SHIFT.**
-// The Std tier has no 32-bit memory access at all (`StdLoweringShared.accessWidthFor`), and the two header
-// columns are adjacent, so the pair comes back in one aligned word — count in the low half, flags offset in
+// The two header columns are adjacent, so the pair comes back in one aligned word — count in the low half, flags offset in
 // the high. Derived from the column width, so widening a column moves the shift with it.
 export let SymtabHeaderFlagsOffsetShift = SymbolTableColumnBytes * 8
 
 // ⭐ **AND THE SAME TRICK ONE ARRAY OVER: AN ENTRY'S TWO COLUMNS COME BACK IN ONE WORD, `codeOffset` IN THE
 // LOW HALF.** The safe-point predicate needs a function's START to measure how far into it the interrupted PC
-// is; the walkers read the columns separately with 32-bit loads, which the Std tier does not have.
+// is; the walkers read the columns separately with 32-bit loads.
 export let SymtabEntryCodeOffsetMask = (1 shl (SymbolTableColumnBytes * 8)) - 1
 export let SymtabEntryOffCodeOffset = 0 as Imm32  // an entry's first column
 export let SymtabEntryOffNameOffset = SymbolTableColumnBytes as Imm32  // … and its second

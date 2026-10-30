@@ -6,6 +6,7 @@ package main
 
 import (
 	"crypto/subtle"
+	"encoding/binary"
 )
 
 type planes = [8]uint64
@@ -18,7 +19,6 @@ const (
 	blockBytes       = 16
 	wordBytes        = 4
 	ghashWordBytes   = 8
-	counterBytes     = 4
 	nonceBytes       = 12
 	tagBytes         = 16
 	counterLimit     = 1 << 32
@@ -36,14 +36,40 @@ func byteWordShift(index, width int, bigEndian bool) uint {
 	return uint(position * bitsPerByte)
 }
 
-func appendOrderedWord(out []byte, word uint64, width int, bigEndian bool) []byte {
-	for index := 0; index < width; index++ {
-		out = append(out, byte(word>>byteWordShift(index, width, bigEndian)))
+func movesInOneAccess(width int) bool {
+	return width == 2 || width == 4 || width == 8
+}
+
+func wordFitsBelow(off, width, limit int) bool {
+	return limit >= width && off <= limit-width
+}
+
+func readWholeWord(src []byte, off, width int, bigEndian bool) uint64 {
+	window := src[off:]
+	switch width {
+	case 2:
+		if bigEndian {
+			return uint64(binary.BigEndian.Uint16(window))
+		}
+		return uint64(binary.LittleEndian.Uint16(window))
+	case 4:
+		if bigEndian {
+			return uint64(binary.BigEndian.Uint32(window))
+		}
+		return uint64(binary.LittleEndian.Uint32(window))
+	case 8:
+		if bigEndian {
+			return binary.BigEndian.Uint64(window)
+		}
+		return binary.LittleEndian.Uint64(window)
 	}
-	return out
+	panic("readOrderedWord: a width is not moved in one access")
 }
 
 func readOrderedWord(src []byte, off, width, limit int, bigEndian bool) uint64 {
+	if movesInOneAccess(width) && wordFitsBelow(off, width, limit) {
+		return readWholeWord(src, off, width, bigEndian)
+	}
 	var word uint64
 	for index := 0; index < width; index++ {
 		at := off + index
@@ -101,20 +127,23 @@ func packColumns(c0, c1, c2, c3 uint64) (uint64, uint64) {
 	return interleave(c0, c2), interleave(c1, c3)
 }
 
+func aesReadWord(src []byte, at int) uint64 {
+	return uint64(binary.LittleEndian.Uint32(src[at:]))
+}
+
 func packBlock(src []byte, off int) (uint64, uint64) {
-	limit := len(src)
-	c0 := readOrderedWord(src, off, wordBytes, limit, false)
-	c1 := readOrderedWord(src, off+wordBytes, wordBytes, limit, false)
-	c2 := readOrderedWord(src, off+2*wordBytes, wordBytes, limit, false)
-	c3 := readOrderedWord(src, off+3*wordBytes, wordBytes, limit, false)
+	c0 := aesReadWord(src, off)
+	c1 := aesReadWord(src, off+wordBytes)
+	c2 := aesReadWord(src, off+2*wordBytes)
+	c3 := aesReadWord(src, off+3*wordBytes)
 	return packColumns(c0, c1, c2, c3)
 }
 
 func appendBlock(out []byte, low, high uint64) []byte {
-	out = appendOrderedWord(out, deinterleave(low, 0), wordBytes, false)
-	out = appendOrderedWord(out, deinterleave(high, 0), wordBytes, false)
-	out = appendOrderedWord(out, deinterleave(low, 1), wordBytes, false)
-	out = appendOrderedWord(out, deinterleave(high, 1), wordBytes, false)
+	out = binary.LittleEndian.AppendUint32(out, uint32(deinterleave(low, 0)))
+	out = binary.LittleEndian.AppendUint32(out, uint32(deinterleave(high, 0)))
+	out = binary.LittleEndian.AppendUint32(out, uint32(deinterleave(low, 1)))
+	out = binary.LittleEndian.AppendUint32(out, uint32(deinterleave(high, 1)))
 	return out
 }
 
@@ -348,7 +377,7 @@ func keySchedule(key []byte, rounds int) []uint64 {
 	total := (rounds + 1) * 4
 	words := make([]uint64, 0, total)
 	for i := 0; i < keyWords; i++ {
-		words = append(words, readOrderedWord(key, i*wordBytes, wordBytes, len(key), false))
+		words = append(words, aesReadWord(key, i*wordBytes))
 	}
 	previous := words[keyWords-1]
 	slot, constant := 0, 0
@@ -424,7 +453,7 @@ func (a *BitslicedAes) XorKeyStream(nonce []byte, counter uint32, data []byte) [
 		counterBlocks = counterBlocks[:0]
 		for slot := 0; slot < batch; slot++ {
 			counterBlocks = append(counterBlocks, nonce...)
-			counterBlocks = appendOrderedWord(counterBlocks, uint64(counter)+uint64(done+slot), counterBytes, true)
+			counterBlocks = binary.BigEndian.AppendUint32(counterBlocks, uint32(uint64(counter)+uint64(done+slot)))
 		}
 		keystream = keystream[:0]
 		loadBatch(&p, counterBlocks, batch)
@@ -471,9 +500,13 @@ func foldSpill(w uint64) uint64 { return (w << 63) ^ (w << 62) ^ (w << 57) }
 
 type ghashKey struct{ h0, h1, h0r, h1r, h2, h2r uint64 }
 
+func ghashReadWord(src []byte, at int) uint64 {
+	return binary.BigEndian.Uint64(src[at:])
+}
+
 func newGhashKey(sub []byte) ghashKey {
-	h1 := readOrderedWord(sub, 0, ghashWordBytes, len(sub), true)
-	h0 := readOrderedWord(sub, ghashWordBytes, ghashWordBytes, len(sub), true)
+	h1 := ghashReadWord(sub, 0)
+	h0 := ghashReadWord(sub, ghashWordBytes)
 	h0r, h1r := ghashReverse(h0), ghashReverse(h1)
 	return ghashKey{h0, h1, h0r, h1r, h0 ^ h1, h0r ^ h1r}
 }
@@ -504,11 +537,20 @@ func (k *ghashKey) multiply(y1, y0 uint64) (uint64, uint64) {
 	return t3, u2
 }
 
+func ghashBlockWords(data []byte, blockStart int) (uint64, uint64) {
+	limit := len(data)
+	if blockStart+blockBytes <= limit {
+		return ghashReadWord(data, blockStart), ghashReadWord(data, blockStart+ghashWordBytes)
+	}
+	high := readOrderedWord(data, blockStart, ghashWordBytes, limit, true)
+	low := readOrderedWord(data, blockStart+ghashWordBytes, ghashWordBytes, limit, true)
+	return high, low
+}
+
 func (k *ghashKey) absorb(high, low uint64, data []byte) (uint64, uint64) {
 	limit := len(data)
 	for start := 0; start < limit; start += blockBytes {
-		blockHigh := readOrderedWord(data, start, ghashWordBytes, limit, true)
-		blockLow := readOrderedWord(data, start+ghashWordBytes, ghashWordBytes, limit, true)
+		blockHigh, blockLow := ghashBlockWords(data, start)
 		high, low = k.multiply(high^blockHigh, low^blockLow)
 	}
 	return high, low
@@ -529,8 +571,8 @@ func (g *BitslicedGcm) authenticate(nonce, aad, ciphertext []byte) []byte {
 	high, low = g.hash.absorb(high, low, ciphertext)
 	high, low = g.hash.multiply(high^uint64(len(aad)*bitsPerByte), low^uint64(len(ciphertext)*bitsPerByte))
 	digest := make([]byte, 0, blockBytes)
-	digest = appendOrderedWord(digest, high, ghashWordBytes, true)
-	digest = appendOrderedWord(digest, low, ghashWordBytes, true)
+	digest = binary.BigEndian.AppendUint64(digest, high)
+	digest = binary.BigEndian.AppendUint64(digest, low)
 	return g.cipher.XorKeyStream(nonce, tagMaskCounter, digest)
 }
 

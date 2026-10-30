@@ -265,6 +265,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		orRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		xorRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		notReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
+		byteSwapReg(dest, src, _) then pushReuseUnaryOperands(buf, dest: dest, src: src)
 
 		// The immediate forms are two-address too (`and dest, imm` modifies dest in place),
 		// so — unlike `leaRegRegImm32`/`imulRegRegImm32`, whose destination is INDEPENDENT
@@ -402,6 +403,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64Lsrv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
 		arm64Neg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Mvn(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64Rev(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
 
 		// arm64 immediate ALU forms are 3-address (dest INDEPENDENT of src), so a PLAIN def-from-use
 		// — NOT the two-address reuse the x64 immediate forms declare.

@@ -103,10 +103,11 @@ end 'memFillByte'
 let FillByteMask = 0xFF
 let FillByteBroadcast = 0x0101010101010101
 
-// ⭐ THE ONE DOOR from a Std type to a memory-access WIDTH. `i1`/`u8` are one byte, `i64`/`f64` the
-// full word; those are what the language can put behind a load/store today. Every other type panics
-// rather than picking a nearby width — a narrow integer needs the `as` cast, and its SIGNEDNESS
-// then decides the sign/zero-extending load form. Reuses the neutral `X64AccessWidth` enum: the width
+// ⭐ THE ONE DOOR from a Std type to a memory-access WIDTH. `i1`/`u8` are one byte, `u16`/`u32` two and
+// four, `i64`/`f64` the full word; every narrow width loads zero-extended, which is correct only
+// because each of those types is unsigned. Every other type panics rather than picking a nearby width —
+// a signed narrow integer needs the `as` cast, and its SIGNEDNESS then decides the sign/zero-extending
+// load form. Reuses the neutral `X64AccessWidth` enum: the width
 // (HOW MANY BITS) is not ISA-specific; only the encoder that turns `byte`/`word64` into the concrete
 // instruction (`movzx`/`mov` vs `ldrb`/`ldr`) is. An `f64` access is 8 bytes; whether it moves through
 // the integer or FP form is decided at emit time by the register's class, in each backend.
@@ -116,13 +117,13 @@ export function accessWidthFor(t StdType) returns X64AccessWidth
 
 		// A `u8` access is unambiguous because it is unsigned: zero-extension is always correct.
 		u8 then return X64AccessWidth.byte
+		u16 then return X64AccessWidth.word16
+		u32 then return X64AccessWidth.word32
 		i64 or
 		f64 then return X64AccessWidth.word64
 		i8 or
 		i16 or
 		i32 then panic("accessWidthFor: no memory-access form for {t.name} — a narrow integer needs the `as` cast, and its SIGNEDNESS then decides the sign/zero-extending load rather than defaulting to a width")
-		u16 or
-		u32 or
 		u64 then panic("accessWidthFor: no memory-access form for {t.name} — an unsigned type wider than a byte needs the `as` cast")
 		f32 then panic("accessWidthFor: f32 is 4 bytes and moves through a single-precision form, a width this enum does not carry; Maxon's `float` is f64, so nothing produces one")
 	end 'w'
@@ -263,6 +264,9 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 		fneg or
 		bitcastI64ToF64 gives RegClass.xmm
 		fpToSi or
+		byteSwap16 or
+		byteSwap32 or
+		byteSwap64 or
 		bitcastF64ToI64 gives RegClass.gpr
 	end 'k'
 end 'unaryResultClass'
@@ -292,6 +296,9 @@ export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
 		logicalNot or
 		siToFp or
 		uiToFp or
+		byteSwap16 or
+		byteSwap32 or
+		byteSwap64 or
 		fpToSi then panic("floatRoundModeFor: Std unary opcode {opcode.name} performs no rounding — only floor/ceil/round lower to a rounding instruction (`roundsd` on x64, `frint` on arm64), and the isels route only those three here")
 
 		// ONE arm for the three float ops past the roundings: the reason is identical (each has its own

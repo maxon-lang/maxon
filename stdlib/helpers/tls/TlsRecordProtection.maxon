@@ -128,7 +128,7 @@ type TlsRecordState
 	function xorNonce(sequenceNumber TlsSequenceNumber) returns ByteArray
 		var mask = ByteArray.create()
 		mask.resize(iv.count() - tlsSequenceBytes)
-		appendOrderedWord(mask, word: sequenceNumber as ByteWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
+		appendOrderedWord(mask, word: sequenceNumber as OrderedWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
 
 		var nonce = ByteArray.create()
 		nonce.reserve(iv.count())
@@ -349,7 +349,7 @@ module function tlsRequireFraming(record ByteArray) throws TlsRecordError
 
 	let declared = readOrderedWord(record, off: tlsRecordLengthOffset, width: tlsRecordFieldBytes, limit: record.count(), order: ByteOrder.bigEndian)
 
-	if declared != (record.count() - tlsRecordHeaderBytes) as ByteWord 'length'
+	if declared != (record.count() - tlsRecordHeaderBytes) as OrderedWord 'length'
 		throw TlsRecordError.decodeError
 	end 'length'
 end 'tlsRequireFraming'
@@ -357,8 +357,8 @@ end 'tlsRequireFraming'
 module function tlsRecordHeader(contentType TlsContentType, version TlsRecordVersion, bodyBytes Count) returns ByteArray
 	var header = ByteArray.create()
 	header.push(contentType.rawValue as Byte)
-	appendOrderedWord(header, word: version as ByteWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
-	appendOrderedWord(header, word: bodyBytes as ByteWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
+	appendOrderedWord(header, word: version as OrderedWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
+	appendOrderedWord(header, word: bodyBytes as OrderedWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
 
 	return header
 end 'tlsRecordHeader'
@@ -375,7 +375,7 @@ function tls12ExplicitNonce(sequenceNumber TlsSequenceNumber, bytes Count) retur
 	var explicit = ByteArray.create()
 
 	if bytes != 0 'present'
-		appendOrderedWord(explicit, word: sequenceNumber as ByteWord, width: bytes as ByteWordWidth, order: ByteOrder.bigEndian)
+		appendOrderedWord(explicit, word: sequenceNumber as OrderedWord, width: bytes as ByteWordWidth, order: ByteOrder.bigEndian)
 	end 'present'
 
 	return explicit
@@ -383,7 +383,7 @@ end 'tls12ExplicitNonce'
 
 function tls12AdditionalData(sequenceNumber TlsSequenceNumber, contentType TlsContentType, plaintextBytes Count) returns ByteArray
 	var additionalData = ByteArray.create()
-	appendOrderedWord(additionalData, word: sequenceNumber as ByteWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
+	appendOrderedWord(additionalData, word: sequenceNumber as OrderedWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
 	additionalData.append(tlsRecordHeader(contentType, version: tlsRecordVersion, bodyBytes: plaintextBytes))
 
 	return additionalData

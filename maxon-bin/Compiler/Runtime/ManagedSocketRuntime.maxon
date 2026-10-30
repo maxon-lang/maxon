@@ -316,12 +316,10 @@ let SockaddrAddrOffset = 4
 // WRITE side of this struct, which is why there is one offset here and not three.
 let SockaddrFamilyPortAddrOffset = 0
 
-// ⭐⭐ **2^32 AND 2^16 AS SCALES, BECAUSE THIS TIER HAS NO NARROW STORE.** `accessWidthFor` carries `byte` and
-// `word64` and PANICS for everything between (deliberately — a narrow access needs the `as` cast so its
-// SIGNEDNESS decides the extension), so a `u16` or `u32` FIELD cannot be stored on its own here. Every such
-// field is written by composing it into the 64-bit word that contains it, and these are the two multipliers
-// that place a field at byte 2 and at byte 4 of that word. Named rather than spelled `65536`/`4294967296` at
-// five sites: a bare power of two at a shift says nothing about which field offset it encodes.
+// ⭐⭐ **2^32 AND 2^16 AS SCALES.** Every `u16` or `u32` FIELD here is written by composing it into the
+// 64-bit word that contains it, and these are the two multipliers that place a field at byte 2 and at
+// byte 4 of that word. Named rather than spelled `65536`/`4294967296` at five sites: a bare power of two
+// at a shift says nothing about which field offset it encodes.
 let ByteTwoScale = 65536
 let ByteFourScale = 4294967296
 
@@ -458,9 +456,9 @@ function emitLiveSocketOrThrow(module StdModule, func IrFunction, entry IrBlock,
 end 'emitLiveSocketOrThrow'
 
 // ⭐ **TWO 32-BIT FIELDS SHARING ONE 64-BIT SLOT, WRITTEN AS ONE CONSTANT STORE.** `low` lands at `offset`
-// and `high` at `offset + 4`. It exists because this tier has NO 4-byte store at all (see `ByteFourScale`),
-// so a DWORD field is only reachable through the word that contains it — and doing that inline would put the
-// "+4 is the high half" arithmetic at every `hints` field instead of once.
+// and `high` at `offset + 4`. Each DWORD field is written through the word that contains it (see
+// `ByteFourScale`), and doing that inline would put the "+4 is the high half" arithmetic at every `hints`
+// field instead of once.
 //
 // ⚠ Both values are COMPILE-TIME here, so the packing is folded into a single `emitConst` rather than emitted
 // as a shift and an or.
@@ -1902,8 +1900,8 @@ let DnsRcodeByteOffset = 5
 let DnsAnCountHighIndex = 8
 let DnsQuestionStart = DnsTcpLengthPrefixBytes + DnsHeaderBytes
 
-// A byte's worth of shift, as a MULTIPLIER — the tier has no narrow store, so a big-endian halfword is
-// composed rather than written (`ByteTwoScale`'s argument, one field width down).
+// A byte's worth of shift, as a MULTIPLIER — a big-endian halfword is composed into its word
+// (`ByteTwoScale`'s argument, one field width down).
 let ByteOneScale = 256
 let ByteMask = 0xFF
 

@@ -198,6 +198,9 @@ let OpcodeGrp2Cl = 0xD3  // group-2 SHIFT, r/m, cl — the count is IMPLICIT, in
 let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
 let OpcodeXchgRm8Reg8 = 0x86
 let OpcodeMovzxRegRm8 = 0xB6  // movzx r, r/m8 (two-byte 0F B6 /r; reg field = dest)
+let OpcodeMovzxRegRm16 = 0xB7  // movzx r, r/m16 (two-byte 0F B7 /r; reg field = dest)
+let OpcodeBswapBase = 0xC8  // bswap r (two-byte 0F C8+rd; REX.W selects the 64-bit form)
+let ByteSwapHalfwordShift = 16
 let OpcodeMovsxd = 0x63  // movsxd r64, r/m32 (REX.W 63 /r; reg field = dest) — the jump table's signed i32 load
 let OpcodeCqo = 0x99  // cqo: sign-extend RAX into RDX:RAX (REX.W 99), no ModR/M
 let OpcodeCallRel32 = 0xE8  // call rel32
@@ -416,7 +419,7 @@ let TwoByteOpcodeEscape = 0x0F
 // it immediately before their own `emitRex` call) instead of being pushed by callers, who by
 // construction could not get a byte in ahead of a REX the assembler has not written yet.
 enum SseMandatoryPrefix
-	// No mandatory prefix — every GPR instruction in this file.
+	// No mandatory prefix — every GPR instruction in this file but the 16-bit store (`operandSize16`).
 	none
 
 	// The SCALAR DOUBLE family: movsd, addsd, subsd, mulsd, divsd, and both converts.
@@ -430,10 +433,13 @@ enum SseMandatoryPrefix
 	// its own prefix at the call, which is the fact that cannot drift; grep
 	// `packedDouble` for the current set rather than reading one here.
 	packedDouble
+
+	operandSize16
 end 'SseMandatoryPrefix'
 
 let SsePrefixScalarDoubleByte = 0xF2
 let SsePrefixPackedDoubleByte = 0x66
+let OperandSize16PrefixByte = 0x66
 
 // The two segment-override legacy prefixes. On Win64 `gs:` addresses the Thread Information Block, whose
 // StackBase/StackLimit the GT syscall shim repoints for a kernel call (see `encodeMovSegAbsReg`); under SysV
@@ -461,6 +467,7 @@ function emitSseMandatoryPrefix(code ByteArray, prefix SseMandatoryPrefix)
 		none then break
 		scalarDouble then code.push(SsePrefixScalarDoubleByte)
 		packedDouble then code.push(SsePrefixPackedDoubleByte)
+		operandSize16 then code.push(OperandSize16PrefixByte)
 	end 'p'
 end 'emitSseMandatoryPrefix'
 
@@ -1301,6 +1308,25 @@ export function encodeMovzxRegByteBaseDisp(code ByteArray, destReg X64Register, 
 	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovzxRegRm8, regField: destReg, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
 end 'encodeMovzxRegByteBaseDisp'
 
+function encodeMovzxRegWordBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovzxRegRm16, regField: destReg, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
+end 'encodeMovzxRegWordBaseDisp'
+
+function encodeStoreBaseDispReg16(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.operandSize16, index: index, indexScale: indexScale)
+end 'encodeStoreBaseDispReg16'
+
+// `bswap` has no defined 16-bit form, so a halfword swaps as 32 bits and shifts down.
+function encodeByteSwapReg(code ByteArray, reg X64Register, width WordBytes)
+	emitRex(code, wide: width == WordBytes.eight, regField: X64Register.rax, rmField: reg)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeBswapBase + regLow3(reg))
+
+	if width == WordBytes.two 'halfword'
+		encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: reg, count: ByteSwapHalfwordShift)
+	end 'halfword'
+end 'encodeByteSwapReg'
+
 // --- Intra-CHUNK rel32 resolution ---
 //
 // A function's blocks are laid out contiguously inside its ONE FunctionCodeChunk, so
@@ -1752,33 +1778,34 @@ function encodeLeaRegRdata(code ByteArray, rdataRelocs RdataRelocationArray, des
 	writeDword(code, value: 0)
 end 'encodeLeaRegRdata'
 
-// Load `[base + disp]` at the op's width. Both arms REUSE an encoder the spill/reload path
-// already had — `[base+disp]` addressing does not care whether the base is rsp or a global's
-// address — which is the whole reason the review that unified the three drifted `[base+disp]`
-// encoders into `encodeModRmBaseDisp` paid off here.
+// Load `[base + disp]` at the op's width. Every arm is built on `encodeModRmBaseDisp` —
+// `[base+disp]` addressing does not care whether the base is rsp or a global's address.
 //
-// The BYTE arm is `movzx`, not `mov`: a bool must arrive in the register ZERO-EXTENDED, or the
-// upper 56 bits are whatever the register last held and `if flag` tests garbage. It is
-// GPR-only — a one-byte type is never a float — so it asserts the file rather than dispatching
-// on it.
+// The narrow arms ZERO-EXTEND — `movzx` for a byte or a 16-bit word, and a 32-bit `mov`, which clears
+// the upper half: a bool must arrive in the register ZERO-EXTENDED, or the upper 56 bits are whatever
+// the register last held and `if flag` tests garbage. They are GPR-only — a narrow type is never a
+// float — so they assert the file rather than dispatching on it.
 //
-// ⭐ THE WORD64 ARM IS WHERE AN f64 GLOBAL LOADS, AND IT NEEDED NO NEW WIDTH. `X64AccessWidth`
-// stayed at two cases: the RESOLVED REGISTER'S CLASS already says whether those 64 bits move
+// ⭐ THE WORD64 ARM IS WHERE AN f64 GLOBAL LOADS, AND IT NEEDS NO WIDTH OF ITS OWN. `X64AccessWidth`
+// has no float case: the RESOLVED REGISTER'S CLASS already says whether those 64 bits move
 // through `mov` or `movsd`, so a `float64` width would be that same fact written a second time,
 // free to disagree with the first. `word64` is honest — an f64 IS 64 bits — and the shared
 // `emitWord64Load` is the one place the instruction is chosen.
 function emitDataLoad(code ByteArray, dest X64Register, base X64Register, disp Imm32, width X64AccessWidth, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	match width 'w'
 		byte then encodeMovzxRegByteBaseDisp(code, destReg: requireClass(dest, class: RegClass.gpr), base: base, disp: disp, index: index, indexScale: indexScale)
+		word16 then encodeMovzxRegWordBaseDisp(code, destReg: requireClass(dest, class: RegClass.gpr), base: base, disp: disp, index: index, indexScale: indexScale)
+		word32 then encodeLoadRegBaseDisp(code, destReg: requireClass(dest, class: RegClass.gpr), base: base, disp: disp, wide: false, index: index, indexScale: indexScale)
 		word64 then emitWord64Load(code, dest: dest, base: base, disp: disp, index: index, indexScale: indexScale)
 	end 'w'
 end 'emitDataLoad'
 
-// Store `src` to `[base + disp]` at the op's width — `emitDataLoad`'s mirror, over the same
-// byte and word64 encoders.
+// Store `src` to `[base + disp]` at the op's width — `emitDataLoad`'s mirror.
 function emitDataStore(code ByteArray, base X64Register, disp Imm32, src X64Register, width X64AccessWidth, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	match width 'w'
 		byte then encodeStoreBaseDispReg8(code, base: base, disp: disp, srcReg: requireClass(src, class: RegClass.gpr), index: index, indexScale: indexScale)
+		word16 then encodeStoreBaseDispReg16(code, base: base, disp: disp, srcReg: requireClass(src, class: RegClass.gpr), index: index, indexScale: indexScale)
+		word32 then encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: requireClass(src, class: RegClass.gpr), wide: false, index: index, indexScale: indexScale)
 		word64 then emitWord64Store(code, base: base, disp: disp, src: src, index: index, indexScale: indexScale)
 	end 'w'
 end 'emitDataStore'
@@ -2227,6 +2254,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		orRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeOrRmReg, dest: resolveGpr(dest), src: resolveGpr(rhs), wide: true)
 		xorRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeXorRmReg, dest: resolveGpr(dest), src: resolveGpr(rhs), wide: true)
 		notReg(dest, _) then encodeGrp3Reg(code, ext: Grp3ExtNot, reg: resolveGpr(dest))
+		byteSwapReg(dest, _, width) then encodeByteSwapReg(code, reg: resolveGpr(dest), width: width)
 		andRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtAnd, reg: resolveGpr(dest), imm: imm)
 		orRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtOr, reg: resolveGpr(dest), imm: imm)
 		xorRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtXor, reg: resolveGpr(dest), imm: imm)
@@ -2341,6 +2369,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		arm64Lsrv or
 		arm64Neg or
 		arm64Mvn or
+		arm64Rev or
 		arm64AddImm or
 		arm64SubImm or
 		arm64AndImm or
@@ -2615,6 +2644,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		orRegReg or
 		xorRegReg or
 		notReg or
+		byteSwapReg or
 		orRegImm32 or
 		xorRegImm32 or
 		shlRegImm8 or
@@ -2666,6 +2696,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		arm64Lsrv or
 		arm64Neg or
 		arm64Mvn or
+		arm64Rev or
 		arm64AddImm or
 		arm64SubImm or
 		arm64AndImm or
