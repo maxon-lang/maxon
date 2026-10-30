@@ -45,35 +45,19 @@ statement door recognizes `__Builtins.<member>(…)` and nothing else of that sh
 The door admits a shape and no NAME. A member the table does not recognize falls through to the same
 reserved-callee rejection expression position already gives it — `E3004`, at the call's own span.
 
-### The substrate exists on the lanes that have written it, and nowhere else
+### Every lane serves it
 
-The green-thread timer computes its deadline from `osReadClock` and waits with `osSleepMs`, and neither
-backend will fake either. Two lanes provide both — x64-windows through
-QueryPerformanceCounter/`Sleep`, and arm64-macOS through `clock_gettime_nsec_np(CLOCK_UPTIME_RAW)` and
-`nanosleep`. A program that reaches `sleep` on any other is refused with `E3104` at the call site, naming
-the runtime entry (`__gt_sleep`) that has no lowering there — never a panic from inside the backend,
-such as:
+`sleep` lowers to the runtime entry `__gt_sleep`, which every lane implements. On a native lane the
+green-thread timer computes its deadline from the host's monotonic counter and parks the green thread
+until it passes. wasm32-wasi has no green threads, so there a sleep blocks the program on a WASI
+`monotonic-clock` pollable for the requested duration (`runs-on-wasm` below).
 
-```text
-panic at StdToWasm.maxon:1099: emitBodyOp: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung
-```
+A target refusal of a runtime entry is a SEMANTIC CHECK on the program's own source, so it does not care
+whether the call is reachable; `builtins-clock.md`'s `thread-cpu-ticks-rejected-on-wasm-when-unreached`
+pins that with an entry wasm still refuses.
 
-The refusal is a SEMANTIC CHECK, so it does not care whether the call is reachable: an
-`__Builtins.sleep` written in a function `main` never calls is refused for wasm just as a type error in an
-unreached function is reported, even though dead-function elimination — which runs two tiers later —
-would remove the call before any backend saw it. It is pinned below so that relaxing it is a deliberate
-change.
-
-⚠ It is pinned HERE, at the INTRINSIC, where the refusal is raised on the program's own op. A bare
-`sleep(1)` is a call to `stdlib/Sleep.maxon`'s declaration, which moves the `__gt_sleep` out of user code
-and into stdlib source, where the gate exempts a body no path from `main` reaches. The call into that body
-is still the program's own, so a `sleep(1)` in an unreached function is refused too
-(`async-sleep.unreached-call-is-refused-on-wasm`); what the exemption leaves compiling is a program that
-never names `sleep` (`async-sleep.unnamed-sleep-compiles-on-wasm`).
-
-⚠ **Which cases that gates, exactly**: only the ones that REACH the emit. Arity, operand type, value
-position and unknown member are decided in the front end, are target-neutral, and carry NO marker. See
-`async-scheduler.md`'s *Targets* section for the one statement of the substrate gate.
+Arity, operand type, value position and unknown member are decided in the front end, are target-neutral,
+and carry NO marker.
 
 Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
 and a call from anywhere else is E3185. The cases below call the intrinsics themselves, so they compile in
@@ -169,40 +153,21 @@ end 'main'
 error E3004: <fragment>:3:13: call to undefined function '__Builtins.nope': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
 ```
 
-<!-- test: builtins-sleep.rejected-on-wasm -->
+<!-- test: builtins-sleep.runs-on-wasm -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-wasm32-wasi has no green-thread sleep substrate, so the call is refused at its source span with
-`E3104`, naming the runtime entry that has no lowering there — never a panic from inside the wasm
-backend.
+On wasm32-wasi a sleep blocks on a WASI `monotonic-clock` pollable, so the monotonic clock has moved at
+least the requested 20 ms when it returns.
 ```maxon
 function main() returns ExitCode
-	__Builtins.sleep(1)
-	return 0
+	let start = __Builtins.currentTimeNanos()
+	__Builtins.sleep(20)
+	if __Builtins.currentTimeNanos() - start >= 20000000 'sleptTheWholeTime'
+		return 4
+	end 'sleptTheWholeTime'
+	return 1
 end 'main'
 ```
-```maxoncstderr
-error E3104: <fragment>:3:13: this construct lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
-```
-
-<!-- test: builtins-sleep.rejected-on-wasm-when-unreached -->
-<!-- tier: stdlib -->
-<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The gate is REACHABILITY-BLIND for the program's own source — a library-tier case's files included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`): `napper` is never called, yet its intrinsic is still refused.
-`SemanticCheck` visits every function and dead-function elimination runs two tiers later, so this is the
-same rule that reports a type error in an unreached function. Pinned because the stdlib loader's own
-exemption (`checkCalls` skips an unreached stdlib body) points the other way: it is the unreached stdlib
-BODY that is exempt, and a bare `sleep(1)` written in an unreached function is refused like the intrinsic
-(`async-sleep.unreached-call-is-refused-on-wasm`).
-```maxon
-function napper()
-	__Builtins.sleep(1)
-end 'napper'
-
-function main() returns ExitCode
-	return 4
-end 'main'
-```
-```maxoncstderr
-error E3104: <fragment>:3:13: this construct lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+```exitcode
+4
 ```

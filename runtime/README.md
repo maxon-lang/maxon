@@ -379,10 +379,9 @@ Notes on particular rows:
   of 8 bytes) and lowers to `StdOp.stackRecordAddr`, a frame address in a register. In a green-thread
   program a frame can be relocated (`__gt_stack_relocate`), which is why `PromoteStackRecords` promotes
   nothing there; `scratch` reaches `TargetOp.leaRegSlot` by its own route with no such gate, so a tier body
-  must not hold a `scratch` address across a call that can relocate the stack. ⚠ It has no wasm lowering
-  (`StdToWasm.emitBodyOp` panics on `stackRecordAddr`) and no `HostFacility` names an addressable frame, so
-  the row answers `none` and a reached tier body spelling it dies in that backend. Its only tier user,
-  `__clock_now_filetime`, is refused on wasm by the `__clock_` band first.
+  must not hold a `scratch` address across a call that can relocate the stack. On wasm32-wasi a frame is
+  one fixed linear-memory region per function (`StdToWasm.WasmScratchFrames`), so a tier body spelling
+  `scratch` there must call no module code; the backend panics on one that does (`requireLeafFrame`).
 - **The atomics** take no offset; `atomicAddWord` answers the prior value and `atomicCas` answers 1/0.
 
 ## Open gaps
@@ -394,4 +393,3 @@ Notes on particular rows:
 - `osLockInit`, `osLockEnter`, `osLockLeave` and `atomicCas` are spelled by no reached tier body; spec probe bodies that
   spell them are unreached, so dead-function elimination drops them before instruction selection and no
   lane's isel is exercised from the tier. A probe case proves only the parser and the Maxon-to-Std lowering.
-- `scratch` has no wasm lowering and no facility row to refuse it (above).

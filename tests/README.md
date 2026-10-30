@@ -824,7 +824,8 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   exactly as the cold run respelled it, the two marker shapes the reference grammar reads, an
   `AsyncTrace` case passing on ids that differ from the run's but name the same threads and failing on a
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
-  every case untouched, an exit-code mismatch reporting the child's stdout and stderr, and a
+  every case untouched, a run case whose marker leaves `wasm32-wasi` its only lane failing there on an
+  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, and a
   `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.
   Each fixture's own preamble says what its test asserts.
@@ -842,8 +843,8 @@ never contend, the compiler needs no exemption for these runs, and nothing a run
 above, and refuses a fixture holding a subdirectory, so every run starts from the fixture's spec files
 and nothing else.
 
-⚠ **THE wasm32-wasi GATE RUNS FROM THE CHECKOUT.** `findWasmtimePath` walks up from the working directory
-to `vendor/wasmtime/`, which a staged copy under the host temp area has no ancestor holding, so that
+⚠ **THE wasm32-wasi GATES RUN FROM THE CHECKOUT.** `findWasmtimePath` walks up from the working directory
+to `vendor/wasmtime/`, which a staged copy under the host temp area has no ancestor holding, so each such
 gate stages its fixture there and spawns `spec-test` with the checkout as the working directory
 (`runGateFixtureOnceFromTheCheckout`). It needs `vendor/` staged, which `ci.yml` does before this corpus.
 

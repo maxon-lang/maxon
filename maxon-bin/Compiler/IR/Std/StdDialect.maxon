@@ -881,6 +881,10 @@ export function stdOpMayWriteMemory(op StdOp) returns bool
 	return op.rawValue.isStore or op.rawValue.isCall
 end 'stdOpMayWriteMemory'
 
+export function stdOpEntersModuleCode(op StdOp) returns bool
+	return op.rawValue.category == StdOpCategory.call and op.rawValue.role == OpRole.plain
+end 'stdOpEntersModuleCode'
+
 // --- StdOp: the flat op union ---
 //
 // Variants are declared in CATEGORY-CONTIGUOUS BANDS, in `StdOpCategory` order:
@@ -1036,8 +1040,8 @@ export enum NetpollVerb
 	// reads it.
 	openTimer
 
-	// `(microseconds, timer) -> nothing`. Sleep the calling OS thread: the timer set and waited on, or a
-	// `nanosleep`.
+	// `(microseconds, timer) -> nothing`. Sleep the calling OS thread: the timer set and waited on, a
+	// `nanosleep`, or a block on a WASI `monotonic-clock` pollable.
 	sleepOnTimer
 
 	// `(microseconds) -> nothing`. Back the calling OS thread off for the shortest interval the host can

@@ -50,7 +50,8 @@ this family only once a backend has written those out. All four native lanes hav
 `X64GtRuntime`'s context switch, trampoline, relocating grower and Win32 substrate; then `Arm64GtRuntime`
 and the two Linux images). A WASI component has no addressable call stack for a context switch to move,
 so `SemanticCheck.requireTargetSupportsCallee` answers **E3104** there, naming the entry (`__gt_resched`,
-`__gt_sleep`, `__gt_now_ns`).
+for one). `sleep` and the monotonic clock are not in that family on wasm: `__gt_sleep` is a blocking WASI
+`monotonic-clock` wait there and `__gt_now_ns` reads that clock.
 
 ⛔ **AND E3104 IS REPORTED, WHICH A MARKER IS NOT.** The harness counts a target-refused case as a
 **SKIP** and prints it by name; a marker takes the case out of selection with nothing said anywhere. The

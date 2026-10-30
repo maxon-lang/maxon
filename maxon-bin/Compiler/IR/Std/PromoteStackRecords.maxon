@@ -128,12 +128,11 @@
 // ⛔ **wasm32-wasi PROMOTES NOTHING EITHER, FOR AN UNRELATED REASON.**
 //
 // A wasm local HAS NO ADDRESS, and the compiler's wasm module emits no globals section at all — so there is no
-// `__stack_pointer`, no shadow stack, and no frame for a slot to index (`StdToWasm`'s header: *"the call
-// stack is the ENGINE's, not addressable memory"*). x64 and arm64 both already own the mechanism this pass
-// needs — a reserved region on the spiller's own slot grid, addressed by `TargetOp.leaRegSlot` — and wasm
-// owns none of it. Giving wasm one is a shadow-stack change (a mutable global plus a bump on entry and a
-// restore at every return, which interacts with asyncify), not an extension of anything here. Until then
-// this pass does nothing on that lane and `StdToWasm`'s arms panic rather than guess.
+// `__stack_pointer` and no shadow stack. A wasm frame is one fixed linear-memory region per function
+// (`StdToWasm.WasmScratchFrames`), sound only in a function that calls no module code, and a promoted
+// record may be handed to a call (`scanCallOperands`) — so promotion there would build a frame holder
+// the wasm backend refuses (`requireLeafFrame`). Giving wasm promotion is a shadow-stack change (a mutable global plus a bump on
+// entry and a restore at every return, which interacts with asyncify), not an extension of anything here.
 
 // One field of a recognized record constructor: WHERE it goes and WHAT goes there.
 type RecordField

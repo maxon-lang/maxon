@@ -52,10 +52,10 @@ The declaration enforces the call's rules: the argument is checked against `mill
 the ordinary argument rule, and the absent result by the ordinary void-call rule. Only the qualified
 `__Builtins.sleep(ms)` — stdlib's own floor — is recognized by name.
 
-**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** `sleep` lowers to `__gt_sleep`, which every native lane implements and `wasm32-wasi`
-does not, so `SemanticCheck` refuses it with **E3104** there. That is what the `rejected-on-wasm` cases
-below PIN, and why they carry the inverse marker naming only the target they are about.
+**Targets.** `sleep` lowers to `__gt_sleep`, which every lane implements. A native lane parks the green
+thread on a timer; `wasm32-wasi` has no green threads, so there a sleep is a blocking wait on a WASI
+`monotonic-clock` pollable. The `on-wasm` cases below pin that lowering, and carry the inverse marker
+naming only the target they are about.
 
 ### Deadline order is the TIMER STORE's answer, not the netpoller's
 
@@ -275,46 +275,28 @@ end 'main'
 error E3009: <fragment>:3:2: argument 'milliseconds': cannot implicitly convert 'float' to 'Milliseconds': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
-<!-- test: async-sleep.rejected-on-wasm -->
+<!-- test: async-sleep.runs-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The timer the park is built on reads `osReadClock` and waits with `osSleepMs`, and neither has a
-wasm lowering. A `sleep` compiled for wasm is therefore refused at its own call span with `E3104`,
-naming the runtime entry it lowers to — not a panic three tiers down in the backend, which is what an
-ungated call reaches:
-
-```text
-panic at StdToWasm.maxon:1099: emitBodyOp: `osReadClock` is x64-windows only
-```
-
-The refusal is raised INSIDE `stdlib/Sleep.maxon`'s body and attributed to the crossing call, so it is
-positioned at the line the user wrote and names the stdlib function they called
-(`stdlib-loading.md`) — never at a path inside `stdlib/`.
-⚠ **NO NATIVE LANE REFUSES `sleep`, SO THIS CASE CARRIES THE RULE ALONE.** Every native lane has a timed
-park, and a native twin's program and expected diagnostic would be byte-identical to this one's but for the
-target name — one fact written down twice.
-
-⇒ **THE CONVENTION, STATED ONCE FOR THE THREE CASES THAT SHARE IT** (`services.md` and
-`builtins-cpu-parallel.md` carry the other two): a target-refusal case needs a lane that actually refuses.
-When the last native lane gains a facility, its native witness has nowhere to go — **do not re-point it at
-`wasm32-wasi` beside an existing wasm sibling, and do not re-add one unless a native lane loses the
-facility.** wasm's refusal is permanent, so the wasm case carries the rule by itself.
-
+On wasm32-wasi `sleep` is a blocking wait on a WASI `monotonic-clock` pollable, so the monotonic clock
+has moved at least the requested 20 ms when it returns.
 ```maxon
 function main() returns ExitCode
-	sleep(1)
-	return 0
+	let start = Clock.nowNanos()
+	sleep(20)
+	if Clock.nowNanos() - start >= 20000000 'sleptTheWholeTime'
+		return 4
+	end 'sleptTheWholeTime'
+	return 1
 end 'main'
 ```
-```maxoncstderr
-error E3104: <fragment>:3:2: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+```exitcode
+4
 ```
 
-<!-- test: async-sleep.taken-as-a-value-rejected-on-wasm -->
+<!-- test: async-sleep.taken-as-a-value-runs-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-Taking `sleep`'s ADDRESS reaches its body exactly as a call does, so the crossing is refused at the span
-where the address is taken — `2:10`, the `sleep` token, not the `f(5)` that consumes the value and not a
-line inside `stdlib/`. The value route needs its own pin because it is not a call op at all: the target
-gate reaches it through the `functionRef`, which is one of the four edges reachability counts.
+Taking `sleep`'s ADDRESS reaches its body exactly as a call does, through the `functionRef` rather than a
+call op, and on wasm32-wasi the function it takes runs: the program sleeps through the value and exits.
 ```maxon
 function main() returns ExitCode
 	let f = sleep
@@ -322,16 +304,14 @@ function main() returns ExitCode
 	return 7
 end 'main'
 ```
-```maxoncstderr
-error E3104: <fragment>:3:10: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+```exitcode
+7
 ```
 
 <!-- test: async-sleep.unnamed-sleep-compiles-on-wasm -->
-A program that never names `sleep` compiles for wasm although `stdlib/Sleep.maxon` is loaded. The target
-gate is reachability-AWARE for a STDLIB body: `sleep`'s `__gt_sleep` lives inside stdlib source, no path
-from `main` reaches that body, and so it is not in the program — the same exemption that keeps an unused
-stdlib module byte-neutral (`stdlib-loading.unreached-clock-still-compiles-on-wasm`). A `sleep` on a path from
-`main` is refused, as the case above shows.
+A program that never names `sleep` compiles for wasm with `stdlib/Sleep.maxon` loaded: a stdlib body no
+path from `main` reaches is not in the program, the same exemption that keeps an unused stdlib module
+byte-neutral (`stdlib-loading.unreached-host-sibling-still-compiles-on-wasm`).
 ```maxon
 function main() returns ExitCode
 	print("awake\n")
@@ -345,13 +325,11 @@ end 'main'
 awake
 ```
 
-<!-- test: async-sleep.unreached-call-is-refused-on-wasm -->
+<!-- test: async-sleep.unreached-call-compiles-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The call itself is what the gate refuses, and a call written in the program's own source is visited
-whether or not a path from `main` reaches it: `napper` is never called, yet its `sleep(1)` is the
-crossing into `stdlib/Sleep.maxon` and is refused at the line the author wrote. The reachability exemption
-belongs to the stdlib body, never to the program's own calls into it
-(`builtins-sleep.rejected-on-wasm-when-unreached` pins the same for the intrinsic spelled there).
+A `sleep(1)` in a function nothing calls compiles for wasm32-wasi: the target gate visits the program's
+own calls whether or not `main` reaches them, and `__gt_sleep` has a wasm lowering, so it has nothing to
+refuse.
 ```maxon
 function napper()
 	sleep(1)
@@ -361,6 +339,6 @@ function main() returns ExitCode
 	return 4
 end 'main'
 ```
-```maxoncstderr
-error E3104: <fragment>:3:2: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+```exitcode
+4
 ```

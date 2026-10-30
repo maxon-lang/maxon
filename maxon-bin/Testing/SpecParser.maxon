@@ -978,6 +978,10 @@ export type SpecTest
 		return self.sourceFiles.count() > 0
 	end 'isMultiFile'
 
+	export function runsOnOneLane() returns bool
+		return markerLeaves(self.unsupportedTargets, lanes: OneLane)
+	end 'runsOnOneLane'
+
 	export function compilesAsLibrary() returns bool
 		return match self.tier 'tier'
 			user gives false
@@ -2213,12 +2217,19 @@ function parseUnsupportedTargetKeys(opening String, specPath FilePath, testName 
 		end 'nonEmpty'
 	end 'eachTarget'
 
-	if result.count() == supportedTargets().count() 'excludesEverything'
+	if markerLeaves(result, lanes: NoLane) 'excludesEverything'
 		panic("SpecParser: {specPath.toString()}: test '{testName}' excludes every supported target ({targetRoster(supportedTargets())}), so it runs nowhere. A case no target runs tests nothing while reading as coverage — fix it so some target can run it, or delete it")
 	end 'excludesEverything'
 
 	return result
 end 'parseUnsupportedTargetKeys'
+
+let NoLane = 0
+let OneLane = 1
+
+function markerLeaves(excluded TargetKeyArray, lanes Count) returns bool
+	return excluded.count() + lanes == supportedTargets().count()
+end 'markerLeaves'
 
 function requireSupportedTargetKey(key String, spelledIn String, specPath FilePath, testName String)
 	match resolveTarget(key, among: supportedTargets()) 'known'

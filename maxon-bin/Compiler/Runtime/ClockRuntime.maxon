@@ -1,6 +1,7 @@
 // Runtime/ClockRuntime.maxon — the compiler's half of the host-clock family: the three BANDS a clock
 // entry point wears, the FILETIME facts the per-target wall-clock chunks are assembled against, and the
-// one clock body that is still built as Std IR here.
+// clock bodies still built as Std IR here: `__thread_cpu_ticks`, and the `__gt_now_ns`/`__gt_sleep` a
+// lane with no scheduler gets.
 //
 // ⭐ **EVERY ENTRY POINT BUT ONE IS MAXON SOURCE, IN `runtime/Clock.maxon`.** `__clock_now_unix_s`,
 // `__clock_now_unix_ns`, `__clock_now_filetime` and `__uptime_ms` are written there against the
@@ -25,11 +26,10 @@
 // here would be a guess wearing a unit's name. The entry point says `ticks`; callers compare RATIOS,
 // which are unit-free, or absolutes within one platform.
 //
-// ⭐ **THREE BANDS RATHER THAN ONE, AND THE SPLIT IS ABOUT COST.** All three are refused on the same
-// lanes, so they do not divide by "may this target run it". They reach three DIFFERENT Win32 imports,
-// and the optional trailing import band is gated per producer: one shared bit would make a program that
-// reads the calendar import `QueryThreadCycleTime`, and a program that measures its own cost import
-// `GetSystemTimePreciseAsFileTime`.
+// ⭐ **THREE BANDS RATHER THAN ONE, AND THE SPLIT IS ABOUT COST.** They reach three DIFFERENT Win32
+// imports, and the optional trailing import band is gated per producer: one shared bit would make a
+// program that reads the calendar import `QueryThreadCycleTime`, and a program that measures its own cost
+// import `GetSystemTimePreciseAsFileTime`.
 
 // The prefix every wall-clock runtime entry point shares — the "does this program read the CALENDAR?" test.
 let ClockRuntimeCallPrefix = b"__clock_"
@@ -113,9 +113,9 @@ export function threadCpuTicksShips(usage RuntimeUsage) returns bool
 	return usage.usesThreadCpuTicks or usage.usesGt
 end 'threadCpuTicksShips'
 
-// Install the host-clock runtime into the lowered Std module. ONE entry point is left to install, and it
-// keeps its own gate for the reason the three bands exist: the import it costs is not the import its two
-// source-tier siblings cost.
+// Install the host-clock runtime into the lowered Std module. `__thread_cpu_ticks` keeps its own gate for
+// the reason the three bands exist: the import it costs is not the import its two source-tier siblings
+// cost.
 //
 // Appended AFTER the pipeline (like every other runtime install), and already-lowered Std so it still
 // flows through the whole backend. What runs over that appended band is stated once, in
@@ -124,7 +124,41 @@ export function installClockRuntime(module StdModule, usage RuntimeUsage)
 	if threadCpuTicksShips(usage) 'threadCpu'
 		buildThreadCpuTicks(module, greenThreads: usage.usesGt)
 	end 'threadCpu'
+
+	if usage.usesSchedulerlessNowNs 'nowNs'
+		buildGtNowNs(module)
+	end 'nowNs'
+
+	if usage.usesSchedulerlessSleep 'sleep'
+		buildSchedulerlessSleep(module)
+	end 'sleep'
 end 'installClockRuntime'
+
+let MicrosPerMillisecond = 1000
+
+// The longest wait whose nanosecond count fits an i64. A negative `ms` (`ForeverMs` is `u64.max`) and
+// anything above this wait this long, as a scheduler's deadline saturates (`emitGtDeadlineAfterMs`).
+let SleepMaxMillis = i64.max / NanosPerMilli
+
+function buildSchedulerlessSleep(module StdModule)
+	var func = IrFunction.createFromStd(GtSleepName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let milliseconds = 0
+
+	let outOfRange = emitMillisecondsAbove(module, block: entry, ms: milliseconds, ceilingMs: SleepMaxMillis, ids: ids)
+	let ceiling = emitConst(module, block: entry, value: SleepMaxMillis, ids: ids)
+	let bounded = emitSelectWord(module, block: entry, cond: outOfRange, whenSet: ceiling, whenClear: milliseconds, ids: ids)
+	let microseconds = emitBin(module, block: entry, a: bounded, b: emitConst(module, block: entry, value: MicrosPerMillisecond, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+
+	_ = emitNetpoll(module, block: entry, verb: NetpollVerb.sleepOnTimer, operands: argsOf(microseconds), ids: ids)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedulerlessSleep'
 
 // ⭐ **`GetCurrentThread()`'s PSEUDO-HANDLE, `(HANDLE)-2`** — a compile-time constant that always names the
 // calling thread, not a handle to open or close, so naming this thread costs neither an import nor a call.

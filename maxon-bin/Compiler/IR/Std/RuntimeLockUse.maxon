@@ -50,10 +50,6 @@ function globalAddrResultOf(op StdOp) returns ValueId
 	end 'op'
 end 'globalAddrResultOf'
 
-function isIndirectCall(op StdOp) returns bool
-	return op.rawValue.category == StdOpCategory.call and op.rawValue.role == OpRole.plain
-end 'isIndirectCall'
-
 function widenLockSet(sets LockSetArray, position ElementIndex, by LockSet) returns bool
 	let before = try sets.get(position) otherwise panic("widenLockSet: sets.get OOB at {position}")
 
@@ -203,7 +199,7 @@ type HeldLockCheck
 					self.noteAddressTaken(module, position: reference.funcIndex)
 				end 'anAddress'
 
-				indirect = indirect or isIndirectCall(op)
+				indirect = indirect or stdOpEntersModuleCode(op)
 			end 'eachOp'
 
 			self.directTakes.push(direct)
@@ -437,7 +433,7 @@ type HeldLockCheck
 				continue
 			end 'aCall'
 
-			if isIndirectCall(op) and not summarizing 'anIndirectCall'
+			if stdOpEntersModuleCode(op) and not summarizing 'anIndirectCall'
 				try self.checkIndirectCall(module, func: func, may: may, must: must)
 			end 'anIndirectCall'
 		end 'eachOp'

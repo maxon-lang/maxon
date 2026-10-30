@@ -252,7 +252,7 @@ vendored wasmtime. By hand, for ONE program:
 ⚠ **THE wasm LANE IS NOT "SCALAR ONLY".** Heap, `String`, `print`, structs, arrays, closures,
 interfaces and **floats** (arithmetic AND shortest-round-trip printing) all work there; the two lanes
 run within a few hundred cases of each other. The families it has no substrate for (**async / green
-threads, the clock builtins, argv**) answer E3104 and are counted SKIPs (see the rule below). The
+threads, the uptime and thread-CPU clocks, argv**) answer E3104 and are counted SKIPs (see the rule below). The
 x64-only CODEGEN cases (register pressure, `.rdata`, emitted symbol names), which are about x64's
 output rather than about wasm, carry an `<!-- unsupported-targets: … -->` exclusion. ⇒ **a float or
 String case failing on wasm is a BUG on that lane, not an out-of-slice case to refuse.**
@@ -266,12 +266,16 @@ spelling.
 ⛔⛔ **DO NOT MARK A CASE THE COMPILER ALREADY REFUSES.** A lane with no substrate answers **E3104**, and
 the harness reports that as a counted **SKIP** naming the case; a marker removes the case from selection
 with nothing said anywhere. The two are not two spellings of one fact — one is the fact and the other is
-the fact made invisible. So async, the clock, argv, file and directory IO and console stdin carry NO
-marker on wasm: every one of those skips is a case a reader can count. A marker is for a case that would
-otherwise go RED — an ISA-specific codegen reading, a POSIX/Windows shell spelling, a diagnostic
-displaced by E3104 — and it states its reason. E3104 waits for the Maxon-tier checks, so only a
-diagnostic decided after them (`InsertRangeChecks`' E3005, the backend's, a missing intrinsic's E3004)
+the fact made invisible. So async, the thread-CPU clock, argv, file and directory IO and console stdin
+carry NO marker on wasm: every one of those skips is a case a reader can count. A marker is for a case
+that would otherwise go RED — an ISA-specific codegen reading, a POSIX/Windows shell spelling, a
+diagnostic displaced by E3104 — and it states its reason. E3104 waits for the Maxon-tier checks, so only
+a diagnostic decided after them (`InsertRangeChecks`' E3005, the backend's, a missing intrinsic's E3004)
 is displaced by it.
+
+⚠ **A RUN CASE WHOSE MARKER LEAVES EXACTLY ONE LANE FAILS THERE ON AN E3104.** It exists for that lane,
+so the refusal is the case failing (`SpecTest.runsOnOneLane`) — which is what lets a `runs-on-wasm` case
+go red.
 
 ⚠ **SUBPROCESS IS THE EXCEPTION, AND NEEDS THE MARKER.** A target that can never host a child process
 answers **E3074** ahead of E3104 (`requireTargetSupportsCallee`), and the harness counts only E3104 as a

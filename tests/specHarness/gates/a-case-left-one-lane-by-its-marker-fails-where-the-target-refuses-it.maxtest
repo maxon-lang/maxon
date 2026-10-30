@@ -1,0 +1,42 @@
+let SingleLaneSpecName = "single-lane-refusal"
+let SingleLaneOnlyLane = "single-lane-refusal.only-lane"
+let SingleLaneTwoLanes = "single-lane-refusal.two-lanes"
+let SingleLaneUnmarked = "single-lane-refusal.unmarked"
+let RefusalCodeWord = "E3104"
+
+test 'a run case whose marker leaves one lane fails there when the target refuses it, and a case with more lanes is still skipped'
+	let run = runGateFixtureOnceFromTheCheckout([WasiTargetFlag])
+	let said = everythingSaid(run)
+	let onlyLane = testLabel(SingleLaneSpecName, testName: SingleLaneOnlyLane)
+	let twoLanes = testLabel(SingleLaneSpecName, testName: SingleLaneTwoLanes)
+	let unmarked = testLabel(SingleLaneSpecName, testName: SingleLaneUnmarked)
+	var broken = StringArray.create()
+
+	if not said.contains(failVerdictPrefix(onlyLane)) 'onlyLaneDidNotFail'
+		broken.push("'{onlyLane}' is marked to leave {WasiTargetFlag} as its only lane and the target refuses its construct, so it must FAIL. Expected '{failVerdictPrefix(onlyLane)}', and the run said:\n{said}\n")
+	end 'onlyLaneDidNotFail'
+
+	if said.contains(skipVerdictLine(onlyLane)) 'onlyLaneWasSkipped'
+		broken.push("'{onlyLane}' leaves one lane and was SKIPPED. A case that exists for a lane has nothing to skip there. The run said:\n{said}\n")
+	end 'onlyLaneWasSkipped'
+
+	if not said.contains(RefusalCodeWord) 'refusalUnsaid'
+		broken.push("the failure of '{onlyLane}' does not carry the target's refusal ({RefusalCodeWord}). The run said:\n{said}\n")
+	end 'refusalUnsaid'
+
+	for control in [twoLanes, unmarked] 'eachControl'
+		if not said.contains(skipVerdictLine(control)) 'controlDidNotSkip'
+			broken.push("'{control}' leaves more than one lane and the target refuses its construct, so it must be SKIPPED. Expected '{skipVerdictLine(control)}', and the run said:\n{said}\n")
+		end 'controlDidNotSkip'
+
+		if said.contains(failVerdictPrefix(control)) 'controlFailed'
+			broken.push("'{control}' leaves more than one lane and FAILED where the target refuses its construct. The run said:\n{said}\n")
+		end 'controlFailed'
+	end 'eachControl'
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a failing case in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "a target refusal fails a case whose marker leaves one lane")
+end 'a run case whose marker leaves one lane fails there when the target refuses it, and a case with more lanes is still skipped'

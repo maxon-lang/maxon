@@ -14,7 +14,7 @@ absolute value that is platform-defined and only meaningful when two readings ar
 subtracted, and both come from the same source: the runtime's nanosecond clock,
 `QueryPerformanceCounter` scaled to nanoseconds on Windows,
 `clock_gettime(CLOCK_MONOTONIC)` on Linux and `clock_gettime(CLOCK_UPTIME_RAW)` on
-macOS. wasm32-wasi has no clock; a program that reads one is refused with **E3104**.
+macOS, and the WASI monotonic clock on wasm32-wasi.
 
 `Clock.nowMs()` is that reading in whole milliseconds (nanoseconds divided by
 1,000,000).
@@ -39,8 +39,9 @@ depending on where the millisecond boundary fell. `nowMs()` is the right choice
 for timeouts and deadlines expressed in milliseconds.
 
 Note that `nowNanos()`'s UNIT is nanoseconds but its PERIOD is platform-defined —
-100 ns on a typical Windows machine, 1 ns elsewhere — so two back-to-back
-readings can legitimately compare equal.
+100 ns on a typical Windows machine, 1 ns on Linux and macOS, and the WASI host's
+monotonic-clock resolution on wasm32-wasi — so two back-to-back readings can
+legitimately compare equal.
 
 `Clock.elapsedMs(since)` / `Clock.elapsedNanos(since)` return the time elapsed
 since a prior reading from the matching clock, clamping to 0 if the source
@@ -59,8 +60,8 @@ did this take" and useless for "what is today's date" — no arithmetic turns an
 uptime into a calendar day.
 
 `WallClock.nowUnixSeconds()` returns whole seconds since the Unix epoch
-(1970-01-01 UTC), read from `GetSystemTimeAsFileTime` on Windows and
-`clock_gettime(CLOCK_REALTIME)` on macOS/Linux.
+(1970-01-01 UTC), read from `GetSystemTimeAsFileTime` on Windows,
+`clock_gettime(CLOCK_REALTIME)` on macOS/Linux and the WASI wall clock on wasm32-wasi.
 
 ```text
 let now = WallClock.nowUnixSeconds()  // e.g. 1783990842
@@ -370,6 +371,27 @@ end 'main'
 ```
 ```stdout
 ok
+```
+
+<!-- test: clock.wall-clock-nanos-agree-with-seconds-on-wasm -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+On wasm32-wasi both calendar readings come from WASI's `wall-clock`: the nanosecond reading, taken after
+the seconds, falls in the same second or the next one.
+```maxon
+function main() returns ExitCode
+	let s = WallClock.nowUnixSeconds()
+	let n = WallClock.nowUnixNanos()
+	let drift = (n / 1_000_000_000) as UnixSeconds - s
+
+	if drift == 0 or drift == 1 'sameOrNextSecond'
+		return 4
+	end 'sameOrNextSecond'
+
+	return 1
+end 'main'
+```
+```exitcode
+4
 ```
 
 <!-- test: clock.now-unix-nanos-has-sub-second-resolution -->

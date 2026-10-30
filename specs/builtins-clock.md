@@ -58,9 +58,8 @@ have.
 
 Both monotonic builtins read the one runtime entry `__gt_now_ns`: `QueryPerformanceCounter` scaled
 to nanoseconds on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux and
-`clock_gettime(CLOCK_UPTIME_RAW)` on macOS. `currentTimeNanos()` returns that reading, and
-`currentTimeMs()` divides it by 1,000,000 inline. wasm32-wasi has no clock, and a call to either is
-refused with **E3104** (`rejected-on-wasm` below).
+`clock_gettime(CLOCK_UPTIME_RAW)` on macOS and the WASI monotonic clock on wasm32-wasi.
+`currentTimeNanos()` returns that reading, and `currentTimeMs()` divides it by 1,000,000 inline.
 
 So a millisecond reading resolves to one millisecond on every native lane, never to a scheduler
 tick. A coarse tick source such as `GetTickCount64` (~15.6 ms period) would still be monotonic and
@@ -90,6 +89,10 @@ All four read the host, and a lane serves them only once a backend has written t
 that reaches one on a lane whose `targetProvidesFacility` row denies the facility is refused with `E3104`
 at the call site rather than panicking three tiers down in the backend.
 
+⭐ **wasm32-wasi SERVES THE THREE CLOCKS, NOT THE CPU READ.** The monotonic reading is WASI's
+`monotonic-clock` and the calendar is its `wall-clock`. WASI has no per-thread CPU clock and no
+time-since-boot clock, so `threadCpuTicks` and the uptime read `tickCountMs` are refused there.
+
 ⭐ **arm64-macOS SERVES ALL FOUR, WHICH IS WHY THE READING CASES BELOW NAME IT.** The calendar and the
 thread-CPU read belong to the Darwin host surface; the MONOTONIC one is `__gt_now_ns`, a scheduler
 function that rides `usesGt`. All three are one libSystem
@@ -117,8 +120,8 @@ half of the refusal below lives in `builtins-mm-counters.md` (`all-six-run-on-wa
 `thread-cpu-ticks-rejected-on-wasm` would pass just as happily against a compiler that had stopped
 serving the whole instrumentation family on that lane.
 
-⚠ **Which cases that gates, exactly**: only the ones that REACH `__gt_now_ns`/`__clock_now_unix_s`.
-`arity-checked` and `unknown-intrinsic` are refused in the front end, are target-neutral, and carry NO
+⚠ **Which cases that gates, exactly**: on wasm32-wasi, only the ones that REACH `__thread_cpu_ticks` or
+`__uptime_ms`. `arity-checked` and `unknown-intrinsic` are refused in the front end, are target-neutral, and carry NO
 marker. See `async-scheduler.md`'s *Targets* section for the one statement of the substrate gate.
 
 Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
@@ -369,31 +372,40 @@ end 'main'
 error E3004: <fragment>:3:16: call to undefined function '__whatever': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
 ```
 
-<!-- test: builtins-clock.rejected-on-wasm -->
+<!-- test: builtins-clock.monotonic-clock-runs-on-wasm -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-wasm32-wasi has no clock substrate, so the call is refused at its source span with `E3104`, naming
-the runtime entry that has no lowering there — never a panic from inside the wasm backend.
+On wasm32-wasi the monotonic reading is WASI's `monotonic-clock`: a running program reads a positive
+value, and a second reading does not move backwards.
 ```maxon
 function main() returns ExitCode
-	return __Builtins.currentTimeNanos() as ExitCode
+	let first = __Builtins.currentTimeNanos()
+	let second = __Builtins.currentTimeNanos()
+	if first > 0 and second >= first 'readsTheClock'
+		return 4
+	end 'readsTheClock'
+	return 1
 end 'main'
 ```
-```maxoncstderr
-error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+```exitcode
+4
 ```
 
-<!-- test: builtins-clock.wall-clock-rejected-on-wasm -->
+<!-- test: builtins-clock.wall-clock-runs-on-wasm -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The wall clock is refused the same way, naming its own runtime entry.
+On wasm32-wasi the calendar is WASI's `wall-clock`, so it reads a date after November 2023
+(Unix second 1,700,000,000), not zero.
 ```maxon
 function main() returns ExitCode
-	return __Builtins.currentUnixTimeSeconds() as ExitCode
+	if __Builtins.currentUnixTimeSeconds() > 1700000000 'readsTheCalendar'
+		return 4
+	end 'readsTheCalendar'
+	return 1
 end 'main'
 ```
-```maxoncstderr
-error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__clock_now_unix_s', which has no wasm32-wasi implementation
+```exitcode
+4
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-monotonic -->
@@ -520,9 +532,9 @@ error E3036: <fragment>:3:20: '__Builtins.threadCpuTicks' takes exactly 0 argume
 <!-- test: builtins-clock.thread-cpu-ticks-rejected-on-wasm -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The CPU clock is refused the same way the other three are, naming its OWN runtime entry — which is
-what says the gate is keyed on the `__thread_` band rather than on the clock band it shares a file
-with. WASI exposes no per-thread CPU clock, so a lowering there could only fabricate a cost.
+The CPU clock is refused on wasm32-wasi while the other three run there, naming its OWN runtime entry —
+which is what says the gate is keyed on the `__thread_` band rather than on the clock band it shares a
+file with. WASI exposes no per-thread CPU clock, so a lowering there could only fabricate a cost.
 
 Its ACCEPTANCE half is `builtins-mm-counters.md`'s `all-six-run-on-wasm`, which proves the same
 compiler still serves the rest of the instrumentation family on this lane.
@@ -533,6 +545,41 @@ end 'main'
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-clock.thread-cpu-ticks-rejected-on-wasm-when-unreached -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The gate is REACHABILITY-BLIND for the program's own source — a library-tier case's files included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`): `napper` is never called, yet its intrinsic is still refused.
+`SemanticCheck` visits every function and dead-function elimination runs two tiers later, so this is the
+same rule that reports a type error in an unreached function. Pinned because the stdlib loader's own
+exemption (`checkCalls` skips an unreached stdlib body) points the other way: it is the unreached stdlib
+BODY that is exempt, not an unreached function of the program's own.
+```maxon
+function napper() returns ExitCode
+	return __Builtins.threadCpuTicks() as ExitCode
+end 'napper'
+
+function main() returns ExitCode
+	return 4
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-clock.uptime-clock-rejected-on-wasm -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The machine's uptime is refused on wasm32-wasi, naming its own runtime entry: WASI has no time-since-boot
+clock, and the monotonic clock's origin is arbitrary, so it cannot stand in for one.
+```maxon
+function main() returns ExitCode
+	return __Builtins.tickCountMs() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__uptime_ms', which has no wasm32-wasi implementation
 ```
 
 <!-- test: builtins-clock.the-public-cpu-clock-follows-the-thread-not-the-wall -->

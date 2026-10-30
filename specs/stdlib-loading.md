@@ -161,27 +161,28 @@ The refusal that reaches this is the TARGET gate, `E3104`. It is reported at the
 crossing from user code INTO stdlib, and it names the stdlib function the user actually wrote:
 
 ```text
-error E3104: <fragment>:3:16: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:16: 'Clock.threadCpuTicks' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
 ```
 
-The requirement is TRANSITIVE through the stdlib call graph: `Clock.elapsedMs` names no runtime entry
-itself — it calls `Clock.nowMs`, which does — so a program calling `elapsedMs` is refused at ITS call,
-naming `Clock.elapsedMs` and still naming the entry that has no lowering. A user's own helper is user
-code, so `main → myHelper → Clock.nowMs` is blamed inside `myHelper`. And a stdlib function no path
-from `main` reaches is refused nowhere at all, which is what keeps an unused module byte-neutral.
+The requirement is TRANSITIVE through the stdlib call graph: `Directory.isDirectory` names no runtime
+entry itself — it calls `Directory.exists`, which reaches `__md_exists` — so a program calling
+`isDirectory` is refused at ITS call, naming `Directory.isDirectory` and still naming the entry that has
+no lowering. A user's own helper is user code, so `main → myHelper → Clock.threadCpuTicks` is blamed
+inside `myHelper`. And a stdlib function no path from `main` reaches is refused nowhere at all, which is
+what keeps an unused module byte-neutral.
 
 The gate is therefore reachability-BLIND for user code and reachability-AWARE for stdlib source: a
 construct user code lowers straight to a target-gated runtime entry — `spawn`, a message send — is refused for
-wasm even in a function `main` never calls (`user-code-is-refused-on-wasm-even-where-unreached` below), while a
-`Clock.nowMs()` in one is not. User code here is the program's own source — a library-tier case's files
-included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording
-them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`).
+wasm even in a function `main` never calls (`user-code-is-refused-on-wasm-even-where-unreached` below), while
+an unreached stdlib body that reaches one is not. A call written in user code INTO such a stdlib body is
+the program's own crossing, so it is refused reached or not (`unreached-user-helper-is-still-refused`
+below). User code here is the program's own source — a library-tier case's files included, because a
+project rooted under `stdlib/` keeps its own files as the program's rather than recording them as library
+source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`).
 
-A retired bare-name builtin puts a program in the second case rather than the first: `sleep(1)` is a
-call into stdlib rather than a `__gt_sleep` in user code, so an unreached one compiles for wasm
-(`async-sleep.unreached-compiles-on-wasm`). Every builtin retired the same way moves the same way, and it
-is the correct direction — the entry genuinely is stdlib's, and a program that cannot reach it does
-not contain it.
+A retired bare-name builtin puts its runtime entry in stdlib source rather than in user code: the entry
+genuinely is stdlib's, and a program that names none of the stdlib functions reaching it does not
+contain it.
 
 ## Tests
 
@@ -251,8 +252,8 @@ end 'main'
 A program that mentions no stdlib module must compile to exactly what it did before any of them
 existed: the loader hands Clock AND Sleep to this compile too, and every one of their functions is
 pruned back out with no runtime floor installed. This case carries NO target restriction, so its
-byte-neutrality is checked on wasm as well — loading stdlib must not drag the x64-only clock or timer
-substrate into a non-x64 target for a program that reads no clock and sleeps nowhere.
+byte-neutrality is checked on wasm as well — loading stdlib must not drag the clock or timer substrate
+into any target's program that reads no clock and sleeps nowhere.
 ```maxon
 function main() returns ExitCode
 	let answer = 42
@@ -316,12 +317,12 @@ end 'main'
 
 <!-- test: stdlib-loading.target-refusal-blames-the-crossing-call -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-A stdlib body that bottoms out in an x64-only runtime entry is refused at the USER's call, and
-names the stdlib function they wrote — never at `stdlib/Clock.maxon`, a file they never opened
+A stdlib body that bottoms out in a runtime entry with no wasm32-wasi lowering is refused at the USER's
+call, and names the stdlib function they wrote — never at `stdlib/Clock.maxon`, a file they never opened
 and cannot change.
 ```maxon
 function main() returns ExitCode
-	let t = Clock.nowMs()
+	let t = Clock.threadCpuTicks()
 	if t > 0 'chk'
 		return 4
 	end 'chk'
@@ -329,7 +330,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:16: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:16: 'Clock.threadCpuTicks' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-loading.target-refusal-blames-the-crossing-call-second-entry -->
@@ -361,20 +362,20 @@ error E3104: <fragment>:3:24: 'TcpClient.connect' lowers to the runtime entry '_
 
 <!-- test: stdlib-loading.target-refusal-is-transitive -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-`Clock.elapsedMs` reaches no runtime entry itself — it calls `Clock.nowMs`, which does. The
-requirement propagates through the stdlib call graph, so the caller is blamed at the function
-THEY named, while the entry named is still the one that has no lowering.
+`Directory.isDirectory` reaches no runtime entry itself — it calls `Directory.exists`, which reaches
+`__md_exists`. The requirement propagates through the stdlib call graph, so the caller is blamed at the
+function THEY named, while the entry named is still the one that has no lowering.
 ```maxon
 function main() returns ExitCode
-	let e = Clock.elapsedMs(0)
-	if e >= 0 'chk'
+	let d = Directory.isDirectory(FilePath from "x")
+	if d 'chk'
 		return 4
 	end 'chk'
 	return 5
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:16: 'Clock.elapsedMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:20: 'Directory.isDirectory' lowers to the runtime entry '__md_exists', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-loading.target-refusal-blames-the-users-own-helper -->
@@ -382,8 +383,8 @@ error E3104: <fragment>:3:16: 'Clock.elapsedMs' lowers to the runtime entry '__g
 A user's own function is not stdlib, so the crossing is the call INSIDE it — code the user can
 actually change — rather than `main`'s call to the helper or anything in `stdlib/`.
 ```maxon
-function reader() returns Integer
-	return Clock.nowMs()
+function reader() returns ThreadCpuTicks
+	return Clock.threadCpuTicks()
 end 'reader'
 
 function main() returns ExitCode
@@ -393,24 +394,24 @@ function main() returns ExitCode
 	end 'chk'
 	return 5
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:15: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:15: 'Clock.threadCpuTicks' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
 ```
 
-<!-- test: stdlib-loading.unreached-clock-still-compiles-on-wasm -->
-The crossing gate is reachability-AWARE for a STDLIB body: `WallClock.rfc3339Millis` is pure, but it
-sits in the type whose `nowUnixSeconds` and `nowUnixNanos` reach clock entries wasm has no lowering
-for, and `Clock`'s readers sit beside it. Nothing on a path from `main` calls any of them, so the program
-compiles for wasm and runs. This is the byte-neutrality guarantee stated as a run — attributing the
-refusal to the caller must not turn a clock reader the program never reaches into a refusal.
+<!-- test: stdlib-loading.unreached-host-sibling-still-compiles-on-wasm -->
+The crossing gate is reachability-AWARE for a STDLIB body: `Process.envEntryName` is pure, but it sits
+in the type whose `id` reaches `__proc_pid`, a process entry wasm has no lowering for. Nothing on a path
+from `main` calls `id`, so the program compiles for wasm and runs. This is the
+byte-neutrality guarantee stated as a run — attributing the refusal to the caller must not turn a host
+read the program never reaches into a refusal.
 
 ⚠ **THE UNREACHED READER MUST BE STDLIB'S.** A call to a reader written in the program's own source is
 refused wherever it sits, reached or not (`stdlib-loading.unreached-user-helper-is-still-refused`).
 ```maxon
 function main() returns ExitCode
-	print("{WallClock.rfc3339Millis(0)}\n")
+	let name = Process.envEntryName("HOME=/root")
+	print("{name}\n")
 	return 4
 end 'main'
 ```
@@ -418,41 +419,43 @@ end 'main'
 4
 ```
 ```stdout
-1970-01-01T00:00:00.000Z
+HOME
 ```
 
-<!-- test: stdlib-loading.reached-clock-sibling-is-refused-on-wasm -->
+<!-- test: stdlib-loading.reached-host-sibling-is-refused-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The contrast to the case above: the same function, with its sibling `WallClock.nowUnixNanos` now on the
-path from `main`. The reader's entry has no wasm32-wasi lowering, so the call into it is refused at the
-span the author wrote.
+The contrast to the case above: the same function, with its sibling `Process.id` now on the path from
+`main`. That sibling's entry has no wasm32-wasi lowering, so the call into it is refused at the span the
+author wrote.
 ```maxon
 function main() returns ExitCode
-	print("{WallClock.rfc3339Millis(WallClock.nowUnixNanos())}\n")
+	let pid = Process.id()
+	let name = Process.envEntryName("PID={pid}")
+	print("{name}\n")
 	return 4
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:44: 'WallClock.nowUnixNanos' lowers to the runtime entry '__clock_now_unix_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:20: 'Process.id' lowers to the runtime entry '__proc_pid', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-loading.unreached-user-helper-is-still-refused -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The other side of the reachability asymmetry: `reader` is the program's own function, so the call to
-`Clock.nowMs` inside it is the crossing, and the gate visits every function of the program's own source
-whether or not a path from `main` reaches it. `main` never calls `reader`, yet the program is refused.
+`Clock.threadCpuTicks` inside it is the crossing, and the gate visits every function of the program's own
+source whether or not a path from `main` reaches it. `main` never calls `reader`, yet the program is
+refused.
 ```maxon
-function reader() returns Integer
-	return Clock.nowMs()
+function reader() returns ThreadCpuTicks
+	return Clock.threadCpuTicks()
 end 'reader'
 
 function main() returns ExitCode
 	return 4
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:15: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:15: 'Clock.threadCpuTicks' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-loading.user-code-is-refused-on-wasm-even-where-unreached -->

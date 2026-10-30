@@ -30,7 +30,7 @@ differences. `ThreadCpuTicks` is `int(0 to u64.max)`. `osTickMs()` and `threadCp
 |--------|--------|--------|
 | `x64-windows` | `QueryPerformanceCounter` | 100 ns |
 | `arm64-macos`, `arm64-linux`, `x64-linux` | the kernel's monotonic clock | 1 ns |
-| `wasm32-wasi` | refused at compile time (E3104) | |
+| `wasm32-wasi` | WASI's `monotonic-clock` | the host runtime's clock resolution |
 
 Readings are always in nanoseconds, but two back-to-back readings can be equal when the period is coarser.
 

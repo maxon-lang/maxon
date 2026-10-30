@@ -330,6 +330,9 @@ export type RuntimeUsage
 	// `osReadWallClock` chunk on each POSIX lane, which no source file can write.
 	export var usesWallClock as bool
 
+	export var usesSchedulerlessNowNs as bool
+	export var usesSchedulerlessSleep as bool
+
 	// ⭐ **THE GRAPHEME FAMILY — ONE BIT PER ENTRY POINT**, following this file's existing discipline
 	// rather than one `usesGrapheme` blanket: a program carries only the entry points it names. Each
 	// is set by `recordCallUsage` from whichever entry point the module actually names, and
@@ -556,7 +559,7 @@ export type RuntimeUsage
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesReleaseTypeParam: false, usesReclaimTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesReleaseTypeParam: false, usesReclaimTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -737,9 +740,15 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// this scan walks because stdlib source is merged into the module it walks — but ONLY IF A PATH FROM
 	// `main` REACHES THAT BODY. `scanRuntimeUsage`'s `bodyIsSwept` filter (above) skips the rest, and
 	// that qualifier is the load-bearing half, not a footnote: it is what keeps listing a stdlib module
-	// byte-neutral for a program that does not use it, and it is why an unreached `sleep(ms)` compiles for a
-	// target with no `__gt_sleep` while an unreached `__Builtins.sleep(ms)` in USER code is still refused.
-	if isGtRuntimeCallee(callee) 'gt'
+	// byte-neutral for a program that does not use it.
+	//
+	// The two exceptions are the clock read and the sleep on a lane that does not park on I/O: that lane
+	// has no green threads, so no scheduler to install, and `ClockRuntime` builds both bodies without one.
+	if not usage.parksOnIo and callee.equals(GtNowNsName) 'schedulerlessNowNs'
+		usage.usesSchedulerlessNowNs = true
+	end 'schedulerlessNowNs' else if not usage.parksOnIo and callee.equals(GtSleepName) 'schedulerlessSleep'
+		usage.usesSchedulerlessSleep = true
+	end 'schedulerlessSleep' else if isGtRuntimeCallee(callee) 'gt'
 		recordGtUsage(usage)
 	end 'gt'
 

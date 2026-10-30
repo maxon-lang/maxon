@@ -1177,7 +1177,7 @@ yet its intrinsic is refused: `__Builtins.runProcess` emits `__gt_process_run` i
 dead-function elimination runs two tiers later. `async-sleep.unnamed-sleep-compiles-on-wasm` shows the
 opposite outcome for an entry written in stdlib source, where the gate is reachability-AWARE; this entry has
 no stdlib declaration (see the *Documentation* section), so it keeps the property, exactly as
-`builtins-sleep.rejected-on-wasm-when-unreached` does for `__Builtins.sleep`.
+`builtins-clock.thread-cpu-ticks-rejected-on-wasm-when-unreached` does for `__Builtins.threadCpuTicks`.
 ```maxon
 function spawner() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 9

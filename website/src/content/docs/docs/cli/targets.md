@@ -78,13 +78,13 @@ differences a program can meet are:
   first nameserver in `/etc/resolv.conf`, no search domains and no CNAME following.
 
 **`wasm32-wasi`** runs heap-allocated values, strings, `print`, structs, arrays, closures, interfaces and
-floating point. It does not provide these, and a program that reaches one is **refused at compile
-time**, at the call:
+floating point, the monotonic and wall clocks, and `sleep`, which waits the whole program. A program
+that reaches one of the following is **refused at compile time**, at the call:
 
 | Not available on `wasm32-wasi` | Refused with |
 |--------------------------------|--------------|
-| `async`/`await`, green threads, services (the standard library's `Log` included), `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
-| Clocks (`Clock`, current time, CPU ticks) | E3104 |
+| `async`/`await`, green threads, services (the standard library's `Log` included), `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
+| Machine uptime and thread CPU time (`Clock.osTickMs`, `Clock.threadCpuTicks`) | E3104 |
 | Command-line arguments | E3104 |
 | File and directory I/O | E3104 |
 | Sockets | E3104 |
@@ -94,7 +94,7 @@ time**, at the call:
 | Environment variables (`Process.environmentVariable`) | E3074 |
 
 ```text
-error E3104: app.maxon:3:2: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+error E3104: app.maxon:3:10: 'Clock.threadCpuTicks' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
 error E3074: app.maxon:5:17: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
 ```
 

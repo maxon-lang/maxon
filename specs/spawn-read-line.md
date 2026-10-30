@@ -39,7 +39,7 @@ lost-wakeup race.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** Reading a line from a spawned child parks the calling green thread,
-and the interleaving cases additionally reach `__gt_sleep` — neither of which wasm32-wasi lowers.
+which wasm32-wasi does not lower.
 
 ### ⭐ The POSIX lanes
 

@@ -1522,9 +1522,13 @@ end 'TargetRefusal'
 // wire record, and why `reportTargetSkips` prints the count, the target and the constructs. A skip
 // that is not counted must never be added here.
 //
-// Four guards keep it narrow, each against a different way it could swallow a real failure:
+// Five guards keep it narrow, each against a different way it could swallow a real failure:
 //   * only a verdict that did not hold is considered, so a case that pins E3104 as its own expected
-//     diagnostic (`builtins-sleep.rejected-on-wasm`) matches, passes, and never reaches here;
+//     diagnostic (`builtins-clock.thread-cpu-ticks-rejected-on-wasm`) matches, passes, and never
+//     reaches here;
+//   * a run case whose `unsupported-targets` marker leaves exactly one lane is not converted
+//     (`SpecTest.runsOnOneLane`): the case exists for that lane, so a refusal there is the case
+//     failing, and without this a case such as `builtins-sleep.runs-on-wasm` could never go red;
 //   * a `compilerError` case is not converted even when its verdict failed (`refusalThatSkips`),
 //     so the coverage that pins a refusal survives the refusal becoming a skip in both directions;
 //   * every non-empty line the compiler printed must be an E3104, not merely contain one: another
@@ -1582,25 +1586,26 @@ end 'targetRefusalIn'
 // `outcome` first is enough only while such a case PASSES; the moment its pinned text stops matching it
 // becomes a FAILED verdict over a compile that exited 1 having printed nothing but E3104s — which is
 // bit-for-bit the shape a skip is read off. So the very cases that pin the refusal —
-// `builtins-sleep.rejected-on-wasm`, `stdlib-loading.target-refusal-blames-the-crossing-call`,
+// `builtins-clock.thread-cpu-ticks-rejected-on-wasm`,
+// `stdlib-loading.target-refusal-blames-the-crossing-call`,
 // `console-stdin`/`process-executable-path`/`builtins-clock`'s twins — would turn into SILENT SKIPS at
 // the exact moment they broke, and a test that can only pass or vanish pins nothing.
-//
-// ⚠ MEASURED 2026-08-06 on this branch, twice and two ways: editing `builtins-sleep.rejected-on-wasm`'s
-// pinned entry name to `__gt_SABOTAGE` reported `SKIP … / 1 passed, 0 failed`, **exit 0**; a purpose-built
-// case pinning a wrong E3104 did the same on x64-linux. Both are FAIL after this guard.
 //
 // ⇒ **THE QUESTION IS WHO THE SUBJECT IS.** A `compilerError` case asserts WHAT THE COMPILER SAYS, so
 // the diagnostics are the artifact under test and a disagreement is an assertion that did not hold. Only
 // a case that expected to BUILD AND RUN can be "not runnable here", and that is the one this converts.
-function refusalThatSkips(outcome TestOutcome, expectation SpecExpectation, compile CompileAnswer) returns TargetRefusal
+function refusalThatSkips(outcome TestOutcome, test SpecTest, compile CompileAnswer) returns TargetRefusal
 	if outcome.isPass() 'itRanHere'
 		return TargetRefusal.notRefused
 	end 'itRanHere'
 
-	if expectation.expectsCompileError() 'diagnosticsAreTheAssertion'
+	if test.expectation.expectsCompileError() 'diagnosticsAreTheAssertion'
 		return TargetRefusal.notRefused
 	end 'diagnosticsAreTheAssertion'
+
+	if test.runsOnOneLane() 'theCaseExistsForThisLane'
+		return TargetRefusal.notRefused
+	end 'theCaseExistsForThisLane'
 
 	return targetRefusalIn(compile)
 end 'refusalThatSkips'
@@ -2467,7 +2472,7 @@ module function compileVerdictOf(e CompileError) returns CompileVerdict
 end 'compileVerdictOf'
 
 function settledPreRun(compiled CompiledTest, outcome TestOutcome, action IrAction, via RunVia, effectiveTarget Target) returns PreparedTest
-	match refusalThatSkips(outcome, expectation: compiled.test.expectation, compile: compiled.compile) 'refusal'
+	match refusalThatSkips(outcome, test: compiled.test, compile: compiled.compile) 'refusal'
 		notRefused then return settledStep(compiled, outcome: outcome, action: action, via: via, effectiveTarget: effectiveTarget)
 		refused(diagnostics) then return settledStep(compiled, outcome: TestOutcome.skipped(diagnostics), action: action, via: via, effectiveTarget: effectiveTarget)
 	end 'refusal'

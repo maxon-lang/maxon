@@ -5759,9 +5759,9 @@ Exit code 2 with `fatal error: cannot open standard fds` is the start-up check d
 
 ### Targets
 
-Green threads, `async`, `sleep`, `awaitAny` and services run on every native target. `wasm32-wasi` has no
-green threads, so each of them is **E3104** there, reported at the call when the language checks find no
-other error in the program.
+Green threads, `async`, `sleep`, `awaitAny` and services run on every native target. `wasm32-wasi` has one
+thread: `sleep` waits the whole program there, and `async`, `awaitAny` and services are **E3104**, reported
+at the call when the language checks find no other error in the program.
 
 ---
 

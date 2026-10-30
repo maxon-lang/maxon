@@ -3,9 +3,9 @@
 /// meaningful when subtracted.
 ///
 /// Every reading comes from one source, `__gt_now_ns`: `QueryPerformanceCounter` scaled to nanoseconds
-/// on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux and `clock_gettime(CLOCK_UPTIME_RAW)` on macOS.
-/// `nowMs()` is that reading divided by 1,000,000. `wasm32-wasi` has no clock substrate, and a call there
-/// is refused at compile time (E3104).
+/// on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux, `clock_gettime(CLOCK_UPTIME_RAW)` on macOS and
+/// WASI's `monotonic-clock.now` on `wasm32-wasi`. `nowMs()` is that reading divided by 1,000,000. On
+/// `wasm32-wasi`, `osTickMs()` and `threadCpuTicks()` are refused at compile time (E3104).
 /// @category System
 /// ⭐ **NO READING CAN PRESENT A VALUE ABOVE `i64.max`.** `__gt_now_ns` answers nanoseconds since boot,
 /// which needs 292 years of uptime to reach `i64.max`, and a millisecond reading is the same quantity
@@ -54,12 +54,14 @@ public type Clock
 
 	/// Monotonic time in nanoseconds, read from the platform's high-resolution
 	/// counter (`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)`
-	/// on Linux, `clock_gettime(CLOCK_UPTIME_RAW)` on macOS). Differences between
-	/// two `nowNanos()` readings are meaningful; the absolute value is not.
+	/// on Linux, `clock_gettime(CLOCK_UPTIME_RAW)` on macOS, `monotonic-clock.now`
+	/// on `wasm32-wasi`). Differences between two `nowNanos()` readings are
+	/// meaningful; the absolute value is not.
 	///
 	/// The value is always expressed in nanoseconds, but the counter's PERIOD is
-	/// platform-defined — typically 100 ns on Windows and 1 ns elsewhere — so
-	/// successive readings taken back-to-back may compare equal.
+	/// platform-defined — typically 100 ns on Windows, the host runtime's clock
+	/// resolution on `wasm32-wasi`, and 1 ns elsewhere — so successive readings
+	/// taken back-to-back may compare equal.
 	public static function nowNanos() returns InstantNanos
 		return __Builtins.currentTimeNanos()
 	end 'nowNanos'

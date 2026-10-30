@@ -1897,10 +1897,10 @@ let GtTraceIdBatch = 16
 // `__gt_init` and so has no `__sched_procs` array to index. It also deletes three `.data` words and, for the
 // trace, one `__slab_alloc` in `__gt_init`.
 //
-// ⚠ **`StdOp.stackRecordAddr` IS x64/arm64 ONLY (a wasm local has no address), WHICH COSTS NOTHING HERE**:
-// `osReadClock` is already x64-windows-gated in both other backends, and the trace rides `--async-trace` on
-// the same lane. The reserving function sets `func.stackSize` itself, exactly as `promoteStackRecords` does,
-// and the register allocator's spiller then starts above the region (`SplitDriver.create`).
+// ⚠ On wasm32-wasi a frame is one fixed linear-memory region per function (`StdToWasm.WasmScratchFrames`),
+// so a function reserving one there must call no module code; `__gt_now_ns` calls none. The reserving
+// function sets `func.stackSize` itself, exactly as `promoteStackRecords` does, and the register
+// allocator's spiller then starts above the region (`SplitDriver.create`).
 //
 // 24 bytes covers the widest i64 (`-9223372036854775808`, 20 characters) with room to spare.
 let GtTraceDigitsBytes = 24
@@ -4156,12 +4156,12 @@ export function emitGtNowNs(module StdModule, block IrBlock, ids ValueMinter) re
 	return now
 end 'emitGtNowNs'
 
-// `__gt_now_ns() -> i64` — the monotonic clock, nanoseconds since boot. `osReadClock` reads the QPC counter
+// `__gt_now_ns() -> i64` — the monotonic clock, nanoseconds from the host's monotonic origin. `osReadClock` reads the QPC counter
 // and QPF frequency into two frame slots; the ticks→ns scale is done HERE in builder-built Std, via
 // the OVERFLOW-SAFE split identity `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq`. Both terms stay
 // inside i64 for any realistic QPF (Windows fixes it at 10 MHz; even a TSC-derived few-GHz value keeps
 // `(freq-1)*1e9 < 2^63`) and centuries of uptime — so no 128-bit MUL/DIV, and no new Target op, is needed.
-function buildGtNowNs(module StdModule)
+export function buildGtNowNs(module StdModule)
 	var func = IrFunction.createFromStd(GtNowNsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
@@ -6561,9 +6561,7 @@ export function emitGtDeadlineAfterMs(module StdModule, func IrFunction, cur IrB
 	var saturated = module.addBlock(func, label: b"deadlinesaturated", heat: BlockHeat.normal)
 	var finite = module.addBlock(func, label: b"deadlinefinite", heat: BlockHeat.normal)
 
-	let aboveSignedRange = emitCompareWithConstant(module, block: cur, value: ms, pred: StdCmpPred.lt, against: 0, ids: ids)
-	let aboveCeiling = emitCompareWithConstant(module, block: cur, value: ms, pred: StdCmpPred.gt, against: GtDeadlineMaxMs, ids: ids)
-	let saturatesAtAnyClock = emitBin(module, block: cur, a: aboveSignedRange, b: aboveCeiling, opcode: StdBinOpcode.bitOr, ids: ids)
+	let saturatesAtAnyClock = emitMillisecondsAbove(module, block: cur, ms: ms, ceilingMs: GtDeadlineMaxMs, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(saturatesAtAnyClock, thenBlockId: saturated.id, elseBlockId: finite.id))
 
 	let latestWhenSaturated = emitConst(module, block: saturated, value: GtDeadlineMaxNs, ids: ids)
@@ -6586,6 +6584,12 @@ export function emitGtDeadlineAfterMs(module StdModule, func IrFunction, cur IrB
 
 	return value
 end 'emitGtDeadlineAfterMs'
+
+export function emitMillisecondsAbove(module StdModule, block IrBlock, ms ValueId, ceilingMs FullRangeInt, ids ValueMinter) returns ValueId
+	let aboveSignedRange = emitCompareWithConstant(module, block: block, value: ms, pred: StdCmpPred.lt, against: 0, ids: ids)
+	let aboveCeiling = emitCompareWithConstant(module, block: block, value: ms, pred: StdCmpPred.gt, against: ceilingMs, ids: ids)
+	return emitBin(module, block: block, a: aboveSignedRange, b: aboveCeiling, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitMillisecondsAbove'
 
 // `__gt_sleep(ms)` — suspend the current GT for `ms` milliseconds: compute the absolute deadline and park on
 // the timer store (`__gt_park`).

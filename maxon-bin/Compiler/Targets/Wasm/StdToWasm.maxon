@@ -80,7 +80,7 @@ typealias IndirectCallTypeIdxMap = Map with (ByteArray, Wasm32Index)
 typealias InlinePositionBySite = Map with (ElementIndex, Wasm32Index)
 typealias InlineSiteIndexArray = Array with ElementIndex
 
-// FIVE functions are imported, in this fixed order — so their func indices are the constants
+// TEN functions are imported, in this fixed order — so their func indices are the constants
 // below and every DEFINED function is offset by `WasmImportCount`. `buildWasmCoreModule` MUST
 // `addImportFunc` them in exactly this order for the indices to hold; `wasmFuncIdxOf`
 // derives each defined function's index as `WasmImportCount + position` on the same assumption. The
@@ -91,18 +91,28 @@ typealias InlineSiteIndexArray = Array with ElementIndex
 //   2  wasi:io/streams@0.2.6 [method]output-stream.blocking-write-and-flush  (i32,i32,i32,i32) -> ()
 //   3  wasi:cli/stderr@0.2.6 get-stderr                               () -> (result i32)
 //   4  wasi:random/random@0.2.6 get-random-u64                         () -> (result i64)
+//   5  wasi:clocks/monotonic-clock@0.2.6 now                           () -> (result i64)
+//   6  wasi:clocks/monotonic-clock@0.2.6 subscribe-duration            (param i64) -> (result i32)
+//   7  wasi:io/poll@0.2.6 [method]pollable.block                       (param i32) -> ()
+//   8  wasi:io/poll@0.2.6 [resource-drop]pollable                      (param i32) -> ()
+//   9  wasi:clocks/wall-clock@0.2.6 now                                (param i32) -> ()
 //
 // ⚠ `get-stderr` is APPENDED, not slotted in beside its stdout twin, for the reason a `StdOp` variant
 // is appended at the end of its band: the indices above it are read from a dozen emit sites and a
 // renumber is invisible at every one of them — the module would still validate and would call the
 // wrong import. Appending costs only the ONE derived offset (`WasmImportCount`), which every defined
 // function's index already goes through.
-let WasmImportCount = 5 as Wasm32Index
+let WasmImportCount = 10 as Wasm32Index
 let ExitImportFuncIdx = 0
 let GetStdoutImportFuncIdx = 1 as Wasm32Index
 let BlockingWriteFlushImportFuncIdx = 2
 let GetStderrImportFuncIdx = 3 as Wasm32Index
 let GetRandomU64ImportFuncIdx = 4
+let MonotonicNowImportFuncIdx = 5
+let SubscribeDurationImportFuncIdx = 6
+let PollableBlockImportFuncIdx = 7
+let PollableDropImportFuncIdx = 8
+let WallClockNowImportFuncIdx = 9
 
 // ⭐ The wasm half of `StdLoweringShared.posixStreamFd` — which `wasi:cli` accessor hands over the
 // output-stream a write targets. Exhaustive over `OsOutputStream` for that door's reason: a third
@@ -118,7 +128,8 @@ end 'wasmStreamAccessorImportFuncIdx'
 // `result<_, stream-error>` into. It sits in the low scratch region BELOW the `.data` base
 // (1024) and within page 0, so it never overlaps real data. Only the result's tag byte is read
 // (`mrt_write_stream` stops on an error); the error payload is not — 256 leaves ample room to the
-// data base.
+// data base. `wall-clock.now` returns its 16-byte datetime here too: each import's area is read right
+// after its call returns, so the two never overlap.
 let WasmRetAreaBase = 256
 
 // `blocking-write-and-flush(handle, ptr, len, retArea)` takes four i32 params — the stream handle,
@@ -210,6 +221,24 @@ let WasmRandomFillStoreOffset = 0
 let WasmRandomFillLoopDepth = 0
 let WasmRandomFillExitDepth = 1
 
+let WasiMonotonicClockModuleName = b"wasi:clocks/monotonic-clock@0.2.6"
+let WasiMonotonicNowFieldName = b"now"
+let WasiSubscribeDurationFieldName = b"subscribe-duration"
+let WasiPollModuleName = b"wasi:io/poll@0.2.6"
+let WasiPollableBlockFieldName = b"[method]pollable.block"
+let WasiPollableDropFieldName = b"[resource-drop]pollable"
+let WasmMonotonicTicksPerSecond = 1000000000
+
+// wasmtime's monotonic clock counts from context creation, so an early `Clock.nowMs()` would read 0.
+// WASI's origin is arbitrary, so shifting it is free and makes every reading positive.
+let WasmMonotonicOriginBiasNanos = 1000000000
+let WasmClockStoreOffset = 0
+let WasiWallClockModuleName = b"wasi:clocks/wall-clock@0.2.6"
+let WasiWallClockNowFieldName = b"now"
+let WasmDatetimeSecondsOffset = 0
+let WasmDatetimeNanosecondsOffset = 8
+let WasmSleepNothingToReport = 0
+
 enum WasmRandomFillUnit
 	word
 	byte
@@ -224,11 +253,16 @@ let WasiGetStdoutDebugName = b"get_stdout"
 let WasiBlockingWriteFlushDebugName = b"blocking_write_and_flush"
 let WasiGetStderrDebugName = b"get_stderr"
 let WasiGetRandomU64DebugName = b"get_random_u64"
+let WasiMonotonicNowDebugName = b"monotonic_now"
+let WasiSubscribeDurationDebugName = b"subscribe_duration"
+let WasiPollableBlockDebugName = b"pollable_block"
+let WasiPollableDropDebugName = b"pollable_drop"
+let WasiWallClockNowDebugName = b"wall_clock_now"
 
-// The `.rdata` image (String-literal records + blobs) is laid in linear memory immediately
-// after the `.data` image, rounded up to 8 so every 8-byte record field lands naturally
-// aligned. The base is otherwise free.
-let WasmRdataAlignment = 8
+// Each linear-memory region after `.data` (`.rdata`, the scratch frames, the frame-trace ring) starts
+// immediately after the one before it, rounded up to 8 so every 8-byte field lands naturally aligned.
+// The base is otherwise free.
+let WasmRegionAlignment = 8
 
 // ==========================================================================
 // Seam 2 — the whole-module entry (the ONLY external symbol)
@@ -272,7 +306,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// Both are shared by the per-function emitters (a `globalAddr` resolves against `.data`, an
 	// `rdataAddr` against `.rdata`) and by the module's memory + data sections.
 	let dataImage = globalData.dataSectionImage()
-	let rdataBase = wasmRdataBase(WasmDataBaseOffset, dataSize: dataImage.count() as BytePos)
+	let rdataBase = wasmRegionAfter(WasmDataBaseOffset, size: dataImage.count() as BytePos)
 
 	// An `.rdata` slot naming another `.rdata` payload — a String record's `buffer@0`, an imaged string
 	// table's element slot — holds an ABSOLUTE address that exists only once `rdataBase` is fixed. wasm is
@@ -281,7 +315,8 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	var rdataImage = globalData.rdataImage()
 	applyRdataAbsRelocs(rdataImage, globalData: globalData, rdataBase: rdataBase)
 	bakeFuncTableIndexRelocs(rdataImage, globalData: globalData, funcNames: funcNames)
-	let frames = WasmFrameStack.above((rdataBase as BytePos) + rdataImage.count() as BytePos, spellings: spellings)
+	let scratchFrames = WasmScratchFrames.layout(module, funcNames: funcNames, base: wasmRegionAfter(rdataBase, size: rdataImage.count() as BytePos))
+	let frames = WasmFrameStack.above(scratchFrames.endAddress, spellings: spellings)
 
 	// The WASI imports were added FIRST (above), in the order the `*ImportFuncIdx` constants fix, so every
 	// defined function gets the index `wasmFuncIdxOf` computes (`WasmImportCount + position`). Order
@@ -301,7 +336,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 		displacedAddressFolds.foldInFunction(module, func: func, reach: DisplacementReach.anyImm32)
 		let funcIdx = (WasmImportCount + iter.index()) as Wasm32Index
 		let firstPosition = (wasmFirstInlinePosition(funcNames) + inlinePositions.count()) as Wasm32Index
-		var emitter = WasmFuncEmitter.create(module, func: func, funcIdx: funcIdx, frames: frames, firstPosition: firstPosition, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
+		var emitter = WasmFuncEmitter.create(module, func: func, funcIdx: funcIdx, frames: frames, firstPosition: firstPosition, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, scratchFrameBase: scratchFrames.baseOf(iter.index()), funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
 		emitter.emit()
 
 		for position in emitter.inlinePositionLines() 'eachPosition'
@@ -352,13 +387,10 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	return builder.finish()
 end 'buildWasmCoreModule'
 
-// Add the five WASI imports in the order the `*ImportFuncIdx` constants pin: `exit-with-code`
-// (0), `get-stdout` (1), `blocking-write-and-flush` (2), `get-stderr` (3), `get-random-u64` (4).
-// `exit-with-code` takes one i32 (the status) and returns nothing; each stream accessor takes
-// nothing and returns the i32 stream handle; `blocking-write-and-flush` takes (handle, ptr, len,
-// retArea) — four i32 — and returns nothing; `get-random-u64` takes nothing and returns an i64.
+// Add the WASI imports in the order the `*ImportFuncIdx` constants pin; the table above
+// `WasmImportCount` lists each one's signature.
 //
-// All five are imported UNCONDITIONALLY, including by a program that never panics and never prints.
+// All are imported UNCONDITIONALLY, including by a program that never panics and never prints.
 // A wasm import costs a name pair in the import section and nothing at run time (the host resolves
 // it whether or not a `call` reaches it), whereas making one conditional would put the
 // `*ImportFuncIdx` constants — and therefore `WasmImportCount`, and therefore EVERY defined
@@ -386,6 +418,16 @@ function appendWasiImports(builder WasmModuleBuilder)
 
 	let getRandomTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i64))
 	_ = builder.addImportFunc(WasiRandomModuleName, fieldName: WasiGetRandomU64FieldName, typeIdx: getRandomTypeIdx, debugName: WasiGetRandomU64DebugName)
+
+	_ = builder.addImportFunc(WasiMonotonicClockModuleName, fieldName: WasiMonotonicNowFieldName, typeIdx: getRandomTypeIdx, debugName: WasiMonotonicNowDebugName)
+
+	let subscribeTypeIdx = builder.internFuncType(singletonValTypes(WasmValType.i64), results: singletonValTypes(WasmValType.i32))
+	_ = builder.addImportFunc(WasiMonotonicClockModuleName, fieldName: WasiSubscribeDurationFieldName, typeIdx: subscribeTypeIdx, debugName: WasiSubscribeDurationDebugName)
+
+	_ = builder.addImportFunc(WasiPollModuleName, fieldName: WasiPollableBlockFieldName, typeIdx: exitTypeIdx, debugName: WasiPollableBlockDebugName)
+	_ = builder.addImportFunc(WasiPollModuleName, fieldName: WasiPollableDropFieldName, typeIdx: exitTypeIdx, debugName: WasiPollableDropDebugName)
+
+	_ = builder.addImportFunc(WasiWallClockModuleName, fieldName: WasiWallClockNowFieldName, typeIdx: exitTypeIdx, debugName: WasiWallClockNowDebugName)
 end 'appendWasiImports'
 
 // Bake every `.rdata` slot naming another `.rdata` payload (see `PendingRdataAbsReloc`) into the `.rdata`
@@ -432,12 +474,9 @@ function bakeFuncTableIndexRelocs(rdataImage ByteArray, globalData GlobalDataTab
 	end 'each'
 end 'bakeFuncTableIndexRelocs'
 
-// The `.rdata` base: the first 8-aligned linear-memory address at or after the end of the
-// `.data` image. `WasmDataBaseOffset` is itself 8-aligned, so a program with no top-level `var`
-// puts `.rdata` at `WasmDataBaseOffset`.
-function wasmRdataBase(dataBase Wasm32Index, dataSize BytePos) returns Wasm32Index
-	return alignUp((dataBase as BytePos) + dataSize, alignment: WasmRdataAlignment) as Wasm32Index
-end 'wasmRdataBase'
+function wasmRegionAfter(base Wasm32Index, size BytePos) returns Wasm32Index
+	return alignUp((base as BytePos) + size, alignment: WasmRegionAlignment) as Wasm32Index
+end 'wasmRegionAfter'
 
 // ⭐⭐ **`mrt_panic` ON WASM — THE THIRD IMPLEMENTATION OF ONE CONTRACT.**
 //
@@ -743,8 +782,7 @@ type WasmFrameStack
 	let prefix as ByteArray
 	var spellings as StdlibShadowSpellingArray
 
-	static function above(rdataEnd BytePos, spellings StdlibShadowSpellingArray) returns Self
-		let base = alignUp(rdataEnd, alignment: WasmRdataAlignment) as Wasm32Index
+	static function above(base Wasm32Index, spellings StdlibShadowSpellingArray) returns Self
 		let ringSlots = roundUpToPowerOfTwo(MaxBacktraceFrames)
 		var prefix = ByteArray.create()
 		let depthOffset = prefix.count()
@@ -811,6 +849,54 @@ type WasmFrameStack
 		writeDword(image, value: (lineEnd - lineStart) as MachineWord)
 	end 'writeLineEntry'
 end 'WasmFrameStack'
+
+// One fixed linear-memory region per function holding a frame, which `stackRecordAddr` indexes. Sound
+// only while such a function cannot be entered again before it returns: a WASI component has one
+// thread, the host cannot re-enter it, `async` is refused on this lane, and `requireLeafFrame` refuses
+// a frame holder that calls module code.
+type WasmScratchFrames
+	let bases as Wasm32IndexArray
+	export let endAddress as Wasm32Index
+
+	static function layout(module StdModule, funcNames FunctionNameIndex, base Wasm32Index) returns Self
+		var bases = Wasm32IndexArray.create()
+		var next = base
+
+		for func in funcNames.functions 'eachFunc'
+			if func.stackSize == 0 'frameless'
+				bases.push(0)
+				continue
+			end 'frameless'
+
+			requireLeafFrame(module, func: func)
+			bases.push(next)
+			next = wasmRegionAfter(next, size: func.stackSize as BytePos)
+		end 'eachFunc'
+
+		return Self{bases: bases, endAddress: next}
+	end 'layout'
+
+	export function baseOf(position ElementIndex) returns Wasm32Index
+		return try self.bases.get(position) otherwise panic("WasmScratchFrames.baseOf: position {position} is past the {self.bases.count()} functions the layout walked")
+	end 'baseOf'
+end 'WasmScratchFrames'
+
+function requireLeafFrame(module StdModule, func IrFunction)
+	var ops = OpIndexArray.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("requireLeafFrame: blockRef {blockRef} not in module.blocks")
+		block.collectOpsInRunOrder(ops)
+	end 'eachBlock'
+
+	for opIdx in ops 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("requireLeafFrame: opIdx {opIdx} not in module.ops")
+
+		if stdOpEntersModuleCode(op) 'callsOut'
+			panic("requireLeafFrame: `{String.from(func.name)}` holds a frame on wasm32-wasi and also calls — a wasm frame is a fixed region of linear memory, one per function, so it is correct only while the function cannot be entered again before it returns, which a function that calls out does not promise")
+		end 'callsOut'
+	end 'eachOp'
+end 'requireLeafFrame'
 
 // An inline position shares the frame-line index space with the function indices, numbered past
 // all of them (`wasmFirstInlinePosition`), so one ring slot holds either and one line table
@@ -1658,27 +1744,26 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		unaryOp(resultId, _, opcode, operandType) then setValtype(valtypes, v: resultId, vt: unaryResultValType(opcode, operandType: operandType))
 
 		// ⚠ A wasm linear-memory address is an i32, not the i64 pointer width the native backends carry:
-		// `globalAddr` and `rdataAddr` materialize an `i32.const` that `loadIndirect`, `storeIndirect`
-		// and `osWriteStdout` consume as the base address.
+		// `globalAddr`, `stackRecordAddr` and `rdataAddr` materialize an `i32.const` that `loadIndirect`,
+		// `storeIndirect` and `osWriteStdout` consume as the base address.
 		cmp(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		cmpImm(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		globalAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		stackRecordAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		rdataAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 
 		// ⚠ The machine word. `div`/`mod` have no width of their own and are computed at machine width
 		// whatever their operands' storage widths (`emitDivMod`). A stream write widens the i32 length it
 		// wrote back (`emitOsWriteStream`). A `funcAddr` is narrowed to the i32 `call_indirect`
 		// table-index operand only at the call itself (`emitFuncAddr`/`emitCallIndirect`), so it flows as
-		// i64, unlike an address consumed in place. The rest are refused at emission on this lane, or
-		// unreachable (`stackRecordAddr`: stack promotion is gated off for wasm32-wasi), but are typed
-		// anyway because this column is built before any lowering decides anything.
+		// i64, unlike an address consumed in place. The rest are refused at emission on this lane, but are
+		// typed anyway because this column is built before any lowering decides anything.
 		div(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		mod(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osAllocPages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osWriteStdout(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osWriteStderr(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		stackRecordAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osOpenNamedSegment(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osMapNamedSegment(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osTickCountMs(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
@@ -1781,10 +1866,11 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osUnpublishNamedSegment or
 		covPoint or
 		osHostProcess or
-		osNetpoll or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then break
+
+		osNetpoll(resultId, _, _, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
 		// A parameter's local is the wasm parameter, so it takes the signature's machine word, the same
 		// answer the `func.paramTypes` sweep recorded and `funcParamValTypes` declares.
@@ -1846,6 +1932,9 @@ type WasmFuncEmitter
 	let dataBase as Wasm32Index
 	let rdataBase as Wasm32Index
 
+	// Per function, unlike the bases above: this function's region in `WasmScratchFrames`.
+	let scratchFrameBase as Wasm32Index
+
 	// The module's CHECKED name index (`FunctionNameIndex`), threaded down from `buildBackend`. It
 	// answers both questions a direct `call` asks about its callee — which wasm function index to emit
 	// (`wasmFuncIdxOf`) and whether the callee returns a value at all — in place of the two maps that used
@@ -1893,7 +1982,7 @@ type WasmFuncEmitter
 	var positions as WasmInlinePositions
 	var currentSite as InlineSiteRef
 
-	static function create(module StdModule, func IrFunction, funcIdx Wasm32Index, frames WasmFrameStack, firstPosition Wasm32Index, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
+	static function create(module StdModule, func IrFunction, funcIdx Wasm32Index, frames WasmFrameStack, firstPosition Wasm32Index, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, scratchFrameBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
 		var valtypes = buildValtypeTable(module, func: func, funcNames: funcNames)
 		let useDispatcher = decideDispatcher(module, func: func)
 
@@ -1903,6 +1992,7 @@ type WasmFuncEmitter
 			globalData: globalData,
 			dataBase: dataBase,
 			rdataBase: rdataBase,
+			scratchFrameBase: scratchFrameBase,
 			funcNames: funcNames,
 			calleeParamTypes: calleeParamTypes,
 			indirectCallTypeIdx: indirectCallTypeIdx,
@@ -2396,9 +2486,7 @@ type WasmFuncEmitter
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			osPanic(label) then self.emitPanicLabel(label)
 
-			// The green-thread sleep substrate's clock (`osReadClock`) has no wasm lowering, and E3104 refuses a
-			// program that reaches it at the call's own span, so it never arrives here.
-			osReadClock then panic("emitBodyOp: `osReadClock` has no wasm32-wasi lowering — the green-thread sleep substrate is refused at the call's own span (E3104)")
+			osReadClock(ticksPtrId, freqPtrId) then self.emitOsReadClock(ticksPtrId, freqPtrId: freqPtrId)
 
 			// WASI has no process-spawn primitive, so the spawn/wait band has nothing to lower to.
 			osProcessSpawn or
@@ -2451,10 +2539,7 @@ type WasmFuncEmitter
 			osPipeCreateOutbound or
 			osWriteFile then panic("emitBodyOp: the IOCP ops have no wasm32-wasi lowering — the async-subprocess-stdio substrate is refused at the call's own span (E3104)")
 
-			// WASI's `wasi:clocks/wall-clock.now` answers a (seconds, nanoseconds) record rather than one
-			// 64-bit tick count, so a wasm lowering is a different shape rather than a different import
-			// name.
-			osReadWallClock then panic("emitBodyOp: `osReadWallClock` has no wasm32-wasi lowering — the wall clock is refused at the call's own span (E3104)")
+			osReadWallClock(ftPtrId) then self.emitOsReadWallClock(ftPtrId)
 			osFileOpenRead or
 			osFileClose or
 			osReadFile or
@@ -2495,12 +2580,7 @@ type WasmFuncEmitter
 			// the writer is the same method, so `printError` runs on this lane.
 			osWriteStderr(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError)
 
-			// ⛔ It cannot reach here, and a GUESS would be a wrong ANSWER rather than a missed
-			// optimization: `promoteStackRecords` is gated off for this target because a wasm local has no
-			// address and the module emits no shadow-stack global, so there is no frame for a slot to
-			// index. If this panic ever fires, that gate was removed without giving wasm a shadow stack
-			// first.
-			stackRecordAddr then panic("emitBodyOp: a `stackRecordAddr` reached the wasm backend, which has no addressable frame for its slot to index — `promoteStackRecords` is gated off for wasm32-wasi precisely so this cannot happen")
+			stackRecordAddr(resultId, slot) then self.emitStackRecordAddr(resultId, slot: slot)
 
 			// ⛔ The DebugStream producer attaches to a NAMED SECTION; a WASI component has no such thing and no
 			// route to one. `--debugstream` is refused at the command line for this target, so this is a
@@ -2575,7 +2655,7 @@ type WasmFuncEmitter
 			// ⛔ WASI has no other thread to suspend and no register file to read — the sandbox exposes
 			// neither — so this is a permanent absence rather than an unwritten lowering.
 			osHostProcess then panic("emitBodyOp: `osHostProcess` has no wasm32-wasi spelling — process sampling is `HostFacility.processSampling`, which this lane does not provide, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
-			osNetpoll then panic("emitBodyOp: `osNetpoll` has no wasm32-wasi spelling — a WASI component has one thread, so there is no second party to interrupt a wait and no poller to block in; the scheduler that emits it is `HostFacility.greenThreads`, which SemanticCheck refuses on this lane at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
+			osNetpoll(resultId, verb, microsecondsId, _, _, _, _) then self.emitOsNetpoll(resultId, verb: verb, microsecondsId: microsecondsId)
 			osSocketOverlapped then panic("emitBodyOp: `osSocketOverlapped` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `managedSocket` on this lane, so a socket call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
 			osPathQuery then panic("emitBodyOp: `osPathQuery` has no wasm32-wasi spelling — it is emitted only by the `PATH` walk and by `__md_resolve_path`; WASI has no process-spawn primitive, so a subprocess call is refused at its own source span (E3074) and the `PATH` walk is never installed, and a resolve (`FilePath.resolvedPhysically`) is refused earlier by E3104; this is the backstop for a compiler bug that got one past those refusals")
 			osSocketServe then panic("emitBodyOp: `osSocketServe` has no wasm32-wasi spelling — binding, listening and accepting need `wasi:sockets`, which this lane does not use, so `TargetFacilities.targetProvidesFacility` denies `managedSocket` here and a listener call is refused at its own source span (E3104); this is the backstop for a compiler bug that got one past that gate")
@@ -3490,6 +3570,12 @@ type WasmFuncEmitter
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitGlobalAddr'
 
+	function emitStackRecordAddr(resultId ValueId, slot SpillSlot)
+		let slotOffset = ((slot as StackSize) * SpillSlotBytes) as ByteOffset
+		self.body.i32Const(wasmLinearAddress(self.scratchFrameBase, byteOffset: slotOffset))
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitStackRecordAddr'
+
 	// `loadIndirect` → push the base address as an i32, then `<width>.load offset=<offset>`. The
 	// static `offset` (0 for a plain global, non-zero for a struct/heap-record field riding this op)
 	// folds into the memarg. The width is `valueType`'s: a `u8`/`i1` BYTE (a heap String's bytes,
@@ -3712,6 +3798,72 @@ type WasmFuncEmitter
 		self.body.i32WrapI64()
 		self.body.i32Store8(WasmRandomFillStoreOffset)
 	end 'storeRandomByte'
+
+	function emitOsReadClock(ticksPtrId ValueId, freqPtrId ValueId)
+		self.pushOperandAt(ticksPtrId, targetVt: WasmValType.i32)
+		self.body.call(MonotonicNowImportFuncIdx)
+		self.body.i64Const(WasmMonotonicOriginBiasNanos)
+		self.body.i64Add()
+		self.body.i64Store(WasmClockStoreOffset)
+
+		self.pushOperandAt(freqPtrId, targetVt: WasmValType.i32)
+		self.body.i64Const(WasmMonotonicTicksPerSecond)
+		self.body.i64Store(WasmClockStoreOffset)
+	end 'emitOsReadClock'
+
+	// Answers FILETIME ticks, as every lane's `osReadWallClock` does, so `runtime/Clock.maxon`'s shared
+	// arithmetic converts the Unix datetime back unchanged.
+	function emitOsReadWallClock(ftPtrId ValueId)
+		self.pushOperandAt(ftPtrId, targetVt: WasmValType.i32)
+
+		self.body.i32Const(WasmRetAreaBase)
+		self.body.call(WallClockNowImportFuncIdx)
+
+		self.body.i32Const(WasmRetAreaBase)
+		self.body.i64Load(WasmDatetimeSecondsOffset)
+		self.body.i64Const(FileTimeTicksPerSecond)
+		self.body.i64Mul()
+
+		self.body.i32Const(WasmRetAreaBase)
+		self.body.i32Load(WasmDatetimeNanosecondsOffset)
+		self.body.i64ExtendI32U()
+		self.body.i64Const(posixNanosPerFileTimeTick() as FullRangeInt)
+		self.body.i64DivU()
+		self.body.i64Add()
+
+		self.body.i64Const(FileTimeTicksFrom1601To1970)
+		self.body.i64Add()
+		self.body.i64Store(WasmClockStoreOffset)
+	end 'emitOsReadWallClock'
+
+	function emitOsNetpoll(resultId ValueId, verb NetpollVerb, microsecondsId ValueId)
+		match verb 'which'
+			sleepOnTimer then self.emitOsSleepMicroseconds(resultId, microsecondsId: microsecondsId)
+			default panic("emitBodyOp: `osNetpoll` has no wasm32-wasi spelling for this verb — a WASI component has one thread, so there is no second party to interrupt a wait and no poller to block in; only `sleepOnTimer` lowers, to a wait on a monotonic-clock pollable. The scheduler that emits every other verb is `HostFacility.greenThreads`, which SemanticCheck refuses on this lane at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
+		end 'which'
+	end 'emitOsNetpoll'
+
+	function emitOsSleepMicroseconds(resultId ValueId, microsecondsId ValueId)
+		let handle = resultId as Wasm32Index
+
+		self.pushOperandAt(microsecondsId, targetVt: WasmValType.i64)
+		self.body.i64Const(posixNanosPerUnit(PosixTimeUnit.microseconds) as FullRangeInt)
+		self.body.i64Mul()
+		self.body.call(SubscribeDurationImportFuncIdx)
+		self.body.i64ExtendI32U()
+		self.body.localSet(handle)
+
+		self.body.localGet(handle)
+		self.body.i32WrapI64()
+		self.body.call(PollableBlockImportFuncIdx)
+
+		self.body.localGet(handle)
+		self.body.i32WrapI64()
+		self.body.call(PollableDropImportFuncIdx)
+
+		self.body.i64Const(WasmSleepNothingToReport)
+		self.body.localSet(handle)
+	end 'emitOsSleepMicroseconds'
 
 	// ----------------------------------------------------------------------
 	// Dispatcher terminators: branch / cond-branch (with phi copies)

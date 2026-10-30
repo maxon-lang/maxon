@@ -71,7 +71,8 @@ export enum HostFacility
 	// states.
 	uptimeClock
 
-	// A green thread's timed park — `__gt_sleep`, and so `sleep(ms)` through `stdlib/Sleep.maxon`.
+	// A timed wait — `__gt_sleep`, and so `sleep(ms)` through `stdlib/Sleep.maxon`: a green thread's park
+	// where the lane has a scheduler, a blocking host wait where it has none.
 	sleep
 
 	// The cooperative reschedule (`__gt_resched`) — `Scheduler.yield()`. The scheduler's run-queue handoff
@@ -637,8 +638,8 @@ end 'calleeHasHostFacility'
 // Windows, libSystem imports on macOS, raw syscalls on the two static Linux images. A premature `true` is worse than a `false`;
 // this file's header says why.
 //
-// ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory`, `hostMutex` AND `entropy`, AND SOME OF ITS `false`s
-// ARE PERMANENT.** WASI
+// ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory`, `hostMutex`, `entropy`, THE TWO CLOCKS AND `sleep`, AND
+// SOME OF ITS `false`s ARE PERMANENT.** WASI
 // has no process-spawn primitive and no per-thread CPU clock at all, so `subprocess` and `threadCpuClock`
 // there are refusals of a different KIND from "not yet" — that distinction is carried by
 // `SemanticCheck.targetCanHostSubprocess` and its E3074, which reads this table's subject and not its
@@ -882,23 +883,24 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `HostFacility` row for what a threaded wasm lane would owe.
 			pageMemory or
 			hostMutex or
-			entropy gives true
+			entropy or
+			monotonicClock or
+			wallClock or
+			sleep gives true
 
 			// ⛔ **THE REST ARE ABSENT, AND FOR TWO DIFFERENT KINDS OF REASON THIS COLUMN DOES NOT RECORD.**
 			// A WASI component has one thread and no process-spawn primitive, so the green-thread floor,
 			// the child-process band, the per-thread CPU clock and per-OS-thread STORAGE are permanent
-			// refusals; the file, directory,
+			// refusals, as is the uptime clock: WASI's monotonic origin is arbitrary, so answering "time
+			// since boot" with it would be a plausible wrong answer. The file, directory,
 			// socket, argv, stdin, identity, priority, machine-query and named-section families are surfaces
 			// nobody has ported. `SemanticCheck.targetCanHostSubprocess` is where the permanent half of that
 			// distinction is written down, reading this table's SUBJECT rather than its answer.
 			//
 			// ⚠ `terminalDetection` is the row whose `false` is an ANSWER rather than a refusal:
 			// `TerminalRuntime.installTerminalRuntime` reads it and builds a body answering "not a terminal".
-			monotonicClock or
-			wallClock or
 			threadCpuClock or
 			uptimeClock or
-			sleep or
 			reschedule or
 			greenThreads or
 			subprocess or

@@ -157,7 +157,7 @@ at the call site, rather than failing at run time:
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
-| `Clock`, `WallClock`, `sleep`, `MachinePin`, every `Scheduler` member but `parallelBoundary` | E3104 |
+| `Clock.osTickMs`, `Clock.threadCpuTicks`, `MachinePin`, every `Scheduler` member but `parallelBoundary` | E3104 |
 | `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `FilePath.resolvedPhysically`, `SharedSegment`, `TrustStore` | E3104 |
@@ -243,7 +243,7 @@ These are free functions and compiler builtins available everywhere.
 |----------|-------------|
 | `print(value String)` | Write `value` to standard output. No newline is added. |
 | `printError(value String)` | Write `value` to standard error. |
-| `sleep(milliseconds int(0 to u64.max))` | Suspend the current green thread; other green threads run meanwhile. |
+| `sleep(milliseconds int(0 to u64.max))` | Suspend the current green thread; other green threads run meanwhile. On `wasm32-wasi` the whole program waits. |
 | `panic(message String)` | Stop the program: prints `panic at <file>:<line>: <message>` and a stack trace to stderr, exits with code 1. |
 
 To print something that is not a `String`, interpolate it: `print("{count}\n")`.

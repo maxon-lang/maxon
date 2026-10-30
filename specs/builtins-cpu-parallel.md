@@ -335,7 +335,7 @@ error E3104: <fragment>:3:24: this construct lowers to the runtime entry '__cpu_
 The gate is REACHABILITY-BLIND for the program's own source — a library-tier case's files included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`): `probe` is never called, yet its intrinsic is still
 refused. `SemanticCheck` visits every function and dead-function elimination runs two tiers later,
 so this is the same rule that reports a type error in an unreached function — the half
-`builtins-sleep.rejected-on-wasm-when-unreached` keeps for the sleep intrinsic.
+`builtins-clock.thread-cpu-ticks-rejected-on-wasm-when-unreached` keeps for the CPU-clock intrinsic.
 ```maxon
 function probe() returns ExitCode
 	return __Builtins.cpuCount() as ExitCode
@@ -524,7 +524,7 @@ the value exposes that.
 ⚠ **NO NATIVE LANE REFUSES THESE COUNTERS**, so this case runs on wasm alone. It proves the
 `TargetFacilities.calleeHostFacility` arm fires, not that the x64 backend lowers the counters —
 `StdToX64Conversion.lowerTlsSetValue` has a real arm, and the x64-linux lane's passing cases are what prove
-it. `async-sleep.md`'s wasm case states the convention this follows.
+it. `services.md`'s `error.a-service-is-rejected-on-wasm` states the convention this follows.
 
 ```maxon
 function main() returns ExitCode

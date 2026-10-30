@@ -307,7 +307,7 @@ line:
 | Directive | Effect |
 |-----------|--------|
 | `<!-- Args: ... -->` | The argv the compiled program is spawned with, space-separated; a double-quoted run is one argument and may be empty (`""`). Capital `A`, matched exactly |
-| `<!-- unsupported-targets: t1, t2 -->` | Exclude the case from the named targets (`x64-windows`, `wasm32-wasi`, …; comma-separated); it runs on every other target. A missing or blank marker excludes nothing; a key naming no supported target, a key named twice, or a list naming every one, is a parse failure |
+| `<!-- unsupported-targets: t1, t2 -->` | Exclude the case from the named targets (`x64-windows`, `wasm32-wasi`, …; comma-separated); it runs on every other target. A missing or blank marker excludes nothing; a key naming no supported target, a key named twice, or a list naming every one, is a parse failure. A run case whose list leaves exactly one target FAILS on that target when the target refuses its construct (E3104); any other run case is reported there as a skip |
 | `<!-- targets: ... -->` | Retired. The parser refuses it: nothing reads it, so a case carrying it would run everywhere. Spell the lanes that cannot serve the case with `unsupported-targets:` instead |
 | `<!-- MmTrace -->` | Enable mm-trace capture mode (see below): the program is built with `--debugstream`, run under `maxon monitor --filter=mm`, and its normalized trace compared to the ` ```mm-trace ` block. Equivalent to adding the block |
 | `<!-- LogTrace -->` | The same capture mode for the other family of the debug stream — the events the program writes through `__DebugStream` — compared to a ` ```log-trace ` block. A case selects one family, never both |

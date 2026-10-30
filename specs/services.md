@@ -5119,8 +5119,15 @@ naming the runtime entry that has no lowering there — never a panic from insid
 ⚠ **THE TWO OPS NEED TWO ARMS, AND ONE WOULD HAVE PASSED A HALF-BUILT GATE.** A `spawn` and a send mint
 different entries, and a program can contain either without the other — `an-idle-service-that-is-never-sent-to-still-exits-zero`
 is exactly a spawn with no send.
-⚠ **NO NATIVE LANE REFUSES A SERVICE, SO THIS wasm CASE HAS NO NATIVE TWIN.** `async-sleep.md`'s wasm
-case states the convention this follows.
+⚠ **NO NATIVE LANE REFUSES A SERVICE, SO THIS wasm CASE HAS NO NATIVE TWIN.** A native twin's program
+and expected diagnostic would be byte-identical to this one's but for the target name — one fact written
+down twice.
+
+⇒ **THE CONVENTION, STATED ONCE FOR EVERY wasm-ONLY REFUSAL CASE THAT SHARES IT**
+(`builtins-cpu-parallel.md`'s counter case is another): a target-refusal case needs a lane that actually
+refuses. When the last native lane gains a facility, its native witness has nowhere to go — **do not
+re-point it at `wasm32-wasi` beside an existing wasm sibling, and do not re-add one unless a native lane
+loses the facility.** While wasm refuses the facility, the wasm case carries the rule by itself.
 
 ```maxon
 type Plot

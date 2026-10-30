@@ -61,8 +61,7 @@ appends into; the reader scans for `\n`, returns everything through the first on
 buffered for the next call. `cmd /c echo hello` writes `hello\r\n` = 7 bytes.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** The streaming reader parks its green thread, and several cases reach
-`__gt_sleep` directly — neither of which wasm32-wasi lowers.
+statement of it.** The streaming reader parks its green thread, which wasm32-wasi does not lower.
 
 ### ⭐ arm64-macOS RUNS THESE BUILTINS, AND THE READ IS WHERE THE TWO LANES GENUINELY PART
 
