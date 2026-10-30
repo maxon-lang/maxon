@@ -1644,10 +1644,12 @@ check, so a hoisted `count()` read after its loop left the allocator a use with 
 both modes and pinned. ⛔ **The optimize step found a real quadratic**: three per-loop walks of the whole
 function made the phase ×3.9 per doubling of loop count; it is ×2.0 now, with `tests/ladders/genunswitch.sh`
 committed so the reading can be repeated (the scale corpus holds no versionable loop — its row is a blind
-spot). Sabotage (`__managed_push` declared header-pure): the push control reads slot 0 through a freed
-buffer and exits 1, the two-loop control answers wrong, and the compiler that sabotaged compiler builds
-MISCOMPILES ITSELF — the class of defect the table refuses. Timed A/B (control from the round-3 commit,
-interleaved, n=11): **4,440 → 3,860 ms**; n=12 **60,716 → 53,436 ms (ratio to C 2.93 → 2.58)**; census ops
+spot). Sabotage at landing (`__managed_push` declared header-pure): the push control read slot 0 through
+a freed buffer and exited 1, the two-loop control answered wrong, and the compiler that sabotaged compiler
+built MISCOMPILED ITSELF — the class of defect the table refuses. An inlined `push` refuses its loop through
+its own `length@8` store whatever the table says, so the table's `push` entry is pinned by the emitted code
+of `ir-specs/loop-unswitching.md`'s `a-loop-pushing-an-unexpanded-element-stays-unversioned`. Timed A/B
+(control from the round-3 commit, interleaved, n=11): **4,440 → 3,860 ms**; n=12 **60,716 → 53,436 ms (ratio to C 2.93 → 2.58)**; census ops
 1712 → 2244 (two versions of every versioned loop) and `mgd-call` 54 → 76 (the slow versions). fannkuch:
 7 loops versioned, `flipCount`'s reverse loop is now `cmp/jcc + load` per get and `cmp/jcc + store` per
 set; the self-compile versions 71 loops (1,164 refused for a call with an unknown effect, 251 for no
@@ -1810,10 +1812,10 @@ predicate is established becomes `const 0` through the same rewrite `refineValue
 and the loads and arithmetic that fed it and now feed nothing are retired by a bounded worklist (the
 one place an unread `loadIndirect` is deleted: nobody reads its value, and the dialect's `isPure: false`
 on a load is about moving one across a store, not about executing one). The unswitch chain's own
-`element_destroy@40` test for a writer with no such guard went with this row: `emitStoreArm` omits that
-guard exactly where the lowering stamped the element trivial (`Project.stdOpTrivialElementSites`, the
-record's static instance), so the test was vacuous, and it was the one chain test in `carry`'s shape the
-facts could never fold. The first implementation held the in-state as dense blocks × records columns
+`element_destroy@40` test for a writer with no such guard went with this row: `emitElementStoreGuards` omits
+that guard exactly where the lowering stamped the element trivial (`Project.stdOpTrivialElementSites`, the
+record's static instance) and for a `push`, whose slot holds nothing, so the test was vacuous, and it was
+the one chain test in `carry`'s shape the facts could never fold. The first implementation held the in-state as dense blocks × records columns
 and bent the scale ladder (bytes ×1.8 → ×3.2 per doubling, CPU ×2.2 → ×3.7); the state is now one
 arena of per-block runs of live (record, facts) entries written once on a block's first arrival and only
 narrowed after, and the phase reads ×2.0 in both columns (rung 5: 62.3 MB → 16.8 MB, CPU −92%).

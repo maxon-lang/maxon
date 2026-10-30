@@ -1481,3 +1481,421 @@ func @main {
     arm64.ret
 }
 ```
+
+<!-- test: a-byte-push-loop-reaches-the-runtime-only-on-its-slow-arm -->
+A loop that pushes bytes onto a `ByteArray` holds no call on its path: the push is the guarded fast arm
+`inlineManagedPrimitives` emits, and `__managed_push` is reached only from the `__im_slow` arm, which the
+ownership, sharing and capacity guards send a full, shared or non-owned array to.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias ByteCount = int(0 to 1000)
+
+function fill(output ByteArray, count ByteCount, value Byte)
+	for _ in 0 upto count 'eachByte'
+		output.push(value)
+	end 'eachByte'
+end 'fill'
+
+function main() returns ExitCode
+	var output = ByteArray.create()
+	fill(output, count: 42, value: 7)
+	return output.count() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 7
+  __rc_ok#14:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  eachByte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegReg rax, rcx
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rdx, rcx, -24
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __im_slow
+  __im_store:
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
+    x64.cmpRegImm32 rdx, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rax*8 + 0], r12
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.jmp forstep
+  __im_stride:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.leaRegRegReg rcx, rcx, rax
+    x64.storeBaseDispReg.byte [rcx + 0], r12
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.jmp forstep
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr:
+    x64.cmpRegImm32 r13, 42
+    x64.jcc less, eachByte
+  __il_cont:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok#2:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-byte-push-loop-reaches-the-runtime-only-on-its-slow-arm.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 7
+  __rc_ok#14:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  eachByte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegReg rax, rcx
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rdx, rcx, -24
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __im_slow
+  __im_store:
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
+    x64.cmpRegImm32 rdx, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rax*8 + 0], r12
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.jmp forstep
+  __im_stride:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.leaRegRegReg rcx, rcx, rax
+    x64.storeBaseDispReg.byte [rcx + 0], r12
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.jmp forstep
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr:
+    x64.cmpRegImm32 r13, 42
+    x64.jcc less, eachByte
+  __il_cont:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok#2:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-byte-push-loop-reaches-the-runtime-only-on-its-slow-arm.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 7
+  __rc_ok#14:
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  eachByte:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.cmp x0, x1
+    arm64.b.hs __im_slow
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x2, x1, 24
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
+    arm64.cmp x2, 0
+    arm64.b.ne __im_slow
+  __im_store:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
+    arm64.cmp x2, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.storeBaseIndexScaleReg.word64 [x1 + x0*8 + 0], x20
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.b forstep
+  __im_stride:
+    arm64.cmp x2, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.add x1, x1, x0
+    arm64.storeBaseDispReg.byte [x1 + 0], x20
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.b forstep
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.cmp x21, 42
+    arm64.b.lt eachByte
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#2:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-byte-push-loop-reaches-the-runtime-only-on-its-slow-arm.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 7
+  __rc_ok#14:
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  eachByte:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.cmp x0, x1
+    arm64.b.hs __im_slow
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x2, x1, 24
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
+    arm64.cmp x2, 0
+    arm64.b.ne __im_slow
+  __im_store:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
+    arm64.cmp x2, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.storeBaseIndexScaleReg.word64 [x1 + x0*8 + 0], x20
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.b forstep
+  __im_stride:
+    arm64.cmp x2, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.add x1, x1, x0
+    arm64.storeBaseDispReg.byte [x1 + 0], x20
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.b forstep
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.cmp x21, 42
+    arm64.b.lt eachByte
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#2:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-byte-push-loop-reaches-the-runtime-only-on-its-slow-arm.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```

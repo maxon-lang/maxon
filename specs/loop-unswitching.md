@@ -32,8 +32,11 @@ re-derives nothing.
 ### What the pass refuses, and why
 
 - **A call whose effect on a record the runtime does not describe** — `push`, `resize`, `slice`,
-  `clone`, `retain`, any user call. Such a loop is left alone (`a-loop-that-pushes-stays-unversioned`).
-- **A store that is not an element store**, or a loop-defined value read past the loop in a block no
+  `clone`, `retain`, any user call. Such a loop is left alone. The callee table is what refuses a `push`
+  the inliner left a call (`ir-specs/loop-unswitching.md`, `a-loop-pushing-an-unexpanded-element-stays-unversioned`);
+  an expanded `push` also carries the next refusal.
+- **A store that is not an element store** — an expanded `push`'s write of `length@8` is one, and its slow
+  arm still calls `push` (`a-loop-that-pushes-stays-unversioned`) — or a loop-defined value read past the loop in a block no
   single exit dominates (a `break 'outer'` that carries a value out of two loops at once), or a
   loop-defined OP RESULT — a hoisted load, a computed value — read after the loop in either mode.
   The copy would need SSA the pass does not rebuild in this version; a loop whose exits carry nothing
@@ -49,10 +52,9 @@ the loop, a body of bound check + store and bound check + load), which nothing i
 every path the rewrite touches under a value the program reads back: the slow version's detach, an
 out-of-bounds fallback taken inside the fast version, a loop-defined value read after the loop, a
 value carried out through two loops at once, a hoisted load read after its loop, two names for one
-record. Under sabotage — `__managed_push` declared to write nothing — the push control reads
-slot 0 through a buffer the push has freed and exits 1, and `a-value-carried-out-of-two-loops` is
-versioned around its pushes and answers wrong; the compiler built by that sabotaged compiler then
-miscompiles itself, which is the class of defect the callee table exists to refuse.
+record. The callee table's `push` entry is pinned by the emitted code of
+`ir-specs/loop-unswitching.md`, because the cases here cannot see it: an expanded `push`'s own length store
+refuses its loop whatever the table says.
 
 ## Tests
 
@@ -162,10 +164,13 @@ end 'main'
 ```
 
 <!-- test: a-loop-that-pushes-stays-unversioned -->
-Control for the callee table. `push` may grow the buffer, so its effect is `unknown` and the loop
-is left alone; the emitted code (`--emit-ir`) holds one copy of the loop and no `__us_test` block. The array holds an
-element on entry and every iteration reads slot 0 after its push: were the loop hoisted, the hoisted
-buffer would be the one a growing `push` frees, and the read would follow a stale pointer.
+Control for the expanded `push`. The push is inlined: its fast arm writes `length@8`, which is not an
+element store, and its slow arm calls `__managed_push`, whose effect is `unknown` because it may grow
+the buffer. Either refuses the loop; the emitted code (`--emit-ir`) holds one copy of the loop and no
+`__us_test` block. The array holds an element on entry and every iteration reads slot 0 after its push:
+were the loop hoisted, the hoisted buffer would be the one a growing `push` frees, and the read would
+follow a stale pointer. The callee table alone is pinned by the unexpanded shape in
+`ir-specs/loop-unswitching.md`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word

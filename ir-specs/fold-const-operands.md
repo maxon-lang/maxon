@@ -105,58 +105,37 @@ func @main {
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r13
     x64.callDirect __retain_type_param
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#27
-  __im_owned#31:
+  __im_owned:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#27
-  __im_bounds#32:
+  __im_bounds:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r15, rax
     x64.jcc aboveEqual, __im_slow#27
-  __im_buffer#33:
+  __im_buffer:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#27
-  __im_viewed#34:
+  __im_viewed:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#27
-  __im_store#35:
+  __im_store:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
     x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
     x64.jmp forstep
   __im_stride:
-    x64.cmpRegImm32 rax, 1
+    x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, __im_slow#27
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#27
-  __im_owned#36:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#27
-  __im_bounds#37:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#27
-  __im_buffer#38:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#27
-  __im_viewed#39:
-    x64.leaRegRegImm32 rcx, rax, -24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#27
-  __im_store#40:
     x64.leaRegRegReg rax, rax, r15
     x64.storeBaseDispReg.byte [rax + 0], r8
     x64.jmp forstep
@@ -641,58 +620,37 @@ func @main {
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r13
     x64.callDirect __retain_type_param
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#27
-  __im_owned#31:
+  __im_owned:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#27
-  __im_bounds#32:
+  __im_bounds:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r15, rax
     x64.jcc aboveEqual, __im_slow#27
-  __im_buffer#33:
+  __im_buffer:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#27
-  __im_viewed#34:
+  __im_viewed:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#27
-  __im_store#35:
+  __im_store:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
     x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
     x64.jmp forstep
   __im_stride:
-    x64.cmpRegImm32 rax, 1
+    x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, __im_slow#27
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#27
-  __im_owned#36:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#27
-  __im_bounds#37:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#27
-  __im_buffer#38:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#27
-  __im_viewed#39:
-    x64.leaRegRegImm32 rcx, rax, -24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#27
-  __im_store#40:
     x64.leaRegRegReg rax, rax, r15
     x64.storeBaseDispReg.byte [rax + 0], r8
     x64.jmp forstep
@@ -1181,58 +1139,37 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __retain_type_param
     arm64.movRegReg x2, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow#27
-  __im_owned#31:
+  __im_owned:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow#27
-  __im_bounds#32:
+  __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x23, x0
     arm64.b.hs __im_slow#27
-  __im_buffer#33:
+  __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#27
-  __im_viewed#34:
+  __im_viewed:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
     arm64.b.ne __im_slow#27
-  __im_store#35:
+  __im_store:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+    arm64.cmp x1, 8
+    arm64.b.ne __im_stride
+  __im_word:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x23*8 + 0], x2
     arm64.b forstep
   __im_stride:
-    arm64.cmp x0, 1
+    arm64.cmp x1, 1
     arm64.b.ne __im_slow#27
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
-    arm64.b.ne __im_slow#27
-  __im_owned#36:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#27
-  __im_bounds#37:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x23, x0
-    arm64.b.hs __im_slow#27
-  __im_buffer#38:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#27
-  __im_viewed#39:
-    arm64.sub x1, x0, 24
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
-    arm64.cmp x1, 0
-    arm64.b.ne __im_slow#27
-  __im_store#40:
     arm64.add x0, x0, x23
     arm64.storeBaseDispReg.byte [x0 + 0], x2
     arm64.b forstep
@@ -1704,58 +1641,37 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __retain_type_param
     arm64.movRegReg x2, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow#27
-  __im_owned#31:
+  __im_owned:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow#27
-  __im_bounds#32:
+  __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x23, x0
     arm64.b.hs __im_slow#27
-  __im_buffer#33:
+  __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#27
-  __im_viewed#34:
+  __im_viewed:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
     arm64.b.ne __im_slow#27
-  __im_store#35:
+  __im_store:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+    arm64.cmp x1, 8
+    arm64.b.ne __im_stride
+  __im_word:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x23*8 + 0], x2
     arm64.b forstep
   __im_stride:
-    arm64.cmp x0, 1
+    arm64.cmp x1, 1
     arm64.b.ne __im_slow#27
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
-    arm64.b.ne __im_slow#27
-  __im_owned#36:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#27
-  __im_bounds#37:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x23, x0
-    arm64.b.hs __im_slow#27
-  __im_buffer#38:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#27
-  __im_viewed#39:
-    arm64.sub x1, x0, 24
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
-    arm64.cmp x1, 0
-    arm64.b.ne __im_slow#27
-  __im_store#40:
     arm64.add x0, x0, x23
     arm64.storeBaseDispReg.byte [x0 + 0], x2
     arm64.b forstep

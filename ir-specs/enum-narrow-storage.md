@@ -79,14 +79,14 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 2
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.jcc belowEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 2
-    x64.jcc belowEqual, __im_slow
-  __im_load#11:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.jmp tryok
@@ -94,10 +94,6 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 2
-    x64.jcc belowEqual, __im_slow
-  __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 2]
     x64.jmp tryok
@@ -155,14 +151,14 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 2
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.jcc belowEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 2
-    x64.jcc belowEqual, __im_slow
-  __im_load#11:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.jmp tryok
@@ -170,10 +166,6 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 2
-    x64.jcc belowEqual, __im_slow
-  __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 2]
     x64.jmp tryok
@@ -227,14 +219,14 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x1, 2
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 2
+    arm64.b.ls __im_slow
+  __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 2
-    arm64.b.ls __im_slow
-  __im_load#11:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
     arm64.b tryok
@@ -242,10 +234,6 @@ func @main {
     arm64.cmp x0, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 2
-    arm64.b.ls __im_slow
-  __im_load#12:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 2]
     arm64.b tryok
@@ -299,14 +287,14 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x1, 2
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 2
+    arm64.b.ls __im_slow
+  __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 2
-    arm64.b.ls __im_slow
-  __im_load#11:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
     arm64.b tryok
@@ -314,10 +302,6 @@ func @main {
     arm64.cmp x0, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 2
-    arm64.b.ls __im_slow
-  __im_load#12:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 2]
     arm64.b tryok
@@ -942,14 +926,14 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow
-  __im_load#14:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
@@ -957,10 +941,6 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow
-  __im_load#15:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded:
@@ -1033,14 +1013,14 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow
-  __im_load#14:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
@@ -1048,10 +1028,6 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow
-  __im_load#15:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded:
@@ -1120,14 +1096,14 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+  __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ls __im_slow
-  __im_load#14:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.b __im_loaded
@@ -1135,10 +1111,6 @@ func @main {
     arm64.cmp x0, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ls __im_slow
-  __im_load#15:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
   __im_loaded:
@@ -1207,14 +1179,14 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+  __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ls __im_slow
-  __im_load#14:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.b __im_loaded
@@ -1222,10 +1194,6 @@ func @main {
     arm64.cmp x0, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ls __im_slow
-  __im_load#15:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
   __im_loaded:

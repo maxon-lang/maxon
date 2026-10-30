@@ -300,9 +300,9 @@ end 'stringTableBufferBytes'
 //
 // ⚠ A BYTE-STRING LITERAL IS NOT A SEPARATE CASE HERE, and it is worth saying: the under-write does NOT
 // land in read-only `.rdata` and fault loudly.
-// `__managed_resize` reaches its shrink through `__managed_grow`, whose FIRST op is the unconditional detach, so by
-// the time the zero range is computed the record is already on a private HEAP buffer and a literal corrupts
-// the allocator exactly like an owned array — QUIETLY. Measured with this guard stubbed out: `b"hey"` then
+// `__managed_resize` reaches its shrink through `__managed_grow`, which first detaches every buffer that
+// is not this record's own, so by the time the zero range is computed the record is already on a private
+// HEAP buffer and a literal corrupts the allocator exactly like an owned array — QUIETLY. Measured with this guard stubbed out: `b"hey"` then
 // `resize(-2)` exits 0, the leak gate stays green, `capacity()` reads 3 (proving the detach fired) and
 // `count()` publishes -2. The failure mode is silent, which is why the guard is here.
 //
@@ -1942,7 +1942,7 @@ function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMi
 end 'emitCowDetach'
 
 // Call `__managed_reserve(arr, n)` — make the buffer hold at least `n` elements, DETACHING a COW/rdata one
-// on the way (that is `__managed_grow`'s first and unconditional act, stated at `buildManagedGrow`). The
+// on the way (`__managed_grow` does that ahead of its capacity check, stated at `buildManagedGrow`). The
 // callee is void, so the minted result is unread; it exists because a `call` op always defines a value.
 //
 // ⚠ **IT IS EXPORTED WHERE `ManagedReserveName` IS NOT, AND THAT IS THE POINT.** Its second caller is
@@ -2015,7 +2015,7 @@ end 'ElementSlotOperands'
 // (`emitReallocateToCapacity`) and every record — this one's `ManagedRecordBytes` and any other — is
 // another, so the bytes the store reaches are never a record's. What it CAN write is the buffer's own
 // header, one word below `buffer@0`, if a VARIABLE index were negative: that is why every emitter of
-// the shape bounds the index first (`InlineManagedPrimitives.emitStoreArm` through
+// the shape bounds the index first (`InlineManagedPrimitives.emitElementStoreGuards` through
 // `emitIndexOutOfRange`, `emitStoreElemAt` behind the entries' own guards), and why a pass resting on
 // this fact checks that a bound guard on the same index dominates such a store. A constant
 // displacement is non-negative by construction and reaches nothing below the buffer.
@@ -2896,11 +2896,12 @@ end 'emitElementIsManaged'
 //      create, plus or minus one per link and unlink (`emitListCountDelta`), every unlink already
 //      bounds-checked.
 //   3. **`capacity@16` REACHES ONE OF THESE GUARDS, AND ONLY BEHIND AN OWNERSHIP TEST.**
-//      `InlineManagedPrimitives.guardIndexInRange` bounds the inlined `__managed_mem_set`'s index against
-//      `capacity@16` — the one limit here that CAN be a sentinel — so `emitStoreArm` asks
-//      `emitBufferNotOwned` (`capacity < 0`) FIRST and this guard runs on a capacity already proven
-//      non-negative. That ORDER is this precondition, established at the code; the note there names this one
-//      back, and the dependency is written down at both ends because nothing checks it.
+//      `InlineManagedPrimitives.guardIndexInRange` bounds the inlined `__managed_mem_set`'s and
+//      `__managed_push`'s index against `capacity@16` — the one limit here that CAN be a sentinel — so
+//      `emitElementStoreGuards` asks `emitBufferNotOwned` (`capacity < 0`) FIRST and this guard runs on a
+//      capacity already proven non-negative. That ORDER is this precondition, established at the code;
+//      the note there names this one back, and the dependency is written down at both ends because
+//      nothing checks it.
 //
 // ⚠ **A NEW LIMIT MUST BE READ AGAINST THAT LIST**, exactly as a fifth `NotOwnedBufferCapacity` must be read
 // against `BufferOwnership`'s two exceptions. There is no compile error for getting it wrong, and the failure
@@ -3057,7 +3058,7 @@ export enum ManagedGuardKind
 	// `emitBufferNotOwned`: `capacity@16 < 0`.
 	bufferNotOwned
 
-	// `InlineManagedPrimitives.emitStoreArm`'s null test: `buffer@0 == NoBufferAllocated`.
+	// `InlineManagedPrimitives.emitElementStoreGuards`' null test: `buffer@0 == NoBufferAllocated`.
 	bufferUnallocated
 
 	// `emitIsSharedAllocation` over `buffer@0`: the buffer's refcount word is non-zero.
@@ -3066,9 +3067,9 @@ export enum ManagedGuardKind
 	// `emitElementIsManaged`: `element_destroy@40 != TrivialElementDestroy`, which is 0.
 	elementManaged
 
-	// `emitIndexOutOfRange`: `index >=u length@8`, or `>=u capacity@16` for the buffer surface's write —
-	// or, for a constant index `K` once `foldConstOperands` has swapped it into the immediate and
-	// flipped the predicate, `length@8 <=u K`.
+	// `emitIndexOutOfRange`: `index >=u length@8`, or `>=u capacity@16` for the buffer surface's write and
+	// an inlined push — or, for a constant index `K` once `foldConstOperands` has swapped it into the
+	// immediate and flipped the predicate, `length@8 <=u K`.
 	indexOutOfRange
 end 'ManagedGuardKind'
 
@@ -3438,12 +3439,12 @@ end 'emitViewRecordTail'
 // property of the runtime rather than of a checklist a future mutator can be added without reading.
 //
 // ⭐ **THE GATING RULE, stated once: a mutator either calls `__managed_grow` before it touches the buffer, or it
-// calls `__managed_cow_detach` itself.** `__managed_grow`'s FIRST op is an unconditional detach — placed ahead of its
-// own `capacity >= required` early-out precisely so the guarantee does not depend on the growth arithmetic —
-// so `push`/`reserve`/`resize`/`insert`/`append` are gated by construction through the call they already make,
-// and `set`/`clear`/`remove`/`pop`, which write without ever growing, call it directly. Those five are the
-// only call sites, and a sixth in (say) `insert` would be an unreachable branch: by the time it ran, `grow`
-// would already have made `capacity >= 0`, so it could never do anything. `get`/`first`/`last`/`count`/
+// calls `__managed_cow_detach` itself.** `__managed_grow` detaches whenever the detach has work to do — asked
+// ahead of its own `capacity >= required` early-out precisely so the guarantee does not depend on the growth
+// arithmetic — so `push`/`reserve`/`resize`/`insert`/`append` are gated by construction through the call
+// they already make, and `set`/`clear`/`remove`/`pop`, which write without ever growing, call it directly.
+// Those five are the only call sites, and a sixth in (say) `insert` would be an unreachable branch: by the
+// time it ran, `grow` would already have made `capacity >= 0`, so it could never do anything. `get`/`first`/`last`/`count`/
 // `capacity`/`is_empty` are READS and must NOT detach; `__managed_append`'s `src` is borrowed and read-only, so
 // only its `dest` is gated.
 //
@@ -3482,30 +3483,15 @@ function buildManagedCowDetach(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkBuffer = module.addBlock(func, label: b"chkbuf", heat: BlockHeat.normal)
 	var checkShared = module.addBlock(func, label: b"chkshared", heat: BlockHeat.normal)
-	var checkRc = module.addBlock(func, label: b"chkrc", heat: BlockHeat.normal)
 	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
 
-	// entry — ARM 1: a buffer that is not this record's must be replaced before any write. Asked FIRST, so
-	// the header read below is only ever reached on a pointer that HAS a header (see the ordering note).
-	let notOwned = emitBufferNotOwned(module, block: entry, record: arr, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(notOwned, thenBlockId: detach.id, elseBlockId: checkShared.id))
-
-	// checkShared: an owner with no buffer at all (an array that never grew) has nothing to share and
-	// nothing to write; the mutator that follows will grow it.
-	let ownBuf = emitLoadField(module, block: checkShared, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	emitBranchOnCompare(module, block: checkShared, value: ownBuf, pred: StdCmpPred.ne, against: 0, whenTrue: checkRc, whenFalse: done, ids: ids)
-
-	// checkRc — ARM 2: the buffer is this record's, but is anyone else holding it? `emitIsSharedAllocation`
-	// owns what the count means (`owners - 1`, so sole ownership is 0), and the only thing that can hold a
-	// second reference to an element buffer is a VIEW — so "shared" here reads literally as "someone is
-	// reading these bytes", and the write must go elsewhere.
-	let viewed = emitIsSharedAllocation(module, block: checkRc, ptr: ownBuf, ids: ids)
-	module.setTerminator(checkRc, op: StdOp.condBranch(viewed, thenBlockId: detach.id, elseBlockId: done.id))
+	emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: done, ids: ids)
 
 	// detach: the ASK is exactly `length` — an array's detach buys NO slack, because growth is
 	// `__managed_grow`/`__managed_grown_cap`'s separate business and a detach that also grew would give this record
@@ -3527,6 +3513,28 @@ function buildManagedCowDetach(module StdModule)
 
 	module.functions.push(func)
 end 'buildManagedCowDetach'
+
+// `__managed_cow_detach`'s decision, shared with `__managed_grow`, which skips the call only where this
+// sends control to `notNeeded`; a second copy that drifted would let a grow write through a shared or
+// `.rdata` buffer.
+function emitBranchOnDetachNeeded(module StdModule, entry IrBlock, checkBuffer IrBlock, checkShared IrBlock, arr ValueId, needed IrBlock, notNeeded IrBlock, ids ValueMinter)
+	// entry — ARM 1: a buffer that is not this record's must be replaced before any write. Asked FIRST, so
+	// the header read below is only ever reached on a pointer that HAS a header (see the ordering note).
+	let notOwned = emitBufferNotOwned(module, block: entry, record: arr, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(notOwned, thenBlockId: needed.id, elseBlockId: checkBuffer.id))
+
+	// checkBuffer: an owner with no buffer at all (an array that never grew) has nothing to share and
+	// nothing to write; the mutator that follows will grow it.
+	let ownBuf = emitLoadField(module, block: checkBuffer, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	emitBranchOnCompare(module, block: checkBuffer, value: ownBuf, pred: StdCmpPred.eq, against: NoBufferAllocated, whenTrue: notNeeded, whenFalse: checkShared, ids: ids)
+
+	// checkShared — ARM 2: the buffer is this record's, but is anyone else holding it? `emitIsSharedAllocation`
+	// owns what the count means (`owners - 1`, so sole ownership is 0), and the only thing that can hold a
+	// second reference to an element buffer is a VIEW — so "shared" here reads literally as "someone is
+	// reading these bytes", and the write must go elsewhere.
+	let viewed = emitIsSharedAllocation(module, block: checkShared, ptr: ownBuf, ids: ids)
+	module.setTerminator(checkShared, op: StdOp.condBranch(viewed, thenBlockId: needed.id, elseBlockId: notNeeded.id))
+end 'emitBranchOnDetachNeeded'
 
 // `__managed_grown_cap(current, required) -> newCap` — the growth policy; see the `GrowthThreshold` note
 // above for why it eases. An ask that outruns doubling is taken at face value with no slack.
@@ -3597,6 +3605,10 @@ function buildManagedGrow(module StdModule)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkBuffer = module.addBlock(func, label: b"chkbuf", heat: BlockHeat.normal)
+	var checkShared = module.addBlock(func, label: b"chkshared", heat: BlockHeat.normal)
+	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
+	var checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
 	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
 	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
@@ -3605,16 +3617,22 @@ function buildManagedGrow(module StdModule)
 	let arr = 0
 	let required = 1
 
-	// ⭐ **DETACH FIRST, UNCONDITIONALLY, AHEAD OF THE EARLY-OUT.** Every mutator that reaches the buffer
-	// through a grow (`push`/`reserve`/`resize`/`insert`/`append`) is gated by THIS call, so it must not
-	// depend on whether the growth check happens to fire — a `resize` whose `required` is below the rdata
-	// sentinel would otherwise return from `done` with the record still pointing at read-only `.rdata`, and
-	// the caller would write there. `capacity` is read AFTERWARDS because the detach republishes it.
-	emitCowDetach(module, block: entry, arr: arr, ids: ids)
+	// ⭐ **THE DETACH IS CALLED UNLESS IT PROVABLY HAS NOTHING TO DO, AHEAD OF THE EARLY-OUT.** Every mutator
+	// that reaches the buffer through a grow (`push`/`reserve`/`resize`/`insert`/`append`) is gated by THIS
+	// function, so it must not depend on whether the growth check happens to fire — a `resize` whose `required`
+	// is below the rdata sentinel would otherwise return from `done` with the record still pointing at
+	// read-only `.rdata`, and the caller would write there. The tests are `__managed_cow_detach`'s own
+	// decision, so the call is skipped exactly where the detach would return untouched: an owned record with
+	// no buffer or an unshared one, the common case. `capacity` is read AFTERWARDS because the detach
+	// republishes it.
+	emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: checkCapacity, ids: ids)
 
-	// entry: already big enough ⇒ nothing to do.
-	let capacity = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
-	emitBranchOnCompareValues(module, block: entry, a: capacity, pred: StdCmpPred.ge, b: required, whenTrue: done, whenFalse: grow, ids: ids)
+	emitCowDetach(module, block: detach, arr: arr, ids: ids)
+	module.setTerminator(detach, op: StdOp.branch(checkCapacity.id))
+
+	// chkcap: already big enough ⇒ nothing to do.
+	let capacity = emitLoadField(module, block: checkCapacity, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
+	emitBranchOnCompareValues(module, block: checkCapacity, a: capacity, pred: StdCmpPred.ge, b: required, whenTrue: done, whenFalse: grow, ids: ids)
 
 	// grow: pick the new capacity by the growth POLICY, then reallocate to it. An overflowing byte count
 	// ABORTS here, because a `required` that big can only come from the compiler's own growth arithmetic —

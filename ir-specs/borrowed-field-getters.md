@@ -176,16 +176,16 @@ func @main {
     x64.storeBaseDispReg.byte [r14 + 16], r13
   __il_cont#4:
     x64.movRegImm32 rcx, 3
-  __il_body#42:
+  __il_body#41:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#44
-  sharedView#43:
+    x64.jcc equal, ifcont#43
+  sharedView#42:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#41
-  ifcont#44:
+    x64.jmp __il_cont#40
+  ifcont#43:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#41:
+  __il_cont#40:
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
     x64.leaRegFunc rax, [rip + __clone_Map_Count$0_1000000_Count$0_1000000]
     x64.leaRegRdata r12, [rip + __witness_int.Hashable]
@@ -211,91 +211,87 @@ func @main {
     x64.jcc above, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg r8, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg r8, rax
-    x64.jcc aboveEqual, __im_slow
-  __im_load#31:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r8*8 + 0]
-    x64.jmp __il_body#46
+    x64.jmp __il_body#45
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg r8, rax
-    x64.jcc aboveEqual, __im_slow
-  __im_load#32:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, r8
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_body#46
+    x64.jmp __il_body#45
   __im_slow:
     x64.movRegReg rdx, r8
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#22
-  critsplit#56:
+  critsplit#55:
     x64.movRegReg rax, r8
-  __il_body#46:
+  __il_body#45:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#51
-  matcharm#48:
+    x64.jcc notEqual, matchnext#50
+  matcharm#47:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#15
-  matchnext#51:
+  matchnext#50:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#52
-  matcharm#47:
+    x64.jcc notEqual, matchnext#51
+  matcharm#46:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#15
-  matchnext#52:
+  matchnext#51:
     x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, matchdead
-  matcharm#49:
+  matcharm#48:
     x64.movRegImm32 rax, 0
   __il_cont#15:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#55
-  __il_body#34:
+    x64.jcc notEqual, critsplit#54
+  __il_body#33:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#36
-  sharedView#35:
+    x64.jcc equal, ifcont#35
+  sharedView#34:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#33
-  ifcont#36:
+    x64.jmp __il_cont#32
+  ifcont#35:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#33:
+  __il_cont#32:
     x64.loadRegBaseDisp.byte rax, [rax + 16]
     x64.jmp scmerge
-  critsplit#55:
+  critsplit#54:
     x64.movRegReg rax, rcx
   scmerge:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#54
-  __il_body#38:
+    x64.jcc notEqual, critsplit#53
+  __il_body#37:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#40
-  sharedView#39:
+    x64.jcc equal, ifcont#39
+  sharedView#38:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#37
-  ifcont#40:
+    x64.jmp __il_cont#36
+  ifcont#39:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#37:
+  __il_cont#36:
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 3
     x64.setccReg above, rax
     x64.jmp __il_cont#6
-  critsplit#54:
+  critsplit#53:
     x64.movRegReg rax, rcx
   __il_cont#6:
     x64.cmpRegImm32 rax, 0
@@ -461,16 +457,16 @@ func @main {
     x64.storeBaseDispReg.byte [r14 + 16], r13
   __il_cont#4:
     x64.movRegImm32 rcx, 3
-  __il_body#42:
+  __il_body#41:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#44
-  sharedView#43:
+    x64.jcc equal, ifcont#43
+  sharedView#42:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#41
-  ifcont#44:
+    x64.jmp __il_cont#40
+  ifcont#43:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#41:
+  __il_cont#40:
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
     x64.leaRegFunc rax, [rip + __clone_Map_Count$0_1000000_Count$0_1000000]
     x64.leaRegRdata r12, [rip + __witness_int.Hashable]
@@ -496,91 +492,87 @@ func @main {
     x64.jcc above, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg r8, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg r8, rax
-    x64.jcc aboveEqual, __im_slow
-  __im_load#31:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r8*8 + 0]
-    x64.jmp __il_body#46
+    x64.jmp __il_body#45
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg r8, rax
-    x64.jcc aboveEqual, __im_slow
-  __im_load#32:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, r8
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_body#46
+    x64.jmp __il_body#45
   __im_slow:
     x64.movRegReg rdx, r8
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#22
-  critsplit#56:
+  critsplit#55:
     x64.movRegReg rax, r8
-  __il_body#46:
+  __il_body#45:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#51
-  matcharm#48:
+    x64.jcc notEqual, matchnext#50
+  matcharm#47:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#15
-  matchnext#51:
+  matchnext#50:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#52
-  matcharm#47:
+    x64.jcc notEqual, matchnext#51
+  matcharm#46:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#15
-  matchnext#52:
+  matchnext#51:
     x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, matchdead
-  matcharm#49:
+  matcharm#48:
     x64.movRegImm32 rax, 0
   __il_cont#15:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#55
-  __il_body#34:
+    x64.jcc notEqual, critsplit#54
+  __il_body#33:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#36
-  sharedView#35:
+    x64.jcc equal, ifcont#35
+  sharedView#34:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#33
-  ifcont#36:
+    x64.jmp __il_cont#32
+  ifcont#35:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#33:
+  __il_cont#32:
     x64.loadRegBaseDisp.byte rax, [rax + 16]
     x64.jmp scmerge
-  critsplit#55:
+  critsplit#54:
     x64.movRegReg rax, rcx
   scmerge:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#54
-  __il_body#38:
+    x64.jcc notEqual, critsplit#53
+  __il_body#37:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#40
-  sharedView#39:
+    x64.jcc equal, ifcont#39
+  sharedView#38:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.jmp __il_cont#37
-  ifcont#40:
+    x64.jmp __il_cont#36
+  ifcont#39:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-  __il_cont#37:
+  __il_cont#36:
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 3
     x64.setccReg above, rax
     x64.jmp __il_cont#6
-  critsplit#54:
+  critsplit#53:
     x64.movRegReg rax, rcx
   __il_cont#6:
     x64.cmpRegImm32 rax, 0
@@ -747,15 +739,15 @@ func @main {
     arm64.storeBaseDispReg.byte [x22 + 16], x21
   __il_cont#4:
     arm64.movImm x19, 3
-  __il_body#42:
+  __il_body#41:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#44
-  sharedView#43:
+    arm64.cbz x0, ifcont#43
+  sharedView#42:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#41
-  ifcont#44:
+    arm64.b __il_cont#40
+  ifcont#43:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#41:
+  __il_cont#40:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.leaFuncAddr x0, __clone_Map_Count$0_1000000_Count$0_1000000
     arm64.leaRdata x21, __witness_int.Hashable
@@ -784,84 +776,80 @@ func @main {
     arm64.b.hi __rc_panic
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow
+  __im_load:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow
-  __im_load#31:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b __il_body#46
+    arm64.b __il_body#45
   __im_stride:
     arm64.cmp x2, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow
-  __im_load#32:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __il_body#46
+    arm64.b __il_body#45
   __im_slow:
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.ne tryerr#22
-  __il_body#46:
+  __il_body#45:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#51
-  matcharm#48:
+    arm64.b.ne matchnext#50
+  matcharm#47:
     arm64.movImm x0, 0
     arm64.b __il_cont#15
-  matchnext#51:
+  matchnext#50:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#52
-  matcharm#47:
+    arm64.b.ne matchnext#51
+  matcharm#46:
     arm64.movImm x0, 1
     arm64.b __il_cont#15
-  matchnext#52:
+  matchnext#51:
     arm64.cmp x0, 2
     arm64.b.ne matchdead
-  matcharm#49:
+  matcharm#48:
     arm64.movImm x0, 0
   __il_cont#15:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#55
-  __il_body#34:
+    arm64.cbnz x0, critsplit#54
+  __il_body#33:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#36
-  sharedView#35:
+    arm64.cbz x0, ifcont#35
+  sharedView#34:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#33
-  ifcont#36:
+    arm64.b __il_cont#32
+  ifcont#35:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#33:
+  __il_cont#32:
     arm64.loadRegBaseDisp.byte x0, [x0 + 16]
     arm64.b scmerge
-  critsplit#55:
+  critsplit#54:
     arm64.movRegReg x0, x1
   scmerge:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#54
-  __il_body#38:
+    arm64.cbnz x0, critsplit#53
+  __il_body#37:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#40
-  sharedView#39:
+    arm64.cbz x0, ifcont#39
+  sharedView#38:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#37
-  ifcont#40:
+    arm64.b __il_cont#36
+  ifcont#39:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#37:
+  __il_cont#36:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 3
     arm64.cset x0, hi
     arm64.b __il_cont#6
-  critsplit#54:
+  critsplit#53:
     arm64.movRegReg x0, x1
   __il_cont#6:
     arm64.cbz x0, ifcont#3
@@ -1030,15 +1018,15 @@ func @main {
     arm64.storeBaseDispReg.byte [x22 + 16], x21
   __il_cont#4:
     arm64.movImm x19, 3
-  __il_body#42:
+  __il_body#41:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#44
-  sharedView#43:
+    arm64.cbz x0, ifcont#43
+  sharedView#42:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#41
-  ifcont#44:
+    arm64.b __il_cont#40
+  ifcont#43:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#41:
+  __il_cont#40:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.leaFuncAddr x0, __clone_Map_Count$0_1000000_Count$0_1000000
     arm64.leaRdata x21, __witness_int.Hashable
@@ -1067,84 +1055,80 @@ func @main {
     arm64.b.hi __rc_panic
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow
+  __im_load:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow
-  __im_load#31:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b __il_body#46
+    arm64.b __il_body#45
   __im_stride:
     arm64.cmp x2, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow
-  __im_load#32:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __il_body#46
+    arm64.b __il_body#45
   __im_slow:
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.ne tryerr#22
-  __il_body#46:
+  __il_body#45:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#51
-  matcharm#48:
+    arm64.b.ne matchnext#50
+  matcharm#47:
     arm64.movImm x0, 0
     arm64.b __il_cont#15
-  matchnext#51:
+  matchnext#50:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#52
-  matcharm#47:
+    arm64.b.ne matchnext#51
+  matcharm#46:
     arm64.movImm x0, 1
     arm64.b __il_cont#15
-  matchnext#52:
+  matchnext#51:
     arm64.cmp x0, 2
     arm64.b.ne matchdead
-  matcharm#49:
+  matcharm#48:
     arm64.movImm x0, 0
   __il_cont#15:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#55
-  __il_body#34:
+    arm64.cbnz x0, critsplit#54
+  __il_body#33:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#36
-  sharedView#35:
+    arm64.cbz x0, ifcont#35
+  sharedView#34:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#33
-  ifcont#36:
+    arm64.b __il_cont#32
+  ifcont#35:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#33:
+  __il_cont#32:
     arm64.loadRegBaseDisp.byte x0, [x0 + 16]
     arm64.b scmerge
-  critsplit#55:
+  critsplit#54:
     arm64.movRegReg x0, x1
   scmerge:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#54
-  __il_body#38:
+    arm64.cbnz x0, critsplit#53
+  __il_body#37:
     arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#40
-  sharedView#39:
+    arm64.cbz x0, ifcont#39
+  sharedView#38:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#37
-  ifcont#40:
+    arm64.b __il_cont#36
+  ifcont#39:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#37:
+  __il_cont#36:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 3
     arm64.cset x0, hi
     arm64.b __il_cont#6
-  critsplit#54:
+  critsplit#53:
     arm64.movRegReg x0, x1
   __il_cont#6:
     arm64.cbz x0, ifcont#3

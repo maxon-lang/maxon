@@ -56,7 +56,7 @@ nothing, and such a site keeps both guards.
 
 ### What the two arms drop
 
-- **Write** (`emitStoreArm`): the `@40` load, the compare and the branch to the slow arm. The four
+- **Write** (`emitElementStoreGuards`): the `@40` load, the compare and the branch to the slow arm. The four
   remaining guards — ownership, the bound, the buffer, the sharing test — are untouched.
 - **Read** (`emitCheckedGetTail`): the `@40` load, the compare, the `__im_empty` block and its
   `cmp value, 0` — the continuation is reached by one unconditional edge carrying `(value, noError)`.

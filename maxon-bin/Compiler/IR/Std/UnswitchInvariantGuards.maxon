@@ -39,10 +39,11 @@
 //     the detach fires exactly when one of them fails; the copy is entered with all three true, nothing
 //     in the copy writes the header, so they hold on every iteration and the detach never fires. A
 //     writer runs a destructor only on a managed element, and the copy never runs one: the three guards
-//     are `emitStoreArm`'s alone, and that arm asks `element_destroy@40` at run time exactly where the
+//     are `emitElementStoreGuards`' alone, and it asks `element_destroy@40` at run time exactly where the
 //     lowering could not answer it — the loop's own guard, folded like the other three — and omits it
 //     where the lowering proved the element trivial, a stamp that is the record's own
-//     (`Project.stdOpTrivialElementSites`), so no path reaches such a store with a destructor to run;
+//     (`Project.stdOpTrivialElementSites`), or where the store fills the empty slot of a push, which no
+//     loop this pass versions holds; so no path reaches such a store with a destructor to run;
 //   • every loop-defined value read after L is a block arg of a member, read only under ONE exit block
 //     whose predecessors are all members — the block that takes one phi per such value.
 //
