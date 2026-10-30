@@ -510,6 +510,7 @@ function referenceKeepingAlive(module StdModule, name ByteArray, byName FuncInde
 			let namesIt = match reference.kind 'edge'
 				none gives false
 				directCall or
+				directTryCall or
 				otherReference gives reference.funcIndex == funcIndexOfName
 			end 'edge'
 
@@ -546,23 +547,27 @@ function markFunctionRecordCode(label ByteArray, recordCodes FunctionRecordCodeM
 end 'markFunctionRecordCode'
 
 // The static reachability edge one `StdOp` names, if any. Read here to walk the call graph and by the
-// inliner's called-once census, which counts the direct calls and refuses a callee anything else names.
+// inliner's called-once census, which counts the direct `call` and `tryCall` sites and refuses a callee
+// anything else names.
 function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, reference StdFunctionReference)
 	stdFunctionReferenceOf(op, byName: byName, into: reference)
 
 	match reference.kind 'edge'
 		none then break
 		directCall or
+		directTryCall or
 		otherReference then markLiveFunctionIndex(reference.funcIndex, reached: reached, worklist: worklist)
 	end 'edge'
 end 'markCalleeOf'
 
-// The kind of function reference one `StdOp` makes: a direct `call`, or a reference that is not one.
+// The kind of function reference one `StdOp` makes: a direct `call`, a direct `tryCall`, or a reference
+// that is neither.
 module enum StdFunctionReferenceKind
 	none
 	directCall
+	directTryCall
 
-	// A `tryCall` or a `funcAddr`.
+	// A `funcAddr`.
 	otherReference
 end 'StdFunctionReferenceKind'
 
@@ -739,7 +744,7 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 		osSocketOverlapped or
 		osSocketServe then break
 		call(_, callee, _) then into.resolve(callee, resolvedKind: StdFunctionReferenceKind.directCall, byName: byName)
-		tryCall(_, _, callee, _) then into.resolve(callee, resolvedKind: StdFunctionReferenceKind.otherReference, byName: byName)
+		tryCall(_, _, callee, _) then into.resolve(callee, resolvedKind: StdFunctionReferenceKind.directTryCall, byName: byName)
 		funcAddr(_, funcName) then into.resolve(funcName, resolvedKind: StdFunctionReferenceKind.otherReference, byName: byName)
 	end 'op'
 end 'stdFunctionReferenceOf'

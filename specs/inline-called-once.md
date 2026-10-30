@@ -8,7 +8,7 @@ category: codegen
 
 ## Documentation
 
-The inliner's second admission rule: a function with **exactly one direct `call` site in the whole
+The inliner's second admission rule: a function with **exactly one direct site (`call` or `tryCall`) in the whole
 program** is spliced into its caller **regardless of size** — loops, stores, panics, `/` and `mod`, and
 calls inside its body are all admitted. The leaf rule (`specs/inline-leaves.md`) buys a copy per site
 because the copy is tiny; this rule buys ONE copy because the call it removes was the function's only
@@ -17,7 +17,8 @@ reason to exist as a frame, and the body moves rather than multiplies.
 A called-once function is refused when:
 
 - it is **recursive**, or has any other call site (a self-call is a second site);
-- it **throws** — an `errorReturn` body, or a site spelled `tryCall`;
+- its exits leave through a **different return convention** than its site reads (a `ret` read by a
+  `tryCall`, an `errorReturn` read by a `call`, or both kinds of exit in one body);
 - it takes a **by-reference** (reassigned) parameter;
 - it carries the **green-thread stack guard** — it runs user code on its caller's stack;
 - the splice would exceed the caller's **register-pressure budget**.
@@ -466,19 +467,26 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: a-throwing-called-once-function-stays-a-call -->
-A throwing body leaves through `errorReturn` and its one site is a `tryCall`; either half refuses
-it. The loop and its stores are there so the size rule is not what decides.
+<!-- test: a-throwing-called-once-function-is-spliced -->
+A throwing body leaves through `errorReturn` and its one site is a `tryCall`; the splice carries the
+result and the error flag to the continuation. The loop and its stores are there so the size rule is not
+what admits it, and the second call, on a short array, proves the thrown case still reaches the caller's
+`otherwise` with its identity.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-enum FillError
+enum FillError implements Error
 	tooShort
+	negativeCount
 end 'FillError'
 
 function fillChecked(a IntArray, n Integer) returns Integer throws FillError
+	if n < 0 'negative'
+		throw FillError.negativeCount
+	end 'negative'
+
 	if (a.count() as Integer) < n 'short'
 		throw FillError.tooShort
 	end 'short'
@@ -493,10 +501,30 @@ function fillChecked(a IntArray, n Integer) returns Integer throws FillError
 	return total
 end 'fillChecked'
 
+function report(a IntArray, n Integer) returns Integer
+	let total = try fillChecked(a, n: n) otherwise (e) 'refused'
+		match e 'which'
+			tooShort then return 1000
+			negativeCount then return 2000
+		end 'which'
+	end 'refused'
+
+	return total
+end 'report'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.resize(5)
-	let total = try fillChecked(a, n: 5) otherwise 0
+	let total = report(a, n: 5)
+
+	if report(a, n: 9) != 1000 'shortWrong'
+		return 1
+	end 'shortWrong'
+
+	if report(a, n: -1) != 2000 'negativeWrong'
+		return 2
+	end 'negativeWrong'
+
 	let last = try a.get(4) otherwise panic("main: a.count() = 5")
 	return (total + last) as ExitCode
 end 'main'

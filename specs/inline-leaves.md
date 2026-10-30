@@ -21,8 +21,8 @@ stands BEFORE any splice, and memoised:
   are copied verbatim, as the called-once rule copies every call. A retain, a release and a scope drop
   are parser-emitted calls, so the same rule covers them;
 - it contains **no op the dialect marks `isUnsupportedInInlineBody`** except the two PANIC ops, which
-  are copied like any other block (see `THE PANIC RULE` below) — so an `errorReturn` (a throwing body),
-  a `stackRecordAddr`, a `covPoint` and every OS primitive refuse the callee. The OS band carries the
+  are copied like any other block (see `THE PANIC RULE` below) — so a `stackRecordAddr`, a `covPoint`
+  and every OS primitive refuse the callee, and so does an `errorReturn` anywhere but a block's exit. The OS band carries the
   mark because it is `isCall: true` and `inlineOpRole` classifies it off the flag, where the only two
   answers are "body op" and "refused": a system op that is NOT a call is a body op like any other, which
   is what admits `memFill`, the two atomics and the per-OS-thread slot read;
@@ -39,8 +39,9 @@ stands BEFORE any splice, and memoised:
 - it is **not the caller** — a self-recursive function is refused, and a mutually recursive pair is
   already refused by the leaf rule.
 
-Only a direct `StdOp.call` site is ever rewritten. A `tryCall` is never touched: it is the throwing
-call's spelling AND the existential-returning call's, and neither is what a tiny leaf is.
+A direct `call` or `tryCall` site is rewritten; a `callIndirect`, `witnessCall` or `witnessTryCall` never
+is. A site is refused when the callee's exits leave through a different return convention than it reads:
+a `ret` read by a `tryCall`, an `errorReturn` read by a `call`, or both kinds of exit in one body.
 
 ### ⭐⭐ `__Raw.splicedAtEverySite()` — a body that overrules the BUDGET and nothing that would break it
 
@@ -122,7 +123,8 @@ everything after it, plus the block's whole exit; and the continuation's single 
 call's original result id**, so no op after the site changes. The callee's blocks are copied as fresh
 blocks tagged with the site, its `param i` maps to the site's argument `i` (a generic callee's trailing
 layout / count / witness parameters are ordinary parameters and map the same way), and every `ret v`
-becomes a branch to the continuation carrying `v`.
+becomes a branch to the continuation carrying `v`. At a `tryCall` its two block args are the result and
+error-flag ids, and every `errorReturn(v, f)` becomes a branch carrying `(v, f)`.
 
 ## Tests
 
@@ -387,27 +389,62 @@ end 'main'
 42
 ```
 
-<!-- test: a-throwing-tiny-function-is-not-inlined -->
-A throwing body leaves through `errorReturn`, which the dialect marks unsupported in an inline body,
-and its call site is a `tryCall`, which this pass never rewrites. Both halves refuse it.
+<!-- test: a-throwing-tiny-function-is-inlined -->
+A throwing body leaves through `errorReturn` and its sites are `tryCall`s; the splice carries the result
+and the error flag to the continuation, so the caller's `otherwise` still sees the success value or the
+thrown case, whichever way the copied body left.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum HalveError
-	odd
+enum HalveError implements Error
+	negative
+	tooLarge
 end 'HalveError'
 
 function halve(n Integer) returns Integer throws HalveError
 	if n < 0 'negative'
-		throw HalveError.odd
+		throw HalveError.negative
 	end 'negative'
+
+	if n > 1000 'large'
+		throw HalveError.tooLarge
+	end 'large'
+
 	return n / 2
 end 'halve'
 
+function classify(n Integer) returns Integer
+	let half = try halve(n) otherwise (e) 'refused'
+		match e 'which'
+			negative then return 1000
+			tooLarge then return 2000
+		end 'which'
+	end 'refused'
+
+	return half
+end 'classify'
+
 function main() returns ExitCode
-	let v = try halve(84) otherwise 0
-	return v as ExitCode
+	let direct = try halve(84) otherwise 0
+
+	if direct != 42 'directWrong'
+		return 1
+	end 'directWrong'
+
+	if classify(10) != 5 'successWrong'
+		return 2
+	end 'successWrong'
+
+	if classify(-3) != 1000 'negativeWrong'
+		return 3
+	end 'negativeWrong'
+
+	if classify(5000) != 2000 'largeWrong'
+		return 4
+	end 'largeWrong'
+
+	return direct as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -775,4 +812,59 @@ end 'main'
 ```
 ```maxoncstderr
 error E3158: <fragment>:3:17: '__probe_unhonourable' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but '__probe_unhonourable_entry' still calls it: it holds an op the splice cannot copy. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it
+```
+
+<!-- test: a-body-that-asks-to-be-spliced-may-try-another-that-does -->
+A `tryCall` is a site the splice rewrites, so a throwing body declaring the row may `try` another: the
+edge is spliced away callees-first like a plain call's, and the thrown case still reaches the caller.
+Each body has two sites, so the called-once rule does not collapse the pair ahead of the leaf rule.
+```maxon
+// --- runtime-file: Probe.maxon
+enum ProbeError implements Error
+	tooLarge
+end 'ProbeError'
+
+module function __probe_checked(seed MachineWord) returns MachineWord throws ProbeError
+	__Raw.splicedAtEverySite()
+
+	if seed > 1000 'tooLarge'
+		throw ProbeError.tooLarge
+	end 'tooLarge'
+
+	return seed + 1
+end '__probe_checked'
+
+module function __probe_checked_twice(seed MachineWord) returns MachineWord throws ProbeError
+	__Raw.splicedAtEverySite()
+
+	let low = try __probe_checked(seed)
+	let high = try __probe_checked(seed + 1)
+	return low + high - seed - 1
+end '__probe_checked_twice'
+
+function __probe_checked_entry(seed ExitCode) returns ExitCode
+	let first = try __probe_checked_twice(seed as MachineWord) otherwise 99
+	let second = try __probe_checked_twice(seed as MachineWord) otherwise 99
+
+	if first != second 'disagree'
+		return 0
+	end 'disagree'
+
+	return first as ExitCode
+end '__probe_checked_entry'
+// --- stdlib-overlay: Builtins.maxon
+export function probeChecked(seed ExitCode) returns ExitCode
+	return __probe_checked_entry(seed)
+end 'probeChecked'
+// --- file: main.maxon
+function main() returns ExitCode
+	if probeChecked(2000) != 99 'thrownCaseLost'
+		return 1
+	end 'thrownCaseLost'
+
+	return probeChecked(40)
+end 'main'
+```
+```exitcode
+42
 ```

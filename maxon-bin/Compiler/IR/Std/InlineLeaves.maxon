@@ -7,7 +7,7 @@
 //     cost: MEASURED on the self-compile, `regMaskContains` — `((mask shr regNum) and 1) != 0` plus
 //     its entry guard — was 21% of the profile's self time from 14 static sites, because the body is
 //     smaller than the protocol around it (the argument moves, the `call`, the frame, the `ret`).
-//   • THE CALLED-ONCE RULE: a function with exactly one direct `call` site in the whole program is spliced
+//   • THE CALLED-ONCE RULE: a function with exactly one direct site (`call` or `tryCall`) in the whole program is spliced
 //     into its caller whatever its body holds — loops, stores, panics, `div`/`mod`, calls of every kind.
 //     The call was the function's only reason to exist as a frame, and the body moves rather than
 //     multiplies. Callees are spliced before their callers (post-order over the direct-call graph), so a
@@ -407,6 +407,7 @@ type LeafBodyScan
 	export var opCount as ElementIndex
 	export var cascadeOpCount = 0 as ElementIndex
 	export var reliesOnDeclinedCascades = false
+	export var convention = ReturnConvention.neither
 
 	static function create(verdict LeafVerdict, opCount ElementIndex) returns LeafBodyScan
 		return Self{verdict: verdict, opCount: opCount}
@@ -440,6 +441,7 @@ end 'LeafOpTally'
 // per site — stated here rather than left to be inferred from the order of two loops.
 type LeafPlan
 	var verdicts as LeafVerdictArray
+	var conventions as ConventionArray
 
 	// One past the highest ValueId each ELIGIBLE callee's body uses — the width of the value column a
 	// splice builds — and the block count it was admitted with. Zero for every other function;
@@ -474,6 +476,7 @@ type LeafPlan
 		reliesOnDeclinedCascades.resize(funcCount)
 		return Self{
 			verdicts: LeafVerdictArray.create(),
+			conventions: ConventionArray.create(),
 			valueBounds: valueBounds,
 			blockCounts: blockCounts,
 			eligibleFuncs: eligibleFuncs,
@@ -494,6 +497,7 @@ type LeafPlan
 		end 'outOfOrder'
 
 		self.verdicts.push(scan.verdict)
+		self.conventions.push(scan.convention)
 
 		match scan.verdict 'tally'
 			eligible then self.recordEligible(funcIndex, scan: scan, module: module, func: func)
@@ -540,6 +544,10 @@ type LeafPlan
 		return try self.verdicts.get(funcIndex) otherwise panic("LeafPlan.verdictOf: function index {funcIndex} is outside the {self.verdicts.count()}-function module this plan was built over")
 	end 'verdictOf'
 
+	function conventionOf(funcIndex ElementIndex) returns ReturnConvention
+		return try self.conventions.get(funcIndex) otherwise panic("LeafPlan.conventionOf: function index {funcIndex} is outside the {self.conventions.count()}-function module this plan was built over")
+	end 'conventionOf'
+
 	function isWithinLargerBudget(funcIndex ElementIndex) returns bool
 		return try self.withinLargerBudget.get(funcIndex) otherwise panic("LeafPlan.isWithinLargerBudget: function index {funcIndex} is outside the {self.withinLargerBudget.count()}-function module this plan was built over")
 	end 'isWithinLargerBudget'
@@ -578,10 +586,10 @@ end 'buildLeafPlan'
 // that is the same descent** — but the array version MATERIALIZES the index list, and this runs over
 // EVERY function in the module including the large majority that answer `notALeaf` on their first call
 // op. `InlineManagedPrimitives.expandChainFrom` walks the same halves for the same reason. A terminator
-// is never a `param`, but it IS counted and it CAN be an `errorReturn`, so the half this walk would
-// otherwise omit is exactly where a throwing body is caught.
+// is never a `param`, but it IS counted and it CAN be an `errorReturn`, the exit `terminatorRole` admits
+// for a throwing body.
 //
-// ⭐ **THE SHAPE RULES ARE ASKED IN THE SAME WALK AS THE LEAF RULE, so a body is read once**; the shape
+// ⭐ **THE SHAPE RULES ARE ASKED IN THE SAME WALK AS THE LEAF RULE, so a body's ops are read once**; the shape
 // helpers below are shared with `scanSpliceableShape`, which asks them of a called-once candidate and
 // nothing else. A leaf scan RETURNS at the first hot-path call — the commonest op there is — where
 // the shape scan has to read the whole body for its refusal reason.
@@ -647,8 +655,78 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 	var scan = LeafBodyScan.create(LeafVerdict.eligible, opCount: tally.body)
 	scan.cascadeOpCount = tally.cascade
 	scan.reliesOnDeclinedCascades = tally.body + tally.cascade > budget and not alwaysSpliced
+	scan.convention = returnConventionOf(module, func: func, meta: meta)
 	return scan
 end 'scanLeafBody'
+
+enum ReturnConvention
+	neither
+	plain
+	dual
+	mixed
+end 'ReturnConvention'
+
+typealias ConventionArray = Array with ReturnConvention
+
+function returnConventionOf(module StdModule, func IrFunction, meta StdOpMetaMemo) returns ReturnConvention
+	var leavesThroughOneRegister = false
+	var leavesThroughTwoRegisters = false
+
+	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
+		let block = module.blockAtPosition(func, position: blockIndex)
+
+		if not block.hasTerminatorOp() 'opless'
+			continue
+		end 'opless'
+
+		match exitConventionOf(module.getOp(block.terminatorIndex()), meta: meta) 'exit'
+			neither then break
+			plain then leavesThroughOneRegister = true
+			dual then leavesThroughTwoRegisters = true
+			mixed then panic("returnConventionOf: one terminator of '{String.from(func.name)}' answered `mixed` — `exitConventionOf` reads a single exit")
+		end 'exit'
+	end 'eachBlock'
+
+	if leavesThroughOneRegister and leavesThroughTwoRegisters 'inconsistent'
+		return ReturnConvention.mixed
+	end 'inconsistent'
+
+	if leavesThroughTwoRegisters 'dual'
+		return ReturnConvention.dual
+	end 'dual'
+
+	if leavesThroughOneRegister 'plain'
+		return ReturnConvention.plain
+	end 'plain'
+
+	return ReturnConvention.neither
+end 'returnConventionOf'
+
+function exitConventionOf(term StdOp, meta StdOpMetaMemo) returns ReturnConvention
+	if meta.hasRole(term, role: OpRole.errorReturn) 'secondarySlot'
+		return ReturnConvention.dual
+	end 'secondarySlot'
+
+	if meta.hasRole(term, role: OpRole.ret) 'primarySlotOnly'
+		return ReturnConvention.plain
+	end 'primarySlotOnly'
+
+	return ReturnConvention.neither
+end 'exitConventionOf'
+
+enum SiteShape
+	call
+	tryCall
+end 'SiteShape'
+
+function conventionServesSite(convention ReturnConvention, site SiteShape) returns bool
+	return match convention 'convention'
+		neither gives true
+		plain gives site == SiteShape.call
+		dual gives site == SiteShape.tryCall
+		mixed gives false
+	end 'convention'
+end 'conventionServesSite'
 
 function blockIsInAnEntryCascade(func IrFunction, block IrBlock) returns bool
 	for guard in func.paramGuards 'eachGuard'
@@ -709,17 +787,30 @@ end 'callFit'
 
 // Does this op directly call a body that declares the row? Asked through `DeadFunctionElimination`'s own
 // reference enumeration, so "which ops name a callee" stays the roster that walk already keeps rather than
-// a second one here — and a `tryCall`, a `callIndirect` and a witness call answer `false` from it, which
-// is the right answer: none of them is a site this pass rewrites.
+// a second one here — a `callIndirect` and a witness call name no callee and answer `false` — neither is
+// a site this pass rewrites; a `tryCall` answers like a `call`.
 function callIsIntoAnAlwaysSplicedBody(op StdOp, module StdModule, byName FunctionNameIndex, reference StdFunctionReference) returns bool
 	stdFunctionReferenceOf(op, byName: byName.byName, into: reference)
 
 	return match reference.kind 'reference'
 		none or
 		otherReference gives false
-		directCall gives module.getFunc(reference.funcIndex).mustBeSplicedAtEverySite
+		directCall or
+		directTryCall gives module.getFunc(reference.funcIndex).mustBeSplicedAtEverySite
 	end 'reference'
 end 'callIsIntoAnAlwaysSplicedBody'
+
+union SiteResults
+	value(resultId ValueId)
+	valueAndFlag(resultId ValueId, errorFlagId ValueId)
+end 'SiteResults'
+
+function shapeOfSite(results SiteResults) returns SiteShape
+	return match results 'site'
+		value gives SiteShape.call
+		valueAndFlag gives SiteShape.tryCall
+	end 'site'
+end 'shapeOfSite'
 
 // Whether a body has the SHAPE the splice can copy at all, whichever rule admits it — or which refusal
 // names why not.
@@ -731,7 +822,7 @@ end 'SpliceableShape'
 // The shape both rules ask of a body before their own criterion — the function-level facts, then one
 // walk of the blocks. The called-once rule asks it of every candidate; the leaf rule asks the same
 // helpers inside its own walk (`scanLeafBody`).
-function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMemo) returns SpliceableShape
+function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMemo, site SiteShape) returns SpliceableShape
 	match functionShape(func) 'shape'
 		spliceable then break
 		refused(reason) then return SpliceableShape.refused(reason)
@@ -757,10 +848,14 @@ function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMe
 			match terminatorRole(term, func: func, meta: meta) 'termRole'
 				body or
 				calling then break
-				refusing then return SpliceableShape.refused(terminatorRefusal(term, meta: meta))
+				refusing then return SpliceableShape.refused(CalledOnceRefusal.unsupportedOp)
 			end 'termRole'
 		end 'terminated'
 	end 'eachBlock'
+
+	if not conventionServesSite(returnConventionOf(module, func: func, meta: meta), site: site) 'wrongReturnConvention'
+		return SpliceableShape.refused(CalledOnceRefusal.returnConventionMismatch)
+	end 'wrongReturnConvention'
 
 	return SpliceableShape.spliceable
 end 'scanSpliceableShape'
@@ -834,14 +929,9 @@ function terminatorRole(term StdOp, func IrFunction, meta StdOpMetaMemo) returns
 		parameter then panic("terminatorRole: '{String.from(func.name)}' has a `param` op in a TERMINATOR slot")
 		body then return TerminatorRole.body
 		calling then return TerminatorRole.calling
-		refusing then return TerminatorRole.refusing
+		refusing then return TerminatorRole.body if meta.hasRole(term, role: OpRole.errorReturn) else TerminatorRole.refusing
 	end 'termRole'
 end 'terminatorRole'
-
-// Why a refusing terminator refuses: an `errorReturn` — a THROWING body's exit — is caught exactly here.
-function terminatorRefusal(term StdOp, meta StdOpMetaMemo) returns CalledOnceRefusal
-	return CalledOnceRefusal.throwing if meta.hasRole(term, role: OpRole.errorReturn) else CalledOnceRefusal.unsupportedOp
-end 'terminatorRefusal'
 
 // ⛔⛔ **THE SAFE-POINT BYTE DESCRIBES A WHOLE SYMBOL, SO EVERY BYTE INSIDE ONE MUST AGREE ON WHETHER A
 // THREAD MAY BE STOPPED THERE.** `__symtable` carries ONE flag per SYMBOL
@@ -884,6 +974,8 @@ type InlineLeafStats
 	// `splicingWouldWidenTheSafePoint`.
 	export var sitesRefusedBySafePoint as SiteCount
 
+	export var sitesRefusedByReturnConvention as SiteCount
+
 	// How many spliced parameter cascades this compile proved dead and did not copy. Reported for
 	// `ReportedLargerLeafBudget`'s reason: it is the number the row is graded on, and it should come from the
 	// compile being asked about rather than be re-derived from a corpus later.
@@ -892,7 +984,7 @@ type InlineLeafStats
 	var callersCutOffNoted as CutOffCallerSet
 
 	static function create() returns InlineLeafStats
-		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, declinedParamGuards: 0, callersCutOffFromAContinuation: FuncIndexArray.create(), callersCutOffNoted: CutOffCallerSet.create()}
+		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, sitesRefusedByReturnConvention: 0, declinedParamGuards: 0, callersCutOffFromAContinuation: FuncIndexArray.create(), callersCutOffNoted: CutOffCallerSet.create()}
 	end 'create'
 
 	function noteCallerCutOffFromAContinuation(funcIndex ElementIndex)
@@ -932,6 +1024,10 @@ type InlineLeafStats
 	function noteSafePointRefusal()
 		self.sitesRefusedBySafePoint = self.sitesRefusedBySafePoint + 1
 	end 'noteSafePointRefusal'
+
+	function noteReturnConventionRefusal()
+		self.sitesRefusedByReturnConvention = self.sitesRefusedByReturnConvention + 1
+	end 'noteReturnConventionRefusal'
 
 	function noteSizeRefusal(withinLargerBudget bool)
 		self.sitesRefusedBySize = self.sitesRefusedBySize + 1
@@ -1441,12 +1537,13 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let sizeRefusalsAtLargerBudget = stats.sitesRefusedBySizeWithinLargerBudget
 	let selfCalls = stats.selfCallSites
 	let safePointRefusals = stats.sitesRefusedBySafePoint
+	let conventionRefusals = stats.sitesRefusedByReturnConvention
 	let declinedGuards = stats.declinedParamGuards
 	let calleesSizeRefused = plan.tooManyOpsCount
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
 
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops, or {MaxInlinedColdCallLeafOps} with a cold call ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops, or {MaxInlinedColdCallLeafOps} with a cold call ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
 	end 'debugging'
 end 'spliceLeaves'
 
@@ -1465,8 +1562,8 @@ end 'spliceLeaves'
 // `StdDialect.assertCallsMatchCalleeArity` stands beside it in `BackendDispatch.buildBackend` for this
 // reason exactly.
 //
-// ⚠ **IT COUNTS EVERY REFERENCE THIS TIER CAN SEE, NOT ONLY A DIRECT CALL** — a `tryCall`, a function
-// value's `funcAddr`, an `.rdata` slot and the function-value target list all keep the body alive as a real
+// ⚠ **IT COUNTS EVERY REFERENCE THIS TIER CAN SEE, NOT ONLY A DIRECT CALL** — a surviving `call` or
+// `tryCall`, a function value's `funcAddr`, an `.rdata` slot and the function-value target list all keep the body alive as a real
 // function, which is the thing the row denies. The one door below this tier is a hand-assembled Target
 // chunk calling a name: there is no `IrFunction` behind a chunk and no op here to read it off, so a family
 // reached that way would owe its own statement.
@@ -1486,6 +1583,7 @@ export function requireAlwaysSplicedBodiesAreGone(project Project, module StdMod
 			match reference.kind 'reference'
 				none then break
 				directCall or
+				directTryCall or
 				otherReference then try requireReferenceIsNotToAnAlwaysSplicedBody(project, module: module, calleeIndex: reference.funcIndex, caller: func, byName: byName, always: always)
 			end 'reference'
 		end 'eachOp'
@@ -1612,8 +1710,10 @@ function bodyOpRefusalText(module StdModule, calleeIndex ElementIndex, byName Fu
 		for opIdx in block.bodyOps() 'eachOp'
 			let op = module.getOp(opIdx)
 
-			if leafOpFit(inlineOpRole(op, meta: meta), op: op, module: module, block: block, alwaysSpliced: true, byName: byName, reference: reference) == LeafOpFit.refuses 'thisOpRefuses'
-				return refusedOpText(op, module: module, byName: byName, reference: reference)
+			let role = inlineOpRole(op, meta: meta)
+
+			if leafOpFit(role, op: op, module: module, block: block, alwaysSpliced: true, byName: byName, reference: reference) == LeafOpFit.refuses 'thisOpRefuses'
+				return refusedOpText(op, role: role, module: module, byName: byName, reference: reference)
 			end 'thisOpRefuses'
 		end 'eachOp'
 
@@ -1623,24 +1723,35 @@ function bodyOpRefusalText(module StdModule, calleeIndex ElementIndex, byName Fu
 			match terminatorRole(term, func: module.getFunc(calleeIndex), meta: meta) 'termRole'
 				body then break
 				calling or
-				refusing then return calledOnceRefusalText(terminatorRefusal(term, meta: meta))
+				refusing then return calledOnceRefusalText(CalledOnceRefusal.unsupportedOp)
 			end 'termRole'
 		end 'terminated'
 	end 'eachBlock'
+
+	if returnConventionOf(module, func: module.getFunc(calleeIndex), meta: meta) == ReturnConvention.mixed 'noSiteReadsBothConventions'
+		return calledOnceRefusalText(CalledOnceRefusal.returnConventionMismatch)
+	end 'noSiteReadsBothConventions'
 
 	return "no rule of the inliner refuses it, so the site was minted after the last splice round"
 end 'bodyOpRefusalText'
 
 // Which op refused, said in the vocabulary a reader of the body has: a call names its callee, because the
 // fix for one is to give that callee the row too or to stop calling it.
-function refusedOpText(op StdOp, module StdModule, byName FunctionNameIndex, reference StdFunctionReference) returns String
+function refusedOpText(op StdOp, role InlineOpRole, module StdModule, byName FunctionNameIndex, reference StdFunctionReference) returns String
 	stdFunctionReferenceOf(op, byName: byName.byName, into: reference)
 
-	return match reference.kind 'reference'
-		none gives calledOnceRefusalText(CalledOnceRefusal.unsupportedOp)
-		directCall gives "it calls '{String.from(module.getFunc(reference.funcIndex).name)}', which does not declare '__Raw.splicedAtEverySite()'"
-		otherReference gives "it holds an indirect or throwing call, which is not a site this pass rewrites"
+	match reference.kind 'reference'
+		none then break
+		directCall or
+		directTryCall then return "it calls '{String.from(module.getFunc(reference.funcIndex).name)}', which does not declare '__Raw.splicedAtEverySite()'"
+		otherReference then panic("refusedOpText: a `funcAddr` refused the leaf rule — it is a body op, which `leafOpFit` admits")
 	end 'reference'
+
+	if role == InlineOpRole.calling 'anIndirectCall'
+		return "it holds an indirect or witness call, which is not a site this pass rewrites"
+	end 'anIndirectCall'
+
+	return calledOnceRefusalText(CalledOnceRefusal.unsupportedOp)
 end 'refusedOpText'
 
 // Does a ```RequiredRuntime request name this body? The same roster `irRequestedFunctions` builds its
@@ -1661,14 +1772,14 @@ end 'anIrRequestNames'
 
 // Why a called-once callee was left as a call. Counted per reason into the pass summary.
 enum CalledOnceRefusal
-	// Its one `call` site is not its only reference: a `tryCall` site, a function-value thunk, a witness or
-	// layout slot, or a name the entry stub or a hand-assembled chunk calls.
+	// Its one direct site (`call` or `tryCall`) is not its only reference: a function-value thunk, a witness
+	// or layout slot, or a name the entry stub or a hand-assembled chunk calls.
 	referencedElsewhere
 
 	// Its one site is inside itself, or it lies on a cycle of called-once callees: splicing any member
 	// would nest a body into itself.
 	recursive
-	throwing
+	returnConventionMismatch
 	byReferenceParameter
 	greenThreadStackGuard
 
@@ -1700,7 +1811,7 @@ function calledOnceRefusalText(reason CalledOnceRefusal) returns String
 	return match reason 'r'
 		referencedElsewhere gives "it is reached by more than its one call"
 		recursive gives "its one site is inside itself or a cycle of called-once callees"
-		throwing gives "it throws"
+		returnConventionMismatch gives "its exits leave through a different pair of registers than its call site reads"
 		byReferenceParameter gives "it takes a by-reference parameter"
 		greenThreadStackGuard gives "it carries the green-thread stack guard"
 		keepsItsOwnFrame gives "its body claims its own frame"
@@ -1729,6 +1840,7 @@ type CalledOnceCensus
 	var sitePositions as BlockPositionColumn
 	var siteOpPositions as BlockOpPosArray
 	var referencedElsewhere as BoolArray
+	var siteIsTryCall as BoolArray
 
 	// The enumerator's sink, refilled per op of the walk.
 	var reference as StdFunctionReference
@@ -1737,6 +1849,8 @@ type CalledOnceCensus
 		let funcCount = module.funcCount()
 		var siteCounts = SiteCountArray.create()
 		siteCounts.resize(funcCount)
+		var siteIsTryCall = BoolArray.create()
+		siteIsTryCall.resize(funcCount)
 		var callerOf = FuncIndexArray.create()
 		callerOf.resize(funcCount)
 		var sitePositions = BlockPositionColumn.create()
@@ -1745,7 +1859,7 @@ type CalledOnceCensus
 		siteOpPositions.resize(funcCount)
 		var referencedElsewhere = BoolArray.create()
 		referencedElsewhere.resize(funcCount)
-		var census = Self{siteCounts: siteCounts, callerOf: callerOf, sitePositions: sitePositions, siteOpPositions: siteOpPositions, referencedElsewhere: referencedElsewhere, reference: StdFunctionReference.create()}
+		var census = Self{siteCounts: siteCounts, callerOf: callerOf, sitePositions: sitePositions, siteOpPositions: siteOpPositions, referencedElsewhere: referencedElsewhere, siteIsTryCall: siteIsTryCall, reference: StdFunctionReference.create()}
 		census.markRoots(project, byName: byName)
 
 		// The blocks are walked directly rather than through `IrModule.liveOpIndices`, which materializes an
@@ -1863,7 +1977,14 @@ type CalledOnceCensus
 		try self.referencedElsewhere.set(funcIndex, value: true) otherwise panic("CalledOnceCensus.markReferenced: function index {funcIndex} is outside the {self.referencedElsewhere.count()}-function module")
 	end 'markReferencedIndex'
 
-	function noteCall(calleeIndex ElementIndex, from ElementIndex, position ElementIndex, opPos ElementIndex)
+	function siteShapeOf(calleeIndex ElementIndex) returns SiteShape
+		self.requireCalledOnce(calleeIndex)
+		let aTryCall = try self.siteIsTryCall.get(calleeIndex) otherwise panic("CalledOnceCensus.siteShapeOf: function index {calleeIndex} is outside the {self.siteIsTryCall.count()}-function module")
+		return SiteShape.tryCall if aTryCall else SiteShape.call
+	end 'siteShapeOf'
+
+	function noteCall(calleeIndex ElementIndex, from ElementIndex, position ElementIndex, opPos ElementIndex, shape SiteShape)
+		try self.siteIsTryCall.set(calleeIndex, value: shape == SiteShape.tryCall) otherwise panic("CalledOnceCensus.noteCall: function index {calleeIndex} is outside the {self.siteIsTryCall.count()}-function module")
 		try self.siteCounts.set(calleeIndex, value: self.siteCountOf(calleeIndex) + 1) otherwise panic("CalledOnceCensus.noteCall: function index {calleeIndex} is outside the {self.siteCounts.count()}-function module")
 		try self.callerOf.set(calleeIndex, value: from) otherwise panic("CalledOnceCensus.noteCall: function index {calleeIndex} is outside the {self.callerOf.count()}-function module")
 		try self.sitePositions.set(calleeIndex, value: position) otherwise panic("CalledOnceCensus.noteCall: function index {calleeIndex} is outside the {self.sitePositions.count()}-function module")
@@ -1878,7 +1999,8 @@ type CalledOnceCensus
 
 		match self.reference.kind 'reference'
 			none then break
-			directCall then self.noteCall(self.reference.funcIndex, from: from, position: position, opPos: opPos)
+			directCall then self.noteCall(self.reference.funcIndex, from: from, position: position, opPos: opPos, shape: SiteShape.call)
+			directTryCall then self.noteCall(self.reference.funcIndex, from: from, position: position, opPos: opPos, shape: SiteShape.tryCall)
 			otherReference then self.markReferencedIndex(self.reference.funcIndex)
 		end 'reference'
 	end 'noteReferences'
@@ -1890,7 +2012,8 @@ type CalledOnceCensus
 
 		match self.reference.kind 'reference'
 			none then break
-			directCall then panic("CalledOnceCensus: '{String.from(func.name)}' holds a direct call of function {self.reference.funcIndex} in a TERMINATOR slot — every call is a body op, and the splice cuts a block immediately past the call it replaces")
+			directCall or
+			directTryCall then panic("CalledOnceCensus: '{String.from(func.name)}' holds a direct call of function {self.reference.funcIndex} in a TERMINATOR slot — every call is a body op, and the splice cuts a block immediately past the call it replaces")
 			otherReference then self.markReferencedIndex(self.reference.funcIndex)
 		end 'reference'
 	end 'noteTerminatorReferences'
@@ -2124,6 +2247,7 @@ function siteArgsOf(module StdModule, caller IrFunction, position ElementIndex, 
 
 	match module.getOp(opIdx) 'kind'
 		call(_, callee, args) then return argsOfCensusedCall(callee, args: args, calleeIndex: calleeIndex, caller: caller, byName: byName)
+		tryCall(_, _, callee, args) then return argsOfCensusedCall(callee, args: args, calleeIndex: calleeIndex, caller: caller, byName: byName)
 		default panic("siteArgsOf: the op at position {opPos} of block {position} of '{String.from(caller.name)}' is not a direct call, where the census placed one")
 	end 'kind'
 end 'siteArgsOf'
@@ -2501,7 +2625,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			continue
 		end 'wouldWidenTheSafePoint'
 
-		match scanSpliceableShape(module, func: func, meta: meta) 'shape'
+		match scanSpliceableShape(module, func: func, meta: meta, site: census.siteShapeOf(funcIndex)) 'shape'
 			refused(reason) then refusals.add(reason.ordinal, count: 1)
 			spliceable then admitCandidate(funcIndex, census: census, candidate: candidate, pendingCallees: pendingCallees, candidateCount: candidateCount)
 		end 'shape'
@@ -3200,9 +3324,9 @@ type SiteSplicer
 	// call. It allocates nothing for a block with no site — which is nearly every block in the
 	// module — because only `considerSite` seeds the buffers.
 	//
-	// ⚠ The `StdOp` match is EXHAUSTIVE: `call` is named and so is every other variant, so a variant
-	// added later fails to compile here until it is consciously placed. A terminator is never a `call`,
-	// so the half this walk omits holds no site.
+	// ⚠ The `StdOp` match is EXHAUSTIVE: `call` and `tryCall` are named and so is every other variant, so a
+	// variant added later fails to compile here until it is consciously placed. A terminator is never a
+	// `call` or `tryCall`, so the half this walk omits holds no site.
 	function collectSites(blockRef ElementIndex) returns SiteCount
 		if self.siteBuffersSeeded 'reuse'
 			self.clearSiteBuffers()
@@ -3231,7 +3355,6 @@ type SiteSplicer
 				osAllocPages or
 				osWriteStdout or
 				rdataAddr or
-				tryCall or
 				errorReturn or
 				osExit or
 				funcAddr or
@@ -3333,7 +3456,8 @@ type SiteSplicer
 				osPathQuery or
 				osSocketOverlapped or
 				osSocketServe then break
-				call(_, callee, args) then self.considerSite(pos, callee: callee, args: args)
+				call(_, callee, args) then self.considerSite(pos, callee: callee, args: args, shape: SiteShape.call)
+				tryCall(_, _, callee, args) then self.considerSite(pos, callee: callee, args: args, shape: SiteShape.tryCall)
 			end 'kind'
 		end 'eachOp'
 
@@ -3348,7 +3472,7 @@ type SiteSplicer
 	// synthesized destructor cascades — which are installed AFTER the pipeline and so are absent from
 	// `module.functions` at this point. They are therefore never inlined BY CONSTRUCTION rather than by
 	// a roster this file would have to keep. (`mrt_panic` is not a call at all: it is an `osPanic` op.)
-	function considerSite(pos ElementIndex, callee ByteArray, args ValueIdArray)
+	function considerSite(pos ElementIndex, callee ByteArray, args ValueIdArray, shape SiteShape)
 		let calleeIndex = try self.byName.byName.get(callee) otherwise return
 
 		if calleeIndex == self.funcIndex 'selfCall'
@@ -3360,20 +3484,25 @@ type SiteSplicer
 		end 'selfCall'
 
 		match self.admission 'rule'
-			leaves(plan) then self.considerLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args)
+			leaves(plan) then self.considerLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args, shape: shape)
 			calledOnce(wave) then self.considerCalledOnceSite(pos, calleeIndex: calleeIndex, wave: wave)
 		end 'rule'
 	end 'considerSite'
 
-	function considerLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray)
+	function considerLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray, shape SiteShape)
 		match plan.verdictOf(calleeIndex) 'verdict'
-			eligible then self.considerEligibleLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args)
+			eligible then self.considerEligibleLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args, shape: shape)
 			tooManyOps then self.stats.noteSizeRefusal(plan.isWithinLargerBudget(calleeIndex))
 			notALeaf then break
 		end 'verdict'
 	end 'considerLeafSite'
 
-	function considerEligibleLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray)
+	function considerEligibleLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray, shape SiteShape)
+		if not conventionServesSite(plan.conventionOf(calleeIndex), site: shape) 'readsAnotherConvention'
+			self.stats.noteReturnConventionRefusal()
+			return
+		end 'readsAnotherConvention'
+
 		if plan.reliesOnDeclinedCascadesAt(calleeIndex) and not self.declinedGuards(self.module.getFunc(calleeIndex), args: args).declinesEveryGuard() 'cascadesStayAtThisSite'
 			self.stats.noteSizeRefusal(plan.isWithinLargerBudget(calleeIndex))
 			return
@@ -3455,7 +3584,6 @@ type SiteSplicer
 			osAllocPages or
 			osWriteStdout or
 			rdataAddr or
-			tryCall or
 			errorReturn or
 			osExit or
 			funcAddr or
@@ -3557,7 +3685,8 @@ type SiteSplicer
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then self.refuseNotTheSplitCall()
-			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId, siteSpan: siteSpan)
+			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, results: SiteResults.value(resultId), siteSpan: siteSpan)
+			tryCall(resultId, errorFlagId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, results: SiteResults.valueAndFlag(resultId, errorFlagId: errorFlagId), siteSpan: siteSpan)
 		end 'site'
 
 		var pred = self.blockAt(predRef)
@@ -3577,7 +3706,7 @@ type SiteSplicer
 
 	// ⭐⭐ **THE SPLICE.** `predRef` ends in the call (about to be dropped); `contRef` holds everything
 	// that followed it, and — if this is the block's last site — the block's whole exit.
-	function splice(predRef ElementIndex, contRef ElementIndex, calleeIndex ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, siteSpan SpanId)
+	function splice(predRef ElementIndex, contRef ElementIndex, calleeIndex ElementIndex, callee ByteArray, args ValueIdArray, results SiteResults, siteSpan SpanId)
 		requireCallNamesCallee(callee, calleeIndex: calleeIndex, caller: self.func, byName: self.byName)
 		var calleeFunc = self.module.getFunc(calleeIndex)
 
@@ -3593,9 +3722,9 @@ type SiteSplicer
 		let declined = self.declinedGuards(calleeFunc, args: args)
 		self.stats.noteDeclinedParamGuards(declined.declinedCount)
 		var blocks = self.mintCopiedBlocks(calleeFunc, guards: declined, spliceSite: spliceSite)
-		self.attachContinuationArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
+		self.attachContinuationArgs(contRef, calleeFunc: calleeFunc, results: results)
 		self.aReturnReachesTheContinuation = false
-		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst)
+		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst, shape: shapeOfSite(results))
 
 		if not self.aReturnReachesTheContinuation 'theCalleeNeverReturns'
 			self.stats.noteCallerCutOffFromAContinuation(self.funcIndex)
@@ -3831,19 +3960,33 @@ type SiteSplicer
 	// void call's result is not a value any op can name), and there is no `ret v` in the body to feed a
 	// block arg with.
 	//
-	// A void callee touches nothing here — no array is built for it, which is the difference between
+	// A void callee at a `call` site touches nothing here; at a `tryCall` site it still gets both args. No array is built for it, which is the difference between
 	// "the continuation declares no args" and "it declares an empty list", and this pass makes thousands
 	// of continuations.
-	function attachContinuationArg(contRef ElementIndex, calleeFunc IrFunction, resultId ValueId)
+	function attachContinuationArgs(contRef ElementIndex, calleeFunc IrFunction, results SiteResults)
+		match results 'site'
+			value(resultId) then self.attachValueArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
+			valueAndFlag(resultId, errorFlagId) then self.attachValueAndFlagArgs(contRef, calleeFunc: calleeFunc, resultId: resultId, errorFlagId: errorFlagId)
+		end 'site'
+	end 'attachContinuationArgs'
+
+	function attachValueArg(contRef ElementIndex, calleeFunc IrFunction, resultId ValueId)
 		match calleeFunc.returnType 'rt'
 			void then break
 			value(inner) then attachBlockArgs(self.blockAt(contRef), valueIds: self.returnedValues(calleeFunc, valueId: resultId), argType: inner)
 		end 'rt'
-	end 'attachContinuationArg'
+	end 'attachValueArg'
+
+	function attachValueAndFlagArgs(contRef ElementIndex, calleeFunc IrFunction, resultId ValueId, errorFlagId ValueId)
+		var blockArgs = IrBlockArgArray.create()
+		blockArgs.push(IrBlockArg.create(resultId, argType: stdDefaultPrimaryReturnType(calleeFunc.returnType)))
+		blockArgs.push(IrBlockArg.create(errorFlagId, argType: StdType.i64))
+		attachTypedBlockArgs(self.blockAt(contRef), blockArgs: blockArgs)
+	end 'attachValueAndFlagArgs'
 
 	// Copy every block's phis, ops and exit into the fresh blocks `mintCopiedBlocks` minted, in the same
 	// order and skipping the same declined cascades — so the two walks pair up positionally.
-	function copyBodies(calleeFunc IrFunction, contRef ElementIndex, blocks SpliceBlocks, subst ValueIdArray)
+	function copyBodies(calleeFunc IrFunction, contRef ElementIndex, blocks SpliceBlocks, subst ValueIdArray, shape SiteShape)
 		var copied = 0 as ElementIndex
 		let reachable = reachableBlockPositions(self.module, func: calleeFunc)
 
@@ -3863,7 +4006,7 @@ type SiteSplicer
 			// the real result, and that merge is a phi — which pins a fresh record: once its call is gone
 			// the record is `promoteStackRecords`' to lift, and that pass refuses one reaching a phi. The
 			// copy leaves the CALLER the same way instead.
-			if self.copyBody(calleeBlockRef, freshRef: freshRef, contRef: contRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc) 'aborts'
+			if self.copyBody(calleeBlockRef, freshRef: freshRef, contRef: contRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc, shape: shape) 'aborts'
 				appendDeadReturn(self.module, func: self.func, block: self.blockAt(freshRef), ids: self.valueIds())
 
 				// The dead return's constants are the last ids minted, and every one of them is defined.
@@ -3874,7 +4017,7 @@ type SiteSplicer
 
 	// One block's phis, ops and — unless it aborts — its exit. Answers whether the copy still owes the
 	// aborting block's dead return.
-	function copyBody(calleeBlockRef ElementIndex, freshRef ElementIndex, contRef ElementIndex, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction) returns bool
+	function copyBody(calleeBlockRef ElementIndex, freshRef ElementIndex, contRef ElementIndex, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction, shape SiteShape) returns bool
 		view calleeBlock = self.blockAt(calleeBlockRef)
 		self.copyBlockArgs(calleeBlock, freshRef: freshRef, subst: subst)
 
@@ -3882,7 +4025,7 @@ type SiteSplicer
 			return true
 		end 'aborts'
 
-		self.copyBlockExit(calleeBlock, freshRef: freshRef, contRef: contRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc)
+		self.copyBlockExit(calleeBlock, freshRef: freshRef, contRef: contRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc, shape: shape)
 		return false
 	end 'copyBody'
 
@@ -3950,16 +4093,17 @@ type SiteSplicer
 		self.highestDefined = self.def.maxDefinedId(self.highestDefined)
 	end 'noteClonedDefs'
 
-	// ⭐ **A `ret` BECOMES A BRANCH TO THE CONTINUATION carrying what it was returning; every other
-	// terminator is cloned with its block targets remapped.** A callee with two returns therefore gives
+	// ⭐ **A `ret` OR AN `errorReturn` BECOMES A BRANCH TO THE CONTINUATION carrying what it was returning —
+	// `errorReturn` its value and flag; every other terminator is cloned with its block targets remapped.** A callee with two returns therefore gives
 	// the continuation two incoming edges into one block arg, which is precisely what a phi is for.
-	function copyBlockExit(calleeBlock IrBlock, freshRef ElementIndex, contRef ElementIndex, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction)
+	function copyBlockExit(calleeBlock IrBlock, freshRef ElementIndex, contRef ElementIndex, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction, shape SiteShape)
 		if not calleeBlock.hasTerminatorOp() 'oplessTerminator'
 			self.carryOplessExit(calleeBlock, freshRef: freshRef, calleeFunc: calleeFunc)
 			return
 		end 'oplessTerminator'
 
 		var term = self.module.getOp(calleeBlock.terminatorIndex())
+		self.requireExitServesSite(term, shape: shape, calleeFunc: calleeFunc)
 
 		// The cloned exit is the callee's terminator, so it answers to the callee's own line — the body
 		// walk left the cursor on this block's LAST op, which is a different statement.
@@ -3983,7 +4127,6 @@ type SiteSplicer
 			osWriteStdout or
 			rdataAddr or
 			tryCall or
-			errorReturn or
 			osExit or
 			funcAddr or
 			callIndirect or
@@ -4088,8 +4231,15 @@ type SiteSplicer
 			switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
 			ret(retValId) then self.returnToContinuation(freshRef, contRef: contRef, argIds: self.returnedValues(calleeFunc, valueId: clonedValue(retValId, subst: subst)))
 			retVoid then self.returnToContinuation(freshRef, contRef: contRef, argIds: ValueIdArray.create())
+			errorReturn(retValId, errorFlagId) then self.returnToContinuation(freshRef, contRef: contRef, argIds: twoArgs(clonedValue(retValId, subst: subst), second: clonedValue(errorFlagId, subst: subst)))
 		end 'exit'
 	end 'copyBlockExit'
+
+	function requireExitServesSite(term StdOp, shape SiteShape, calleeFunc IrFunction)
+		if not conventionServesSite(exitConventionOf(term, meta: self.meta), site: shape) 'wrongConvention'
+			panic("SiteSplicer.copyBlockExit: '{String.from(calleeFunc.name)}' leaves through an exit that its call site in '{String.from(self.func.name)}' does not read — `conventionServesSite` refuses the site before any body is copied")
+		end 'wrongConvention'
+	end 'requireExitServesSite'
 
 	// ⚠ **A BLOCK CAN HAVE NO TERMINATOR OP AT ALL, AND THAT IS NOT A MALFORMED BLOCK.** The parser marks
 	// the continuation after a fully-terminated `if`/`else` — or after a `match` whose every arm breaks

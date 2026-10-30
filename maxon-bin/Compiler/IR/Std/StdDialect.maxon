@@ -1602,10 +1602,9 @@ export union StdOp
 	// and `errorFlagId` to the error-flag register (R10 / x9), then the return terminator. This is the
 	// ONE place the second register is written, and `role: OpRole.errorReturn` is what names it.
 	// `isPure: true` mirrors `ret`.
-	// `isUnsupportedInInlineBody: true`: the splice rewrites a callee's `ret` into a branch carrying the
-	// value to the site's continuation, and a dual-register exit has a second register the continuation
-	// takes no argument for — so a throwing body is refused, which `terminatorRefusal` reports as
-	// `CalledOnceRefusal.throwing`.
+	// `isUnsupportedInInlineBody: true` refuses it anywhere but a block's terminator slot. There the splice
+	// copies it at a `tryCall` site whose convention it serves, as a branch carrying the value and the flag
+	// to the continuation's two block args.
 	errorReturn(retValId ValueId, errorFlagId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.errorReturn, isPure: true, isUnsupportedInInlineBody: true, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// Terminate the process with exit code `codeId` — the primitive a user `panic(...)` ends on (via the

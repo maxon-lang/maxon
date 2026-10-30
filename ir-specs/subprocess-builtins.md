@@ -195,14 +195,39 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect __str_unshare
     x64.storeBaseDispReg.word64 [r14 + 8], r8
+  __il_body#11:
     x64.movRegReg rcx, r14
-    x64.movRegReg rdx, rbx
-    x64.callDirect Subprocess.run
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r14
+    x64.callDirect Configuration.create
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 r15, [r13 + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_retain
     x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.movRegReg rcx, r13
+    x64.callDirect Configuration.run
+    x64.movRegReg rbx, r8
+    x64.movRegReg r15, r10
+    x64.cmpRegImm32 r15, 0
+    x64.jcc equal, tryok#12
+  tryerr#13:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Configuration
+  exitterminal#14:
+    x64.movRegImm32 rbx, 0
+    x64.cmpRegImm32 r15, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp __il_cont#10
+  tryok#12:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Configuration
+  __il_cont#10:
     x64.storeSlotReg slot2, rbx
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-  tryok:
+  tryok#1:
     x64.movRegReg rcx, r14
     x64.callDirect __destruct_Executable
     x64.callDirect Scheduler.counters
@@ -214,10 +239,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 72]
     x64.subRegReg r14, r14, rax
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-  __il_body#13:
+  __il_body#19:
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.storeSlotReg slot4, r12
-  __il_cont#12:
+  __il_cont#18:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.leaRegRdata rdx, [rip + __str_rec_78]  ; "hi"
     x64.callDirect String.startsWith
@@ -371,10 +396,10 @@ func @main {
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot9
     x64.callDirect __mm_decref
-  __il_body#11:
+  __il_body#17:
     x64.loadRegSlot rcx, slot17
     x64.callDirect __write_stdout
-  __il_cont#10:
+  __il_cont#16:
     x64.loadRegSlot rcx, slot17
     x64.callDirect __str_decref
     x64.loadRegSlot rax, slot4
@@ -396,7 +421,7 @@ func @main {
   exitdrop#6:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
-  exitterminal:
+  exitterminal#3:
     x64.loadRegSlot r8, slot4
     x64.epilogue 232
     x64.popReg r15
@@ -406,7 +431,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
-  tryerr:
+  tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_84]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -942,14 +967,39 @@ func @main {
     arm64.bl __str_retain
     arm64.bl __str_unshare
     arm64.storeBaseDispReg.word64 [x22 + 8], x0
+  __il_body#11:
     arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x19
-    arm64.bl Subprocess.run
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x22
+    arm64.bl Configuration.create
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
     arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.movRegReg x0, x21
+    arm64.bl Configuration.run
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x23, x9
+    arm64.cmp x23, 0
+    arm64.b.eq tryok#12
+  tryerr#13:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Configuration
+  exitterminal#14:
+    arm64.movImm x19, 0
+    arm64.cmp x23, 0
+    arm64.b.ne tryerr#2
+    arm64.b __il_cont#10
+  tryok#12:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Configuration
+  __il_cont#10:
     arm64.storeSlotReg slot2, x19
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr
-  tryok:
+  tryok#1:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_Executable
     arm64.bl Scheduler.counters
@@ -961,10 +1011,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x20 + 72]
     arm64.sub x20, x0, x1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-  __il_body#13:
+  __il_body#19:
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.storeSlotReg slot4, x22
-  __il_cont#12:
+  __il_cont#18:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.leaRdata x1, __str_rec_78  ; "hi"
     arm64.bl String.startsWith
@@ -1102,10 +1152,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#11:
+  __il_body#17:
     arm64.loadRegSlot x0, slot6
     arm64.bl __write_stdout
-  __il_cont#10:
+  __il_cont#16:
     arm64.loadRegSlot x0, slot6
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot4
@@ -1127,7 +1177,7 @@ func @main {
   exitdrop#6:
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
-  exitterminal:
+  exitterminal#3:
     arm64.loadRegSlot x0, slot4
     arm64.loadRegSlot x19, slot16
     arm64.loadRegSlot x20, slot17
@@ -1141,7 +1191,7 @@ func @main {
     arm64.loadRegSlot x28, slot25
     arm64.epilogue 224
     arm64.retIndirect
-  tryerr:
+  tryerr#2:
     arm64.leaRdata x0, __str_blob_84  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1718,14 +1768,39 @@ func @main {
     arm64.bl __str_retain
     arm64.bl __str_unshare
     arm64.storeBaseDispReg.word64 [x22 + 8], x0
+  __il_body#11:
     arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x19
-    arm64.bl Subprocess.run
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x22
+    arm64.bl Configuration.create
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
     arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.movRegReg x0, x21
+    arm64.bl Configuration.run
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x23, x9
+    arm64.cmp x23, 0
+    arm64.b.eq tryok#12
+  tryerr#13:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Configuration
+  exitterminal#14:
+    arm64.movImm x19, 0
+    arm64.cmp x23, 0
+    arm64.b.ne tryerr#2
+    arm64.b __il_cont#10
+  tryok#12:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Configuration
+  __il_cont#10:
     arm64.storeSlotReg slot2, x19
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr
-  tryok:
+  tryok#1:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_Executable
     arm64.bl Scheduler.counters
@@ -1737,10 +1812,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x20 + 72]
     arm64.sub x20, x0, x1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-  __il_body#13:
+  __il_body#19:
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.storeSlotReg slot4, x22
-  __il_cont#12:
+  __il_cont#18:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.leaRdata x1, __str_rec_78  ; "hi"
     arm64.bl String.startsWith
@@ -1878,10 +1953,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#11:
+  __il_body#17:
     arm64.loadRegSlot x0, slot6
     arm64.bl __write_stdout
-  __il_cont#10:
+  __il_cont#16:
     arm64.loadRegSlot x0, slot6
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot4
@@ -1903,7 +1978,7 @@ func @main {
   exitdrop#6:
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
-  exitterminal:
+  exitterminal#3:
     arm64.loadRegSlot x0, slot4
     arm64.loadRegSlot x19, slot16
     arm64.loadRegSlot x20, slot17
@@ -1917,7 +1992,7 @@ func @main {
     arm64.loadRegSlot x28, slot25
     arm64.epilogue 224
     arm64.retIndirect
-  tryerr:
+  tryerr#2:
     arm64.leaRdata x0, __str_blob_84  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
