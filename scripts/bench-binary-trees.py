@@ -32,7 +32,6 @@ can be verified.
 Exit codes: 0 ok; 1 a verification failure; 2 a build failure; 3 usage.
 """
 import argparse
-import datetime
 import json
 import os
 import re
@@ -117,8 +116,7 @@ def main():
 
         out_dir = os.path.abspath(args.out_dir)
         os.makedirs(out_dir, exist_ok=True)
-        head, dirty = bench_common.tree_identity(bench_common.REPO)
-        today = datetime.date.today().isoformat()
+        context = bench_common.session_context()
         maxon_arms = [bench_common.build_arm(arm, out_dir, args.source, SOURCE_STEM) for arm in plan]
         bounds = agreed_bounds(maxon_arms)
         smallest_depth = bounds[BOUND_SMALLEST_DEPTH]
@@ -128,7 +126,7 @@ def main():
     except (UsageFailure, BuildFailure) as e:
         return bench_common.report_failure(e)
 
-    print(f"bench-binary-trees  {today}  head {head}{'*' if dirty else ''}  n={n}  runs={args.runs}  warmup={args.warmup}  (no C arm)")
+    print(f"bench-binary-trees  {context['today']}  head {context['head']}{'*' if context['dirty'] else ''}  n={n}  runs={args.runs}  warmup={args.warmup}  (no C arm)")
     for arm in maxon_arms:
         print(f"  {arm['label']}: {bench_common.describe_identity(arm['identity'])}  exe {arm['exe_bytes']:,} B")
     print(f"  program: {bench_common.describe_sources({arm['label']: {SOURCE_STEM: arm['source_sha256']} for arm in maxon_arms})}")
@@ -153,7 +151,7 @@ def main():
     bench_common.print_timing_table([(arm["label"], stats[arm["label"]], control) for arm in maxon_arms])
 
     if args.json:
-        payload = {"date": today, "head": head, "dirty": dirty, "n": n, "runs": args.runs,
+        payload = {"date": context["today"], "head": context["head"], "dirty": context["dirty"], "n": n, "runs": args.runs,
                    "stats": stats, "arms": maxon_arms}
         with open(os.path.join(out_dir, "last-run.json"), "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2)

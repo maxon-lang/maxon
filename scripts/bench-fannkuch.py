@@ -32,7 +32,6 @@ of a --source inside this tree, so an A/B across a change to the example compare
 Exit codes: 0 ok; 1 a verification failure (no log row is written); 2 a build failure; 3 usage.
 """
 import argparse
-import datetime
 import importlib.util
 import json
 import os
@@ -202,8 +201,7 @@ def main():
 
         os.makedirs(out_dir, exist_ok=True)
         census = load_census()
-        head, dirty = bench_common.tree_identity(bench_common.REPO)
-        today = datetime.date.today().isoformat()
+        context = bench_common.session_context()
 
         # Ref arms first: an A/B's control is the pre-change ref, and the self-compile band is
         # measured against the FIRST arm.
@@ -218,7 +216,7 @@ def main():
     except (bench_common.UsageFailure, bench_common.BuildFailure) as e:
         return bench_common.report_failure(e)
 
-    print(f"bench-fannkuch  {today}  head {head}{'*' if dirty else ''}  n={args.n}  runs={args.runs}  warmup={args.warmup}")
+    print(f"bench-fannkuch  {context['today']}  head {context['head']}{'*' if context['dirty'] else ''}  n={args.n}  runs={args.runs}  warmup={args.warmup}")
     if c_exe:
         print(f"  C: {clang_line}  {' '.join(CLANG_FLAGS)}  (no -fopenmp)")
     for arm in maxon_arms:
@@ -317,14 +315,14 @@ def main():
             if arm["label"] in self_compiles:
                 note = f"{note}; self-compile {bench_common.fmt_ms(self_compiles[arm['label']]['ms'])} ms"
             bench_common.append_log_rows(LOG_PATH, LOG_HEADER, [[
-                today, head, bench_common.tree_state(dirty), str(args.n), str(args.runs), c_cell,
+                context["today"], context["head"], bench_common.tree_state(context["dirty"]), str(args.n), str(args.runs), c_cell,
                 f"{bench_common.fmt_ms(s['min'])} / {bench_common.fmt_ms(s['median'])}", ratio, f"{arm['exe_bytes']:,}",
                 str(censuses[arm["label"]]["ops"]), arm["label"], note]])
         print()
         print(f"  {len(maxon_arms)} row(s) appended to {os.path.relpath(LOG_PATH, bench_common.REPO)}")
 
     if args.json:
-        payload = {"date": today, "head": head, "dirty": dirty, "n": args.n, "runs": args.runs,
+        payload = {"date": context["today"], "head": context["head"], "dirty": context["dirty"], "n": args.n, "runs": args.runs,
                    "clang": clang_line, "clang_flags": CLANG_FLAGS, "stats": stats,
                    "arms": [{k: v for k, v in arm.items()} for arm in maxon_arms],
                    "census": censuses, "profiles": profiles, "self_compile": self_compiles,
