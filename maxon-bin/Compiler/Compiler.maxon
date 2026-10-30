@@ -1128,11 +1128,11 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// EVERY compile, so a `Clock` no path from `main` reaches must be invisible to every
 	// pre-elimination pass that examines a body — else its `__gt_now_ns`/`__clock_now_unix_s` calls
 	// would install the scheduler + wall-clock `.data` for a program that reads no clock
-	// (`scanRuntimeUsage`), and refuse to compile at all on wasm/arm64 (`checkCalls`'s E3104 target
-	// gate). Computed ONCE here — stdlib AND unreachable from `main`, plus which of the REACHABLE
-	// ones need the x64-windows substrate — and stored on the project so every consumer reads the
-	// identical derivation. USER functions are never in it, so nothing about a stdlib-free program
-	// changes. See StdlibSource for why the reachability is exact here (a stdlib function is reached
+	// (`scanRuntimeUsage`), and refuse to compile at all on a target that lacks them (`checkCalls`'s
+	// E3104 target gate). Computed ONCE here — stdlib AND unreachable from `main` — and stored on the
+	// project so every consumer reads the identical derivation; `semanticCheck` adds which of the
+	// REACHABLE ones reach a host entry the target lacks. USER functions are never in it, so nothing
+	// about a stdlib-free program changes. See StdlibSource for why the reachability is exact here (a stdlib function is reached
 	// only by a direct call or a taken address, never by a witness or `.rdata` edge).
 	//
 	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL

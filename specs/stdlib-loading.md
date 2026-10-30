@@ -439,6 +439,21 @@ end 'main'
 error E3104: <fragment>:3:20: 'Process.id' lowers to the runtime entry '__proc_pid', which has no wasm32-wasi implementation
 ```
 
+<!-- test: stdlib-loading.a-body-reaching-a-provided-and-a-refused-entry-is-refused-on-wasm -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+`HttpClient.get` reads the monotonic clock, which wasm32-wasi provides, and dials a socket, which it does not.
+A body that reaches both is refused at the crossing, and the diagnostic names the entry the target lacks.
+```maxon
+function main() returns ExitCode
+	let response = try HttpClient.get("http://127.0.0.1:9/") otherwise return 4
+	print("{response.body().byteLength()}\n")
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:32: 'HttpClient.get' lowers to the runtime entry '__ms_tcp_connect', which has no wasm32-wasi implementation
+```
+
 <!-- test: stdlib-loading.unreached-user-helper-is-still-refused -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The other side of the reachability asymmetry: `reader` is the program's own function, so the call to

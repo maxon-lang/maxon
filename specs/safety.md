@@ -1209,12 +1209,15 @@ Stack trace:
 ```
 
 <!-- test: unbounded-recursion-on-a-green-thread-panics-with-stack-overflow -->
+<!-- unsupported-targets: wasm32-wasi -->
 <!-- runs: alone -->
 ### Unbounded recursion on a green thread panics `stack overflow` too
 The `sleep` runs the scheduler, which puts `main` on a green thread, whose stack grows on demand instead of
 faulting. Growth stops at 1 GiB, and the recursion that asks for more stops with the same line, trace and
 exit code as one that runs an OS thread's stack out — reported from the frame whose entry asked. The case
 grows a stack to that limit and the last growth holds both copies, so it runs with no other case beside it.
+`wasm32-wasi` is excluded: its `sleep` is a blocking host wait with no scheduler behind it, so `main` stays
+on the engine's own call stack and running out of that is wasmtime's own trap.
 ```maxon
 typealias Depth = int(0 to i64.max)
 

@@ -36,7 +36,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// so every pass below (and the whole backend) sees the member the call actually meant.
 	resolveOverloadedCalls(project, module: module, signatures: signatures, funcNames: funcNames)
 	try requireStillWanted(project)
-	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(module)
+	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(module, target: project.target)
 	var summaryIndex = CallSummaryIndex.create(project, module: module, signatures: signatures, funcIndexByName: funcNames.byName, funcCount: funcNames.functions.count())
 	settleBrandAdoption(project, module: module, signatures: signatures, calls: summaryIndex)
 	project.functionValueConventions = buildFunctionValueConventions(project, module: module, signatures: signatures, calls: summaryIndex)
@@ -5726,8 +5726,8 @@ end 'opIsTheCompilersOwn'
 //     builtin lowers to ONE entry, so the callee name is the whole test.
 //   • a STDLIB function whose body reaches one, directly or through other stdlib functions
 //     (`Clock.elapsedMs` → `Clock.nowMs` → `__gt_now_ns`, and `sleep` → `__gt_sleep`).
-//     `stdlibSubstrateEntries` computed which, and which entry each reaches; this is where that fact
-//     becomes a refusal.
+//     `stdlibSubstrateEntries` computed which, and the entry each reaches that the target lacks; this
+//     is where that fact becomes a refusal.
 //
 // ⚠ **THE SECOND KIND IS BLAMED AT THE CROSSING, WHICH IS THE POINT.** Stdlib source is compiled as part of
 // the program, so refusing it inside its own body positions the error at an absolute
@@ -5771,26 +5771,14 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex E
 	end 'nothingRefusableHere'
 
 	// ⭐ **THE TWO QUESTIONS, ASKED IN ORDER: what does this callee NEED, and does this target PROVIDE it?**
-	// They were one bool until arm64-macOS landed a file surface, at which point a single answer could no
-	// longer be right for two families on one target — see `Compiler/TargetFacilities.maxon`.
+	// One bool cannot be right for two families on a target that has landed only one — see
+	// `Compiler/TargetFacilities.maxon`.
 	if calleeNeedsFacilityTargetLacks(project.target, callee: callee) 'compilerOwnedEntry'
 		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: TargetUnsupportedUnnamedSubject, entry: callee)
 		return
 	end 'compilerOwnedEntry'
 
 	if let entry = try project.libraryFacts.substrateEntries.get(callee) 'stdlibCrossing'
-		// ⭐⭐ **THE CROSSING ASKS THE FACILITY TABLE TOO, AND BEFORE ANYTHING ELSE — WITHOUT THIS, A LANDED
-		// FAMILY IS STILL REFUSED THROUGH STDLIB.** The fixpoint is target-blind by design
-		// (`StdlibSource.noteSubstrateCallee`), so `substrateEntries` holds an entry for every stdlib body
-		// that reaches ANY host facility, on every target. While x64-windows was the only provider, "this
-		// map has an entry" and "this target cannot serve it" were the same sentence and the test was
-		// omitted; they part company the moment a second lane lands a family, and a `File.readText` on
-		// arm64-macOS would be refused at the crossing with the direct `__mf_open_read` call already legal
-		// four lines up.
-		if not calleeNeedsFacilityTargetLacks(project.target, callee: entry) 'targetProvidesIt'
-			return
-		end 'targetProvidesIt'
-
 		// ⭐⭐ **E3074 TAKES THE CROSSING AHEAD OF E3104 WHEN THE TARGET CAN NEVER HOST A CHILD PROCESS.**
 		// The two codes are two DIFFERENT facts about one call and both have to survive: E3104 says this
 		// target has not lowered the entry yet — a statement about this compiler's progress — while E3074
@@ -5949,9 +5937,9 @@ end 'requireFunctionValueTargetTakesNoWitness'
 // entry produces the same E3104 differing in the name it quotes. It does not:
 // `requireTargetSupportsCallee` reads the entry to CHOOSE THE
 // DIAGNOSTIC — a subprocess entry on WASI answers E3074 (*subprocess can NEVER exist here*, with a `#if`
-// to write) and every other answers E3104 (*x64-windows only AT THIS RUNG*). Those are different claims with
-// different advice, so a body reaching both must not have its code decided by which seed the worklist
-// drained first.
+// to write) and every other answers E3104 (*this target has no lowering for the entry yet*). Those are
+// different claims with different advice, so a body reaching both must not have its code decided by which
+// seed the worklist drained first.
 //
 // ⚠ **NO STDLIB BODY IN THE CORPUS REACHES BOTH BANDS TODAY, so the old rule was stable BY ACCIDENT OF THE
 // CORPUS rather than by construction** — which is exactly the kind of accident this project keeps paying for.

@@ -1243,10 +1243,13 @@ r=716508
 ```
 
 <!-- test: async-stack-growth.main-recurses-deeper-than-the-os-stack -->
+<!-- unsupported-targets: wasm32-wasi -->
 **`main` IS A GREEN THREAD, SO ITS STACK GROWS LIKE EVERY OTHER ONE.** Two million nested calls need tens of
-megabytes on every lane — far past the 1 MB a Windows main thread reserves and the 8 MB a Linux or macOS one gets. In Go the
+megabytes on every native lane — far past the 1 MB a Windows main thread reserves and the 8 MB a Linux or macOS one gets. In Go the
 main goroutine's stack grows like any goroutine's, to a limit of a gigabyte. The `sleep` makes this a program
-that runs the scheduler, which is what puts `main` on a green thread at all.
+that runs the scheduler, which is what puts `main` on a green thread at all. `wasm32-wasi` is excluded: its `sleep`
+is a blocking host wait with no scheduler behind it, `main` stays on the engine's own call stack, and
+running out of that is wasmtime's own trap.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

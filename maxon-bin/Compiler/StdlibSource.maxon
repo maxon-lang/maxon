@@ -3,7 +3,7 @@
 //
 //   1. WHICH STDLIB FUNCTIONS THIS PROGRAM CANNOT REACH — code dead-function elimination will drop
 //      before the back end, so no pre-elimination pass may let it decide anything about the program.
-//   2. WHICH STDLIB FUNCTIONS NEED THE x64-WINDOWS SUBSTRATE, and which runtime entry each one reaches —
+//   2. WHICH STDLIB FUNCTIONS REACH A HOST ENTRY THE TARGET LACKS, and which entry each one reaches —
 //      the fact a user's own call site is refused with, so a target rejection names the stdlib function
 //      THEY wrote instead of a line inside `stdlib/`.
 //
@@ -198,9 +198,9 @@ export typealias FunctionNameSet = Set with ByteArray
 // (There is no typealias for it: `typealias X = bool` is not legal Maxon, and a one-word alias for a
 // primitive would be a name to keep in step rather than a fact to state. The header above is the fact.)
 
-// A stdlib function name -> the x64-windows-only runtime entry its body reaches, directly or through
-// other stdlib functions. Membership IS "this function needs the Win32 substrate", so the map is its own
-// mark column and there is no second set to keep in step with it.
+// A stdlib function name -> the host entry this compile's target lacks that its body reaches, directly
+// or through other stdlib functions. Membership IS "this function cannot be lowered for the target", so
+// the map is its own mark column and there is no second set to keep in step with it.
 export typealias StdlibSubstrateEntryMap = Map with (ByteArray, readonly ByteArray)
 
 // Stdlib function name -> its DENSE node index in the substrate fixpoint's call graph. A distinct alias
@@ -291,8 +291,8 @@ export type LibraryFacts
 	// under `unreachedRuntimeTier` instead, which answers the narrower question its readers may ask.
 	export let unreachable as FunctionNameSet
 
-	// The REACHABLE stdlib functions that need the x64-windows substrate, and which runtime entry each
-	// one reaches. Read at a call site that crosses from user code into stdlib, to refuse the program on
+	// The REACHABLE stdlib functions that reach a host entry this compile's target lacks, and which
+	// entry each one reaches. Read at a call site that crosses from user code into stdlib, to refuse the program on
 	// a target that cannot lower it — at the user's own span.
 	export let substrateEntries as StdlibSubstrateEntryMap
 
@@ -384,8 +384,8 @@ export type LibraryFacts
 	// Asked right after `SemanticCheck.resolveOverloadedCalls` and not by `deriveLibraryFacts`: before
 	// resolution a call to an overloaded name carries the first member's name, so a forwarding
 	// overload would hide its sibling's entry.
-	export function withSubstrateEntriesOf(module MaxonModule) returns LibraryFacts
-		let entries = stdlibSubstrateEntries(module, stdlibNames: self.substrateNodes, unreachable: self.unreachable)
+	export function withSubstrateEntriesOf(module MaxonModule, target Target) returns LibraryFacts
+		let entries = stdlibSubstrateEntries(module, stdlibNames: self.substrateNodes, unreachable: self.unreachable, target: target)
 		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes)
 	end 'withSubstrateEntriesOf'
 end 'LibraryFacts'
@@ -1859,7 +1859,7 @@ function anyCalleeIsIn(callees NameRoster, stdlib FunctionNameSet) returns bool
 	return false
 end 'anyCalleeIsIn'
 
-// ⭐ **WHICH STDLIB FUNCTIONS NEED THE x64-WINDOWS SUBSTRATE, AND WHICH RUNTIME ENTRY EACH REACHES.**
+// ⭐ **WHICH STDLIB FUNCTIONS REACH A HOST ENTRY THE TARGET LACKS, AND WHICH ENTRY EACH REACHES.**
 // The fact a user's crossing call is blamed with, so the refusal names the stdlib function they wrote
 // instead of a line inside `stdlib/`.
 //
@@ -1880,9 +1880,9 @@ end 'anyCalleeIsIn'
 // stdlib as that grows from today's one module to all of it.
 //
 // The UNREACHABLE stdlib functions are left out entirely: they are invisible to this compile, so their
-// substrate is too. That is what keeps a program whose own source never names a clock reader compiling
-// for wasm.
-function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unreachable FunctionNameSet) returns StdlibSubstrateEntryMap
+// substrate is too. That is what keeps a program whose own source never names a host-only reader
+// compiling for wasm.
+function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unreachable FunctionNameSet, target Target) returns StdlibSubstrateEntryMap
 	let nodeCount = stdlibNames.count()
 	var nodeOf = StdlibNodeByName.create()
 
@@ -1890,7 +1890,7 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unre
 		nodeOf.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB below its own count()"), value: i as CsrIndex)
 	end 'index'
 
-	var state = SubstrateFixpoint.overNodes(nodeCount as CsrIndex)
+	var state = SubstrateFixpoint.overNodes(nodeCount as CsrIndex, target: target)
 
 	for func in module.functions 'eachFunc'
 		if unreachable.contains(func.name) 'notInTheProgram'
@@ -1929,7 +1929,7 @@ end 'stdlibSubstrateEntries'
 // ⭐ THE COLUMNS PROPAGATE SCALARS. A marked node stores an INDEX into `seedEntries`, never the entry name
 // itself. The names are read once, after the fixpoint has settled.
 type SubstrateFixpoint
-	// Per node: does it (transitively) need the Win32 substrate? Also the "already queued" test — a node is
+	// Per node: does it (transitively) reach an entry the target lacks? Also the "already queued" test — a node is
 	// marked exactly when it enters the worklist, so it enters at most once.
 	var marked as BoolArray
 
@@ -1948,12 +1948,14 @@ type SubstrateFixpoint
 	var edgeCallee as CsrColumn
 	var edgeCaller as CsrColumn
 
-	static function overNodes(nodeCount CsrIndex) returns SubstrateFixpoint
+	let target as Target
+
+	static function overNodes(nodeCount CsrIndex, target Target) returns SubstrateFixpoint
 		var marked = BoolArray.create()
 		marked.resize(nodeCount)
 		var seedOf = CsrColumn.create()
 		seedOf.resize(nodeCount)
-		return Self{marked: marked, seedOf: seedOf, seedEntries: NameRoster.create(), worklist: CsrColumn.create(), edgeCallee: CsrColumn.create(), edgeCaller: CsrColumn.create()}
+		return Self{marked: marked, seedOf: seedOf, seedEntries: NameRoster.create(), worklist: CsrColumn.create(), edgeCallee: CsrColumn.create(), edgeCaller: CsrColumn.create(), target: target}
 	end 'overNodes'
 
 	// `node` names `entry` directly — a SEED.
@@ -1965,9 +1967,18 @@ type SubstrateFixpoint
 	// one place that says which wins and why; here it is only obeyed. An entry that outranks the incumbent
 	// REPLACES it and re-queues the node, so the callers that already inherited the weaker one are corrected.
 	//
-	// ⚠ The upgrade is MONOTONE — a rank only ever rises, and the rank has two levels — so a node is
-	// re-queued at most once and the fixpoint below stays linear.
+	// ⚠ The upgrade is MONOTONE — a rank only ever rises, and the rank has three levels — so a node is
+	// re-queued at most twice and the fixpoint below stays linear.
+	//
+	// ⚠ An entry the target provides seeds nothing. A node holds one entry, so a body reaching a provided
+	// entry and a lacking one must record the lacking one, or its crossing passes the gate and the
+	// program reaches a backend that cannot lower it. Per-target state is sound because `LibraryFacts`
+	// is rebuilt for every compile and a `Project` has one target for its whole life.
 	function seed(node CsrIndex, entry ByteArray)
+		if not calleeNeedsFacilityTargetLacks(self.target, callee: entry) 'theTargetProvidesIt'
+			return
+		end 'theTargetProvidesIt'
+
 		let already = try self.marked.get(node) otherwise panic("SubstrateFixpoint.seed: marked.get({node}) outside the node space")
 
 		if already and not substrateEntryOutranks(entry, incumbent: self.entryOf(node)) 'keepTheIncumbent'
@@ -2136,13 +2147,8 @@ end 'noteSubstrateRawIntrinsic'
 // target-neutral runtime helper — carries no substrate requirement.
 //
 // ⭐ `calleeHostFacility` is asked, never restated: it is the ONE place that knows which runtime entries
-// need a facility at all, and a second list here would be that fact written down twice.
-//
-// ⚠ **THE FIXPOINT IS TARGET-BLIND ON PURPOSE, AND ASKING WHICH FACILITY IS WHAT KEEPS IT THAT WAY.** What
-// it records is *which entry each stdlib function reaches* — a property of stdlib source, identical for
-// every target — so the target question is asked once, later, at the USER call that crossed into stdlib
-// (`SemanticCheck.requireTargetSupportsCallee`). Seeding on "does the CURRENT target lack it" instead would
-// make `project.libraryFacts` differ per target for no gain and one more thing to invalidate.
+// need a facility at all, and a second list here would be that fact written down twice. Whether the
+// target provides it is `SubstrateFixpoint.seed`'s question.
 function noteSubstrateCallee(callee ByteArray, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
 	if calleeHasHostFacility(callee) 'substrateEntry'
 		state.seed(callerNode, entry: callee)
