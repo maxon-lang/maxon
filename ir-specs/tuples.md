@@ -4111,3 +4111,186 @@ func @main {
     arm64.ret
 }
 ```
+
+<!-- test: a-with-iterator-loop-over-an-array-allocates-nothing-per-element -->
+A `for (iter, x) in values.withIterator()` loop reads each element together with its iterator, and the
+pair it destructures is a value: the loop body holds no `__mm_alloc` or `__slab_alloc` call, so a step
+costs the cursor advance and the two reads and no allocation. Prints `sum=35`, the four elements plus
+their positions.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+function main() returns ExitCode
+	let values = [3 as Tally, 5, 8, 13]
+	var sum = 0 as Tally
+
+	for (iter, x) in values.withIterator() 'each'
+		sum = sum + x + (iter.index() as Tally)
+	end 'each'
+
+	print("sum={sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sum=35
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot0, r8
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 4
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [r8 + 24], rax
+    x64.movRegImm32 rbx, 0
+    x64.leaRegRdata rdx, [rip + __layout_Array_Tally]
+    x64.movRegReg rcx, r8
+    x64.callDirect Array.withIterator
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forhdr
+    x64.jmp forjoin
+  each:
+    x64.leaRegRdata r13, [rip + __witness_ArrayIterator_Tally.Iterator]
+    x64.leaRegRdata rcx, [rip + __layout_WithIterIterator_ArrayIterator_Tally_Tally]
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.callDirect __retain_type_param
+    x64.movRegReg r14, r8
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.callMem [r13 + 48]
+  __il_cont#9:
+    x64.leaRegRegReg rbx, rbx, r8
+  __il_body#11:
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.callDirect __managed_cursor_index
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __il_cont#8:
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_ArrayIterator_Tally
+  forstep:
+    x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_Tally.Iterator]
+    x64.movRegReg rcx, r12
+    x64.callDirect WithIterIterator.advance
+    x64.movRegReg rax, r10
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, each
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_WithIterIterator_ArrayIterator_Tally_Tally
+  forjoin:
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "sum="
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot4, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot1, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rdx, slot4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot3
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+  __il_body#15:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#14:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```

@@ -687,6 +687,16 @@ export type IrModule uses Op
 		block.condBranch = CondBranch.opIndex(idx)
 	end 'appendCondBranch'
 
+	// Adds `op` to the flat op array and to no block: the caller places the index in a block's op list
+	// itself, because appending to a block would put the op at the block's end rather than at the
+	// position being rebuilt.
+	export function pushDetachedOp(op Op) returns ElementIndex
+		let idx = self.ops.count()
+		self.ops.push(op)
+		self.spans.pushCurrent(idx)
+		return idx
+	end 'pushDetachedOp'
+
 	export function setTerminator(block IrBlock, op Op)
 		let idx = self.ops.count()
 		self.ops.push(op)

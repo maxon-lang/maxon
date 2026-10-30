@@ -1608,12 +1608,12 @@ function appendRewrittenOp(module StdModule, opIdx ElementIndex, plans RecordPro
 end 'appendRewrittenOp'
 
 function emitPromotedRecord(module StdModule, plan RecordPromotion, mint ValueMinter, rebuilt OpIndexArray)
-	rebuilt.push(appendModuleOp(module, op: StdOp.stackRecordAddr(plan.recordValue, slot: plan.slot)))
+	rebuilt.push(module.pushDetachedOp(StdOp.stackRecordAddr(plan.recordValue, slot: plan.slot)))
 
 	for fieldIndex in 0 upto plan.fields.count() 'eachField'
 		let field = try plan.fields.get(fieldIndex) otherwise panic("emitPromotedRecord: fields.get OOB at {fieldIndex}")
 		let stored = fieldValueId(module, source: field.source, callArgs: plan.callArgs, mint: mint, rebuilt: rebuilt)
-		rebuilt.push(appendModuleOp(module, op: StdOp.storeIndirect(plan.recordValue, offset: field.offset, valueId: stored, valueType: field.storeType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.storeIndirect(plan.recordValue, offset: field.offset, valueId: stored, valueType: field.storeType)))
 	end 'eachField'
 end 'emitPromotedRecord'
 
@@ -1630,19 +1630,9 @@ end 'fieldValueId'
 
 function emitFieldConstant(module StdModule, value FullRangeInt, constType StdType, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
 	let id = mint.mint()
-	rebuilt.push(appendModuleOp(module, op: StdOp.const(id, value: value, valueType: constType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.const(id, value: value, valueType: constType)))
 	return id
 end 'emitFieldConstant'
-
-// Append `op` to the module's flat op array and answer its index. Blocks reference ops by index, so a new
-// op is created here and referenced from the rebuilt `opRefs` rather than appended to a block — which would
-// place it at the block's END rather than at the construction's position.
-function appendModuleOp(module StdModule, op StdOp) returns ElementIndex
-	let opIdx = module.ops.count()
-	module.ops.push(op)
-	module.spans.pushCurrent(opIdx)
-	return opIdx
-end 'appendModuleOp'
 
 function opDropsAPromotedRecord(module StdModule, opIdx ElementIndex, promoted BoolArray) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("opDropsAPromotedRecord: opIdx {opIdx} not in module.ops")

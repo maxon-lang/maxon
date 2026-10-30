@@ -67,11 +67,15 @@
 // ⭐ **THE THIRD SHAPE IS BOTH ENDS IN ONE FRAME.** A called-once callee is spliced into its caller
 // (`InlineLeaves`), so a fresh pair the callee minted and the loads-then-drop the caller did are now one
 // function's ops with no call between them: `__mm_alloc`, the two half stores, whole-slot loads of the
-// halves, and the one trivial `__mm_decref`. Nothing else sees the box, so it is deleted outright and every
-// load reads the STORED value — the same ownership argument as the fresh literal, with no register to
-// cross. It asks one thing more than the other two: the box's destructor is the trivial one, because here
-// the drop being deleted is the drop that would have run it. A function holding such a box is analysed
-// whether or not it returns a tuple or calls a candidate.
+// halves, and the one drop — the trivial `__mm_decref`, or the `__destruct_<T>` cascade when an
+// element is managed. Nothing else sees the box, so it is deleted outright and every load reads the
+// STORED value — the same ownership argument as the fresh literal, with no register to cross. A
+// trivial drop goes with the box; a cascade is replaced by the per-slot releases it would have run
+// (`MmRuntime.structDestructorDrops`), and a cascade with a release that is not one direct call on
+// one stored word keeps the box. It asks one thing more than the other two: the allocation's
+// destructor is the trivial one, because here a deleted `__mm_decref` is the drop that would have
+// run it. A function holding such a box is analysed whether or not it returns a tuple or calls a
+// candidate.
 //
 // Scheduled last in `PassPipeline.buildLoweringPasses`, after `promoteStackRecords`, so every shape it
 // matches is the final one — a record a promotion already turned into frame storage is no longer a call
@@ -97,24 +101,45 @@ let PairBytes = HighHalfOffset + MachineWordBytes
 // `__mm_alloc(size, destructor)` — plus a trace tag in a `--debugstream` build, which this pass reads
 // past: it deletes the allocation, so the tag loses its reader with it.
 let MmAllocMinArgCount = 2 as ParamCount
-let MmDecrefArgCount = 1 as ParamCount
+let RecordDropArgCount = 1 as ParamCount
 
-// A call that is not the one-argument `__mm_decref` a record's whole drop lowers to.
-enum NotTheTrivialDrop
+enum RecordDropKind
+	trivial
+	cascade
+end 'RecordDropKind'
+
+type RecordDrop
+	export let box as ValueId
+	export let kind as RecordDropKind
+
+	static function create(box ValueId, kind RecordDropKind) returns RecordDrop
+		return Self{box: box, kind: kind}
+	end 'create'
+end 'RecordDrop'
+
+enum NotARecordDrop
 	someOtherCall
-end 'NotTheTrivialDrop'
+end 'NotARecordDrop'
 
-// The value a trivial drop releases. THE shape this pass admits as a record's release: a
-// `__destruct_<T>` cascade — which is what the drop lowers to when the elements are managed at this
-// instantiation — is some other call and refuses the pair. Asked by the census, by the classifier's
-// complement and by the rewrite, so the three cannot come to disagree about what a trivial drop is.
-function trivialDropOf(callee ByteArray, args ValueIdArray) returns ValueId throws NotTheTrivialDrop
-	if not callee.equals(MmDecrefName) or args.count() != MmDecrefArgCount 'notTheTrivialDrop'
-		throw NotTheTrivialDrop.someOtherCall
-	end 'notTheTrivialDrop'
+// Asked by the census, by the classifier's complement and by the rewrite, so the three cannot
+// come to disagree about what a record's drop is.
+function recordDropOf(callee ByteArray, args ValueIdArray) returns RecordDrop throws NotARecordDrop
+	if args.count() != RecordDropArgCount 'notOneArgument'
+		throw NotARecordDrop.someOtherCall
+	end 'notOneArgument'
 
-	return try args.get(0) otherwise panic("trivialDropOf: args.get(0) OOB on a one-argument `__mm_decref`")
-end 'trivialDropOf'
+	let box = try args.get(0) otherwise panic("recordDropOf: args.get(0) OOB on a one-argument call")
+
+	if callee.equals(MmDecrefName) 'trivial'
+		return RecordDrop.create(box, kind: RecordDropKind.trivial)
+	end 'trivial'
+
+	if bytesStartWith(callee, prefix: DestructorPrefix) 'cascade'
+		return RecordDrop.create(box, kind: RecordDropKind.cascade)
+	end 'cascade'
+
+	throw NotARecordDrop.someOtherCall
+end 'recordDropOf'
 
 // Whether a dense mark column answers true for `value`. The columns are minted over one function's value
 // space, and a value minted by the rewrite itself lies past their extent — outside is a `false` answer,
@@ -160,6 +185,9 @@ type TupleValueRow
 	export var returnUses as UseTally
 	export var trivialDrops as UseTally
 
+	export var cascadeDrops as UseTally
+	export var cascadeCallee as ByteArray
+
 	// Every read this pass has no rewrite for: an argument to some other call, a store of the value
 	// ITSELF into somewhere, a branch-edge argument, a comparison. One is enough to refuse.
 	export var other as UseTally
@@ -167,25 +195,33 @@ type TupleValueRow
 	export var storedHigh as ValueId
 
 	static function create(value ValueId) returns TupleValueRow
-		return Self{value: value, origin: TupleValueOrigin.elsewhere, loadLow: 0, loadHigh: 0, storeLow: 0, storeHigh: 0, returnUses: 0, trivialDrops: 0, other: 0, storedLow: 0, storedHigh: 0}
+		return Self{value: value, origin: TupleValueOrigin.elsewhere, loadLow: 0, loadHigh: 0, storeLow: 0, storeHigh: 0, returnUses: 0, trivialDrops: 0, cascadeDrops: 0, cascadeCallee: ByteArray.create(), other: 0, storedLow: 0, storedHigh: 0}
 	end 'create'
+
+	function dropCount() returns UseTally
+		return self.trivialDrops + self.cascadeDrops
+	end 'dropCount'
 
 	// The FRESH-LITERAL shape: this box is written once at each half and returned, and nothing else in the
 	// function can see it. Both stores must be there or the `errorReturn` would have no second word.
 	function isAnUnsharedFreshPair() returns bool
-		return self.storeLow == 1 and self.storeHigh == 1 and self.returnUses == 1 and self.loadLow == 0 and self.loadHigh == 0 and self.trivialDrops == 0 and self.other == 0
+		return self.storeLow == 1 and self.storeHigh == 1 and self.returnUses == 1 and self.loadLow == 0 and self.loadHigh == 0 and self.dropCount() == 0 and self.other == 0
 	end 'isAnUnsharedFreshPair'
 
 	// The FRAME-LOCAL shape: built, read by whole-slot loads only, and dropped once, all in one frame. Any
 	// number of loads — each becomes a read of the stored value.
+	//
+	// ⚠ Exactly one store per half is also what lets a cascade drop become per-slot releases with
+	// no null guard: each slot still holds the one value stored into it, because a move-out would be
+	// a second store. Admitting a second store releases a moved-out slot.
 	function isAFrameLocalPair() returns bool
-		return self.storeLow == 1 and self.storeHigh == 1 and self.trivialDrops == 1 and self.returnUses == 0 and self.other == 0
+		return self.storeLow == 1 and self.storeHigh == 1 and self.dropCount() == 1 and self.returnUses == 0 and self.other == 0
 	end 'isAFrameLocalPair'
 
 	// The CALL-SITE shape that needs no record: the halves are read out and the box is released by the one
 	// trivial decref. Zero loads is admitted — a result nobody reads still costs the call.
 	function isReadThenDropped() returns bool
-		return self.trivialDrops == 1 and self.returnUses == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
+		return self.trivialDrops == 1 and self.cascadeDrops == 0 and self.returnUses == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
 	end 'isReadThenDropped'
 
 	// ⛔⛔ **THE UNREACHABLE PANIC RETURN, which is not an exception to the gate but the same rule applied to
@@ -195,12 +231,12 @@ type TupleValueRow
 	// return — but the block must still leave the function with the arity its type declares, or the wasm
 	// module does not validate (that door's own header records it).
 	function isAnUnreachableZero() returns bool
-		return self.returnUses >= 1 and self.loadLow == 0 and self.loadHigh == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.trivialDrops == 0 and self.other == 0
+		return self.returnUses >= 1 and self.loadLow == 0 and self.loadHigh == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.dropCount() == 0 and self.other == 0
 	end 'isAnUnreachableZero'
 
 	// The FORWARDED shape: the pair's one use is the enclosing function's own return.
 	function isForwardedToTheReturn() returns bool
-		return self.returnUses == 1 and self.trivialDrops == 0 and self.loadLow == 0 and self.loadHigh == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
+		return self.returnUses == 1 and self.dropCount() == 0 and self.loadLow == 0 and self.loadHigh == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
 	end 'isForwardedToTheReturn'
 end 'TupleValueRow'
 
@@ -216,13 +252,14 @@ type FunctionTupleFlow
 	export var rowAt as UseTallyArray
 	export var exitChains as ExitChainsByReturn
 	export var returnPlumbing as BlockIdSet
+	export var cascadeSymbols as DestructorSet
 
 	static function create(valueBound ValueId, exitChains ExitChainsByReturn) returns FunctionTupleFlow
 		var hasRow = BoolArray.create()
 		hasRow.growFilled(valueBound, value: false)
 		var rowAt = UseTallyArray.create()
 		rowAt.growFilled(valueBound, value: 0)
-		return Self{rows: TupleValueRowArray.create(), hasRow: hasRow, rowAt: rowAt, exitChains: exitChains, returnPlumbing: BlockIdSet.create()}
+		return Self{rows: TupleValueRowArray.create(), hasRow: hasRow, rowAt: rowAt, exitChains: exitChains, returnPlumbing: BlockIdSet.create(), cascadeSymbols: DestructorSet.create()}
 	end 'create'
 
 	// A `ret` of an exit chain's block argument is judged by the values its exits carry into the
@@ -333,7 +370,7 @@ typealias ValueTupleCallSiteArray = Array with ValueTupleCallSite
 
 // ⭐ **THE PASS.** Whole-module: a callee's convention and its call sites' shapes are one decision, and
 // neither end may be judged without the other.
-export function applyValueTupleReturn(project Project, module StdModule)
+export function applyValueTupleReturn(project Project, module StdModule, signatures ProgramSignatures)
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.ir).debug("applyValueTupleReturn: {module.funcCount()} function(s)")
 	end 'debugging'
@@ -344,11 +381,11 @@ export function applyValueTupleReturn(project Project, module StdModule)
 	// sees strictly more collisions.
 	match FunctionNameIndex.build(module.functions) 'names'
 		duplicateAt then return
-		built(byName) then convertWithNameIndex(project, module: module, byName: byName)
+		built(byName) then convertWithNameIndex(project, module: module, signatures: signatures, byName: byName)
 	end 'names'
 end 'applyValueTupleReturn'
 
-function convertWithNameIndex(project Project, module StdModule, byName FunctionNameIndex)
+function convertWithNameIndex(project Project, module StdModule, signatures ProgramSignatures, byName FunctionNameIndex)
 	// PHASE 1 — the structural candidates, and one analysis per function a verdict can turn on or that
 	// holds a frame-local pair.
 	var onTheConvention = collectCandidates(project, module: module)
@@ -368,15 +405,36 @@ function convertWithNameIndex(project Project, module StdModule, byName Function
 		stampTheConvention(module, onTheConvention: onTheConvention)
 	end 'someCandidateKeptIt'
 
+	let catalog = StructDropCatalog.create(project, signatures: signatures, needed: cascadeSymbolsOf(flows))
+
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		var flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
-		rewriteOneFunction(module, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention)
+		rewriteOneFunction(module, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, catalog: catalog)
 	end 'eachFunc'
 end 'convertWithNameIndex'
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 // Phase 1 — the structural candidates
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+function cascadeSymbolsOf(flows FunctionTupleFlowSlotArray) returns DestructorSet
+	var symbols = DestructorSet.create()
+
+	for slot in flows 'eachFunc'
+		match slot 'slot'
+			absent then continue
+			present(flow) then insertCascadeSymbols(flow, into: symbols)
+		end 'slot'
+	end 'eachFunc'
+
+	return symbols
+end 'cascadeSymbolsOf'
+
+function insertCascadeSymbols(flow FunctionTupleFlow, into DestructorSet)
+	for symbol in flow.cascadeSymbols 'eachSymbol'
+		into.insert(symbol.clone())
+	end 'eachSymbol'
+end 'insertCascadeSymbols'
 
 function anyCandidate(onTheConvention BoolArray) returns bool
 	for on in onTheConvention 'eachFunc'
@@ -1088,10 +1146,10 @@ function trackConstant(resultId ValueId, flow FunctionTupleFlow)
 end 'trackConstant'
 
 function trackCallResult(resultId ValueId, callee ByteArray, args ValueIdArray, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow, consts ConstValueMap)
-	// ⚠ A BOX gets a row where a `ret` already named it, or where it is two trivially-dropped words — the
-	// box a frame-local pair may live in; its row decides which shape it is, if either. Giving every
-	// allocation a row would make the classifier's per-op scan of the rows grow with the function's
-	// allocation count.
+	// ⚠ A BOX gets a row where a `ret` already named it, or where it is two words with the trivial
+	// destructor — the box a frame-local pair may live in; its row decides which shape it is, if
+	// either. Giving every allocation a row would make the classifier's per-op scan of the rows grow
+	// with the function's allocation count.
 	if callee.equals(MmAllocName) and args.count() >= MmAllocMinArgCount 'aHeapBox'
 		if not flow.tracks(resultId) and isATwoWordTrivialBox(callee, argCount: args.count() as ParamCount, sizeId: allocArg(args, index: 0), destructorId: allocArg(args, index: 1), consts: consts) 'aPairSizedBox'
 			flow.track(resultId)
@@ -1240,7 +1298,7 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 		osSocketOverlapped or
 		osSocketServe then break
 		ret(retValId) then noteReturnedValue(flow, retValId: retValId)
-		call(_, callee, args) then noteTrivialDrop(flow, callee: callee, args: args)
+		call(_, callee, args) then noteDrop(flow, callee: callee, args: args)
 		loadIndirect(_, addrId, offset, valueType) then noteHalfLoad(flow, addrId: addrId, offset: offset, valueType: valueType)
 		storeIndirect(addrId, offset, valueId, valueType) then noteHalfStore(flow, addrId: addrId, offset: offset, valueId: valueId, valueType: valueType)
 	end 'op'
@@ -1386,7 +1444,7 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 		osSocketOverlapped or
 		osSocketServe gives false
 		ret(retValId) gives retValId == value
-		call(_, callee, args) gives callIsTheTrivialDropOf(callee, args: args, value: value)
+		call(_, callee, args) gives callIsTheDropOf(callee, args: args, value: value)
 		loadIndirect(_, addrId, offset, valueType) gives addrId == value and isAWholeHalf(offset, valueType: valueType)
 		storeIndirect(addrId, offset, valueId, valueType) gives addrId == value and valueId != value and isAWholeHalf(offset, valueType: valueType)
 	end 'op'
@@ -1410,10 +1468,10 @@ function isAWholeHalf(offset ByteOffset, valueType StdType) returns bool
 	return offset == LowHalfOffset or offset == HighHalfOffset
 end 'isAWholeHalf'
 
-function callIsTheTrivialDropOf(callee ByteArray, args ValueIdArray, value ValueId) returns bool
-	let dropped = try trivialDropOf(callee, args: args) otherwise return false
-	return dropped == value
-end 'callIsTheTrivialDropOf'
+function callIsTheDropOf(callee ByteArray, args ValueIdArray, value ValueId) returns bool
+	let drop = try recordDropOf(callee, args: args) otherwise return false
+	return drop.box == value
+end 'callIsTheDropOf'
 
 function noteOtherUse(flow FunctionTupleFlow, value ValueId)
 	if not flow.tracks(value) 'notOurs'
@@ -1431,16 +1489,27 @@ function noteReturnedValue(flow FunctionTupleFlow, retValId ValueId)
 	end 'eachExitValue'
 end 'noteReturnedValue'
 
-function noteTrivialDrop(flow FunctionTupleFlow, callee ByteArray, args ValueIdArray)
-	let dropped = try trivialDropOf(callee, args: args) otherwise return
+function noteDrop(flow FunctionTupleFlow, callee ByteArray, args ValueIdArray)
+	let drop = try recordDropOf(callee, args: args) otherwise return
 
-	if not flow.tracks(dropped) 'notOurs'
+	if not flow.tracks(drop.box) 'notOurs'
 		return
 	end 'notOurs'
 
-	var row = flow.rowOf(dropped)
-	row.trivialDrops = row.trivialDrops + 1
-end 'noteTrivialDrop'
+	var row = flow.rowOf(drop.box)
+
+	match drop.kind 'kind'
+		trivial then row.trivialDrops = row.trivialDrops + 1
+		cascade then noteCascadeDrop(flow, box: drop.box, callee: callee)
+	end 'kind'
+end 'noteDrop'
+
+function noteCascadeDrop(flow FunctionTupleFlow, box ValueId, callee ByteArray)
+	var row = flow.rowOf(box)
+	row.cascadeDrops = row.cascadeDrops + 1
+	row.cascadeCallee = callee.clone()
+	flow.cascadeSymbols.insert(callee.clone())
+end 'noteCascadeDrop'
 
 function noteHalfLoad(flow FunctionTupleFlow, addrId ValueId, offset ByteOffset, valueType StdType)
 	if not flow.tracks(addrId) or not isAWholeHalf(offset, valueType: valueType) 'notAHalfOfATrackedPair'
@@ -1822,6 +1891,104 @@ end 'stampTheConvention'
 
 typealias ChainHighByBlock = Map with (BlockId, ValueId)
 
+enum NoSlotDrops
+	notElidable
+end 'NoSlotDrops'
+
+type SlotDrop
+	export let callee as ByteArray
+	export let value as ValueId
+	export let resultId as ValueId
+
+	static function create(callee ByteArray, value ValueId, resultId ValueId) returns SlotDrop
+		return Self{callee: callee, value: value, resultId: resultId}
+	end 'create'
+end 'SlotDrop'
+
+typealias SlotDropArray = Array with SlotDrop
+typealias SlotDropsByBox = Map with (ValueId, SlotDropArray)
+typealias FollowingOpsByOp = Map with (ElementIndex, OpIndexArray)
+
+type SlotDropTarget
+	export let offset as ByteOffset
+	export let callee as ByteArray
+
+	static function create(offset ByteOffset, callee ByteArray) returns SlotDropTarget
+		return Self{offset: offset, callee: callee}
+	end 'create'
+end 'SlotDropTarget'
+
+typealias SlotDropTargetArray = Array with SlotDropTarget
+typealias SlotDropTargetsBySymbol = Map with (ByteArray, SlotDropTargetArray)
+
+type StructDropCatalog
+	export var targetsBySymbol as SlotDropTargetsBySymbol
+
+	static function create(project Project, signatures ProgramSignatures, needed DestructorSet) returns StructDropCatalog
+		var targetsBySymbol = SlotDropTargetsBySymbol.create()
+
+		if needed.count() == 0 'nothingToResolve'
+			return Self{targetsBySymbol: targetsBySymbol}
+		end 'nothingToResolve'
+
+		for entry in structRuntimeRoster(project, signatures: signatures) 'eachStruct'
+			let symbol = destructorSymbol(entry.layout.name)
+
+			if not needed.contains(symbol) 'notDroppedHere'
+				continue
+			end 'notDroppedHere'
+
+			let targets = try directSlotDropTargets(entry, signatures: signatures) otherwise continue
+			targetsBySymbol.upsert(symbol, value: targets)
+		end 'eachStruct'
+
+		return Self{targetsBySymbol: targetsBySymbol}
+	end 'create'
+end 'StructDropCatalog'
+
+function directSlotDropTargets(entry StructRosterEntry, signatures ProgramSignatures) returns SlotDropTargetArray throws NoSlotDrops
+	var targets = SlotDropTargetArray.create()
+
+	for field in structDestructorDrops(entry.layout, typeNames: entry.typeNames, signatures: signatures) 'eachManagedSlot'
+		match field.kind 'kind'
+			direct(callee) then targets.push(SlotDropTarget.create(field.offset, callee: callee.clone()))
+			existential or
+			throughDescriptor then throw NoSlotDrops.notElidable
+		end 'kind'
+	end 'eachManagedSlot'
+
+	// An empty list would leave the cascade call in place, reading a box the rewrite deletes.
+	if targets.count() == 0 'nothingToRelease'
+		throw NoSlotDrops.notElidable
+	end 'nothingToRelease'
+
+	return targets
+end 'directSlotDropTargets'
+
+function storedValueAtSlot(row TupleValueRow, offset ByteOffset) returns ValueId throws NoSlotDrops
+	if offset == LowHalfOffset 'low'
+		return row.storedLow
+	end 'low'
+
+	if offset == HighHalfOffset 'high'
+		return row.storedHigh
+	end 'high'
+
+	throw NoSlotDrops.notElidable
+end 'storedValueAtSlot'
+
+function slotDropsOf(catalog StructDropCatalog, row TupleValueRow, mint ValueMinter) returns SlotDropArray throws NoSlotDrops
+	view targets = try catalog.targetsBySymbol.get(row.cascadeCallee) otherwise throw NoSlotDrops.notElidable
+	var drops = SlotDropArray.create()
+
+	for target in targets 'eachTarget'
+		let value = try storedValueAtSlot(row, offset: target.offset)
+		drops.push(SlotDrop.create(target.callee.clone(), value: value, resultId: mint.mint()))
+	end 'eachTarget'
+
+	return drops
+end 'slotDropsOf'
+
 // The rewrite plan for one function: which values leave through the two return registers, which boxes stop
 // being built, which call results now arrive as a register pair, and the second value id each pair is
 // captured into.
@@ -1837,7 +2004,8 @@ type ValueTuplePlan
 	export var elidedBox as BoolArray
 
 	// The `call` defining this value becomes a `tryCall` capturing both registers; its half loads become
-	// reads of those two values and its trivial drop disappears.
+	// reads of those two values and its trivial drop disappears; a frame-local box's cascade drop
+	// becomes its `slotDrops`.
 	export var registerPair as BoolArray
 	export var lowOf as ValueIdArray
 	export var highOf as ValueIdArray
@@ -1849,9 +2017,12 @@ type ValueTuplePlan
 	// registers, and `markRegisterPair` marks a captured pair as returnable without knowing which function
 	// holds it — so the ABI rewrite asks here before it writes.
 	export let onTheConvention as bool
+	export let catalog as StructDropCatalog
+	export var slotDrops as SlotDropsByBox
+	export var followingOps as FollowingOpsByOp
 
-	static function create(valueBound ValueId, onTheConvention bool) returns ValueTuplePlan
-		return Self{returnsAsAPair: markColumn(valueBound), elidedBox: markColumn(valueBound), registerPair: markColumn(valueBound), lowOf: halfColumn(valueBound), highOf: halfColumn(valueBound), anyRewrite: false, chainHighs: ChainHighByBlock.create(), onTheConvention: onTheConvention}
+	static function create(valueBound ValueId, onTheConvention bool, catalog StructDropCatalog) returns ValueTuplePlan
+		return Self{returnsAsAPair: markColumn(valueBound), elidedBox: markColumn(valueBound), registerPair: markColumn(valueBound), lowOf: halfColumn(valueBound), highOf: halfColumn(valueBound), anyRewrite: false, chainHighs: ChainHighByBlock.create(), onTheConvention: onTheConvention, catalog: catalog, slotDrops: SlotDropsByBox.create(), followingOps: FollowingOpsByOp.create()}
 	end 'create'
 
 	function returnsAPair(value ValueId) returns bool
@@ -1929,7 +2100,7 @@ function halfColumn(valueBound ValueId) returns ValueIdArray
 	return column
 end 'halfColumn'
 
-function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray)
+function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog)
 	view func = module.getFunc(funcIndex)
 	let liveOps = module.liveOpIndices(func)
 
@@ -1937,7 +2108,7 @@ function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow Funct
 	// two readings of the same number.
 	let valueBound = nextFreeValueId(module, func: func)
 	var mint = ValueMinter.resuming(valueBound)
-	var plan = ValueTuplePlan.create(valueBound, onTheConvention: isOnTheConvention(onTheConvention, funcIndex: funcIndex))
+	var plan = ValueTuplePlan.create(valueBound, onTheConvention: isOnTheConvention(onTheConvention, funcIndex: funcIndex), catalog: catalog)
 
 	for opIdx in liveOps 'eachOp'
 		planOneOp(try module.ops.get(opIdx) otherwise panic("rewriteOneFunction: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
@@ -1957,6 +2128,10 @@ function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow Funct
 	for opIdx in liveOps 'eachOp'
 		rewriteOneOp(module, opIdx: opIdx, plan: plan, subst: subst, doomed: doomed)
 	end 'eachOp'
+
+	// Spliced before the substitution, which rewrites only the ops the blocks list: a release's value
+	// can be a load from another frame-local pair that the substitution retires.
+	insertFollowingOps(module, func: func, plan: plan)
 
 	// The substitution must land before the removal: it walks the LIVE ops, and the loads it retires are
 	// still among them until `removeDoomedOps` takes them out.
@@ -2303,19 +2478,24 @@ function planOneCallResult(resultId ValueId, flow FunctionTupleFlow, onTheConven
 	end 'notOurs'
 
 	match flow.rowOf(resultId).origin 'origin'
-		freshBox then markTheBoxIfFrameLocal(resultId, flow: flow, plan: plan)
+		freshBox then markTheBoxIfFrameLocal(resultId, flow: flow, plan: plan, mint: mint)
 		directCall(calleeIndex) then markThePairIfTheCalleeKeptTheConvention(resultId, calleeIndex: calleeIndex, onTheConvention: onTheConvention, plan: plan, mint: mint)
 		constant or
 		elsewhere then break
 	end 'origin'
 end 'planOneCallResult'
 
-function markTheBoxIfFrameLocal(box ValueId, flow FunctionTupleFlow, plan ValueTuplePlan)
+function markTheBoxIfFrameLocal(box ValueId, flow FunctionTupleFlow, plan ValueTuplePlan, mint ValueMinter)
 	let row = flow.rowOf(box)
 
 	if not row.isAFrameLocalPair() 'somethingElseSeesTheBox'
 		return
 	end 'somethingElseSeesTheBox'
+
+	if row.cascadeDrops == 1 'theSlotsAreReleasedOneByOne'
+		let drops = try slotDropsOf(plan.catalog, row: row, mint: mint) otherwise return
+		plan.slotDrops.upsert(box, value: drops)
+	end 'theSlotsAreReleasedOneByOne'
 
 	plan.markFrameLocalPair(box, low: row.storedLow, high: row.storedHigh)
 end 'markTheBoxIfFrameLocal'
@@ -2559,12 +2739,65 @@ function rewriteOneCall(module StdModule, opIdx ElementIndex, resultId ValueId, 
 		return
 	end 'capturesBothRegisters'
 
-	let dropped = try trivialDropOf(callee, args: args) otherwise return
+	let drop = try recordDropOf(callee, args: args) otherwise return
 
-	if plan.isARegisterPair(dropped) 'theDropOfANonExistentRecord'
-		doomed.insert(opIdx)
-	end 'theDropOfANonExistentRecord'
+	if not plan.isARegisterPair(drop.box) 'theRecordStillExists'
+		return
+	end 'theRecordStillExists'
+
+	match drop.kind 'kind'
+		trivial then doomed.insert(opIdx)
+		cascade then replaceTheCascadeWithSlotReleases(module, opIdx: opIdx, resultId: resultId, box: drop.box, plan: plan)
+	end 'kind'
 end 'rewriteOneCall'
+
+function replaceTheCascadeWithSlotReleases(module StdModule, opIdx ElementIndex, resultId ValueId, box ValueId, plan ValueTuplePlan)
+	view drops = try plan.slotDrops.get(box) otherwise panic("replaceTheCascadeWithSlotReleases: box {box} has no record any more but no slot releases were planned for it — `markTheBoxIfFrameLocal` elides a cascade-dropped box only once its releases are planned, and `callShapeOf` refuses a cascade-dropped call-site pair")
+	var following = OpIndexArray.create()
+	module.spans.current = module.spans.at(opIdx)
+
+	for index in 0 upto drops.count() 'eachRelease'
+		let drop = try drops.get(index) otherwise panic("replaceTheCascadeWithSlotReleases: drops.get OOB at {index}")
+
+		if index == 0 'inPlace'
+			try module.ops.set(opIdx, value: StdOp.call(resultId, callee: drop.callee, args: argsOf(drop.value))) otherwise panic("replaceTheCascadeWithSlotReleases: ops.set({opIdx}) OOB")
+			continue
+		end 'inPlace'
+
+		following.push(module.pushDetachedOp(StdOp.call(drop.resultId, callee: drop.callee, args: argsOf(drop.value))))
+	end 'eachRelease'
+
+	if following.count() > 0 'someFollow'
+		plan.followingOps.upsert(opIdx, value: following)
+	end 'someFollow'
+end 'replaceTheCascadeWithSlotReleases'
+
+function insertFollowingOps(module StdModule, func IrFunction, plan ValueTuplePlan)
+	if plan.followingOps.count() == 0 'nothingFollows'
+		return
+	end 'nothingFollows'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("insertFollowingOps: blockRef from func.blockRefs not in module.blocks")
+		var rebuilt = OpIndexArray.create()
+
+		for opIdx in block.bodyOps() 'eachRef'
+			rebuilt.push(opIdx)
+
+			if not plan.followingOps.contains(opIdx) 'nothingFollows'
+				continue
+			end 'nothingFollows'
+
+			let followers = try plan.followingOps.get(opIdx) otherwise panic("insertFollowingOps: followingOps.get missed {opIdx} after contains")
+
+			for followerIdx in followers 'eachFollower'
+				rebuilt.push(followerIdx)
+			end 'eachFollower'
+		end 'eachRef'
+
+		block.replaceBodyOps(rebuilt)
+	end 'eachBlock'
+end 'insertFollowingOps'
 
 function rewriteOneHalfLoad(opIdx ElementIndex, resultId ValueId, addrId ValueId, offset ByteOffset, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet)
 	if not plan.isARegisterPair(addrId) 'notAHalfOfACapturedPair'

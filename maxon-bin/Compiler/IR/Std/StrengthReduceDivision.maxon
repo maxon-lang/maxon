@@ -811,7 +811,7 @@ function emitReducedQuotient(module StdModule, resultId ValueId, dividend ValueI
 	end 'shape'
 
 	if reduction.negateQuotient 'negate'
-		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.unaryOp(resultId, operand: chainResult, opcode: StdUnaryOpcode.neg, operandType: ReducedOperandType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.unaryOp(resultId, operand: chainResult, opcode: StdUnaryOpcode.neg, operandType: ReducedOperandType)))
 	end 'negate'
 end 'emitReducedQuotient'
 
@@ -831,7 +831,7 @@ end 'emitReducedQuotient'
 function emitReducedRemainder(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
 	if reduction.isUnsigned and reduction.kind == DivisionReductionKind.powerOfTwo 'lowBitsMask'
 		let mask = emitReducedConst(module, value: (reduction.divisorMagnitude - 1) as FullRangeInt, mint: mint, rebuilt: rebuilt)
-		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: mask, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: dividend, rhs: mask, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
 		return
 	end 'lowBitsMask'
 
@@ -840,8 +840,8 @@ function emitReducedRemainder(module StdModule, resultId ValueId, dividend Value
 
 	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude as FullRangeInt, mint: mint, rebuilt: rebuilt)
 	let product = mint.mint()
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(product, lhs: quotient, rhs: divisorValue, opcode: StdBinOpcode.mul, operandType: ReducedOperandType)))
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: product, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(product, lhs: quotient, rhs: divisorValue, opcode: StdBinOpcode.mul, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: dividend, rhs: product, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
 end 'emitReducedRemainder'
 
 // ⭐⭐ **DIVISION BY `2^k`, AND THE BIAS IS THE WHOLE CONTENT OF IT.** An arithmetic right shift rounds
@@ -860,39 +860,39 @@ end 'emitReducedRemainder'
 function emitPowerOfTwoQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
 	if reduction.isUnsigned 'logicalShift'
 		let count = emitReducedConst(module, value: reduction.shift as FullRangeInt, mint: mint, rebuilt: rebuilt)
-		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: count, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: dividend, rhs: count, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 		return
 	end 'logicalShift'
 
 	let signBroadcast = mint.mint()
 	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(signBroadcast, lhs: dividend, rhs: signBitCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(signBroadcast, lhs: dividend, rhs: signBitCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 
 	let bias = mint.mint()
 	let biasCount = emitReducedConst(module, value: ((ReducedWordBits - reduction.shift) as FullRangeInt), mint: mint, rebuilt: rebuilt)
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(bias, lhs: signBroadcast, rhs: biasCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(bias, lhs: signBroadcast, rhs: biasCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 
 	let biased = mint.mint()
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(biased, lhs: dividend, rhs: bias, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(biased, lhs: dividend, rhs: bias, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
 
 	let quotientCount = emitReducedConst(module, value: reduction.shift as FullRangeInt, mint: mint, rebuilt: rebuilt)
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: biased, rhs: quotientCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: biased, rhs: quotientCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 end 'emitPowerOfTwoQuotient'
 
 function emitComparisonBitQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
 	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude as FullRangeInt, mint: mint, rebuilt: rebuilt)
 
 	let difference = mint.mint()
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(difference, lhs: dividend, rhs: divisorValue, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(difference, lhs: dividend, rhs: divisorValue, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
 
 	let inverted = mint.mint()
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.unaryOp(inverted, operand: difference, opcode: StdUnaryOpcode.bitNot, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.unaryOp(inverted, operand: difference, opcode: StdUnaryOpcode.bitNot, operandType: ReducedOperandType)))
 
 	let noBorrow = mint.mint()
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(noBorrow, lhs: dividend, rhs: inverted, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(noBorrow, lhs: dividend, rhs: inverted, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
 
 	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: noBorrow, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: noBorrow, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 end 'emitComparisonBitQuotient'
 
 // ⭐⭐ **DIVISION BY A GENERAL CONSTANT: MULTIPLY BY THE RECIPROCAL, IN FIXED POINT.** `M / 2^(64+s)`
@@ -911,7 +911,7 @@ function emitMagicQuotient(module StdModule, resultId ValueId, dividend ValueId,
 	let highOpcode = StdBinOpcode.mulHighUnsigned if reduction.isUnsigned else StdBinOpcode.mulHighSigned
 
 	let highProduct = mint.mint()
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(highProduct, lhs: multiplier, rhs: dividend, opcode: highOpcode, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(highProduct, lhs: multiplier, rhs: dividend, opcode: highOpcode, operandType: ReducedOperandType)))
 
 	if reduction.isUnsigned 'unsignedTail'
 		emitUnsignedMagicTail(module, resultId: resultId, dividend: dividend, highProduct: highProduct, reduction: reduction, mint: mint, rebuilt: rebuilt)
@@ -939,19 +939,19 @@ function emitUnsignedMagicTail(module StdModule, resultId ValueId, dividend Valu
 
 	if reduction.addIndicator 'restoreTheImplicitBit'
 		let difference = mint.mint()
-		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(difference, lhs: dividend, rhs: highProduct, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.binOp(difference, lhs: dividend, rhs: highProduct, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
 
 		let halvingCount = emitReducedConst(module, value: AddIndicatorHalvingShift, mint: mint, rebuilt: rebuilt)
 		let halved = mint.mint()
-		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(halved, lhs: difference, rhs: halvingCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.binOp(halved, lhs: difference, rhs: halvingCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 
 		let recombined = mint.mint()
-		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(recombined, lhs: halved, rhs: highProduct, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.binOp(recombined, lhs: halved, rhs: highProduct, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
 		scaled = recombined
 	end 'restoreTheImplicitBit'
 
 	let scaleCount = emitReducedConst(module, value: reduction.shift as FullRangeInt, mint: mint, rebuilt: rebuilt)
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: scaled, rhs: scaleCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: scaled, rhs: scaleCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 end 'emitUnsignedMagicTail'
 
 //     h = h + x                    ; ONLY when M's true value was at least 2^63 (see below)
@@ -968,22 +968,22 @@ function emitSignedMagicTail(module StdModule, resultId ValueId, dividend ValueI
 
 	if reduction.magicIsNegative 'restoreTheWrappedMultiplier'
 		let corrected = mint.mint()
-		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(corrected, lhs: high, rhs: dividend, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.binOp(corrected, lhs: high, rhs: dividend, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
 		high = corrected
 	end 'restoreTheWrappedMultiplier'
 
 	if reduction.shift > 0 'scaleDown'
 		let shifted = mint.mint()
 		let scaleCount = emitReducedConst(module, value: reduction.shift as FullRangeInt, mint: mint, rebuilt: rebuilt)
-		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(shifted, lhs: high, rhs: scaleCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
+		rebuilt.push(module.pushDetachedOp(StdOp.binOp(shifted, lhs: high, rhs: scaleCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 		high = shifted
 	end 'scaleDown'
 
 	let signBit = mint.mint()
 	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(signBit, lhs: high, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(signBit, lhs: high, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: high, rhs: signBit, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: high, rhs: signBit, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
 end 'emitSignedMagicTail'
 
 // A fresh `const` of `value`, appended to the rebuilt op list, answering the value it defines.
@@ -995,21 +995,9 @@ end 'emitSignedMagicTail'
 // for the immediate field — which for the 64-bit magic is always, and for every shift count never.
 function emitReducedConst(module StdModule, value FullRangeInt, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
 	let id = mint.mint()
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.const(id, value: value, valueType: ReducedOperandType)))
+	rebuilt.push(module.pushDetachedOp(StdOp.const(id, value: value, valueType: ReducedOperandType)))
 	return id
 end 'emitReducedConst'
-
-// Append `op` to the module's flat op array and answer its index. Blocks reference ops by index, so a
-// new op is created here and referenced from the rebuilt `opRefs` rather than appended to a block —
-// which would place it at the block's END rather than at the division's position.
-// (`PromoteStackRecords.appendModuleOp` is the same three lines for the same reason; it is a private
-// `function` there, so this file states them rather than reaching across.)
-function appendReducedSequenceOp(module StdModule, op StdOp) returns ElementIndex
-	let opIdx = module.ops.count()
-	module.ops.push(op)
-	module.spans.pushCurrent(opIdx)
-	return opIdx
-end 'appendReducedSequenceOp'
 
 // Drop the divisor `const` of every rewritten site that NOTHING now reads.
 //

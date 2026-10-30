@@ -2064,6 +2064,14 @@ INTO ONE."* ⚠ **The frontend refuses dead source** (E3012 unused-variable), so
 this compiler has little to collect — the real producers are inlining, identity folds and proven-redundant
 range checks. **Measure the corpus first**; this may be a row with nothing behind it.
 
+#### `EC24` · Direct calls for the `withIterator()` loop over an `Array`
+
+`for (iter, x) in array.withIterator()` allocates nothing per element: `ValueTupleReturn` elides the
+`(iter, x)` pair each step builds, and releases its slots one by one where an element is managed
+(`ir-specs/tuples.md`, `a-with-iterator-loop-over-an-array-allocates-nothing-per-element`).
+Each step reaches the cursor through its witness table: about 21 x64 instructions per element,
+against 6 for `for x in array`.
+
 ## What is deliberately absent from this roadmap
 
 - **arm64-macos and wasm32-wasi as first-class rows.** Design and measure on x64-windows (the host

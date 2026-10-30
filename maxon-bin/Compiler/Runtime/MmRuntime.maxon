@@ -3518,7 +3518,7 @@ end 'installOneStructRuntimeEntry'
 // an INTERNED TUPLE comes out of the signature index and its ids index that index's table. Resolving both
 // against the project's misreads them — see `ProgramSignatures.indexTypeNames` for the panic it produced on
 // this compiler's own source, and for why a misread that happens to land on a declared type is worse.
-function structRuntimeRoster(project Project, signatures ProgramSignatures) returns StructRosterEntryArray
+export function structRuntimeRoster(project Project, signatures ProgramSignatures) returns StructRosterEntryArray
 	var roster = StructRosterEntryArray.create()
 
 	for (_, layout) in project.structTypes 'eachCommitted'
@@ -3549,8 +3549,8 @@ function installOneStructDestructor(module StdModule, layout StructLayout, typeN
 	synthesizeStructDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures)
 end 'installOneStructDestructor'
 
-// Emit `__destruct_<Struct>(box)` — the field list is built here and the entry/lower/drop/free skeleton
-// runs in the shared `emitFieldCascadeDestructor`:
+// Emit `__destruct_<Struct>(box)` — the field list is `structDestructorDrops` and the
+// entry/lower/drop/free skeleton runs in the shared `emitFieldCascadeDestructor`:
 //
 //   drop:  drop each managed field, in declaration order, behind a NULL-guard (a moved-out field slot is
 //          null), each through `managedFieldDropCallee`.
@@ -3559,6 +3559,12 @@ end 'installOneStructDestructor'
 // under a tag switch. It shares its skeleton with the generic-instance cascade, which is the same
 // tagless box shape over a substituted field list.
 function synthesizeStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
+	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(layout.name), drops: structDestructorDrops(layout, typeNames: typeNames, signatures: signatures))
+end 'synthesizeStructDestructor'
+
+// The one list of a struct's releases. `ValueTupleReturn` puts it in place of a cascade call it
+// deletes, so the two cannot release different slots.
+export function structDestructorDrops(layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures) returns ManagedFieldDropArray
 	var drops = ManagedFieldDropArray.create()
 
 	for i in 0 upto layout.fieldCount() 'eachField'
@@ -3569,8 +3575,8 @@ function synthesizeStructDestructor(module StdModule, layout StructLayout, typeN
 		drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: structFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures)))
 	end 'eachField'
 
-	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(layout.name), drops: drops)
-end 'synthesizeStructDestructor'
+	return drops
+end 'structDestructorDrops'
 
 // The dictionary twin's admission — `installOneStructDestructor`'s shape with the one question that
 // differs: not "does it own a managed field" (a bare parameter is not one) but "does it rest a slot at a
@@ -3863,7 +3869,7 @@ end 'FieldDropKindOption'
 // One managed field a TAGLESS box destructor must drop: its byte offset in the box, and HOW it is released.
 // The struct and generic-instance cascades each build a list of these and hand it to
 // `emitFieldCascadeDestructor`, so the entry/lower/drop/free skeleton lives in ONE place.
-type ManagedFieldDrop
+export type ManagedFieldDrop
 	export let offset as ByteOffset
 	export var kind as FieldDropKind
 
@@ -3872,7 +3878,7 @@ type ManagedFieldDrop
 	end 'create'
 end 'ManagedFieldDrop'
 
-typealias ManagedFieldDropArray = Array with ManagedFieldDrop
+export typealias ManagedFieldDropArray = Array with ManagedFieldDrop
 
 // Emit `<symbolName>(box)` for a TAGLESS box (a struct, or a monomorphized generic instance) — every field
 // is always present, so the cascade drops each managed field unconditionally behind a null-guard (a

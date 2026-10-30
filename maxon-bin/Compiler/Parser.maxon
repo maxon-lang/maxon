@@ -52856,23 +52856,22 @@ export type Parser
 	// body was left. Without it a `continue` re-enters the header with the counter unchanged and the
 	// loop spins forever.
 	//
-	// ⭐ **THE COUNTER FORM IS WHAT A SOURCE WITH NO `createIterator` GETS — AND NEITHER CORPUS
-	// CONTAINER IS ONE.** `stdlib/Array.maxon` is loaded (`StdlibLoader` takes all of `stdlib/`), so
-	// `materializeIterableIterationSource` rewrites an array source to the `ArrayIterator` its
-	// `createIterator()` returns BEFORE the fork below is reached, and `for x in [10, 20, 30]` emits
-	// `Array.createIterator` / `ArrayIterator.current` / `ArrayIterator.advance`.
+	// ⭐ **THE COUNTER FORM IS WHAT AN `Array` AND A SOURCE WITH NO `createIterator` GET.**
+	// `stdlib/` is loaded whole (`StdlibLoader`), so `materializeIterableIterationSource` rewrites a
+	// source whose container declares `createIterator()` to the cursor it returns BEFORE the fork
+	// below is reached — except an `Array`, which it keeps on the counter (`valueIsAnArray`).
+	// `for x in [10, 20, 30]` emits `__managed_count` / `__managed_get_unchecked`.
 	//
-	// ⚠⚠ **`stdlib/FixedArray.maxon` IS IN IT TOO.** The corpus declares `createIterator`, so a fixed array
-	// source takes the rewrite exactly as an array does — a fact that turns on VISIBILITY alone, which
-	// is why a `FixedArray`, whose record IS an array's, is not the counter source it looks like: the loop
-	// runs the declaration's cursor. The trade is deliberate and not free — a counted read against a
-	// per-loop iterator struct and a call per step. It is taken for UNIFORMITY — one rule for both
-	// corpus containers, the one `Array` already follows — and because the alternative is a second
-	// loop form kept alive by a name.
+	// ⚠⚠ **`stdlib/FixedArray.maxon` TAKES THE REWRITE.** The corpus declares `createIterator`, so a
+	// fixed array source runs the declaration's cursor — a fact that turns on VISIBILITY alone, which
+	// is why a `FixedArray`, whose record IS an array's, is not the counter source it looks like. The
+	// trade is not free — a counted read against a per-loop iterator struct and a call per step;
+	// `materializeIterableIterationSource` states why its exemption is the `Array`'s alone.
 	//
-	// What still arrives here as a counter is every source that supplies no cursor of its own: a program's
-	// OWN `type Array … implements BuiltinArrayLiteral` that declares none (see `requireIterableSource`'s
-	// array arm, which is the door that admits exactly those). The counted ranges share the shape.
+	// What arrives here as a counter is a corpus `Array` and every source that supplies no cursor of
+	// its own: a program's OWN `type Array … implements BuiltinArrayLiteral` that declares none (see
+	// `requireIterableSource`'s array arm, which is the door that admits exactly those). The counted
+	// ranges share the shape.
 	//
 	// ⭐ **WHAT THE COUNTER IS STILL THE RIGHT SHAPE FOR, AND WHY THE COMPILER NEVER SYNTHESIZES A
 	// CURSOR.** A counter is taken over a compiler-BUILT heap cursor for three reasons: such a cursor
@@ -54214,7 +54213,7 @@ export type Parser
 
 		// ⚠ A LIST needs no arm of its own. A corpus `List` declares `Iterable with (Element, ListIter)`, so it arrives
 		// as the `ListIterator` its own `createIterator()` returned and is admitted by the cursor arm below —
-		// the same route the corpus `Array` and the corpus `Map` take.
+		// the same route the corpus `Map` takes.
 		// A FIXED ARRAY iterates exactly as an `Array` does — its record IS an array's, its length is its fixed
 		// size, and `parseForStatement`'s counted form reads both off the record and the element through the
 		// shared accessor, so the loop needed no arm of its own: only this admission.
