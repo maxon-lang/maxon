@@ -2459,7 +2459,7 @@ end 'emitSingleOpElementLoad'
 // `exit` is caller-owned and passed IN (the `emitLoadElem` shape). The returned value is the JOIN block's
 // own block argument, and that join's only successor is `exit` — so it dominates `exit`, and `exit`
 // itself needs no argument.
-export function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, buffer ValueId, index ValueId, es ValueId, ids ValueMinter) returns ValueId
+function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, buffer ValueId, index ValueId, es ValueId, ids ValueMinter) returns ValueId
 	var wordArm = module.addBlock(func, label: b"ldword", heat: BlockHeat.normal)
 	var byteArm = module.addBlock(func, label: b"ldbyte", heat: BlockHeat.normal)
 	var generic = module.addBlock(func, label: b"ldgen", heat: BlockHeat.normal)
@@ -2520,7 +2520,7 @@ end 'emitSingleOpElementStore'
 // or 4-byte element, an unset stride and every sub-byte width take.
 //
 // Threads `cur` and returns the join every arm reaches.
-export function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter) returns IrBlock
+function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter) returns IrBlock
 	var wordArm = module.addBlock(func, label: b"stword", heat: BlockHeat.normal)
 	var byteArm = module.addBlock(func, label: b"stbyte", heat: BlockHeat.normal)
 	var otherStride = module.addBlock(func, label: b"stother", heat: BlockHeat.normal)
@@ -3751,43 +3751,23 @@ function buildManagedPush(module StdModule)
 	let arr = 0
 	let value = 1
 
-	let site = emitGrowForAppend(module, block: entry, arr: arr, count: PushedElementCount, ids: ids)
-	var afterStore = emitStoreElemAt(module, func: func, cur: entry, buffer: site.buffer, index: site.length, value: value, es: site.es, ids: ids)
-	emitAppendReturn(module, block: afterStore, arr: arr, site: site, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let one = emitConst(module, block: entry, value: PushedElementCount, ids: ids)
+	let required = emitBin(module, block: entry, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let grown = ids.mint()
+	module.appendOp(entry, op: StdOp.call(grown, callee: ManagedGrowName, args: twoArgs(arr, second: required)))
+
+	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	var afterStore = emitStoreElemAt(module, func: func, cur: entry, buffer: buffer, index: length, value: value, es: es, ids: ids)
+
+	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: afterStore, record: arr, offset: ManagedRecordLengthOffset, value: newLen)
+	module.setTerminator(afterStore, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildManagedPush'
-
-export type AppendSite
-	export let length as ValueId
-	export let added as ValueId
-	export let buffer as ValueId
-	export let es as ValueId
-
-	static function create(length ValueId, added ValueId, buffer ValueId, es ValueId) returns Self
-		return Self{length: length, added: added, buffer: buffer, es: es}
-	end 'create'
-end 'AppendSite'
-
-export function emitGrowForAppend(module StdModule, block IrBlock, arr ValueId, count FullRangeInt, ids ValueMinter) returns AppendSite
-	let length = emitLoadField(module, block: block, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let added = emitConst(module, block: block, value: count, ids: ids)
-	let required = emitBin(module, block: block, a: length, b: added, opcode: StdBinOpcode.add, ids: ids)
-	let grown = ids.mint()
-	module.appendOp(block, op: StdOp.call(grown, callee: ManagedGrowName, args: twoArgs(arr, second: required)))
-
-	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
-	let buffer = emitLoadField(module, block: block, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: block, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-
-	return AppendSite.create(length, added: added, buffer: buffer, es: es)
-end 'emitGrowForAppend'
-
-export function emitAppendReturn(module StdModule, block IrBlock, arr ValueId, site AppendSite, ids ValueMinter)
-	let newLength = emitBin(module, block: block, a: site.length, b: site.added, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: block, record: arr, offset: ManagedRecordLengthOffset, value: newLength)
-	module.setTerminator(block, op: StdOp.retVoid)
-end 'emitAppendReturn'
 
 // `__managed_get(arr, index) -> (value, flag)` — bounds-checked element read (throws indexOutOfBounds).
 function buildManagedGet(module StdModule, greenThreads bool)

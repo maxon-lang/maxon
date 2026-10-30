@@ -132,14 +132,14 @@ export function wordGetSourceMethodName(callee ByteArray) returns ByteArray
 	return orderedWordIntrinsicName(OrderedWordIntrinsic.create(entry.access, order: entry.order))
 end 'wordGetSourceMethodName'
 
-function wordByteShift(index FullRangeInt, order WordByteOrder, width WordBytes) returns FullRangeInt
+function emitWordByteShift(module StdModule, block IrBlock, index ValueId, order WordByteOrder, width WordBytes, ids ValueMinter) returns ValueId
 	let position = match order 'o'
 		littleEndian gives index
-		bigEndian gives wordByteCount(width) - 1 - index
+		bigEndian gives emitBin(module, block: block, a: emitConst(module, block: block, value: wordByteCount(width) - 1, ids: ids), b: index, opcode: StdBinOpcode.sub, ids: ids)
 	end 'o'
 
-	return position * WordBitsPerByte
-end 'wordByteShift'
+	return emitBin(module, block: block, a: position, b: emitConst(module, block: block, value: WordBitsPerByte, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+end 'emitWordByteShift'
 
 export function installWordEntries(module StdModule)
 	for width in WordBytes.allCases 'eachWidth'
@@ -175,23 +175,37 @@ function buildWordGet(module StdModule, order WordByteOrder, width WordBytes)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
-	let buffer = emitLoadField(module, block: read, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: read, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	var word = emitConst(module, block: read, value: WordZero, ids: ids)
-	var cur = read
+	var header = module.addBlock(func, label: b"wgh", heat: BlockHeat.normal)
+	var fetch = module.addBlock(func, label: b"wgb", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"wgfail", heat: BlockHeat.normal)
+	var place = module.addBlock(func, label: b"wgstep", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"wgd", heat: BlockHeat.normal)
 
-	for index in 0 upto count 'eachByte'
-		var next = module.addBlock(func, label: b"wgstep", heat: BlockHeat.normal)
-		let offset = emitConst(module, block: cur, value: index, ids: ids)
-		let slot = emitBin(module, block: cur, a: at, b: offset, opcode: StdBinOpcode.add, ids: ids)
-		let byte = emitLoadElemAt(module, func: func, cur: cur, exit: next, buffer: buffer, index: slot, es: es, ids: ids)
-		let shift = emitConst(module, block: next, value: wordByteShift(index, order: order, width: width), ids: ids)
-		let placed = emitBin(module, block: next, a: byte, b: shift, opcode: StdBinOpcode.shl, ids: ids)
-		word = emitBin(module, block: next, a: word, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
-		cur = next
-	end 'eachByte'
+	let index = ids.mint()
+	let word = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(word, argType: StdType.i64))
 
-	emitOkReturn(module, block: cur, value: word, ids: ids)
+	let zero = emitConst(module, block: read, value: WordZero, ids: ids)
+	emitBranchCarrying(module, from: read, to: header, values: twoArgs(zero, second: zero))
+	emitBranchOnCompare(module, block: header, value: index, pred: StdCmpPred.ge, against: count, whenTrue: done, whenFalse: fetch, ids: ids)
+
+	let slot = emitBin(module, block: fetch, a: at, b: index, opcode: StdBinOpcode.add, ids: ids)
+	let byte = ids.mint()
+	let byteFlag = ids.mint()
+	module.appendOp(fetch, op: StdOp.tryCall(byte, errorFlagId: byteFlag, callee: ManagedGetName, args: twoArgs(arr, second: slot)))
+	emitBranchOnCompare(module, block: fetch, value: byteFlag, pred: StdCmpPred.ne, against: NoErrorFlag, whenTrue: failed, whenFalse: place, ids: ids)
+
+	module.setTerminator(failed, op: StdOp.errorReturn(byte, errorFlagId: byteFlag))
+
+	let shift = emitWordByteShift(module, block: place, index: index, order: order, width: width, ids: ids)
+	let placed = emitBin(module, block: place, a: byte, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+	let merged = emitBin(module, block: place, a: word, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
+	let nextIndex = ids.mint()
+	module.appendOp(place, op: StdOp.binOpImm(nextIndex, lhs: index, imm: SingleStep, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	emitBranchCarrying(module, from: place, to: header, values: twoArgs(nextIndex, second: merged))
+
+	emitOkReturn(module, block: done, value: word, ids: ids)
 
 	module.functions.push(func)
 end 'buildWordGet'
@@ -206,20 +220,18 @@ function buildWordPut(module StdModule, order WordByteOrder, width WordBytes)
 	let word = 1
 	let count = wordByteCount(width)
 
-	let site = emitGrowForAppend(module, block: entry, arr: arr, count: count, ids: ids)
-	let mask = emitConst(module, block: entry, value: WordByteMask, ids: ids)
-	var cur = entry
+	let first = emitConst(module, block: entry, value: WordZero, ids: ids)
+	let total = emitConst(module, block: entry, value: count, ids: ids)
+	var loop = openCountedLoop(module, func: func, cur: entry, from: first, to: total, label: b"wp", ids: ids)
 
-	for index in 0 upto count 'eachByte'
-		let shift = emitConst(module, block: cur, value: wordByteShift(index, order: order, width: width), ids: ids)
-		let moved = emitBin(module, block: cur, a: word, b: shift, opcode: StdBinOpcode.shrLogical, ids: ids)
-		let byte = emitBin(module, block: cur, a: moved, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
-		let offset = emitConst(module, block: cur, value: index, ids: ids)
-		let slot = emitBin(module, block: cur, a: site.length, b: offset, opcode: StdBinOpcode.add, ids: ids)
-		cur = emitStoreElemAt(module, func: func, cur: cur, buffer: site.buffer, index: slot, value: byte, es: site.es, ids: ids)
-	end 'eachByte'
+	let shift = emitWordByteShift(module, block: loop.body, index: loop.index, order: order, width: width, ids: ids)
+	let moved = emitBin(module, block: loop.body, a: word, b: shift, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let byte = emitBin(module, block: loop.body, a: moved, b: emitConst(module, block: loop.body, value: WordByteMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let pushed = ids.mint()
+	module.appendOp(loop.body, op: StdOp.call(pushed, callee: ManagedPushName, args: twoArgs(arr, second: byte)))
+	closeCountedLoop(module, loop: loop, tail: loop.body, step: SingleStep, ids: ids)
 
-	emitAppendReturn(module, block: cur, arr: arr, site: site, ids: ids)
+	module.setTerminator(loop.done, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildWordPut'
