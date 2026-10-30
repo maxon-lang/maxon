@@ -243,6 +243,8 @@ export let MmOwnName = b"__mm_own"
 // SLOTS address other records.** `__mm_own`'s blit is sound only for a box of scalars; see `buildMmOwnDeep`.
 export let MmOwnDeepName = b"__mm_own_deep"
 export let MmAllocName = b"__mm_alloc"
+// `(size, destructor)`; a `--debugstream` build passes a trace tag as a third argument.
+export let MmAllocBaseArgCount = 2 as ParamCount
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
 let MmReleaseName = b"__mm_release"
@@ -385,8 +387,46 @@ let DictionaryDestructorParamCount = 2 as ParamCount
 let DictionaryDestructorDescriptorParam = 0 as ValueId
 let DictionaryDestructorBoxParam = 1 as ValueId
 let WholeDescriptorBlockOffset = 0 as ByteOffset
-let PlainDestructorParamCount = 1 as ParamCount
+let PlainDropParamCount = 1 as ParamCount
 let PlainDestructorBoxParam = 0 as ValueId
+
+export enum RecordDropKind
+	trivial
+	cascade
+end 'RecordDropKind'
+
+export type RecordDrop
+	export let box as ValueId
+	export let kind as RecordDropKind
+
+	static function create(box ValueId, kind RecordDropKind) returns RecordDrop
+		return Self{box: box, kind: kind}
+	end 'create'
+end 'RecordDrop'
+
+export enum NotARecordDrop
+	someOtherCall
+end 'NotARecordDrop'
+
+// The one answer to "is this call a record's drop" for every pass that elides or promotes a record,
+// so no two of them can disagree about it.
+export function recordDropOf(callee ByteArray, args ValueIdArray) returns RecordDrop throws NotARecordDrop
+	if args.count() != PlainDropParamCount 'notOneArgument'
+		throw NotARecordDrop.someOtherCall
+	end 'notOneArgument'
+
+	let box = try args.get(0) otherwise panic("recordDropOf: args.get(0) OOB on a one-argument call")
+
+	if callee.equals(MmDecrefName) 'trivial'
+		return RecordDrop.create(box, kind: RecordDropKind.trivial)
+	end 'trivial'
+
+	if bytesStartWith(callee, prefix: DestructorPrefix) 'cascade'
+		return RecordDrop.create(box, kind: RecordDropKind.cascade)
+	end 'cascade'
+
+	throw NotARecordDrop.someOtherCall
+end 'recordDropOf'
 
 // ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`**, the
 // `(box) -> newBox` DUAL of `__destruct_<TypeName>`. `__`-prefixed, so `isCompilerInternalCallee` routes its
@@ -3893,7 +3933,7 @@ export typealias ManagedFieldDropArray = Array with ManagedFieldDrop
 // `call_indirect` type to satisfy and no `i64` return). It is the same
 // skeleton the union cascade uses too, minus the tag switch — hence the shared `emitNullGuardedDrop`.
 function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drops ManagedFieldDropArray, takesDescriptor bool = false)
-	let paramCount = DictionaryDestructorParamCount if takesDescriptor else PlainDestructorParamCount
+	let paramCount = DictionaryDestructorParamCount if takesDescriptor else PlainDropParamCount
 	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(paramCount)
 

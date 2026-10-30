@@ -256,11 +256,14 @@ function resolveCallee(byName FunctionNameIndex, callee ByteArray) returns FuncI
 	return FuncIndexLookup.resolves(funcIndex)
 end 'resolveCallee'
 
-// `__mm_alloc(size, destructor)` takes exactly two arguments — see MmRuntime.
-let MmAllocArgCount = 2 as ParamCount
+function trivialDropBoxOf(callee ByteArray, args ValueIdArray) returns ValueId throws NotARecordDrop
+	let drop = try recordDropOf(callee, args: args)
 
-// `__mm_decref(ptr)` takes exactly one.
-let MmDecrefArgCount = 1 as ParamCount
+	match drop.kind 'kind'
+		trivial then return drop.box
+		cascade then throw NotARecordDrop.someOtherCall
+	end 'kind'
+end 'trivialDropBoxOf'
 
 // ⭐ **THE PASS.** Whole-module: the constructor table and the parameter-escape summary are both facts about
 // the call graph, and a call site cannot be judged without them.
@@ -714,7 +717,7 @@ type ConstructorScan
 			return false
 		end 'notTheAllocation'
 
-		if self.allocSeen or resultId != box or args.count() != MmAllocArgCount 'notTheOneReturnedBox'
+		if self.allocSeen or resultId != box or args.count() != MmAllocBaseArgCount 'notTheOneReturnedBox'
 			return false
 		end 'notTheOneReturnedBox'
 
@@ -1186,9 +1189,7 @@ end 'scanOneOp'
 // buffer), and a record whose drop is any of them fails phase 1's `destructor == 0` test anyway. They fall
 // through to the unknown-callee escape below, which is where they belong.
 function scanCallOperands(module StdModule, callee ByteArray, args ValueIdArray, tracked BoolArray, byName FunctionNameIndex, scan PointerScan)
-	if callee.equals(MmDecrefName) and args.count() == MmDecrefArgCount 'theDrop'
-		let dropped = try args.get(0) otherwise panic("scanCallOperands: args.get(0) OOB on a one-argument `__mm_decref`")
-
+	if let dropped = try trivialDropBoxOf(callee, args: args) 'theDrop'
 		if isTracked(tracked, v: dropped) 'ours'
 			scan.noteDrop(dropped)
 			return
@@ -1763,11 +1764,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx ElementIndex, promoted B
 end 'opDropsAPromotedRecord'
 
 function callDropsAPromotedRecord(callee ByteArray, args ValueIdArray, promoted BoolArray) returns bool
-	if not callee.equals(MmDecrefName) or args.count() != MmDecrefArgCount 'notTheDrop'
-		return false
-	end 'notTheDrop'
-
-	let dropped = try args.get(0) otherwise panic("callDropsAPromotedRecord: args.get(0) OOB on a one-argument `__mm_decref`")
+	let dropped = try trivialDropBoxOf(callee, args: args) otherwise return false
 
 	if dropped >= promoted.count() as ValueId 'outsideTheValueSpace'
 		return false

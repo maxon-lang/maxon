@@ -99,49 +99,6 @@ let LowHalfOffset = 0
 let HighHalfOffset = MachineWordBytes
 let PairBytes = HighHalfOffset + MachineWordBytes
 
-// `__mm_alloc(size, destructor)` — plus a trace tag in a `--debugstream` build, which this pass reads
-// past: it deletes the allocation, so the tag loses its reader with it.
-let MmAllocMinArgCount = 2 as ParamCount
-let RecordDropArgCount = 1 as ParamCount
-
-enum RecordDropKind
-	trivial
-	cascade
-end 'RecordDropKind'
-
-type RecordDrop
-	export let box as ValueId
-	export let kind as RecordDropKind
-
-	static function create(box ValueId, kind RecordDropKind) returns RecordDrop
-		return Self{box: box, kind: kind}
-	end 'create'
-end 'RecordDrop'
-
-enum NotARecordDrop
-	someOtherCall
-end 'NotARecordDrop'
-
-// Asked by the census, by the classifier's complement and by the rewrite, so the three cannot
-// come to disagree about what a record's drop is.
-function recordDropOf(callee ByteArray, args ValueIdArray) returns RecordDrop throws NotARecordDrop
-	if args.count() != RecordDropArgCount 'notOneArgument'
-		throw NotARecordDrop.someOtherCall
-	end 'notOneArgument'
-
-	let box = try args.get(0) otherwise panic("recordDropOf: args.get(0) OOB on a one-argument call")
-
-	if callee.equals(MmDecrefName) 'trivial'
-		return RecordDrop.create(box, kind: RecordDropKind.trivial)
-	end 'trivial'
-
-	if bytesStartWith(callee, prefix: DestructorPrefix) 'cascade'
-		return RecordDrop.create(box, kind: RecordDropKind.cascade)
-	end 'cascade'
-
-	throw NotARecordDrop.someOtherCall
-end 'recordDropOf'
-
 // Whether a dense mark column answers true for `value`. The columns are minted over one function's value
 // space, and a value minted by the rewrite itself lies past their extent — outside is a `false` answer,
 // not an error.
@@ -764,7 +721,7 @@ end 'allocatesATwoWordTrivialBox'
 // lives in. The destructor matters here because the frame-local rewrite deletes the drop that would have
 // run it.
 function isATwoWordTrivialBox(callee ByteArray, argCount ParamCount, sizeId ValueId, destructorId ValueId, consts ConstValueMap) returns bool
-	if not callee.equals(MmAllocName) or argCount < MmAllocMinArgCount 'notAnAllocation'
+	if not callee.equals(MmAllocName) or argCount < MmAllocBaseArgCount 'notAnAllocation'
 		return false
 	end 'notAnAllocation'
 
@@ -1157,7 +1114,7 @@ function trackCallResult(resultId ValueId, callee ByteArray, args ValueIdArray, 
 	// destructor — the box a frame-local pair may live in; its row decides which shape it is, if
 	// either. Giving every allocation a row would make the classifier's per-op scan of the rows grow
 	// with the function's allocation count.
-	if callee.equals(MmAllocName) and args.count() >= MmAllocMinArgCount 'aHeapBox'
+	if callee.equals(MmAllocName) and args.count() >= MmAllocBaseArgCount 'aHeapBox'
 		if not flow.tracks(resultId) and isATwoWordTrivialBox(callee, argCount: args.count() as ParamCount, sizeId: allocArg(args, index: 0), destructorId: allocArg(args, index: 1), consts: consts) 'aPairSizedBox'
 			flow.track(resultId)
 		end 'aPairSizedBox'
