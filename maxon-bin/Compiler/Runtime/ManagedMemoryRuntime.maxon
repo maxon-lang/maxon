@@ -680,12 +680,13 @@ export let ManagedCursorDecrefName = b"__managed_cursor_decref"
 // The two slots, and the box they sit in. ⚠ `position@8` is never written at creation: `__mm_alloc` zeroes
 // its payload and a fresh cursor starts at 0, the same contract `__managed_create` relies on for
 // `element_destroy@40`.
-// ⚠ The POSITION offset is file-private: only the builders below read it, and the parser learns a position
-// through `__managed_cursor_index`. The SOURCE offset is exported because the parser names the buffer a
+// ⚠ The POSITION offset is exported for `InlineManagedPrimitives`, which expands `index`, `current`,
+// `advance` and `retreat` at their call sites; the parser learns a position through
+// `__managed_cursor_index`. The SOURCE offset is exported because the parser names the buffer a
 // promise read through a cursor came out of (`Parser.emitArrayCursorSlot`), and the SIZE because
 // `ProgramSignatures.genericInstanceBoxSize` has to answer how big a cursor's box is.
 export let CursorSourceOffset = 0 as ByteOffset
-let CursorPositionOffset = 8
+export let CursorPositionOffset = 8 as ByteOffset
 export let CursorRecordBytes = 16 as FullRangeInt
 
 // ⭐⭐ **`__managed_mem_set` — THE BUFFER'S ELEMENT WRITE, BOUNDED BY CAPACITY.**
@@ -5537,7 +5538,7 @@ end 'buildManagedCursorPeek'
 // that takes two parameters. That is the whole of the asymmetry, and it is why the step is a `CursorStep`
 // rather than an integer added to the position: an integer would have made `seek` "position + (index -
 // position)", which is arithmetic standing in for a distinction.
-enum CursorStep
+export enum CursorStep
 	forward
 	backward
 	absolute
@@ -5560,10 +5561,7 @@ function buildManagedCursorNavigator(module StdModule, name ByteArray, step Curs
 	var target = 1 as ValueId
 
 	if not takesTarget 'relativeToTheCurrentPosition'
-		let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
-		let one = emitConst(module, block: entry, value: 1, ids: ids)
-		let opcode = StdBinOpcode.add if step == CursorStep.forward else StdBinOpcode.sub
-		target = emitBin(module, block: entry, a: position, b: one, opcode: opcode, ids: ids)
+		target = emitCursorStepTarget(module, block: entry, cursor: cursor, step: step, ids: ids)
 	end 'relativeToTheCurrentPosition'
 
 	let outOfRange = emitCursorPositionOutOfRange(module, block: entry, cursor: cursor, position: target, ids: ids)
@@ -5577,15 +5575,32 @@ function buildManagedCursorNavigator(module StdModule, name ByteArray, step Curs
 	module.functions.push(func)
 end 'buildManagedCursorNavigator'
 
-// ⭐ **IS `position` A LIVE ELEMENT OF THE CURSOR'S SOURCE?** — the ONE bounds question all four fallible
-// cursor members ask, over a `length@8` read LIVE off the source record (the header's whole argument). It is
-// `emitIndexOutOfRange`, which is also what `get`/`set`/`remove` ask, so a cursor and an index agree about
-// what "in range" means by construction rather than by two matching comparisons.
 function emitCursorPositionOutOfRange(module StdModule, block IrBlock, cursor ValueId, position ValueId, ids ValueMinter) returns ValueId
 	let source = emitLoadField(module, block: block, record: cursor, offset: CursorSourceOffset, ids: ids)
+	return emitCursorSourceOutOfRange(module, block: block, source: source, position: position, ids: ids)
+end 'emitCursorPositionOutOfRange'
+
+// ⭐ **IS `position` A LIVE ELEMENT OF THE CURSOR'S SOURCE?** — the ONE bounds question every fallible
+// cursor member asks, in the runtime and in the inline expansions, over a `length@8` read LIVE off the
+// source record (the header's whole argument). It is `emitIndexOutOfRange`, which is also what
+// `get`/`set`/`remove` ask, so a cursor and an index agree about what "in range" means by construction
+// rather than by two matching comparisons.
+export function emitCursorSourceOutOfRange(module StdModule, block IrBlock, source ValueId, position ValueId, ids ValueMinter) returns ValueId
 	let length = emitLoadField(module, block: block, record: source, offset: ManagedRecordLengthOffset, ids: ids)
 	return emitIndexOutOfRange(module, block: block, index: position, length: length, ids: ids)
-end 'emitCursorPositionOutOfRange'
+end 'emitCursorSourceOutOfRange'
+
+export function emitCursorStepTarget(module StdModule, block IrBlock, cursor ValueId, step CursorStep, ids ValueMinter) returns ValueId
+	let opcode = match step 'step'
+		forward gives StdBinOpcode.add
+		backward gives StdBinOpcode.sub
+		absolute panic("emitCursorStepTarget: an absolute step takes its target from an argument, not from the position")
+	end 'step'
+
+	let position = emitLoadField(module, block: block, record: cursor, offset: CursorPositionOffset, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	return emitBin(module, block: block, a: position, b: one, opcode: opcode, ids: ids)
+end 'emitCursorStepTarget'
 
 // ⭐ **READ ELEMENT `index` OUT OF THE CURSOR'S SOURCE** — shared by `current` and `peek`, and the reason a
 // cursor needs no packed arithmetic of its own: `buffer@0` and `element_size@24` come off the source LIVE and

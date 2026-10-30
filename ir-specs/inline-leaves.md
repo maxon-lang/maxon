@@ -2546,3 +2546,853 @@ func @main {
     x64.ret
 }
 ```
+<!-- test: a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms -->
+A loop driving an `ArrayIterator` reads its element and its index without calling the runtime's cursor entries: `current` and `index` are expanded inline, and `__managed_cursor_current` is reached only from the `__im_slow` arm that an out-of-range position, a stride the arm does not move in one operation or an empty managed slot is sent to.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Total = int(0 to 1000000)
+
+function walk(values ByteArray) returns Total
+	var total = 0 as Total
+	var cursor = try values.createIterator() otherwise return total
+
+	while true 'visit'
+		total = (total as FullRangeInt + cursor.current() as FullRangeInt + cursor.index() as FullRangeInt) as Total
+
+		try cursor.advance() otherwise break
+	end 'visit'
+
+	return total
+end 'walk'
+
+function main() returns ExitCode
+	var first = ByteArray.create()
+	first.push(10)
+	first.push(20)
+	first.push(9)
+
+	var second = ByteArray.create()
+	second.push(1)
+	second.push(2)
+
+	let tail = walk(second)
+
+	if tail != 4 'wrong'
+		return 1
+	end 'wrong'
+
+	return walk(first) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @walk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.callDirect Array.createIterator
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, visit
+  tryerr:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  visit:
+    x64.leaRegRdata r13, [rip + __layout_ArrayIterator_Byte$0_255$1]
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
+    x64.cmpRegReg rax, rdi
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 24]
+    x64.cmpRegImm32 rdi, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rdi + rax*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rdi, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.leaRegRegReg rax, rdi, rax
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#26
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#27
+  __im_slow:
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rdx, r8
+    x64.jmp __im_cont
+  critsplit#27:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  critsplit#26:
+    x64.movRegReg rdx, rax
+  __im_cont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __retain_type_param
+  __il_cont#13:
+    x64.leaRegRegReg rax, rbx, r8
+  __il_body#23:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#25
+  __il_cont#12:
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#10
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 1000000
+    x64.jcc greater, __rc_panic#10
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect ArrayIterator.advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, visit
+  whileexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_ArrayIterator_Byte$0_255$1
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#25:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms.test:11: Range check failed: value outside typealias 'Total'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.callDirect walk
+    x64.cmpRegImm32 r8, 4
+    x64.jcc equal, ifcont
+  wrong:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  exitdrop#3:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+  exitterminal#2:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect walk
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  exitdrop#6:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+  exitterminal#5:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @walk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.callDirect Array.createIterator
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, visit
+  tryerr:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  visit:
+    x64.leaRegRdata r13, [rip + __layout_ArrayIterator_Byte$0_255$1]
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
+    x64.cmpRegReg rax, rdi
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 24]
+    x64.cmpRegImm32 rdi, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rdi + rax*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rdi, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.leaRegRegReg rax, rdi, rax
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#26
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#27
+  __im_slow:
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rdx, r8
+    x64.jmp __im_cont
+  critsplit#27:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  critsplit#26:
+    x64.movRegReg rdx, rax
+  __im_cont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __retain_type_param
+  __il_cont#13:
+    x64.leaRegRegReg rax, rbx, r8
+  __il_body#23:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#25
+  __il_cont#12:
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#10
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 1000000
+    x64.jcc greater, __rc_panic#10
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect ArrayIterator.advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, visit
+  whileexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_ArrayIterator_Byte$0_255$1
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#25:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms.test:11: Range check failed: value outside typealias 'Total'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.callDirect walk
+    x64.cmpRegImm32 r8, 4
+    x64.jcc equal, ifcont
+  wrong:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  exitdrop#3:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+  exitterminal#2:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect walk
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r13, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  exitdrop#6:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+  exitterminal#5:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @walk {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.bl Array.createIterator
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq visit
+  tryerr:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  visit:
+    arm64.leaRdata x21, __layout_ArrayIterator_Byte$0_255$1
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.leaRdata x1, __str_rec_1  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
+    arm64.cmp x2, x4
+    arm64.b.hs __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 24]
+    arm64.cmp x4, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x4 + x2*8 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x4, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.add x2, x4, x2
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#26
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#27
+  __im_slow:
+    arm64.bl __managed_cursor_current
+    arm64.movRegReg x1, x0
+    arm64.b __im_cont
+  critsplit#27:
+    arm64.movRegReg x1, x2
+    arm64.b __im_cont
+  critsplit#26:
+    arm64.movRegReg x1, x2
+  __im_cont:
+    arm64.movRegReg x0, x21
+    arm64.bl __retain_type_param
+  __il_cont#13:
+    arm64.add x0, x19, x0
+  __il_body#23:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#25
+  __il_cont#12:
+    arm64.add x19, x0, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#10
+  __rc_chk:
+    arm64.movImm x16, 1000000
+    arm64.cmp x19, x16
+    arm64.b.gt __rc_panic#10
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl ArrayIterator.advance
+    arm64.cmp x9, 0
+    arm64.b.eq visit
+  whileexit:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_ArrayIterator_Byte$0_255$1
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#25:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms.test:11: Range check failed: value outside typealias 'Total'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 9
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.bl walk
+    arm64.cmp x0, 4
+    arm64.b.eq ifcont
+  wrong:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  exitdrop#3:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  exitterminal#2:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movRegReg x0, x19
+    arm64.bl walk
+    arm64.movRegReg x21, x0
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  exitdrop#6:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  exitterminal#5:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @walk {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.bl Array.createIterator
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq visit
+  tryerr:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  visit:
+    arm64.leaRdata x21, __layout_ArrayIterator_Byte$0_255$1
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.leaRdata x1, __str_rec_1  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
+    arm64.cmp x2, x4
+    arm64.b.hs __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 24]
+    arm64.cmp x4, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x4 + x2*8 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x4, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.add x2, x4, x2
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#26
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#27
+  __im_slow:
+    arm64.bl __managed_cursor_current
+    arm64.movRegReg x1, x0
+    arm64.b __im_cont
+  critsplit#27:
+    arm64.movRegReg x1, x2
+    arm64.b __im_cont
+  critsplit#26:
+    arm64.movRegReg x1, x2
+  __im_cont:
+    arm64.movRegReg x0, x21
+    arm64.bl __retain_type_param
+  __il_cont#13:
+    arm64.add x0, x19, x0
+  __il_body#23:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#25
+  __il_cont#12:
+    arm64.add x19, x0, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#10
+  __rc_chk:
+    arm64.movImm x16, 1000000
+    arm64.cmp x19, x16
+    arm64.b.gt __rc_panic#10
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl ArrayIterator.advance
+    arm64.cmp x9, 0
+    arm64.b.eq visit
+  whileexit:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_ArrayIterator_Byte$0_255$1
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#25:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms.test:11: Range check failed: value outside typealias 'Total'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 9
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.bl walk
+    arm64.cmp x0, 4
+    arm64.b.eq ifcont
+  wrong:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  exitdrop#3:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  exitterminal#2:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movRegReg x0, x19
+    arm64.bl walk
+    arm64.movRegReg x21, x0
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  exitdrop#6:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  exitterminal#5:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```

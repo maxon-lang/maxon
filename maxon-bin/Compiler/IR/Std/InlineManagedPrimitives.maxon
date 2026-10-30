@@ -136,6 +136,7 @@ let InlineOwnedLabel = b"__im_owned"
 let InlineBufferLabel = b"__im_buffer"
 let InlineViewedLabel = b"__im_viewed"
 let InlineStoreLabel = b"__im_store"
+let InlineMoveLabel = b"__im_move"
 
 // The stride fork's own three: the block that asks the SECOND of `emitStrideDispatch`'s two questions, and
 // the entry of each accepted arm. Named here rather than left to the runtime's `esbyte` default so every
@@ -144,7 +145,7 @@ let InlineStrideLabel = b"__im_stride"
 let InlineWordLabel = b"__im_word"
 let InlineByteLabel = b"__im_byte"
 
-// Where the two widths of a checked `get` rejoin, carrying the loaded element as a block arg.
+// Where the two widths of a checked `get` or a cursor `current` rejoin, carrying the loaded element as a block arg.
 let InlineLoadedLabel = b"__im_loaded"
 
 // How many sites the pass expanded — a diagnostic counter, reported once per compile.
@@ -155,6 +156,27 @@ union ManagedCallFlag
 	none
 	flag(flagId ValueId)
 end 'ManagedCallFlag'
+
+union ElementReadExit
+	valueOnly
+	valueAndFlag(noError ValueId)
+end 'ElementReadExit'
+
+function okArgs(exit ElementReadExit, value ValueId) returns ValueIdArray
+	return match exit 'exit'
+		valueOnly gives argsOf(value)
+		valueAndFlag(noError) gives twoArgs(value, second: noError)
+	end 'exit'
+end 'okArgs'
+
+type LoadedElement
+	export let blockRef as ElementIndex
+	export let value as ValueId
+
+	static function create(blockRef ElementIndex, value ValueId) returns LoadedElement
+		return Self{blockRef: blockRef, value: value}
+	end 'create'
+end 'LoadedElement'
 
 // What a carve leaves behind: the block holding everything that followed the call, and the ref naming it.
 //
@@ -548,8 +570,16 @@ type PrimitiveInliner
 
 	function expandPlainCall(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId) returns ElementIndex
 		if callee.equals(ManagedCountName) 'count'
-			return self.rewriteCountInPlace(blockRef, pos: pos, args: args, resultId: resultId, callee: callee)
+			return self.rewriteAsFieldLoad(blockRef, pos: pos, args: args, resultId: resultId, callee: callee, offset: ManagedRecordLengthOffset)
 		end 'count'
+
+		if callee.equals(ManagedCursorIndexName) 'cursorIndex'
+			return self.rewriteAsFieldLoad(blockRef, pos: pos, args: args, resultId: resultId, callee: callee, offset: CursorPositionOffset)
+		end 'cursorIndex'
+
+		if callee.equals(ManagedCursorCurrentName) 'cursorCurrent'
+			return self.expandCursorCurrent(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+		end 'cursorCurrent'
 
 		if callee.equals(ManagedGetUncheckedName) 'uncheckedGet'
 			return self.expandUncheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
@@ -574,7 +604,7 @@ type PrimitiveInliner
 		return blockRef
 	end 'expandPlainCall'
 
-	// The three THROWING ones, reached as an `StdOp.tryCall` over the dual-register `(value, flag)` ABI and
+	// The THROWING ones, reached as an `StdOp.tryCall` over the dual-register `(value, flag)` ABI and
 	// told apart the same way.
 	//
 	// ⭐ `set` and `mem_set` differ in exactly ONE thing — the record field their index is bounded against —
@@ -598,23 +628,32 @@ type PrimitiveInliner
 			return self.expandWordGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 		end 'wordGet'
 
+		if callee.equals(ManagedCursorAdvanceName) 'cursorAdvance'
+			return self.expandCursorMove(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, step: CursorStep.forward)
+		end 'cursorAdvance'
+
+		if callee.equals(ManagedCursorRetreatName) 'cursorRetreat'
+			return self.expandCursorMove(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, step: CursorStep.backward)
+		end 'cursorRetreat'
+
 		return blockRef
 	end 'expandThrowingCall'
 
-	// ⭐ `__managed_count(arr)` IS THE ONE MEMBER WITH NOTHING TO GUARD: its whole body is
-	// `loadIndirect i64 [arr + length@8]` (`buildManagedCount`), which is legal wherever the call was —
-	// the record is the caller's own and no field of it is consulted. So the call op is REPLACED at its own
+	// ⭐ `__managed_count(arr)` and `__managed_cursor_index(cursor)` HAVE NOTHING TO GUARD: each whole body
+	// is one `loadIndirect i64` of a field of the record the caller holds (`buildManagedCount`'s
+	// `length@8`, `buildManagedCursorIndex`'s `position@8`), which is legal wherever the call was — no
+	// other field is consulted. So the call op is REPLACED at its own
 	// index, keeping `resultId`, and not one block or edge moves. `IrModule.ops` is indexed by
 	// `block.opRefs`, so an in-place replacement is invisible to every other reference in the function —
 	// the same discipline the register allocator's colorer states for itself.
-	function rewriteCountInPlace(blockRef ElementIndex, pos ElementIndex, args ValueIdArray, resultId ValueId, callee ByteArray) returns ElementIndex
-		let arr = argAt(args, index: 0, callee: callee)
+	function rewriteAsFieldLoad(blockRef ElementIndex, pos ElementIndex, args ValueIdArray, resultId ValueId, callee ByteArray, offset ByteOffset) returns ElementIndex
+		let record = argAt(args, index: 0, callee: callee)
 		let opIdx = self.opIndexAt(blockRef, pos: pos)
-		try self.module.ops.set(opIdx, value: StdOp.loadIndirect(resultId, addrId: arr, offset: ManagedRecordLengthOffset, valueType: StdType.i64)) otherwise panic("rewriteCountInPlace: module.ops.set OOB at {opIdx}, which block {blockRef} of '{String.from(self.func.name)}' names at position {pos}")
+		try self.module.ops.set(opIdx, value: StdOp.loadIndirect(resultId, addrId: record, offset: offset, valueType: StdType.i64)) otherwise panic("rewriteAsFieldLoad: module.ops.set OOB at {opIdx}, which block {blockRef} of '{String.from(self.func.name)}' names at position {pos}")
 		self.expanded = self.expanded + 1
 
 		return blockRef
-	end 'rewriteCountInPlace'
+	end 'rewriteAsFieldLoad'
 
 	// `__managed_get_unchecked(arr, index) -> value`: each accepted stride is a slot address and one load, at
 	// its own width. There is nothing above the widths to share, so the stride fork IS the whole guard chain
@@ -705,20 +744,30 @@ type PrimitiveInliner
 		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 		var inRange = self.guardIndexInRange(self.blockAt(blockRef), arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: frame.slow, next: InlineLoadLabel)
 		let arms = self.openStrideArms(registeredBlockRef(self.module, func: self.func, block: inRange), arr: arr, slow: frame.slow.id, plan: plan)
+		let loaded = self.emitLoadArms(arms, arr: arr, index: index)
 
-		// ⭐ **ONE ARM NEEDS NO JOIN, AND THE JOIN IS THE ONLY REASON THE TAIL IS NOT WRITTEN IN PLACE.**
-		// With two widths the tail reads a value TWO blocks produced, so the arms rejoin at `loaded` and carry
-		// it as a block arg; with one there is exactly one producer and the tail simply follows it — one block
-		// and one branch fewer, on every element read whose stride the compiler knows.
+		var tail = self.blockAt(loaded.blockRef)
+		let noError = emitConst(self.module, block: tail, value: NoErrorFlag, ids: self.valueIds())
+		self.emitElementReadTail(tail, arr: arr, value: loaded.value, frame: frame, trivialElement: trivialElement, exit: ElementReadExit.valueAndFlag(noError))
+
+		return self.finish(frame.carve)
+	end 'expandCheckedGet'
+
+	// ⭐ **ONE ARM NEEDS NO JOIN, AND THE JOIN IS THE ONLY REASON THE TAIL IS NOT WRITTEN IN PLACE.**
+	// With two widths the tail reads a value TWO blocks produced, so the arms rejoin at `loaded` and carry
+	// it as a block arg; with one there is exactly one producer and the tail simply follows it — one block
+	// and one branch fewer, on every element read whose stride the compiler knows.
+	function emitLoadArms(arms StrideArmArray, arr ValueId, index ValueId) returns LoadedElement
 		if arms.count() == 1 'oneKnownWidth'
-			let only = try arms.get(0) otherwise panic("expandCheckedGet: a one-arm plan produced an empty arm list")
+			let only = try arms.get(0) otherwise panic("emitLoadArms: a one-arm plan produced an empty arm list")
 			var loadBlock = self.blockAt(only.blockRef)
 			let value = self.emitElementLoad(loadBlock, arr: arr, index: index, stride: only.stride)
-			self.emitCheckedGetTail(loadBlock, arr: arr, value: value, frame: frame, trivialElement: trivialElement)
-			return self.finish(frame.carve)
+
+			return LoadedElement.create(only.blockRef, value: value)
 		end 'oneKnownWidth'
 
 		var loaded = self.module.addBlock(self.func, label: InlineLoadedLabel, heat: BlockHeat.normal)
+		let loadedRef = registeredBlockRef(self.module, func: self.func, block: loaded)
 		let value = self.valueIds().mint()
 
 		// ⚠ **THE `loaded` JOIN'S ARG IS AN ELEMENT AND NOT A CALL RESULT, AND IT IS i64 FOR A DIFFERENT
@@ -733,12 +782,51 @@ type PrimitiveInliner
 			self.emitLoadArmToCont(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, cont: loaded)
 		end 'eachArm'
 
-		self.emitCheckedGetTail(loaded, arr: arr, value: value, frame: frame, trivialElement: trivialElement)
+		return LoadedElement.create(loadedRef, value: value)
+	end 'emitLoadArms'
+
+	function expandCursorCurrent(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId) returns ElementIndex
+		let cursor = argAt(args, index: 0, callee: callee)
+		let plan = StrideDispatchPlan.runtimeFork
+
+		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
+
+		var head = self.blockAt(blockRef)
+		let position = emitLoadField(self.module, block: head, record: cursor, offset: CursorPositionOffset, ids: self.valueIds())
+		let source = emitLoadField(self.module, block: head, record: cursor, offset: CursorSourceOffset, ids: self.valueIds())
+		var inRange = self.guardCursorInRange(head, source: source, position: position, slow: frame.slow, next: InlineLoadLabel)
+		let arms = self.openStrideArms(registeredBlockRef(self.module, func: self.func, block: inRange), arr: source, slow: frame.slow.id, plan: plan)
+		let loaded = self.emitLoadArms(arms, arr: source, index: position)
+
+		self.emitElementReadTail(self.blockAt(loaded.blockRef), arr: source, value: loaded.value, frame: frame, trivialElement: false, exit: ElementReadExit.valueOnly)
 
 		return self.finish(frame.carve)
-	end 'expandCheckedGet'
+	end 'expandCursorCurrent'
 
-	// The shared tail of a checked `get`: an empty MANAGED slot throws and everything else is the answer.
+	function expandCursorMove(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, step CursorStep) returns ElementIndex
+		let cursor = argAt(args, index: 0, callee: callee)
+
+		// Cold, unlike `current`'s slow arm: only an out-of-range move reaches it, and the call there throws.
+		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: BlockHeat.cold)
+
+		var head = self.blockAt(blockRef)
+		let target = emitCursorStepTarget(self.module, block: head, cursor: cursor, step: step, ids: self.valueIds())
+		let source = emitLoadField(self.module, block: head, record: cursor, offset: CursorSourceOffset, ids: self.valueIds())
+		var move = self.guardCursorInRange(head, source: source, position: target, slow: frame.slow, next: InlineMoveLabel)
+
+		emitStoreField(self.module, block: move, record: cursor, offset: CursorPositionOffset, value: target)
+		self.emitVoidOkExit(move, frame: frame, errorFlagId: ManagedCallFlag.flag(errorFlagId))
+
+		return self.finish(frame.carve)
+	end 'expandCursorMove'
+
+	function guardCursorInRange(cur IrBlock, source ValueId, position ValueId, slow IrBlock, next ByteArray) returns IrBlock
+		let outOfRange = emitCursorSourceOutOfRange(self.module, block: cur, source: source, position: position, ids: self.valueIds())
+		return self.guard(cur, refused: outOfRange, slow: slow, next: next)
+	end 'guardCursorInRange'
+
+	// The shared tail of a checked element read (`get`, and a cursor's `current`): an empty MANAGED slot
+	// leaves for the slow arm, which throws (`get`) or panics (`current`), and everything else is the answer.
 	// `cur` holds the loaded element — as its own block arg when the two widths rejoined there, and as the
 	// value the one arm's load defined otherwise.
 	//
@@ -754,9 +842,7 @@ type PrimitiveInliner
 	// `MemoryIndexOutOfBoundsOrdinal` makes about not aliasing itself to `ArrayErrorIndexOutOfBoundsFlag`.
 	// It costs nothing: `foldConstOperands` folds both compares into immediates and DCEs their consts,
 	// leaving only the flag, whose reader is the edge below.
-	function emitCheckedGetTail(cur IrBlock, arr ValueId, value ValueId, frame InlineFrame, trivialElement bool)
-		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
-
+	function emitElementReadTail(cur IrBlock, arr ValueId, value ValueId, frame InlineFrame, trivialElement bool, exit ElementReadExit)
 		if trivialElement 'noEmptySlotToReport'
 			self.module.setTerminator(cur, op: StdOp.branch(frame.carve.cont.id))
 		end 'noEmptySlotToReport' else 'askTheRecord'
@@ -766,15 +852,15 @@ type PrimitiveInliner
 			var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel, heat: BlockHeat.normal)
 			self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.carve.cont.id))
 
-			// `value` and `noError` are both readable here: `cur` defines `noError` and either defines `value` or
-			// takes it as its own block arg, and `cur` dominates this block — so both reach this block's own edge
-			// to the continuation too.
+			// `value`, and for `get` the `noError` its caller defined in `cur`, are readable here: `cur` either
+			// defines `value` or takes it as its own block arg, and `cur` dominates this block — so both reach
+			// this block's own edge to the continuation too.
 			emitBranchOnCompare(self.module, block: checkEmpty, value: value, pred: StdCmpPred.eq, against: EmptyManagedSlot, whenTrue: frame.slow, whenFalse: frame.carve.cont, ids: self.valueIds())
-			attachEdge(checkEmpty, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
+			attachEdge(checkEmpty, targetId: frame.carve.cont.id, argIds: okArgs(exit, value: value))
 		end 'askTheRecord'
 
-		attachEdge(cur, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
-	end 'emitCheckedGetTail'
+		attachEdge(cur, targetId: frame.carve.cont.id, argIds: okArgs(exit, value: value))
+	end 'emitElementReadTail'
 
 	// `__managed_set` / `__managed_mem_set` / `__managed_set_unchecked`.
 	//
@@ -1226,8 +1312,8 @@ type PrimitiveInliner
 		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
 		attachEdge(slow, targetId: cont.id, argIds: slowCarried)
 
-		// Every value these five primitives carry is a MACHINE WORD, and that is exact rather than a
-		// default: all five are declared `value(StdType.i64)` or void, so the `resultId` a call defined was
+		// Every value the expanded primitives carry is a MACHINE WORD, and that is exact rather than a
+		// default: every one is declared `value(StdType.i64)` or void, so the `resultId` a call defined was
 		// already classed off that declaration (`StdLoweringShared.calleeResultClass`), and a dual-register
 		// error flag is i64 on every backend (`StdToWasm.recordTryCallDefs`).
 		attachBlockArgs(cont, valueIds: carried, argType: StdType.i64)
