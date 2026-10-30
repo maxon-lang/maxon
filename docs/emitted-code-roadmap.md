@@ -2066,9 +2066,12 @@ range checks. **Measure the corpus first**; this may be a row with nothing behin
 
 #### `EC24` · Direct calls for the `withIterator()` loop over an `Array`
 
-`for (iter, x) in array.withIterator()` allocates nothing per element: `ValueTupleReturn` elides the
-`(iter, x)` pair each step builds, and releases its slots one by one where an element is managed
-(`ir-specs/tuples.md`, `a-with-iterator-loop-over-an-array-allocates-nothing-per-element`).
+`for (iter, x) in array.withIterator()` allocates nothing per element, in a body that returns early
+too: `ValueTupleReturn` elides the `(iter, x)` pair each step builds, takes it in two registers where
+several loops share one `WithIterIterator.current` call, and releases its slots one by one where an
+element is managed (`ir-specs/tuples.md`: `a-with-iterator-loop-over-an-array-allocates-nothing-per-element`,
+`a-with-iterator-loop-that-returns-early-allocates-nothing-per-element`,
+`a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element`).
 Each step reaches the cursor through its witness table: about 21 x64 instructions per element,
 against 6 for `for x in array`.
 

@@ -41,13 +41,14 @@
 // those functions keep the heap convention entirely, and every element-ownership question with them.
 //
 // ⭐ **AND THE CALLER MUST BE ABLE TO TAKE THE PAIR TOO, OR THE CALLEE DOES NOT GET THE CONVENTION.** A
-// call site qualifies when the result's only uses are whole-slot loads of its two halves plus the one
-// trivial `__mm_decref` that drops it — no record needed, so none is built — or when the result flows
-// straight into the enclosing function's own value-convention `ret`. Anything else (the pair escapes into
-// an array, its drop is a `__destruct_<T>` cascade because the elements are managed at THIS instantiation,
-// it crosses a branch merge) takes the callee OFF the convention for the whole compile. That is what keeps
-// this pass from ever having to materialize a record out of two registers — which in a `--debugstream`
-// build would also have to invent an mm-trace tag for a box no source line asked for.
+// call site qualifies when the result's only uses are whole-slot loads of its two halves plus its drops
+// — trivial `__mm_decref`s, which go, or `__destruct_<T>` cascades, each replaced by the per-slot releases
+// it would have run — so no record is needed and none is built; or when the result flows straight into
+// the enclosing function's own value-convention `ret`. Anything else (the pair escapes into an array, a
+// cascade releases a slot other than by one direct call on one half, it crosses a branch merge) takes the
+// callee OFF the convention for the whole compile. That is what keeps this pass from ever having to
+// materialize a record out of two registers — which in a `--debugstream` build would also have to invent
+// an mm-trace tag for a box no source line asked for.
 //
 // ⚠ **BOTH ENDS READ ONE VERDICT, AND THAT IS THE WHOLE SAFETY ARGUMENT.** A callee lowered to
 // `errorReturn` whose caller still reads one register hands back a scalar where a pointer is expected; the
@@ -67,10 +68,10 @@
 // ⭐ **THE THIRD SHAPE IS BOTH ENDS IN ONE FRAME.** A called-once callee is spliced into its caller
 // (`InlineLeaves`), so a fresh pair the callee minted and the loads-then-drop the caller did are now one
 // function's ops with no call between them: `__mm_alloc`, the two half stores, whole-slot loads of the
-// halves, and the one drop — the trivial `__mm_decref`, or the `__destruct_<T>` cascade when an
-// element is managed. Nothing else sees the box, so it is deleted outright and every load reads the
-// STORED value — the same ownership argument as the fresh literal, with no register to cross. A
-// trivial drop goes with the box; a cascade is replaced by the per-slot releases it would have run
+// halves, and its drops — trivial `__mm_decref`s, or `__destruct_<T>` cascades when an element is
+// managed. Nothing else sees the box, so it is deleted outright and every load reads the STORED value
+// — the same ownership argument as the fresh literal, with no register to cross. A trivial drop goes
+// with the box; each cascade is replaced by the per-slot releases it would have run
 // (`MmRuntime.structDestructorDrops`), and a cascade with a release that is not one direct call on
 // one stored word keeps the box. It asks one thing more than the other two: the allocation's
 // destructor is the trivial one, because here a deleted `__mm_decref` is the drop that would have
@@ -208,20 +209,27 @@ type TupleValueRow
 		return self.storeLow == 1 and self.storeHigh == 1 and self.returnUses == 1 and self.loadLow == 0 and self.loadHigh == 0 and self.dropCount() == 0 and self.other == 0
 	end 'isAnUnsharedFreshPair'
 
-	// The FRAME-LOCAL shape: built, read by whole-slot loads only, and dropped once, all in one frame. Any
+	// The FRAME-LOCAL shape: built, read by whole-slot loads only, and dropped, all in one frame. Any
 	// number of loads — each becomes a read of the stored value.
 	//
 	// ⚠ Exactly one store per half is also what lets a cascade drop become per-slot releases with
 	// no null guard: each slot still holds the one value stored into it, because a move-out would be
 	// a second store. Admitting a second store releases a moved-out slot.
 	function isAFrameLocalPair() returns bool
-		return self.storeLow == 1 and self.storeHigh == 1 and self.dropCount() == 1 and self.returnUses == 0 and self.other == 0
+		return self.storeLow == 1 and self.storeHigh == 1 and self.hasOneKindOfDrop() and self.returnUses == 0 and self.other == 0
 	end 'isAFrameLocalPair'
 
-	// The CALL-SITE shape that needs no record: the halves are read out and the box is released by the one
-	// trivial decref. Zero loads is admitted — a result nobody reads still costs the call.
+	// Several drop sites are sound only because nothing shares the box: with no `other` use and no
+	// return its count stays 1, so a path reaches at most one drop and each is the last owner's. Every
+	// caller must also refuse `other` and `returnUses`, or a rewritten drop releases a live box's slots.
+	function hasOneKindOfDrop() returns bool
+		return self.dropCount() >= 1 and (self.trivialDrops == 0 or self.cascadeDrops == 0)
+	end 'hasOneKindOfDrop'
+
+	// The CALL-SITE shape that needs no record: the halves are read out and the box dropped. Zero loads
+	// is admitted — a result nobody reads still costs the call.
 	function isReadThenDropped() returns bool
-		return self.trivialDrops == 1 and self.cascadeDrops == 0 and self.returnUses == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
+		return self.hasOneKindOfDrop() and self.returnUses == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
 	end 'isReadThenDropped'
 
 	// ⛔⛔ **THE UNREACHABLE PANIC RETURN, which is not an exception to the gate but the same rule applied to
@@ -345,7 +353,7 @@ typealias ValueTupleRetVerdictArray = Array with ValueTupleRetVerdict
 
 // What one CALL SITE of a candidate can do — the caller half of the gate.
 union ValueTupleCallShape
-	// The halves are read out and the box trivially dropped: no record is needed at this site.
+	// The halves are read out and the box dropped: no record is needed at this site.
 	readThenDropped
 
 	// The pair flows straight into the caller's own return, so the caller must be on the convention too.
@@ -390,13 +398,14 @@ function convertWithNameIndex(project Project, module StdModule, signatures Prog
 	// holds a frame-local pair.
 	var onTheConvention = collectCandidates(project, module: module)
 	var flows = analyseAffectedFunctions(module, byName: byName, onTheConvention: onTheConvention)
+	let catalog = StructDropCatalog.create(project, signatures: signatures, needed: cascadeSymbolsOf(flows))
 
 	// PHASES 2 and 3 — the two verdict lists, and the fixpoint that removes every candidate one of them
 	// refuses. Only where a candidate exists: a frame-local pair needs no convention and is rewritten
 	// from its flow alone.
 	if anyCandidate(onTheConvention) 'aCandidateExists'
 		let retVerdicts = collectRetVerdicts(module, flows: flows, onTheConvention: onTheConvention)
-		let callSites = collectCallSites(module, byName: byName, flows: flows, onTheConvention: onTheConvention)
+		let callSites = collectCallSites(module, byName: byName, flows: flows, onTheConvention: onTheConvention, catalog: catalog)
 		settleTheConvention(onTheConvention, retVerdicts: retVerdicts, callSites: callSites)
 	end 'aCandidateExists'
 
@@ -404,8 +413,6 @@ function convertWithNameIndex(project Project, module StdModule, signatures Prog
 	if anyCandidate(onTheConvention) 'someCandidateKeptIt'
 		stampTheConvention(module, onTheConvention: onTheConvention)
 	end 'someCandidateKeptIt'
-
-	let catalog = StructDropCatalog.create(project, signatures: signatures, needed: cascadeSymbolsOf(flows))
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		var flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
@@ -754,8 +761,8 @@ function allocatesATwoWordTrivialBox(module StdModule, liveOps OpIndexArray, con
 end 'allocatesATwoWordTrivialBox'
 
 // An `__mm_alloc` of exactly two machine words with the trivial destructor — the box a frame-local pair
-// lives in. The destructor matters HERE and nowhere else in this pass: the frame-local rewrite deletes the
-// drop that would have run it, where the two convention shapes hand the drop to the caller untouched.
+// lives in. The destructor matters here because the frame-local rewrite deletes the drop that would have
+// run it.
 function isATwoWordTrivialBox(callee ByteArray, argCount ParamCount, sizeId ValueId, destructorId ValueId, consts ConstValueMap) returns bool
 	if not callee.equals(MmAllocName) or argCount < MmAllocMinArgCount 'notAnAllocation'
 		return false
@@ -1465,8 +1472,12 @@ function isAWholeHalf(offset ByteOffset, valueType StdType) returns bool
 		return false
 	end 'notAWholeGeneralRegister'
 
-	return offset == LowHalfOffset or offset == HighHalfOffset
+	return isAHalfOffset(offset)
 end 'isAWholeHalf'
+
+function isAHalfOffset(offset ByteOffset) returns bool
+	return offset == LowHalfOffset or offset == HighHalfOffset
+end 'isAHalfOffset'
 
 function callIsTheDropOf(callee ByteArray, args ValueIdArray, value ValueId) returns bool
 	let drop = try recordDropOf(callee, args: args) otherwise return false
@@ -1506,6 +1517,13 @@ end 'noteDrop'
 
 function noteCascadeDrop(flow FunctionTupleFlow, box ValueId, callee ByteArray)
 	var row = flow.rowOf(box)
+
+	// A box's slot releases are planned from one destructor, so a second would have its sites given
+	// the first one's releases.
+	if row.cascadeDrops > 0 and not row.cascadeCallee.equals(callee) 'aDifferentDestructor'
+		row.other = row.other + 1
+	end 'aDifferentDestructor'
+
 	row.cascadeDrops = row.cascadeDrops + 1
 	row.cascadeCallee = callee.clone()
 	flow.cascadeSymbols.insert(callee.clone())
@@ -1611,7 +1629,7 @@ function forwardedKindOf(row TupleValueRow, calleeIndex ElementIndex) returns Va
 end 'forwardedKindOf'
 
 // Every direct call to a candidate, wherever it is, with what that site can do.
-function collectCallSites(module StdModule, byName FunctionNameIndex, flows FunctionTupleFlowSlotArray, onTheConvention BoolArray) returns ValueTupleCallSiteArray
+function collectCallSites(module StdModule, byName FunctionNameIndex, flows FunctionTupleFlowSlotArray, onTheConvention BoolArray, catalog StructDropCatalog) returns ValueTupleCallSiteArray
 	var sites = ValueTupleCallSiteArray.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
@@ -1619,14 +1637,14 @@ function collectCallSites(module StdModule, byName FunctionNameIndex, flows Func
 		let func = module.getFunc(funcIndex)
 
 		for opIdx in module.liveOpIndices(func) 'eachOp'
-			noteCallSite(try module.ops.get(opIdx) otherwise panic("collectCallSites: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, sites: sites)
+			noteCallSite(try module.ops.get(opIdx) otherwise panic("collectCallSites: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, catalog: catalog, sites: sites)
 		end 'eachOp'
 	end 'eachFunc'
 
 	return sites
 end 'collectCallSites'
 
-function noteCallSite(op StdOp, funcIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, sites ValueTupleCallSiteArray)
+function noteCallSite(op StdOp, funcIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog, sites ValueTupleCallSiteArray)
 	match op 'op'
 		const or
 		binOp or
@@ -1749,21 +1767,21 @@ function noteCallSite(op StdOp, funcIndex ElementIndex, byName FunctionNameIndex
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then break
-		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, sites: sites)
+		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, catalog: catalog, sites: sites)
 	end 'op'
 end 'noteCallSite'
 
-function noteCandidateCallSite(resultId ValueId, callee ByteArray, funcIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, sites ValueTupleCallSiteArray)
+function noteCandidateCallSite(resultId ValueId, callee ByteArray, funcIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog, sites ValueTupleCallSiteArray)
 	let calleeIndex = try byName.byName.get(callee) otherwise return
 
 	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'notACandidate'
 		return
 	end 'notACandidate'
 
-	sites.push(ValueTupleCallSite.create(funcIndex, calleeIndex: calleeIndex, shape: callShapeOf(flow, pair: resultId, callerIsACandidate: isOnTheConvention(onTheConvention, funcIndex: funcIndex))))
+	sites.push(ValueTupleCallSite.create(funcIndex, calleeIndex: calleeIndex, shape: callShapeOf(flow, pair: resultId, callerIsACandidate: isOnTheConvention(onTheConvention, funcIndex: funcIndex), catalog: catalog)))
 end 'noteCandidateCallSite'
 
-// ⭐ **THE CALLER HALF OF THE GATE.** A pair that is read out and trivially dropped needs no record; one
+// ⭐ **THE CALLER HALF OF THE GATE.** A pair that is read out and dropped needs no record; one
 // that flows into the caller's own return needs none either, PROVIDED the caller is on the convention.
 //
 // ⛔⛔ **A CALLER THAT IS NOT A CANDIDATE FORWARDS NOTHING, AND THE REFUSAL HAS TO BE STATED HERE.** The
@@ -1772,14 +1790,14 @@ end 'noteCandidateCallSite'
 // that edge can be seeded at, so admitting its site would leave the callee on the convention with a
 // forwarding `ret` in a function whose ABI hands back one register. Then `rewriteOneReturn` writes the
 // low half where the caller's type says a record pointer, and the indirect call reading it faults.
-function callShapeOf(flow FunctionTupleFlow, pair ValueId, callerIsACandidate bool) returns ValueTupleCallShape
+function callShapeOf(flow FunctionTupleFlow, pair ValueId, callerIsACandidate bool, catalog StructDropCatalog) returns ValueTupleCallShape
 	if not flow.tracks(pair) 'noRowAtAll'
 		return ValueTupleCallShape.unusable
 	end 'noRowAtAll'
 
 	let row = flow.rowOf(pair)
 
-	if row.isReadThenDropped() 'noRecordNeeded'
+	if row.isReadThenDropped() and catalog.releasesTheSlotsOf(row) 'noRecordNeeded'
 		return ValueTupleCallShape.readThenDropped
 	end 'noRecordNeeded'
 
@@ -1898,10 +1916,9 @@ end 'NoSlotDrops'
 type SlotDrop
 	export let callee as ByteArray
 	export let value as ValueId
-	export let resultId as ValueId
 
-	static function create(callee ByteArray, value ValueId, resultId ValueId) returns SlotDrop
-		return Self{callee: callee, value: value, resultId: resultId}
+	static function create(callee ByteArray, value ValueId) returns SlotDrop
+		return Self{callee: callee, value: value}
 	end 'create'
 end 'SlotDrop'
 
@@ -1944,6 +1961,10 @@ type StructDropCatalog
 
 		return Self{targetsBySymbol: targetsBySymbol}
 	end 'create'
+
+	function releasesTheSlotsOf(row TupleValueRow) returns bool
+		return row.cascadeDrops == 0 or self.targetsBySymbol.contains(row.cascadeCallee)
+	end 'releasesTheSlotsOf'
 end 'StructDropCatalog'
 
 function directSlotDropTargets(entry StructRosterEntry, signatures ProgramSignatures) returns SlotDropTargetArray throws NoSlotDrops
@@ -1957,6 +1978,12 @@ function directSlotDropTargets(entry StructRosterEntry, signatures ProgramSignat
 		end 'kind'
 	end 'eachManagedSlot'
 
+	for target in targets 'eachTarget'
+		if not isAHalfOffset(target.offset) 'notAHalf'
+			throw NoSlotDrops.notElidable
+		end 'notAHalf'
+	end 'eachTarget'
+
 	// An empty list would leave the cascade call in place, reading a box the rewrite deletes.
 	if targets.count() == 0 'nothingToRelease'
 		throw NoSlotDrops.notElidable
@@ -1965,29 +1992,32 @@ function directSlotDropTargets(entry StructRosterEntry, signatures ProgramSignat
 	return targets
 end 'directSlotDropTargets'
 
-function storedValueAtSlot(row TupleValueRow, offset ByteOffset) returns ValueId throws NoSlotDrops
+function valueAtSlot(offset ByteOffset, low ValueId, high ValueId) returns ValueId
 	if offset == LowHalfOffset 'low'
-		return row.storedLow
+		return low
 	end 'low'
 
 	if offset == HighHalfOffset 'high'
-		return row.storedHigh
+		return high
 	end 'high'
 
-	throw NoSlotDrops.notElidable
-end 'storedValueAtSlot'
+	panic("valueAtSlot: offset {offset} is neither half — `directSlotDropTargets` admits only a destructor whose managed slots are the two halves")
+end 'valueAtSlot'
 
-function slotDropsOf(catalog StructDropCatalog, row TupleValueRow, mint ValueMinter) returns SlotDropArray throws NoSlotDrops
-	view targets = try catalog.targetsBySymbol.get(row.cascadeCallee) otherwise throw NoSlotDrops.notElidable
+function planSlotReleases(plan ValueTuplePlan, box ValueId, row TupleValueRow, low ValueId, high ValueId)
+	if row.cascadeDrops == 0 'nothingCascades'
+		return
+	end 'nothingCascades'
+
+	view targets = try plan.catalog.targetsBySymbol.get(row.cascadeCallee) otherwise panic("planSlotReleases: box {box} is cascade-dropped through a destructor the catalog holds no slot releases for — `markTheBoxIfFrameLocal` and `callShapeOf` admit a cascade-dropped box only where `StructDropCatalog.releasesTheSlotsOf` answers true")
 	var drops = SlotDropArray.create()
 
 	for target in targets 'eachTarget'
-		let value = try storedValueAtSlot(row, offset: target.offset)
-		drops.push(SlotDrop.create(target.callee.clone(), value: value, resultId: mint.mint()))
+		drops.push(SlotDrop.create(target.callee.clone(), value: valueAtSlot(target.offset, low: low, high: high)))
 	end 'eachTarget'
 
-	return drops
-end 'slotDropsOf'
+	plan.slotDrops.upsert(box, value: drops)
+end 'planSlotReleases'
 
 // The rewrite plan for one function: which values leave through the two return registers, which boxes stop
 // being built, which call results now arrive as a register pair, and the second value id each pair is
@@ -2004,8 +2034,8 @@ type ValueTuplePlan
 	export var elidedBox as BoolArray
 
 	// The `call` defining this value becomes a `tryCall` capturing both registers; its half loads become
-	// reads of those two values and its trivial drop disappears; a frame-local box's cascade drop
-	// becomes its `slotDrops`.
+	// reads of those two values, its trivial drops disappear, and each cascade drop becomes its
+	// `slotDrops`.
 	export var registerPair as BoolArray
 	export var lowOf as ValueIdArray
 	export var highOf as ValueIdArray
@@ -2126,7 +2156,7 @@ function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow Funct
 	end 'eachChainReturn'
 
 	for opIdx in liveOps 'eachOp'
-		rewriteOneOp(module, opIdx: opIdx, plan: plan, subst: subst, doomed: doomed)
+		rewriteOneOp(module, opIdx: opIdx, plan: plan, subst: subst, doomed: doomed, mint: mint)
 	end 'eachOp'
 
 	// Spliced before the substitution, which rewrites only the ops the blocks list: a release's value
@@ -2478,40 +2508,38 @@ function planOneCallResult(resultId ValueId, flow FunctionTupleFlow, onTheConven
 	end 'notOurs'
 
 	match flow.rowOf(resultId).origin 'origin'
-		freshBox then markTheBoxIfFrameLocal(resultId, flow: flow, plan: plan, mint: mint)
-		directCall(calleeIndex) then markThePairIfTheCalleeKeptTheConvention(resultId, calleeIndex: calleeIndex, onTheConvention: onTheConvention, plan: plan, mint: mint)
+		freshBox then markTheBoxIfFrameLocal(resultId, flow: flow, plan: plan)
+		directCall(calleeIndex) then markThePairIfTheCalleeKeptTheConvention(resultId, calleeIndex: calleeIndex, onTheConvention: onTheConvention, flow: flow, plan: plan, mint: mint)
 		constant or
 		elsewhere then break
 	end 'origin'
 end 'planOneCallResult'
 
-function markTheBoxIfFrameLocal(box ValueId, flow FunctionTupleFlow, plan ValueTuplePlan, mint ValueMinter)
+function markTheBoxIfFrameLocal(box ValueId, flow FunctionTupleFlow, plan ValueTuplePlan)
 	let row = flow.rowOf(box)
 
-	if not row.isAFrameLocalPair() 'somethingElseSeesTheBox'
+	if not row.isAFrameLocalPair() or not plan.catalog.releasesTheSlotsOf(row) 'somethingElseSeesTheBox'
 		return
 	end 'somethingElseSeesTheBox'
 
-	if row.cascadeDrops == 1 'theSlotsAreReleasedOneByOne'
-		let drops = try slotDropsOf(plan.catalog, row: row, mint: mint) otherwise return
-		plan.slotDrops.upsert(box, value: drops)
-	end 'theSlotsAreReleasedOneByOne'
-
+	planSlotReleases(plan, box: box, row: row, low: row.storedLow, high: row.storedHigh)
 	plan.markFrameLocalPair(box, low: row.storedLow, high: row.storedHigh)
 end 'markTheBoxIfFrameLocal'
 
-function markThePairIfTheCalleeKeptTheConvention(resultId ValueId, calleeIndex ElementIndex, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
+function markThePairIfTheCalleeKeptTheConvention(resultId ValueId, calleeIndex ElementIndex, onTheConvention BoolArray, flow FunctionTupleFlow, plan ValueTuplePlan, mint ValueMinter)
 	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'refusedByTheFixpoint'
 		return
 	end 'refusedByTheFixpoint'
 
-	plan.markRegisterPair(resultId, high: mint.mint())
+	let high = mint.mint()
+	planSlotReleases(plan, box: resultId, row: flow.rowOf(resultId), low: resultId, high: high)
+	plan.markRegisterPair(resultId, high: high)
 end 'markThePairIfTheCalleeKeptTheConvention'
 
 // Rewrite one op in place, or doom it. A `ret` may be a TERMINATOR or the rare mid-block body op, so both
 // are reached through the one live-op walk and rewritten by `ops.set` at the index they already occupy —
 // a terminator names its op by index, so nothing else has to move.
-function rewriteOneOp(module StdModule, opIdx ElementIndex, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet)
+function rewriteOneOp(module StdModule, opIdx ElementIndex, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet, mint ValueMinter)
 	match try module.ops.get(opIdx) otherwise panic("rewriteOneOp: live op index {opIdx} not in module.ops") 'op'
 		const or
 		binOp or
@@ -2632,7 +2660,7 @@ function rewriteOneOp(module StdModule, opIdx ElementIndex, plan ValueTuplePlan,
 		osSocketOverlapped or
 		osSocketServe then break
 		ret(retValId) then rewriteOneReturn(module, opIdx: opIdx, retValId: retValId, plan: plan)
-		call(resultId, callee, args) then rewriteOneCall(module, opIdx: opIdx, resultId: resultId, callee: callee, args: args, plan: plan, doomed: doomed)
+		call(resultId, callee, args) then rewriteOneCall(module, opIdx: opIdx, resultId: resultId, callee: callee, args: args, plan: plan, doomed: doomed, mint: mint)
 		loadIndirect(resultId, addrId, offset, _) then rewriteOneHalfLoad(opIdx, resultId: resultId, addrId: addrId, offset: offset, plan: plan, subst: subst, doomed: doomed)
 		storeIndirect(addrId, _, _, _) then doomAStoreIntoAnElidedBox(opIdx, addrId: addrId, plan: plan, doomed: doomed)
 	end 'op'
@@ -2727,7 +2755,7 @@ function rewriteOneReturn(module StdModule, opIdx ElementIndex, retValId ValueId
 	try module.ops.set(opIdx, value: StdOp.errorReturn(plan.lowHalfOf(retValId), errorFlagId: plan.highHalfOf(retValId))) otherwise panic("rewriteOneReturn: ops.set({opIdx}) OOB")
 end 'rewriteOneReturn'
 
-function rewriteOneCall(module StdModule, opIdx ElementIndex, resultId ValueId, callee ByteArray, args ValueIdArray, plan ValueTuplePlan, doomed DoomedOpSet)
+function rewriteOneCall(module StdModule, opIdx ElementIndex, resultId ValueId, callee ByteArray, args ValueIdArray, plan ValueTuplePlan, doomed DoomedOpSet, mint ValueMinter)
 	// Before the register-pair arm: a frame-local box is BOTH, and its allocation is deleted, not captured.
 	if callee.equals(MmAllocName) and plan.isAnElidedBox(resultId) 'theBoxThatIsNoLongerBuilt'
 		doomed.insert(opIdx)
@@ -2747,12 +2775,12 @@ function rewriteOneCall(module StdModule, opIdx ElementIndex, resultId ValueId, 
 
 	match drop.kind 'kind'
 		trivial then doomed.insert(opIdx)
-		cascade then replaceTheCascadeWithSlotReleases(module, opIdx: opIdx, resultId: resultId, box: drop.box, plan: plan)
+		cascade then replaceTheCascadeWithSlotReleases(module, opIdx: opIdx, resultId: resultId, box: drop.box, plan: plan, mint: mint)
 	end 'kind'
 end 'rewriteOneCall'
 
-function replaceTheCascadeWithSlotReleases(module StdModule, opIdx ElementIndex, resultId ValueId, box ValueId, plan ValueTuplePlan)
-	view drops = try plan.slotDrops.get(box) otherwise panic("replaceTheCascadeWithSlotReleases: box {box} has no record any more but no slot releases were planned for it — `markTheBoxIfFrameLocal` elides a cascade-dropped box only once its releases are planned, and `callShapeOf` refuses a cascade-dropped call-site pair")
+function replaceTheCascadeWithSlotReleases(module StdModule, opIdx ElementIndex, resultId ValueId, box ValueId, plan ValueTuplePlan, mint ValueMinter)
+	view drops = try plan.slotDrops.get(box) otherwise panic("replaceTheCascadeWithSlotReleases: box {box} has no record any more but no slot releases were planned for it — `markTheBoxIfFrameLocal` and `markThePairIfTheCalleeKeptTheConvention` mark a cascade-dropped box only once its releases are planned")
 	var following = OpIndexArray.create()
 	module.spans.current = module.spans.at(opIdx)
 
@@ -2764,7 +2792,7 @@ function replaceTheCascadeWithSlotReleases(module StdModule, opIdx ElementIndex,
 			continue
 		end 'inPlace'
 
-		following.push(module.pushDetachedOp(StdOp.call(drop.resultId, callee: drop.callee, args: argsOf(drop.value))))
+		following.push(module.pushDetachedOp(StdOp.call(mint.mint(), callee: drop.callee, args: argsOf(drop.value))))
 	end 'eachRelease'
 
 	if following.count() > 0 'someFollow'
