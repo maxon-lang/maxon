@@ -85,6 +85,7 @@ scripts/mac-host.sh clone <session> <commit> --seed             # prints session
 scripts/mac-host.sh lock <session> --wait=1800 <purpose>        # prints token=<TOKEN>
 scripts/mac-host.sh run <session> <TOKEN> bash -c '<line>'      # prints job=, pid=, log=
 scripts/mac-host.sh job <session>                               # alive / finished (exit N) + log tail
+scripts/mac-host.sh fetch <session> <path> <destination>        # copy a file out of the clone
 scripts/mac-host.sh unlock <session> <TOKEN>                    # only while no job runs
 scripts/mac-host.sh drop <session> <KEY>
 ```
@@ -95,6 +96,7 @@ scripts/mac-host.sh drop <session> <KEY>
 - **A lock runs one job, and the job's exit releases it.** Watch the job with a Monitor that polls
   `job <session>`; while the lock is held with no job running, the same poll calls `heartbeat <session>
   <TOKEN>`, or the lock goes stale and any agent may break it.
+- `fetch` needs no lock and no key; run it before `drop`, which deletes the clone.
 - `drop` the session when done; it releases a lock the session still holds.
 - ⚠ **`mac-host.sh: skipped — MAXON_MAC_HOST is not set` means no Mac is configured.** It exits 0 and
   touches nothing. Skip the arm64-macos work and say so in the report — it is not a failure.

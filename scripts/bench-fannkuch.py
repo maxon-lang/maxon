@@ -115,24 +115,14 @@ def find_clang(override):
 def build_c_reference(clang, c_source, out_dir):
     """Build the C arm, cached on the source bytes, the clang version and the flags."""
     c_dir = os.path.join(out_dir, "c")
-    os.makedirs(c_dir, exist_ok=True)
     exe = os.path.join(c_dir, "fannkuchredux" + bench_common.EXE)
-    stamp_path = os.path.join(c_dir, "fannkuchredux.stamp.json")
     version = bench_common.run([clang, "--version"])
     if version.returncode != 0:
         raise bench_common.BuildFailure(f"{clang} --version failed:\n{version.stderr}")
     clang_line = version.stdout.splitlines()[0].strip()
     stamp = {"source_sha256": bench_common.sha256_of(c_source), "clang": clang_line, "flags": CLANG_FLAGS}
-    if os.path.exists(exe) and os.path.exists(stamp_path):
-        with open(stamp_path, encoding="utf-8") as fh:
-            if json.load(fh) == stamp:
-                return exe, clang_line, True
-    r = bench_common.run([clang] + CLANG_FLAGS + ["-o", exe, c_source], cwd=c_dir)
-    if r.returncode != 0 or not os.path.exists(exe):
-        raise bench_common.BuildFailure(f"clang failed (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
-    with open(stamp_path, "w", encoding="utf-8") as fh:
-        json.dump(stamp, fh, indent=2)
-    return exe, clang_line, False
+    cached = bench_common.build_cached([clang] + CLANG_FLAGS + ["-o", exe, c_source], c_dir, exe, stamp, "clang")
+    return exe, clang_line, cached
 
 
 def build_maxon_arm(planned, source, out_dir):
@@ -167,22 +157,6 @@ def parse_output(stdout):
     return checksum, flips
 
 
-def profile_arm(arm, n, hz):
-    """`maxon profile run` with the arm's own compiler; the report is saved beside the binary."""
-    cmd = [arm["compiler"], "profile", "run", f"--rate={hz}", arm["exe"], str(n)]
-    try:
-        r = bench_common.run(cmd, cwd=arm["dir"], timeout=bench_common.RUN_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        raise bench_common.VerificationFailure(f"profile of {arm['label']} at n={n} timed out after {bench_common.RUN_TIMEOUT_S} s") from None
-    if r.returncode != 0:
-        raise bench_common.VerificationFailure(f"profile of {arm['label']} at n={n} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
-    path = os.path.join(arm["dir"], f"profile-n{n}.txt")
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(r.stdout)
-        fh.write(r.stderr)
-    return path, r.stdout
-
-
 def time_self_compile(arm):
     """Wall time of this arm's compiler compiling the tree's own compiler sources into a scratch stem."""
     stem = os.path.join(arm["dir"], "selfcompile", "maxon")
@@ -200,27 +174,6 @@ def time_self_compile(arm):
     if r.returncode != 0 or not os.path.exists(stem + bench_common.EXE):
         raise bench_common.BuildFailure(f"self-compile with {arm['label']} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
     return ms, os.path.getsize(stem + bench_common.EXE)
-
-
-def hot_functions_section(report):
-    lines = report.splitlines()
-    out = []
-    keep = False
-    for line in lines:
-        if line.startswith("=== hot functions"):
-            keep = True
-        elif line.startswith("=== ") and keep:
-            break
-        if keep:
-            out.append(line)
-    return "\n".join(out)
-
-
-def append_log_row(row):
-    if not os.path.exists(LOG_PATH):
-        with open(LOG_PATH, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(LOG_HEADER)
-    bench_common.append_table_row(LOG_PATH, row)
 
 
 def main():
@@ -340,13 +293,13 @@ def main():
         profile_n = args.profile_n if args.profile_n is not None else args.n
         for arm in maxon_arms:
             try:
-                path, report = profile_arm(arm, profile_n, args.profile_hz)
+                path, report = bench_common.profile_arm(arm, [str(profile_n)], args.profile_hz, f"profile-n{profile_n}.txt")
             except bench_common.VerificationFailure as e:
                 return bench_common.report_failure(e)
             profiles[arm["label"]] = path
             print()
             print(f"  profile of {arm['label']} at n={profile_n} -> {path}")
-            for line in hot_functions_section(report).splitlines():
+            for line in bench_common.hot_functions_section(report).splitlines():
                 print("  " + line)
 
     if args.n == 12 and c_stats:
@@ -363,9 +316,10 @@ def main():
             note = args.note.replace("|", "/")
             if arm["label"] in self_compiles:
                 note = f"{note}; self-compile {bench_common.fmt_ms(self_compiles[arm['label']]['ms'])} ms"
-            append_log_row([today, head, "dirty" if dirty else "clean", str(args.n), str(args.runs), c_cell,
-                            f"{bench_common.fmt_ms(s['min'])} / {bench_common.fmt_ms(s['median'])}", ratio, f"{arm['exe_bytes']:,}",
-                            str(censuses[arm["label"]]["ops"]), arm["label"], note])
+            bench_common.append_log_rows(LOG_PATH, LOG_HEADER, [[
+                today, head, bench_common.tree_state(dirty), str(args.n), str(args.runs), c_cell,
+                f"{bench_common.fmt_ms(s['min'])} / {bench_common.fmt_ms(s['median'])}", ratio, f"{arm['exe_bytes']:,}",
+                str(censuses[arm["label"]]["ops"]), arm["label"], note]])
         print()
         print(f"  {len(maxon_arms)} row(s) appended to {os.path.relpath(LOG_PATH, bench_common.REPO)}")
 

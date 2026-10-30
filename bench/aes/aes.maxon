@@ -1,0 +1,226 @@
+typealias RepeatCount = int(1 to u64.max)
+typealias IterationDivisor = int(1 to u64.max)
+
+enum UsageError implements Error
+	notPositiveInteger
+end 'UsageError'
+
+let defaultRepeats = 5
+let defaultDivisor = 1
+// On wasm this program reads no arguments, so `defaultRepeats` and `wasmDivisor` must equal REPEATS and
+// WASM_DIVISOR in scripts/bench-aes.py, which hands them to the Go arms; a mismatch fails its agreement
+// check on iterations and repeats.
+let wasmDivisor = 10
+let usageExit = 2
+let ctrCounter = 2
+
+type Settings
+	export let repeats as RepeatCount
+	export let divisor as IterationDivisor
+
+	static function create(repeats RepeatCount, divisor IterationDivisor) returns Settings
+		return Self{repeats: repeats, divisor: divisor}
+	end 'create'
+end 'Settings'
+
+#if not os(Wasi)
+	function positiveArgument(position Count, fallback Count) returns Count throws UsageError
+		let value = try CommandLine.readOptionalIntArgument(position, otherwise: fallback) otherwise throw UsageError.notPositiveInteger
+
+		if value == 0 'zero'
+			throw UsageError.notPositiveInteger
+		end 'zero'
+
+		return value
+	end 'positiveArgument'
+
+	function readSettings() returns Settings throws UsageError
+		let repeats = try positiveArgument(1, fallback: defaultRepeats)
+		let divisor = try positiveArgument(2, fallback: defaultDivisor)
+
+		return Settings.create(repeats as RepeatCount, divisor: divisor as IterationDivisor)
+	end 'readSettings'
+#endif
+
+function filled(count Count, seed Byte) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for i in 0 upto count 'eachByte'
+		bytes.push(((i + (seed as Count)) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'filled'
+
+function digest(bytes ByteArray) returns Count
+	var sum = 0 as Count
+
+	for (iter, byte) in bytes.withIterator() 'eachByte'
+		sum = (sum + (byte as Count) * (iter.index() + 1)) and 0xFFFFFF
+	end 'eachByte'
+
+	return sum
+end 'digest'
+
+type Fixtures
+	export let key128 as ByteArray
+	export let nonce as ByteArray
+	export let block as ByteArray
+	export let aad as ByteArray
+	export let small as ByteArray
+	export let kib1 as ByteArray
+	export let kib16 as ByteArray
+	export let sealed16k as ByteArray
+	export let aes128 as Aes
+	export let aes256 as Aes
+	export let gcm128 as AesGcm
+	export let gcm256 as AesGcm
+
+	static function create() returns Fixtures
+		let key128 = filled(16, seed: 0)
+		let key256 = filled(32, seed: 0)
+		let nonce = filled(12, seed: 100)
+		let aad = filled(13, seed: 50)
+		let kib16 = filled(16384, seed: 7)
+		let gcm128 = try AesGcm.create(key128) otherwise panic("key")
+
+		return Self{
+			key128: key128,
+			nonce: nonce,
+			block: filled(16, seed: 200),
+			aad: aad,
+			small: filled(64, seed: 7),
+			kib1: filled(1024, seed: 7),
+			kib16: kib16,
+			sealed16k: try gcm128.seal(nonce, plaintext: kib16, additionalData: aad) otherwise panic("seal"),
+			aes128: try Aes.create(key128) otherwise panic("key"),
+			aes256: try Aes.create(key256) otherwise panic("key"),
+			gcm128: gcm128,
+			gcm256: try AesGcm.create(key256) otherwise panic("key")
+		}
+	end 'create'
+end 'Fixtures'
+
+enum Workload
+	keySetup128
+	block128
+	ctr128
+	ctr256
+	gcm128Seal64
+	gcm128Seal1k
+	gcm128Seal16k
+	gcm128Open16k
+	gcm256Seal16k
+end 'Workload'
+
+function nameOf(workload Workload) returns String
+	return match workload 'name'
+		keySetup128 gives "keysetup-128"
+		block128 gives "block-128"
+		ctr128 gives "ctr-128-16k"
+		ctr256 gives "ctr-256-16k"
+		gcm128Seal64 gives "gcm-128-seal-64"
+		gcm128Seal1k gives "gcm-128-seal-1k"
+		gcm128Seal16k gives "gcm-128-seal-16k"
+		gcm128Open16k gives "gcm-128-open-16k"
+		gcm256Seal16k gives "gcm-256-seal-16k"
+	end 'name'
+end 'nameOf'
+
+function baseIterationsOf(workload Workload) returns Count
+	return match workload 'iterations'
+		keySetup128 gives 20000
+		block128 gives 200000
+		gcm128Seal64 gives 100000
+		gcm128Seal1k gives 10000
+		ctr128 or
+		ctr256 or
+		gcm128Seal16k or
+		gcm128Open16k or
+		gcm256Seal16k gives 1000
+	end 'iterations'
+end 'baseIterationsOf'
+
+function iterationsOf(workload Workload, divisor IterationDivisor) returns Count
+	let scaled = try (baseIterationsOf(workload) / (divisor as Count)) otherwise panic("aes: an IterationDivisor is positive")
+
+	return scaled if scaled > 0 else 1
+end 'iterationsOf'
+
+function bytesOf(workload Workload) returns Count
+	return match workload 'bytes'
+		keySetup128 gives 0
+		block128 gives 16
+		gcm128Seal64 gives 64
+		gcm128Seal1k gives 1024
+		ctr128 or
+		ctr256 or
+		gcm128Seal16k or
+		gcm128Open16k or
+		gcm256Seal16k gives 16384
+	end 'bytes'
+end 'bytesOf'
+
+function keySetup(key ByteArray) returns ByteArray
+	let cipher = try Aes.create(key) otherwise panic("key")
+
+	return try cipher.encryptBlock(key) otherwise panic("block")
+end 'keySetup'
+
+function step(workload Workload, f Fixtures, previous ByteArray) returns ByteArray
+	return match workload 'step'
+		keySetup128 gives keySetup(f.key128)
+		block128 gives try f.aes128.encryptBlock(previous) otherwise panic("block")
+		ctr128 gives try f.aes128.xorKeyStream(f.nonce, counter: ctrCounter, data: f.kib16) otherwise panic("ctr")
+		ctr256 gives try f.aes256.xorKeyStream(f.nonce, counter: ctrCounter, data: f.kib16) otherwise panic("ctr")
+		gcm128Seal64 gives try f.gcm128.seal(f.nonce, plaintext: f.small, additionalData: f.aad) otherwise panic("seal")
+		gcm128Seal1k gives try f.gcm128.seal(f.nonce, plaintext: f.kib1, additionalData: f.aad) otherwise panic("seal")
+		gcm128Seal16k gives try f.gcm128.seal(f.nonce, plaintext: f.kib16, additionalData: f.aad) otherwise panic("seal")
+		gcm128Open16k gives try f.gcm128.open(f.nonce, sealed: f.sealed16k, additionalData: f.aad) otherwise panic("open")
+		gcm256Seal16k gives try f.gcm256.seal(f.nonce, plaintext: f.kib16, additionalData: f.aad) otherwise panic("seal")
+	end 'step'
+end 'step'
+
+function runOnce(workload Workload, f Fixtures, iterations Count) returns ByteArray
+	var last = f.block.clone()
+
+	for _ in 0 upto iterations 'each'
+		last = step(workload, f: f, previous: last)
+	end 'each'
+
+	return last
+end 'runOnce'
+
+function measure(workload Workload, f Fixtures, settings Settings)
+	let iterations = iterationsOf(workload, divisor: settings.divisor)
+	var best = u64.max as DurationNanos
+	var last = ByteArray.create()
+
+	for _ in 0 upto (settings.repeats as Count) 'eachRepeat'
+		let start = Clock.nowNanos()
+		last = runOnce(workload, f: f, iterations: iterations)
+		let took = Clock.elapsedNanos(start)
+		best = took if took < best else best
+	end 'eachRepeat'
+
+	print("{nameOf(workload)} {bytesOf(workload)} {iterations} {settings.repeats} {best} {digest(last)}\n")
+end 'measure'
+
+function main() returns ExitCode
+	#if os(Wasi)
+		let settings = Settings.create(defaultRepeats, divisor: wasmDivisor)
+	#else
+		let settings = try readSettings() otherwise 'unusable'
+			printError("aes: usage: aes [repeats [divisor]], both positive integers\n")
+			return usageExit
+		end 'unusable'
+	#endif
+
+	let f = Fixtures.create()
+
+	for workload in Workload.allCases 'eachWorkload'
+		measure(workload, f: f, settings: settings)
+	end 'eachWorkload'
+
+	return 0
+end 'main'

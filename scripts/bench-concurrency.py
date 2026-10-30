@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import dataclasses
-import datetime
 import json
 import os
 import platform
@@ -46,14 +45,8 @@ TIME_PROGRAM = "/usr/bin/time"
 WSL_LAUNCHER = "wsl.exe"
 ORB_LAUNCHER = "orb"
 GO_ARM = "go"
-GO_PATH_VARIABLE = "MAXON_GO"
 GO_PROCESSORS_VARIABLE = "GOMAXPROCS"
 MAXON_PROCESSORS_VARIABLE = "MAXON_MAX_PROCS"
-GO_WINDOWS_INSTALL = r"C:\Program Files\Go\bin\go.exe"
-GO_HOME_INSTALL = os.path.join(".local", "go", "bin", "go")
-GO_BUILD_ENV = {"GOTOOLCHAIN": "local", "GOFLAGS": ""}
-GO_BUILD_ARGS = ["build"]
-GO_TARGET_SETTINGS = ("GOOS", "GOARCH", "GOAMD64", "GOEXPERIMENT", "CGO_ENABLED")
 GO_SOURCE_DIRS = ("internal",)
 GO_MODULE_FILE = "go.mod"
 GO_MAIN_FILE = "main.go"
@@ -287,23 +280,6 @@ def measure(command, env, cwd):
     return measure_windows(command, env, cwd) if IS_WINDOWS else measure_posix(command, env, cwd)
 
 
-def locate_go():
-    configured = os.environ.get(GO_PATH_VARIABLE)
-    if configured:
-        if os.path.isfile(configured) and os.access(configured, os.X_OK):
-            return configured
-        raise BuildFailure(f"{GO_PATH_VARIABLE}={configured} is not an executable file; unset it to search PATH, "
-                           "or point it at the go binary")
-    found = shutil.which("go")
-    if found:
-        return found
-    fallback = GO_WINDOWS_INSTALL if IS_WINDOWS else os.path.join(os.path.expanduser("~"), GO_HOME_INSTALL)
-    if os.path.isfile(fallback):
-        return fallback
-    raise BuildFailure(f"no Go toolchain found: {GO_PATH_VARIABLE} is unset, `go` is not on PATH and {fallback} does not exist. "
-                       f"Install Go (go.dev/dl) or set {GO_PATH_VARIABLE} to the go binary")
-
-
 def go_source_files(workload):
     files = [os.path.join(BENCH_DIR, GO_MODULE_FILE), os.path.join(BENCH_DIR, workload.name, GO_MAIN_FILE)]
     for directory in GO_SOURCE_DIRS:
@@ -312,40 +288,18 @@ def go_source_files(workload):
     return sorted(files)
 
 
-def go_source_digest(workload):
-    return {os.path.relpath(path, BENCH_DIR).replace("\\", "/"): bench_common.sha256_of(path) for path in go_source_files(workload)}
-
-
-def go_query(go, env, *arguments):
-    answer = bench_common.run([go] + list(arguments), env=env)
-    if answer.returncode != 0:
-        raise BuildFailure(f"{go} {' '.join(arguments)} failed:\n{answer.stderr}")
-    return answer.stdout.strip()
-
-
 def build_go_programs(go, workloads, host_out_dir):
-    env = dict(os.environ, **GO_BUILD_ENV)
-    version_line = go_query(go, env, "version")
-    settings = json.loads(go_query(go, env, "env", "-json", *GO_TARGET_SETTINGS))
+    env = bench_common.go_build_environment()
+    version_line = bench_common.go_query(go, env, "version")
+    settings = bench_common.go_target_settings(go, env)
     go_dir = os.path.join(host_out_dir, GO_ARM)
-    os.makedirs(go_dir, exist_ok=True)
     executables = {}
     for workload in workloads:
-        exe = os.path.join(go_dir, workload.name + bench_common.EXE)
-        stamp_path = os.path.join(go_dir, workload.name + ".stamp.json")
-        stamp = {"sources": go_source_digest(workload), "version": version_line, "settings": settings,
-                 "args": GO_BUILD_ARGS, "env": GO_BUILD_ENV}
-        cached = False
-        if os.path.exists(exe) and os.path.exists(stamp_path):
-            with open(stamp_path, encoding="utf-8") as fh:
-                cached = json.load(fh) == stamp
-        if not cached:
-            built = bench_common.run([go] + GO_BUILD_ARGS + ["-o", exe, f"./{workload.name}"], cwd=BENCH_DIR, env=env)
-            if built.returncode != 0 or not os.path.exists(exe):
-                raise BuildFailure(f"go build failed for {workload.name} (exit {built.returncode}):\n{built.stdout}\n{built.stderr}")
-            with open(stamp_path, "w", encoding="utf-8") as fh:
-                json.dump(stamp, fh, indent=2)
-        executables[workload.name] = exe
+        stamp = {"sources": bench_common.file_digests(go_source_files(workload), BENCH_DIR), "version": version_line,
+                 "settings": settings}
+        executables[workload.name] = bench_common.build_go_cached(
+            go, env, [], f"./{workload.name}", BENCH_DIR, os.path.join(go_dir, workload.name + bench_common.EXE), stamp,
+            workload.name)
     return version_line, executables
 
 
@@ -485,7 +439,7 @@ def write_log_rows(cells, maxon_labels, context, args, host):
         for label in maxon_labels:
             stats = cell["stats"]
             ratios = [fmt_ratio(ratio_of(stats[label][key], stats[GO_ARM][key])) for key, _, _, _ in METRICS]
-            bench_common.append_table_row(LOG_PATH, [context["today"], context["head"], "dirty" if context["dirty"] else "clean", host, cell["workload"],
+            bench_common.append_table_row(LOG_PATH, [context["today"], context["head"], bench_common.tree_state(context["dirty"]), host, cell["workload"],
                             " ".join(cell["arguments"]), f"{cell['processors']}{pin_marker(cell)}",
                             str(args.runs), f"{stats[GO_ARM]['wall']['median']:,.0f}", f"{stats[label]['wall']['median']:,.0f}"] + ratios + [label, note])
 
@@ -667,8 +621,8 @@ def run_outer_guest(args, workloads, context, planned_arms, host):
     host_out_dir, arms = build_maxon_arms(planned_arms, workloads, out_dir, host)
     with open(os.path.join(host_out_dir, CONTEXT_FILE), "w", encoding="utf-8") as fh:
         json.dump({"context": context, "arms": arms}, fh, indent=2)
-    forward_go = GUESTS[host].forwards_go_path and GO_PATH_VARIABLE in os.environ
-    environment = [f"{GO_PATH_VARIABLE}={os.environ[GO_PATH_VARIABLE]}"] if forward_go else []
+    forward_go = GUESTS[host].forwards_go_path and bench_common.GO_PATH_VARIABLE in os.environ
+    environment = [f"{bench_common.GO_PATH_VARIABLE}={os.environ[bench_common.GO_PATH_VARIABLE]}"] if forward_go else []
     command = guest_launcher(host, args) + ["env"] + environment + [
         "python3", guest_path(host, args, os.path.abspath(__file__)), "--inside", host,
         "--out-dir", guest_path(host, args, out_dir)] + forwarded_arguments(args, host)
@@ -678,7 +632,7 @@ def run_outer_guest(args, workloads, context, planned_arms, host):
 def run_native(args, workloads, context, planned_arms):
     out_dir = os.path.abspath(args.out_dir)
     host = native_host()
-    go = locate_go()
+    go = bench_common.locate_go()
     _, arms = build_maxon_arms(planned_arms, workloads, out_dir, host)
     run_session(args, workloads, host, context, arms, go)
     return bench_common.EXIT_OK
@@ -686,13 +640,8 @@ def run_native(args, workloads, context, planned_arms):
 
 def run_inside_guest(args, workloads):
     stored = read_context(host_out_dir_of(os.path.abspath(args.out_dir), args.inside))
-    run_session(args, workloads, args.inside, stored["context"], stored["arms"], locate_go())
+    run_session(args, workloads, args.inside, stored["context"], stored["arms"], bench_common.locate_go())
     return bench_common.EXIT_OK
-
-
-def build_context():
-    head, dirty = bench_common.tree_identity(bench_common.REPO)
-    return {"today": datetime.date.today().isoformat(), "head": head, "dirty": dirty}
 
 
 def parse_arguments():
@@ -735,7 +684,7 @@ def main():
         workloads = select_workloads(args.filter)
         if args.inside:
             return run_inside_guest(args, workloads)
-        context = build_context()
+        context = bench_common.session_context()
         planned_arms = bench_common.plan_arms(args, reserved_labels=(GO_ARM,))
         if outer_guest:
             return run_outer_guest(args, workloads, context, planned_arms, args.host)

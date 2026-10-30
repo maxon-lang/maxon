@@ -74,6 +74,11 @@ usage() {
 		"                                     Prints job=<ID>, pid=<PID> and log=<PATH>" \
 		"  job <session>                      the session's newest job (alive, finished with its exit code, or" \
 		"                                     gone) and the last $JobLogLines lines of its log" \
+		"  fetch <session> <path> <destination>" \
+		"                                     copy the file <path>, relative to the session's clone, to" \
+		"                                     <destination> on this machine; nothing is left at <destination>" \
+		"                                     unless the whole file arrived. Needs no lock and no key, so it" \
+		"                                     can read a finished job's output before drop deletes the clone" \
 		"  drop <session> <key>               delete ~/Dev/agents/<session>; <key> is its session key, or the" \
 		"                                     token of the lock it holds; refused while any of its jobs is alive;" \
 		"                                     a lock the session holds is released with it" \
@@ -874,6 +879,29 @@ r_cmd_job() {
 	tail -n "$JobLogLines" "$newest"
 }
 
+r_cmd_fetch() {
+	local session="$1" relative="$2" file directory
+
+	r_session_paths "$session" || exit "$ExitFailure"
+	[ -d "$clone_dir" ] || r_fail "no clone at $clone_dir"
+
+	case "/$relative/" in
+		*"//"*|*"/./"*|*"/../"*) r_fail "a fetched path is relative to the clone and has no empty, '.' or '..' component; got '$relative'" ;;
+	esac
+
+	# fetch takes no key, so these checks are all that keep it from reading any file the account can.
+	file="$clone_dir/$relative"
+	[ -f "$file" ] && [ ! -L "$file" ] || r_fail "there is no regular file at $file"
+	directory="$(cd "${file%/*}" && pwd -P)" || r_fail "cannot enter the directory of $file"
+
+	case "$directory/" in
+		"$clone_dir/"*) ;;
+		*) r_fail "refusing $file: it resolves to $directory, outside $clone_dir" ;;
+	esac
+
+	cat "$file"
+}
+
 r_cmd_drop() {
 	local session="$1" credential="$2" path state key="" holds=""
 
@@ -1066,6 +1094,25 @@ cmd_job() {
 	remote r_cmd_job "$1"
 }
 
+cmd_fetch() {
+	[ $# -eq 3 ] || usage
+	check_session "$1"
+	local session="$1" relative="$2" destination="$3" staging status=0
+	[ -n "$relative" ] || die "fetch needs a path"
+	[ -n "$destination" ] || die "fetch needs a destination"
+	staging="$destination.partial.$$"
+	connect
+	trap 'rm -f "$staging"' EXIT
+	remote r_cmd_fetch "$session" "$relative" > "$staging" || status=$?
+
+	if [ "$status" -ne "$ExitSuccess" ]; then
+		exit "$status"
+	fi
+
+	mv -f "$staging" "$destination"
+	trap - EXIT
+}
+
 cmd_drop() {
 	[ $# -eq 2 ] || usage
 	check_session "$1"
@@ -1089,6 +1136,7 @@ case "$command" in
 	clone)     cmd_clone "$@" ;;
 	run)       cmd_run "$@" ;;
 	job)       cmd_job "$@" ;;
+	fetch)     cmd_fetch "$@" ;;
 	drop)      cmd_drop "$@" ;;
 	*)         usage ;;
 esac

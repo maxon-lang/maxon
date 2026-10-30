@@ -1,0 +1,55 @@
+let AesBenchmarkDirName = "bench/aes"
+let AesBenchmarkProgram = "aes.maxon"
+let AesBenchmarkRepeats = "1"
+let AesBenchmarkDivisor = "1000"
+let AesBenchmarkExitCode = 0
+let AesBenchmarkRowFields = 6
+let AesBenchmarkBestNanosField = 4
+let AesBenchmarkFieldSeparator = " "
+
+// What bench/aes/go prints for `std 1 1000` with the bestNanos field removed: Go crypto/aes is the
+// oracle.
+let AesBenchmarkAnswer = "keysetup-128 0 20 1 19769\nblock-128 16 200 1 21690\nctr-128-16k 16384 1 1 7047604\nctr-256-16k 16384 1 1 6200970\ngcm-128-seal-64 64 100 1 419589\ngcm-128-seal-1k 1024 10 1 1778890\ngcm-128-seal-16k 16384 1 1 9539867\ngcm-128-open-16k 16384 1 1 9134080\ngcm-256-seal-16k 16384 1 1 6333370\n"
+
+function withoutBestNanos(stdout String) returns String
+	var kept = ""
+
+	for line in stdout.split("\n") 'eachLine'
+		if line.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		let fields = line.split(AesBenchmarkFieldSeparator)
+
+		if fields.count() != AesBenchmarkRowFields 'malformed'
+			panic("bench-aes: the benchmark printed `{line}`, which is not 'workload bytesPerOp iterations repeats bestNanos digest'")
+		end 'malformed'
+
+		var row = ""
+
+		for (iter, field) in fields.withIterator() 'eachField'
+			if iter.index() == AesBenchmarkBestNanosField 'timing'
+				continue
+			end 'timing'
+
+			if not row.isEmpty() 'separate'
+				row.append(AesBenchmarkFieldSeparator)
+			end 'separate'
+
+			row.append(field)
+		end 'eachField'
+
+		kept.append("{row}\n")
+	end 'eachLine'
+
+	return kept
+end 'withoutBestNanos'
+
+test 'the aes benchmark computes the digests Go crypto/aes computes'
+	requireExampleBuild(AesBenchmarkProgram, directory: AesBenchmarkDirName)
+
+	let run = runBuiltExample(AesBenchmarkProgram, arguments: [AesBenchmarkRepeats, AesBenchmarkDivisor], directory: AesBenchmarkDirName)
+
+	Expect.equal(run.exitCode, expected: AesBenchmarkExitCode, message: "`{run.commandLine}` exited {run.exitCode}. It wrote to stderr: {run.stderr}")
+	Expect.equal(withoutBestNanos(run.stdout), expected: AesBenchmarkAnswer, message: "`{run.commandLine}` did not print the digests the Go program prints. It wrote to stderr: {run.stderr}")
+end 'the aes benchmark computes the digests Go crypto/aes computes'

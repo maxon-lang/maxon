@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import json
 import os
 import shutil
 import statistics
@@ -26,6 +27,14 @@ BUILD_TIMEOUT_S = 1200
 REF_BUILD_TIMEOUT_S = 3600
 RUN_TIMEOUT_S = 1800
 GIT_EXEC_PATH_DEPTH = 3
+GO_PATH_VARIABLE = "MAXON_GO"
+GO_WINDOWS_INSTALL = r"C:\Program Files\Go\bin\go.exe"
+GO_HOME_INSTALL = os.path.join(".local", "go", "bin", "go")
+GO_BUILD_ENV = {"GOTOOLCHAIN": "local", "GOFLAGS": ""}
+GO_TARGET_SETTINGS = ("GOOS", "GOARCH", "GOAMD64", "GOARM64", "GOEXPERIMENT", "CGO_ENABLED")
+STAMP_SUFFIX = ".stamp.json"
+TREE_DIRTY = "dirty"
+TREE_CLEAN = "clean"
 
 
 class BuildFailure(Exception):
@@ -40,9 +49,67 @@ class UsageFailure(Exception):
     """An argument, or the example itself, cannot support the run that was asked for."""
 
 
-def add_arm_arguments(ap):
+def locate_go():
+    configured = os.environ.get(GO_PATH_VARIABLE)
+    if configured:
+        if os.path.isfile(configured) and os.access(configured, os.X_OK):
+            return configured
+        raise BuildFailure(f"{GO_PATH_VARIABLE}={configured} is not an executable file; unset it to search PATH, "
+                           "or point it at the go binary")
+    found = shutil.which("go")
+    if found:
+        return found
+    fallback = GO_WINDOWS_INSTALL if IS_WINDOWS else os.path.join(os.path.expanduser("~"), GO_HOME_INSTALL)
+    if os.path.isfile(fallback):
+        return fallback
+    raise BuildFailure(f"no Go toolchain found: {GO_PATH_VARIABLE} is unset, `go` is not on PATH and {fallback} does not exist. "
+                       f"Install Go (go.dev/dl) or set {GO_PATH_VARIABLE} to the go binary")
+
+
+def go_build_environment(target_env=None):
+    return dict(os.environ, **GO_BUILD_ENV, **(target_env or {}))
+
+
+def go_query(go, env, *arguments):
+    answer = run([go] + list(arguments), env=env)
+    if answer.returncode != 0:
+        raise BuildFailure(f"{go} {' '.join(arguments)} failed:\n{answer.stderr}")
+    return answer.stdout.strip()
+
+
+def go_target_settings(go, env):
+    return json.loads(go_query(go, env, "env", "-json", *GO_TARGET_SETTINGS))
+
+
+def file_digests(paths, root):
+    return {os.path.relpath(path, root).replace(os.sep, "/"): sha256_of(path) for path in sorted(paths)}
+
+
+def build_cached(command, cwd, exe, stamp, what, env=None):
+    """Run `command` to write `exe` unless it was already built from a stamp equal to `stamp`; True when cached."""
+    stamp_path = os.path.splitext(exe)[0] + STAMP_SUFFIX
+    if os.path.exists(exe) and os.path.exists(stamp_path):
+        with open(stamp_path, encoding="utf-8") as fh:
+            if json.load(fh) == stamp:
+                return True
+    os.makedirs(os.path.dirname(exe), exist_ok=True)
+    built = run(command, cwd=cwd, env=env)
+    if built.returncode != 0 or not os.path.exists(exe):
+        raise BuildFailure(f"{what} failed (exit {built.returncode}):\n{built.stdout}\n{built.stderr}")
+    with open(stamp_path, "w", encoding="utf-8") as fh:
+        json.dump(stamp, fh, indent=2)
+    return False
+
+
+def build_go_cached(go, env, flags, package, cwd, exe, stamp, what):
+    build_cached([go, "build"] + list(flags) + ["-o", exe, package], cwd, exe,
+                 dict(stamp, env=GO_BUILD_ENV, flags=list(flags), package=package), f"go build for {what}", env=env)
+    return exe
+
+
+def add_arm_arguments(ap, warmup_default=1):
     ap.add_argument("--runs", type=int, default=5, help="timed runs per arm (default 5)")
-    ap.add_argument("--warmup", type=int, default=1, help="untimed runs per binary first (default 1)")
+    ap.add_argument("--warmup", type=int, default=warmup_default, help=f"untimed runs per binary first (default {warmup_default})")
     ap.add_argument("--compiler", action="append", default=[], help="a compiler binary as an arm (repeatable)")
     ap.add_argument("--label", action="append", default=[], help="label for the matching --compiler")
     ap.add_argument("--ref", action="append", default=[],
@@ -175,12 +242,12 @@ def compile_in_arm(compiler, label, arm_dir, source, stem, build_args=(), exe_su
     return exe
 
 
-def build_arm(planned, out_dir, source, stem, build_args=()):
+def build_arm(planned, out_dir, source, stem, build_args=(), exe_suffix=EXE, arms_dir=None):
     label = planned["label"]
     compiler = arm_compiler(planned, out_dir)
     program = arm_source(planned, out_dir, source)
-    arm_dir = os.path.join(out_dir, label)
-    exe = compile_in_arm(compiler, label, arm_dir, program, stem, build_args=build_args)
+    arm_dir = os.path.join(arms_dir or out_dir, label)
+    exe = compile_in_arm(compiler, label, arm_dir, program, stem, build_args=build_args, exe_suffix=exe_suffix)
     return {"label": label, "dir": arm_dir, "exe": exe, "exe_bytes": os.path.getsize(exe),
             "identity": compiler_identity(compiler), "compiler": compiler,
             "source": program, "source_sha256": sha256_of(program)}
@@ -216,6 +283,23 @@ def summarize(values):
 def append_table_row(path, row):
     with open(path, "a", encoding="utf-8", newline="\n") as fh:
         fh.write("| " + " | ".join(row) + " |\n")
+
+
+def append_log_rows(path, header, rows):
+    if not os.path.exists(path):
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(header)
+    for row in rows:
+        append_table_row(path, row)
+
+
+def session_context():
+    head, dirty = tree_identity(REPO)
+    return {"today": datetime.date.today().isoformat(), "head": head, "dirty": dirty}
+
+
+def tree_state(dirty):
+    return TREE_DIRTY if dirty else TREE_CLEAN
 
 
 def report_failure(error):
@@ -360,6 +444,37 @@ def compiler_identity(compiler):
         identity["head"] = head
         identity["dirty"] = dirty
     return identity
+
+
+def profile_arm(arm, program_arguments, hz, report_name):
+    """`maxon profile run` with the arm's own compiler; the report is saved beside the binary."""
+    cmd = [arm["compiler"], "profile", "run", f"--rate={hz}", arm["exe"]] + list(program_arguments)
+    where = f"profile of {arm['label']} with arguments {list(program_arguments)}"
+    try:
+        r = run(cmd, cwd=arm["dir"], timeout=RUN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise VerificationFailure(f"{where} timed out after {RUN_TIMEOUT_S} s") from None
+    if r.returncode != 0:
+        raise VerificationFailure(f"{where} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
+    path = os.path.join(arm["dir"], report_name)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(r.stdout)
+        fh.write(r.stderr)
+    return path, r.stdout
+
+
+def hot_functions_section(report):
+    lines = report.splitlines()
+    out = []
+    keep = False
+    for line in lines:
+        if line.startswith("=== hot functions"):
+            keep = True
+        elif line.startswith("=== ") and keep:
+            break
+        if keep:
+            out.append(line)
+    return "\n".join(out)
 
 
 def timed_run(exe, n, cwd):

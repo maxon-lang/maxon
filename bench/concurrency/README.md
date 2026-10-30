@@ -140,7 +140,7 @@ The script runs on Python 3.9 or newer and needs only the standard library.
   because a Mac `MAXON_GO` names a macOS binary, and the machine finds its own Go on its `PATH` or at
   `~/.local/go/bin/go`. Go builds land in `out/<host>/go/`, cached by a hash of the program's sources,
   `internal/` and `go.mod`, the `go version` line, the target settings `go env` reports (`GOOS`,
-  `GOARCH`, `GOAMD64`, `GOEXPERIMENT`, `CGO_ENABLED`) and the build flags.
+  `GOARCH`, `GOAMD64`, `GOARM64`, `GOEXPERIMENT`, `CGO_ENABLED`) and the build flags.
 - **Maxon is built once per arm** into `out/<host>/maxon/<arm>/`: `slot` (the compiler in
   `maxon-bin/.maxon`), `--ref <sha>` (a compiler built from that commit in a cached worktree,
   `out/ref-<sha>/tree/`, by `scripts/bench_common.py`, which every bench harness shares), or
