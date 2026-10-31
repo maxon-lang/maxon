@@ -35,6 +35,8 @@ readonly SeedTagPattern='^(v[0-9]|seed-[0-9])[A-Za-z0-9.+-]*$'
 readonly LoginUserPattern='^[A-Za-z0-9._-]+$'
 readonly LoginHostPattern='^[A-Za-z0-9.:%-]+$'
 readonly Ipv4Pattern='^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
+readonly ResolveAttempts=6
+readonly ResolveRetrySeconds=5
 readonly ResolveIpv4Script='(Resolve-DnsName $env:MAXON_MAC_RESOLVE_NAME -ErrorAction Stop | Where-Object { $_.IPAddress -match "^\d+\.\d+\.\d+\.\d+$" } | Select-Object -First 1).IPAddress'
 readonly ExitSuccess=0
 readonly ExitFailure=1
@@ -135,15 +137,25 @@ check_single_line() {
 }
 
 resolve_address() {
-	local address
+	local address attempt
 
 	case "$mac_name" in
 		*.local)
 			if command -v powershell.exe >/dev/null 2>&1; then
-				address="$(MAXON_MAC_RESOLVE_NAME="$mac_name" powershell.exe -NoProfile -NonInteractive -Command "$ResolveIpv4Script" 2>/dev/null | tr -d '\r')" || address=""
-				[[ "$address" =~ $Ipv4Pattern ]] || die "cannot resolve $mac_name to an IPv4 address (is the Mac awake?)"
-				printf '%s\n' "$address"
-				return
+				for ((attempt = 1; attempt <= ResolveAttempts; attempt++)); do
+					address="$(MAXON_MAC_RESOLVE_NAME="$mac_name" powershell.exe -NoProfile -NonInteractive -Command "$ResolveIpv4Script" 2>/dev/null | tr -d '\r')" || address=""
+
+					if [[ "$address" =~ $Ipv4Pattern ]]; then
+						printf '%s\n' "$address"
+						return
+					fi
+
+					if ((attempt < ResolveAttempts)); then
+						sleep "$ResolveRetrySeconds"
+					fi
+				done
+
+				die "cannot resolve $mac_name to an IPv4 address after $ResolveAttempts attempts (is the Mac awake?)"
 			fi
 			;;
 	esac
