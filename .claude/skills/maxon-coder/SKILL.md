@@ -91,3 +91,6 @@ After each edit:
   An `export` no other file uses is E3092, and an exported signature naming a file-private typealias is
   E3167 — so a one-file program marks nothing `export`, and files sharing one directory use `module`.
 - **An unused parameter is E3012**, like an unused variable.
+- **Never add `.clone()` "just in case": it allocates and copies.** Reassigning a `var` to a freshly
+  produced value needs none. Add one only where the compiler refuses without it (E3078, E3188) or the
+  code must diverge from a shared reference.

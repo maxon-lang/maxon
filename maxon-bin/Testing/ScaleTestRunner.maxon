@@ -66,8 +66,9 @@
 // A SUBPROCESS PER RUNG, AND `--repeat` OF THEM
 // ===========================================================================================
 //
-// The compiler has no on-disk cache — `Compiler.loadProject` reads every source fresh in every process — so
-// a new process is COLD BY CONSTRUCTION and there is nothing to bust. Spawning also means a crash
+// Every rung's process reads the corpus fresh, and takes the standard library and runtime from the
+// on-disk library cache. One unmeasured compile warms that cache before the first rung, so every rung
+// measures the same thing: a warm library and a cold corpus. Spawning also means a crash
 // at the top rung kills that rung and not the run, which is not hypothetical: the 19,200-block
 // shape at rung 5 is exactly where the historical SIGSEGV lived, and a runner that died with it
 // would report nothing at all about the five rungs that had already climbed.

@@ -49,9 +49,19 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   an executable named after a source under `maxon-bin/Compiler/`, left the slot EMPTY, and **exited 0** — so the next command is
   a bare `127` about a compiler that was never written. `scripts/build-from-seed.sh` passes `--output=` for this reason;
   `CONTRIBUTING.md` spells it too.
+  `scripts/build-from-seed.sh` treats ANY failed seed build as a seed refusal and stages
+  `scripts/seed-shim/`, so a locked slot (E6002, e.g. an editor's language server holding
+  `maxon-bin/.maxon/maxon`) reads as a seed wall: read the E6002 itself. A held slot binary can be renamed
+  aside even when it cannot be deleted. A slot binary's version stamp names the last commit, never the
+  working tree, so a compiler built while uncommitted or stashed edits were applied carries a stamp that
+  looks clean: it does not vouch for the source. When a build fails on a name or constant the tree plainly
+  declares, rebuild with `scripts/build-from-seed.sh` before believing the diagnostic.
 - **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`.
 - Exit code **101** means a memory leak was detected.
-- There is **no `maxon clean`**.
+- There is **no `maxon clean`**; `maxon cache clear` empties the run and library caches. Clearing the cache
+  rules the cache OUT; it is not a fix. If a hand-built program crashes after a compiler change while the
+  suite is green, suspect a real miscompile first (the suite may not exercise the pattern) and read the
+  emitted code with `dump_ir` or a disassembler.
 
 > ### ⭐ A SELF-REBUILD RENAMES ITS RUNNING IMAGE OUT OF THE SLOT, THEN WRITES INTO THE EMPTY SLOT
 >
@@ -105,6 +115,14 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
 > `runtime/`, and the compiler resolves both by walking UP from its own executable — so an archive
 > unpacked whole would leave a RELEASED stdlib and runtime one directory above the compiler and the
 > tree's own would never be reached. The build would succeed and compile the wrong sources, silently.
+
+⛔ **A COMPILER THAT STARTS DEPENDING ON A RUNTIME BEHAVIOUR THE SAME CHANGE ADDS NEEDS THE SEED CHAIN.**
+When the compiler's OWN code relies on a transfer, scheduler, allocator or walk semantic the change
+introduces, every local self-compile stays green, because the slot compiler is always a post-change
+builder. CI builds from the pinned seed, whose runtime lacks the behaviour, so seed → C1 → C2 can die
+(exit 96). Run `scripts/fetch-seed.sh` then `scripts/build-from-seed.sh` before pushing. Stage the
+dependency behind a builder-set `static let` capability that defaults to the old-safe path, as
+`FrontEndPool.RuntimeMovesSharedRecords` does, and remove it once a release carries the runtime.
 
 ## maxon MCP tools (PREFER THESE — **IN A WORKTREE, PASS `repoRoot`**)
 
@@ -237,6 +255,11 @@ every case is compiled on the Mac, and each spec's binaries run in one `orb run`
 the preflight runs a minimal x86-64 ELF in the machine and names that remedy when the ELF fails.
 `--target=arm64-linux` hands the suite to a compiler built for the machine and run inside it.
 
+⚠ **A CHANGE THAT GROWS A FUNCTION'S LIVE-VALUE COUNT IS A CROSS-TARGET CHANGE** even when it touches no
+target-specific code: arm64 has 31 general registers and x64 about 14, so a self-compile on one host cannot
+see the other's E5001 — CI's lanes are the gate. An E5001 in straight-line, loop-depth-0 code is an
+allocator defect (it should have spilled), not a reason to shrink the function.
+
 `run_spec_test` takes `target: "wasm32-wasi"` and runs the output under the
 vendored wasmtime. By hand, for ONE program:
 
@@ -256,6 +279,11 @@ threads, the uptime and thread-CPU clocks, argv**) answer E3104 and are counted 
 x64-only CODEGEN cases (register pressure, `.rdata`, emitted symbol names), which are about x64's
 output rather than about wasm, carry an `<!-- unsupported-targets: … -->` exclusion. ⇒ **a float or
 String case failing on wasm is a BUG on that lane, not an out-of-slice case to refuse.**
+
+⚠ **A FAILURE ON wasm ALONE CAN BE A FACT THE OTHER LANES ARE BLIND TO.** A call-signature width
+disagreement (an i32 result declared as i64) is invisible on x64 and arm64, which pass both in one 64-bit
+register; wasm types every function value exactly and traps `indirect call type mismatch`. That means the
+other lanes cannot see the disagreement, not that the wasm backend is broken.
 
 ⭐ **THE MARKER NAMES THE LANES THAT CANNOT SERVE A CASE, NEVER THE ONES THAT CAN**, so a backend that
 lands inherits every unmarked case instead of being excluded from all of them at once. The harness
@@ -373,6 +401,14 @@ then the summary**, with failures wherever those tests fall in declaration order
 while the reason sits thousands of lines above. `<scratchpad>` is the scratchpad directory your system
 prompt names (root `AGENTS.md`). The MCP tools need none of this.
 
+⛔ **A CHAINED OR BACKGROUNDED COMMAND REPORTS THE EXIT STATUS OF ITS LAST COMMAND:** `build > log; echo $?;
+tail log` reports `tail`'s 0 over a failed build. Write the status into the log (`…; echo EXIT=$? >> log`),
+read it back, and confirm the artifact exists. Join build and test with `&&`, so a failed build cannot be
+followed by a suite that runs the stale binary and reads green. A run that died before testing prints no
+`FAIL` lines, so require the `N passed, M failed` summary line. A tool-call timeout does not kill the
+compiler it spawned: the retry meets the tree lock (`error: … is BUSY … Nothing was run.`, non-zero
+exit) — the lock working, not a red gate; wait for the other command.
+
 ⚠ **THE SUITE RUNS EVERY TEST BINARY WITH CWD `temp/`**, so that directory is shared with anything
 else you put there. Stage a binary you must keep somewhere else.
 
@@ -430,6 +466,15 @@ no doc comment, which is how it finds them.
   subtree and a case at the `stdlib/` root cannot see one under `helpers/`. It is for a case whose SUBJECT is that surface; a
   case that merely uses one moves to the safe stdlib API.
   The compiler's own sources under `maxon-bin/` are user tier too.
+- ⚠ A diagnostic added to an early pass can pre-empt the subject of an older compile-error case: the
+  pipeline stops at the first pass that reports, so a case pinning a later pass's code starts failing with
+  the new code. That reads as message churn, and re-minting it makes the case silently test nothing. Change
+  the case's program so it no longer trips the new check and the original diagnostic fires again. A
+  construct in a case's scaffolding that a lane refuses with E3104 does the same.
+- A scripted edit in text mode on Windows (Python `open(p,'w')`) rewrites every line ending in the file, and
+  `git diff` cannot show it because `.gitattributes` normalises to LF. A case whose `stdout` block gained a
+  `\r` fails with `expected:` and `actual:` printing identically. Edit spec files binary-safe and check
+  `file <path>` for `CRLF`; when expected and actual look identical, suspect line endings first.
 - A spec fence the harness does not read (` ```RequiredIR ` among them) is refused, naming the case.
 - `--update-required` re-mints the trace-capture blocks (` ```mm-trace `, ` ```log-trace `) and the
   ` ```TargetIr:<lane> ` pins in a spec file but **not** its `maxoncstderr` blocks — an error-code renumber

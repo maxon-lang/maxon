@@ -1,6 +1,11 @@
 You do not care if an issue is pre-existing. Just debug and fix it. One found while a change is in
 progress, and not related to it, is noted and landed right after that change (`/land` §10).
 
+A symptom with no mechanism (a one-off hang, a flake that will not reproduce) is the next thing to debug,
+not a risk to record: never ship it described as "unexplained". A hang and a crash in the same subsystem
+are one wild pointer until shown otherwise. A clean re-run bounds the probe, not the bug: ask what shape
+of run would make it certain (a process's first spawn, the first lap).
+
 Do not use "cmd /c" to run commands
 
 Do not use heredocs or here-strings (a hook refuses them): write the text with the file-writing tool and
@@ -19,7 +24,9 @@ There are no time constraints. Complexity doesn't matter. If you are fixing an i
 **Maxon never avoids a breaking change.** A language that refuses to break cannot improve, and Maxon is
 written with agents, which fix what a release breaks. Make the better design: keep no old spelling, no
 compatibility shim, no deprecation period, and never reject a design because existing code would have to
-change. A change that makes Maxon source which compiled with the previous release fail to compile owes its
+change. Because Maxon's authors are agents, a compile error costs one round trip: prefer a deterministic
+error that names the deficit and the fix over silently slower or degraded code. The error must be a
+property of the program, not of a heuristic search, so the author's rewrite loop converges. A change that makes Maxon source which compiled with the previous release fail to compile owes its
 entry under `## Unreleased` in `RELEASE_NOTES.md` — the change and its `Fix:` — in the same commit
 (`docs/RELEASING.md`, "The release notes"). A change to a command, flag, tool output or event stream is
 not such an entry; it updates its `docs/` source.

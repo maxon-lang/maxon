@@ -34,13 +34,12 @@ REPORT, and the caller lands it in its own `/land` right after this one.
 
 > ### ⛔ IF ANOTHER PROCESS DISPATCHED YOU, DO NOT RUN THE FULL SUITE AND DO NOT COMMIT.
 >
-> `/land` dispatches you at its §5 and runs its battery at §8 — like any caller that owns its own gates,
-> it runs the full unfiltered suite **on the identical tree, minutes later**, and commits everything as
-> one commit. A full run here is not extra
-> assurance — it is the same run twice, and it is the single largest piece of duplicated work these
-> processes have ever paid for. **Your `--filter`ed runs are yours; the battery is the caller's, once,
-> after you.** If a refactor you make spans files, **say so in your report** — the caller's battery is
-> where a broken caller three files away surfaces, and it is already going to run.
+> `/land` dispatches you at its §5 and runs its landing gates at §8 **on the identical tree, minutes
+> later**, then commits everything as one commit; the full suite is CI's, after the push. A full run
+> here is the single largest piece of duplicated work these processes have ever paid for. **Your
+> `--filter`ed runs are yours; the landing gates are the caller's, once, after you.** If a refactor you
+> make spans files, **say so in your report** and name the spec files it touches, so the caller's
+> filter covers them — CI is where a broken caller three files away otherwise surfaces.
 
 **Invoked standalone**, steps 6–7 below are yours: the gates and the commit. Skip them when you were
 dispatched.
@@ -102,6 +101,17 @@ parser's token collapse, then re-derived by the async door, `spawn`, `default`, 
 E3112 census. Five `/land`s fixed it one consumer at a time, and six reviews each merged the copies inside
 their own diff without asking why the next consumer needed the same fix.
 
+### When two places must agree on one fact, climb the ladder
+
+1. **DERIVE** one from the other, so drift is unrepresentable.
+2. Otherwise **CHECK** them against each other on a path nothing can skip — an assert in the code that
+   builds both, as `assertCallClobberConsistent` and `assertRegisterFacts` do — and record why a
+   derivation was refused.
+
+⛔ **A comment saying "these must move together" is not a cure.** The checked copy fails every build when
+it drifts; the commented one passes every gate. And ask **where the single place RUNS**: a dedup that
+allocates on a path every compile takes is a new cost curve.
+
 ## 4. Latent bugs — not just style
 
 - **Resource release on EVERY path**, including throw/panic/abort. (Two `StreamingSubprocess` handle
@@ -110,6 +120,38 @@ their own diff without asking why the next consumer needed the same fix.
   yields in between" is a property of today's code, not an invariant.
 - Concurrency: dropped/double-dispatched work, starvation, races between a producer and a consumer.
 - Off-by-one, unhandled boundary, silent fallthrough.
+
+**Sweep the class.** After a root cause, state the defining predicate of the defect class and grep every
+site that satisfies it, across all targets and every consumer of the fact.
+
+- **Sweep the FIELD or fact, not the feature.** Derive the set from the defining property, never from a
+  proxy (a keyword, a parameter name, "the ones I found").
+- **A check filed against a SPELLING misses values that arrive another way.** List the arrivals (name,
+  field, call result, parameter, return type, alias, array element, merge) and give each its own case; a
+  declared type is an arrival a value-producer sweep cannot see.
+- **When a change widens what a union case carries, re-read every range or `to` arm over that union** —
+  exhaustiveness catches missing arms, not over-broad ones.
+- **When a predicate's premise goes false, narrow it, do not delete it.** An over-approximate analysis may
+  ORDER but must never REFUSE.
+
+**Reading-only findings** — what to ask of the diff when nothing is run:
+
+- A deferral ("pre-existing", "already rejected", "unreachable") is a claim. Ask what the construct this
+  change now permits can reach, not what today's callers reach.
+- A change that widens reach (visibility, overload set, conformance, a lookup table) admits programs:
+  review what now compiles that shouldn't. Before exporting a synthesized member, check something builds
+  its body.
+- "Cannot happen" needs a named mechanism, with the condition that ends it written next to the check.
+- A two-ended protocol (retain/release, mint/free) sharing a classifier can still disagree if each end
+  asks it about a different subject (e.g. different nesting depths): check both ends ask about the same
+  value.
+- Two correct changes on disjoint files can compose wrongly: when one seeds a fact and another consumes
+  it, or correctness rests on "X never appears in what we scan", hunt the interaction.
+- A justification for a gap that rests on "no test exercises it" is circular if the tests were narrowed
+  (marker, `#if`, skipped lane) because of that gap.
+- "This is more work than before" is a hypothesis: hand cost claims to the optimizer to measure.
+- Before blaming a mechanism, ask which pass raises the symptom and what it reads; a symptom that
+  precedes the mechanism in the pipeline was not caused by it.
 
 ## 5. The AGENTS.md quality checklist
 
@@ -139,9 +181,10 @@ name what the change owes in your report for §6 rather than writing it. Standal
 
 ## 6. Rebuild and re-run the gates — STANDALONE ONLY
 
-- **The battery:** every row of `/land` §8's table — build if stale (`maxon run build`, which builds
-  twice by itself for an emitted-runtime change), the full suite, the wasm lane, the self-compile, the tree
-  corpora and the documentation gates. It is one battery, kept in one place.
+- **The landing gates:** every row of `/land` §8's table — build if stale (`maxon run build`, which
+  builds twice by itself for an emitted-runtime change), filtered specs covering what changed, the codecs
+  check, and the self-compile, seed chain and documentation gates where §8 calls for them. CI runs the
+  rest. They are kept in one place.
 - **Scaling:** `mcp__maxon__run_scale_test` if the change touched a pass, the IR, or a data
   structure the compiler indexes by. ⚠ **It is an INSTRUMENT with no verdict — there is no green one,
   and you never touch it to make a number look better.** Read the doubling ladder straight off the

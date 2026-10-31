@@ -73,6 +73,11 @@ end 'main'
 42
 ```
 
+Leaving out the ```` ```exitcode ```` block asserts nothing about the exit code, whereas leaving out
+```` ```stdout ```` asserts the program printed nothing. A case whose subject is ownership (refcounts,
+drops, clones, moves, copy-on-write) pins ```` ```exitcode ```` `0`: a crash during teardown, or the leak
+gate's exit 101, happens after the last `print` and passes a stdout-only case.
+
 #### Per-target stdout
 
 When a program's stdout differs by target (e.g. `FilePath` prints `\` on
@@ -572,3 +577,24 @@ The line under `N passed, M failed` counts them: `N run case(s) ran batched in M
 3. Implement until tests pass. A case that pins emitted code belongs in `ir-specs/<feature-name>.md`: write
    its program and result blocks, add a `TargetIr:<lane>` block for the lane you run (any content), and
    run `spec-test ir-specs --update-required --filter=<feature-name>/` on each lane.
+4. Check the case against the list below.
+
+What a case must pin:
+
+- Every feature gets at least one case that pins a concrete value. A case asserting only a relation
+  between two computed values (`f(x) == f(y)`, `h != 0`) is blind to a defect that perturbs both sides
+  identically. Use distinctive inputs, not round ones whose expected answer is 0.
+- A case asserting that a resolver picked X must make the resolver's do-nothing outcome (first
+  declaration, bare key, identity mapping) the WRONG answer, so non-selection fails instead of printing
+  the right result by accident. An ownership probe uses a heap `String`: a freed `int` slot reads `0`, a
+  plausible answer.
+- A control must be able to fail. When a pass changes what a case's scaffolding does (an inliner splices
+  the call that kept a function alive), re-root every case sharing that scaffolding, the negative control
+  first, and read the control's pinned output: it must still show the construct the rule is about. A
+  probe that reports absence needs a positive control known to be present. An `#if` or marker that is
+  true on every target tests nothing.
+- A line added inside a spec program, a comment included, shifts every `:line:col` an expected
+  `maxoncstderr` or `stderr` block cites; explain a deliberate spelling in the prose above the fence.
+- A case carrying `<!-- unsupported-targets: x64-windows -->` is never compiled on a Windows host, so a
+  green host suite says nothing about it. `spec-test --target=<lane> --filter=<spec>/` compiles each case
+  that lane selects without running it, in seconds: cross-compile every lane the marker leaves it on.

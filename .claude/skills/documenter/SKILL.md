@@ -205,6 +205,12 @@ category, drop it. **A confident, fabricated invariant is far worse than a missi
 someone will rely on it. If a claim's substance matters but cannot be verified, preserve it verbatim
 rather than rephrasing into something the code does not support.
 
+- ⛔ **Grep every file, function or heading a comment or doc cites before writing it.** An invented name
+  is worse than the dangling reference it replaced.
+- **Omit a prose count** (lines, cases, callers): it rots beside the thing it counts.
+- **A doc or comment correction has no test behind it**, so read it against the code and name any claim
+  you could not check.
+
 ### Scope, and working in order
 
 **The diff plus its neighbourhood, never the whole file.** For each file the change touched: every
@@ -394,9 +400,9 @@ stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP 
 > the code, by accident. The build catches that, and it is the whole gate.
 >
 > ⛔ **No test runs. Not the spec suite, not the wasm lane, not the doc-coverage gates.** None of them
-> can move on a comment, so running one is confirmation rather than detection — and the caller's gate
-> battery runs all of them minutes later on the same tree. Never repeat a run whose inputs have not
-> changed.
+> can move on a comment, so running one is confirmation rather than detection — the caller's landing
+> gates run minutes later on the same tree, and CI runs the rest. Never repeat a run whose inputs have
+> not changed.
 
 Two things precede the build. Both cost seconds, and both catch what a build cannot.
 
@@ -415,7 +421,7 @@ Two things precede the build. Both cost seconds, and both catch what a build can
    get identical mangling of any `//` inside a string. Put the output in the report verbatim; **an
    empty diff is the only acceptable result** — do not argue around a non-empty one.
 3. **`./maxon-bin/.maxon/maxon run build`** — about a minute, exit 0. MCP `build` with
-   `path: "maxon-bin"` is a path build that leaves the slot as it was, so the caller's battery would
+   `path: "maxon-bin"` is a path build that leaves the slot as it was, so the caller's landing gates would
    find the binary stale. ⛔ Skip only when the caller says it is batching the build.
 
 `node website/scripts/sync-docs.mjs` still **runs** — it is the regeneration this pass owes, not a

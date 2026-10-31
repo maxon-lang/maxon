@@ -21,9 +21,10 @@ any other edit.
 ## First: who is running you
 
 - **Dispatched as a step of another process** (`/land` §4, or any caller that owns the gates): **you do
-  not run the full suite and you do not commit.** Your caller runs the battery and commits everything,
-  minutes later. Your correctness proof is your `--filter`ed specs staying green while you iterate.
-- **Invoked standalone**: the full suite and the commit are yours, at the end, once.
+  not run the full suite and you do not commit.** Your caller runs the landing gates and commits
+  everything, minutes later. Your correctness proof is your `--filter`ed specs staying green while you iterate.
+- **Invoked standalone**: `/land` §8's landing gates and the commit are yours, at the end, once. The
+  full suite is CI's.
 
 **Either way, a `TargetIr` pin your change moves is a gate in `ir-specs/`.** Re-mint it with
 `--update-required --filter=<spec>/` and leave the re-minted file exactly as it lies, for whoever
@@ -45,6 +46,9 @@ the current figures. Look for:
   live-set's set bits. Making exactly this change is what turned the compiler's allocator linear.
 - **Allocation in a hot path**, especially anything that allocates into the very `mm` stream being
   traced. (Hashing through a `toByteArray()` copy allocates; `String.hash` walks the bytes in place.)
+  ⚠ **An allocation count is a proxy, not a time**: a slab fast-path allocation costs about 8 ns. For a
+  speed goal rank by self time in `maxon profile` and gate on the ladder's CPU column; use
+  `--allocations-by-tag` for questions about allocations themselves.
 
 **Scope the hunt to the change.** A new pass, a new IR op, or a new collection the compiler indexes by
 earns the full hunt above. A change that added none of those gives the hunt structurally nothing to
@@ -74,6 +78,20 @@ backwards makes you optimize the instrument instead of the compiler.
   ratios wobble up to ±0.5 run to run — take them with `--repeat=N`, which reports the least CPU per
   phase and fails as a BROKEN RUN if a rung's repeats disagree on memory. And **an A/B must be
   INTERLEAVED** — a stable sign can come from the schedule alone.
+- ⛔ **The "before" side of an A/B is a compiler built from a NAMED commit (a clean checkout), never
+  whatever sits in the slot.** After a checkout, stash or branch switch that reverts compiler source,
+  REBUILD before measuring: the harness's staleness refusal compares modification times, so a binary
+  newer than the reverted sources passes it while emitting the old code. Read emitted-code claims from
+  disassembled bytes.
+- **`--repeat=N` bounds noise within a run, not drift between runs**; a baseline from another day,
+  branch or session is not a measurement. Take the noise floor from the same binary run twice (control vs
+  control); an effect inside it is no effect.
+- **When the exact columns (allocations, bytes, code bytes) and the CPU column disagree on a change's
+  sign, believe the exact ones and look for the confound.** If untouched phases move as much as touched
+  ones, the comparison has a confound, not a result.
+- **A speedup measured from an implementation that also fails cases is not a number.** Measure
+  per-operation costs in the configuration the change runs in (a saturated worker pool, not a serial
+  loop). Before attributing a regression to a file, `git diff --name-only <a>..<b> -- <path>`.
 - **The CPU unit is platform-defined and the platforms do not agree** (TSC ticks on Windows,
   nanoseconds on macOS) and there is **no honest conversion** — `QueryPerformanceFrequency` is the
   *performance counter's* rate, not the TSC's. ⇒ **Compare RATIOS between rungs, which are unit-free;
@@ -136,6 +154,14 @@ control carries its own runtime.
 ⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
 dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just
 inflate numbers.
+
+- **Instrument phases disjointly** (X's time excludes the Y it calls), fail if the parts exceed the
+  total, and print an explicit `(unattributed)` row.
+- **A share is a ratio**: a term measured small behind a dominant one is not disproved; re-profile after
+  the dominant term is removed.
+- **Benchmarks of EMITTED code can swing tens of percent on code alignment alone**; a control benchmark
+  the change cannot affect that shows a delta is the tell. Sweep padding (0–5 dummy functions) and
+  believe a delta only when the spreads are disjoint and the candidate wins at every padding.
 
 ⚠ **The trend log is a deliverable, and it must say WHY.** The instrument can see exactly *what* moved
 and can never see *why*. If your change moves the numbers, **record the reason in

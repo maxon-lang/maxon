@@ -2,6 +2,12 @@ Work here is compiler work.
 
 @../maxon-bin/AGENTS.md
 
+## Names
+
+No single leading underscore for private members in `stdlib/` filenames, fields or functions: privacy is
+the unmarked default, or `module`. Names starting `__` are compiler and runtime intrinsics, a separate
+convention.
+
 ## Where a file goes
 
 **The `stdlib/` root holds only the major modules: the files a user names.** A root file's `public`

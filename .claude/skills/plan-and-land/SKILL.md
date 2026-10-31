@@ -13,7 +13,7 @@ read; `/land` does everything from the red set onward. This skill adds the three
 >
 > The reading is dispatched (§2). You read **reports** and write the **plan**. `/land`: *"A coordinator
 > who starts reading a third file to form a hypothesis has stopped coordinating."* You reach §6 still
-> owing `/land` §1–§9 **including the battery** — spend what is left on judgement, not greps.
+> owing `/land` §1–§9 **including its landing gates** — spend what is left on judgement, not greps.
 > ⚠ Planning *feels* like reading; that is why this box exists.
 > ⛔ **No worktree, no branch** — `/land` §0 requires a CLEAN tree and this skill must not dirty it.
 
@@ -38,7 +38,7 @@ resumes; a refuted APPROACH returns to §3, then to §5 for re-approval. That is
 `git branch --show-current` is `main`; `git status` is clean; `git fetch` shows nothing behind
 `origin/main`. Record `BASE=$(git rev-parse HEAD)`.
 
-⛔ **Do not build** — that is `/land` §0's, *"IF, AND ONLY IF, THE BINARY IS STALE"*, and nothing in
+⛔ **Do not build** (the one exception is §2's check of a claim that something is open) — that is `/land` §0's, *"IF, AND ONLY IF, THE BINARY IS STALE"*, and nothing in
 planning reads the binary. **Given a plan-file path instead of a problem**, this is a RESUME: read it,
 then go to the resume box in §4. If the ask is ambiguous **in a way that changes the approach**, ask now.
 
@@ -47,7 +47,8 @@ then go to the resume box in §4. If the ask is ambiguous **in a way that change
 What is wrong or missing, and **what would prove it fixed**. For a bug, state the reproduction **as a
 program** — never as something you ran.
 
-> ⛔ **PLANNING RUNS NO SPEC TESTS AND NO PROBES.** `/land` binds its scout the same way: *"It reads; it
+> ⛔ **PLANNING RUNS NO SPEC TESTS AND NO PROBES** (bar §2's re-check of a stale-prone claim, which runs the
+> claim's own reproduction). `/land` binds its scout the same way: *"It reads; it
 > does not run probes — what the compiler does today is what §1's red run of the chosen cases shows."*
 > Verification lives in cases and nowhere else (NO MANUAL TESTS, user directive). A planning-phase run is
 > a claim nobody can attribute and a red nobody watched.
@@ -68,6 +69,12 @@ own this behaviour; every existing case that touches it with file + line and **t
 that already pins it; what the neighbouring cases look like.
 
 Both: read-only · write nothing into the checkout · run nothing · `file:line` for every claim.
+
+⚠ **An issue, residual or TODO saying something is open is a claim about the past, and nothing re-checks
+it.** Before planning around one, build the compiler and run its own minimal reproduction; correct a stale
+claim and do not plan a wave around it. Verify a dependency edge ("blocked on X") the same way. This is
+the one exception to §0's no-build and §1's no-probes: it runs the claim's own reproduction, not a probe
+of your own devising, and it is you or a dedicated agent that runs it, never the two survey agents.
 
 ## 3. Choose the approach — yours, never delegated
 

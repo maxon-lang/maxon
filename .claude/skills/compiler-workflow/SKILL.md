@@ -1,11 +1,11 @@
 ---
 name: compiler-workflow
-description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, freezing a new bootstrap seed with `scripts/freeze-seed.sh`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, when the pinned seed no longer accepts the tree, or when `vendor/wasmtime` is missing.
+description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, resolving a CI fault's rip on a local build, freezing a new bootstrap seed with `scripts/freeze-seed.sh`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, when the pinned seed no longer accepts the tree, or when `vendor/wasmtime` is missing.
 ---
 
 # Compiler workflow — instruments and host lanes
 
-The always-loaded rules live in `maxon-bin/AGENTS.md`. This skill holds the six procedures that are
+The always-loaded rules live in `maxon-bin/AGENTS.md`. This skill holds the procedures that are
 reference material rather than standing constraints.
 
 ## `run_scale_test` — the scaling INSTRUMENT. ⚠ NOT A GATE.
@@ -100,6 +100,29 @@ scripts/mac-host.sh drop <session> <KEY>
 - `drop` the session when done; it releases a lock the session still holds.
 - ⚠ **`mac-host.sh: skipped — MAXON_MAC_HOST is not set` means no Mac is configured.** It exits 0 and
   touches nothing. Skip the arm64-macos work and say so in the report — it is not a failure.
+- **Before a lane run, cross-compile that lane from the local host** with
+  `spec-test --target=arm64-macos --filter=<spec>/`: it compiles every case the lane selects without
+  running it, in seconds.
+- **To tell a hang from a crash on macOS (no `timeout`),** background the program and poll `kill -0`;
+  `sample <pid> 2` prints the parked stack.
+- **Poll the remote for liveness** (`scripts/mac-host.sh job`, the log's modification time), never the
+  local driver's log: a dead remote and a slow one look identical from here.
+
+## Resolving a CI fault
+
+A fault panic from a CI lane (`… at rip=0x… diag_base=0x…`) resolves to an exact instruction on a local
+build of the same commit from the same seed (`scripts/fetch-seed.sh <target>`, then
+`scripts/build-from-seed.sh`, as CI does).
+
+1. `diag_base` is the runtime address of the text base, `mrt_start`: slide = CI's `diag_base` minus that
+   symbol's unslid address (`nm`); unslid rip = `rip` minus slide.
+2. Confirm the unslid rip lands inside the frame the backtrace named — that proves the binaries match.
+3. Disassemble that function (`otool -tvV` on macOS, `llvm-objdump -d` elsewhere).
+
+⚠ **The panic words are the same for a nil dereference and a use-after-free; the faulting load tells them
+apart.** Freed payloads are poisoned with `0x3F` and stay mapped, so a read through a freed buffer returns
+poison without faulting — only a pointer read OUT of poison faults, on `0x3F3F3F3F3F3F3F3F`. A true nil
+faults on the first load.
 
 ## Freezing a bootstrap seed
 
@@ -138,3 +161,10 @@ their natural names — `wasmtime` on unix, `wasmtime.exe` on Windows — and no
 extensionless file is somebody else's Mach-O. Pass a target (`fetch-vendor.sh arm64-macos`) to stage
 another platform's, and `wasm-opt` by name: nothing in the tree invokes it, so it is not fetched by
 default.
+
+**For a runtime design question** (signals, alt stacks, thread suspension, preemption, scheduler,
+netpoller, allocator), follow Go's runtime (`src/runtime/` in Go's source; `vendor/go/` when staged)
+rather than re-deriving it — the tree's runtime is built on its mechanisms, and a brief for such work
+names the Go function followed. `vendor/delve/` (Delve's source, `pkg/proc/gdbserial/`, also fetched by
+nothing) is the reference for driving Apple's `debugserver` over the GDB remote protocol; read it before
+changing `maxon-bin/Debug/Backend/GdbRemoteBackend.maxon`.

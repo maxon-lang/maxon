@@ -1,13 +1,14 @@
 ---
 name: land
-description: Implement one self-contained change end to end and push it — decide the MINIMAL spec set and watch it go RED first, write the code, green the set on a filter, optimize, independent review, document it, rebase on origin/main, then ONE gate battery (full suite + wasm lane + self-compile), commit and push. Main checkout, no worktree, no branch. Use for a bug fix, a missing diagnostic, a small feature, a defect found by hand, or any compiler change — HOWEVER LARGE it turns out to be: the task is done AS ONE CHUNK, in ONE commit, with no slicing and no escalation out of this process. Invoke as `/land <what to do>`.
+description: Implement one self-contained change end to end and push it — decide the MINIMAL spec set and watch it go RED first, write the code, green the set on a filter, optimize, independent review, document it, rebase on origin/main, then the landing gates ONCE (build, filtered specs, codecs check, plus the self-compile and seed chain when the diff calls for them; CI runs the rest), commit and push without waiting for CI. Main checkout, no worktree, no branch. Use for a bug fix, a missing diagnostic, a small feature, a defect found by hand, or any compiler change — HOWEVER LARGE it turns out to be: the task is done AS ONE CHUNK, in ONE commit, with no slicing and no escalation out of this process. Invoke as `/land <what to do>`.
 ---
 
 # Land one change
 
 **One invocation = ONE change, done WHOLE: specified, implemented, reviewed and pushed as a single
-commit.** You work directly in the main checkout, alone on `main`, and you run the expensive gates
-**exactly once, at the end**.
+commit.** You work directly in the main checkout, alone on `main`, and you run the landing gates
+**exactly once, at the end**. There is **no full local battery**: you commit and push on a build, filtered
+specs covering what changed and the codecs check, and CI runs the rest.
 
 **This is the process for compiler work:** the bug you just found, the diagnostic nobody wrote, the pass
 that answers wrong, a feature however large. There is no heavier sibling to escalate into.
@@ -52,9 +53,9 @@ that answers wrong, a feature however large. There is no heavier sibling to esca
 > unit of work; it is an unintegrated one that lands half-finished on `main`.
 >
 > **Three things go wrong, and the first is the one that made this process worth writing:**
-> - **The battery multiplies.** §8 is the expensive part and it runs ONCE precisely because the change
->   is one chunk. Four slices is four rebases, four full suites, four wasm lanes, four
->   self-compiles and four reviews — **four times the gate cost**, for the same code.
+> - **The gates multiply.** §8 runs ONCE precisely because the change is one chunk. Four slices is four
+>   rebases, four gate runs, four self-compiles and four reviews — **four times the gate cost**, for the
+>   same code.
 > - **`main` carries half a mechanism between slices**, and the next agent builds on it. An `export`
 >   without its consumer is an E3092 that breaks the self-compile; a diagnostic no case reaches is dead
 >   code; a lowering with no emitter is a wrong answer waiting for a caller.
@@ -85,19 +86,19 @@ gates and the commit.** Agents do the reading and the typing.
 | **5** | Independent review | the **`code-review`** skill, in a dispatched agent — never one that wrote the code | fix before the commit |
 | **6** | **Document it** — every comment the change gets, plus its `docs/` source | the **`documenter`** skill, in a dispatched agent | a build that no longer compiles |
 | **7** | **Rebase** on `origin/main` | **you** | resolve by hand |
-| **8** | THE BATTERY, once: full suite · wasm lane · **self-compile** | **you** | **stop** |
-| **9** | Commit and push | **you** | a rejected push re-runs §8 |
+| **8** | THE LANDING GATES, once: build · filtered specs · codecs check · **self-compile** and seed chain where the diff calls for them | **you** | **stop** |
+| **9** | Commit and push — do not wait for CI | **you** | a rejected push re-runs §8 |
 
-**Everything before §8 runs on `--filter`ed specs** — the whole set in ONE run, one `--filter=` per
+**Every spec run, in §8 as before it, is `--filter`ed** — the whole set in ONE run, one `--filter=` per
 pattern (MCP: a `filter` array), so its spec files run as parallel jobs. That is what makes this lightweight — and it is only
 honest because §1's red was real. The filter is a *proxy* for the suite, and a proxy you never saw fail
-is a proxy for nothing.
+is a proxy for nothing. CI runs the suite.
 
 ⚠ **Steps 4–8 do not reorder.** Optimize *before* review (an optimizer rewrites code and can introduce
 the very duplication the review exists to catch). Review *before* commit (a review after the commit is a
 bug report; before it, it is a gate). **Document AFTER the review** — comments are written once, against
 code that has stopped moving, and a documenter running earlier would comment code the review then
-rewrites. **Rebase before the battery** — a battery run on a tree you then rebase has tested something
+rewrites. **Rebase before the gates** — gates run on a tree you then rebase have tested something
 you are not pushing.
 
 ## Coordinating: what you delegate, what you keep, and what you never hand over
@@ -123,7 +124,7 @@ still runs**, because independence is not a size question.
 - **Reading the RED (§1) and confirming the GREEN (§3)** with your own filtered run.
 - **The `scale-test` ladder read and its `optimization-log.md` row (§4)** — attribution is only
   available now, and only to whoever knows what changed.
-- **The rebase (§7), the battery (§8), the commit and the push (§9).**
+- **The rebase (§7), the landing gates (§8), the commit and the push (§9).**
 
 ### ⛔ EACH GATE RUNS ONCE, AND THIS TABLE SAYS WHERE
 
@@ -134,7 +135,7 @@ five times per change and exactly one of those runs gates anything.
 |---|---|---|---|
 | **build** | **only when the binary is stale** | whoever last edited a compiled-in source — usually **§6's documenter**, which is the last editor | ⛔ **nobody builds a current binary** — see the box below |
 | **filtered specs** | many | **each agent's own loop** | that is the loop, not a gate |
-| **full suite · wasm lane · self-compile** | **once** | **you, §8** | ⛔ **no agent runs any of these** — §6's documenter finishes minutes before the battery, on the identical tree, and runs no tests at all |
+| **the §8 gates** — final filtered specs · codecs check · self-compile · seed chain · docs check | **once** | **you, §8** | ⛔ **no agent runs any of these** — §6's documenter finishes minutes before them, on the identical tree, and runs no tests at all. The full suite, the wasm lane and the tree corpora are CI's |
 | **`scale-test` ladder** | **once** | **you, §4** — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
 | **`git commit` / `git push` / `git rebase`** | **once** | **you, §7 and §9** | ⛔ **no agent commits, pushes, rebases, stashes or opens a worktree** |
 
@@ -159,23 +160,31 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 >   and run to a file in their scratchpad directory and report its path and exit code; you read that file. Re-run only
 >   when something it depended on has changed since.
 > - **Every edit comes before the expensive runs, never beside them.** An edit to a compiled-in source
->   after a run started invalidates that run. So the battery starts only once no agent can still edit:
->   **§6's documenter is the last editor**, and its verification is a build — so the battery's
+>   after a run started invalidates that run. So the landing gates start only once no agent can still edit:
+>   **§6's documenter is the last editor**, and its verification is a build — so the gates'
 >   build-if-stale row is already satisfied when it arrives, and you do not pay for it twice.
 > - **A red you did not cause is re-run by FILTER** — the failing cases alone — never by re-running the
 >   whole suite.
 
-### Every brief carries these eight things
+### Every brief carries these nine things
 
 1. **The change in one line**, and **the cases that must go green** — the acceptance, not a topic.
 2. **"This is a `/land` change"**: main checkout, no worktree, no branch, **one commit at the end, which
-   is the coordinator's**. ⛔ Do not commit, push, rebase or stash.
+   is the coordinator's**. ⛔ Do not commit, push, rebase or stash. No self-relaunching or polling loops,
+   and never copy a binary into `maxon-bin/.maxon/` — a probe build goes to `--output=temp/<task>/…`.
 3. **Its EXCLUSIVE file list**, when more than one agent is live. One file, one owner — and agents run in
    parallel only on disjoint files, sequentially otherwise.
 4. **The DIAGNOSIS you already have** — symptoms, exit codes, stderr, the call sites you read, the
    hypotheses you already refuted. Making an agent re-derive this is the one waste delegation exists to
-   prevent.
-5. **Its STOP RULE**: stop when your filter is green; the full suite is the coordinator's. **A defect you
+   prevent. ⚠ **Hand it over as a HYPOTHESIS to test against the red set, not a specification to
+   execute:** if the agent's measurement contradicts it, it reports the measurement and stops instead of
+   building the stated cure. Name a cure or a location as a candidate, never as the place to fix. Never
+   brief an unmeasured scope claim as a prohibition ("X is not affected, do not touch it"): say what was
+   checked and ask for any other route. Ask for `file:line` behind every load-bearing claim and a closing
+   list of what the agent asserted without reading. "Present but I could not reach it" bounds the agent's
+   search, not the code: assign that shape to the next agent explicitly.
+5. **Its STOP RULE**: stop when your filter is green; the §8 gates are the coordinator's, the full suite
+   is CI's. **A defect you
    find that is NOT RELATED to this change (the test is §10's) you do not fix** — you name it in your
    report: what is wrong, `file:line`, how you saw it, and a program that reproduces it.
 6. **The gate table above**, in one line: which runs are yours, which are not.
@@ -185,10 +194,17 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
    exit code"** —
    including your LAST build, and whether you edited a compiled-in source after it. That report is what
    lets the coordinator read your work instead of repeating it.
+9. **"Wait only on blocking tools."** A background shell or a Monitor wakes the main session, not a
+   subagent whose turn has ended. An agent uses the blocking `maxon` MCP tools (`build`, `run_spec_test`,
+   `test`, `run_scale_test`), which return when finished; it never backgrounds a run, never Monitors,
+   never ends a turn to wait. Multi-hour sweeps stay with the coordinator.
+
+**When an agent reports done, kill any shell it left running before the next step:** a leftover loop can
+kill another build or swap the compiler in the slot.
 
 ⛔ **Brief for DIAGNOSIS, never for COVERAGE.** "Enumerate every construct that could false-reject and
-prove each parses", "confirm no other spec regressed", "check every case still runs" — the §8
-battery and §1's count check already do all three, better, one step later. ⚠ **A specific instruction in
+prove each parses", "confirm no other spec regressed", "check every case still runs" — the filtered runs,
+§1's count check and CI already do all three, better, one step later. ⚠ **A specific instruction in
 your brief OUTRANKS the agent's own stop rule**: you cannot brief thoroughness in without briefing the
 stop out.
 
@@ -196,7 +212,7 @@ stop out.
 > Verification lives in cases and nowhere else — a case in `specs/`, or for a driver command its
 > `tests/` corpus. **No agent sabotages code, a test, a fixture or a file to watch a check fail, and
 > nobody verifies by a hand-run probe, a scratch program or a one-off script.** A check worth running
-> is worth keeping: write it as a case, in the set, where the battery and the wasm lane run it every
+> is worth keeping: write it as a case, in the set, where CI runs it on every lane every
 > time and a reader can see it. A check not worth a case is not worth running at all.
 > - **§1's red IS the sabotage every case needs**: it watched the case fail before the fix existed.
 > - **Diagnosis is not verification.** Running a reproduction to find a cause is part of §2; the
@@ -229,9 +245,9 @@ cheapest moment to ask.
   EMPTY slot is refused, not seeded: fetch the seed with `scripts/fetch-seed.sh` and build with it as
   `maxon-bin/AGENTS.md` says. A current binary is already what every red in §1 is read off: rebuilding
   it is minutes spent to learn nothing.
-- **No baseline suite run.** The §8 gate is `failed: 0`, not a delta from a remembered total, so there is
-  nothing to measure yet. (When §8 comes back red you therefore may not assume the red is yours — §8 says
-  how to attribute it.)
+- **No baseline suite run.** The §8 gate is `failed: 0` on the filtered set, not a delta from a remembered
+  total, so there is nothing to measure yet. (When §8 comes back red you therefore may not assume the red
+  is yours — §8 says how to attribute it.)
 
 ## 1. The MINIMAL spec set — and it goes RED before you write any code
 
@@ -254,6 +270,10 @@ the neighbouring cases in that file look like.
 
 **Then YOU pick the set** — from its facts, against the criterion above. That decision never moves.
 
+⚠ **When the ask (an issue, a ledger entry) names failing cases or a failure count, those named cases,
+run, are part of the acceptance.** A hand-built red that reproduces the mechanism may be narrower than the
+class; it supplements the named cases and never replaces them.
+
 **Then hand the writing out**: give an agent the exact list — file, case name, program, expected
 `exitcode`/`stdout`/`maxoncstderr` — and let it
 write them into `specs/`, and **tell it to invoke the `maxon-coder` skill before writing a case**. *(For
@@ -271,7 +291,7 @@ That is a cost call, not a rule.)*
 command, option, MCP tool or `public` stdlib API, the doc-coverage gate that owns the surface
 (`maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` (it covers the MCP `instructions` too), `tests/docs`) reads the
 built compiler or the tree's `stdlib/`, so it is green today and turns red only once the new surface exists.
-It is not in this set; it is acceptance, read in §8's battery after §6 has written the documentation.
+It is not in this set; it is acceptance, read in §8 after §6 has written the documentation.
 Every other user-visible change still owes its `docs/` source an edit (§6), which the gates cannot see.
 
 **Then SEE IT RED.** A spec is data — no rebuild needed to run one.
@@ -291,6 +311,11 @@ run_spec_test filter=["<spec-a>/", "<spec-b>/", …]
   per spec file, never one run per file, which pays the startup per file and runs each on one worker. A
   comma is part of a pattern, not a separator. A pattern that selects nothing refuses the whole run and
   is named, so a typo'd member cannot pass unseen.
+- ⚠ **A case that can race is reported as a failure rate `n of m`, never "passes" or "fails".** A 4% race
+  comes back clean 88% of the time at m=3, so use m ≥ 20 per cell before comparing cells. A case that fails
+  1 in 3 is not a red-set gate. A racy red is finished only when it is deterministic: force the losing
+  interleaving structurally (put the readied work where the other contender cannot take it), never by
+  widening a timeout.
 
 > ### ⛔ COUNT WHAT RAN. A spec can pass by running NOTHING — two ways, both of which read as green.
 > ```bash
@@ -308,7 +333,7 @@ run_spec_test filter=["<spec-a>/", "<spec-b>/", …]
 
 ## 2. Write the code — an `implementer` agent
 
-**Hand the implementation to an `implementer` agent** (`subagent_type: "implementer"`; its definition sets the model and effort, so pass no `model` override). **Every implementer is one** — the first, any further one, and every later implementer round (a review fix, a defect found while gating). The brief is §1's red set, the eight things
+**Hand the implementation to an `implementer` agent** (`subagent_type: "implementer"`; its definition sets the model and effort, so pass no `model` override). **Every implementer is one** — the first, any further one, and every later implementer round (a review fix, a defect found while gating). The brief is §1's red set, the nine things
 every brief carries, and above all **the diagnosis you already did while reading the red** — that is
 the most valuable thing in it.
 
@@ -317,7 +342,7 @@ fine on **disjoint** files, sequentially when they overlap: never two agents in 
 overlapping files. That is a scheduling rule about LABOUR — you integrate as their work arrives, and the
 deliverable stays one chunk and one commit.)*
 
-**What the agents must be told, beyond the standard eight:**
+**What the agents must be told, beyond the standard nine:**
 
 - **Invoke the `maxon-coder` skill before writing any Maxon**, and hand back only code its compile
   loop has passed.
@@ -333,8 +358,8 @@ deliverable stays one chunk and one commit.)*
   one writer of cases, and a fix that would falsify another spec's committed expectation is a
   STOP-and-report, never an edit to that spec.
 - **Root causes, no workarounds** — and a defect is fixed whether or not it predates you (AGENTS.md).
-- **Cross-target consistency**: an x64 change needs its arm64 equivalent. The wasm lane runs in §8 and
-  is not scalar-only — a float or `String` case failing there is a bug on that lane.
+- **Cross-target consistency**: an x64 change needs its arm64 equivalent. The wasm lane (CI runs it) is
+  not scalar-only — a float or `String` case failing there is a bug on that lane.
 - **A new diagnostic goes through the registry, which is HAND-AUTHORED and has NO generator**: add a
   `<caseName> = "EXXXX"` entry to `maxon-bin/Compiler/ErrorCodeRegistry.maxon`, then write the code that
   emits it. ⛔ **Not its doc comment — that block IS a documentation surface**
@@ -364,16 +389,16 @@ run** — the log file it reported, with the binary current when it ran — and 
 standing between an agent's report and §8. Re-run the filter yourself only when that evidence is
 missing or something changed after it.
 
-- ⛔ **NOBODY runs the full suite in this loop — not you, not the agent.** It is §8's, once. A suite
-  run per iteration is the single largest piece of duplicated work these processes have ever paid for,
-  and every agent's brief must say so.
+- ⛔ **NOBODY runs the full suite — not in this loop, not in §8, not you, not the agent.** It is CI's. A
+  suite run per iteration is the single largest piece of duplicated work these processes have ever paid
+  for, and every agent's brief must say so.
 - ⛔ **Never turn a case green by narrowing what it tests** — not the spec text, not the filter, not a
   marker. A green suite that tests nothing is the most expensive lie a test runner can tell.
 - **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
   not the suite is green over it. **When it is RELATED to this change it is fixed NOW, and the
   reproduction that found it becomes a case in the set; when it is not, it goes on the FOLLOW-UP LEDGER
   and is landed right after this change (§10)** — fixed all the same, without slowing this one. A
-  hand-run check is never evidence — it is unrepeatable, unreviewable, and invisible to the wasm lane a
+  hand-run check is never evidence — it is unrepeatable, unreviewable, and invisible to the CI lanes a
   spec case reaches for free — so none is run to verify anything (the NO MANUAL TESTS box).
 - **When the set is green, re-run §1's count check yourself**, then stop editing for correctness. An
   agent reporting "all green" and a filtered run you read are not the same evidence.
@@ -397,7 +422,7 @@ missing or something changed after it.
   or an indexed collection; or (b)'s allocation ladder bends ≳2.4 per doubling and you cannot explain it.
   Send a `general-purpose` agent with `model: "opus"` and tell it to invoke `optimize`; **it must not be an agent that wrote
   the code.** Say in the brief that this is a `/land` change — the diff is uncommitted in the main
-  checkout and the battery is YOURS, minutes later — so it neither runs the suite nor commits. **If no
+  checkout and the landing gates are YOURS, minutes later — so it neither runs the suite nor commits. **If no
   trigger fired, say so in the report** — a superlinear hunt over a change that added no algorithm has
   nothing to find.
 
@@ -413,7 +438,7 @@ code**; that independence is the whole point. The skill carries the criteria; yo
 situation:
 
 - **Say this is a `/land` change** — the diff is uncommitted in the main checkout, there is no worktree
-  and no branch, and the battery is YOURS, minutes later. The skill's steps 6–7 (gates, commit) are
+  and no branch, and the landing gates are YOURS, minutes later. The skill's steps 6–7 (gates, commit) are
   standalone-only and it must skip them.
 - **Tell it that a finding NOT RELATED to this change (§10's test) is REPORTED, not fixed** — the
   skill's "fix what you find even if it is pre-existing" is satisfied by the follow-up /land, not by
@@ -425,9 +450,9 @@ situation:
 - ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
   minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
   your brief outranks the skill's rules.
-- ⛔ **Do NOT ask it to run the full suite, prove coverage, or establish correctness.** Your battery runs
-  minutes later on the identical tree, and the suite is a far better false-reject detector than anything
-  it can probe by hand — and it runs no sabotage and no hand probes at all: a finding that needs a run
+- ⛔ **Do NOT ask it to run the full suite, prove coverage, or establish correctness.** Your gates run
+  minutes later on the identical tree and CI runs the suite, a far better false-reject detector than
+  anything it can probe by hand — and it runs no sabotage and no hand probes at all: a finding that needs a run
   to show it is a case it adds to the set, or a reading-only finding in its report. Its `--filter`ed
   runs are its own. ⚠ A specific instruction in your brief
   OUTRANKS its standing stop rule — you cannot brief thoroughness in without briefing the stop out.
@@ -457,7 +482,7 @@ owns, then regenerates the site pages.
 written once, against code that has stopped moving.** A documenter before §5 would comment code the
 review then rewrites, which is the write-it-twice waste the no-comments rule exists to remove.
 
-**What the brief carries, beyond the standard eight:**
+**What the brief carries, beyond the standard nine:**
 
 - ⭐ **THE DIAGNOSIS — the change's *why*.** This is the most valuable thing in the brief and it exists
   nowhere else: a why-only comment cannot be composed from a diff. Also the implementer's and
@@ -465,8 +490,8 @@ review then rewrites, which is the write-it-twice waste the no-comments rule exi
   forked fast path.
 - **What the change made user-visible**, in `AGENTS.md`'s terms — or that nothing is, which is
   an answer it must state rather than skip.
-- ⛔ **It runs NO tests** — not the suite, not the wasm lane, not the doc-coverage gates. Its
-  verification is the slot build, `./maxon-bin/.maxon/maxon run build`, and §8's battery runs everything else minutes later on the same
+- ⛔ **It runs NO tests** — not the suite, not a lane, not the doc-coverage gates. Its
+  verification is the slot build, `./maxon-bin/.maxon/maxon run build`, and §8's gates run minutes later on the same
   tree. It regenerates the site pages but does not run `sync-docs.mjs --check`; that is §8's.
 - **It does not commit, `git add`, push, rebase or stash**, and it changes not one byte of code.
 
@@ -477,7 +502,7 @@ rewritten, deleted, net. **A change that came back with a paragraph per declarat
 skill's own first rule** — the default is no comment, and most declarations end with none. Spot-check
 its list of facts it did NOT write, which is where a wrongly-dropped constraint would be.
 
-**Its build is the battery's build.** §8 rebuilds only if the binary is stale; §6 is the last editor and
+**Its build is §8's build.** §8 rebuilds only if the binary is stale; §6 is the last editor and
 its verification is a build, so that row is already satisfied unless the rebase moves a source.
 
 ## 7. Rebase on `origin/main` — yours
@@ -495,7 +520,12 @@ and §8 pays a full `maxon run build` — two stages when the diff holds emitted
 content. Stash and rebase only when the log above prints commits.
 
 **Rebase FIRST, so §8 runs on the tree you will actually push.** Other agents land on `main` between and
-during changes; a battery run before the rebase measured a tree that no longer exists.
+during changes; gates run before the rebase measured a tree that no longer exists.
+
+- **A ladder row's absolute columns describe the whole tree.** After a rebase that brought in compiler
+  changes, re-run the ladder and rewrite them; the row's attribution (its difference from its own parent)
+  survives. A change to `ScaleCorpus.maxon` makes the delta column mostly "a bigger, different program":
+  say so in the row and give a same-tree parent-vs-commit A/B as the attributable figure.
 
 - **A conflict is resolved BY HAND, hunk by hunk.** ⛔ Never `git checkout --ours/--theirs` a doc file to
   clear one: a whole-file resolution in a doc has silently reverted somebody else's landed section, and
@@ -503,31 +533,36 @@ during changes; a battery run before the rebase measured a tree that no longer e
 - **A stash must never outlive this step.** If the pop conflicts, resolve it now — work sitting in
   `git stash list` looks exactly like work that vanished.
 
-## 8. THE BATTERY — once, in this order, on the rebased tree — yours
+## 8. THE LANDING GATES — once, on the rebased tree — yours
+
+**There is no full local battery.** You commit and push on a build, filtered specs covering what changed
+and the codecs check, and CI runs the rest. **Do not wait for CI.**
 
 ⛔ **No agent runs any part of this.** Every brief says so; this is where that promise is kept.
 
 | Gate | |
 |---|---|
-| **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the suite rows — it builds twice |
-| **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
-| **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
-| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
-| **The tree corpora** — `./maxon-bin/.maxon/maxon test` on `tests/fmt`, `tests/specHarness`, `tests/ladders`, `tests/examples` and `tests/emittedRuntime` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, the ladder index, every program under `examples/` plus the snippets the website teaches, compiled and run against their known answers, and the acquire/release ordering gates on the scheduler words the emitted runtime shares between threads — tree-level gates `spec-test` does not run. CI runs all five on every lane |
-| **The multicore stress programs** — `bash scripts/multicore-stress/compile-all.sh` | exit 0 and `ALL CHECKS PASSED`: every torture program under `scripts/multicore-stress/` builds, and each `REFUSED_PROGRAMS` entry is refused with its declared code as its only error. CI runs it on every lane |
-| **Every stdlib function** — `./maxon-bin/.maxon/maxon check-stdlib` | exit 0: every `stdlib/` function, called by a program or not, passes every check and compiles on each target, and a target with no runtime for one is listed on stdout. CI runs it on every lane |
+| **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the spec rows — it builds twice |
+| **Filtered `run_spec_test`** — §1's minimal set plus every spec file the change touched, in ONE run | **`failed: 0`**, and no exit **101**. The gate is zero failures in every case the filter selects, never a total |
+| **Filtered tree corpora and IR specs** — `./maxon-bin/.maxon/maxon test <tests/dir> --filter=…` and `spec-test ir-specs --filter=<spec>/` for each corpus case or `ir-specs/` spec the change touched | each `0 fail` / `failed: 0`. A pin the change moved is re-minted with `--update-required --filter=<spec>/` and staged with the change (`git add -A ir-specs/ specs/`); a change to one target's emitted code also filters `ir-specs` on that target's lane (`--target=<lane>`), which compiles each pin without running it, on any host. See the box below |
+| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds or removes an `export` or a `module`, or adds a file declaring types.** Exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
+| **Seed shims and the seed chain** — apply ALL `scripts/seed-shim/*.patch` cumulatively, in sorted order, on a throwaway clone at a short path (the diff applied), then run `scripts/build-from-seed.sh` there; exit 0 | **Where the diff touches a file a patch edits, or the compiler starts using a construct, intrinsic or runtime behaviour the change itself made legal.** Judge the stack, never one patch: a per-patch `git apply --check` against the clean tree falsely fails the generated patch wherever an earlier patch touched the same file. Run it after §6's documenter (its comment edits can break a patch's context lines) and before the push. CI builds from the pinned seed. Regenerate a patch that no longer applies, then re-run the seed build |
+| **The codecs** — `python3 scripts/library-cache/generate-codecs.py --check` | exit 0: the library-cache codecs inside the compiler's sources match what the generator emits. On exit 1, run it without `--check` and stage what it rewrites |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` — which also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
-| **Seed shims** — every `scripts/seed-shim/*.patch` passes `git apply --check`, in sorted order; if the tree has any, `scripts/build-from-seed.sh` in a throwaway clone at a short path exits 0 | A shim's context lines are source text, so §6's comment edits can break one, and CI builds from the pinned seed. Regenerate a patch that no longer applies, then re-run the seed build |
-| **The IR suite** — `./maxon-bin/.maxon/maxon spec-test ir-specs`, and again with `--target=x64-linux` under WSL | `failed: 0` on each lane this host runs. A pin the change moved is re-minted with `--update-required --filter=<spec>/` on that lane and staged with the change (`git add -A ir-specs/ specs/`). See the box below |
 | **§1's count check** on the final tree | markers == ran, no name spelled twice |
+
+**CI runs everything else, and it is not run here:** the full `run_spec_test`, the wasm32-wasi lane, the
+full tree corpora, the multicore stress compile-all, `check-stdlib`, the full IR suite on every lane and
+the WSL lane runs.
 
 > ### ⭐ THE SELF-COMPILE IS THE GATE THE SUITE CANNOT SUBSTITUTE FOR
 > `checkUnusedExports` (**E3092/E3093/E3094**) runs only when the compiler compiles a *program*, and the
 > only program that names every `export` in `maxon-bin/Compiler/` is the compiler itself. **A three-line
-> commit once broke stage-2 with the suite at 6673/0.**
+> commit once broke stage-2 with the suite at 6673/0.** It is the only E3092 gate, and CI's failure there
+> is a red `main`.
 > Run it after any change that adds or removes an `export` or a `module`, or adds a file declaring
-> TYPES; run it anyway, it is a minute. An E3092 here is a declaration more visible than its uses:
-> narrow it, or land it *with* its first consumer.
+> TYPES. An E3092 here is a declaration more visible than its uses: narrow it, or land it *with* its
+> first consumer.
 
 > ### ⭐ THE IR SUITE'S PINS ARE A GATE
 > `ir-specs/` holds the corpus's emitted-code cases, and each pins the Target IR its program compiles to on
@@ -539,22 +574,28 @@ during changes; a battery run before the rebase measured a tree that no longer e
 
 **A red gate STOPS the change** — and a red you did not cause still gets fixed, in its own commit,
 before yours (AGENTS.md). To attribute it: do the failures touch what you changed? Re-run **the failing
-cases alone, by filter** — one run, one pattern per case — never the whole suite for them. If that still does not settle it, **measure
-the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
-did not RUN is not a red gate** (remote arm64 is outside this battery): that is a SKIP you report, never
-folded into the green — CI answers it after the push, and §9's report names it.
+cases alone, by filter** — one run, one pattern per case. If that still does not settle it, **measure
+the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane or gate that
+did not RUN is not a red gate** (the lanes above are CI's): that is a SKIP you report, never
+folded into the green — §9's report names it. **A CI red after the push is fixed next, like any red**
+(AGENTS.md), in its own commit.
 
 ## 9. Commit and push
 
 **ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
 the compiler source, the spec cases, **the documentation and the site pages it regenerates**, **every
 `TargetIr` pin the change re-minted** — and any `optimization-log.md` row.
-⛔ **Not a commit per piece, and never a partial landing with the rest "to follow"** — the battery you just ran was run on the whole tree, so the whole tree is what it
+⛔ **Not a commit per piece, and never a partial landing with the rest "to follow"** — the gates you just ran were run on the whole tree, so the whole tree is what they
 licensed you to push.
 
 **The message carries what the diff cannot:** the wrong answer that motivated the change, the mechanism,
 the cases that went red → green, and the gate figures you measured. ⚠ **Never a figure you did not
 measure** — a number nobody took looks exactly like one that was.
+
+**Stage and commit with git's stderr in view — never suppress it.** `git add` with any pathspec that
+matches nothing stages NOTHING, so stage only paths `git status --porcelain` lists, and read
+`git diff --cached --stat` before committing: a commit whose message describes a code change must show
+that code file.
 
 ```bash
 git push origin main
@@ -567,10 +608,10 @@ not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 
 > ### ⛔ DO NOT WAIT FOR CI (user ruling)
 > **The push ends the change.** Do not watch, poll or schedule a check on the CI run; report and stop.
-> CI hosts the four native targets on their own architecture, runs the two-stage seed build and
-> `scripts/fixpoint.sh`, none of which your battery does, so a lane can still go red after you have
-> reported — that is why the report names every lane your battery did not run. CI also runs the
-> wasm32-wasi suite, on its x64-linux lane. When a red lane is reported to you, it is yours to fix whether or not
+> CI hosts the four native targets on their own architecture, runs the full suite, the tree corpora,
+> the two-stage seed build and `scripts/fixpoint.sh`, none of which your landing gates do, so a lane
+> can still go red after you have reported — that is why the report names every lane and gate your
+> landing gates did not run. CI also runs the wasm32-wasi suite, on its x64-linux lane. When a red lane is reported to you, it is yours to fix whether or not
 > you caused it (AGENTS.md), in its own commit, reproduced on that platform's own host — never on the
 > cross lane that missed it.
 
@@ -587,7 +628,10 @@ wait for the push, not longer.**
 > - the acceptance set, or a gate in §8, **cannot go green** without it — including a red you did not
 >   cause, which still gets its own commit before yours (§8);
 > - it is in code **this change wrote or changed** — a defect the diff introduced or carries, a
->   duplication the new code takes part in, a superlinearity in the new code.
+>   duplication the new code takes part in, a superlinearity in the new code;
+> - or it is another instance of the very class this change exists to close, even in a file the diff
+>   does not touch. State the change's scope as a class and test each sibling against it: a reason for
+>   leaving B that applies equally to the A you fixed is not a reason.
 >
 > **Everything else is UNRELATED** — a pre-existing defect in a file you touched but not in what you
 > changed, a reviewer's finding elsewhere, pre-existing duplication the new code does not take part in,
@@ -601,7 +645,7 @@ wrong, `file:line`, how it was seen, and **a program that reproduces it** — th
 the follow-up's red set.
 
 **After the push, run `/land` on each entry in turn**, in ledger order, one commit each, each a full
-`/land` with its own red set and battery. Strike each entry with its sha as it lands. A follow-up's own
+`/land` with its own red set and landing gates. Strike each entry with its sha as it lands. A follow-up's own
 unrelated findings are appended to the **same** ledger. An entry whose red will not go red was fixed on
 the way — strike it with the sha that fixed it.
 
@@ -645,8 +689,8 @@ has to answer.**
 
 ## The thing this process exists to catch
 
-**A change that is green because nothing tested it.** Everything expensive here runs once, at the end,
-and every cheap thing before it is a proxy — so the whole loop rests on §1's red being real. **Watch
+**A change that is green because nothing tested it.** The gates here run once, at the end,
+on filters, and every spec run before them is a proxy for the suite — so the whole loop rests on §1's red being real. **Watch
 every case fail before you write the fix, count what actually ran, and never make a case go away.**
 
 **And the reason the coordination exists at all:** that red set, the integration and the gates are

@@ -11,7 +11,7 @@ description: One round of the fannkuch-redux Maxon-vs-C loop — build the tree'
 
 > ## ⭐ ONE ROUND IS ONE SESSION, ON `main`, LANDED BY `/land`'s OWN TAIL
 >
-> The loop runs on `main` like any other change: `/land`'s rebase on `origin/main`, its battery ONCE,
+> The loop runs on `main` like any other change: `/land`'s rebase on `origin/main`, its landing gates ONCE,
 > one commit, one push — and no waiting for CI after it. Start each round in a fresh session — a round's context is the README ranking, the log and
 > this file, not the previous session's transcript.
 
@@ -62,15 +62,14 @@ A candidate that names no shape is not a candidate.
 - Every target the change touches gets the equivalent change (x64, arm64, wasm) or a stated reason.
 - ⛔ **During the round, never run the entire spec suite** (user ruling). Every spec run — yours, an
   implementer's, a reviewer's — is ONE `spec-test` over the spec files the change touches, one
-  `--filter=<spec>/` per file, on x64 and again with `--target=wasm32-wasi`. The full suite runs
-  exactly once, in `/land`'s battery (§8 there), after the rebase; the self-compile is the E3092 gate
-  and is not a spec run.
+  `--filter=<spec>/` per file, on x64 and again with `--target=wasm32-wasi`. The full suite is
+  CI's, after the push (`/land` §8); the self-compile is the E3092 gate and is not a spec run.
 - ⛔ **A filtered-green compiler is not a working compiler.** After EVERY rebuild the implementer runs
   the examples corpus, `maxon test tests/examples`, which builds every program in `examples/` and
   checks fannkuch-redux's n=10 answer (73196 / 38) among the others. A red case there is a red gate,
   and the function it died in becomes a spec case. Round 5 shipped a filtered-green compiler that
   could not compile the example.
-- Run §5 and §6 below between `/land`'s battery and its commit, so the round is ONE commit carrying
+- Run §5 and §6 below between `/land`'s landing gates and its commit, so the round is ONE commit carrying
   the compiler change, its spec, the README row, the log rows and the roadmap row. A push rejected
   by a newer `origin/main` is `/land`'s: rebase and re-run §8.
 
