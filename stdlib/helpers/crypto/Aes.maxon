@@ -167,15 +167,15 @@ function aesLoadCounters(planes AesPlanes, nonceLow AesWord, nonceMid AesWord, f
 	aesOrtho(planes)
 end 'aesLoadCounters'
 
-function aesKeyLane(low AesWord, high AesWord, parity AesParity) returns AesWord
-	return aesDeinterleave(low, parity: parity) or (aesDeinterleave(high, parity: parity) shl aesHalfBits)
-end 'aesKeyLane'
-
-function aesBlockLanes(planes AesPlanes, slot AesBatchSlot) returns AesPair
+function aesSlotLane(planes AesPlanes, slot AesBatchSlot, parity AesParity) returns AesWord
 	let low = planes.get(slot)
 	let high = planes.get(slot + aesBatchBlocks)
 
-	return (aesKeyLane(low, high: high, parity: 0), aesKeyLane(low, high: high, parity: 1))
+	return aesDeinterleave(low, parity: parity) or (aesDeinterleave(high, parity: parity) shl aesHalfBits)
+end 'aesSlotLane'
+
+function aesBlockLanes(planes AesPlanes, slot AesBatchSlot) returns AesPair
+	return (aesSlotLane(planes, slot: slot, parity: 0), aesSlotLane(planes, slot: slot, parity: 1))
 end 'aesBlockLanes'
 
 function aesXorLane(output ByteArray, data ByteArray, at ElementIndex, lane AesWord)
@@ -201,21 +201,26 @@ function aesXorLane(output ByteArray, data ByteArray, at ElementIndex, lane AesW
 	end 'eachByte'
 end 'aesXorLane'
 
-function aesXorBatch(output ByteArray, data ByteArray, planes AesPlanes, off ElementIndex, firstSlot AesBlockSlots)
+function aesXorSlot(output ByteArray, data ByteArray, planes AesPlanes, slot AesBatchSlot, at ElementIndex)
+	aesXorLane(output, data: data, at: at, lane: aesSlotLane(planes, slot: slot, parity: 0))
+	aesXorLane(output, data: data, at: at + aesLaneBytes, lane: aesSlotLane(planes, slot: slot, parity: 1))
+end 'aesXorSlot'
+
+function aesXorBatch(output ByteArray, data ByteArray, planes AesPlanes, off ElementIndex)
 	aesOrtho(planes)
 
 	for slot in 0 upto aesBatchBlocks 'eachSlot'
-		if slot < firstSlot 'skipped'
-			continue
-		end 'skipped'
-
-		let (firstLane, secondLane) = aesBlockLanes(planes, slot: slot)
-		let at = off + (slot - firstSlot) * aesBlockBytes
-
-		aesXorLane(output, data: data, at: at, lane: firstLane)
-		aesXorLane(output, data: data, at: at + aesLaneBytes, lane: secondLane)
+		aesXorSlot(output, data: data, planes: planes, slot: slot, at: off + slot * aesBlockBytes)
 	end 'eachSlot'
 end 'aesXorBatch'
+
+function aesXorBatchPastMask(output ByteArray, data ByteArray, planes AesPlanes)
+	aesOrtho(planes)
+
+	for slot in aesMaskLeadBlocks upto aesBatchBlocks 'eachSlot'
+		aesXorSlot(output, data: data, planes: planes, slot: slot, at: (slot - aesMaskLeadBlocks) * aesBlockBytes)
+	end 'eachSlot'
+end 'aesXorBatchPastMask'
 
 function aesAppendBlock(output ByteArray, low AesWord, high AesWord)
 	__Builtins.appendLittleEndian(output, aesDeinterleave(low, parity: 0) as OrderedWord, aesWordBytes)
@@ -740,7 +745,7 @@ public type Aes
 		let (nonceLow, nonceMid) = try streamNonceWords(nonce, firstCounter: firstBlock, streamBlocks: streamBlocks)
 		var planes = AesPlanes.create()
 		encryptCounters(planes, nonceLow: nonceLow, nonceMid: nonceMid, counter: firstBlock)
-		aesXorBatch(output, data: data, planes: planes, off: 0, firstSlot: aesMaskLeadBlocks)
+		aesXorBatchPastMask(output, data: data, planes: planes)
 
 		let firstBlockLanes = aesBlockLanes(planes, slot: 0)
 		xorBatches(planes, nonceLow: nonceLow, nonceMid: nonceMid, firstCounter: firstBlock, streamBlocks: streamBlocks, lead: aesMaskLeadBlocks, data: data, output: output, startBlock: aesBatchBlocks)
@@ -772,7 +777,7 @@ public type Aes
 
 		while done < streamBlocks 'eachBatch'
 			encryptCounters(planes, nonceLow: nonceLow, nonceMid: nonceMid, counter: firstCounter + done)
-			aesXorBatch(output, data: data, planes: planes, off: (done - lead) shl aesBlockShift, firstSlot: 0)
+			aesXorBatch(output, data: data, planes: planes, off: (done - lead) shl aesBlockShift)
 			done = done + aesBatchBlocks
 		end 'eachBatch'
 	end 'xorBatches'

@@ -463,7 +463,7 @@ func (a *BitslicedAes) XorKeyStreamPastFirstBlock(nonce []byte, counter uint32, 
 	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, streamBlocks)
 	var p planes
 	a.encryptCounters(&p, nonceLow, nonceMid, uint64(firstBlock))
-	output = xorBatch(output, data, &p, 0, maskLeadBlocks)
+	output = xorBatchPastMask(output, data, &p)
 	firstLane, secondLane := blockLanes(&p, 0)
 	output = a.xorBatches(&p, nonceLow, nonceMid, firstBlock, streamBlocks, maskLeadBlocks, data, output, batchBlocks)
 	return output, firstLane, secondLane
@@ -487,7 +487,7 @@ func (a *BitslicedAes) encryptCounters(p *planes, nonceLow, nonceMid, counter ui
 func (a *BitslicedAes) xorBatches(p *planes, nonceLow, nonceMid uint64, firstCounter, streamBlocks, lead int, data, output []byte, startBlock int) []byte {
 	for done := startBlock; done < streamBlocks; done += batchBlocks {
 		a.encryptCounters(p, nonceLow, nonceMid, uint64(firstCounter)+uint64(done))
-		output = xorBatch(output, data, p, (done-lead)<<4, 0)
+		output = xorBatch(output, data, p, (done-lead)<<4)
 	}
 	return output
 }
@@ -505,13 +505,13 @@ func loadCounters(p *planes, nonceLow, nonceMid, firstCounter uint64) {
 	ortho(p)
 }
 
-func keyLane(low, high uint64, parity uint) uint64 {
+func slotLane(p *planes, slot int, parity uint) uint64 {
+	low, high := p[slot], p[slot+batchBlocks]
 	return deinterleave(low, parity) | (deinterleave(high, parity) << 32)
 }
 
 func blockLanes(p *planes, slot int) (uint64, uint64) {
-	low, high := p[slot], p[slot+batchBlocks]
-	return keyLane(low, high, 0), keyLane(low, high, 1)
+	return slotLane(p, slot, 0), slotLane(p, slot, 1)
 }
 
 func xorLane(output, data []byte, at int, lane uint64) []byte {
@@ -528,16 +528,23 @@ func xorLane(output, data []byte, at int, lane uint64) []byte {
 	return output
 }
 
-func xorBatch(output, data []byte, p *planes, off, firstSlot int) []byte {
+func xorSlot(output, data []byte, p *planes, slot, at int) []byte {
+	output = xorLane(output, data, at, slotLane(p, slot, 0))
+	return xorLane(output, data, at+laneBytes, slotLane(p, slot, 1))
+}
+
+func xorBatch(output, data []byte, p *planes, off int) []byte {
 	ortho(p)
 	for slot := 0; slot < batchBlocks; slot++ {
-		if slot < firstSlot {
-			continue
-		}
-		firstLane, secondLane := blockLanes(p, slot)
-		at := off + (slot-firstSlot)*blockBytes
-		output = xorLane(output, data, at, firstLane)
-		output = xorLane(output, data, at+laneBytes, secondLane)
+		output = xorSlot(output, data, p, slot, off+slot*blockBytes)
+	}
+	return output
+}
+
+func xorBatchPastMask(output, data []byte, p *planes) []byte {
+	ortho(p)
+	for slot := maskLeadBlocks; slot < batchBlocks; slot++ {
+		output = xorSlot(output, data, p, slot, (slot-maskLeadBlocks)*blockBytes)
 	}
 	return output
 }
