@@ -2848,14 +2848,15 @@ end 'emitUnitOps'
 
 // Emit a unit — `first` alone, or `first` and `last` as a fused pair — where the erratum allows. It is
 // emitted first and measured after, so no encoder's width is tabled: only a `covered` unit that straddles a
-// window is rolled back, padded to the next boundary and emitted again. Line rows are noted once the
-// placement is final, so a row lands on its instruction and never on the pad before it.
+// window is rolled back, padded to the next boundary and emitted again. A unit's line row starts at the pad
+// that aligns it: the pad is the unit's own code, and a step landing on it must read the unit's line.
 function emitUnit(module TargetModule, first ElementIndex, last ElementIndex, covered bool, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, runOffsets DebugRunOffsets, captureSpans bool)
 	if covered 'markable'
 		mark.take(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
 	end 'markable'
 
 	var firstStart = code.count()
+	let rowStart = firstStart
 	var lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
 	if covered and straddlesBranchWindow(firstStart as CodeOffset, unitEnd: codeHere(code)) 'straddles'
@@ -2876,7 +2877,7 @@ function emitUnit(module TargetModule, first ElementIndex, last ElementIndex, co
 	end 'straddles'
 
 	if captureSpans 'rows'
-		lineRows.note(module.spans.at(first), codeOffset: firstStart as CodeOffset)
+		lineRows.note(module.spans.at(first), codeOffset: rowStart as CodeOffset)
 
 		if last != first 'pair'
 			lineRows.note(module.spans.at(last), codeOffset: lastStart)
