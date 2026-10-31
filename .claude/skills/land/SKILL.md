@@ -395,7 +395,7 @@ missing or something changed after it.
   ladder whose corpus cannot express your feature is a blind spot, not a result.
 - **(c) The `optimize` SKILL, in a dispatched agent — on a trigger:** the change adds a pass, an IR op,
   or an indexed collection; or (b)'s allocation ladder bends ≳2.4 per doubling and you cannot explain it.
-  Send a `general-purpose` agent and tell it to invoke `optimize`; **it must not be an agent that wrote
+  Send a `general-purpose` agent with `model: "opus"` and tell it to invoke `optimize`; **it must not be an agent that wrote
   the code.** Say in the brief that this is a `/land` change — the diff is uncommitted in the main
   checkout and the battery is YOURS, minutes later — so it neither runs the suite nor commits. **If no
   trigger fired, say so in the report** — a superlinear hunt over a change that added no algorithm has
@@ -407,7 +407,7 @@ neither can you. ⚠ **Write no row you did not measure.**
 
 ## 5. The review
 
-**Send a `general-purpose` agent and tell it to invoke the `code-review` skill**, on the working diff —
+**Send a `general-purpose` agent with `model: "opus"` and tell it to invoke the `code-review` skill**, on the working diff —
 uncommitted, main checkout — after §4 and before the commit. **It must not be an agent that wrote the
 code**; that independence is the whole point. The skill carries the criteria; your brief carries the
 situation:
@@ -449,7 +449,7 @@ them, review that delta, then run §6 again on the files the fixes touched.
 
 ## 6. Document the change — the `documenter` skill, in a dispatched agent
 
-**Send a `general-purpose` agent and tell it to invoke the `documenter` skill.** It writes **every
+**Send a `general-purpose` agent with `model: "opus"` and tell it to invoke the `documenter` skill.** It writes **every
 comment the change gets** — nobody before it wrote one — and updates the `docs/` source its surface
 owns, then regenerates the site pages.
 
