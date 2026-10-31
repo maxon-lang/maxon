@@ -12,9 +12,9 @@ let aesGcmBlockBytes = 16
 let aesGcmWordBytes = 8
 let aesGcmBitsPerByte = 8
 let aesGcmTagMaskCounter = 1
-let aesGcmFirstDataCounter = 2
 
-// 2^32 − 2 blocks of 16 bytes: the most the 32-bit counter covers from `aesGcmFirstDataCounter` on.
+// 2^32 − 2 blocks of 16 bytes: counters 1 to 2^32 − 1 cover the tag mask block plus this many data
+// blocks.
 let aesGcmMaxPlaintextBytes = 68719476704
 
 let ghashWordBits = 64
@@ -29,7 +29,7 @@ let ghashSwapByte = 8
 let ghashSwapHalfword = 16
 let ghashSwapWord = 32
 
-let ghashZeroWord = 0 as GhashWord
+let ghashZeroWord = 0
 let ghashHoleMask0 = 0x1111111111111111 as GhashWord
 let ghashHoleMask1 = 0x2222222222222222 as GhashWord
 let ghashHoleMask2 = 0x4444444444444444 as GhashWord
@@ -44,14 +44,19 @@ function ghashSwapUnits(word GhashWord, mask GhashWord, shift GhashShift) return
 	return ((word and mask) shl shift) or ((word shr shift) and mask)
 end 'ghashSwapUnits'
 
+function ghashReverseBytes(word GhashWord) returns GhashWord
+	let bytes2 = ghashSwapUnits(word, mask: ghashByteMask, shift: ghashSwapByte)
+	let bytes4 = ghashSwapUnits(bytes2, mask: ghashHalfwordMask, shift: ghashSwapHalfword)
+
+	return (bytes4 shl ghashSwapWord) or (bytes4 shr ghashSwapWord)
+end 'ghashReverseBytes'
+
 function ghashReverse(word GhashWord) returns GhashWord
 	let bits1 = ghashSwapUnits(word, mask: ghashBitMask, shift: ghashSwapBit)
 	let bits2 = ghashSwapUnits(bits1, mask: ghashPairMask, shift: ghashSwapPair)
 	let bits4 = ghashSwapUnits(bits2, mask: ghashNibbleMask, shift: ghashSwapNibble)
-	let bits8 = ghashSwapUnits(bits4, mask: ghashByteMask, shift: ghashSwapByte)
-	let bits16 = ghashSwapUnits(bits8, mask: ghashHalfwordMask, shift: ghashSwapHalfword)
 
-	return (bits16 shl ghashSwapWord) or (bits16 shr ghashSwapWord)
+	return ghashReverseBytes(bits4)
 end 'ghashReverse'
 
 // Carry-less multiplication through integer multiplies: each operand keeps one bit in four, so each 4-bit
@@ -118,8 +123,7 @@ type GhashKey
 		return Self{h0: h0, h1: h1, h0r: h0r, h1r: h1r, h2: h0 xor h1, h2r: h0r xor h1r}
 	end 'create'
 
-	function multiply(block GhashBlock) returns GhashBlock
-		let (y1, y0) = block
+	function multiply(y1 GhashWord, y0 GhashWord) returns GhashBlock
 		let y0r = ghashReverse(y0)
 		let y1r = ghashReverse(y1)
 		let y2 = y0 xor y1
@@ -153,32 +157,30 @@ type GhashKey
 		return (t3, u2)
 	end 'multiply'
 
-	function absorb(state GhashBlock, data ByteArray) returns GhashBlock
-		var (high, low) = state
+	function absorb(startHigh GhashWord, startLow GhashWord, data ByteArray) returns GhashBlock
+		var high = startHigh
+		var low = startLow
 		var blockStart = 0 as ElementIndex
 		let limit = data.count()
 
 		while blockStart < limit 'eachBlock'
 			let (blockHigh, blockLow) = ghashBlockWords(data, blockStart: blockStart)
-			(high, low) = multiply((high xor blockHigh, low xor blockLow))
+			(high, low) = multiply(high xor blockHigh, y0: low xor blockLow)
 			blockStart = blockStart + aesGcmBlockBytes
 		end 'eachBlock'
 
 		return (high, low)
 	end 'absorb'
 
-	function finish(state GhashBlock, additionalBytes Count, ciphertextBytes Count) returns ByteArray
-		let (high, low) = state
-		let lengths = (high xor ((additionalBytes * aesGcmBitsPerByte) as GhashWord), low xor ((ciphertextBytes * aesGcmBitsPerByte) as GhashWord))
-		let (digestHigh, digestLow) = multiply(lengths)
-		var digest = ByteArray.create()
-		digest.reserve(aesGcmBlockBytes)
-		__Builtins.appendBigEndian(digest, digestHigh as OrderedWord, aesGcmWordBytes)
-		__Builtins.appendBigEndian(digest, digestLow as OrderedWord, aesGcmWordBytes)
-
-		return digest
+	function finish(high GhashWord, low GhashWord, additionalBytes Count, ciphertextBytes Count) returns GhashBlock
+		return multiply(high xor ((additionalBytes * aesGcmBitsPerByte) as GhashWord), y0: low xor ((ciphertextBytes * aesGcmBitsPerByte) as GhashWord))
 	end 'finish'
 end 'GhashKey'
+
+function ghashAppendTag(output ByteArray, high GhashWord, low GhashWord)
+	__Builtins.appendBigEndian(output, high as OrderedWord, aesGcmWordBytes)
+	__Builtins.appendBigEndian(output, low as OrderedWord, aesGcmWordBytes)
+end 'ghashAppendTag'
 
 /// AES-GCM under one 16-, 24- or 32-byte key.
 public type AesGcm implements Aead
@@ -205,40 +207,52 @@ public type AesGcm implements Aead
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 		try aeadRequirePlaintextLength(plaintext, limit: aesGcmMaxPlaintextBytes)
 
-		var sealed = apply(nonce, counter: aesGcmFirstDataCounter, data: plaintext)
-		let tag = authenticate(nonce, additionalData: additionalData, ciphertext: sealed)
-		sealed.append(tag)
+		var sealed = ByteArray.create()
+		sealed.reserve(plaintext.count() + aesGcmTagBytes)
+		let (firstLane, secondLane) = applyBehindMask(nonce, data: plaintext, output: sealed)
+		let (tagHigh, tagLow) = authenticate(additionalData, ciphertext: sealed, firstLane: firstLane, secondLane: secondLane)
+		ghashAppendTag(sealed, high: tagHigh, low: tagLow)
 
 		return sealed
 	end 'seal'
 
+	// The plaintext is decrypted before the tag is known, which is what lets the tag mask share the
+	// first batch. It stays local until `aeadRequireTag` passes: a throw drops it, so no path hands
+	// back unauthenticated bytes.
 	public function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 
 		let parts = try aeadSplitSealed(sealed, tagBytes: aesGcmTagBytes, plaintextLimit: aesGcmMaxPlaintextBytes)
-		let expected = authenticate(nonce, additionalData: additionalData, ciphertext: parts.ciphertext)
+		var plaintext = ByteArray.create()
+		plaintext.reserve(parts.ciphertext.count())
+		let (firstLane, secondLane) = applyBehindMask(nonce, data: parts.ciphertext, output: plaintext)
+		let (tagHigh, tagLow) = authenticate(additionalData, ciphertext: parts.ciphertext, firstLane: firstLane, secondLane: secondLane)
+		var expected = ByteArray.create()
+		expected.reserve(aesGcmTagBytes)
+		ghashAppendTag(expected, high: tagHigh, low: tagLow)
 		try aeadRequireTag(expected, received: parts.tag)
 
-		return apply(nonce, counter: aesGcmFirstDataCounter, data: parts.ciphertext)
+		return plaintext
 	end 'open'
 
-	function apply(nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray
-		let transformed = try cipher.xorKeyStream(nonce, counter: counter, data: data) otherwise (failure) 'refused'
+	// The tag mask is the key-stream block at counter 1, computed in the same four-block batch as the
+	// first data blocks so that short messages cost one batch rather than two.
+	function applyBehindMask(nonce ByteArray, data ByteArray, output ByteArray) returns AesPair
+		let lanes = try cipher.xorKeyStreamPastFirstBlock(nonce, counter: aesGcmTagMaskCounter, data: data, output: output) otherwise (failure) 'refused'
 			match failure 'reason'
-				invalidNonceLength then panic("AesGcm: xorKeyStream refused a nonce that aeadRequireNonce accepted")
-				counterOverflow then panic("AesGcm: xorKeyStream wrapped the block counter for data no longer than 2^36 - 32 bytes")
+				invalidNonceLength then panic("AesGcm: xorKeyStreamPastFirstBlock refused a nonce that aeadRequireNonce accepted")
+				counterOverflow then panic("AesGcm: xorKeyStreamPastFirstBlock wrapped the block counter for data no longer than 2^36 - 32 bytes")
 			end 'reason'
 		end 'refused'
 
-		return transformed
-	end 'apply'
+		return lanes
+	end 'applyBehindMask'
 
-	function authenticate(nonce ByteArray, additionalData ByteArray, ciphertext ByteArray) returns ByteArray
-		let initial = (ghashZeroWord, ghashZeroWord)
-		let afterAdditional = hashKey.absorb(initial, data: additionalData)
-		let afterCiphertext = hashKey.absorb(afterAdditional, data: ciphertext)
-		let digest = hashKey.finish(afterCiphertext, additionalBytes: additionalData.count(), ciphertextBytes: ciphertext.count())
+	function authenticate(additionalData ByteArray, ciphertext ByteArray, firstLane AesWord, secondLane AesWord) returns GhashBlock
+		let (afterAdditionalHigh, afterAdditionalLow) = hashKey.absorb(ghashZeroWord, startLow: ghashZeroWord, data: additionalData)
+		let (afterCiphertextHigh, afterCiphertextLow) = hashKey.absorb(afterAdditionalHigh, startLow: afterAdditionalLow, data: ciphertext)
+		let (digestHigh, digestLow) = hashKey.finish(afterCiphertextHigh, low: afterCiphertextLow, additionalBytes: additionalData.count(), ciphertextBytes: ciphertext.count())
 
-		return apply(nonce, counter: aesGcmTagMaskCounter, data: digest)
+		return (digestHigh xor ghashReverseBytes(firstLane as GhashWord), digestLow xor ghashReverseBytes(secondLane as GhashWord))
 	end 'authenticate'
 end 'AesGcm'

@@ -7,16 +7,17 @@
 // halves.
 // bench/aes/go/bitsliced.go mirrors this file function for function; a change here is ported there in the
 // same commit.
-typealias AesWord = bits(64)
+export typealias AesWord = bits(64)
 typealias AesWords = Array with AesWord
 typealias AesPlanes = FixedArray with 8 AesWord
-typealias AesPair = (AesWord, AesWord)
+export typealias AesPair = (AesWord, AesWord)
 
 typealias AesPlaneIndex = int(0 to 7) implements ElementIndex
 typealias AesRoundCount = int(10 to 14)
 typealias AesRoundIndex = int(0 to 14) implements ElementIndex
 typealias AesParity = int(0 to 1)
 typealias AesBlockSlots = int(0 to 4) implements ElementIndex
+typealias AesBatchSlot = int(0 to 3) implements ElementIndex
 typealias AesStride = int(1 to 4)
 typealias AesKeySlot = int(0 to 8)
 typealias AesConstantIndex = int(0 to 10) implements ElementIndex
@@ -44,6 +45,7 @@ end 'AesDirection'
 let aesBlockBytes = 16
 let aesBlockShift = 4
 let aesBatchBlocks = 4
+let aesMaskLeadBlocks = 1
 let aesBlockWords = 4
 let aesLaneBytes = 8
 let aesWordBytes = 4
@@ -169,6 +171,13 @@ function aesKeyLane(low AesWord, high AesWord, parity AesParity) returns AesWord
 	return aesDeinterleave(low, parity: parity) or (aesDeinterleave(high, parity: parity) shl aesHalfBits)
 end 'aesKeyLane'
 
+function aesBlockLanes(planes AesPlanes, slot AesBatchSlot) returns AesPair
+	let low = planes.get(slot)
+	let high = planes.get(slot + aesBatchBlocks)
+
+	return (aesKeyLane(low, high: high, parity: 0), aesKeyLane(low, high: high, parity: 1))
+end 'aesBlockLanes'
+
 function aesXorLane(output ByteArray, data ByteArray, at ElementIndex, lane AesWord)
 	let total = data.count()
 
@@ -192,16 +201,19 @@ function aesXorLane(output ByteArray, data ByteArray, at ElementIndex, lane AesW
 	end 'eachByte'
 end 'aesXorLane'
 
-function aesXorBatch(output ByteArray, data ByteArray, planes AesPlanes, off ElementIndex)
+function aesXorBatch(output ByteArray, data ByteArray, planes AesPlanes, off ElementIndex, firstSlot AesBlockSlots)
 	aesOrtho(planes)
 
 	for slot in 0 upto aesBatchBlocks 'eachSlot'
-		let low = planes.get(slot)
-		let high = planes.get(slot + aesBatchBlocks)
-		let at = off + slot * aesBlockBytes
+		if slot < firstSlot 'skipped'
+			continue
+		end 'skipped'
 
-		aesXorLane(output, data: data, at: at, lane: aesKeyLane(low, high: high, parity: 0))
-		aesXorLane(output, data: data, at: at + aesLaneBytes, lane: aesKeyLane(low, high: high, parity: 1))
+		let (firstLane, secondLane) = aesBlockLanes(planes, slot: slot)
+		let at = off + (slot - firstSlot) * aesBlockBytes
+
+		aesXorLane(output, data: data, at: at, lane: firstLane)
+		aesXorLane(output, data: data, at: at + aesLaneBytes, lane: secondLane)
 	end 'eachSlot'
 end 'aesXorBatch'
 
@@ -708,33 +720,62 @@ public type Aes
 	/// `data` XORed with the counter-mode key stream of a 12-byte `nonce`, the first block's counter being
 	/// `counter`. Encryption and decryption are the same call.
 	public function xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
+		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift
+		let firstBlock = counter as Count
+		let (nonceLow, nonceMid) = try streamNonceWords(nonce, firstCounter: firstBlock, streamBlocks: blocks)
+		var planes = AesPlanes.create()
+		var output = ByteArray.create()
+		output.reserve(data.count())
+		xorBatches(planes, nonceLow: nonceLow, nonceMid: nonceMid, firstCounter: firstBlock, streamBlocks: blocks, lead: 0, data: data, output: output, startBlock: 0)
+
+		return output
+	end 'xorKeyStream'
+
+	// Appends to `output`, which the caller reserves. The data starts at counter + 1: the block at
+	// `counter` is returned as its two lanes instead of being XORed in. The overflow check covers that
+	// block plus the data.
+	export function xorKeyStreamPastFirstBlock(nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
+		let streamBlocks = ((data.count() + aesBlockBytes - 1) shr aesBlockShift) + aesMaskLeadBlocks
+		let firstBlock = counter as Count
+		let (nonceLow, nonceMid) = try streamNonceWords(nonce, firstCounter: firstBlock, streamBlocks: streamBlocks)
+		var planes = AesPlanes.create()
+		encryptCounters(planes, nonceLow: nonceLow, nonceMid: nonceMid, counter: firstBlock)
+		aesXorBatch(output, data: data, planes: planes, off: 0, firstSlot: aesMaskLeadBlocks)
+
+		let firstBlockLanes = aesBlockLanes(planes, slot: 0)
+		xorBatches(planes, nonceLow: nonceLow, nonceMid: nonceMid, firstCounter: firstBlock, streamBlocks: streamBlocks, lead: aesMaskLeadBlocks, data: data, output: output, startBlock: aesBatchBlocks)
+
+		return firstBlockLanes
+	end 'xorKeyStreamPastFirstBlock'
+
+	function streamNonceWords(nonce ByteArray, firstCounter Count, streamBlocks Count) returns AesPair throws AesKeyStreamError
 		if nonce.count() != aesNonceBytes 'nonceLength'
 			throw AesKeyStreamError.invalidNonceLength
 		end 'nonceLength'
 
-		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift
-		let firstBlock = counter as Count
-
-		if firstBlock + blocks > aesCounterLimit 'overflow'
+		if firstCounter + streamBlocks > aesCounterLimit 'overflow'
 			throw AesKeyStreamError.counterOverflow
 		end 'overflow'
 
 		let nonceLow = aesInterleave(aesReadWord(nonce, at: 0), odd: aesReadWord(nonce, at: 2 * aesWordBytes))
-		let nonceMid = aesReadWord(nonce, at: aesWordBytes)
-		var planes = AesPlanes.create()
-		var output = ByteArray.create()
-		output.reserve(data.count())
-		var done = 0 as Count
 
-		while done < blocks 'eachBatch'
-			aesLoadCounters(planes, nonceLow: nonceLow, nonceMid: nonceMid, firstCounter: firstBlock + done)
-			aesEncryptPlanes(planes, keys: roundKeys, rounds: rounds)
-			aesXorBatch(output, data: data, planes: planes, off: done shl aesBlockShift)
+		return (nonceLow, aesReadWord(nonce, at: aesWordBytes))
+	end 'streamNonceWords'
+
+	function encryptCounters(planes AesPlanes, nonceLow AesWord, nonceMid AesWord, counter Count)
+		aesLoadCounters(planes, nonceLow: nonceLow, nonceMid: nonceMid, firstCounter: counter)
+		aesEncryptPlanes(planes, keys: roundKeys, rounds: rounds)
+	end 'encryptCounters'
+
+	function xorBatches(planes AesPlanes, nonceLow AesWord, nonceMid AesWord, firstCounter Count, streamBlocks Count, lead AesBlockSlots, data ByteArray, output ByteArray, startBlock Count)
+		var done = startBlock
+
+		while done < streamBlocks 'eachBatch'
+			encryptCounters(planes, nonceLow: nonceLow, nonceMid: nonceMid, counter: firstCounter + done)
+			aesXorBatch(output, data: data, planes: planes, off: (done - lead) shl aesBlockShift, firstSlot: 0)
 			done = done + aesBatchBlocks
 		end 'eachBatch'
-
-		return output
-	end 'xorKeyStream'
+	end 'xorBatches'
 
 	function requireBlock(block ByteArray) throws AesError
 		if block.count() != aesBlockBytes 'blockLength'

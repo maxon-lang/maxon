@@ -33,20 +33,20 @@ const (
 	row3First3     = 0x0FFF000000000000
 	row3Last3      = 0xFFF0000000000000
 
-	blockBytes       = 16
-	laneBytes        = 8
-	batchBlocks      = 4
-	rowWrapBits      = 12
-	counterSwapBits  = 24
-	wordBytes        = 4
-	ghashWordBytes   = 8
-	nonceBytes       = 12
-	tagBytes         = 16
-	counterLimit     = 1 << 32
-	maxPlaintext     = 68719476704
-	bitsPerByte      = 8
-	tagMaskCounter   = 1
-	firstDataCounter = 2
+	blockBytes      = 16
+	laneBytes       = 8
+	batchBlocks     = 4
+	rowWrapBits     = 12
+	counterSwapBits = 24
+	wordBytes       = 4
+	ghashWordBytes  = 8
+	nonceBytes      = 12
+	tagBytes        = 16
+	counterLimit    = 1 << 32
+	maxPlaintext    = 68719476704
+	bitsPerByte     = 8
+	tagMaskCounter  = 1
+	maskLeadBlocks  = 1
 )
 
 func byteWordShift(index, width int, bigEndian bool) uint {
@@ -449,21 +449,45 @@ func (a *BitslicedAes) EncryptBlock(block []byte) []byte {
 }
 
 func (a *BitslicedAes) XorKeyStream(nonce []byte, counter uint32, data []byte) []byte {
+	blocks := (len(data) + 15) >> 4
+	firstBlock := int(counter)
+	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, blocks)
+	var p planes
+	output := make([]byte, 0, len(data))
+	return a.xorBatches(&p, nonceLow, nonceMid, firstBlock, blocks, 0, data, output, 0)
+}
+
+func (a *BitslicedAes) XorKeyStreamPastFirstBlock(nonce []byte, counter uint32, data, output []byte) ([]byte, uint64, uint64) {
+	streamBlocks := ((len(data) + 15) >> 4) + maskLeadBlocks
+	firstBlock := int(counter)
+	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, streamBlocks)
+	var p planes
+	a.encryptCounters(&p, nonceLow, nonceMid, uint64(firstBlock))
+	output = xorBatch(output, data, &p, 0, maskLeadBlocks)
+	firstLane, secondLane := blockLanes(&p, 0)
+	output = a.xorBatches(&p, nonceLow, nonceMid, firstBlock, streamBlocks, maskLeadBlocks, data, output, batchBlocks)
+	return output, firstLane, secondLane
+}
+
+func streamNonceWords(nonce []byte, firstCounter, streamBlocks int) (uint64, uint64) {
 	if len(nonce) != nonceBytes {
 		panic("bitsliced aes: a nonce is 12 bytes")
 	}
-	blocks := (len(data) + 15) >> 4
-	if int(counter)+blocks > counterLimit {
+	if firstCounter+streamBlocks > counterLimit {
 		panic("bitsliced aes: the block counter overflows")
 	}
-	nonceLow := interleave(aesReadWord(nonce, 0), aesReadWord(nonce, 2*wordBytes))
-	nonceMid := aesReadWord(nonce, wordBytes)
-	var p planes
-	output := make([]byte, 0, len(data))
-	for done := 0; done < blocks; done += batchBlocks {
-		loadCounters(&p, nonceLow, nonceMid, uint64(counter)+uint64(done))
-		encryptPlanes(&p, a.keys, a.rounds)
-		output = xorBatch(output, data, &p, done<<4)
+	return interleave(aesReadWord(nonce, 0), aesReadWord(nonce, 2*wordBytes)), aesReadWord(nonce, wordBytes)
+}
+
+func (a *BitslicedAes) encryptCounters(p *planes, nonceLow, nonceMid, counter uint64) {
+	loadCounters(p, nonceLow, nonceMid, counter)
+	encryptPlanes(p, a.keys, a.rounds)
+}
+
+func (a *BitslicedAes) xorBatches(p *planes, nonceLow, nonceMid uint64, firstCounter, streamBlocks, lead int, data, output []byte, startBlock int) []byte {
+	for done := startBlock; done < streamBlocks; done += batchBlocks {
+		a.encryptCounters(p, nonceLow, nonceMid, uint64(firstCounter)+uint64(done))
+		output = xorBatch(output, data, p, (done-lead)<<4, 0)
 	}
 	return output
 }
@@ -485,6 +509,11 @@ func keyLane(low, high uint64, parity uint) uint64 {
 	return deinterleave(low, parity) | (deinterleave(high, parity) << 32)
 }
 
+func blockLanes(p *planes, slot int) (uint64, uint64) {
+	low, high := p[slot], p[slot+batchBlocks]
+	return keyLane(low, high, 0), keyLane(low, high, 1)
+}
+
 func xorLane(output, data []byte, at int, lane uint64) []byte {
 	total := len(data)
 	if at >= total {
@@ -499,13 +528,16 @@ func xorLane(output, data []byte, at int, lane uint64) []byte {
 	return output
 }
 
-func xorBatch(output, data []byte, p *planes, off int) []byte {
+func xorBatch(output, data []byte, p *planes, off, firstSlot int) []byte {
 	ortho(p)
 	for slot := 0; slot < batchBlocks; slot++ {
-		low, high := p[slot], p[slot+batchBlocks]
-		at := off + slot*blockBytes
-		output = xorLane(output, data, at, keyLane(low, high, 0))
-		output = xorLane(output, data, at+laneBytes, keyLane(low, high, 1))
+		if slot < firstSlot {
+			continue
+		}
+		firstLane, secondLane := blockLanes(p, slot)
+		at := off + (slot-firstSlot)*blockBytes
+		output = xorLane(output, data, at, firstLane)
+		output = xorLane(output, data, at+laneBytes, secondLane)
 	}
 	return output
 }
@@ -514,13 +546,17 @@ func swapUnits(w, mask uint64, shift uint) uint64 {
 	return ((w & mask) << shift) | ((w >> shift) & mask)
 }
 
+func ghashReverseBytes(w uint64) uint64 {
+	w = swapUnits(w, 0x00FF00FF00FF00FF, 8)
+	w = swapUnits(w, 0x0000FFFF0000FFFF, 16)
+	return (w << 32) | (w >> 32)
+}
+
 func ghashReverse(w uint64) uint64 {
 	w = swapUnits(w, 0x5555555555555555, 1)
 	w = swapUnits(w, 0x3333333333333333, 2)
 	w = swapUnits(w, 0x0F0F0F0F0F0F0F0F, 4)
-	w = swapUnits(w, 0x00FF00FF00FF00FF, 8)
-	w = swapUnits(w, 0x0000FFFF0000FFFF, 16)
-	return (w << 32) | (w >> 32)
+	return ghashReverseBytes(w)
 }
 
 func mulLow(x, y uint64) uint64 {
@@ -605,14 +641,16 @@ func NewBitslicedGcm(key []byte) *BitslicedGcm {
 	return &BitslicedGcm{c, newGhashKey(c.EncryptBlock(make([]byte, blockBytes)))}
 }
 
-func (g *BitslicedGcm) authenticate(nonce, aad, ciphertext []byte) []byte {
+func (g *BitslicedGcm) authenticate(aad, ciphertext []byte, firstLane, secondLane uint64) (uint64, uint64) {
 	high, low := g.hash.absorb(0, 0, aad)
 	high, low = g.hash.absorb(high, low, ciphertext)
 	high, low = g.hash.multiply(high^uint64(len(aad)*bitsPerByte), low^uint64(len(ciphertext)*bitsPerByte))
-	digest := make([]byte, 0, blockBytes)
-	digest = binary.BigEndian.AppendUint64(digest, high)
-	digest = binary.BigEndian.AppendUint64(digest, low)
-	return g.cipher.XorKeyStream(nonce, tagMaskCounter, digest)
+	return high ^ ghashReverseBytes(firstLane), low ^ ghashReverseBytes(secondLane)
+}
+
+func appendTag(output []byte, high, low uint64) []byte {
+	output = binary.BigEndian.AppendUint64(output, high)
+	return binary.BigEndian.AppendUint64(output, low)
 }
 
 func requireNonce(nonce []byte) {
@@ -626,8 +664,10 @@ func (g *BitslicedGcm) Seal(nonce, plaintext, aad []byte) []byte {
 	if len(plaintext) > maxPlaintext {
 		panic("bitsliced gcm: the plaintext is too long")
 	}
-	sealed := g.cipher.XorKeyStream(nonce, firstDataCounter, plaintext)
-	return append(sealed, g.authenticate(nonce, aad, sealed)...)
+	sealed := make([]byte, 0, len(plaintext)+tagBytes)
+	sealed, firstLane, secondLane := g.cipher.XorKeyStreamPastFirstBlock(nonce, tagMaskCounter, plaintext, sealed)
+	tagHigh, tagLow := g.authenticate(aad, sealed, firstLane, secondLane)
+	return appendTag(sealed, tagHigh, tagLow)
 }
 
 func (g *BitslicedGcm) Open(nonce, sealed, aad []byte) []byte {
@@ -638,9 +678,12 @@ func (g *BitslicedGcm) Open(nonce, sealed, aad []byte) []byte {
 	split := len(sealed) - tagBytes
 	ciphertext := append([]byte(nil), sealed[:split]...)
 	received := append([]byte(nil), sealed[split:]...)
-	expected := g.authenticate(nonce, aad, ciphertext)
+	plaintext := make([]byte, 0, len(ciphertext))
+	plaintext, firstLane, secondLane := g.cipher.XorKeyStreamPastFirstBlock(nonce, tagMaskCounter, ciphertext, plaintext)
+	tagHigh, tagLow := g.authenticate(aad, ciphertext, firstLane, secondLane)
+	expected := appendTag(make([]byte, 0, tagBytes), tagHigh, tagLow)
 	if subtle.ConstantTimeCompare(expected, received) != 1 {
 		panic("bitsliced gcm: the tag does not match")
 	}
-	return g.cipher.XorKeyStream(nonce, firstDataCounter, ciphertext)
+	return plaintext
 }
