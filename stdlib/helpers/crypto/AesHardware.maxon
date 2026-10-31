@@ -4,6 +4,13 @@
 	let aesHardwareRoundsOverKeyWords = 6
 	let aesHardwareScheduleRoundBytes = 32
 	let aesHardwareFirstByte = 0
+	let aesHardwareBlockShift = 4
+	let aesHardwareNonceBytes = 12
+	let aesHardwareCounterBytes = 4
+	let aesHardwareCounterLimit = 4294967296
+	let aesHardwareWidestGroup = 8
+	let aesHardwareMaskLead = 1
+	let aesHardwareLaneBytes = 8
 
 	// `__Builtins.aesExpandKey` ends the program unless the array holds exactly the encryption keys and
 	// the decryption keys of a 16-, 24- or 32-byte `key`.
@@ -39,4 +46,77 @@
 
 		return opened
 	end 'aesHardwareDecrypt'
+
+	function aesHardwareCounterBlock(nonce ByteArray, firstCounter AesCounter, streamBlocks Count) returns ByteArray throws AesKeyStreamError
+		if nonce.count() != aesHardwareNonceBytes 'nonceLength'
+			throw AesKeyStreamError.invalidNonceLength
+		end 'nonceLength'
+
+		let first = firstCounter as Count
+
+		// `aesCtrXor` wraps its counter word without a signal, so a stream that would wrap is refused here.
+		if first + streamBlocks > aesHardwareCounterLimit 'overflow'
+			throw AesKeyStreamError.counterOverflow
+		end 'overflow'
+
+		var block = ByteArray.create()
+		block.reserve(aesHardwareBlockBytes)
+		block.append(nonce)
+		let counterWord = first as AesWord
+		__Builtins.appendBigEndian(block, counterWord as OrderedWord, aesHardwareCounterBytes)
+
+		return block
+	end 'aesHardwareCounterBlock'
+
+	function aesHardwareCtrWalk(buffer ByteArray, at Count, schedule ByteArray, counterBlock ByteArray, firstBlock Count, blocks Count)
+		var done = 0 as Count
+		var group = aesHardwareWidestGroup as Count
+
+		while group > 0 'eachGroupSize'
+			while done + group <= blocks 'eachGroup'
+				__Builtins.aesCtrXor(buffer, at + (done shl aesHardwareBlockShift), schedule, counterBlock, firstBlock + done, group)
+				done = done + group
+			end 'eachGroup'
+
+			group = group shr 1
+		end 'eachGroupSize'
+	end 'aesHardwareCtrWalk'
+
+	// `aesCtrXor` takes whole blocks, so the data is appended zero-padded to a block boundary, XORed in
+	// place and cut back to its length: the padding bytes never reach the caller.
+	function aesHardwareXorAppend(output ByteArray, schedule ByteArray, counterBlock ByteArray, firstBlock Count, data ByteArray, blocks Count)
+		let start = output.count()
+		let paddedEnd = start + (blocks shl aesHardwareBlockShift)
+		output.reserve(paddedEnd)
+		output.append(data)
+		output.growFilled(paddedEnd, value: 0)
+		aesHardwareCtrWalk(output, at: start, schedule: schedule, counterBlock: counterBlock, firstBlock: firstBlock, blocks: blocks)
+		output.truncate(start + data.count())
+	end 'aesHardwareXorAppend'
+
+	module function aesHardwareXorKeyStream(schedule ByteArray, nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
+		let blocks = (data.count() + aesHardwareBlockBytes - 1) shr aesHardwareBlockShift
+		let counterBlock = try aesHardwareCounterBlock(nonce, firstCounter: counter, streamBlocks: blocks)
+		var output = ByteArray.create()
+		aesHardwareXorAppend(output, schedule: schedule, counterBlock: counterBlock, firstBlock: 0, data: data, blocks: blocks)
+
+		return output
+	end 'aesHardwareXorKeyStream'
+
+	module function aesHardwareXorKeyStreamPastFirstBlock(schedule ByteArray, nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
+		let blocks = (data.count() + aesHardwareBlockBytes - 1) shr aesHardwareBlockShift
+		let counterBlock = try aesHardwareCounterBlock(nonce, firstCounter: counter, streamBlocks: blocks + aesHardwareMaskLead)
+		var mask = ByteArray.create()
+		mask.resize(aesHardwareBlockBytes)
+		aesHardwareCtrWalk(mask, at: 0, schedule: schedule, counterBlock: counterBlock, firstBlock: 0, blocks: aesHardwareMaskLead)
+
+		aesHardwareXorAppend(output, schedule: schedule, counterBlock: counterBlock, firstBlock: aesHardwareMaskLead, data: data, blocks: blocks)
+
+		return (aesHardwareMaskLane(mask, at: aesHardwareFirstByte), aesHardwareMaskLane(mask, at: aesHardwareLaneBytes))
+	end 'aesHardwareXorKeyStreamPastFirstBlock'
+
+	// Little-endian, which is how the bitsliced cipher's lanes read a block; `AesGcm` consumes both alike.
+	function aesHardwareMaskLane(mask ByteArray, at Count) returns AesWord
+		return (try __Builtins.readLittleEndian(mask, at, aesHardwareLaneBytes) otherwise panic("aes: a lane inside the 16-byte mask block is missing")) as AesWord
+	end 'aesHardwareMaskLane'
 #endif

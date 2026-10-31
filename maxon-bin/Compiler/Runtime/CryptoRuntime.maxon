@@ -1,11 +1,20 @@
 export let AesExpandKeyChunkName = b"mrt_aes_expand_key"
 export let AesEncryptBlockChunkName = b"mrt_aes_encrypt_block"
 export let AesDecryptBlockChunkName = b"mrt_aes_decrypt_block"
+let AesCtrBlocks1ChunkName = b"mrt_aes_ctr_blocks_1"
+let AesCtrBlocks2ChunkName = b"mrt_aes_ctr_blocks_2"
+let AesCtrBlocks4ChunkName = b"mrt_aes_ctr_blocks_4"
+let AesCtrBlocks8ChunkName = b"mrt_aes_ctr_blocks_8"
 
 let AesCipherRuntimeCallPrefix = b"__cpufeat_aes_cipher_"
 let AesCipherExpandKeyName = b"__cpufeat_aes_cipher_expand_key"
 let AesCipherEncryptBlockName = b"__cpufeat_aes_cipher_encrypt_block"
 let AesCipherDecryptBlockName = b"__cpufeat_aes_cipher_decrypt_block"
+let AesCipherCtrXorName = b"__cpufeat_aes_cipher_ctr_xor"
+
+export typealias AesCtrGroupBlocks = int(1 to 8)
+
+export let AesCtrGroupCount = 4
 
 export let AesBlockBytes = 16
 export let AesRoundPairBytes = 2 * AesBlockBytes
@@ -18,6 +27,7 @@ export let AesShortRounds = 10
 export let AesLongRounds = 14
 export let AesMediumRounds = 12
 export let AesFullRoundsBeforeLast = AesShortRounds - 1
+
 // A schedule holds the encryption round keys followed by the decryption round keys, 16 bytes each per
 // round. `stdlib/helpers/crypto/AesHardware.maxon` sizes its array to the same figure.
 let AesScheduleBytesPerRound = 32
@@ -32,6 +42,18 @@ let AesByteLimit = 0xFF
 let AesFieldReduction = 0x11B
 let AesExpandKeyParams = 2
 let AesBlockParams = 5
+let AesCtrParams = 6
+
+// A `cryptoRoutine` passes four arguments, so the counter offset rides in the first one, above the
+// round count in the low byte.
+export let AesCtrControlOffsetShift = 8
+export let AesCtrRoundsMask = 0xFF
+
+// The counter is the last word of the counter block, big-endian, and wraps modulo 2^32 inside it
+// without carrying into the nonce (GCM's inc32). The stdlib refuses a stream that would wrap before it
+// calls.
+export let AesCtrCounterWordBytes = 4
+export let AesCtrCounterLane = 3
 
 export function nextAesRoundConstant(current MachineWord) returns MachineWord
 	let doubled = current shl 1
@@ -43,10 +65,14 @@ export enum AesCipherIntrinsic
 	expandKey
 	encryptBlock
 	decryptBlock
+	ctrXor
 end 'AesCipherIntrinsic'
 
 let AesBlockOutputAtPosition = 1
 let AesBlockInputAtPosition = 4
+let AesCtrBufferAtPosition = 1
+let AesCtrCounterOffsetPosition = 4
+let AesCtrBlocksPosition = 5
 
 export let AesCipherBufferRequirement = "ByteArray"
 
@@ -55,6 +81,7 @@ function aesCipherIntrinsicName(intrinsic AesCipherIntrinsic) returns ByteArray
 		expandKey gives b"__Builtins.aesExpandKey"
 		encryptBlock gives b"__Builtins.aesEncryptBlock"
 		decryptBlock gives b"__Builtins.aesDecryptBlock"
+		ctrXor gives b"__Builtins.aesCtrXor"
 	end 'intrinsic'
 end 'aesCipherIntrinsicName'
 
@@ -78,6 +105,7 @@ export function aesCipherRuntimeName(intrinsic AesCipherIntrinsic) returns ByteA
 		expandKey gives AesCipherExpandKeyName
 		encryptBlock gives AesCipherEncryptBlockName
 		decryptBlock gives AesCipherDecryptBlockName
+		ctrXor gives AesCipherCtrXorName
 	end 'intrinsic'
 end 'aesCipherRuntimeName'
 
@@ -86,6 +114,7 @@ export function aesCipherArity(intrinsic AesCipherIntrinsic) returns ParamCount
 		expandKey gives AesExpandKeyParams
 		encryptBlock or
 		decryptBlock gives AesBlockParams
+		ctrXor gives AesCtrParams
 	end 'intrinsic'
 end 'aesCipherArity'
 
@@ -94,6 +123,7 @@ export function aesCipherOperandIsOffset(intrinsic AesCipherIntrinsic, index Par
 		expandKey gives false
 		encryptBlock or
 		decryptBlock gives index == AesBlockOutputAtPosition or index == AesBlockInputAtPosition
+		ctrXor gives index == AesCtrBufferAtPosition or index == AesCtrCounterOffsetPosition or index == AesCtrBlocksPosition
 	end 'intrinsic'
 end 'aesCipherOperandIsOffset'
 
@@ -106,8 +136,26 @@ export function cryptoChunkName(routine CryptoRoutine) returns ByteArray
 		aesExpandKey gives AesExpandKeyChunkName
 		aesEncryptBlock gives AesEncryptBlockChunkName
 		aesDecryptBlock gives AesDecryptBlockChunkName
+		aesCtrBlocks1 gives AesCtrBlocks1ChunkName
+		aesCtrBlocks2 gives AesCtrBlocks2ChunkName
+		aesCtrBlocks4 gives AesCtrBlocks4ChunkName
+		aesCtrBlocks8 gives AesCtrBlocks8ChunkName
 	end 'routine'
 end 'cryptoChunkName'
+
+export function aesCtrGroupBlocks(exponent FullRangeInt) returns AesCtrGroupBlocks
+	return (1 shl exponent) as AesCtrGroupBlocks
+end 'aesCtrGroupBlocks'
+
+export function aesCtrRoutine(blocks AesCtrGroupBlocks) returns CryptoRoutine
+	match blocks 'blocks'
+		1 then return CryptoRoutine.aesCtrBlocks1
+		2 then return CryptoRoutine.aesCtrBlocks2
+		4 then return CryptoRoutine.aesCtrBlocks4
+		8 then return CryptoRoutine.aesCtrBlocks8
+		default panic("aesCtrRoutine: {blocks} is not a counter-mode group size; the sizes are 1, 2, 4 and 8")
+	end 'blocks'
+end 'aesCtrRoutine'
 
 export function hardwareAesChunksAreEmitted(usage RuntimeUsage, target Target) returns bool
 	return usage.usesHardwareAes and (target.cpu == CpuArch.x64 or target.cpu == CpuArch.arm64)
@@ -124,7 +172,25 @@ export function installCryptoRuntime(module StdModule, usage RuntimeUsage)
 	buildAesExpandKey(module)
 	buildAesBlockRoutine(module, name: AesCipherEncryptBlockName, routine: CryptoRoutine.aesEncryptBlock)
 	buildAesBlockRoutine(module, name: AesCipherDecryptBlockName, routine: CryptoRoutine.aesDecryptBlock)
+	buildAesCtrXor(module)
 end 'installCryptoRuntime'
+
+function emitScheduleSizeGuards(module StdModule, func IrFunction, entry IrBlock, scheduleBytes ValueId, refused IrBlock, next IrBlock, ids ValueMinter)
+	var bounded = module.addBlock(func, label: b"scbounded", heat: BlockHeat.normal)
+	var stepped = module.addBlock(func, label: b"scstepped", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: entry, value: scheduleBytes, pred: StdCmpPred.lt, against: AesScheduleMinBytes, whenTrue: refused, whenFalse: bounded, ids: ids)
+	emitBranchOnCompare(module, block: bounded, value: scheduleBytes, pred: StdCmpPred.gt, against: AesScheduleMaxBytes, whenTrue: refused, whenFalse: stepped, ids: ids)
+
+	let step = emitBin(module, block: stepped, a: scheduleBytes, b: emitConst(module, block: stepped, value: AesScheduleStepMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompare(module, block: stepped, value: step, pred: StdCmpPred.ne, against: AesScheduleStepResidue, whenTrue: refused, whenFalse: next, ids: ids)
+end 'emitScheduleSizeGuards'
+
+function emitScheduleRounds(module StdModule, block IrBlock, scheduleBytes ValueId, ids ValueMinter) returns ValueId
+	let roundKeys = emitBin(module, block: block, a: scheduleBytes, b: emitConst(module, block: block, value: AesScheduleRoundShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+
+	return emitBin(module, block: block, a: roundKeys, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+end 'emitScheduleRounds'
 
 function buildAesExpandKey(module StdModule)
 	var func = IrFunction.createFromStd(AesCipherExpandKeyName, returnType: StdReturnType.void, paramCount: AesExpandKeyParams, paramTypes: twoI64Params())
@@ -174,8 +240,6 @@ function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRo
 	var ids = ValueMinter.create(AesBlockParams)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var bounded = module.addBlock(func, label: b"abbounded", heat: BlockHeat.normal)
-	var stepped = module.addBlock(func, label: b"abstepped", heat: BlockHeat.normal)
 	var crypt = module.addBlock(func, label: b"abcrypt", heat: BlockHeat.normal)
 	var bad = module.addBlock(func, label: b"abbad", heat: BlockHeat.cold)
 
@@ -187,12 +251,8 @@ function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRo
 	let inputAt = 4
 
 	let scheduleBytes = emitLoadField(module, block: entry, record: schedule, offset: ManagedRecordLengthOffset, ids: ids)
-	emitBranchOnCompare(module, block: entry, value: scheduleBytes, pred: StdCmpPred.lt, against: AesScheduleMinBytes, whenTrue: bad, whenFalse: bounded, ids: ids)
-	emitBranchOnCompare(module, block: bounded, value: scheduleBytes, pred: StdCmpPred.gt, against: AesScheduleMaxBytes, whenTrue: bad, whenFalse: stepped, ids: ids)
-
-	let step = emitBin(module, block: stepped, a: scheduleBytes, b: emitConst(module, block: stepped, value: AesScheduleStepMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	var outputSpan = module.addBlock(func, label: b"aboutput", heat: BlockHeat.normal)
-	emitBranchOnCompare(module, block: stepped, value: step, pred: StdCmpPred.ne, against: AesScheduleStepResidue, whenTrue: bad, whenFalse: outputSpan, ids: ids)
+	emitScheduleSizeGuards(module, func: func, entry: entry, scheduleBytes: scheduleBytes, refused: bad, next: outputSpan, ids: ids)
 
 	var inputSpan = module.addBlock(func, label: b"abinput", heat: BlockHeat.normal)
 	var outputInside = module.addBlock(func, label: b"abo", heat: BlockHeat.normal)
@@ -203,7 +263,7 @@ function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRo
 	// The detach comes first so the data pointers below are read after it: an output that shares its
 	// buffer would otherwise be written in place, and an input that is the output sees the new buffer.
 	emitCowDetach(module, block: crypt, arr: output, ids: ids)
-	let rounds = emitBin(module, block: crypt, a: emitBin(module, block: crypt, a: scheduleBytes, b: emitConst(module, block: crypt, value: AesScheduleRoundShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids), b: emitConst(module, block: crypt, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let rounds = emitScheduleRounds(module, block: crypt, scheduleBytes: scheduleBytes, ids: ids)
 	let scheduleData = emitLoadField(module, block: crypt, record: schedule, offset: ManagedRecordBufferOffset, ids: ids)
 	let halfBytes = emitBin(module, block: crypt, a: scheduleBytes, b: emitConst(module, block: crypt, value: AesScheduleHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
 	let decryptionKeys = emitBin(module, block: crypt, a: scheduleData, b: halfBytes, opcode: StdBinOpcode.add, ids: ids)
@@ -220,3 +280,66 @@ function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRo
 
 	module.functions.push(func)
 end 'buildAesBlockRoutine'
+
+function buildAesCtrXor(module StdModule)
+	var func = IrFunction.createFromStd(AesCipherCtrXorName, returnType: StdReturnType.void, paramCount: AesCtrParams, paramTypes: sixI64Params())
+	var ids = ValueMinter.create(AesCtrParams)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var counterCheck = module.addBlock(func, label: b"cxcounter", heat: BlockHeat.normal)
+	var dispatch = module.addBlock(func, label: b"cxdispatch", heat: BlockHeat.normal)
+	var bad = module.addBlock(func, label: b"cxbad", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: AesCtrParams)
+	let buffer = 0
+	let bufferAt = 1
+	let schedule = 2
+	let counterBlock = 3
+	let counterOffset = 4
+	let blocks = 5
+
+	let scheduleBytes = emitLoadField(module, block: entry, record: schedule, offset: ManagedRecordLengthOffset, ids: ids)
+	emitScheduleSizeGuards(module, func: func, entry: entry, scheduleBytes: scheduleBytes, refused: bad, next: counterCheck, ids: ids)
+
+	let counterBytes = emitLoadField(module, block: counterCheck, record: counterBlock, offset: ManagedRecordLengthOffset, ids: ids)
+	emitBranchOnCompare(module, block: counterCheck, value: counterBytes, pred: StdCmpPred.ne, against: AesBlockBytes, whenTrue: bad, whenFalse: dispatch, ids: ids)
+
+	var probe = dispatch
+
+	for exponent in 0 upto AesCtrGroupCount - 1 'eachProbedGroup'
+		let group = aesCtrGroupBlocks(exponent)
+		var arm = module.addBlock(func, label: "cxarm{group}".toByteArray(), heat: BlockHeat.normal)
+		var unmatched = module.addBlock(func, label: "cxprobe{group}".toByteArray(), heat: BlockHeat.normal)
+
+		emitBranchOnCompare(module, block: probe, value: blocks, pred: StdCmpPred.eq, against: group as FullRangeInt, whenTrue: arm, whenFalse: unmatched, ids: ids)
+		buildAesCtrArm(module, func: func, arm: arm, group: group, buffer: buffer, bufferAt: bufferAt, schedule: schedule, scheduleBytes: scheduleBytes, counterBlock: counterBlock, counterOffset: counterOffset, refused: bad, ids: ids)
+		probe = unmatched
+	end 'eachProbedGroup'
+
+	let widest = aesCtrGroupBlocks(AesCtrGroupCount - 1)
+	var widestArm = module.addBlock(func, label: "cxarm{widest}".toByteArray(), heat: BlockHeat.normal)
+	emitBranchOnCompare(module, block: probe, value: blocks, pred: StdCmpPred.eq, against: widest as FullRangeInt, whenTrue: widestArm, whenFalse: bad, ids: ids)
+	buildAesCtrArm(module, func: func, arm: widestArm, group: widest, buffer: buffer, bufferAt: bufferAt, schedule: schedule, scheduleBytes: scheduleBytes, counterBlock: counterBlock, counterOffset: counterOffset, refused: bad, ids: ids)
+
+	emitRuntimeFatal(module, func: func, block: bad, fatal: RuntimeFatal.cryptoBufferOutOfRange, ids: ids)
+
+	module.functions.push(func)
+end 'buildAesCtrXor'
+
+function buildAesCtrArm(module StdModule, func IrFunction, arm IrBlock, group AesCtrGroupBlocks, buffer ValueId, bufferAt ValueId, schedule ValueId, scheduleBytes ValueId, counterBlock ValueId, counterOffset ValueId, refused IrBlock, ids ValueMinter)
+	var inside = module.addBlock(func, label: "cxspan{group}".toByteArray(), heat: BlockHeat.normal)
+	var crypt = module.addBlock(func, label: "cxcrypt{group}".toByteArray(), heat: BlockHeat.normal)
+	emitSpanGuards(module, entry: arm, inside: inside, next: crypt, refused: refused, arr: buffer, at: bufferAt, byteCount: (group as FullRangeInt) * AesBlockBytes, ids: ids)
+
+	emitCowDetach(module, block: crypt, arr: buffer, ids: ids)
+	let rounds = emitScheduleRounds(module, block: crypt, scheduleBytes: scheduleBytes, ids: ids)
+	let shiftedOffset = emitBin(module, block: crypt, a: counterOffset, b: emitConst(module, block: crypt, value: AesCtrControlOffsetShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let control = emitBin(module, block: crypt, a: shiftedOffset, b: rounds, opcode: StdBinOpcode.bitOr, ids: ids)
+	let scheduleData = emitLoadField(module, block: crypt, record: schedule, offset: ManagedRecordBufferOffset, ids: ids)
+	let counterData = emitLoadField(module, block: crypt, record: counterBlock, offset: ManagedRecordBufferOffset, ids: ids)
+	let bufferData = emitLoadField(module, block: crypt, record: buffer, offset: ManagedRecordBufferOffset, ids: ids)
+	let destination = emitBin(module, block: crypt, a: bufferData, b: bufferAt, opcode: StdBinOpcode.add, ids: ids)
+	let answer = ids.mint()
+	module.appendOp(crypt, op: StdOp.cryptoRoutine(answer, routine: aesCtrRoutine(group), a0Id: control, a1Id: scheduleData, a2Id: counterData, a3Id: destination))
+	module.setTerminator(crypt, op: StdOp.retVoid)
+end 'buildAesCtrArm'

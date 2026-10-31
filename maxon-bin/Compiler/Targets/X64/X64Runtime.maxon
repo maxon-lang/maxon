@@ -1673,10 +1673,12 @@ let CpuidFeatureLeaf = 1
 let CpuidEcxPclmulqdq = 0x2
 let CpuidEcxSsse3 = 0x200
 let CpuidEcxAesNi = 0x2000000
-let CpuidEcxHardwareAes = CpuidEcxAesNi or CpuidEcxPclmulqdq or CpuidEcxSsse3
+let CpuidEcxSse41 = 0x80000
+let CpuidEcxHardwareAes = CpuidEcxAesNi or CpuidEcxPclmulqdq or CpuidEcxSsse3 or CpuidEcxSse41
 
-// `mrt_cpu_feature_probe` — stores 1 in `__mrt_cpu_aes_usable` when leaf 1 reports AES-NI, PCLMULQDQ and
-// SSSE3, else 0. Leaf 0's maximum is read first because leaf 1 is undefined below it. These instructions use
+// `mrt_cpu_feature_probe` — stores 1 in `__mrt_cpu_aes_usable` when leaf 1 reports AES-NI, PCLMULQDQ,
+// SSSE3 and SSE4.1, else 0. SSE4.1 is for `pinsrd`, which the counter-mode chunks build their counters
+// with. Leaf 0's maximum is read first because leaf 1 is undefined below it. These instructions use
 // only SSE state, which every x64 OS enables, so no XGETBV check is owed. `cpuid` clobbers rbx, which is
 // callee-saved in the custom ABI, so it is saved in slot 0 and restored on the one path out.
 function buildCpuFeatureProbeChunk() returns FunctionCodeChunk
@@ -2143,6 +2145,10 @@ export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Tar
 		chunks.push(buildAesExpandKeyChunk())
 		chunks.push(buildAesEncryptBlockChunk())
 		chunks.push(buildAesDecryptBlockChunk())
+
+		for exponent in 0 upto AesCtrGroupCount 'eachCtrGroup'
+			chunks.push(buildAesCtrChunk(aesCtrGroupBlocks(exponent)))
+		end 'eachCtrGroup'
 	end 'hardwareAes'
 end 'appendX64RuntimeChunks'
 

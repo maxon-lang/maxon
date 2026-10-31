@@ -861,6 +861,7 @@ export let OpcodePshufd = 0x70
 export let OpcodeShufps = 0xC6
 let OpcodeThreeByteEscape38 = 0x38
 let OpcodeAeskeygenassist = 0xDF
+let OpcodePinsrd = 0x22
 
 export enum AesNiInstruction
 	aesimc
@@ -902,6 +903,10 @@ end 'encodeAesNiRegReg'
 export function encodeAeskeygenassist(code ByteArray, dest X64Register, src X64Register, roundConstant MachineWord)
 	encodeSseMap3ARegRegImm8(code, opcode: OpcodeAeskeygenassist, dest: dest, src: src, imm: roundConstant)
 end 'encodeAeskeygenassist'
+
+export function encodePinsrd(code ByteArray, dest X64Register, src X64Register, lane MachineWord)
+	encodeSseMap3ARegRegImm8(code, opcode: OpcodePinsrd, dest: dest, src: src, imm: lane)
+end 'encodePinsrd'
 
 export function encodeSseRegRegImm8(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, imm MachineWord)
 	encodeSseRegReg(code, prefix: prefix, opcode: opcode, dest: dest, src: src, wide: false)
@@ -1375,7 +1380,7 @@ function encodeStoreBaseDispReg16(code ByteArray, base X64Register, disp Imm32, 
 end 'encodeStoreBaseDispReg16'
 
 // `bswap` has no defined 16-bit form, so a halfword swaps as 32 bits and shifts down.
-function encodeByteSwapReg(code ByteArray, reg X64Register, width WordBytes)
+export function encodeByteSwapReg(code ByteArray, reg X64Register, width WordBytes)
 	emitRex(code, wide: width == WordBytes.eight, regField: X64Register.rax, rmField: reg)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeBswapBase + regLow3(reg))

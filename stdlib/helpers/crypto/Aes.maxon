@@ -21,6 +21,7 @@ end 'AesKeyStreamError'
 /// An AES key schedule, ready to encrypt and decrypt 16-byte blocks in constant time.
 public type Aes
 	let software as AesBitsliced
+
 	// Empty when the software cipher is in use.
 	let schedule as ByteArray
 
@@ -62,10 +63,22 @@ public type Aes
 	/// `data` XORed with the counter-mode key stream of a 12-byte `nonce`, the first block's counter being
 	/// `counter`. Encryption and decryption are the same call.
 	public function xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
+		#if arch(x64) or arch(arm64)
+			if not schedule.isEmpty() 'hardware'
+				return try aesHardwareXorKeyStream(schedule, nonce: nonce, counter: counter, data: data)
+			end 'hardware'
+		#endif
+
 		return try software.xorKeyStream(nonce, counter: counter, data: data)
 	end 'xorKeyStream'
 
 	export function xorKeyStreamPastFirstBlock(nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
+		#if arch(x64) or arch(arm64)
+			if not schedule.isEmpty() 'hardware'
+				return try aesHardwareXorKeyStreamPastFirstBlock(schedule, nonce: nonce, counter: counter, data: data, output: output)
+			end 'hardware'
+		#endif
+
 		return try software.xorKeyStreamPastFirstBlock(nonce, counter: counter, data: data, output: output)
 	end 'xorKeyStreamPastFirstBlock'
 end 'Aes'

@@ -217,8 +217,8 @@ public type AesGcm implements Aead
 	end 'seal'
 
 	// The plaintext is decrypted before the tag is known, which is what lets the tag mask share the
-	// first batch. It stays local until `aeadRequireTag` passes: a throw drops it, so no path hands
-	// back unauthenticated bytes.
+	// first software batch. It stays local until `aeadRequireTag` passes: a throw drops it, so no path
+	// hands back unauthenticated bytes.
 	public function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 
@@ -235,8 +235,8 @@ public type AesGcm implements Aead
 		return plaintext
 	end 'open'
 
-	// The tag mask is the key-stream block at counter 1, computed in the same four-block batch as the
-	// first data blocks so that short messages cost one batch rather than two.
+	// The tag mask is the key-stream block at counter 1. The software cipher computes it in the same
+	// four-block batch as the first data blocks, so that short messages cost one batch rather than two.
 	function applyBehindMask(nonce ByteArray, data ByteArray, output ByteArray) returns AesPair
 		let lanes = try cipher.xorKeyStreamPastFirstBlock(nonce, counter: aesGcmTagMaskCounter, data: data, output: output) otherwise (failure) 'refused'
 			match failure 'reason'

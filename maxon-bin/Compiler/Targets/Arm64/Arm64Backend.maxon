@@ -234,7 +234,7 @@ let Arm64OpMovReg = 0xAA0003E0
 // SOURCE through the Rm field (bit 16) with XZR in the Rn field — the zero register is NOT folded into
 // the opcode, so the source must land at Rm, not Rn.
 let Arm64OpOrn = 0xAA200000
-let Arm64OpRevW = 0x5AC00800
+export let Arm64OpRevW = 0x5AC00800
 let Arm64OpRevX = 0xDAC00C00
 let Arm64ByteSwapHalfwordShift = 16
 
@@ -543,6 +543,7 @@ let Arm64OpEorVec8b = 0x2E201C00
 export let Arm64OpEorVec16b = 0x6E201C00
 export let Arm64OpExtVec16b = 0x6E000000
 export let Arm64OpDupWordsFromGpr = 0x4E040C00
+export let Arm64OpInsWordFromGpr = 0x4E1C1C00
 export let Arm64OpUmovWord = 0x0E043C00
 export let Arm64OpAese = 0x4E284800
 export let Arm64OpAesd = 0x4E285800
@@ -3267,6 +3268,10 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 		chunks.push(buildArm64AesExpandKeyChunk())
 		chunks.push(buildArm64AesEncryptBlockChunk())
 		chunks.push(buildArm64AesDecryptBlockChunk())
+
+		for exponent in 0 upto AesCtrGroupCount 'eachCtrGroup'
+			chunks.push(buildArm64AesCtrChunk(aesCtrGroupBlocks(exponent)))
+		end 'eachCtrGroup'
 	end 'hardwareAes'
 
 	// The HOST SURFACE — the sequences behind the `os*` ops. EXACTLY ONE lane's chunks are appended, which

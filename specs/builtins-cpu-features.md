@@ -1,7 +1,7 @@
 ---
 feature: builtins-cpu-features
 status: stable
-keywords: [builtins, __Builtins, cpuHasAes, intrinsics, cpu features, AES-NI, PCLMULQDQ, SSSE3, HWCAP_AES, HWCAP_PMULL, cpuid]
+keywords: [builtins, __Builtins, cpuHasAes, intrinsics, cpu features, AES-NI, PCLMULQDQ, SSSE3, SSE4.1, HWCAP_AES, HWCAP_PMULL, cpuid]
 category: system
 ---
 
@@ -14,7 +14,7 @@ carry-less multiply AES-GCM's GHASH is built on. It takes no arguments and answe
 
 | Target | Where the answer comes from |
 |---|---|
-| x64-windows, x64-linux | `cpuid` leaf 1 at startup: AES-NI (ECX bit 25), PCLMULQDQ (bit 1) and SSSE3 (bit 9) must all be set, and leaf 0 must report leaf 1 |
+| x64-windows, x64-linux | `cpuid` leaf 1 at startup: AES-NI (ECX bit 25), PCLMULQDQ (bit 1), SSSE3 (bit 9) and SSE4.1 (bit 19) must all be set, and leaf 0 must report leaf 1 |
 | arm64-linux | the auxiliary vector's `AT_HWCAP`: `HWCAP_AES` (bit 3) and `HWCAP_PMULL` (bit 4) must both be set |
 | arm64-macos | always `true`: every Apple Silicon CPU has both |
 | wasm32-wasi | none: the call is refused with E3104 |
@@ -75,7 +75,7 @@ true
 
 <!-- test: builtins-cpu-features.a-native-host-has-hardware-aes -->
 <!-- tier: stdlib -->
-Every x64 machine this suite runs on has AES-NI, PCLMULQDQ and SSSE3, and every arm64 one has the AES and PMULL
+Every x64 machine this suite runs on has AES-NI, PCLMULQDQ, SSSE3 and SSE4.1, and every arm64 one has the AES and PMULL
 extensions, so the answer is `true` wherever the intrinsic is answered at all. A probe that stored nothing, or
 read the wrong register or bit, answers `false` here.
 ```maxon

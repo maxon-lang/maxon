@@ -7,6 +7,8 @@ let Arm64AesStateVector = 0
 let Arm64AesKeyVector = 1
 let Arm64AesSpareVector = 2
 let Arm64AesZeroVector = 3
+let Arm64AesCtrKeyVector = 16
+let Arm64AesCtrDataVector = 17
 
 enum Arm64VectorTransfer
 	load
@@ -22,51 +24,62 @@ function emitArm64VectorTransfer(asm Arm64RuntimeAsm, transfer Arm64VectorTransf
 	arm64EmitScaledMem(asm.code, opcode: opcode, rt: vector, baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: AesBlockBytes)
 end 'emitArm64VectorTransfer'
 
-function emitArm64AesStep(asm Arm64RuntimeAsm, round MachineWord, mix MachineWord, mixes bool)
-	emitArm64Rr(asm.code, opcode: round, rd: Arm64AesStateVector, rn: Arm64AesKeyVector)
+function emitArm64AesRoundAcross(asm Arm64RuntimeAsm, round MachineWord, mix MachineWord, mixes bool, states FullRangeInt, key MachineWord)
+	for state in 0 upto states 'eachState'
+		emitArm64Rr(asm.code, opcode: round, rd: state as MachineWord, rn: key)
 
-	if mixes 'mixes'
-		emitArm64Rr(asm.code, opcode: mix, rd: Arm64AesStateVector, rn: Arm64AesStateVector)
-	end 'mixes'
-end 'emitArm64AesStep'
+		if mixes 'mixes'
+			emitArm64Rr(asm.code, opcode: mix, rd: state as MachineWord, rn: state as MachineWord)
+		end 'mixes'
+	end 'eachState'
+end 'emitArm64AesRoundAcross'
 
-function emitArm64AesRoundPair(asm Arm64RuntimeAsm, round MachineWord, mix MachineWord)
+function emitArm64AesRoundPair(asm Arm64RuntimeAsm, round MachineWord, mix MachineWord, states FullRangeInt, key MachineWord, keys Arm64Register)
 	for index in 0 upto 2 'eachRound'
-		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesKeyVector, base: Arm64Register.x1, byteOffset: (index * AesBlockBytes) as MachineWord)
-		emitArm64AesStep(asm, round: round, mix: mix, mixes: true)
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: key, base: keys, byteOffset: (index * AesBlockBytes) as MachineWord)
+		emitArm64AesRoundAcross(asm, round: round, mix: mix, mixes: true, states: states, key: key)
 	end 'eachRound'
 
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: AesRoundPairBytes)
+	arm64EmitAddRuntimeImm(asm, dest: keys, base: keys, imm: AesRoundPairBytes)
 end 'emitArm64AesRoundPair'
 
-// Takes the round count, the round keys, the destination and the source in x0 to x3. The AES chunks
-// use x0 to x7 and v0 to v3 and no stack, all caller-saved, so they preserve d8 to d15.
-function buildArm64AesBlockChunk(name ByteArray, round MachineWord, mix MachineWord) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+function emitArm64AesRounds(asm Arm64RuntimeAsm, round MachineWord, mix MachineWord, states FullRangeInt, key MachineWord, keys Arm64Register, rounds Arm64Register)
 	let from192 = asm.newLabel()
 	let from128 = asm.newLabel()
 
-	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesStateVector, base: Arm64Register.x3, byteOffset: 0)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: AesMediumRounds)
+	arm64EmitCmpRuntimeImm(asm, reg: rounds, imm: AesMediumRounds)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: from128)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: from192)
 
-	emitArm64AesRoundPair(asm, round: round, mix: mix)
+	emitArm64AesRoundPair(asm, round: round, mix: mix, states: states, key: key, keys: keys)
 
 	asm.placeLabel(from192)
-	emitArm64AesRoundPair(asm, round: round, mix: mix)
+	emitArm64AesRoundPair(asm, round: round, mix: mix, states: states, key: key, keys: keys)
 
 	asm.placeLabel(from128)
 
 	for index in 0 upto AesFullRoundsBeforeLast 'eachRound'
-		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesKeyVector, base: Arm64Register.x1, byteOffset: (index * AesBlockBytes) as MachineWord)
-		emitArm64AesStep(asm, round: round, mix: mix, mixes: true)
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: key, base: keys, byteOffset: (index * AesBlockBytes) as MachineWord)
+		emitArm64AesRoundAcross(asm, round: round, mix: mix, mixes: true, states: states, key: key)
 	end 'eachRound'
 
-	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesKeyVector, base: Arm64Register.x1, byteOffset: (AesFullRoundsBeforeLast * AesBlockBytes) as MachineWord)
-	emitArm64AesStep(asm, round: round, mix: mix, mixes: false)
-	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesKeyVector, base: Arm64Register.x1, byteOffset: ((AesFullRoundsBeforeLast + 1) * AesBlockBytes) as MachineWord)
-	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: Arm64AesStateVector, rn: Arm64AesStateVector, rm: Arm64AesKeyVector)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: key, base: keys, byteOffset: (AesFullRoundsBeforeLast * AesBlockBytes) as MachineWord)
+	emitArm64AesRoundAcross(asm, round: round, mix: mix, mixes: false, states: states, key: key)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: key, base: keys, byteOffset: ((AesFullRoundsBeforeLast + 1) * AesBlockBytes) as MachineWord)
+
+	for state in 0 upto states 'eachFinal'
+		emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: state as MachineWord, rn: state as MachineWord, rm: key)
+	end 'eachFinal'
+end 'emitArm64AesRounds'
+
+// Takes the round count, the round keys, the destination and the source in x0 to x3. The block chunks
+// use x0 to x7 and v0 to v3 and the counter-mode chunks x0 to x7, v0 to v7, v16 and v17. None keeps a
+// stack, and all of those are caller-saved, so they preserve d8 to d15.
+function buildArm64AesBlockChunk(name ByteArray, round MachineWord, mix MachineWord) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginRawFunction()
+
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesStateVector, base: Arm64Register.x3, byteOffset: 0)
+	emitArm64AesRounds(asm, round: round, mix: mix, states: 1, key: Arm64AesKeyVector, keys: Arm64Register.x1, rounds: Arm64Register.x0)
 	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: Arm64AesStateVector, base: Arm64Register.x2, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 	arm64EmitRet(asm.code)
@@ -81,6 +94,48 @@ end 'buildArm64AesEncryptBlockChunk'
 export function buildArm64AesDecryptBlockChunk() returns FunctionCodeChunk
 	return buildArm64AesBlockChunk(AesDecryptBlockChunkName, round: Arm64OpAesd, mix: Arm64OpAesimc)
 end 'buildArm64AesDecryptBlockChunk'
+
+export function buildArm64AesCtrChunk(blocks AesCtrGroupBlocks) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let blockCount = blocks as FullRangeInt
+	let control = Arm64Register.x0
+	let keys = Arm64Register.x1
+	let counterBlock = Arm64Register.x2
+	let buffer = Arm64Register.x3
+	let rounds = Arm64Register.x4
+	let counter = Arm64Register.x5
+	let walker = Arm64Register.x6
+	let scratch = Arm64Register.x7
+
+	arm64EmitMovRuntimeImm(asm, dest: rounds, value: AesCtrRoundsMask)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: rounds, lhs: control, rhs: rounds)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(control), rn: arm64RuntimeReg(control), sh: AesCtrControlOffsetShift)
+	arm64EmitLoadWord32At(asm, dest: counter, base: counterBlock, byteOffset: (AesBlockBytes - AesCtrCounterWordBytes) as MachineWord)
+	emitArm64Rr(asm.code, opcode: Arm64OpRevW, rd: arm64RuntimeReg(counter), rn: arm64RuntimeReg(counter))
+	arm64EmitAddRuntimeReg(asm, dest: counter, lhs: counter, rhs: control)
+
+	for index in 0 upto blockCount 'eachCounter'
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: index as MachineWord, base: counterBlock, byteOffset: 0)
+		arm64EmitAddRuntimeImm(asm, dest: scratch, base: counter, imm: index as Imm32)
+		emitArm64Rr(asm.code, opcode: Arm64OpRevW, rd: arm64RuntimeReg(scratch), rn: arm64RuntimeReg(scratch))
+		emitArm64Rr(asm.code, opcode: Arm64OpInsWordFromGpr, rd: index as MachineWord, rn: arm64RuntimeReg(scratch))
+	end 'eachCounter'
+
+	arm64EmitMovRuntimeReg(asm, dest: walker, src: keys)
+	emitArm64AesRounds(asm, round: Arm64OpAese, mix: Arm64OpAesmc, states: blockCount, key: Arm64AesCtrKeyVector, keys: walker, rounds: rounds)
+
+	for index in 0 upto blockCount 'eachBlock'
+		let byteOffset = (index * AesBlockBytes) as MachineWord
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesCtrDataVector, base: buffer, byteOffset: byteOffset)
+		emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: Arm64AesCtrDataVector, rn: Arm64AesCtrDataVector, rm: index as MachineWord)
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: Arm64AesCtrDataVector, base: buffer, byteOffset: byteOffset)
+	end 'eachBlock'
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitRet(asm.code)
+
+	return asm.finishChunk(cryptoChunkName(aesCtrRoutine(blocks)))
+end 'buildArm64AesCtrChunk'
 
 // SubWord of x4 as `aese` against a zero key on the word repeated four times: ShiftRows leaves four
 // identical columns unchanged, so only SubBytes acts.
