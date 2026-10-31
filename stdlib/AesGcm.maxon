@@ -314,18 +314,24 @@ public type AesGcm implements Aead
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 		try aeadRequirePlaintextLength(plaintext, limit: aesGcmMaxPlaintextBytes)
 
-		let readNonce = aeadDetached(nonce, output: output)
-		let readPlaintext = aeadDetached(plaintext, output: output)
-		let readAdditionalData = aeadDetached(additionalData, output: output)
+		if aeadSharesOutput(output, nonce: nonce, plaintext: plaintext, additionalData: additionalData) 'shared'
+			sealDetachedInto(output, at: at, nonce: aeadDetached(nonce, output: output), plaintext: aeadDetached(plaintext, output: output), additionalData: aeadDetached(additionalData, output: output))
 
+			return
+		end 'shared'
+
+		sealDetachedInto(output, at: at, nonce: nonce, plaintext: plaintext, additionalData: additionalData)
+	end 'sealInto'
+
+	function sealDetachedInto(output ByteArray, at ElementIndex, nonce ByteArray, plaintext ByteArray, additionalData ByteArray)
 		match backing 'backing'
-			bitsliced(software) then sealIntoSoftware(output, at: at, software: software, nonce: readNonce, plaintext: readPlaintext, additionalData: readAdditionalData)
+			bitsliced(software) then sealIntoSoftware(output, at: at, software: software, nonce: nonce, plaintext: plaintext, additionalData: additionalData)
 
 			#if arch(x64) or arch(arm64)
-				hardware(keys) then aesGcmHardwareSealInto(output, at: at, keys: keys, nonce: readNonce, plaintext: readPlaintext, additionalData: readAdditionalData)
+				hardware(keys) then aesGcmHardwareSealInto(output, at: at, keys: keys, nonce: nonce, plaintext: plaintext, additionalData: additionalData)
 			#endif
 		end 'backing'
-	end 'sealInto'
+	end 'sealDetachedInto'
 
 	public function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
