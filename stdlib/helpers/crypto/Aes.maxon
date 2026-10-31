@@ -23,7 +23,7 @@ public type Aes
 	let software as AesBitsliced
 
 	// Empty when the software cipher is in use.
-	let schedule as ByteArray
+	export let schedule as ByteArray
 
 	/// The cipher for a 16-, 24- or 32-byte `key` (AES-128, AES-192 or AES-256).
 	public static function create(key ByteArray) returns Aes throws AesError
@@ -37,6 +37,12 @@ public type Aes
 
 		return Self{software: software, schedule: ByteArray.create()}
 	end 'create'
+
+	export static function createBitsliced(key ByteArray) returns Aes throws AesError
+		let software = try AesBitsliced.create(key)
+
+		return Self{software: software, schedule: ByteArray.create()}
+	end 'createBitsliced'
 
 	/// The encryption of one 16-byte block.
 	public function encryptBlock(block ByteArray) returns ByteArray throws AesError

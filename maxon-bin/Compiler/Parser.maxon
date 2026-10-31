@@ -84887,13 +84887,13 @@ export type Parser
 		self.noteContainerWrite(func, written: receiver, blame: immutableReceiverName, owner: receiverOwner, storage: receiverStorage, placeStart: place.0, placeEnd: place.1, callTok: methodTok, callIndex: methodIndex)
 	end 'noteReceiverWrite'
 
-	function noteFirstArgumentWrite(func IrFunction, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, calleeTok Token, calleeIndex ElementIndex)
-		let written = try args.get(0) otherwise panic("noteFirstArgumentWrite: a write names the argument it writes, and the call has none")
-		let placeStart = try argAnchors.get(0) otherwise panic("noteFirstArgumentWrite: an argument pushed into `args` pushes its anchor with it")
-		let placeEnd = (try argAnchors.get(1) otherwise self.pos) - 1
+	function noteWrittenArgument(func IrFunction, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, calleeTok Token, calleeIndex ElementIndex, position ParamCount = 0)
+		let written = try args.get(position) otherwise panic("noteWrittenArgument: a write names the argument it writes, and the call has none at {position}")
+		let placeStart = try argAnchors.get(position) otherwise panic("noteWrittenArgument: an argument pushed into `args` pushes its anchor with it")
+		let placeEnd = (try argAnchors.get(position + 1) otherwise self.pos) - 1
 
-		self.noteArgumentWrite(func, written: written, blame: immutableArgNameAt(argImmutableNames, index: 0), placeStart: placeStart, placeEnd: placeEnd, calleeTok: calleeTok, calleeIndex: calleeIndex)
-	end 'noteFirstArgumentWrite'
+		self.noteArgumentWrite(func, written: written, blame: immutableArgNameAt(argImmutableNames, index: position), placeStart: placeStart, placeEnd: placeEnd, calleeTok: calleeTok, calleeIndex: calleeIndex)
+	end 'noteWrittenArgument'
 
 	function noteArgumentWrite(func IrFunction, written ValueId, blame WriteBlame, placeStart ElementIndex, placeEnd ElementIndex, calleeTok Token, calleeIndex ElementIndex)
 		let subjectName = self.storageSubjectNameAt(placeStart)
@@ -93462,7 +93462,7 @@ export type Parser
 				let buffer = try args.get(0) otherwise panic("fillRandom: args.count() == FillRandomArity just checked but get(0) failed")
 				try self.requireManagedMemoryValue(buffer, paramName: ManagedFileManagedParamName, anchor: anchor)
 				try self.requireRawByteFillFitsItsElement(self.valueInstanceId(buffer), methodTok: anchor)
-				self.noteFirstArgumentWrite(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: anchor, calleeIndex: calleeIndex)
+				self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: anchor, calleeIndex: calleeIndex)
 				return self.emitLibraryAliasedRuntimeCall(RandomFillName, args: singletonArgs(buffer), alias: FullRangeIntAliasName, range: SourceRange.ofToken(anchor))
 			end 'fillRandom'
 
@@ -94583,7 +94583,11 @@ export type Parser
 			end 'aBuffer'
 		end 'eachOperand'
 
-		self.noteFirstArgumentWrite(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex)
+		for index in 0 upto args.count() 'eachWritten'
+			if aesCipherOperandIsWritten(intrinsic, index: index as ParamCount) 'aWrite'
+				self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex, position: index as ParamCount)
+			end 'aWrite'
+		end 'eachWritten'
 
 		return self.emitRuntimeCall(aesCipherRuntimeName(intrinsic), args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitAesCipherIntrinsic'
@@ -94607,7 +94611,7 @@ export type Parser
 			put then break
 		end 'access'
 
-		self.noteFirstArgumentWrite(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex)
+		self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex)
 		return self.emitRuntimeCall(entry, args: pairArgs(buffer, second: integer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitOrderedWordAccess'
 

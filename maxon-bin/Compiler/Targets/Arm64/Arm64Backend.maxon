@@ -551,7 +551,38 @@ export let Arm64OpAesmc = 0x4E286800
 export let Arm64OpAesimc = 0x4E287800
 export let Arm64OpLdrQ = 0x3DC00000
 export let Arm64OpStrQ = 0x3D800000
+export let Arm64OpPmull = 0x0EE0E000
+export let Arm64OpPmull2 = 0x4EE0E000
+export let Arm64OpRev64Vec16b = 0x4E200800
+export let Arm64OpRev32Vec16b = 0x6E200800
+export let Arm64OpAddVec4s = 0x4EA08400
+export let Arm64OpAndVec16b = 0x4E201C00
+export let Arm64OpOrrVec16b = 0x4EA01C00
+let Arm64OpInsDwordFromGpr = 0x4E081C00
+let Arm64OpUmovDword = 0x4E083C00
+let Arm64OpUshrVec2d = 0x6F000400
+let Arm64OpShlVec2d = 0x4F005400
+let Arm64DwordLaneShift = 20
+let Arm64VectorShiftFieldShift = 16
+let Arm64VectorShiftDwordRightBase = 128
+let Arm64VectorShiftDwordLeftBase = 64
 export let Arm64ExtImmShift = 11
+
+export function arm64InsDwordOpcode(lane MachineWord) returns MachineWord
+	return Arm64OpInsDwordFromGpr or (lane shl Arm64DwordLaneShift)
+end 'arm64InsDwordOpcode'
+
+export function arm64UmovDwordOpcode(lane MachineWord) returns MachineWord
+	return Arm64OpUmovDword or (lane shl Arm64DwordLaneShift)
+end 'arm64UmovDwordOpcode'
+
+export function arm64UshrDwordsOpcode(shift MachineWord) returns MachineWord
+	return Arm64OpUshrVec2d or ((Arm64VectorShiftDwordRightBase - shift) shl Arm64VectorShiftFieldShift)
+end 'arm64UshrDwordsOpcode'
+
+export function arm64ShlDwordsOpcode(shift MachineWord) returns MachineWord
+	return Arm64OpShlVec2d or ((Arm64VectorShiftDwordLeftBase + shift) shl Arm64VectorShiftFieldShift)
+end 'arm64ShlDwordsOpcode'
 
 // The largest immediate `arm64EmitAddSubImmWide`'s hi/lo split encodes — 24 bits, as two imm12 fields,
 // which is exactly the two fields above OR'd together. It bounds BOTH of that helper's callers, and they
@@ -3272,6 +3303,12 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 		for exponent in 0 upto AesCtrGroupCount 'eachCtrGroup'
 			chunks.push(buildArm64AesCtrChunk(aesCtrGroupBlocks(exponent)))
 		end 'eachCtrGroup'
+
+		chunks.push(buildArm64AesGcmInitChunk())
+		chunks.push(buildArm64AesGcmHashChunk())
+		chunks.push(buildArm64AesGcmEncryptChunk())
+		chunks.push(buildArm64AesGcmDecryptChunk())
+		chunks.push(buildArm64AesGcmFinishChunk())
 	end 'hardwareAes'
 
 	// The HOST SURFACE — the sequences behind the `os*` ops. EXACTLY ONE lane's chunks are appended, which

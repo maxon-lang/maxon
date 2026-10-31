@@ -332,7 +332,7 @@ let OpcodeMovqRmXmm = 0x7E
 //
 // ⚠ REX.W is required for the mirror of `0F 7E`'s reason: without it `66 0F 6E` is `movd xmm, r/m32`,
 // which would move 32 bits and leave the resulting double's exponent and sign zeroed.
-let OpcodeMovqXmmRm = 0x6E
+export let OpcodeMovqXmmRm = 0x6E
 
 // --- The GROUP-14 SSE shift-by-immediate pair: f64 ABSOLUTE VALUE (`specs/abs.md`) and NEGATE ---
 //
@@ -348,7 +348,12 @@ let OpcodeMovqXmmRm = 0x6E
 // this way rather than with an `andpd` + `.rdata` mask is recorded in full on `TargetOp.absF64RegReg`.
 //
 // ⚠ SSE2, unlike the SSE4.1 `roundsd` below — this pair does not move the compiler's x64 baseline.
-let OpcodeGrp14ShiftQImm8 = 0x73
+export let OpcodeGrp14ShiftQImm8 = 0x73
+export let OpcodeGrp13ShiftDImm8 = 0x72
+export let Grp13ExtPsrld = 2
+export let Grp13ExtPsrad = 4
+export let Grp13ExtPslld = 6
+export let Grp14ExtPsrldq = 3
 let Grp14ExtPsrlq = 2
 let Grp14ExtPsllq = 6
 export let Grp14ExtPslldq = 7
@@ -859,9 +864,12 @@ export let OpcodeMovaps = 0x28
 export let OpcodePxor = 0xEF
 export let OpcodePshufd = 0x70
 export let OpcodeShufps = 0xC6
+export let OpcodePand = 0xDB
 let OpcodeThreeByteEscape38 = 0x38
 let OpcodeAeskeygenassist = 0xDF
-let OpcodePinsrd = 0x22
+let OpcodePinsr = 0x22
+let OpcodePclmulqdq = 0x44
+let OpcodePshufb = 0x00
 
 export enum AesNiInstruction
 	aesimc
@@ -881,9 +889,9 @@ function aesNiOpcode(instruction AesNiInstruction) returns MachineWord
 	end 'instruction'
 end 'aesNiOpcode'
 
-function encodeSseMap3ARegRegImm8(code ByteArray, opcode MachineWord, dest X64Register, src X64Register, imm MachineWord)
+function encodeSseMap3ARegRegImm8(code ByteArray, opcode MachineWord, dest X64Register, src X64Register, imm MachineWord, wide bool = false)
 	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
-	emitRex(code, wide: false, regField: dest, rmField: src)
+	emitRex(code, wide: wide, regField: dest, rmField: src)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeThreeByteEscape3A)
 	code.push(opcode)
@@ -891,22 +899,38 @@ function encodeSseMap3ARegRegImm8(code ByteArray, opcode MachineWord, dest X64Re
 	code.push(imm)
 end 'encodeSseMap3ARegRegImm8'
 
-export function encodeAesNiRegReg(code ByteArray, instruction AesNiInstruction, dest X64Register, src X64Register)
+function encodeSseMap38RegReg(code ByteArray, opcode MachineWord, dest X64Register, src X64Register)
 	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
 	emitRex(code, wide: false, regField: dest, rmField: src)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeThreeByteEscape38)
-	code.push(aesNiOpcode(instruction))
+	code.push(opcode)
 	emitModRmRegReg(code, regField: dest, rmField: src)
+end 'encodeSseMap38RegReg'
+
+export function encodeAesNiRegReg(code ByteArray, instruction AesNiInstruction, dest X64Register, src X64Register)
+	encodeSseMap38RegReg(code, opcode: aesNiOpcode(instruction), dest: dest, src: src)
 end 'encodeAesNiRegReg'
+
+export function encodePshufb(code ByteArray, dest X64Register, src X64Register)
+	encodeSseMap38RegReg(code, opcode: OpcodePshufb, dest: dest, src: src)
+end 'encodePshufb'
 
 export function encodeAeskeygenassist(code ByteArray, dest X64Register, src X64Register, roundConstant MachineWord)
 	encodeSseMap3ARegRegImm8(code, opcode: OpcodeAeskeygenassist, dest: dest, src: src, imm: roundConstant)
 end 'encodeAeskeygenassist'
 
 export function encodePinsrd(code ByteArray, dest X64Register, src X64Register, lane MachineWord)
-	encodeSseMap3ARegRegImm8(code, opcode: OpcodePinsrd, dest: dest, src: src, imm: lane)
+	encodeSseMap3ARegRegImm8(code, opcode: OpcodePinsr, dest: dest, src: src, imm: lane)
 end 'encodePinsrd'
+
+export function encodePinsrq(code ByteArray, dest X64Register, src X64Register, lane MachineWord)
+	encodeSseMap3ARegRegImm8(code, opcode: OpcodePinsr, dest: dest, src: src, imm: lane, wide: true)
+end 'encodePinsrq'
+
+export function encodePclmulqdq(code ByteArray, dest X64Register, src X64Register, selector MachineWord)
+	encodeSseMap3ARegRegImm8(code, opcode: OpcodePclmulqdq, dest: dest, src: src, imm: selector)
+end 'encodePclmulqdq'
 
 export function encodeSseRegRegImm8(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, imm MachineWord)
 	encodeSseRegReg(code, prefix: prefix, opcode: opcode, dest: dest, src: src, wide: false)
@@ -921,8 +945,8 @@ end 'encodeSseRegRegImm8'
 // Target ops would define one vreg twice, which the SSA the allocator runs on forbids. See
 // `TargetOp.absF64RegReg`.
 function encodeAbsF64Reg(code ByteArray, reg X64Register)
-	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: reg, count: SignBitShiftCount)
-	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsrlq, reg: reg, count: SignBitShiftCount)
+	encodeSseShiftRegImm8(code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPsllq, reg: reg, count: SignBitShiftCount)
+	encodeSseShiftRegImm8(code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPsrlq, reg: reg, count: SignBitShiftCount)
 end 'encodeAbsF64Reg'
 
 // The ONE register `encodeNegF64Reg` builds its sign mask in. xmm5: caller-saved under BOTH ABIs the compiler
@@ -947,7 +971,7 @@ end 'x64NegF64ScratchMask'
 function encodeNegF64Reg(code ByteArray, reg X64Register)
 	assertOperandOffEncoderScratch(reg, scratch: x64NegF64ScratchMask(), opName: "negF64RegReg")
 	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePcmpeqd, dest: NegF64MaskReg, src: NegF64MaskReg, wide: false)
-	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: NegF64MaskReg, count: SignBitPosition)
+	encodeSseShiftRegImm8(code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPsllq, reg: NegF64MaskReg, count: SignBitPosition)
 	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeXorpd, dest: reg, src: NegF64MaskReg, wide: false)
 end 'encodeNegF64Reg'
 
@@ -994,7 +1018,8 @@ function encodeCvtu64sdRegReg(code ByteArray, dest X64Register, src X64Register)
 	patchLocalForwardBranch(code, dispOffset: doneFromSigned, what: PatchSite.x64UnsignedToFloatRel32)
 end 'encodeCvtu64sdRegReg'
 
-// One group-14 SSE shift-by-immediate (`66 0F 73 /ext ib`) — the opcode-extension form of an SSE
+// One SSE shift-by-immediate (group 13, `66 0F 72 /ext ib`, on dwords; group 14, `66 0F 73 /ext ib`, on
+// qwords and whole-register bytes) — the opcode-extension form of an SSE
 // instruction, which is why it can ride neither `encodeSseRegReg` (whose reg field is a REGISTER) nor
 // `encodeModRmExtDirect` (which forces REX.W and emits no mandatory prefix, no escape and no immediate).
 //
@@ -1004,14 +1029,14 @@ end 'encodeCvtu64sdRegReg'
 // `encodeModRmExtDirect`'s reason — the `/ext` reg field is an opcode extension 0..7 and never needs
 // REX.R — while REX.B still extends the r/m register. ⚠ NO REX.W: the mandatory 66 has already chosen
 // the form, and REX.W would only lengthen the encoding and stop the bytes matching an assembler's.
-export function encodeSseShiftQRegImm8(code ByteArray, ext MachineWord, reg X64Register, count ShiftCount)
+export function encodeSseShiftRegImm8(code ByteArray, opcode MachineWord, ext MachineWord, reg X64Register, count ShiftCount)
 	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
 	code.push(TwoByteOpcodeEscape)
-	code.push(OpcodeGrp14ShiftQImm8)
+	code.push(opcode)
 	emitModRmExt(code, ext: ext, rmField: reg)
 	code.push(count)
-end 'encodeSseShiftQRegImm8'
+end 'encodeSseShiftRegImm8'
 
 // `roundsd`'s imm8 for a rounding mode — the ONE place the target-neutral `FloatRoundMode` becomes
 // x86 bits, which is what lets the isel state the rounding once for both native targets.

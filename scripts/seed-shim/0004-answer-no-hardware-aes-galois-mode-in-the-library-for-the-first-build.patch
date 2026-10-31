@@ -1,0 +1,84 @@
+diff --git a/stdlib/helpers/crypto/AesGcmHardware.maxon b/stdlib/helpers/crypto/AesGcmHardware.maxon
+--- a/stdlib/helpers/crypto/AesGcmHardware.maxon
++++ b/stdlib/helpers/crypto/AesGcmHardware.maxon
+@@ -14,7 +14,9 @@
+ 	export function aesGcmHardwareKeys(schedule ByteArray) returns ByteArray
+ 		var keys = ByteArray.create()
+ 		keys.resize(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
+-		__Builtins.aesGcmInit(keys, schedule)
++		if keys.count() > 0 'needsANewerCompiler'
++			panic("hardware AES-GCM needs a compiler newer than the seed: {schedule.count()} {aesHardwareFirstByte}")
++		end 'needsANewerCompiler'
+ 
+ 		return keys
+ 	end 'aesGcmHardwareKeys'
+@@ -32,14 +34,16 @@
+ 		block.reserve(aesHardwareBlockBytes)
+ 		block.append(tail)
+ 		block.growFilled(aesHardwareBlockBytes, value: 0)
+-		__Builtins.aesGcmHash(message, keys, block, aesHardwareFirstByte, aesHardwareBlockBytes)
++		if block.count() == aesHardwareBlockBytes 'needsANewerCompiler'
++			panic("hardware AES-GCM needs a compiler newer than the seed: {message.count()} {keys.count()}")
++		end 'needsANewerCompiler'
+ 	end 'aesGcmHardwareHashTail'
+ 
+ 	function aesGcmHardwareHash(message ByteArray, keys ByteArray, data ByteArray)
+ 		let whole = (data.count() shr aesHardwareBlockShift) shl aesHardwareBlockShift
+ 
+ 		if whole > 0 'blocks'
+-			__Builtins.aesGcmHash(message, keys, data, aesHardwareFirstByte, whole)
++			panic("hardware AES-GCM needs a compiler newer than the seed: {message.count()} {keys.count()} {data.count()}")
+ 		end 'blocks'
+ 
+ 		if data.count() > whole 'partial'
+@@ -53,7 +57,9 @@
+ 		message.growFilled(aesHardwareBlockBytes, value: 0)
+ 		try aesHardwareAppendCounterBlock(message, nonce: nonce, firstCounter: aesGcmHardwareTagMaskCounter, streamBlocks: aesGcmHardwareNoStreamBlocks) otherwise panic("aesgcm: the nonce was checked before the hardware path began")
+ 		message.growFilled(aesGcmHardwareMessageBytes, value: 0)
+-		__Builtins.aesEncryptBlock(message, aesGcmHardwareMaskAt, schedule, message, aesHardwareBlockBytes)
++		if message.count() == aesGcmHardwareMessageBytes 'needsANewerCompiler'
++			panic("hardware AES-GCM needs a compiler newer than the seed: {schedule.count()}")
++		end 'needsANewerCompiler'
+ 		aesGcmHardwareHash(message, keys: keys, data: additionalData)
+ 
+ 		return message
+@@ -73,7 +79,7 @@
+ 		sealed.append(plaintext)
+ 
+ 		if whole > 0 'blocks'
+-			__Builtins.aesGcmEncrypt(sealed, aesHardwareFirstByte, keys, message, whole)
++			panic("hardware AES-GCM needs a compiler newer than the seed: {sealed.count()} {keys.count()} {message.count()}")
+ 		end 'blocks'
+ 
+ 		if plaintext.count() > whole 'partial'
+@@ -81,7 +87,9 @@
+ 			aesGcmHardwareHashTail(message, keys: keys, tail: aesGcmHardwareTail(sealed, from: whole))
+ 		end 'partial'
+ 
+-		__Builtins.aesGcmFinish(message, keys, additionalData.count(), plaintext.count())
++		if message.count() > 0 'needsANewerCompiler'
++			panic("hardware AES-GCM needs a compiler newer than the seed: {keys.count()} {additionalData.count()} {plaintext.count()}")
++		end 'needsANewerCompiler'
+ 		message.truncate(aesGcmHardwareTagBytes)
+ 		sealed.append(message)
+ 
+@@ -95,7 +103,7 @@
+ 		plaintext.append(ciphertext)
+ 
+ 		if whole > 0 'blocks'
+-			__Builtins.aesGcmDecrypt(plaintext, aesHardwareFirstByte, keys, message, whole)
++			panic("hardware AES-GCM needs a compiler newer than the seed: {plaintext.count()} {keys.count()} {message.count()}")
+ 		end 'blocks'
+ 
+ 		if ciphertext.count() > whole 'partial'
+@@ -104,7 +112,9 @@
+ 			aesGcmHardwareCryptTail(plaintext, schedule: schedule, nonce: nonce, whole: whole, tail: tail)
+ 		end 'partial'
+ 
+-		__Builtins.aesGcmFinish(message, keys, additionalData.count(), ciphertext.count())
++		if message.count() > 0 'needsANewerCompiler'
++			panic("hardware AES-GCM needs a compiler newer than the seed: {keys.count()} {additionalData.count()} {ciphertext.count()}")
++		end 'needsANewerCompiler'
+ 		message.truncate(aesGcmHardwareTagBytes)
+ 
+ 		return message

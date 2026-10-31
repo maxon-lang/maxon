@@ -182,30 +182,68 @@ function ghashAppendTag(output ByteArray, high GhashWord, low GhashWord)
 	__Builtins.appendBigEndian(output, low as OrderedWord, aesGcmWordBytes)
 end 'ghashAppendTag'
 
+function aesGcmCipher(key ByteArray, bitsliced bool) returns Aes throws AesError
+	if bitsliced 'software'
+		return try Aes.createBitsliced(key)
+	end 'software'
+
+	return try Aes.create(key)
+end 'aesGcmCipher'
+
+function aesGcmKeyFailure(failure AesError) returns AeadError
+	if failure == AesError.invalidKeyLength 'length'
+		return AeadError.invalidKeyLength
+	end 'length'
+
+	panic("AesGcm: Aes.create reported a block length")
+end 'aesGcmKeyFailure'
+
 /// AES-GCM under one 16-, 24- or 32-byte key.
 public type AesGcm implements Aead
 	var cipher as Aes
 	var hashKey as GhashKey
 
+	// Empty when the software backing is in use.
+	let hardwareKeys as ByteArray
+
 	/// The cipher for `key`, or `invalidKeyLength`.
 	public static function create(key ByteArray) returns AesGcm throws AeadError
-		let cipher = try Aes.create(key) otherwise (failure) 'refused'
-			match failure 'reason'
-				invalidKeyLength then throw AeadError.invalidKeyLength
-				invalidBlockLength then panic("AesGcm: Aes.create reported a block length")
-			end 'reason'
+		return try Self.build(key, bitsliced: false)
+	end 'create'
+
+	// `bitsliced: true` forces the software backing, so a spec can compare the two on one CPU.
+	module static function build(key ByteArray, bitsliced bool) returns AesGcm throws AeadError
+		let cipher = try aesGcmCipher(key, bitsliced: bitsliced) otherwise (failure) 'refused'
+			throw aesGcmKeyFailure(failure)
 		end 'refused'
 
 		var zeros = ByteArray.create()
 		zeros.resize(aesGcmBlockBytes)
 		let hashSubkey = try cipher.encryptBlock(zeros) otherwise panic("AesGcm: the hash subkey block was refused")
+		let hashKey = GhashKey.create(hashSubkey)
 
-		return Self{cipher: cipher, hashKey: GhashKey.create(hashSubkey)}
-	end 'create'
+		#if arch(x64) or arch(arm64)
+			if not cipher.schedule.isEmpty() 'hardware'
+				return Self{cipher: cipher, hashKey: hashKey, hardwareKeys: aesGcmHardwareKeys(cipher.schedule)}
+			end 'hardware'
+		#endif
+
+		return Self{cipher: cipher, hashKey: hashKey, hardwareKeys: ByteArray.create()}
+	end 'build'
+
+	module function usesHardware() returns bool
+		return not hardwareKeys.isEmpty()
+	end 'usesHardware'
 
 	public function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 		try aeadRequirePlaintextLength(plaintext, limit: aesGcmMaxPlaintextBytes)
+
+		#if arch(x64) or arch(arm64)
+			if not hardwareKeys.isEmpty() 'hardware'
+				return aesGcmHardwareSeal(cipher.schedule, keys: hardwareKeys, nonce: nonce, plaintext: plaintext, additionalData: additionalData)
+			end 'hardware'
+		#endif
 
 		var sealed = ByteArray.create()
 		sealed.reserve(plaintext.count() + aesGcmTagBytes)
@@ -223,6 +261,17 @@ public type AesGcm implements Aead
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 
 		let parts = try aeadSplitSealed(sealed, tagBytes: aesGcmTagBytes, plaintextLimit: aesGcmMaxPlaintextBytes)
+
+		#if arch(x64) or arch(arm64)
+			if not hardwareKeys.isEmpty() 'hardware'
+				var opened = ByteArray.create()
+				let expectedTag = aesGcmHardwareOpen(cipher.schedule, keys: hardwareKeys, nonce: nonce, ciphertext: parts.ciphertext, additionalData: additionalData, plaintext: opened)
+				try aeadRequireTag(expectedTag, received: parts.tag)
+
+				return opened
+			end 'hardware'
+		#endif
+
 		var plaintext = ByteArray.create()
 		plaintext.reserve(parts.ciphertext.count())
 		let (firstLane, secondLane) = applyBehindMask(nonce, data: parts.ciphertext, output: plaintext)
