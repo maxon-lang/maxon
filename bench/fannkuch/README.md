@@ -147,3 +147,5 @@ EC22 rel8 (size only), EC21/EC23 (measured empty by `docs/emitted-code-roadmap.m
   with `--ref` and run both arms in one session.
 - `scripts/sample_profile.py` is the other profiler (per-sample, call edges); `maxon profile run` is
   what the harness uses.
+- `rsi`/`rdi` are caller-saved in Maxon's ABI and x64 has five callee-saved GPRs: check the ABI before ranking
+  a register candidate. Per-instruction samples on slot moves just after a call return are skid.

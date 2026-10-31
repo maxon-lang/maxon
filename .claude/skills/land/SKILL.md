@@ -183,10 +183,16 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
    checked and ask for any other route. Ask for `file:line` behind every load-bearing claim and a closing
    list of what the agent asserted without reading. "Present but I could not reach it" bounds the agent's
    search, not the code: assign that shape to the next agent explicitly.
+   A measurement is only as live as the tree it was taken on: one taken under a reverted mechanism, or
+   before a rebase, is re-taken before it is quoted. Give a stop condition a line of its own, and prescribe
+   the case that would FAIL if the premise is false: a sentence nobody is invited to doubt gets built.
 5. **Its STOP RULE**: stop when your filter is green; the §8 gates are the coordinator's, the full suite
    is CI's. **A defect you
    find that is NOT RELATED to this change (the test is §10's) you do not fix** — you name it in your
    report: what is wrong, `file:line`, how you saw it, and a program that reproduces it.
+   An "iterate until X" goal carries a build budget: at most ten builds, one at a time, then report. A
+   self-compile is minutes of every core and gigabytes of memory, and an open-ended loop locks up the
+   workstation it runs on.
 6. **The gate table above**, in one line: which runs are yours, which are not.
 7. **"No manual tests"** — no sabotage, no hand-run probe or scratch program to confirm anything. A
    check worth running goes into the set as a case; anything else is not run (the box below).
@@ -217,6 +223,11 @@ stop out.
 > - **§1's red IS the sabotage every case needs**: it watched the case fail before the fix existed.
 > - **Diagnosis is not verification.** Running a reproduction to find a cause is part of §2; the
 >   moment it shows a wrong answer, it becomes a case in the set — never evidence in a report.
+> - **A diagnosis reading counts only when every row ran, compiled the program you think, and differs from
+>   its control for the reason you think.** A control that fails the same way as the experiment is a broken
+>   harness and proves nothing in either direction; a control that never ran proves less. `rc=127` or a
+>   suspiciously uniform column means the row is fabricated. Two binaries agreeing perfectly is suspect until
+>   both are shown current.
 
 ### Verify the claims, do not re-derive the work
 
@@ -294,6 +305,19 @@ built compiler or the tree's `stdlib/`, so it is green today and turns red only 
 It is not in this set; it is acceptance, read in §8 after §6 has written the documentation.
 Every other user-visible change still owes its `docs/` source an edit (§6), which the gates cannot see.
 
+**A deletion has no red.** Removing a mechanism nothing uses leaves no case that can fail, and a manufactured
+one is worse than saying so. Its acceptance is that nothing was live: code bytes unchanged at every
+`run_scale_test` rung, and `spec-test ir-specs` moves no pin. A drop in allocations is expected, since the
+mechanism's own cost goes with it. Before deleting, grep for what still reads the thing, and ask which
+guarantee goes with it: a lookup that threw on a missing entry can become a silent zero and a panic three
+files away.
+
+**A pure optimization changes no runtime answer, so no behaviour case can go red.** Its evidence is an
+`ir-specs/` pin: mint it showing the unoptimized code, read that as the recorded symptom, and let the diff of
+the re-mint carry the change. ⚠ **An optimization can delete a gate's subject:** a case whose program folds
+away stops gating what it gated. Move the values across a loop-header phi, which the fold reads as unknown, so
+the program survives.
+
 **Then SEE IT RED.** A spec is data — no rebuild needed to run one.
 
 ```
@@ -306,6 +330,10 @@ run_spec_test filter=["<spec-a>/", "<spec-b>/", …]
   verdict.)
 - **A case that is already GREEN is not in the set.** Either it does not test your change, or the change
   is already done. Find out which before writing a line.
+- ⚠ **A filter chosen by feature name cannot see a spec not named for the feature.** A change that refuses
+  programs, or changes what a construct does, has every committed program as its blast radius, including
+  scaffolding that used the construct incidentally. Derive the set by grepping `specs/` and `ir-specs/` for
+  the construct itself. The same goes for any derived list driving an edit: its scope is a premise.
 - ⚠ **Select the whole set in ONE run.** Each pattern is a case-sensitive substring of the
   `<spec>/<case>` label, and repeated `--filter=` flags (MCP: a `filter` array) are a union — one pattern
   per spec file, never one run per file, which pays the startup per file and runs each on one worker. A
@@ -342,8 +370,21 @@ fine on **disjoint** files, sequentially when they overlap: never two agents in 
 overlapping files. That is a scheduling rule about LABOUR — you integrate as their work arrives, and the
 deliverable stays one chunk and one commit.)*
 
+**Split a large change into several small implementer dispatches**, one mechanism each with its own short
+brief, a few builds at most, each leaving a tree that builds: the implementer degrades as its context fills.
+Defer an enforcement that breaks the compiler's own sources to the piece that migrates them, and hand each
+piece the previous report's summary rather than the history. One `/land` and one commit still; this splits
+labour.
+
 **What the agents must be told, beyond the standard nine:**
 
+- **When a case fails for want of a distinction, grep for a comment saying that distinction does not
+  matter.** Read it as a hypothesis about the shapes its author enumerated, and ask which shape it did not
+  consider. A comment that justifies a discard or a gate is load-bearing, and the code does what it says.
+- ⛔ **An agent writing git in a throwaway clone is one failed `cd` from the shared checkout.** Its script runs
+  `set -euo pipefail` and `cd <clone> || exit 1`, and asserts before every writing git command that
+  `git rev-parse --show-toplevel` is not the main checkout. `;` after a `cd` runs the rest in the wrong tree.
+  The main checkout takes read-only git only. A repair the permission system denied goes to the user.
 - **Invoke the `maxon-coder` skill before writing any Maxon**, and hand back only code its compile
   loop has passed.
 - ⛔ **WRITE NO COMMENTS** — not a `//`, not a `///`, not the doc block above a registry case. The code
@@ -530,6 +571,11 @@ during changes; gates run before the rebase measured a tree that no longer exist
 - **A conflict is resolved BY HAND, hunk by hunk.** ⛔ Never `git checkout --ours/--theirs` a doc file to
   clear one: a whole-file resolution in a doc has silently reverted somebody else's landed section, and
   it looks clean in `git diff`.
+  Resolve a conflict as the UNION of both sides, then run the OTHER side's cases as well as your own: "take
+  my side" on a struct literal can silently revert the other change's fix while your own acceptance stays
+  green. When both sides correct one rotting fact (a count, a caller list), derive it from the merged file.
+- **A clean rebase is not a coherent one.** When both sides changed a file, read the merged result for
+  contradictions: git can join a new upstream rule to a new case that breaks it with no conflict marker.
 - **A stash must never outlive this step.** If the pop conflicts, resolve it now — work sitting in
   `git stash list` looks exactly like work that vanished.
 
@@ -545,11 +591,19 @@ and the codecs check, and CI runs the rest. **Do not wait for CI.**
 | **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the spec rows — it builds twice |
 | **Filtered `run_spec_test`** — §1's minimal set plus every spec file the change touched, in ONE run | **`failed: 0`**, and no exit **101**. The gate is zero failures in every case the filter selects, never a total |
 | **Filtered tree corpora and IR specs** — `./maxon-bin/.maxon/maxon test <tests/dir> --filter=…` and `spec-test ir-specs --filter=<spec>/` for each corpus case or `ir-specs/` spec the change touched | each `0 fail` / `failed: 0`. A pin the change moved is re-minted with `--update-required --filter=<spec>/` and staged with the change (`git add -A ir-specs/ specs/`); a change to one target's emitted code also filters `ir-specs` on that target's lane (`--target=<lane>`), which compiles each pin without running it, on any host. See the box below |
-| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds or removes an `export` or a `module`, or adds a file declaring types.** Exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
+| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds or removes an `export` or a `module`, adds a file declaring types, deletes the last cross-file caller of an `export` (de-duplicating is the usual way to orphan one), or adds or tightens a diagnostic.** The slot compiler that `run build` wrote was compiled by its predecessor, so this row is the first time the change's own rules meet the compiler's own source. Exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
 | **Seed shims and the seed chain** — apply ALL `scripts/seed-shim/*.patch` cumulatively, in sorted order, on a throwaway clone at a short path (the diff applied), then run `scripts/build-from-seed.sh` there; exit 0 | **Where the diff touches a file a patch edits, or the compiler starts using a construct, intrinsic or runtime behaviour the change itself made legal.** Judge the stack, never one patch: a per-patch `git apply --check` against the clean tree falsely fails the generated patch wherever an earlier patch touched the same file. Run it after §6's documenter (its comment edits can break a patch's context lines) and before the push. CI builds from the pinned seed. Regenerate a patch that no longer applies, then re-run the seed build |
 | **The codecs** — `python3 scripts/library-cache/generate-codecs.py --check` | exit 0: the library-cache codecs inside the compiler's sources match what the generator emits. On exit 1, run it without `--check` and stage what it rewrites |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` — which also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **§1's count check** on the final tree | markers == ran, no name spelled twice |
+
+**The filter stays narrow:** the spec files whose programs reach the changed code, the files holding the
+change's own cases, and the pins it edited; `ir-specs` only for pins that moved; wasm only when wasm lowering
+changed. It also covers every spec family that pins a size or a trace of the objects the change resizes
+(`mm-trace/`, `builtins-mm-counters/`), and every family named after a KIND of value whose classification
+changed (grep `specs/` for the kind's name, as `union-scalar-backing/`). "Every family that mentions X" is
+CI's job. Briefs cap the work the same way: reuse an existing control binary, batch edits into one build, one
+combined filtered run at the end.
 
 **CI runs everything else, and it is not run here:** the full `run_spec_test`, the wasm32-wasi lane, the
 full tree corpora, the multicore stress compile-all, `check-stdlib`, the full IR suite on every lane and
@@ -560,8 +614,7 @@ the WSL lane runs.
 > only program that names every `export` in `maxon-bin/Compiler/` is the compiler itself. **A three-line
 > commit once broke stage-2 with the suite at 6673/0.** It is the only E3092 gate, and CI's failure there
 > is a red `main`.
-> Run it after any change that adds or removes an `export` or a `module`, or adds a file declaring
-> TYPES. An E3092 here is a declaration more visible than its uses: narrow it, or land it *with* its
+> Run it where §8's row says. An E3092 here is a declaration more visible than its uses: narrow it, or land it *with* its
 > first consumer.
 
 > ### ⭐ THE IR SUITE'S PINS ARE A GATE
@@ -571,6 +624,8 @@ the WSL lane runs.
 > moves with `--update-required --filter=<spec>/` — a pin is COMPILED, not run, so any lane re-mints
 > on any host, `--target=arm64-macos` and `--target=arm64-linux` included — and READS the diff, which is
 > the review of the emitted code. `specs/` pins no emitted code.
+> A change to spill priority renumbers slots across many pins. Normalise only the slot number and compare the
+> removed and added line multisets: identical multisets are that churn, and anything left over is a real move.
 
 **A red gate STOPS the change** — and a red you did not cause still gets fixed, in its own commit,
 before yours (AGENTS.md). To attribute it: do the failures touch what you changed? Re-run **the failing
@@ -579,6 +634,14 @@ the control** on that same filter — `git stash -u`, re-run, `git stash pop`. �
 did not RUN is not a red gate** (the lanes above are CI's): that is a SKIP you report, never
 folded into the green — §9's report names it. **A CI red after the push is fixed next, like any red**
 (AGENTS.md), in its own commit.
+
+Compare failing SETS between runs, never counts. A timeout under load lands on whatever is in flight, so it
+clusters plausibly around the change under test, and the same commit can read 11 then 0. Empty stdout does
+not prove a startup hang: a killed process loses block-buffered output.
+
+⚠ A `git stash pop` takes the top of the list whether or not your push stored anything: a push that failed
+or found nothing to save leaves an older stash on top, and its untracked files land in the tree even when
+the pop aborts. Read `git stash list` before popping. To test an old version of one file, copy it aside.
 
 ## 9. Commit and push
 
@@ -591,6 +654,16 @@ licensed you to push.
 **The message carries what the diff cannot:** the wrong answer that motivated the change, the mechanism,
 the cases that went red → green, and the gate figures you measured. ⚠ **Never a figure you did not
 measure** — a number nobody took looks exactly like one that was.
+
+The index is one file shared by every session in this checkout. Commit with explicit paths
+(`git commit -F <msg> -- <paths>`), which commits exactly those paths whatever else is staged. A re-mint reads
+the specs on disk, so a peer's uncommitted spec edit lands in the pin.
+
+**Glance at the last COMPLETED CI run before pushing, as its own step:**
+`gh run list --branch main --workflow ci --limit 3`, read it, and only then make the push in a separate
+command. Chained in one command, the push goes out before anyone reads the answer. A completed red is fixed
+first, in its own commit, because a red lane hides later failures behind it. A run still in progress never
+blocks a push.
 
 **Stage and commit with git's stderr in view — never suppress it.** `git add` with any pathspec that
 matches nothing stages NOTHING, so stage only paths `git status --porcelain` lists, and read

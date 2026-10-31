@@ -746,6 +746,11 @@ two `fmt` runs, and two spawns fit the deadline where a test per property would 
 The engine file declares no staging, spawning or run check of its own: it calls the ones
 `fixtures.maxtest` exports and the ones `support/` holds.
 
+`maxon test` runs files concurrently, and every spawned run purges and re-stages
+`<fixture>/.maxon/test/staged/`. Two tests naming one fixture from two files are two processes racing on one
+directory, which reads as a rare red with no diagnosis. One fixture, one file: give a new spawning case its own
+fixture and its own file.
+
 ### 6. Expectations are GENERATED, never hand-written
 
 `generate-expectations.py` runs the compiler and records its real answers. Re-run it after

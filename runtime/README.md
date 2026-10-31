@@ -293,6 +293,14 @@ The `__mg_*` bodies are called only from builder-emitted `__` bodies.
 Bulk copy has no `__Raw` row and no Std op; tier source writes it as a loop over the word and byte
 accessors.
 
+**The families still written as builders stay builders.** Emitted-runtime edits concentrate in the allocator,
+the x64 green-thread assembly and the POSIX host layers, so porting the families that need no new machinery
+would move few of them out of the two-self-compile rule, and `maxon run build` pays that second build itself.
+The scheduler core is reached only by lowering-minted calls, which the fold-time demand walk cannot see, and its
+builders use Std ops with no `__Raw` row. Reopening the port takes a new reason. The allocator's one shape per
+target costs about 12% on allocation-bound programs and nothing on the compiler or allocation-free code; that
+cost is accepted.
+
 ## Restated geometry and its pins
 
 No name crosses the tier boundary, so a tier file restates the constants it shares with an emitter, and

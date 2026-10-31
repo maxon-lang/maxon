@@ -6,6 +6,10 @@ not a risk to record: never ship it described as "unexplained". A hang and a cra
 are one wild pointer until shown otherwise. A clean re-run bounds the probe, not the bug: ask what shape
 of run would make it certain (a process's first spawn, the first lap).
 
+A reproduction spawned through a different process chain from the failure can refute a correct hypothesis:
+a shell or runtime may rewrite the environment for a child it recognises, so the parent is part of the
+input. Insert the same intermediary before believing a green repro.
+
 Do not use "cmd /c" to run commands
 
 Do not use heredocs or here-strings (a hook refuses them): write the text with the file-writing tool and
@@ -86,7 +90,8 @@ Apply these standards when writing or reviewing any code:
 - **Consolidate redundant match arms** — collapse multiple cases with the same result into one.
 - **No thin wrapper functions** — remove functions that do nothing but delegate to one other call.
 - **No sentinel return values** — a function that cannot return a valid value must throw, not return
-  `""`, `-1`, `null`, or similar.
+  `""`, `-1`, `null`, or similar. The anonymous identity
+  (`UnnamedTypeId`), real empty text and real domain values are not sentinels.
 - **Blank lines for readability** — around control flow statements and between logical sections.
 - **No magic values** — replace bare literal constants with named `static` constants that describe
   their meaning. Group a related set into a `static enum` rather than scattering them.

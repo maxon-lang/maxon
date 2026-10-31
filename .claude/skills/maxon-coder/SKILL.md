@@ -94,3 +94,11 @@ After each edit:
 - **Never add `.clone()` "just in case": it allocates and copies.** Reassigning a `var` to a freshly
   produced value needs none. Add one only where the compiler refuses without it (E3078, E3188) or the
   code must diverge from a shared reference.
+  ⛔ **In `maxon-bin/`, `stdlib/` and `runtime/`, a `.clone()` added to satisfy a read-only diagnostic is a
+  HALT:** report the site, do not add the copy. First make the checker precise, then move, make the source
+  `let`, or declare the receiving field `let` or `var`. A builder handing a field to its product threads that
+  field as a local `var` through the methods that use it and moves it at the end.
+- **When a natural spelling does not compile and a rewrite does, that is a compiler bug report, not a style
+  choice.** Nothing distinguishes "I wrote it this way" from "I had to". Bisect it to the smallest shape, fix
+  the compiler, and put the natural spelling back so it pins the fix. Narrow a repro before believing its
+  description.

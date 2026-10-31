@@ -210,6 +210,15 @@ rather than rephrasing into something the code does not support.
 - **Omit a prose count** (lines, cases, callers): it rots beside the thing it counts.
 - **A doc or comment correction has no test behind it**, so read it against the code and name any claim
   you could not check.
+- **A comment claiming a difference from another path is verified in both directions before it is kept or
+  acted on.** The natural answer to "we differ here" is to go and align it, so a false claim invites the edit
+  that creates the divergence. Where one proves false, write what is true and warn off the edit it suggested.
+  Correcting a claim, grep its text: other comments may quote it to justify a live decision. A comment
+  describing a rule no committed case exercises goes in your report, so the case gets written.
+- **A stated reason must name the property the predicate tests.** If the code branches on `isUnion`, a reason
+  about payloads is wrong even when the verdict is right, and it invites the edit that breaks the rule. A
+  comment justifying a discard or a shared path states which shapes it holds for. Check a quoted spec sentence
+  against the spec. Deleting a false reason leaves a gate with none: supply the true one.
 
 ### Scope, and working in order
 

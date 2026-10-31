@@ -12,6 +12,11 @@ at 1.0.
   datapoint, and a row that moved the wrong way is a reading to explain.
 - **Rows rot.** Re-measure before planning from one; an A/B is two arms in ONE session, interleaved,
   never a before/after across a source change.
+- **`spawn-many` is not a like-for-like comparison with Go.** The harness still runs it; its ratio is not a
+  gap and never a round's target.
+- **coroutine-churn is an internal regression benchmark, not a Go parity target.** `async` is simple concurrency
+  for I/O on one strand; Maxon's real concurrency is services, so Go parity is reported for the service workloads
+  only.
 - **Only rows from one host compare.** `host` is one of:
   - `windows`: Maxon x64-windows against Go for Windows;
   - `wsl`: Maxon built `--target=x64-linux`, Go built in WSL, both run inside WSL;

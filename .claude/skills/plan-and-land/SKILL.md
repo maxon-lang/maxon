@@ -76,6 +76,10 @@ claim and do not plan a wave around it. Verify a dependency edge ("blocked on X"
 the one exception to §0's no-build and §1's no-probes: it runs the claim's own reproduction, not a probe
 of your own devising, and it is you or a dedicated agent that runs it, never the two survey agents.
 
+A recorded blocker moves as neighbouring changes land: one more than a change old is a hypothesis. When the
+claim is "X blocks Y", the settling check is to apply the candidate cure (delete the refusal, cherry-pick the
+mechanism), rebuild and re-run Y's own reproduction: it shows what really stands behind the refusal.
+
 ## 3. Choose the approach — yours, never delegated
 
 Decide and write down: **the mechanism**, named — what it extends, what new vocabulary it needs (an IR
@@ -84,6 +88,14 @@ blast radius** — the file list, and for more than one implementer the **disjoi
 *"never two agents in one checkout on overlapping files"*); **the obligations** inherited from
 `maxon-bin/AGENTS.md`; **the candidate acceptance set** — file, case name, assertion, and **why it must
 be RED today**; **the staging decision**.
+
+- **A blocker you measured is the first blocker, never the count**: the rest are invisible until it clears.
+  Size work by clearing blockers in a scratch tree until the shape is visible, before choosing a route.
+- **Before scoping a mechanism as "build it", ask whether the compiler or runtime already computes it** and
+  only lacks the door: read the runtime's headers and grep for the capability behind a missing surface.
+- **A diagnostic that claims something about the author's intent (dead, unused, redundant) has its premise put
+  to the user before it is built.** A green suite cannot show a lint is asking the wrong question, and the
+  answer may be a language change.
 
 > ⛔ **THE PLAN NAMES THE MECHANISM AND THE FILES. IT DOES NOT WRITE THE CODE.** A fenced code block that
 > is not a quote of code existing today means the plan has overrun — delete it and name the mechanism in

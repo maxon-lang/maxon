@@ -587,7 +587,8 @@ What a case must pin:
 - A case asserting that a resolver picked X must make the resolver's do-nothing outcome (first
   declaration, bare key, identity mapping) the WRONG answer, so non-selection fails instead of printing
   the right result by accident. An ownership probe uses a heap `String`: a freed `int` slot reads `0`, a
-  plausible answer.
+  plausible answer. Build the value at run time, through interpolation, and hand it over from a `var`: a
+  string literal is a static constant owning no heap, so a missed transfer is silent.
 - A control must be able to fail. When a pass changes what a case's scaffolding does (an inliner splices
   the call that kept a function alive), re-root every case sharing that scaffolding, the negative control
   first, and read the control's pinned output: it must still show the construct the rule is about. A
@@ -598,3 +599,49 @@ What a case must pin:
 - A case carrying `<!-- unsupported-targets: x64-windows -->` is never compiled on a Windows host, so a
   green host suite says nothing about it. `spec-test --target=<lane> --filter=<spec>/` compiles each case
   that lane selects without running it, in seconds: cross-compile every lane the marker leaves it on.
+- A case that pins only ` ```stdout ` passes while leaking: a leaking program exits 101 and prints what a
+  correct run prints, and an unpinned exit code is not checked. A case whose subject is ownership or memory
+  pins ` ```exitcode ` 0, and a file claiming leak coverage pins it on every case.
+- The leak gate counts allocations, so exit 101 cannot see a leaked OS handle. A case about a resource that
+  is not memory pins an observable consequence instead: a live unclosed write handle makes a second open fail
+  with a sharing violation.
+- A case that exists to fail if a mechanism breaks must not rest on a missing feature: it goes silently inert
+  the day the feature lands. Build its failure on a contradiction the program cannot outgrow.
+- A file can be green with its subject unimplemented: every case can observe behaviour that is identical
+  without the mechanism the file is named for. Ask what each case would still pass with the mechanism REMOVED,
+  and grep the cases for the mechanism's own vocabulary (a size, a representation, a flag): if it appears only
+  in the prose, no case tests it.
+- A case whose subject is WHEN (lazy, cached, deferred, ordered) cannot be tested by reading the value: an
+  eager implementation also runs once and prints the same. Ask what program behaves differently with the
+  feature absent. For a lazy feature, that is the program that never touches the thing.
+- When prose states a rule for N sites, cover the N. A rule stated for arguments, `return` and assignment and
+  tested only through arguments is one site tested.
+- When a feature's stated purpose is a round trip, pin the round trip. Two ends each pinned, with nothing
+  composing them, pass while the trip fails.
+- Two guards added together each own a case: a pin for one reads as a pin for both, and the unpinned one can
+  be deleted under a green suite. Say which half of an invariant a case set pins.
+- A spec's cases can all sit on one polarity of their subject, such as `int` elements on a path whose managed
+  arm owns the value. An ownership path gets three: the managed shape, an `int` control, and a co-owned source
+  the caller keeps reading afterwards.
+- `_ = call()` drops the result at that statement, not at scope exit. A case whose subject is a value's
+  liveness keeps a binding and reads it after the thing being observed.
+- A `typealias` added to an existing spec program goes at the END of the block: a trailing alias resolves for
+  returns, parameters and fields, so no pinned `:line:col` moves.
+- A single-file case cannot test byte 0: the harness prepends a `// Test: <name>` line
+  (`SpecTestRunner.fragmentSource`). A rule keyed on a file's first bytes (a shebang, a BOM) uses the
+  multi-file `// --- file: main.maxon` form, which is written verbatim, and says why in the prose
+  (`specs/shebang.md`). The `:line:` numbers in its pins count the merged block a reader sees, so predict them
+  before running.
+- Order-dependent naming is caught by swapping declarations, not by reordering blocks. Two cases with the same
+  program and the same file NAMES, declarations swapped between the files, both pin one byte-identical
+  sentence naming both types. The harness stages files under the same names whatever their order in the block.
+- A pin of a size, offset or stack figure must hold on every target, or it carries an
+  `<!-- unsupported-targets: … -->` marker naming why.
+- A case at `<!-- procs: 1 -->` still has the system monitor: a loaded host holding the process off a core for
+  10 ms of wall time causes preemptions and retakes no code caused, so such a red is a pure reordering or a
+  non-zero monitor counter that does not reproduce locally. Attribute it by reading the mechanism, not by
+  re-running. Where the monitor is not the subject, add `<!-- preempt: off -->`. Where it is, that marker makes
+  the pin vacuous: let one attempt own its disturbance by reading the counters around the window, discarding a
+  disturbed attempt and retrying to a cap, so a real regression fails every attempt (`sched-preempt`'s
+  `a-main-preempted-between-two-spawns-runs-the-earlier-one-first`, `netpoll-socket`'s
+  `n-concurrent-reads-do-not-serialise`). Never loosen the pin to a tolerance.

@@ -50,6 +50,18 @@ the current figures. Look for:
   speed goal rank by self time in `maxon profile` and gate on the ladder's CPU column; use
   `--allocations-by-tag` for questions about allocations themselves.
 
+- **Copying a routine's arithmetic means copying what BOUNDS it.** The same `pos - shift` without the
+  `firstSite upto endSite` bound is how a quadratic enters.
+- **A hash-keyed structure that scales badly: read the key type's `hash()` for dropped bits first.** Primitive
+  hashes mix every bit, so the cure is the hash, never one key site.
+
+**Time a self-compile against the pre-change compiler whenever a pass is added or a hot pass changes**
+(`python scripts/bench-fannkuch.py --ref <pre-sha> --self-compile`), whatever the change bought elsewhere.
+When the change also grows the compiler's own source, the self-compile cannot separate a slower compiler from
+a bigger input, so the 5% is judged on the same input for both compilers: the scale ladder's generated
+programs. Inline-copying an accessor to dodge a cost is duplication, not an optimization; make the accessor
+free in the optimizer.
+
 **Scope the hunt to the change.** A new pass, a new IR op, or a new collection the compiler indexes by
 earns the full hunt above. A change that added none of those gives the hunt structurally nothing to
 find — confirm no new superlinear structure crept in, read one `scale-test`, and stop. **If nothing
@@ -103,6 +115,23 @@ backwards makes you optimize the instrument instead of the compiler.
   ×1.78 across a DOUBLING ladder — that is not a curve of any shape, it is preemption.) CPU time comes
   from `__Builtins.threadCpuTicks()`, which advances only while the calling thread is scheduled.
 
+- **The suite's `compile CPU:` stderr line is a trend indicator, not a gate.** Thread CPU time drops idle and
+  preemption but not contention (SMT siblings, shared cache, memory bandwidth), so the sum rises with worker
+  count. Compare it only at equal worker counts on one host. A failed compile reports nothing and is counted
+  apart, never as zero.
+- **A delta flat at all six rungs is a once-per-compile cost**, which excludes every per-function, per-token
+  and per-block explanation and points at the load phase. `collectMaxonSources` walks `stdlib/` once per
+  compile and pays per entry, so a stray or gitignored directory moves the count, and it exists only in the
+  checkout that holds it. Measure a free plausible explanation before writing it down.
+- **Correcting a logged row edits the last row of all three tables with the same note.** `ScaleHistory` holds
+  allocations, bytes and CPU to one date, path and note, and treats a mismatch as a hand-edited log, which
+  stops the next `scale-test`.
+- ⚠ **`--repeat` can report NONDETERMINISTIC on a tree nothing is wrong with.** `__gt_free_get` takes a record
+  from the current P's free list, then the global list, else allocates, and the process-wide count sees the
+  allocation, so whether a pool worker lands on the P that retired the last record is timing. One allocation
+  of a green-thread record's size, confined to `phase regalloc`, is this and not your diff: re-run, or compare
+  allocation columns against a control compiler at `--repeat=1`.
+
 ### The two blind spots — and never credit one with the other's fix
 
 ✅ **The CPU column exists because a cost that ALLOCATES NOTHING was invisible**, and this project keeps
@@ -114,6 +143,20 @@ N=1024, allocation-free), `requireInterfaceForParse` (allocates identically to t
 feature is the instrument's blind spot, not the cost — in **every** column, CPU included. *(Clearest
 case: `regalloc:splitting`'s float-across-calls quadratic was hidden because the corpus's `floatSpill`
 knob was 4 — few enough that every float fit a register. The knob went 4 → 12; that is a corpus fix.)*
+
+⚠ **A CORPUS HOLDING A CONSTRUCT IS NOT A CORPUS REACHING ITS CODE PATH.** Narrow aliases that appear only as
+generic arguments are erased before any range check sees them; an interface corpus with no `uses` clause never
+runs the arity lookup. Count executions of the path, not occurrences of the construct. A linear-scan quadratic
+is also invisible unless the target sits LAST in the scanned array: position is the variable, so a hand-built
+ladder (`tests/ladders/`) places it there.
+
+**When the corpus cannot express the feature, build a ladder in `tests/ladders/`** that holds the program
+constant and doubles only the shape the change indexes by (`genwitness.sh`: conformers × methods). Check which
+phase the growth landed in before believing an exponent: a generator with many calls in one function measures
+the allocator, not the change. A superlinearity can sit on a clean compile, so read structure even when the
+curve is flat. A gate that is cheap while a feature is absent can be a cliff from its first use, so ladder the
+first use. Attribute a delta by moving the knob it claims to scale with: a formula that only fits the numbers
+is not attribution.
 
 ### When the question is the EMITTED code, not the compiler's logic
 
@@ -137,6 +180,14 @@ it is answered by four instruments, none of which is a single command:
   samples against the `__symtable` every backend embeds, so it needs no `.mxdbg`, and it reads both the
   bootstrap's `.symtab` placement and this compiler's `.text`-closing one. ⚠ Windows x64 only. It takes
   the command to profile as its trailing arguments; it is not a flag of anything.
+
+**"No cost to programs that do not use it" is proved by a control.** Build the base from a named commit the
+same way as the change, compile the same programs with both, diff, and classify each difference by whether the
+program uses the feature. A declaration inserted mid-file in `stdlib/` moves the line numbers baked into panic
+strings, so a new declaration goes at the end of its file.
+
+**A byte compare writes both images to one output path**: an image can carry its own path. Run the same-binary
+control first and report a difference only after it reads zero.
 
 ⛔ **NOTHING IN THE TREE PRODUCES A TWO-COMPILER `scale-test` RATIO TABLE** — stage-1 and stage-2
 `scale-test`ed interleaved, so any allocation ratio above 1.00 is a construct this tree's codegen

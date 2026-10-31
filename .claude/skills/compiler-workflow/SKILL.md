@@ -28,6 +28,10 @@ the compiler indexes by, and READ it.
   reason — `note:` (`--note=` on the CLI) — and that reason is the WHY, recorded at the one moment it
   is still known: the instrument sees exactly WHAT moved and can never see WHY. **Write no row you did
   not measure.**
+- ⛔ **`ScaleHistory` checks only the LAST row of each table, so a well-formed row appended after a ragged one
+  masks it**: the tip runs, the merge base reports BROKEN RUN, and the ragged row survives merges. The cause is
+  a dropped trailing pipe or a literal pipe in the prose column (`splitRow` splits on every one): name that
+  character in words there. After editing a table, count the cells of every row you touched.
 - Through MCP the ladder comes back as `result`, the `--result-json` document (per rung and phase:
   `allocs`, `frees`, `bytes`, `cpuTicks`), with the printed tables in `rawTail`.
 
@@ -96,6 +100,13 @@ scripts/mac-host.sh drop <session> <KEY>
 - **A lock runs one job, and the job's exit releases it.** Watch the job with a Monitor that polls
   `job <session>`; while the lock is held with no job running, the same poll calls `heartbeat <session>
   <TOKEN>`, or the lock goes stale and any agent may break it.
+- **A silent watcher looks exactly like a run still in progress.** Echo a line when it is armed and rely on
+  it only after that line arrives. On a failed lap print the error rather than `2>/dev/null`. Match every
+  terminal state, including the process being gone. Use `gh ... --jq`, not a pipe into `jq`, which a host may
+  not have.
+- A Mac job outlives any subagent: a subagent's turn ends whatever its brief says. Brief it to ship, clone,
+  lock and START the job, leave the fetch and drop recipe, and stop. The coordinator owns the Monitor on
+  `job <session>`, the fetch and the drop.
 - `fetch` needs no lock and no key; run it before `drop`, which deletes the clone.
 - `drop` the session when done; it releases a lock the session still holds.
 - ⚠ **`mac-host.sh: skipped — MAXON_MAC_HOST is not set` means no Mac is configured.** It exits 0 and
@@ -107,6 +118,14 @@ scripts/mac-host.sh drop <session> <KEY>
   `sample <pid> 2` prints the parked stack.
 - **Poll the remote for liveness** (`scripts/mac-host.sh job`, the log's modification time), never the
   local driver's log: a dead remote and a slow one look identical from here.
+
+## Diagnosing a hang
+
+Measure the hung process before reading code. Per-thread CPU splits the cases: one thread running at full CPU
+with the rest in Wait is a spin; every thread in Wait is a lost wakeup. A runtime fault that appears only on a
+green thread and never from `main` points at a stack-switch or register difference between the two paths.
+Reproduce a race without `--async-trace` first: the trace's critical section changes the interleaving and can
+turn a deterministic failure into an intermittent one.
 
 ## Resolving a CI fault
 
@@ -165,6 +184,8 @@ default.
 **For a runtime design question** (signals, alt stacks, thread suspension, preemption, scheduler,
 netpoller, allocator), follow Go's runtime (`src/runtime/` in Go's source; `vendor/go/` when staged)
 rather than re-deriving it — the tree's runtime is built on its mechanisms, and a brief for such work
-names the Go function followed. `vendor/delve/` (Delve's source, `pkg/proc/gdbserial/`, also fetched by
+names the Go function followed. Port the mechanism whole, not only its architecture: the channel lock
+held across park, unlock then ready, lock spinning, per-P caches. A deviation needs a definite reason named in
+the plan or an A/B measuring an improvement over Go; a hazard Go's own design already handles is not a reason. `vendor/delve/` (Delve's source, `pkg/proc/gdbserial/`, also fetched by
 nothing) is the reference for driving Apple's `debugserver` over the GDB remote protocol; read it before
 changing `maxon-bin/Debug/Backend/GdbRemoteBackend.maxon`.

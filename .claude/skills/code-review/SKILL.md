@@ -112,6 +112,10 @@ their own diff without asking why the next consumer needed the same fix.
 it drifts; the commented one passes every gate. And ask **where the single place RUNS**: a dedup that
 allocates on a path every compile takes is a new cost curve.
 
+A "one source of truth" refactor keeps every existing call site's ANSWER. Unifying two choices can change
+the answer at a door that never used the new feature, with the suite green: a suite checks behaviour, not
+"no cost". Say which call sites' answers moved, and why each was meant to.
+
 ## 4. Latent bugs — not just style
 
 - **Resource release on EVERY path**, including throw/panic/abort. (Two `StreamingSubprocess` handle
@@ -119,6 +123,10 @@ allocates on a path every compile takes is a new cost curve.
 - **Ordering hazards**: a flag published before the data it guards is readable. "Safe because nothing
   yields in between" is a property of today's code, not an invariant.
 - Concurrency: dropped/double-dispatched work, starvation, races between a producer and a consumer.
+- **A word another thread publishes with a release is read with an acquire, always.** The edge exists only
+  between a release and an acquire of the SAME word, and an acquire orders only LATER accesses, so an earlier
+  plain load still floats. A new word that crosses threads gets a build-time refusal of plain access, as
+  `assertPublishedWordAccessIsOrdered` and `assertRunQueueObservationIsOrdered` give theirs.
 - Off-by-one, unhandled boundary, silent fallthrough.
 
 **Sweep the class.** After a root cause, state the defining predicate of the defect class and grep every
@@ -133,11 +141,84 @@ site that satisfies it, across all targets and every consumer of the fact.
   exhaustiveness catches missing arms, not over-broad ones.
 - **When a predicate's premise goes false, narrow it, do not delete it.** An over-approximate analysis may
   ORDER but must never REFUSE.
+- **A third site for one rule is the finding.** Fixing a value's shape door by door is an enumeration, wrong
+  the moment someone adds a door. Ask what the complete set is and which one place sees all of it (a
+  callee's entry sees every value entering by parameter). A list that must stay is numbered, with the wrong
+  answer that found each entry.
+- **Grep a count before believing or correcting it.** A comment's wrong tally of its call sites, arms or
+  cases has two possible causes, and one is a site that never got the rule. Name the sites rather than
+  count them.
+- **When a change alters what a value MEANS, enumerate every WRITER of the state it is paired with** from
+  the code, never from a header that says how many there are.
+- **A change that closes the last route to a mechanism deletes that mechanism's coverage inside a green
+  suite** (a construct moving from "traps" to "throws" leaves the fault handler unreached). Ask what still
+  reaches it, and keep a case that does.
+
+**Check a fix against its own predicate.** Enumerate every member the fix's condition admits and test each
+against the premise it states: a registry shared by two constructs, or a rule true of "most" of a set, is a
+wrong answer for the rest.
+
+**Widening a gate.** Ask what the old gate implied without saying so (a precondition a replacement predicate
+only states in its header), and check every downstream test keyed on the same set: two rosters that must
+agree, in two files, with nothing tying them.
+
+**A change that inverts the soundness direction carries the whole risk.** Where a missed fact used to cost
+an optimization and now costs a wrong answer, the fact set must be a view over the classified sources,
+never a further list beside them.
+
+**Identity:**
+
+- **A key used as an identity must be injective.** A lossy key (two spellings over one callee, a `_` join
+  inside the identifier alphabet) silently merges two things, and an "idempotent by label" registry turns a
+  collision into a merge. Join with a byte the parts cannot contain. A second spelling of one identity is a
+  second identity.
+- **A lossy key is exact only while its one producer holds.** A bare name, label or boolean standing in for
+  *which value* or *which sink* goes wrong with the second producer. When a comment argues a key is safe,
+  enumerate every name space it lives in: a claim true on one axis reads as true on all of them. Key on the
+  value, and let the authority that owns the question (the scope, for shadowing) decide.
+- A name that mints a symbol the compiler also mints REPLACES it rather than colliding: "already defined"
+  checks skip the builtin, and no collision check fires.
+- An order-dependent symptom with no order in the code is two id spaces meeting: an id looked up in another
+  interner answers by coincidence. Renaming and watching the wrong answer follow the id proves it.
+- A dense per-value column is not a lookup table: a slot no value occupies can hold a live-looking tag
+  beside a stale id. Prefer a door the resolution already went through.
+- **A cache key takes names, never intern-order ids**, which shift when an unrelated file declares
+  something. After fixing a dependence on declaration order, grep every other consumer of the same id,
+  cache keys first.
+
+**Facts that stand in for other facts:**
+
+- **A predicate authorizing a DESTRUCTIVE act must prove what the act requires, at every level of nesting.**
+  "Owns a reference" does not license nulling a slot, and a claim about a container is not a claim about its
+  contents: a sole box can hold a co-owned payload.
+- **A debug label never shares a slot with a semantic fact.** A name routed through a table the front end
+  reads becomes the fact, for every reader of that table. An instrument gets its own side table, keyed by
+  something inert and read by one function.
+- **A fact a parse newly reads must key the parse memo** (`QueryEngine.parseMemoKey`), and a build flag must
+  not vary a parser artifact cached on file content: one build's op stream gets served to the other. No spec
+  case can see this; check that `verify-warm-rebuild` can express the axis.
+- **A branch whose last arm means "none of the above" fails open** when whatever produces the "above" can
+  grow, and nothing fails to compile when it does. Find the property the cases share and test that.
+- **A refusal's stated basis lives in a comment and is not re-derived.** A refusal cannot go red, so a stale
+  one rejects legal programs indefinitely. When a refusal blocks a program that looks legal, grep for the
+  mechanism its comment names before believing it.
+- **A second instance of an existing fork ports each of the first one's guards deliberately**: read every
+  guard the sibling has, and copy save-and-restore as save-and-restore, not as a reset.
+- **A change that makes a new value class reachable (`inf`, `NaN`, null, zero length) owes an audit of every
+  loop whose exit that class can defeat.** The failure is a hang, not a wrong answer.
+- **A fix to a resource with classes (GPR and FP files, signed and unsigned) gets a case crossing the
+  classes.** Same-class cases stay green over a class-blind fix.
+- **A cross-arm or cross-declaration check runs whole-program**, drained after every file's signatures merge
+  and before `resolveTypes` erases alias names (`checkValueMergeSignatures`). At parse time it sees one file
+  and silently misses forward references and other files.
 
 **Reading-only findings** — what to ask of the diff when nothing is run:
 
 - A deferral ("pre-existing", "already rejected", "unreachable") is a claim. Ask what the construct this
   change now permits can reach, not what today's callers reach.
+  "Pre-existing" and "this change regresses it" are different questions, and only the second decides who
+  fixes it now. A same-tree variant shows a class is not specific to the change; it cannot show the change
+  left the reachable programs alone. That takes the actual program compiled at the base and at the tip.
 - A change that widens reach (visibility, overload set, conformance, a lookup table) admits programs:
   review what now compiles that shouldn't. Before exporting a synthesized member, check something builds
   its body.
@@ -152,6 +233,60 @@ site that satisfies it, across all targets and every consumer of the fact.
 - "This is more work than before" is a hypothesis: hand cost claims to the optimizer to measure.
 - Before blaming a mechanism, ask which pass raises the symptom and what it reads; a symptom that
   precedes the mechanism in the pipeline was not caused by it.
+- A diff can be clean in every file it touches and falsify a premise in one it never opens. When a change
+  widens a grammar or grants a conformance, ask what is newly declarable and who assumed it was not: grep
+  the premise's sentence, not the function, including every hand-written roster over the same ground and
+  every comment that quotes it. A conformance the compiler grants has no `implements` clause for the checker
+  to walk: ask of a new intrinsic grant what validates the member it names.
+- A refusal on one route says nothing about its sibling and hides it, because every report about the feature
+  names the refusal. Enumerate a door's routes, not its refusals. Adding a refusal, read every spelling of
+  each operand domain (negative and positive, `0x10` and `16`, open and closed bounds): a rule that reads a
+  constant-folded value inherits every gap in the fold. Keep independent conditions separate in a fix even
+  where they coincide today.
+- **A lifted refusal exposes what it covered, and the guard replacing it is new surface.** "A false reject,
+  never a wrong answer" describes today's diagnostics, not the mechanism underneath: ask what each shape
+  behind the refusal now does. Check every key the protected lookup uses (a slot rule does not protect a
+  lookup keyed by name), read a reused predicate's header for the question it answers, and make the guard an
+  admit-list whose residual answers "nothing": an unreasoned case then lands as a false reject, never a null
+  dereference or a leak.
+- A predicate's answer spent as a different fact elsewhere is a silent coupling: widening the predicate
+  changes the other fact. One bit that answers "did the substitution fire" and is read as "did the callee
+  take a reference" changes ownership.
+- **A fact built for consumer A is not a safety floor for consumer B.** A's deliberate narrowing is B's hole,
+  and neither door can see it. Give B a column of its own. Likewise a safety argument ("a missing diagnostic
+  is the safe direction") is scoped to the readers it was written for: re-derive it for a second reader.
+- A verdict function whose answer implies an obligation is a trap unless it carries the obligation: every
+  caller that accepts "ok, this widens" and then uses the value it already holds ships the unconverted one.
+  Have the check return the converted value, and assume a survey of such callers is one short.
+- A field that looks like a diagnostic channel may also drive codegen. Check its readers before writing to
+  it; a name carried on the expression result reaches no later statement.
+- A whole-program question cannot be asked during the sweep that answers it: an interning inside
+  `queryProgramSignatures` gives one argument two keys across a file boundary. Ask it in a post-sweep pass,
+  and run a merge after any split, since a fuse cannot be undone. A merge makes every recorded name
+  arbitrary: before making anything non-unique, grep every reader that compares it.
+- A green case does not refute a structural finding. A pass samples one point: a read across two interners
+  survives exactly as long as their insertion orders coincide. Answer such a finding by reading the
+  invariant, or with a case that makes the coincidence fail. Ids never cross between interners; names do.
+- **Refuting a finding by measurement takes every spelling of the construct** (a receiver field write: bare,
+  `self.`-qualified, through a parameter). Two agreeing samples are two samples. "The compiler accepted it
+  before" says nothing about what the program answers.
+- **A fold that changes a value's provenance lands where ownership is decided.** A later rewrite hands a `var`
+  an immortal `.rdata` record already classified as owned, and wasm's linear memory has no read-only segment
+  to catch the write. A fold minting into a content-deduped pool makes the value identical to an unrelated
+  literal: it owes a case for a write leaking between them.
+- **Read a new routine against its siblings first.** Ask what the neighbours all do that this one does not,
+  and whether the difference is deliberate. A scanner missing the newline stop its siblings all carry deletes
+  a statement on a typo no corpus program contains: a green suite is evidence about the programs that exist,
+  never about malformed input nobody wrote.
+- **A second execution path (a batch, a guest, a remote) must deliver every per-child facility the first
+  does:** cwd, stdin, environment, wrappers, instruments. A dropped one surfaces as a plausible verdict, and an
+  absent instrument can make a "costs nothing" case pass. Grep each facility builder's callers. When a gate
+  names a capability, ask whether it is a property of the TARGET or of THIS RUN.
+- **A blanket `otherwise` over a routine that throws for more than one reason merges those reasons.** Decide
+  existence without the throwing resolver.
+- **When one rule has two wordings, fork the wording and never the accept set.** Pass the position through to
+  a sentence table so the code that decides cannot see it. Two exhaustive matches both break on a new arm, but
+  admitting an arm in only one of them compiles.
 
 ## 5. The AGENTS.md quality checklist
 

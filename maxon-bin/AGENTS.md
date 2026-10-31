@@ -104,6 +104,9 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
 > `C1` builds already get the new runtime; only the compiler's own process — the spec harness, the
 > self-compile timing — needs `C2`. The MCP `build` tool with path `maxon-bin` is a path build: it runs
 > no manifest, so it builds once.
+> ⛔ **A `MAXON_SECOND_STAGE=1` BUILD IS NOT A SELF-COMPILE.** The previous compiler does the compiling, so a
+> rule the change adds is never applied to the compiler's own source: a compiler that refuses its own tree
+> builds cleanly here. Only a build run BY the new compiler answers "does it compile itself".
 > ⛔ **THIS RULE IS ONLY ABOUT EMITTED RUNTIME. EVERY OTHER CHANGE NEEDS ONE BUILD**, and a needless
 > self-compile is a minute off every task that touches the compiler.
 > ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` and its sibling `runtime/` are
@@ -115,6 +118,28 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
 > `runtime/`, and the compiler resolves both by walking UP from its own executable — so an archive
 > unpacked whole would leave a RELEASED stdlib and runtime one directory above the compiler and the
 > tree's own would never be reached. The build would succeed and compile the wrong sources, silently.
+
+⛔ **A COMPILER BUILT BY A WRONG COMPILER STAYS WRONG AFTER THE SOURCE IS REVERTED.** A probe or defect in a
+pass or in emitted runtime acted on the compiler's own code, so the binary it builds carries the damage:
+filtered specs stay green, because they exercise the compiler's logic and not its own codegen, and a real
+program then panics; a runtime probe fires in every later build. Keep probe builds at
+`--output=temp/<task>/…`. When one reached the slot, rebuild with `scripts/build-from-seed.sh`, then compile
+a real program (`examples/fannkuch-redux.maxon`) before trusting a filtered green.
+
+⛔ **THE SEED ALSO JUDGES THE COMPILER'S OWN SOURCES BY ITS OLDER RULES.** A language form newer than the seed
+is refused there unless a shim withdraws it, and a tier the seed cannot credit fails too: an `export` that only
+a rule in this tree makes used is E3092 to the seed, on every lane, with `scripts/seed-shim/` empty. When an
+editor's lock stops `build-from-seed.sh`, prove the chain by hand into `temp/<task>/`:
+`.bootstrap/maxon.exe build maxon-bin --output=temp/<task>/c1.exe`, then
+`temp/<task>/c1.exe build maxon-bin --output=temp/<task>/c2.exe`.
+
+⚠ **Every file's tokens are read twice:** the declaration sweep (`foldDeclaredSignaturesInto`) and the real
+parse. A feature that changes WHICH DECLARATIONS EXIST belongs in the token tier (`queryActiveTokens`), where
+both consumers read one array, because the two disagreeing is a wrong field offset with no diagnostic.
+
+A `__Builtins` intrinsic that can be refused signals it through per-handle STATE answered as a corpus enum
+(`__SubprocessStreamState`; ordinals read through `requireCorpusDeclaredEnum`), never through an empty record,
+a null or a last-error global: a managed-returning builtin cannot carry "refused" in-band.
 
 ⛔ **A COMPILER THAT STARTS DEPENDING ON A RUNTIME BEHAVIOUR THE SAME CHANGE ADDS NEEDS THE SEED CHAIN.**
 When the compiler's OWN code relies on a transfer, scheduler, allocator or walk semantic the change
@@ -255,6 +280,22 @@ every case is compiled on the Mac, and each spec's binaries run in one `orb run`
 the preflight runs a minimal x86-64 ELF in the machine and names that remedy when the ELF fails.
 `--target=arm64-linux` hands the suite to a compiler built for the machine and run inside it.
 
+⛔ **NO NEW MECHANISM MAY CAP ARGUMENTS BELOW `MaxAbiArgs` (64).** A small cap refuses ordinary programs and
+regresses them silently, so arguments past the register files ride the stack. The 64 ceiling, its `bits(64)`
+position masks and its refusals stay; do not propose lifting them. A ceiling hit is a clear refusal, never
+silent mishandling.
+
+⚠ **A PARAMETER REASSIGNMENT IS A WHOLE-PROGRAM SWITCH.** `ProgramSignatures.programTakesAParamByRef` is false
+until some function reassigns a parameter, and true turns on the name-keyed, over-approximating cell-local
+prescan in every body of the program, stdlib included. Read and write of a by-ref parameter are specified
+(`specs/pass-by-reference.md`).
+
+⚠ **AN INTERMITTENT COMPILER DEATH ON arm64 ALONE (EXIT 86, A SIGSEGV IN A POOL WORKER, EXIT 101 WITH EVERY
+TEST PASSING) POINTS AT MEMORY ORDERING FIRST.** x86-TSO forbids the reorder, so a clean x64 run is no
+evidence. A self-compile loop is a poor instrument: compare full suites per arm, control included, and read a
+clean arm against the base rate (at one death per suite, six clean suites is p≈0.25%). Instrumentation on a hot
+path moves the timing that causes the death, so a silent probe excludes nothing by itself.
+
 ⚠ **A CHANGE THAT GROWS A FUNCTION'S LIVE-VALUE COUNT IS A CROSS-TARGET CHANGE** even when it touches no
 target-specific code: arm64 has 31 general registers and x64 about 14, so a self-compile on one host cannot
 see the other's E5001 — CI's lanes are the gate. An E5001 in straight-line, loop-depth-0 code is an
@@ -315,6 +356,16 @@ Two instruments live in that skill, with their reading guides: `run_scale_test`,
 doubling ladder to run after any change to a pass, the IR, or a data structure the compiler indexes by;
 and `scripts/fixpoint.sh`, which answers whether the compiler reproduces itself byte for byte — a
 difference there is a MISCOMPILE, and a green suite cannot see it. Load the skill before acting on either.
+
+⛔ **ANYTHING THAT RE-CHECKS A PROGRAM (THE LSP, A WATCH LOOP, A RE-RUN) STAYS ON THE QUERY SPINE** and costs in
+proportion to what changed; a fresh `Project` per check is the wrong foundation even though it is `maxon
+build`'s pipeline. Read `docs/internals/query-spine.md`, name which stages are memoized, and measure warm
+against cold. A stage that cannot be incremental is a finding to raise.
+
+⚠ **RUN `maxon verify-recheck <file|dir>` AFTER A CHANGE TO THE PIPELINE, THE QUERY SPINE OR PER-`Project`
+STATE.** The suite compiles each program once, so it stays green over a memo the pipeline mutated or a table no
+fold resets. A memo's content hash cannot see a mutation, and cloning per serve is too costly: drop the memo as
+the pipeline takes it, as `invalidateAllModuleCache` does.
 
 ## `tests/` — fixture corpora for the DRIVER COMMANDS
 
@@ -412,6 +463,48 @@ exit) — the lock working, not a red gate; wait for the other command.
 ⚠ **THE SUITE RUNS EVERY TEST BINARY WITH CWD `temp/`**, so that directory is shared with anything
 else you put there. Stage a binary you must keep somewhere else.
 
+⚠ A repeat-run loop counts the iterations that printed that summary line, never the iterations attempted: a
+refused run (stale binary, busy tree) prints none, and a loop over a control that never built reads
+`0 leaks in 6 runs`.
+
+⚠ **THE TREE LOCK JUDGES LIVENESS BY HEARTBEAT, NEVER BY PID** (`TreeLock.maxon`): pids are reused and a wedged
+process is alive forever. The BUSY refusal prints the holder's argv and its last progress, which is the whole
+answer: a live holder means wait, and a lock untouched for `AbandonedAfterSeconds` (60) breaks itself on the
+next command.
+
+⚠ **A RED RUN CAN BE THE MACHINE, NOT THE CODE.** Failures uniform across unrelated specs, with no compiler
+output and an OS status for the exit code (Windows `3221225794`, `0xC0000142`: the process never started), mean
+orphaned workers from a killed run, not a defect. Timeout failures that hit a disjoint set on each run mean a
+contended machine: re-measure alone on an idle box. Before killing anything, list parents (`Get-CimInstance
+Win32_Process`): a `spec-test` parent, or new start times between two listings, means the run is alive. A tool
+reporting a task killed is not evidence its process tree died.
+
+⛔ **A SEARCH THAT NEVER RAN READS AS ZERO HITS.** Never discard the stderr of a grep used as evidence of
+absence: `grep -P` is refused under some locales, and `2>/dev/null` turns that refusal into the cleanest possible
+answer. Prove the instrument on a hit you know exists, and prefer the Grep tool, which reports a failure.
+
+## Memory safety
+
+⛔ **THE REFERENCE COUNT IS THE SAFETY MECHANISM. NEVER ADD A REFUSAL WHOSE ONLY JOB IS TO PROTECT AN UNCOUNTED
+REFERENCE: COUNT IT.** An analysis mistake must cost speed, never a use-after-free, so a count is left out only
+where it is proved unneeded. Counts are added where needed, never added and then cancelled: the parser emits hold
+markers and `HoldResolution.maxon` decides each one once the whole-program summaries exist. Trading soundness for
+speed is never an option; a self-compile slowdown is cured by a better proof. The models are reference counting
+with elision (Swift, Perceus, Lobster) and no shared mutable data between threads (Pony, Erlang), not Rust's
+borrow checker.
+
+**A leak can be masking a double free:** a spurious reference pins a record at rc=1 so its destructor never
+runs. Fixing such a leak turns exit 101 into an access violation. Follow the fault; the fix was right.
+
+## Ranged aliases
+
+**Ranged aliases are prove-or-refuse.** A value lands in a ranged alias when the compiler proves it fits, and
+otherwise is a compile error; the unprovable gap is crossed only with `try (x as T) otherwise …`
+(`otherwise panic("why")` for "I know"), on the model of division's prove-or-try (E3057 bare, E3055 on a proven
+one). New work adds no runtime range panic. "Provable" is a normative spec rule over the parser's analysis,
+never an optimizer outcome. Friction is reduced by a stronger prover, and each prover gain surfaces as E3055 on a
+`try` it made unneeded.
+
 ## Error codes — ONE registry, and it is the enum itself
 
 **`maxon-bin/Compiler/ErrorCodeRegistry.maxon` IS the registry.** It carries the number, the canonical
@@ -438,6 +531,12 @@ no doc comment, which is how it finds them.
   (`ErrorCode.semanticUnneededCast`, plus `.rawValue` for the `"E3010"` spelling). A literal `"E3010"`
   in a source file is a second copy of the number space: renumber the code and every gate stays green
   while the code that matched it silently stops matching anything.
+
+- **A diagnostic that lists what the compiler supplies is DERIVED.** Join the sentence from the constants the
+  dispatch arms match on where you can (`specs/builtin-member-rosters.md`), and never state what is absent: an
+  "are not built" clause rots the moment someone builds the thing, across every pin that quotes it. Before
+  widening a roster, grep the message's stable half across `specs/` and `ir-specs/`; re-pin those cases with
+  the change, and grep again after a rebase, which can bring fresh pins of the old wording.
 
 ## Spec files
 
@@ -471,10 +570,25 @@ no doc comment, which is how it finds them.
   the new code. That reads as message churn, and re-minting it makes the case silently test nothing. Change
   the case's program so it no longer trips the new check and the original diagnostic fires again. A
   construct in a case's scaffolding that a lane refuses with E3104 does the same.
+- ⚠ A new refusal redirects programs onto the spellings that are left, and those may be untested or absent.
+  For each spelling it removes, ask what the program must now say and whether anything has ever said it: the
+  suite wrote the closed spelling everywhere, so green measures the road being closed, never the one being
+  opened. The refusal binds everything that generates Maxon too: `Testing/ScaleCorpus.maxon` emitting a
+  now-illegal program takes `run_scale_test` down before it reports a number. Never sed a binding away
+  file-wide when sweeping cases: a pinned diagnostic or a later read may name it.
+- Before changing a diagnostic, grep the current message in `specs/` and `ir-specs/` inside `maxoncstderr` and
+  `Maxoncstderr:<target>` blocks only: prose quotes old messages constantly, and an unfiltered grep
+  over-reports. Read the pinned PROGRAMS, not just the sentences. What they share is the discriminator that
+  lets the change narrow so every pinned shape keeps its wording. A pin inside a test PROGRAM shows up only in
+  the run.
 - A scripted edit in text mode on Windows (Python `open(p,'w')`) rewrites every line ending in the file, and
   `git diff` cannot show it because `.gitattributes` normalises to LF. A case whose `stdout` block gained a
   `\r` fails with `expected:` and `actual:` printing identically. Edit spec files binary-safe and check
   `file <path>` for `CRLF`; when expected and actual look identical, suspect line endings first.
+  The same flip reaches compiler sources: the compiler reads the disk, and a tool writing platform line endings
+  leaves a file `w/crlf` until the next checkout. A `b"…"` literal spanning a line break (`GtTraceNewlineText`)
+  then holds `\r\n`, and the emitted runtime prints it. After an agent edits sources, `git ls-files --eol` over
+  the changed files must show no `w/crlf`. Read a mismatch whose two sides look identical with `od -c`.
 - A spec fence the harness does not read (` ```RequiredIR ` among them) is refused, naming the case.
 - `--update-required` re-mints the trace-capture blocks (` ```mm-trace `, ` ```log-trace `) and the
   ` ```TargetIr:<lane> ` pins in a spec file but **not** its `maxoncstderr` blocks — an error-code renumber
