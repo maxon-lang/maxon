@@ -16,6 +16,7 @@ and a 16-byte tag. The `Aead` interface is what `AesGcm` and `ChaCha20Poly1305` 
 |---|---|
 | `aead.seal(nonce, plaintext: p, additionalData: a)` | the ciphertext of `p` followed by the 16-byte tag over it and `a` |
 | `aead.open(nonce, sealed: s, additionalData: a)` | the plaintext of `s`, only when its tag verifies against `a` |
+| `gcm.sealInto(output, at: i, nonce, plaintext: p, additionalData: a)` | what `seal` answers, written into `output` from `i`: the bytes before `i` stay, `output` ends with the tag, and an `output` that ended before `i` is zero-filled up to it; `AesGcm` only |
 
 Each throws an `AeadError`, and the first check that fails decides it:
 
@@ -1148,4 +1149,218 @@ aes-gcm-err-121 invalidNonceLength
 aes-gcm-err-122 invalidNonceLength
 aes-gcm-err-123 invalidKeyLength
 aes-gcm-err-124 invalidNonceLength
+```
+
+<!-- test: aes-gcm.seal-into-writes-at-an-offset -->
+`sealInto` writes what `seal` answers into an array the caller owns, from an offset, and makes the array end there: the bytes
+before the offset stay, the bytes after the sealed message are dropped, and an array that ends before the offset is
+zero-filled up to it. For plaintexts of 0 to 1024 bytes, the written bytes equal `seal`'s and `open` takes them back; a
+nonce of another length throws `invalidNonceLength` and leaves the array alone.
+```maxon
+function bytesFor(seed Count, count Count) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for index in 0 upto count 'eachByte'
+		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
+		bytes.push(((mixed shr 11) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'bytesFor'
+
+function part(bytes ByteArray, start Count, endIndex Count) returns ByteArray
+	return try bytes.slice(start, endIndex: endIndex) otherwise panic("the slice lies inside the array")
+end 'part'
+
+function zeros(count Count) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.resize(count)
+
+	return bytes
+end 'zeros'
+
+function wrongWrites(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray) returns Count
+	var wrong = 0 as Count
+	let expected = try aead.seal(nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
+	let prefix = bytesFor(9, count: 7)
+
+	var fresh = ByteArray.create()
+	try aead.sealInto(fresh, at: 0, nonce: nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
+
+	if not fresh.equals(expected) 'freshDiffers'
+		wrong = wrong + 1
+	end 'freshDiffers'
+
+	var longer = bytesFor(9, count: 7 + plain.count() + 100)
+	try aead.sealInto(longer, at: 7, nonce: nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
+
+	if longer.count() != 7 + expected.count() or not part(longer, start: 0, endIndex: 7).equals(prefix) or not part(longer, start: 7, endIndex: longer.count()).equals(expected) 'longerDiffers'
+		wrong = wrong + 1
+	end 'longerDiffers'
+
+	var shorter = part(prefix, start: 0, endIndex: 3)
+	try aead.sealInto(shorter, at: 7, nonce: nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
+
+	if shorter.count() != 7 + expected.count() or not part(shorter, start: 0, endIndex: 3).equals(part(prefix, start: 0, endIndex: 3)) or not part(shorter, start: 3, endIndex: 7).equals(zeros(4)) or not part(shorter, start: 7, endIndex: shorter.count()).equals(expected) 'shorterDiffers'
+		wrong = wrong + 1
+	end 'shorterDiffers'
+
+	let opened = try aead.open(nonce, sealed: part(longer, start: 7, endIndex: longer.count()), additionalData: additional) otherwise panic("opened")
+
+	if not opened.equals(plain) 'openDiffers'
+		wrong = wrong + 1
+	end 'openDiffers'
+
+	return wrong
+end 'wrongWrites'
+
+function main() returns ExitCode
+	let key = bytesFor(1, count: 16)
+	let aead = try AesGcm.create(key) otherwise panic("the key is valid")
+	let nonce = bytesFor(2, count: 12)
+	let additional = bytesFor(3, count: 13)
+	var wrong = 0 as Count
+
+	for dataBytes in 0 to 1024 'eachLength'
+		wrong = wrong + wrongWrites(aead, nonce: nonce, additional: additional, plain: bytesFor(dataBytes + 5, count: dataBytes))
+	end 'eachLength'
+
+	var untouched = bytesFor(9, count: 20)
+	var refused = false
+
+	try aead.sealInto(untouched, at: 4, nonce: bytesFor(2, count: 11), plaintext: bytesFor(5, count: 8), additionalData: additional) otherwise (failure) 'nonceRefused'
+		match failure 'reason'
+			invalidNonceLength then refused = true
+			invalidKeyLength or
+			plaintextTooLong or
+			authenticationFailed then refused = false
+		end 'reason'
+	end 'nonceRefused'
+
+	print("{wrong} {refused} {untouched.equals(bytesFor(9, count: 20))}\n")
+	return 0
+end 'main'
+```
+```stdout
+0 true true
+```
+```exitcode
+0
+```
+
+<!-- test: aes-gcm.seal-into-the-plaintext-array-itself -->
+`sealInto` reads its plaintext, nonce and additional data as they were when the call began even when `output` is one of
+those arrays: the array ends up holding that input's first `at` bytes followed by what `seal` answers for the whole
+inputs, for plaintexts of 0 to 300 bytes at offsets 0, 5 and 40, and `open` takes the sealed bytes back.
+```maxon
+function bytesFor(seed Count, count Count) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for index in 0 upto count 'eachByte'
+		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
+		bytes.push(((mixed shr 11) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'bytesFor'
+
+function part(bytes ByteArray, start Count, endIndex Count) returns ByteArray
+	return try bytes.slice(start, endIndex: endIndex) otherwise panic("the slice lies inside the array")
+end 'part'
+
+enum Aliased
+	plaintext
+	nonce
+	additionalData
+end 'Aliased'
+
+function sealOverPlaintext(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray, at Count) returns ByteArray
+	var shared = plain.clone()
+	try aead.sealInto(shared, at: at, nonce: nonce, plaintext: shared, additionalData: additional) otherwise panic("sealed")
+
+	return shared
+end 'sealOverPlaintext'
+
+function sealOverNonce(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray, at Count) returns ByteArray
+	var shared = nonce.clone()
+	try aead.sealInto(shared, at: at, nonce: shared, plaintext: plain, additionalData: additional) otherwise panic("sealed")
+
+	return shared
+end 'sealOverNonce'
+
+function sealOverAdditionalData(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray, at Count) returns ByteArray
+	var shared = additional.clone()
+	try aead.sealInto(shared, at: at, nonce: nonce, plaintext: plain, additionalData: shared) otherwise panic("sealed")
+
+	return shared
+end 'sealOverAdditionalData'
+
+function sealedAliased(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray, at Count, aliased Aliased) returns ByteArray
+	return match aliased 'which'
+		plaintext gives sealOverPlaintext(aead, nonce: nonce, additional: additional, plain: plain, at: at)
+		nonce gives sealOverNonce(aead, nonce: nonce, additional: additional, plain: plain, at: at)
+		additionalData gives sealOverAdditionalData(aead, nonce: nonce, additional: additional, plain: plain, at: at)
+	end 'which'
+end 'sealedAliased'
+
+function prefixOf(aliased Aliased, nonce ByteArray, additional ByteArray, plain ByteArray, at Count) returns ByteArray
+	let source = match aliased 'source'
+		plaintext gives plain
+		nonce gives nonce
+		additionalData gives additional
+	end 'source'
+	let kept = at if at < source.count() else source.count()
+
+	return part(source, start: 0, endIndex: kept)
+end 'prefixOf'
+
+function aliasedWrong(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray, at Count, aliased Aliased) returns bool
+	let expected = try aead.seal(nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
+	let prefix = prefixOf(aliased, nonce: nonce, additional: additional, plain: plain, at: at)
+	let shared = sealedAliased(aead, nonce: nonce, additional: additional, plain: plain, at: at, aliased: aliased)
+
+	if shared.count() != at + expected.count() 'wrongLength'
+		return true
+	end 'wrongLength'
+
+	if not part(shared, start: 0, endIndex: prefix.count()).equals(prefix) 'prefixChanged'
+		return true
+	end 'prefixChanged'
+
+	let sealed = part(shared, start: at, endIndex: shared.count())
+
+	if not sealed.equals(expected) 'sealedDiffers'
+		return true
+	end 'sealedDiffers'
+
+	let opened = try aead.open(nonce, sealed: sealed, additionalData: additional) otherwise panic("opened")
+
+	return not opened.equals(plain)
+end 'aliasedWrong'
+
+function main() returns ExitCode
+	let aead = try AesGcm.create(bytesFor(1, count: 16)) otherwise panic("the key is valid")
+	let nonce = bytesFor(2, count: 12)
+	let additional = bytesFor(3, count: 13)
+	var wrong = 0 as Count
+
+	for dataBytes in 0 to 300 'eachLength'
+		for at in [0, 5, 40] 'eachOffset'
+			for aliased in Aliased.allCases 'eachAlias'
+				if aliasedWrong(aead, nonce: nonce, additional: additional, plain: bytesFor(dataBytes + 5, count: dataBytes), at: at, aliased: aliased) 'aliasedDiffers'
+					wrong = wrong + 1
+				end 'aliasedDiffers'
+			end 'eachAlias'
+		end 'eachOffset'
+	end 'eachLength'
+
+	print("{wrong}\n")
+	return 0
+end 'main'
+```
+```stdout
+0
+```
+```exitcode
+0
 ```

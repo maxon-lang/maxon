@@ -18,7 +18,7 @@ typealias AesStride = int(1 to 4)
 typealias AesKeySlot = int(0 to 8)
 typealias AesConstantIndex = int(0 to 10) implements ElementIndex
 
-enum AesDirection
+export enum AesDirection
 	encrypt
 	decrypt
 end 'AesDirection'
@@ -678,6 +678,20 @@ export function aesRequireKeyLength(key ByteArray) throws AesError
 	end 'keyLength'
 end 'aesRequireKeyLength'
 
+export function aesHoldBlock(output ByteArray, at ElementIndex)
+	if output.count() < at + aesBlockBytes 'short'
+		output.resize(at + aesBlockBytes)
+	end 'short'
+end 'aesHoldBlock'
+
+function aesStoreBlock(output ByteArray, at ElementIndex, block ByteArray)
+	aesHoldBlock(output, at: at)
+
+	for (iter, byte) in block.withIterator() 'eachByte'
+		try output.set(at + iter.index(), value: byte) otherwise panic("aes: a byte inside the span aesHoldBlock grew is missing")
+	end 'eachByte'
+end 'aesStoreBlock'
+
 export type AesBitsliced
 	// Not zeroed when the `AesBitsliced` is dropped: there is no destructor hook to do it.
 	var roundKeys as AesWords
@@ -691,17 +705,16 @@ export type AesBitsliced
 		return Self{roundKeys: aesExpandKey(key, rounds: rounds), rounds: rounds}
 	end 'create'
 
-	export function encryptBlock(block ByteArray) returns ByteArray throws AesError
+	export function cryptBlock(block ByteArray, direction AesDirection) returns ByteArray throws AesError
 		try requireBlock(block)
 
-		return crypt(block, direction: AesDirection.encrypt)
-	end 'encryptBlock'
+		return crypt(block, direction: direction)
+	end 'cryptBlock'
 
-	export function decryptBlock(block ByteArray) returns ByteArray throws AesError
+	export function cryptBlockInto(block ByteArray, output ByteArray, at ElementIndex, direction AesDirection) throws AesError
 		try requireBlock(block)
-
-		return crypt(block, direction: AesDirection.decrypt)
-	end 'decryptBlock'
+		aesStoreBlock(output, at: at, block: crypt(block, direction: direction))
+	end 'cryptBlockInto'
 
 	export function xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
 		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift

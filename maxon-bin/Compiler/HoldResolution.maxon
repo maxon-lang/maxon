@@ -91,6 +91,8 @@ type HoldJudge
 	export var valueTags as ValueTypeTagArray
 	export var valueNameIds as TypeNameIdArray
 	var operands as ValueIdArray
+	var paramCount as ParamCount
+	var byRefParams as ParamPositionMask
 	export var effectKey as HoldKey
 	export var effectCallee as ElementIndex
 	export var effectCandidates as NameRoster
@@ -100,14 +102,20 @@ type HoldJudge
 	let columnContainers as NameRoster
 
 	static function create(signatures ProgramSignatures, typeNames TypeNameInterner, byName FuncIndexByName, functions IrFunctionArray, columnContainers NameRoster) returns HoldJudge
-		return Self{instKind: Instantiation.displaces, instKeys: HoldKeyColumn.create(), columnContainers: columnContainers, signatures: signatures, typeNames: typeNames, byName: byName, effectCandidates: NameRoster.create(), dispatch: WitnessDispatchTargets.create(signatures, functions: functions), filePath: FilePath from "", valueTags: ValueTypeTagArray.create(), valueNameIds: TypeNameIdArray.create(), operands: ValueIdArray.create(), effectKey: UnknownRecord, effectCallee: 0}
+		return Self{instKind: Instantiation.displaces, instKeys: HoldKeyColumn.create(), columnContainers: columnContainers, signatures: signatures, typeNames: typeNames, byName: byName, effectCandidates: NameRoster.create(), dispatch: WitnessDispatchTargets.create(signatures, functions: functions), filePath: FilePath from "", valueTags: ValueTypeTagArray.create(), valueNameIds: TypeNameIdArray.create(), operands: ValueIdArray.create(), paramCount: 0, byRefParams: NoParamPositions, effectKey: UnknownRecord, effectCallee: 0}
 	end 'create'
 
 	function beginFunction(func IrFunction)
 		self.filePath = func.sourceFilePath
 		self.valueTags = func.valueTags
 		self.valueNameIds = func.valueNameIds
+		self.paramCount = func.paramCount
+		self.byRefParams = func.reassignedParamMask
 	end 'beginFunction'
+
+	function addressIsAByRefParam(addr ValueId) returns bool
+		return addr < valueIdAtParamPosition(self.paramCount) and maskHasParam(self.byRefParams, param: paramPositionOfValueId(addr))
+	end 'addressIsAByRefParam'
 
 	function classify(op MaxonOp) returns HoldOpClass
 		return match op 'op'
@@ -187,13 +195,18 @@ type HoldJudge
 
 	function storeEffect(op MaxonOp) returns HoldEffect
 		return match op 'op'
-			storeIndirect(addr, offset, _, valueType) gives self.fieldStoreEffect(addr, offset: offset, valueType: valueType)
+			storeIndirect(addr, offset, _, _) gives self.fieldStoreEffect(addr, offset: offset)
 			default panic("HoldJudge.storeEffect: handed an op that is not a store")
 		end 'op'
 	end 'storeEffect'
 
-	function fieldStoreEffect(addr ValueId, offset ElementIndex, valueType MaxonType) returns HoldEffect
-		if not self.typeMayDisplaceAnOccupant(valueType) 'nothingDisplaced'
+	// A store through a reassigned parameter's cell is judged first: it writes the caller's slot.
+	function fieldStoreEffect(addr ValueId, offset ElementIndex) returns HoldEffect
+		if self.addressIsAByRefParam(addr) 'aReassignedParameterCell'
+			return self.cellStoreEffect(addr)
+		end 'aReassignedParameterCell'
+
+		if not self.slotMayDisplaceAnOccupant(addr, offset: offset) 'nothingDisplaced'
 			return HoldEffect.none
 		end 'nothingDisplaced'
 
@@ -207,6 +220,44 @@ type HoldJudge
 		return HoldEffect.field
 	end 'fieldStoreEffect'
 
+	function cellStoreEffect(cell ValueId) returns HoldEffect
+		let tag = try self.valueTags.get(cell) otherwise return HoldEffect.everything
+		let nameId = try self.valueNameIds.get(cell) otherwise return HoldEffect.everything
+
+		if tag == ValueTypeTag.void or self.typeMayDisplaceAnOccupant(maxonTypeOfTag(tag, nameId: nameId)) 'theCellMayHoldARecord'
+			return HoldEffect.everything
+		end 'theCellMayHoldARecord'
+
+		return HoldEffect.none
+	end 'cellStoreEffect'
+
+	// Judged from the slot's declared type: the op's storage type is lossy for an enum, union or
+	// interface slot, and the value stored is not the occupant it displaces. A String or Character
+	// header store displaces no record, because a hold never names a buffer.
+	function slotMayDisplaceAnOccupant(addr ValueId, offset ElementIndex) returns bool
+		let tag = try self.valueTags.get(addr) otherwise return true
+		let nameId = try self.valueNameIds.get(addr) otherwise return true
+
+		if tagIsByteRecord(tag) 'aByteRecord'
+			return false
+		end 'aByteRecord'
+
+		if tag != ValueTypeTag.structRef and tag != ValueTypeTag.named 'anUnresolvableRecord'
+			return true
+		end 'anUnresolvableRecord'
+
+		let name = try self.typeNames.nameOf(nameId) otherwise return true
+		let declared = try self.signatures.slotDeclaredTypes(name, offset: offset as ByteOffset, into: self.typeNames) otherwise return true
+
+		for slotType in declared 'eachDeclaredSlotType'
+			if self.typeMayDisplaceAnOccupant(slotType) 'mayHoldARecord'
+				return true
+			end 'mayHoldARecord'
+		end 'eachDeclaredSlotType'
+
+		return false
+	end 'slotMayDisplaceAnOccupant'
+
 	function typeMayDisplaceAnOccupant(valueType MaxonType) returns bool
 		let tag = maxonTypeTag(valueType)
 
@@ -214,12 +265,21 @@ type HoldJudge
 			return false
 		end 'aScalarWord'
 
-		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void 'anUnknownOccupant'
+		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void or self.namesNoDeclaredType(valueType) 'anUnknownOccupant'
 			return true
 		end 'anUnknownOccupant'
 
 		return self.signatures.typeOwesDropFor(valueType, from: self.typeNames, readerFilePath: self.filePath)
 	end 'typeMayDisplaceAnOccupant'
+
+	function namesNoDeclaredType(valueType MaxonType) returns bool
+		if maxonTypeTag(valueType) != ValueTypeTag.named 'notAName'
+			return false
+		end 'notAName'
+
+		let name = try self.typeNames.nameOf(typeNameIdOf(valueType)) otherwise return true
+		return not self.signatures.typeNameIsDeclared(name)
+	end 'namesNoDeclaredType'
 
 	function releaseEffectOfValue(value ValueId) returns HoldEffect
 		let record = self.recordKeyOfValue(value)
@@ -535,7 +595,7 @@ function quietRuntimeCallee(callee ByteArray) returns bool
 		return false
 	end 'notACompilerEntry'
 
-	return containerReadCallee(callee) or pureComputationCallee(callee) or bytesStartWith(callee, prefix: ClonerPrefix) or callee.equals(SharedValueCurrentName) or callee.equals(ThreadCpuTicksName) or callee.equals(GtNowNsName) or callee.equals(DsLogEnabledMarkerName) or callee.equals(DebugStreamNameIdMarkerName) or callee.equals(TerminalStdoutWantsColorName) or callee.equals(MmAllocName) or callee.equals(StrCopyName) or callee.equals(StrCloneName) or callee.equals(MmOwnName) or callee.equals(MmOwnDeepName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(MmRetainName) or callee.equals(MmIncrefName) or callee.equals(StrRetainName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(RetainTypeParamName) or callee.equals(RetainExistentialName)
+	return containerReadCallee(callee) or pureComputationCallee(callee) or isHardwareAesRuntimeCallee(callee) or bytesStartWith(callee, prefix: ClonerPrefix) or callee.equals(SharedValueCurrentName) or callee.equals(ThreadCpuTicksName) or callee.equals(GtNowNsName) or callee.equals(DsLogEnabledMarkerName) or callee.equals(DebugStreamNameIdMarkerName) or callee.equals(TerminalStdoutWantsColorName) or callee.equals(MmAllocName) or callee.equals(StrCopyName) or callee.equals(StrCloneName) or callee.equals(MmOwnName) or callee.equals(MmOwnDeepName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(MmRetainName) or callee.equals(MmIncrefName) or callee.equals(StrRetainName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(RetainTypeParamName) or callee.equals(RetainExistentialName)
 end 'quietRuntimeCallee'
 
 export function indexedElementReadCallee(callee ByteArray) returns bool

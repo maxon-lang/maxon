@@ -1,0 +1,26 @@
+diff --git a/stdlib/helpers/crypto/AesGcmHardware.maxon b/stdlib/helpers/crypto/AesGcmHardware.maxon
+--- a/stdlib/helpers/crypto/AesGcmHardware.maxon
++++ b/stdlib/helpers/crypto/AesGcmHardware.maxon
+@@ -21,14 +21,20 @@
+ 			output.resize(sealedEnd)
+ 		end 'resizes'
+ 
+-		__Builtins.aesGcmSeal(output, at, keys, nonce, additionalData, plaintext)
++		if keys.count() > 0 'needsANewerCompiler'
++			panic("hardware AES-GCM needs a compiler newer than the seed: {output.count()} {at} {keys.count()} {nonce.count()} {additionalData.count()} {plaintext.count()}")
++		end 'needsANewerCompiler'
+ 	end 'aesGcmHardwareSealInto'
+ 
+ 	export function aesGcmHardwareOpen(keys ByteArray, nonce ByteArray, sealed ByteArray, additionalData ByteArray, ciphertextBytes Count) returns ByteArray throws AeadError
+ 		var plaintext = ByteArray.create()
+ 		plaintext.resize(ciphertextBytes)
+ 
+-		if not __Builtins.aesGcmOpen(plaintext, aesHardwareFirstByte, keys, nonce, additionalData, sealed) 'forged'
++		if keys.count() > 0 'needsANewerCompiler'
++			panic("hardware AES-GCM needs a compiler newer than the seed: {plaintext.count()} {aesHardwareFirstByte} {keys.count()} {nonce.count()} {additionalData.count()} {sealed.count()}")
++		end 'needsANewerCompiler'
++
++		if keys.count() == 0 'forged'
+ 			throw AeadError.authenticationFailed
+ 		end 'forged'
+ 

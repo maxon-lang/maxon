@@ -23,29 +23,18 @@
 		return schedule
 	end 'aesHardwareSchedule'
 
-	module function aesHardwareEncrypt(schedule ByteArray, block ByteArray) returns ByteArray throws AesError
+	module function aesHardwareCryptInto(schedule ByteArray, block ByteArray, output ByteArray, at ElementIndex, direction AesDirection) throws AesError
 		if block.count() != aesHardwareBlockBytes 'wrongLength'
 			throw AesError.invalidBlockLength
 		end 'wrongLength'
 
-		var sealed = ByteArray.create()
-		sealed.resize(aesHardwareBlockBytes)
-		__Builtins.aesEncryptBlock(sealed, aesHardwareFirstByte, schedule, block, aesHardwareFirstByte)
+		aesHoldBlock(output, at: at)
 
-		return sealed
-	end 'aesHardwareEncrypt'
-
-	module function aesHardwareDecrypt(schedule ByteArray, block ByteArray) returns ByteArray throws AesError
-		if block.count() != aesHardwareBlockBytes 'wrongLength'
-			throw AesError.invalidBlockLength
-		end 'wrongLength'
-
-		var opened = ByteArray.create()
-		opened.resize(aesHardwareBlockBytes)
-		__Builtins.aesDecryptBlock(opened, aesHardwareFirstByte, schedule, block, aesHardwareFirstByte)
-
-		return opened
-	end 'aesHardwareDecrypt'
+		match direction 'operation'
+			encrypt then __Builtins.aesEncryptBlock(output, at, schedule, block, aesHardwareFirstByte)
+			decrypt then __Builtins.aesDecryptBlock(output, at, schedule, block, aesHardwareFirstByte)
+		end 'operation'
+	end 'aesHardwareCryptInto'
 
 	function aesHardwareCounterBlock(nonce ByteArray, firstCounter AesCounter, streamBlocks Count) returns ByteArray throws AesKeyStreamError
 		if nonce.count() != aesHardwareNonceBytes 'nonceLength'

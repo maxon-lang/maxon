@@ -56913,10 +56913,11 @@ export type Parser
 		// owner of is MOVED out of; anything else — a `var` scrutinee, whose slot the arms may still write; a
 		// BORROWED scrutinee (a param/receiver/field read, whose owner is the caller's local); and equally a
 		// CO-OWNED one (a box this frame holds a SECOND reference to) — is RETAINED from instead
-		// (`moveOutManagedPayload` vs `retainBorrowedPayload`). If ANY arm MOVES a managed payload out, the
-		// whole scrutinee is consumed: its binding is marked `partiallyMoved` — a re-read is E3102, but the
-		// box is still dropped, its cascade null-guarding the moved slots. A match that retains, or binds
-		// nothing managed, BORROWS — the union survives.
+		// (`moveOutManagedPayload` vs `retainBorrowedPayload`, or a hold for a binding nothing can
+		// write). If ANY arm MOVES a managed payload out, the whole scrutinee is consumed: its binding
+		// is marked `partiallyMoved` — a re-read is E3102, but the box is still dropped, its cascade
+		// null-guarding the moved slots. A match that retains or holds, or binds nothing managed,
+		// BORROWS — the union survives.
 		//
 		// ⛔⛔ **TWO QUESTIONS, TWO PREDICATES, AND MERGING THEM IS A SEGFAULT.** `scrutOwned` below is
 		// *"does this value owe a drop?"* and is what the temporary-scrutinee enrolment needs — a co-owned
@@ -60022,6 +60023,10 @@ export type Parser
 	//     of them SEGFAULTED while the move-out's gate asked `valueIsOwnedHeap` — a predicate that answers
 	//     *"this value owns a reference"* where the null store needs *"nobody else will read these slots"*. The
 	//     gate is `valueIsSoleHeapOwner`; see `OwnedHeapExclusivity` for the six measured programs.
+	// Each RETAIN above is a hold (`holdBindingRead`) when nothing can write the binding and its
+	// payload is not a `typeParameter` or an `interfaceRef`. `HoldResolution.maxon` lowers the hold
+	// to the same incref only where an op in the window may release or displace what the binding
+	// reads.
 	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
 	// (`setBindingPartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
 	// box, and marking it moved would make the other owner's later re-read a false E3102.
@@ -60069,7 +60074,8 @@ export type Parser
 				self.carryLetPayloadMark(scrutBox, read: loaded)
 			end 'aLetPayload'
 
-			var bindingInfo = try self.bodyState.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), kind: bindingKindOfMutability((scrutMutable or scrutIsAFreshTemporary) and payloadBindingAcceptsWrites(class) and not binding.field.isLet), value: loaded, scrutBox: scrutBox, slotOffset: offset, storage: storage) otherwise throw SourceParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingTypeName()), line: binding.nameTok.line, column: binding.nameTok.column)
+			let bindingWrites = (scrutMutable or scrutIsAFreshTemporary) and payloadBindingAcceptsWrites(class) and not binding.field.isLet
+			var bindingInfo = try self.bodyState.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), kind: bindingKindOfMutability(bindingWrites), value: loaded, scrutBox: scrutBox, slotOffset: offset, storage: storage) otherwise throw SourceParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingTypeName()), line: binding.nameTok.line, column: binding.nameTok.column)
 
 			// ⭐ **E3012 — AN ARM THAT NAMES A PAYLOAD IT NEVER READS MEANT `_`.** The discard is the spelling
 			// for a payload the arm does not want, and it is already skipped above, so a NAME here is a claim
@@ -60109,7 +60115,9 @@ export type Parser
 				if scrutSolelyOwned and not scrutMutable and not self.sendErrorSlotIsCoOwnedByType(layout, slotType: declared) 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: layout.name), range: range)
 					movedManaged = true
-				end 'ownedMoveOut' else 'retainedCoOwn'
+				end 'ownedMoveOut' else if not bindingWrites and not self.holdReplacesItsSource(loaded) 'heldRead'
+					_ = self.holdBindingRead(loaded, name: binding.nameTok.value, range: range)
+				end 'heldRead' else 'retainedCoOwn'
 					self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
 				end 'retainedCoOwn'
 			end 'managedPayload'
@@ -60128,10 +60136,10 @@ export type Parser
 	// destructive and this function never re-reads the slot, so every OTHER owner of the box is a reader it
 	// cannot account for: a BORROWED union's owner is the caller's local, and a CO-OWNED one's is a struct
 	// field, an array slot, a caller's payload slot or a caller's own local that the retain gave this frame a
-	// second reference to. A `var` scrutinee is a reader too — its own later `match` — which is why it takes
-	// the retain as well. All three take `retainBorrowedPayload` instead, which leaves the slot alone;
-	// `declarePayloadBindings` is the one place that picks between them, and `OwnedHeapExclusivity` records the
-	// six programs the wider gate segfaulted.
+	// second reference to. A `var` scrutinee is a reader too — its own later `match` — which is why it
+	// is not moved out of either. All three leave the slot alone, through `retainBorrowedPayload` or a
+	// hold; `declarePayloadBindings` is the one place that picks between them, and
+	// `OwnedHeapExclusivity` records the six programs the wider gate segfaulted.
 	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, scrutBox ValueId, offset ByteOffset, storage MaxonType, exclusivity OwnedHeapExclusivity, range SourceRange)
 		// The caller passes `coOwned` for every union but a send error, whose payloads are sole by its
 		// type (`serviceSendErrorExclusivity`).
@@ -60183,12 +60191,13 @@ export type Parser
 	// destructor drives the field to zero, so the following incref resurrects freed memory.
 	//
 	// The RETAIN twin of `moveOutManagedPayload`, and an application of the retain-promotion rule
-	// `retainBorrowedAggregate` applies, which a thrown borrowed box takes too. A bounded,
-	// unconditional refcount op is the point, not a shortcut. The release side is structural: the
-	// binding is in `ownedBindings` and drops at its scope exit whatever an analysis would have said,
-	// so an unconditional acquire is unconditionally balanced and needs no analysis at all. Deciding
-	// it per value instead would buy a saved incref with a whole-function dataflow pass this compiler
-	// does not have.
+	// `retainBorrowedAggregate` applies, which a thrown borrowed box takes too. The release side is
+	// structural: the binding is in `ownedBindings` and drops at its scope exit whatever an analysis
+	// would have said, so the acquire is balanced without one.
+	//
+	// A binding that can be written takes this retain unconditionally. Any other binding takes a hold
+	// (`holdBindingRead`) in `declarePayloadBindings`, and `HoldResolution.maxon` decides per site
+	// whether the incref is emitted; the payloads `holdReplacesItsSource` names keep this retain.
 	//
 	// ⭐⭐ **AND THE BINDING IS A CO-OWNER, WHICH IS WHAT MAKES A NESTED `match` ON IT SAFE.** The reference this
 	// took is a SECOND one; the box still holds the first. So `direct(ty) gives match ty …` — a nested match on a
@@ -94570,7 +94579,9 @@ export type Parser
 	function emitAesCipherIntrinsic(func IrFunction, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, callee ByteArray, intrinsic AesCipherIntrinsic, calleeTok Token, calleeIndex ElementIndex, resultUsed bool) returns ValueId throws SourceParseError
 		try requireBuiltinArity(args, builtinName: callee, arity: aesCipherArity(intrinsic), calleeTok: calleeTok)
 
-		if resultUsed 'noValueToUse'
+		let answersVerdict = aesCipherAnswersVerdict(intrinsic)
+
+		if resultUsed and not answersVerdict 'noValueToUse'
 			throw SourceParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
 		end 'noValueToUse'
 
@@ -94590,13 +94601,9 @@ export type Parser
 			end 'aBuffer'
 		end 'eachOperand'
 
-		for index in 0 upto args.count() 'eachWritten'
-			if aesCipherOperandIsWritten(intrinsic, index: index as ParamCount) 'aWrite'
-				self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex, position: index as ParamCount)
-			end 'aWrite'
-		end 'eachWritten'
+		self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex, position: AesWrittenOperandPosition)
 
-		return self.emitRuntimeCall(aesCipherRuntimeName(intrinsic), args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+		return self.emitRuntimeCall(aesCipherRuntimeName(intrinsic), args: args, resultTag: ValueTypeTag.boolean if answersVerdict else ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitAesCipherIntrinsic'
 
 	function emitOrderedWordAccess(func IrFunction, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, callee ByteArray, intrinsic OrderedWordIntrinsic, calleeTok Token, calleeIndex ElementIndex, resultUsed bool) returns ValueId throws SourceParseError

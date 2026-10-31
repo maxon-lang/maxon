@@ -257,11 +257,14 @@ let Arm64GcmHalfBlockBytes = 8
 let Arm64GcmLaneLow = 0
 let Arm64GcmLaneHigh = 1
 let Arm64GcmExtHalf = Arm64OpExtVec16b or (Arm64GcmHalfBlockBytes shl Arm64ExtImmShift)
-let Arm64GcmCounterWordOffset = AesBlockBytes - AesCtrCounterWordBytes
 let Arm64GcmControl = Arm64Register.x0
 let Arm64GcmTable = Arm64Register.x1
 let Arm64GcmMessage = Arm64Register.x2
 let Arm64GcmBuffer = Arm64Register.x3
+
+// Shares x10 with `Arm64GcmCounterTemp`, which only the init chunk uses; the encrypt and decrypt
+// chunks keep the destination there, so a counter temporary in either would overwrite it.
+let Arm64GcmDestination = Arm64Register.x10
 let Arm64GcmLength = Arm64Register.x4
 let Arm64GcmRounds = Arm64Register.x5
 let Arm64GcmWalker = Arm64Register.x6
@@ -688,16 +691,19 @@ function emitArm64GcmCryptSetup(asm Arm64RuntimeAsm)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmScratch, value: Arm64GcmCounterStep)
 	emitArm64Rr(asm.code, opcode: Arm64OpInsWordFromGpr, rd: Arm64GcmInc, rn: arm64RuntimeReg(Arm64GcmScratch))
 
-	arm64EmitLoadWord32At(asm, dest: Arm64GcmScratch, base: Arm64GcmMessage, byteOffset: (AesGcmCounterOffset + Arm64GcmCounterWordOffset) as MachineWord)
+	arm64EmitLoadWord32At(asm, dest: Arm64GcmScratch, base: Arm64GcmMessage, byteOffset: (AesGcmCounterOffset + AesCtrCounterWordOffset) as MachineWord)
 	emitArm64Rr(asm.code, opcode: Arm64OpRevW, rd: arm64RuntimeReg(Arm64GcmScratch), rn: arm64RuntimeReg(Arm64GcmScratch))
-	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmCounterTemp, base: Arm64GcmLength, imm: Arm64GcmPartialBlockMax)
-	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64GcmCounterTemp), rn: arm64RuntimeReg(Arm64GcmCounterTemp), sh: AesBlockShift)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64GcmScratch, lhs: Arm64GcmScratch, rhs: Arm64GcmCounterTemp)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmWalker, base: Arm64GcmLength, imm: Arm64GcmPartialBlockMax)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64GcmWalker), rn: arm64RuntimeReg(Arm64GcmWalker), sh: AesBlockShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64GcmScratch, lhs: Arm64GcmScratch, rhs: Arm64GcmWalker)
 	emitArm64Rr(asm.code, opcode: Arm64OpRevW, rd: arm64RuntimeReg(Arm64GcmScratch), rn: arm64RuntimeReg(Arm64GcmScratch))
-	arm64EmitStoreWord32At(asm, src: Arm64GcmScratch, base: Arm64GcmMessage, byteOffset: (AesGcmCounterOffset + Arm64GcmCounterWordOffset) as MachineWord)
+	arm64EmitStoreWord32At(asm, src: Arm64GcmScratch, base: Arm64GcmMessage, byteOffset: (AesGcmCounterOffset + AesCtrCounterWordOffset) as MachineWord)
 
 	emitArm64Rr(asm.code, opcode: Arm64OpRev32Vec16b, rd: Arm64GcmCtr, rn: Arm64GcmCtr)
 	emitArm64Rrr(asm.code, opcode: Arm64OpAddVec4s, rd: Arm64GcmCtr, rn: Arm64GcmCtr, rm: Arm64GcmInc)
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmDestination, src: Arm64GcmBuffer)
+	arm64EmitLoadWord64At(asm, dest: Arm64GcmBuffer, base: Arm64GcmMessage, byteOffset: AesGcmSourceOffset as MachineWord)
 end 'emitArm64GcmCryptSetup'
 
 function emitArm64GcmNextCounter(asm Arm64RuntimeAsm, block MachineWord)
@@ -718,9 +724,9 @@ function emitArm64GcmEightBlocks(asm Arm64RuntimeAsm)
 	emitArm64GcmEncipher(asm, states: Arm64GcmOctetBlocks)
 end 'emitArm64GcmEightBlocks'
 
-// GHASH covers the ciphertext. Decrypting therefore hashes the whole blocks before the loop's in-place
-// XOR overwrites them with plaintext, and the tail from the register it was loaded into; encrypting
-// hashes both after.
+// GHASH covers the ciphertext. Decrypting therefore hashes the whole blocks before the loop's store
+// can overwrite them with plaintext (the output may be the source), and the tail from the register
+// it was loaded into; encrypting hashes both after.
 function emitArm64GcmSingleBlockLoop(asm Arm64RuntimeAsm, decrypting bool, done BlockId)
 	let loop = asm.newLabel()
 	let tail = asm.newLabel()
@@ -728,7 +734,7 @@ function emitArm64GcmSingleBlockLoop(asm Arm64RuntimeAsm, decrypting bool, done 
 	arm64EmitCbzTo(asm, reg: Arm64GcmLength, label: done)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64GcmLength, imm: AesBlockBytes)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: tail)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmTailPointer, src: Arm64GcmBuffer)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmTailPointer, src: Arm64GcmBuffer if decrypting else Arm64GcmDestination)
 
 	if decrypting 'hashesTheInput'
 		arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64GcmRunBytes), rn: arm64RuntimeReg(Arm64GcmLength), sh: AesBlockShift)
@@ -744,8 +750,9 @@ function emitArm64GcmSingleBlockLoop(asm Arm64RuntimeAsm, decrypting bool, done 
 	emitArm64GcmNextCounter(asm, block: 0)
 	emitArm64GcmEncipher(asm, states: 1)
 	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: 0, rn: 0, rm: Arm64GcmLoaded)
-	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: 0, base: Arm64GcmBuffer, byteOffset: 0)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: 0, base: Arm64GcmDestination, byteOffset: 0)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmBuffer, base: Arm64GcmBuffer, imm: AesBlockBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmDestination, base: Arm64GcmDestination, imm: AesBlockBytes)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmRunBytes, base: Arm64GcmRunBytes, imm: AesBlockBytes)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64GcmLength, imm: AesBlockBytes)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: loop)
@@ -761,7 +768,7 @@ function emitArm64GcmSingleBlockLoop(asm Arm64RuntimeAsm, decrypting bool, done 
 	emitArm64GcmNextCounter(asm, block: 0)
 	emitArm64GcmEncipher(asm, states: 1)
 	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: 0, rn: 0, rm: Arm64GcmLoaded)
-	emitArm64GcmStoreTail(asm, vector: 0, destination: Arm64GcmBuffer, count: Arm64GcmLength)
+	emitArm64GcmStoreTail(asm, vector: 0, destination: Arm64GcmDestination, count: Arm64GcmLength)
 
 	if decrypting 'hashesTheInputTail'
 		emitArm64GcmHashBlock(asm, block: Arm64GcmLoaded)
@@ -791,12 +798,13 @@ export function buildArm64AesGcmEncryptChunk() returns FunctionCodeChunk
 		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64GcmT2, base: Arm64GcmBuffer, byteOffset: byteOffset + AesBlockBytes)
 		emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: (pair * 2) as MachineWord, rn: (pair * 2) as MachineWord, rm: Arm64GcmT1)
 		emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: (pair * 2 + 1) as MachineWord, rn: (pair * 2 + 1) as MachineWord, rm: Arm64GcmT2)
-		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: (pair * 2) as MachineWord, base: Arm64GcmBuffer, byteOffset: byteOffset)
-		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: (pair * 2 + 1) as MachineWord, base: Arm64GcmBuffer, byteOffset: byteOffset + AesBlockBytes)
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: (pair * 2) as MachineWord, base: Arm64GcmDestination, byteOffset: byteOffset)
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: (pair * 2 + 1) as MachineWord, base: Arm64GcmDestination, byteOffset: byteOffset + AesBlockBytes)
 	end 'eachPair'
 
 	emitArm64GcmHashOctet(asm, source: Arm64GcmBlockSource.registers, base: Arm64GcmBuffer)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmBuffer, base: Arm64GcmBuffer, imm: Arm64GcmOctetBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmDestination, base: Arm64GcmDestination, imm: Arm64GcmOctetBytes)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64GcmLength, imm: Arm64GcmOctetBytes)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: octets)
 
@@ -830,10 +838,11 @@ export function buildArm64AesGcmDecryptChunk() returns FunctionCodeChunk
 		let byteOffset = (index * AesBlockBytes) as MachineWord
 		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64GcmLoaded, base: Arm64GcmBuffer, byteOffset: byteOffset)
 		emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: index as MachineWord, rn: index as MachineWord, rm: Arm64GcmLoaded)
-		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: index as MachineWord, base: Arm64GcmBuffer, byteOffset: byteOffset)
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: index as MachineWord, base: Arm64GcmDestination, byteOffset: byteOffset)
 	end 'eachBlock'
 
 	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmBuffer, base: Arm64GcmBuffer, imm: Arm64GcmOctetBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmDestination, base: Arm64GcmDestination, imm: Arm64GcmOctetBytes)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64GcmLength, imm: Arm64GcmOctetBytes)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: octets)
 

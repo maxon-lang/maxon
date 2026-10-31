@@ -2,7 +2,7 @@
 
 An instrument for one question: how fast are the stdlib's `Aes` and `AesGcm` against Go's, on the same
 work, on the same machine, on each lane? One Maxon program (`aes.maxon`) and one Go program (`go/`) run
-the same nine workloads and print the same lines. `scripts/bench-aes.py` builds both, verifies that every
+the same fifteen workloads and print the same lines. `scripts/bench-aes.py` builds both, verifies that every
 arm prints the same iteration counts and digests, runs the arms interleaved and reports each workload's
 throughput with the Maxon/Go ratio against every Go arm. The ratios are the numbers the AES parity work
 drives to 1.0 or below; rows are logged in `docs/aes-benchmark-log.md`.
@@ -33,14 +33,24 @@ nonce, a 13-byte AAD, and 64-byte, 1 KiB and 16 KiB messages.
 | Workload | Bytes per op | Base iterations | One op |
 |---|---|---|---|
 | `keysetup-128` | 0 | 20000 | expand a 128-bit key, then encrypt one block with it |
+| `keysetup-128-into` | 0 | 20000 | the same, encrypting into a buffer the loop reuses (`encryptBlockInto`; Go `Encrypt(dst, src)`) |
 | `block-128` | 16 | 200000 | encrypt one block with AES-128; each op encrypts the previous op's output |
+| `block-128-into` | 16 | 200000 | the same, in place over the block itself (`encryptBlockInto`; Go `Encrypt(buf, buf)`) |
 | `ctr-128-16k` | 16384 | 1000 | AES-128 CTR over 16 KiB, counter 2 |
 | `ctr-256-16k` | 16384 | 1000 | AES-256 CTR over 16 KiB, counter 2 |
 | `gcm-128-seal-64` | 64 | 100000 | AES-128-GCM seal of 64 bytes |
+| `gcm-128-seal-64-into` | 64 | 100000 | the same, into a buffer the loop reuses (`sealInto`; Go `Seal(dst[:0], ...)`) |
 | `gcm-128-seal-1k` | 1024 | 10000 | AES-128-GCM seal of 1 KiB |
+| `gcm-128-seal-1k-into` | 1024 | 10000 | the same, into a reused buffer |
 | `gcm-128-seal-16k` | 16384 | 1000 | AES-128-GCM seal of 16 KiB |
+| `gcm-128-seal-16k-into` | 16384 | 1000 | the same, into a reused buffer |
 | `gcm-128-open-16k` | 16384 | 1000 | AES-128-GCM open of a sealed 16 KiB message |
 | `gcm-256-seal-16k` | 16384 | 1000 | AES-256-GCM seal of 16 KiB |
+| `gcm-256-seal-16k-into` | 16384 | 1000 | the same, into a reused buffer |
+
+A plain row returns a fresh array on the Maxon side and a fresh slice on the Go side, so it prices the allocation
+of the answer with the cipher. An `-into` row hands both sides a buffer they reuse from one op to the next, and
+prices the cipher and its per-call work alone.
 
 ## The programs
 
@@ -104,7 +114,9 @@ The script needs Python 3 and only the standard library.
   `--compiler <path> --label <name>`. Each arm compiles its own checkout's `bench/aes/aes.maxon`.
 - **Verification.** Every run of every arm must exit 0; a Maxon arm's exit 101 is reported as a LEAK.
   For each workload, every arm must print the same bytes per op, iterations, repeats and digest, and
-  every arm must print every workload. Any failure is a verification failure (exit 1).
+  every Go arm must print every workload, and so must a Maxon arm unless it is a control compiler built
+  before the workload existed, whose cells then read `-` and which gets no log row for it. Any failure is a
+  verification failure (exit 1).
 - **Timing.** `--warmup` untimed runs per arm (default 0: each process already takes the best of its
   repeats), then `--runs` timed runs interleaved. A cell is the best `bestNanos` over the runs, shown as
   MB/s, or as microseconds per op for `keysetup-128`.

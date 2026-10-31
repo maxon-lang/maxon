@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
@@ -34,14 +35,27 @@ func digest(b []byte) int {
 	return sum
 }
 
+const blockBytesOut = 16
+
 type impl struct {
-	keySetup func(key []byte) []byte
-	block128 func(in []byte) []byte
-	ctr128   func(nonce []byte, data []byte) []byte
-	ctr256   func(nonce []byte, data []byte) []byte
-	seal128  func(nonce, data, aad []byte) []byte
-	open128  func(nonce, sealed, aad []byte) []byte
-	seal256  func(nonce, data, aad []byte) []byte
+	keySetup     func(key []byte) []byte
+	keySetupInto func(output, key []byte) []byte
+	block128     func(in []byte) []byte
+	block128Into func(block []byte) []byte
+	ctr128       func(nonce []byte, data []byte) []byte
+	ctr256       func(nonce []byte, data []byte) []byte
+	seal128      func(nonce, data, aad []byte) []byte
+	seal128Into  func(output, nonce, data, aad []byte) []byte
+	open128      func(nonce, sealed, aad []byte) []byte
+	seal256      func(nonce, data, aad []byte) []byte
+	seal256Into  func(output, nonce, data, aad []byte) []byte
+}
+
+func blockOutput(output []byte) []byte {
+	if len(output) < blockBytesOut {
+		return make([]byte, blockBytesOut)
+	}
+	return output
 }
 
 func ctr(block cipher.Block, nonce []byte, counter uint32, data []byte) []byte {
@@ -77,11 +91,23 @@ func stdImpl(key128, key256 []byte) impl {
 			a128.Encrypt(out, in)
 			return out
 		},
-		ctr128:  func(n, d []byte) []byte { return ctr(a128, n, ctrCounter, d) },
-		ctr256:  func(n, d []byte) []byte { return ctr(a256, n, ctrCounter, d) },
-		seal128: func(n, d, a []byte) []byte { return g128.Seal(nil, n, d, a) },
-		open128: func(n, s, a []byte) []byte { return must(g128.Open(nil, n, s, a)) },
-		seal256: func(n, d, a []byte) []byte { return g256.Seal(nil, n, d, a) },
+		keySetupInto: func(output, key []byte) []byte {
+			c := must(aes.NewCipher(key))
+			out := blockOutput(output)
+			c.Encrypt(out, key)
+			return out
+		},
+		block128Into: func(block []byte) []byte {
+			a128.Encrypt(block, block)
+			return block
+		},
+		ctr128:      func(n, d []byte) []byte { return ctr(a128, n, ctrCounter, d) },
+		ctr256:      func(n, d []byte) []byte { return ctr(a256, n, ctrCounter, d) },
+		seal128:     func(n, d, a []byte) []byte { return g128.Seal(nil, n, d, a) },
+		seal128Into: func(o, n, d, a []byte) []byte { return g128.Seal(o[:0], n, d, a) },
+		open128:     func(n, s, a []byte) []byte { return must(g128.Open(nil, n, s, a)) },
+		seal256:     func(n, d, a []byte) []byte { return g256.Seal(nil, n, d, a) },
+		seal256Into: func(o, n, d, a []byte) []byte { return g256.Seal(o[:0], n, d, a) },
 	}
 }
 
@@ -91,11 +117,22 @@ func bitslicedImpl(key128, key256 []byte) impl {
 	return impl{
 		keySetup: func(key []byte) []byte { return NewBitslicedAes(key).EncryptBlock(key) },
 		block128: a128.EncryptBlock,
-		ctr128:   func(n, d []byte) []byte { return a128.XorKeyStream(n, ctrCounter, d) },
-		ctr256:   func(n, d []byte) []byte { return a256.XorKeyStream(n, ctrCounter, d) },
-		seal128:  g128.Seal,
-		open128:  g128.Open,
-		seal256:  g256.Seal,
+		keySetupInto: func(output, key []byte) []byte {
+			out := blockOutput(output)
+			copy(out, NewBitslicedAes(key).EncryptBlock(key))
+			return out
+		},
+		block128Into: func(block []byte) []byte {
+			copy(block, a128.EncryptBlock(block))
+			return block
+		},
+		ctr128:      func(n, d []byte) []byte { return a128.XorKeyStream(n, ctrCounter, d) },
+		ctr256:      func(n, d []byte) []byte { return a256.XorKeyStream(n, ctrCounter, d) },
+		seal128:     g128.Seal,
+		seal128Into: func(o, n, d, a []byte) []byte { return append(o[:0], g128.Seal(n, d, a)...) },
+		open128:     g128.Open,
+		seal256:     g256.Seal,
+		seal256Into: func(o, n, d, a []byte) []byte { return append(o[:0], g256.Seal(n, d, a)...) },
 	}
 }
 
@@ -126,7 +163,7 @@ func (s settings) measure(name string, bytesPerOp, baseIterations int, op func(p
 	var last []byte
 	for r := 0; r < s.repeats; r++ {
 		start := time.Now()
-		last = seed
+		last = bytes.Clone(seed)
 		for i := 0; i < iterations; i++ {
 			last = op(last)
 		}
@@ -168,12 +205,18 @@ func main() {
 	sealed16k := m.seal128(nonce, kib16, aad)
 
 	run.measure("keysetup-128", 0, 20000, func([]byte) []byte { return m.keySetup(key128) }, nil)
+	run.measure("keysetup-128-into", 0, 20000, func(prev []byte) []byte { return m.keySetupInto(prev, key128) }, nil)
 	run.measure("block-128", 16, 200000, m.block128, blk)
+	run.measure("block-128-into", 16, 200000, m.block128Into, blk)
 	run.measure("ctr-128-16k", 16384, 1000, func([]byte) []byte { return m.ctr128(nonce, kib16) }, nil)
 	run.measure("ctr-256-16k", 16384, 1000, func([]byte) []byte { return m.ctr256(nonce, kib16) }, nil)
 	run.measure("gcm-128-seal-64", 64, 100000, func([]byte) []byte { return m.seal128(nonce, small, aad) }, nil)
+	run.measure("gcm-128-seal-64-into", 64, 100000, func(prev []byte) []byte { return m.seal128Into(prev, nonce, small, aad) }, nil)
 	run.measure("gcm-128-seal-1k", 1024, 10000, func([]byte) []byte { return m.seal128(nonce, kib1, aad) }, nil)
+	run.measure("gcm-128-seal-1k-into", 1024, 10000, func(prev []byte) []byte { return m.seal128Into(prev, nonce, kib1, aad) }, nil)
 	run.measure("gcm-128-seal-16k", 16384, 1000, func([]byte) []byte { return m.seal128(nonce, kib16, aad) }, nil)
+	run.measure("gcm-128-seal-16k-into", 16384, 1000, func(prev []byte) []byte { return m.seal128Into(prev, nonce, kib16, aad) }, nil)
 	run.measure("gcm-128-open-16k", 16384, 1000, func([]byte) []byte { return m.open128(nonce, sealed16k, aad) }, nil)
 	run.measure("gcm-256-seal-16k", 16384, 1000, func([]byte) []byte { return m.seal256(nonce, kib16, aad) }, nil)
+	run.measure("gcm-256-seal-16k-into", 16384, 1000, func(prev []byte) []byte { return m.seal256Into(prev, nonce, kib16, aad) }, nil)
 }

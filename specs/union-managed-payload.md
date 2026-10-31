@@ -49,14 +49,25 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
 - **A match binding on a BORROWED union is a RETAIN.** Where the scrutinee is a
   parameter or a method receiver, the box's owner is the caller's local and
   survives the call, so ownership cannot be moved out of it. The bind emits
-  `__mm_incref` on the loaded payload instead: the binding owns that *second*
+  `__mm_incref` on the loaded payload instead (a binding that cannot be written
+  takes the hold described below in its place): the binding owns that *second*
   reference and drops it at the arm's own exit, and **the box slot is left
   intact** so the owner keeps its own reference and may re-read the field, match
   the union again, or move the payload out itself. The refcount balances at
   exactly one free, and the borrowed union is **not** consumed by the match — a
   later read of it is legal, not `E3102`. The retain is unconditional (no escape
-  analysis): the binding's release is structural — its scope exit — so a blanket
-  acquire is blanket-balanced.
+  analysis) for a binding that can be written and for a `typeParameter` or
+  `interfaceRef` payload: the binding's release is structural — its scope exit —
+  so a blanket acquire is blanket-balanced.
+- **A match binding that cannot be written takes a HOLD where it would otherwise
+  retain.** That is a payload field declared `let`, or a scrutinee that is neither
+  a `var` nor a fresh temporary. The hold raises the payload's count only where an
+  op between the bind and the arm's exit may release or displace the box that holds
+  it, and is deleted where none can; the binding's release stays structural. The
+  three `a-read-only-payload-outlives-…` cases below are the displacing ops: a call
+  that replaces the global owning the box, a call that overwrites the union field,
+  and a call whose parameter assignment replaces the slot it was handed. A
+  `typeParameter` or `interfaceRef` payload keeps the retain.
 - **A match binding on a CO-OWNED union takes the SAME RETAIN, and co-ownership is
   the third state the two bullets above do not cover.** A scrutinee can hold an
   owned reference while something else holds the same box: `let borrowed = h.ty`
@@ -94,7 +105,9 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   and then the payload is gone. `a-borrowed-payload-outlives-a-callee-that-frees-its-box`
   below is that program, and its control is the same arm with a callee that frees nothing.
   ⛔ The elision produces a **silent wrong answer at exit 0**, so neither `exitcode` nor a
-  leak check sees it; the rest of the suite stays green with the incref removed.
+  leak check sees it; the rest of the suite stays green with the incref removed. The
+  unconditional retain is the one a writable binding takes; a read-only binding's hold keeps
+  the incref wherever a callee can release the box, and drops it only where none can.
 
 Passing a managed-payload union across a call boundary as a *return value* is
 outside this spec's cross-call ownership rules; passing one as a **parameter** and
@@ -3291,12 +3304,14 @@ n=56 again=56
 
 <!-- test: a-borrowed-payload-outlives-a-callee-that-frees-its-box -->
 ⭐⭐ **THE RETAIN IS LOAD-BEARING, AND THIS IS THE PROGRAM THAT SAYS SO.** `retainBorrowedPayload`'s
-`__mm_incref` is unconditional, and the question is whether an arm that consumes its payload ONCE —
+`__mm_incref` is unconditional for the writable binding this `var` scrutinee gives the arm, and the
+question is whether an arm that consumes its payload ONCE —
 as the single argument of the arm's one call — could skip it. **It cannot.** The arm here is
 `filled(s) gives cell.replaceThenMeasure(s)`: one call, one use, nothing else in the arm. The callee reassigns
 `self.slot`, which releases the box `s` was borrowed out of and drives the payload's refcount to zero; the
 `refill` allocation then reuses the freed record through the slab free list and the read comes back garbage.
-The binding's SECOND reference is the whole of what carries it across that call.
+The binding's SECOND reference is the whole of what carries it across that call's overwrite of the
+`slot` field.
 ⛔ **BOTH WAYS.** With the incref: `measured=62055`. With `retainBorrowedPayload` made a no-op, the same
 source through the same compiler prints `measured=1085102592571149903` **and still exits 0** — a silent wrong
 answer, neither a crash nor a leak, so an `exitcode` pin alone would not catch it. The rest of the suite
@@ -3588,4 +3603,184 @@ end 'main'
 ```stdout
 celsius 21.75
 celsius 43.5
+```
+
+<!-- test: a-read-only-payload-outlives-the-replacement-of-its-owner -->
+A payload bound out of a union that no name can write, here a `let` field, is still borrowed from the box that holds
+it, and the box from the record that holds that. `Holder.measure` binds `s` and makes one call with it; the call
+replaces the global `theHolder` that owns the box, which frees the box and drives the payload's count to zero, and the
+allocations in `reuse` take the freed record before the read. The payload is built at run time, because a literal is an
+immortal record no release can free. The hold the binding takes is lowered to the reference that carries it across
+the call that replaces the global, as it does across the call that overwrites a union field in
+`a-read-only-payload-outlives-the-overwrite-of-the-union-field-that-holds-it`, so the answer is `68063` and not the
+bytes the freed record became.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Slot
+	filled(s String)
+	empty(n Integer)
+end 'Slot'
+
+type Holder
+	let slot as Slot
+
+	static function create(slot Slot) returns Self
+		return Self{slot: slot}
+	end 'create'
+
+	function measure() returns Integer
+		return match slot 'm'
+			filled(s) gives replaceThenMeasure(s)
+			empty(n) gives n
+		end 'm'
+	end 'measure'
+end 'Holder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+var theHolder = Holder.create(Slot.filled(text(5)))
+
+function reuse(borrowed String) returns Integer
+	let refill = "r{borrowed.byteLength()} a fresh allocation of its own, reusing the freed record, yes"
+	let again = "q{refill.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return (borrowed.byteLength() * 1000 + again.byteLength()) as Integer
+end 'reuse'
+
+function replaceThenMeasure(borrowed String) returns Integer
+	theHolder = Holder.create(Slot.empty(7))
+	return reuse(borrowed)
+end 'replaceThenMeasure'
+
+function main() returns ExitCode
+	let measured = theHolder.measure()
+	print("measured={measured}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+measured=68063
+```
+
+<!-- test: a-read-only-payload-outlives-the-overwrite-of-the-union-field-that-holds-it -->
+A `match` on a `var` union field binds a payload nothing can write through, so the binding is borrowed from the box
+the field holds. `measure` binds `s` and makes one call; the call assigns the field, which frees the old box and
+drives the payload's count to zero. `reuse` then reads the payload's length and allocates, so the answer is `68063`
+and not the poisoned bytes the freed record became.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union LSlot
+	lfilled(s String)
+	lempty(n Integer)
+end 'LSlot'
+
+type VarHolder
+	export var slot as LSlot
+
+	static function create(slot LSlot) returns Self
+		return Self{slot: slot}
+	end 'create'
+
+	function measure() returns Integer
+		return match slot 'm'
+			lfilled(s) gives resetThenLen(self, s: s)
+			lempty(n) gives n
+		end 'm'
+	end 'measure'
+end 'VarHolder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+function reuse(borrowed String) returns Integer
+	let refill = "r{borrowed.byteLength()} a fresh allocation of its own, reusing the freed record, yes"
+	let again = "q{refill.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return (borrowed.byteLength() * 1000 + again.byteLength()) as Integer
+end 'reuse'
+
+function resetThenLen(h VarHolder, s String) returns Integer
+	h.slot = LSlot.lempty(1)
+	return reuse(s)
+end 'resetThenLen'
+
+function main() returns ExitCode
+	var vh = VarHolder.create(LSlot.lfilled(text(5)))
+	let d = vh.measure()
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68063
+```
+
+<!-- test: a-read-only-payload-outlives-a-reassignment-through-a-by-reference-parameter -->
+A callee that assigns to its parameter is handed the caller's storage, not a value, so its store replaces whatever
+slot the argument names. `wipeThenLen` passes `h.slot` to `wipe`, which assigns it, while the arm of the `match` on
+that same field still holds `s`. The binding is counted across the call, so `reuse` reads the payload it bound and the
+answer is `68063`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union LSlot
+	lfilled(s String)
+	lempty(n Integer)
+end 'LSlot'
+
+type VarHolder
+	export var slot as LSlot
+
+	static function create(slot LSlot) returns Self
+		return Self{slot: slot}
+	end 'create'
+
+	function measure() returns Integer
+		return match slot 'm'
+			lfilled(s) gives wipeThenLen(self, s: s)
+			lempty(n) gives n
+		end 'm'
+	end 'measure'
+end 'VarHolder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+function reuse(borrowed String) returns Integer
+	let refill = "r{borrowed.byteLength()} a fresh allocation of its own, reusing the freed record, yes"
+	let again = "q{refill.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return (borrowed.byteLength() * 1000 + again.byteLength()) as Integer
+end 'reuse'
+
+function wipe(u LSlot)
+	u = LSlot.lempty(1)
+end 'wipe'
+
+function wipeThenLen(h VarHolder, s String) returns Integer
+	wipe(h.slot)
+	return reuse(s)
+end 'wipeThenLen'
+
+function main() returns ExitCode
+	var vh = VarHolder.create(LSlot.lfilled(text(5)))
+	let d = vh.measure()
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68063
 ```

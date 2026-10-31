@@ -14,10 +14,13 @@ category: crypto
 | `Aes.create(key)` | the AES cipher for a 16-, 24- or 32-byte key: AES-128, AES-192 or AES-256 |
 | `aes.encryptBlock(block)` | the FIPS 197 cipher of one 16-byte block |
 | `aes.decryptBlock(block)` | the FIPS 197 inverse cipher of one 16-byte block |
+| `aes.encryptBlockInto(block, output: o, at: i)` | writes the cipher of one 16-byte block into the 16 bytes of `o` from `i`, leaving the other bytes of `o` as they were; `o` grows, zero-filled, when it ends before `i + 16`; `block` and `o` may be the same array |
+| `aes.decryptBlockInto(block, output: o, at: i)` | the inverse cipher of the same shape |
 | `aes.xorKeyStream(nonce, counter: c, data: d)` | `d` XORed with the counter-mode keystream: block `j` is the cipher of the 12-byte `nonce` followed by `c + j` as a 32-bit big-endian counter |
 
-`create` throws `AesError.invalidKeyLength` for a key of any other length. `encryptBlock` and `decryptBlock`
-throw `AesError.invalidBlockLength` for a block that is not exactly 16 bytes. `xorKeyStream` is its own
+`create` throws `AesError.invalidKeyLength` for a key of any other length. `encryptBlock`, `decryptBlock`,
+`encryptBlockInto` and `decryptBlockInto` throw `AesError.invalidBlockLength` for a block that is not exactly 16
+bytes. `xorKeyStream` is its own
 inverse; it throws `AesKeyStreamError.invalidNonceLength` for a nonce that is not exactly 12 bytes, then
 `AesKeyStreamError.counterOverflow` when `d` needs a block counter above `2^32 - 1`. `Aes` runs in constant
 time: no table lookup and no branch depends on the key, the block or the data.
@@ -703,10 +706,14 @@ end 'toHex'
 function blockVector(keyHex String, expectedHex String)
 	let software = try AesBitsliced.create(fromHex(keyHex)) otherwise panic("the key is valid")
 	let plain = fromHex("00112233445566778899aabbccddeeff")
-	let sealed = try software.encryptBlock(plain) otherwise panic("the block is 16 bytes")
-	let opened = try software.decryptBlock(sealed) otherwise panic("the block is 16 bytes")
+	let sealed = try software.cryptBlock(plain, direction: AesDirection.encrypt) otherwise panic("the block is 16 bytes")
+	let opened = try software.cryptBlock(sealed, direction: AesDirection.decrypt) otherwise panic("the block is 16 bytes")
+	var into = ByteArray.create()
+	try software.cryptBlockInto(plain, output: into, at: 2, direction: AesDirection.encrypt) otherwise panic("the block is 16 bytes")
+	var intoOpened = fromHex("ff")
+	try software.cryptBlockInto(sealed, output: intoOpened, at: 0, direction: AesDirection.decrypt) otherwise panic("the block is 16 bytes")
 
-	print("{toHex(sealed) == expectedHex} {toHex(opened) == toHex(plain)}\n")
+	print("{toHex(sealed) == expectedHex} {toHex(opened) == toHex(plain)} {toHex(into) == "0000{expectedHex}"} {toHex(intoOpened) == toHex(plain)}\n")
 end 'blockVector'
 
 function errorName(failure AesError) returns String
@@ -721,7 +728,7 @@ function keyRefusal(key ByteArray) returns String
 		return errorName(failure)
 	end 'refused'
 
-	let sealed = try software.encryptBlock(fromHex("00112233445566778899aabbccddeeff")) otherwise (failure) 'blockRefused'
+	let sealed = try software.cryptBlock(fromHex("00112233445566778899aabbccddeeff"), direction: AesDirection.encrypt) otherwise (failure) 'blockRefused'
 		return errorName(failure)
 	end 'blockRefused'
 
@@ -729,7 +736,7 @@ function keyRefusal(key ByteArray) returns String
 end 'keyRefusal'
 
 function blockRefusal(software AesBitsliced) returns String
-	let sealed = try software.encryptBlock(fromHex("00")) otherwise (failure) 'refused'
+	let sealed = try software.cryptBlock(fromHex("00"), direction: AesDirection.encrypt) otherwise (failure) 'refused'
 		return errorName(failure)
 	end 'refused'
 
@@ -768,12 +775,125 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-true true
-true true
-true true
+true true true true
+true true true true
+true true true true
 true
 true true
 invalidKeyLength invalidBlockLength
+```
+```exitcode
+0
+```
+
+<!-- test: aes.block-calls-write-into-a-caller-owned-array -->
+`encryptBlockInto` and `decryptBlockInto` write the 16 bytes of the cipher of `block` into `output` from `at` and leave
+every other byte of `output` as it was: the FIPS 197 appendix C vectors land in the middle of a longer array, undo
+through the same call, run in place over the block itself, and grow an array that is too short, zero-filling any gap.
+A block of another length is refused and leaves `output` alone.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function filler(count Count) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for _ in 0 upto count 'eachByte'
+		bytes.push(0x5A)
+	end 'eachByte'
+
+	return bytes
+end 'filler'
+
+function vector(keyHex String, expectedHex String)
+	let aes = try Aes.create(fromHex(keyHex)) otherwise panic("the key is valid")
+	let plain = fromHex("00112233445566778899aabbccddeeff")
+	let expected = fromHex(expectedHex)
+
+	var middle = filler(40)
+	try aes.encryptBlockInto(plain, output: middle, at: 11) otherwise panic("the block is 16 bytes")
+	let framed = "{toHex(filler(11))}{expectedHex}{toHex(filler(13))}"
+
+	var opened = filler(20)
+	try aes.decryptBlockInto(expected, output: opened, at: 2) otherwise panic("the block is 16 bytes")
+	let restored = "{toHex(filler(2))}00112233445566778899aabbccddeeff{toHex(filler(2))}"
+
+	var inPlace = plain.clone()
+	try aes.encryptBlockInto(inPlace, output: inPlace, at: 0) otherwise panic("the block is 16 bytes")
+	try aes.decryptBlockInto(inPlace, output: inPlace, at: 0) otherwise panic("the block is 16 bytes")
+
+	var grown = filler(3)
+	try aes.encryptBlockInto(plain, output: grown, at: 6) otherwise panic("the block is 16 bytes")
+	let gap = "{toHex(filler(3))}000000{expectedHex}"
+
+	print("{toHex(middle) == framed} {toHex(opened) == restored} {toHex(inPlace) == toHex(plain)} {toHex(grown) == gap}\n")
+end 'vector'
+
+function main() returns ExitCode
+	vector("000102030405060708090a0b0c0d0e0f", expectedHex: "69c4e0d86a7b0430d8cdb78070b4c55a")
+	vector("000102030405060708090a0b0c0d0e0f1011121314151617", expectedHex: "dda97ca4864cdfe06eaf70a0ec0d7191")
+	vector("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", expectedHex: "8ea2b7ca516745bfeafc49904b496089")
+
+	let aes = try Aes.create(fromHex("000102030405060708090a0b0c0d0e0f")) otherwise panic("the key is valid")
+	var untouched = filler(20)
+	var refusals = ""
+
+	try aes.encryptBlockInto(fromHex("00112233"), output: untouched, at: 1) otherwise (failure) 'encryptRefused'
+		match failure 'reason'
+			invalidKeyLength then refusals.append("key ")
+			invalidBlockLength then refusals.append("block ")
+		end 'reason'
+	end 'encryptRefused'
+
+	try aes.decryptBlockInto(fromHex("00112233"), output: untouched, at: 1) otherwise (failure) 'decryptRefused'
+		match failure 'reason'
+			invalidKeyLength then refusals.append("key ")
+			invalidBlockLength then refusals.append("block ")
+		end 'reason'
+	end 'decryptRefused'
+
+	print("{refusals}{toHex(untouched) == toHex(filler(20))}\n")
+	return 0
+end 'main'
+```
+```stdout
+true true true true
+true true true true
+true true true true
+block block true
 ```
 ```exitcode
 0

@@ -452,6 +452,36 @@ and on the ARMv8 Crypto extension on arm64 (with PMULL) when the CPU provides th
 constant-time software cipher otherwise, including on `wasm32-wasi`; on either path the time taken does
 not depend on the key or the data.
 
+`sealInto(output ByteArray, at ElementIndex, nonce ByteArray, plaintext ByteArray, additionalData ByteArray)`
+writes what `seal` returns into `output` from index `at`, an array the caller owns and may reuse from one call
+to the next: the bytes before `at` stay, `output` ends with the tag, and an `output` that ends before `at` is
+zero-filled up to it. It throws the errors `seal` throws, and leaves `output` as it was when it does. On the
+hardware path `sealInto` allocates nothing when `output` already has the sealed length. `nonce`, `plaintext` and
+`additionalData` are read as they were at the call, including when one of them is `output` itself.
+
+### Aes
+
+`Aes` is the AES block cipher (FIPS 197) under one key. `Aes.create(key ByteArray)` takes a 16-, 24- or 32-byte
+key and throws `AesError.invalidKeyLength` for any other. A block is a `ByteArray` of exactly 16 bytes; any other
+length throws `AesError.invalidBlockLength`. The cipher runs on AES-NI on x64 and on the ARMv8 Crypto extension on
+arm64 when the CPU provides them, and on a constant-time software cipher otherwise, including on `wasm32-wasi`;
+on either path the time taken is independent of the key and the data.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `encryptBlock(block ByteArray)` | `ByteArray` | `AesError` | The encryption of one block. |
+| `decryptBlock(block ByteArray)` | `ByteArray` | `AesError` | The decryption of one block. |
+| `encryptBlockInto(block ByteArray, output ByteArray, at ElementIndex)` | nothing | `AesError` | Writes the encryption of `block` into `output` at index `at`. |
+| `decryptBlockInto(block ByteArray, output ByteArray, at ElementIndex)` | nothing | `AesError` | Writes the decryption of `block` into `output` at index `at`. |
+| `xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray)` | `ByteArray` | `AesKeyStreamError` | `data` XORed with the counter-mode key stream of a 12-byte `nonce`, the first block's counter being `counter`. Encryption and decryption are the same call. |
+
+The `Into` forms reuse an array the caller owns: they grow `output` to `at + 16` bytes, zero-filled, when it is
+shorter, keep the bytes outside the block, and leave `output` as it was when they throw.
+
+`AesCounter` is the 32-bit big-endian block counter of counter mode, `int(0 to u32.max)`.
+`AesKeyStreamError` has two cases: `invalidNonceLength` for a nonce of a size other than 12 bytes, and `counterOverflow`
+when the stream would carry the counter past 2^32 − 1.
+
 ### Aead
 
 `Aead` is authenticated encryption with associated data: `seal` encrypts a message and appends a 16-byte

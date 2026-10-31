@@ -41,14 +41,28 @@ public function aeadRequirePlaintextLength(plaintext ByteArray, limit Count) thr
 	end 'plaintextLength'
 end 'aeadRequirePlaintextLength'
 
-/// The ciphertext and the tag of `sealed`, or `authenticationFailed` when it cannot hold a tag or its
-/// ciphertext is longer than `plaintextLimit`.
-public function aeadSplitSealed(sealed ByteArray, tagBytes Count, plaintextLimit Count) returns AeadSealedParts throws AeadError
+// Arrays are shared records, so an `input` that is the `output` changes when `output` is written.
+// The clone keeps the caller reading the bytes the call was handed.
+export function aeadDetached(input ByteArray, output ByteArray) returns ByteArray
+	if input is output 'aliased'
+		return input.clone()
+	end 'aliased'
+
+	return input
+end 'aeadDetached'
+
+export function aeadCiphertextBytes(sealed ByteArray, tagBytes Count, plaintextLimit Count) returns Count throws AeadError
 	if sealed.count() < tagBytes or sealed.count() - tagBytes > plaintextLimit 'badLength'
 		throw AeadError.authenticationFailed
 	end 'badLength'
 
-	let ciphertextBytes = sealed.count() - tagBytes
+	return sealed.count() - tagBytes
+end 'aeadCiphertextBytes'
+
+/// The ciphertext and the tag of `sealed`, or `authenticationFailed` when it cannot hold a tag or its
+/// ciphertext is longer than `plaintextLimit`.
+public function aeadSplitSealed(sealed ByteArray, tagBytes Count, plaintextLimit Count) returns AeadSealedParts throws AeadError
+	let ciphertextBytes = try aeadCiphertextBytes(sealed, tagBytes: tagBytes, plaintextLimit: plaintextLimit)
 	let ciphertext = try sealed.slice(0, endIndex: ciphertextBytes) otherwise panic("aeadSplitSealed: ciphertext range unreachable")
 	let tag = try sealed.slice(ciphertextBytes, endIndex: sealed.count()) otherwise panic("aeadSplitSealed: tag range unreachable")
 

@@ -12217,6 +12217,7 @@ export union InstanceShape
 		return match self 'shape'
 			unsized gives UnsizedHashWord
 			sized(count) gives count as HashDigest
+
 			// Combined rather than OR-ed: a mask reaching the flag's bit would alias it.
 			readOnlyArgs(mask) gives Hasher.combined(ReadOnlyHashFlag, value: mask as HashDigest)
 		end 'shape'
@@ -28878,6 +28879,70 @@ export type ProgramSignatures
 		let layout = try self.registeredLayout(name) otherwise return DeclaredStruct.undeclared
 		return DeclaredStruct.declared(layout)
 	end 'structInAnyFile'
+
+	export function typeNameIsDeclared(name ByteArray) returns bool
+		if self.isCanonicalInstanceName(name) or self.hasRegisteredLayout(name) 'aRenderedOrLaidOutType'
+			return true
+		end 'aRenderedOrLaidOutType'
+
+		let form = try self.declaredFormPastStructTypes(name) otherwise return false
+		return form != TypeDeclKind.structType
+	end 'typeNameIsDeclared'
+
+	export function slotDeclaredTypes(recordName ByteArray, offset ByteOffset, into TypeNameInterner) returns MaxonTypeArray throws AbsentError
+		if let enumLayout = try self.settledDeclarations().enumTypes.get(recordName) 'aDeclaredUnion'
+			return try self.payloadSlotTypesAt(enumLayout, offset: offset, into: into)
+		end 'aDeclaredUnion'
+
+		let layout = try self.registeredLayout(recordName) otherwise throw AbsentError.absent
+
+		if layout.packsInlineIntoAWord or layout.fieldCount() == 0 'noSlotToName'
+			throw AbsentError.absent
+		end 'noSlotToName'
+
+		var occupant = 0 as FieldIndex
+
+		for index in 0 upto layout.fieldCount() 'eachField'
+			if layout.offsetOfField(index) > offset 'pastTheSlot'
+				break
+			end 'pastTheSlot'
+
+			occupant = index
+		end 'eachField'
+
+		var types = MaxonTypeArray.create()
+		types.push(self.fieldTypeOf(layout, index: occupant, into: into))
+		return types
+	end 'slotDeclaredTypes'
+
+	function payloadSlotTypesAt(layout EnumLayout, offset ByteOffset, into TypeNameInterner) returns MaxonTypeArray throws AbsentError
+		var types = MaxonTypeArray.create()
+
+		if offset == 0 'theTagWord'
+			return types
+		end 'theTagWord'
+
+		var matched = false
+
+		for caseIndex in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(caseIndex)
+
+			for slot in 0 upto payloads.count() 'eachPayload'
+				if layout.payloadSlotOffset(slot as PayloadSlotIndex) != offset 'anotherSlot'
+					continue
+				end 'anotherSlot'
+
+				types.push(self.payloadTypeOf(try payloads.get(slot) otherwise panic("payloadSlotTypesAt: payloads.get OOB at {slot} below the case's own count"), layout: layout, into: into))
+				matched = true
+			end 'eachPayload'
+		end 'eachCase'
+
+		if not matched 'noSuchSlot'
+			throw AbsentError.absent
+		end 'noSuchSlot'
+
+		return types
+	end 'payloadSlotTypesAt'
 
 	// ⚠ Built once from `sweptConformanceIndex`, which is itself built once, so
 	// `Queries.foldConformanceClauses` must run before either is first asked: a clause it re-records

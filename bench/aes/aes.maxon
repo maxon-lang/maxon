@@ -7,6 +7,7 @@ end 'UsageError'
 
 let defaultRepeats = 5
 let defaultDivisor = 1
+
 // On wasm this program reads no arguments, so `defaultRepeats` and `wasmDivisor` must equal REPEATS and
 // WASM_DIVISOR in scripts/bench-aes.py, which hands them to the Go arms; a mismatch fails its agreement
 // check on iterations and repeats.
@@ -103,41 +104,59 @@ end 'Fixtures'
 
 enum Workload
 	keySetup128
+	keySetup128Into
 	block128
+	block128Into
 	ctr128
 	ctr256
 	gcm128Seal64
+	gcm128Seal64Into
 	gcm128Seal1k
+	gcm128Seal1kInto
 	gcm128Seal16k
+	gcm128Seal16kInto
 	gcm128Open16k
 	gcm256Seal16k
+	gcm256Seal16kInto
 end 'Workload'
 
 function nameOf(workload Workload) returns String
 	return match workload 'name'
 		keySetup128 gives "keysetup-128"
+		keySetup128Into gives "keysetup-128-into"
 		block128 gives "block-128"
+		block128Into gives "block-128-into"
 		ctr128 gives "ctr-128-16k"
 		ctr256 gives "ctr-256-16k"
 		gcm128Seal64 gives "gcm-128-seal-64"
+		gcm128Seal64Into gives "gcm-128-seal-64-into"
 		gcm128Seal1k gives "gcm-128-seal-1k"
+		gcm128Seal1kInto gives "gcm-128-seal-1k-into"
 		gcm128Seal16k gives "gcm-128-seal-16k"
+		gcm128Seal16kInto gives "gcm-128-seal-16k-into"
 		gcm128Open16k gives "gcm-128-open-16k"
 		gcm256Seal16k gives "gcm-256-seal-16k"
+		gcm256Seal16kInto gives "gcm-256-seal-16k-into"
 	end 'name'
 end 'nameOf'
 
 function baseIterationsOf(workload Workload) returns Count
 	return match workload 'iterations'
-		keySetup128 gives 20000
-		block128 gives 200000
-		gcm128Seal64 gives 100000
-		gcm128Seal1k gives 10000
+		keySetup128 or
+		keySetup128Into gives 20000
+		block128 or
+		block128Into gives 200000
+		gcm128Seal64 or
+		gcm128Seal64Into gives 100000
+		gcm128Seal1k or
+		gcm128Seal1kInto gives 10000
 		ctr128 or
 		ctr256 or
 		gcm128Seal16k or
+		gcm128Seal16kInto or
 		gcm128Open16k or
-		gcm256Seal16k gives 1000
+		gcm256Seal16k or
+		gcm256Seal16kInto gives 1000
 	end 'iterations'
 end 'baseIterationsOf'
 
@@ -149,15 +168,21 @@ end 'iterationsOf'
 
 function bytesOf(workload Workload) returns Count
 	return match workload 'bytes'
-		keySetup128 gives 0
-		block128 gives 16
-		gcm128Seal64 gives 64
-		gcm128Seal1k gives 1024
+		keySetup128 or
+		keySetup128Into gives 0
+		block128 or
+		block128Into gives 16
+		gcm128Seal64 or
+		gcm128Seal64Into gives 64
+		gcm128Seal1k or
+		gcm128Seal1kInto gives 1024
 		ctr128 or
 		ctr256 or
 		gcm128Seal16k or
+		gcm128Seal16kInto or
 		gcm128Open16k or
-		gcm256Seal16k gives 16384
+		gcm256Seal16k or
+		gcm256Seal16kInto gives 16384
 	end 'bytes'
 end 'bytesOf'
 
@@ -167,17 +192,42 @@ function keySetup(key ByteArray) returns ByteArray
 	return try cipher.encryptBlock(key) otherwise panic("block")
 end 'keySetup'
 
+function keySetupInto(key ByteArray, output ByteArray) returns ByteArray
+	let cipher = try Aes.create(key) otherwise panic("key")
+	try cipher.encryptBlockInto(key, output: output, at: 0) otherwise panic("block")
+
+	return output
+end 'keySetupInto'
+
+function encryptInPlace(cipher Aes, block ByteArray) returns ByteArray
+	try cipher.encryptBlockInto(block, output: block, at: 0) otherwise panic("block")
+
+	return block
+end 'encryptInPlace'
+
+function sealReusing(aead AesGcm, f Fixtures, plaintext ByteArray, output ByteArray) returns ByteArray
+	try aead.sealInto(output, at: 0, nonce: f.nonce, plaintext: plaintext, additionalData: f.aad) otherwise panic("seal")
+
+	return output
+end 'sealReusing'
+
 function step(workload Workload, f Fixtures, previous ByteArray) returns ByteArray
 	return match workload 'step'
 		keySetup128 gives keySetup(f.key128)
+		keySetup128Into gives keySetupInto(f.key128, output: previous)
 		block128 gives try f.aes128.encryptBlock(previous) otherwise panic("block")
+		block128Into gives encryptInPlace(f.aes128, block: previous)
 		ctr128 gives try f.aes128.xorKeyStream(f.nonce, counter: ctrCounter, data: f.kib16) otherwise panic("ctr")
 		ctr256 gives try f.aes256.xorKeyStream(f.nonce, counter: ctrCounter, data: f.kib16) otherwise panic("ctr")
 		gcm128Seal64 gives try f.gcm128.seal(f.nonce, plaintext: f.small, additionalData: f.aad) otherwise panic("seal")
+		gcm128Seal64Into gives sealReusing(f.gcm128, f: f, plaintext: f.small, output: previous)
 		gcm128Seal1k gives try f.gcm128.seal(f.nonce, plaintext: f.kib1, additionalData: f.aad) otherwise panic("seal")
+		gcm128Seal1kInto gives sealReusing(f.gcm128, f: f, plaintext: f.kib1, output: previous)
 		gcm128Seal16k gives try f.gcm128.seal(f.nonce, plaintext: f.kib16, additionalData: f.aad) otherwise panic("seal")
+		gcm128Seal16kInto gives sealReusing(f.gcm128, f: f, plaintext: f.kib16, output: previous)
 		gcm128Open16k gives try f.gcm128.open(f.nonce, sealed: f.sealed16k, additionalData: f.aad) otherwise panic("open")
 		gcm256Seal16k gives try f.gcm256.seal(f.nonce, plaintext: f.kib16, additionalData: f.aad) otherwise panic("seal")
+		gcm256Seal16kInto gives sealReusing(f.gcm256, f: f, plaintext: f.kib16, output: previous)
 	end 'step'
 end 'step'
 

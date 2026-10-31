@@ -7271,3 +7271,441 @@ end 'main'
 ```maxoncstderr
 error E3078: <fragment>:16:6: cannot assign the result of 'get', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
 ```
+
+<!-- test: an-argument-read-out-of-a-union-field-survives-the-callee-overwriting-the-field -->
+`go` hands `use` the union in `slot` together with `self.reset()`, whose store replaces the field. The argument is a
+read of the box the field holds, so it is counted: the store frees the old box, and the payload `use` binds out of
+its parameter is still the string it read. `reuse` allocates over the freed record before it reads the length, so the
+answer is `68064` and not the poisoned bytes the record became.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union LSlot
+	lfilled(s String)
+	lempty(n Integer)
+end 'LSlot'
+
+type VarHolder
+	export var slot as LSlot
+
+	static function create(slot LSlot) returns Self
+		return Self{slot: slot}
+	end 'create'
+
+	function reset() returns Integer
+		slot = LSlot.lempty(1)
+		return 1
+	end 'reset'
+
+	function go() returns Integer
+		return use(slot, k: self.reset())
+	end 'go'
+end 'VarHolder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+function reuse(borrowed String) returns Integer
+	let refill = "r{borrowed.byteLength()} a fresh allocation of its own, reusing the freed record, yes"
+	let again = "q{refill.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return (borrowed.byteLength() * 1000 + again.byteLength()) as Integer
+end 'reuse'
+
+function use(u LSlot, k Integer) returns Integer
+	return match u 'm'
+		lfilled(s) gives reuse(s) + k
+		lempty(n) gives n
+	end 'm'
+end 'use'
+
+function main() returns ExitCode
+	var vh = VarHolder.create(LSlot.lfilled(text(5)))
+	let d = vh.go()
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68064
+```
+
+<!-- test: an-argument-read-out-of-a-module-union-survives-the-callee-overwriting-it -->
+`use` is handed the union held by the module `var` `theSlot` together with `reset()`, whose store replaces the
+variable. The argument is a read of the box the variable holds, so it is counted: the store frees the old box, and
+the payload `use` binds out of its parameter is still the string it read, so the answer is `68064`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union LSlot
+	lfilled(s String)
+	lempty(n Integer)
+end 'LSlot'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+var theSlot = LSlot.lfilled(text(5))
+
+function reset() returns Integer
+	theSlot = LSlot.lempty(1)
+	return 1
+end 'reset'
+
+function reuse(borrowed String) returns Integer
+	let refill = "r{borrowed.byteLength()} a fresh allocation of its own, reusing the freed record, yes"
+	let again = "q{refill.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return (borrowed.byteLength() * 1000 + again.byteLength()) as Integer
+end 'reuse'
+
+function use(u LSlot, k Integer) returns Integer
+	return match u 'm'
+		lfilled(s) gives reuse(s) + k
+		lempty(n) gives n
+	end 'm'
+end 'use'
+
+function main() returns ExitCode
+	let d = use(theSlot, k: reset())
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68064
+```
+
+<!-- test: an-argument-read-out-of-a-struct-field-survives-the-callee-overwriting-the-field -->
+`go` hands `use` the record in `inner` together with `self.reset()`, whose store replaces the field with a record of
+its own. The argument is counted, so `use` still reads the label of the record it was handed, and the answer is
+`68064`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export let label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Inner'
+
+type Holder
+	export var inner as Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+
+	function reset() returns Integer
+		inner = Inner.create("short")
+		return 1
+	end 'reset'
+
+	function go() returns Integer
+		return use(inner, k: self.reset())
+	end 'go'
+end 'Holder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+function churn(n Integer) returns Integer
+	let a = "r{n} a fresh allocation of its own, reusing the freed record, yes"
+	let b = "q{a.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return b.byteLength() as Integer
+end 'churn'
+
+function use(i Inner, k Integer) returns Integer
+	let len = i.label.byteLength() as Integer
+	let c = churn(len)
+	return len * 1000 + c + k
+end 'use'
+
+function main() returns ExitCode
+	var h = Holder.create(Inner.create(text(5)))
+	let d = h.go()
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68064
+```
+
+<!-- test: an-argument-read-out-of-a-tuple-field-survives-the-callee-overwriting-the-field -->
+`go` hands `use` the tuple in `pair` together with `self.reset()`, whose store replaces the field. The argument is
+counted, so `use` still reads the first element of the tuple it was handed, and the answer is `68064`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Pair = (String, Integer)
+
+type Holder
+	export var pair as Pair
+
+	static function create(pair Pair) returns Self
+		return Self{pair: pair}
+	end 'create'
+
+	function reset() returns Integer
+		pair = ("short", 1)
+		return 1
+	end 'reset'
+
+	function go() returns Integer
+		return use(pair, k: self.reset())
+	end 'go'
+end 'Holder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+function churn(n Integer) returns Integer
+	let a = "r{n} a fresh allocation of its own, reusing the freed record, yes"
+	let b = "q{a.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return b.byteLength() as Integer
+end 'churn'
+
+function use(p Pair, k Integer) returns Integer
+	let len = p.0.byteLength() as Integer
+	let c = churn(len)
+	return len * 1000 + c + k
+end 'use'
+
+function main() returns ExitCode
+	var h = Holder.create((text(5), 2))
+	let d = h.go()
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68064
+```
+
+<!-- test: an-argument-read-out-of-a-function-field-survives-the-callee-overwriting-the-field -->
+`go` hands `use` the closure in `op` together with `self.reset()`, whose store replaces the field. The argument is
+counted, so the environment holding the captured string outlives the store, and `use` calls the closure it was handed:
+the answer is `68064`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Op = function(Integer) returns Integer
+
+type Holder
+	export var op as Op
+
+	static function create(op Op) returns Self
+		return Self{op: op}
+	end 'create'
+
+	function reset() returns Integer
+		op = function(n) gives n
+		return 1
+	end 'reset'
+
+	function go() returns Integer
+		return use(op, k: self.reset())
+	end 'go'
+end 'Holder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+function churn(n Integer) returns Integer
+	let a = "r{n} a fresh allocation of its own, reusing the freed record, yes"
+	let b = "q{a.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return b.byteLength() as Integer
+end 'churn'
+
+function makeOp() returns Op
+	let captured = text(5)
+	return function(n) gives n + (captured.byteLength() as Integer)
+end 'makeOp'
+
+function use(f Op, k Integer) returns Integer
+	let c = churn(7)
+	return f(0) * 1000 + c + k
+end 'use'
+
+function main() returns ExitCode
+	var h = Holder.create(makeOp())
+	let d = h.go()
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68064
+```
+
+<!-- test: an-argument-read-out-of-an-interface-field-survives-the-callee-overwriting-the-field -->
+`go` hands `use` the value in the interface-typed field `item` together with `self.reset()`, whose store replaces
+it. The argument is counted, so `use` still asks the value it was handed for its label, and the answer is `68064`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Labeled
+	function label() returns String
+end 'Labeled'
+
+type Tag implements Labeled
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function label() returns String
+		return self.text
+	end 'label'
+end 'Tag'
+
+type Holder
+	export var item as Labeled
+
+	static function create(item Labeled) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function reset() returns Integer
+		item = Tag.create("short")
+		return 1
+	end 'reset'
+
+	function go() returns Integer
+		return use(item, k: self.reset())
+	end 'go'
+end 'Holder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+function churn(n Integer) returns Integer
+	let a = "r{n} a fresh allocation of its own, reusing the freed record, yes"
+	let b = "q{a.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return b.byteLength() as Integer
+end 'churn'
+
+function use(i Labeled, k Integer) returns Integer
+	let c = churn(7)
+	let len = i.label().byteLength() as Integer
+	return len * 1000 + c + k
+end 'use'
+
+function main() returns ExitCode
+	var h = Holder.create(Tag.create(text(5)))
+	let d = h.go()
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68064
+```
+
+<!-- test: an-argument-read-out-of-an-interface-field-survives-its-replacement-by-an-inline-conformer -->
+`go` hands `use` the value in the interface-typed field `item` together with `self.reset()`, whose store replaces a
+heap `Tag` conformer with a `Plain`, a conformer small enough to pack into one word. What the store writes owns no
+heap, and the field is stored as two plain words, but the slot it overwrites held a record: the argument is counted
+all the same, so `use` still asks the `Tag` it was handed for its label, and the answer is `68064`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 255)
+
+interface Labeled
+	function label() returns String
+end 'Labeled'
+
+type Tag implements Labeled
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function label() returns String
+		return self.text
+	end 'label'
+end 'Tag'
+
+type Plain implements Labeled
+	export let n as Small
+
+	static function create(n Small) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function label() returns String
+		return "plain"
+	end 'label'
+end 'Plain'
+
+type Holder
+	export var item as Labeled
+
+	static function create(item Labeled) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function reset() returns Integer
+		item = Plain.create(1)
+		return 1
+	end 'reset'
+
+	function go() returns Integer
+		return use(item, k: self.reset())
+	end 'go'
+end 'Holder'
+
+function text(n Integer) returns String
+	return "payload {n} built at runtime, long enough to be a real heap allocation"
+end 'text'
+
+function churn(n Integer) returns Integer
+	let a = "r{n} a fresh allocation of its own, reusing the freed record, yes"
+	let b = "q{a.byteLength()} another allocation of its own, reusing the freed record, ok"
+	return b.byteLength() as Integer
+end 'churn'
+
+function use(i Labeled, k Integer) returns Integer
+	let c = churn(7)
+	let len = i.label().byteLength() as Integer
+	return len * 1000 + c + k
+end 'use'
+
+function main() returns ExitCode
+	var h = Holder.create(Tag.create(text(5)))
+	let d = h.go()
+	print("d={d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=68064
+```

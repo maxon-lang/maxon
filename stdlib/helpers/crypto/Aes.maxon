@@ -53,25 +53,43 @@ public type Aes
 
 	/// The encryption of one 16-byte block.
 	public function encryptBlock(block ByteArray) returns ByteArray throws AesError
-		match backing 'backing'
-			bitsliced(cipher) then return try cipher.encryptBlock(block)
-
-			#if arch(x64) or arch(arm64)
-				hardware(schedule) then return try aesHardwareEncrypt(schedule, block: block)
-			#endif
-		end 'backing'
+		return try cryptBlock(block, direction: AesDirection.encrypt)
 	end 'encryptBlock'
 
 	/// The decryption of one 16-byte block.
 	public function decryptBlock(block ByteArray) returns ByteArray throws AesError
+		return try cryptBlock(block, direction: AesDirection.decrypt)
+	end 'decryptBlock'
+
+	/// Writes the encryption of one 16-byte `block` into `output` at index `at`, growing `output` to
+	/// `at + 16` bytes, zero-filled, when it is shorter. The other bytes of `output` stay.
+	/// `invalidBlockLength` leaves `output` as it was.
+	public function encryptBlockInto(block ByteArray, output ByteArray, at ElementIndex) throws AesError
+		try cryptBlockInto(block, output: output, at: at, direction: AesDirection.encrypt)
+	end 'encryptBlockInto'
+
+	/// Writes the decryption of one 16-byte `block` into `output` at index `at`, with the growth and
+	/// the error behaviour of `encryptBlockInto`.
+	public function decryptBlockInto(block ByteArray, output ByteArray, at ElementIndex) throws AesError
+		try cryptBlockInto(block, output: output, at: at, direction: AesDirection.decrypt)
+	end 'decryptBlockInto'
+
+	function cryptBlock(block ByteArray, direction AesDirection) returns ByteArray throws AesError
+		var result = ByteArray.create()
+		try cryptBlockInto(block, output: result, at: 0, direction: direction)
+
+		return result
+	end 'cryptBlock'
+
+	function cryptBlockInto(block ByteArray, output ByteArray, at ElementIndex, direction AesDirection) throws AesError
 		match backing 'backing'
-			bitsliced(cipher) then return try cipher.decryptBlock(block)
+			bitsliced(cipher) then try cipher.cryptBlockInto(block, output: output, at: at, direction: direction)
 
 			#if arch(x64) or arch(arm64)
-				hardware(schedule) then return try aesHardwareDecrypt(schedule, block: block)
+				hardware(schedule) then try aesHardwareCryptInto(schedule, block: block, output: output, at: at, direction: direction)
 			#endif
 		end 'backing'
-	end 'decryptBlock'
+	end 'cryptBlockInto'
 
 	/// `data` XORed with the counter-mode key stream of a 12-byte `nonce`, the first block's counter being
 	/// `counter`. Encryption and decryption are the same call.

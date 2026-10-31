@@ -15,7 +15,7 @@ let aesGcmTagMaskCounter = 1
 
 // 2^32 − 2 blocks of 16 bytes: counters 1 to 2^32 − 1 cover the tag mask block plus this many data
 // blocks.
-let aesGcmMaxPlaintextBytes = 68719476704
+let aesGcmMaxPlaintextBytes = (u32.max - 1) * aesGcmBlockBytes
 
 let ghashWordBits = 64
 let ghashCarryShift = 1
@@ -198,7 +198,7 @@ type AesGcmSoftware
 		let cipher = try AesBitsliced.create(key)
 		var zeros = ByteArray.create()
 		zeros.resize(aesGcmBlockBytes)
-		let hashSubkey = try cipher.encryptBlock(zeros) otherwise panic("AesGcm: the hash subkey block was refused")
+		let hashSubkey = try cipher.cryptBlock(zeros, direction: AesDirection.encrypt) otherwise panic("AesGcm: the hash subkey block was refused")
 
 		return Self{cipher: cipher, hashKey: GhashKey.create(hashSubkey)}
 	end 'create'
@@ -255,7 +255,7 @@ union AesGcmBacking
 	bitsliced(software AesGcmSoftware)
 
 	#if arch(x64) or arch(arm64)
-		hardware(schedule ByteArray, keys ByteArray)
+		hardware(keys ByteArray)
 	#endif
 end 'AesGcmBacking'
 
@@ -283,9 +283,7 @@ public type AesGcm implements Aead
 				throw aesGcmKeyFailure(failure)
 			end 'refused'
 
-			let schedule = aesHardwareSchedule(key)
-
-			return Self{backing: AesGcmBacking.hardware(schedule, keys: aesGcmHardwareKeys(schedule))}
+			return Self{backing: AesGcmBacking.hardware(aesGcmHardwareKeys(aesHardwareSchedule(key)))}
 		#else
 			panic("AesGcm: the hardware backing was chosen on a target without AES instructions")
 		#endif
@@ -302,39 +300,61 @@ public type AesGcm implements Aead
 	end 'usesHardware'
 
 	public function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+		var sealed = ByteArray.create()
+		try sealInto(sealed, at: 0, nonce: nonce, plaintext: plaintext, additionalData: additionalData)
+
+		return sealed
+	end 'seal'
+
+	/// Writes the bytes `seal` returns into `output` from index `at`, keeping the bytes before `at`.
+	/// `output` ends with the tag, and a gap before `at` is zero-filled. `nonce`, `plaintext` and
+	/// `additionalData` are read as they were at the call, `output` itself included. The errors are
+	/// `seal`'s, and `output` is left as it was when one is thrown.
+	public function sealInto(output ByteArray, at ElementIndex, nonce ByteArray, plaintext ByteArray, additionalData ByteArray) throws AeadError
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 		try aeadRequirePlaintextLength(plaintext, limit: aesGcmMaxPlaintextBytes)
 
+		let readNonce = aeadDetached(nonce, output: output)
+		let readPlaintext = aeadDetached(plaintext, output: output)
+		let readAdditionalData = aeadDetached(additionalData, output: output)
+
 		match backing 'backing'
-			bitsliced(software) then return software.seal(nonce, plaintext: plaintext, additionalData: additionalData)
+			bitsliced(software) then sealIntoSoftware(output, at: at, software: software, nonce: readNonce, plaintext: readPlaintext, additionalData: readAdditionalData)
 
 			#if arch(x64) or arch(arm64)
-				hardware(schedule, keys) then return aesGcmHardwareSeal(schedule, keys: keys, nonce: nonce, plaintext: plaintext, additionalData: additionalData)
+				hardware(keys) then aesGcmHardwareSealInto(output, at: at, keys: keys, nonce: readNonce, plaintext: readPlaintext, additionalData: readAdditionalData)
 			#endif
 		end 'backing'
-	end 'seal'
+	end 'sealInto'
 
 	public function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
 		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 
-		let parts = try aeadSplitSealed(sealed, tagBytes: aesGcmTagBytes, plaintextLimit: aesGcmMaxPlaintextBytes)
-
 		match backing 'backing'
-			bitsliced(software) then return try software.open(nonce, ciphertext: parts.ciphertext, received: parts.tag, additionalData: additionalData)
+			bitsliced(software) then return try openSoftware(software, nonce: nonce, sealed: sealed, additionalData: additionalData)
 
 			#if arch(x64) or arch(arm64)
-				hardware(schedule, keys) then return try openHardware(schedule, keys: keys, nonce: nonce, parts: parts, additionalData: additionalData)
+				hardware(keys) then return try openHardware(keys, nonce: nonce, sealed: sealed, additionalData: additionalData)
 			#endif
 		end 'backing'
 	end 'open'
 
 	#if arch(x64) or arch(arm64)
-		function openHardware(schedule ByteArray, keys ByteArray, nonce ByteArray, parts AeadSealedParts, additionalData ByteArray) returns ByteArray throws AeadError
-			var opened = ByteArray.create()
-			let expectedTag = aesGcmHardwareOpen(schedule, keys: keys, nonce: nonce, ciphertext: parts.ciphertext, additionalData: additionalData, plaintext: opened)
-			try aeadRequireTag(expectedTag, received: parts.tag)
+		function openHardware(keys ByteArray, nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+			let ciphertextBytes = try aeadCiphertextBytes(sealed, tagBytes: aesGcmTagBytes, plaintextLimit: aesGcmMaxPlaintextBytes)
 
-			return opened
+			return try aesGcmHardwareOpen(keys, nonce: nonce, sealed: sealed, additionalData: additionalData, ciphertextBytes: ciphertextBytes)
 		end 'openHardware'
 	#endif
+
+	function sealIntoSoftware(output ByteArray, at ElementIndex, software AesGcmSoftware, nonce ByteArray, plaintext ByteArray, additionalData ByteArray)
+		output.resize(at)
+		output.append(software.seal(nonce, plaintext: plaintext, additionalData: additionalData))
+	end 'sealIntoSoftware'
+
+	function openSoftware(software AesGcmSoftware, nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+		let parts = try aeadSplitSealed(sealed, tagBytes: aesGcmTagBytes, plaintextLimit: aesGcmMaxPlaintextBytes)
+
+		return try software.open(nonce, ciphertext: parts.ciphertext, received: parts.tag, additionalData: additionalData)
+	end 'openSoftware'
 end 'AesGcm'

@@ -1,16 +1,10 @@
 #if arch(x64) or arch(arm64)
-	// The table size, message size, counter offset and mask offset restate `AesGcmTableBytes`, the
-	// message block size, `AesGcmCounterOffset` and `AesGcmMaskOffset` in `CryptoRuntime.maxon`: its
-	// guards end the program on another size, and another offset is a silent wrong tag.
+	// The table size restates `AesGcmTableBytes` in `CryptoRuntime.maxon`, which reads the round count
+	// off the key block's length past it: another size is a wrong round count, and a guard ends the
+	// program only when that length is not one the guards accept.
 	let aesGcmHardwareTableBytes = 256
-	let aesGcmHardwareAccumulatorBytes = 16
-	let aesGcmHardwareMessageBytes = 48
 	let aesGcmHardwareTagBytes = 16
-	let aesGcmHardwareCounterAt = 16
-	let aesGcmHardwareMaskAt = 32
-	let aesGcmHardwareCounterWordBytes = 4
 	let aesGcmHardwareScheduleHalfShift = 1
-	let aesGcmHardwareTagMaskCounter = 1 as OrderedWord
 
 	export function aesGcmHardwareKeys(schedule ByteArray) returns ByteArray
 		var keys = ByteArray.create()
@@ -20,54 +14,24 @@
 		return keys
 	end 'aesGcmHardwareKeys'
 
-	// Each of `aesGcmHash`, `aesGcmEncrypt` and `aesGcmDecrypt` takes a whole message part in one call:
-	// a call that ends in a partial block pads it and counts it as a whole block, so a later call on the
-	// same message block would continue from the wrong position. `specs/aes-hardware.md` owns the rule.
-	function aesGcmHardwareStart(schedule ByteArray, keys ByteArray, nonce ByteArray, additionalData ByteArray) returns ByteArray
-		var message = ByteArray.create()
-		message.reserve(aesGcmHardwareMessageBytes)
-		message.resize(aesGcmHardwareAccumulatorBytes)
-		message.append(nonce)
-		__Builtins.appendBigEndian(message, aesGcmHardwareTagMaskCounter, aesGcmHardwareCounterWordBytes)
-		message.resize(aesGcmHardwareMessageBytes)
-		__Builtins.aesEncryptBlock(message, aesGcmHardwareMaskAt, schedule, message, aesGcmHardwareCounterAt)
+	export function aesGcmHardwareSealInto(output ByteArray, at ElementIndex, keys ByteArray, nonce ByteArray, plaintext ByteArray, additionalData ByteArray)
+		let sealedEnd = at + plaintext.count() + aesGcmHardwareTagBytes
 
-		if additionalData.count() > 0 'hasAdditionalData'
-			__Builtins.aesGcmHash(message, keys, additionalData, aesHardwareFirstByte, additionalData.count())
-		end 'hasAdditionalData'
+		if output.count() != sealedEnd 'resizes'
+			output.resize(sealedEnd)
+		end 'resizes'
 
-		return message
-	end 'aesGcmHardwareStart'
+		__Builtins.aesGcmSeal(output, at, keys, nonce, additionalData, plaintext)
+	end 'aesGcmHardwareSealInto'
 
-	export function aesGcmHardwareSeal(schedule ByteArray, keys ByteArray, nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray
-		var message = aesGcmHardwareStart(schedule, keys: keys, nonce: nonce, additionalData: additionalData)
-		var sealed = ByteArray.create()
-		sealed.reserve(plaintext.count() + aesGcmHardwareTagBytes)
-		sealed.append(plaintext)
+	export function aesGcmHardwareOpen(keys ByteArray, nonce ByteArray, sealed ByteArray, additionalData ByteArray, ciphertextBytes Count) returns ByteArray throws AeadError
+		var plaintext = ByteArray.create()
+		plaintext.resize(ciphertextBytes)
 
-		if plaintext.count() > 0 'hasPlaintext'
-			__Builtins.aesGcmEncrypt(sealed, aesHardwareFirstByte, keys, message, plaintext.count())
-		end 'hasPlaintext'
+		if not __Builtins.aesGcmOpen(plaintext, aesHardwareFirstByte, keys, nonce, additionalData, sealed) 'forged'
+			throw AeadError.authenticationFailed
+		end 'forged'
 
-		__Builtins.aesGcmFinish(message, keys, additionalData.count(), plaintext.count())
-		message.truncate(aesGcmHardwareTagBytes)
-		sealed.append(message)
-
-		return sealed
-	end 'aesGcmHardwareSeal'
-
-	export function aesGcmHardwareOpen(schedule ByteArray, keys ByteArray, nonce ByteArray, ciphertext ByteArray, additionalData ByteArray, plaintext ByteArray) returns ByteArray
-		var message = aesGcmHardwareStart(schedule, keys: keys, nonce: nonce, additionalData: additionalData)
-		plaintext.reserve(ciphertext.count())
-		plaintext.append(ciphertext)
-
-		if ciphertext.count() > 0 'hasCiphertext'
-			__Builtins.aesGcmDecrypt(plaintext, aesHardwareFirstByte, keys, message, ciphertext.count())
-		end 'hasCiphertext'
-
-		__Builtins.aesGcmFinish(message, keys, additionalData.count(), ciphertext.count())
-		message.truncate(aesGcmHardwareTagBytes)
-
-		return message
+		return plaintext
 	end 'aesGcmHardwareOpen'
 #endif

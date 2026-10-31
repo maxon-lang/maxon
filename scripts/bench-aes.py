@@ -292,14 +292,16 @@ def collect(runnables, runs, warmup):
 
 def check_agreement(seen, runnables, order):
     expected = {r["name"] for r in runnables}
+    maxon_arms = {r["name"] for r in runnables if r["kind"] == KIND_MAXON}
     for workload in order:
         shapes = seen[workload]
         if len(shapes) != 1:
             detail = "; ".join(f"{sorted(names)} printed bytes/iterations/repeats/digest {shape}" for shape, names in sorted(shapes.items()))
             raise bench_common.VerificationFailure(f"the arms disagree on {workload}: {detail}")
         (_, names), = shapes.items()
-        if names != expected:
-            raise bench_common.VerificationFailure(f"{sorted(expected - names)} printed no {workload} line")
+        missing = expected - names
+        if missing and not (missing <= maxon_arms and names & maxon_arms):
+            raise bench_common.VerificationFailure(f"{sorted(missing)} printed no {workload} line")
 
 
 def shape_of(seen, workload):
@@ -308,6 +310,8 @@ def shape_of(seen, workload):
 
 
 def throughput_cell(best, seen, workload, name):
+    if (workload, name) not in best:
+        return NO_CELL
     nanos = best[(workload, name)]
     bytes_per_op, iterations = shape_of(seen, workload)
     if nanos <= 0:
@@ -319,6 +323,8 @@ def throughput_cell(best, seen, workload, name):
 
 
 def ratio_cell(best, workload, numerator, denominator):
+    if (workload, numerator) not in best:
+        return NO_CELL
     over = best[(workload, denominator)]
     if over <= 0:
         return NO_CELL
@@ -344,6 +350,9 @@ def log_rows(context, order, best, seen, maxon_names, go_arms, note):
     rows = []
     for maxon_name in maxon_names:
         for workload in order:
+            if (workload, maxon_name) not in best:
+                continue
+
             cells = [throughput_cell(best, seen, workload, maxon_name)]
             ratios = []
             for role in ROLES:
@@ -486,10 +495,10 @@ def check_rows(rows, expected_arms):
     arms = {row[COLUMN_ARM] for row in rows}
     workloads = {row[COLUMN_WORKLOAD] for row in rows}
     pairs = {(row[COLUMN_ARM], row[COLUMN_WORKLOAD]) for row in rows}
-    if len(arms) != expected_arms or len(pairs) != len(rows) or len(rows) != len(arms) * len(workloads):
+    if len(arms) != expected_arms or len(pairs) != len(rows):
         raise bench_common.VerificationFailure(
             f"the Mac's rows file {MAC_ROWS_FILE} holds {len(rows)} rows over {len(arms)} arm(s) and {len(workloads)} workload(s); "
-            f"expected {expected_arms} arm(s), each with every workload exactly once")
+            f"expected {expected_arms} arm(s), each workload at most once per arm")
 
 
 def fetch_mac_rows(session, expected_arms):
