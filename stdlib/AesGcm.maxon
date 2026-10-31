@@ -254,7 +254,7 @@ end 'AesGcmSoftware'
 union AesGcmBacking
 	bitsliced(software AesGcmSoftware)
 
-	#if not arch(wasm32)
+	#if arch(x64) or arch(arm64)
 		hardware(schedule ByteArray, keys ByteArray)
 	#endif
 end 'AesGcmBacking'
@@ -278,7 +278,7 @@ public type AesGcm implements Aead
 			return Self{backing: AesGcmBacking.bitsliced(software)}
 		end 'software'
 
-		#if not arch(wasm32)
+		#if arch(x64) or arch(arm64)
 			try aesRequireKeyLength(key) otherwise (failure) 'refused'
 				throw aesGcmKeyFailure(failure)
 			end 'refused'
@@ -295,7 +295,7 @@ public type AesGcm implements Aead
 		match backing 'backing'
 			bitsliced then return false
 
-			#if not arch(wasm32)
+			#if arch(x64) or arch(arm64)
 				hardware then return true
 			#endif
 		end 'backing'
@@ -308,7 +308,7 @@ public type AesGcm implements Aead
 		match backing 'backing'
 			bitsliced(software) then return software.seal(nonce, plaintext: plaintext, additionalData: additionalData)
 
-			#if not arch(wasm32)
+			#if arch(x64) or arch(arm64)
 				hardware(schedule, keys) then return aesGcmHardwareSeal(schedule, keys: keys, nonce: nonce, plaintext: plaintext, additionalData: additionalData)
 			#endif
 		end 'backing'
@@ -322,13 +322,13 @@ public type AesGcm implements Aead
 		match backing 'backing'
 			bitsliced(software) then return try software.open(nonce, ciphertext: parts.ciphertext, received: parts.tag, additionalData: additionalData)
 
-			#if not arch(wasm32)
+			#if arch(x64) or arch(arm64)
 				hardware(schedule, keys) then return try openHardware(schedule, keys: keys, nonce: nonce, parts: parts, additionalData: additionalData)
 			#endif
 		end 'backing'
 	end 'open'
 
-	#if not arch(wasm32)
+	#if arch(x64) or arch(arm64)
 		function openHardware(schedule ByteArray, keys ByteArray, nonce ByteArray, parts AeadSealedParts, additionalData ByteArray) returns ByteArray throws AeadError
 			var opened = ByteArray.create()
 			let expectedTag = aesGcmHardwareOpen(schedule, keys: keys, nonce: nonce, ciphertext: parts.ciphertext, additionalData: additionalData, plaintext: opened)

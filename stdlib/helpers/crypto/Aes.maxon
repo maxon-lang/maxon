@@ -21,13 +21,13 @@ end 'AesKeyStreamError'
 union AesBacking
 	bitsliced(cipher AesBitsliced)
 
-	#if not arch(wasm32)
+	#if arch(x64) or arch(arm64)
 		hardware(schedule ByteArray)
 	#endif
 end 'AesBacking'
 
 export function aesHardwareAvailable() returns bool
-	#if not arch(wasm32)
+	#if arch(x64) or arch(arm64)
 		return __Builtins.cpuHasAes()
 	#else
 		return false
@@ -40,7 +40,7 @@ public type Aes
 
 	/// The cipher for a 16-, 24- or 32-byte `key` (AES-128, AES-192 or AES-256).
 	public static function create(key ByteArray) returns Aes throws AesError
-		#if not arch(wasm32)
+		#if arch(x64) or arch(arm64)
 			if aesHardwareAvailable() 'hardware'
 				try aesRequireKeyLength(key)
 
@@ -56,7 +56,7 @@ public type Aes
 		match backing 'backing'
 			bitsliced(cipher) then return try cipher.encryptBlock(block)
 
-			#if not arch(wasm32)
+			#if arch(x64) or arch(arm64)
 				hardware(schedule) then return try aesHardwareEncrypt(schedule, block: block)
 			#endif
 		end 'backing'
@@ -67,7 +67,7 @@ public type Aes
 		match backing 'backing'
 			bitsliced(cipher) then return try cipher.decryptBlock(block)
 
-			#if not arch(wasm32)
+			#if arch(x64) or arch(arm64)
 				hardware(schedule) then return try aesHardwareDecrypt(schedule, block: block)
 			#endif
 		end 'backing'
@@ -79,7 +79,7 @@ public type Aes
 		match backing 'backing'
 			bitsliced(cipher) then return try cipher.xorKeyStream(nonce, counter: counter, data: data)
 
-			#if not arch(wasm32)
+			#if arch(x64) or arch(arm64)
 				hardware(schedule) then return try aesHardwareXorKeyStream(schedule, nonce: nonce, counter: counter, data: data)
 			#endif
 		end 'backing'
@@ -89,7 +89,7 @@ public type Aes
 		match backing 'backing'
 			bitsliced(cipher) then return try cipher.xorKeyStreamPastFirstBlock(nonce, counter: counter, data: data, output: output)
 
-			#if not arch(wasm32)
+			#if arch(x64) or arch(arm64)
 				hardware(schedule) then return try aesHardwareXorKeyStreamPastFirstBlock(schedule, nonce: nonce, counter: counter, data: data, output: output)
 			#endif
 		end 'backing'

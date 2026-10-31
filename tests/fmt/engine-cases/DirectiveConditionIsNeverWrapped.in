@@ -1,0 +1,57 @@
+union Backing
+	software(rounds int(0 to 14))
+
+	#if arch(x64) or arch(arm64)
+		hardware(schedule ByteArray, keys ByteArray)
+	#endif
+end 'Backing'
+
+function usesHardware(backing Backing) returns bool
+	match backing 'backing'
+		software then return false
+
+		#if arch(x64) or arch(arm64)
+			hardware then return true
+		#endif
+	end 'backing'
+end 'usesHardware'
+
+function widthOf(backing Backing) returns int(0 to 100)
+	match backing 'backing'
+		software(rounds) then return rounds
+
+		#if arch(x64) or arch(arm64)
+			hardware then return 1
+		#else
+			hardware then return 3
+		#endif
+	end 'backing'
+end 'widthOf'
+
+function chain(value int(0 to 100)) returns int(0 to 100)
+	#if os(Windows) or os(Linux) or os(Macos) or os(Wasi) or arch(x64) or arch(arm64) or arch(wasm32) or testing(true) or testing(false)
+	let width = 8
+	#else
+	let width = 2
+	#endif
+
+	#if arch(wasm32) and os(Wasi) and not arch(x64) and not arch(arm64) and not testing(true) and not testing(false) and not os(Windows)
+	let narrow = 4
+	#else
+	let narrow = 3
+	#endif
+
+	#if not (arch(wasm32) or os(Wasi))
+	let other = 1
+	#else
+	let other = 0
+	#endif
+
+	#if testing(true) or testing(false)
+	let probe = 1
+	#else
+	let probe = 0
+	#endif
+
+	return value + width + narrow + other + probe
+end 'chain'
