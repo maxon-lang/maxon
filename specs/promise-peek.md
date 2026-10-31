@@ -364,7 +364,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:24: '__Builtins.gtIsComplete' requires a int, but its argument is String
+error E3005: <fragment>:3:24: '__Builtins.gtIsComplete' requires an argument of type int, but its argument is String
 ```
 
 <!-- test: promise-peek.rejected-on-wasm -->

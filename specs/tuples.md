@@ -3831,7 +3831,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:25: 'CharSet' requires a Character, but its argument is (int, int)
+error E3005: <fragment>:4:25: 'CharSet' requires an argument of type Character, but its argument is (int, int)
 ```
 
 <!-- test: multi-line-tuple-literal -->

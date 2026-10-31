@@ -232,7 +232,7 @@ error E3036: <fragment>:4:16: '__DebugStream.event' takes exactly 6 arguments, b
 Every `__DebugStream` argument but `text`'s message is a machine word. A `String` in one of those
 slots is refused where the mistake is, not a pass later.
 
-⚠ *"requires a int"* is the shared `builtinOperandType` sentence every `__Builtins` and `subp*` refusal
+⚠ *"requires an argument of type int"* is the shared `builtinOperandType` sentence every `__Builtins` and `subp*` refusal
 already speaks, quoted here as it stands. `specs/builtins-type.md`'s `bits-to-float` cases pin the same
 sentence, and moving it would move four spec files' pins for a reason unrelated to this surface.
 ```maxon
@@ -242,7 +242,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:16: '__DebugStream.phaseBegin' requires a int, but its argument is String
+error E3005: <fragment>:3:16: '__DebugStream.phaseBegin' requires an argument of type int, but its argument is String
 ```
 
 <!-- test: debugstream-log-events.error.text-wants-a-string -->
@@ -255,7 +255,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:16: '__DebugStream.text' requires a String, but its argument is ByteArray
+error E3005: <fragment>:3:16: '__DebugStream.text' requires an argument of type String, but its argument is ByteArray
 ```
 
 <!-- test: debugstream-log-events.error.an-emitting-member-answers-nothing -->

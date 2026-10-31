@@ -236,7 +236,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its argument is float
+error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires an argument of type int, but its argument is float
 ```
 
 <!-- test: builtins-type.error.bits-to-float-managed-arg -->
@@ -253,7 +253,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its argument is String
+error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires an argument of type int, but its argument is String
 ```
 
 <!-- test: builtins-type.error.bits-to-float-bool-arg -->
@@ -266,7 +266,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its argument is bool
+error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires an argument of type int, but its argument is bool
 ```
 
 <!-- test: builtins-type.error.float-to-bits-int-arg -->
@@ -280,7 +280,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:21: '__Builtins.floatToBits' requires a float, but its argument is int
+error E3005: <fragment>:3:21: '__Builtins.floatToBits' requires an argument of type float, but its argument is int
 ```
 
 <!-- test: builtins-type.direct-write-stdout -->

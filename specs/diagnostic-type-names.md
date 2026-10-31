@@ -496,7 +496,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:13: '__Builtins.sleep' requires a integer, but its argument is Point
+error E3005: <fragment>:14:13: '__Builtins.sleep' requires an integer, but its argument is Point
 ```
 
 <!-- test: error.destructuring-a-struct-names-the-struct -->

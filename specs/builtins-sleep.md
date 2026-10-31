@@ -135,7 +135,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:13: '__Builtins.sleep' requires a integer, but its argument is float
+error E3005: <fragment>:3:13: '__Builtins.sleep' requires an integer, but its argument is float
 ```
 
 <!-- test: builtins-sleep.unknown-member-in-statement-position -->

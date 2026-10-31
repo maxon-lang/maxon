@@ -1134,7 +1134,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:13: '__Builtins.runProcess' requires a String, but its argument is int
+error E3005: <fragment>:3:13: '__Builtins.runProcess' requires an argument of type String, but its argument is int
 ```
 
 <!-- test: async-subprocess.error.bare-call-requires-try -->

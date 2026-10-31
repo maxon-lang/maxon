@@ -259,7 +259,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:20: '__Builtins.readStdin' requires a int, but its argument is String
+error E3005: <fragment>:3:20: '__Builtins.readStdin' requires an argument of type int, but its argument is String
 ```
 
 <!-- test: console-stdin.rejected-on-wasm -->

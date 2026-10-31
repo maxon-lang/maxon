@@ -632,7 +632,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:8:28: '__Builtins.readLittleEndian' requires a ByteArray, but its argument is IntegerArray
+error E3005: <fragment>:8:28: '__Builtins.readLittleEndian' requires an argument of type ByteArray, but its argument is IntegerArray
 ```
 
 <!-- test: builtins-byte-order.arity-is-checked -->

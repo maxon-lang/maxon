@@ -475,7 +475,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:13: '__Builtins.aesEncryptBlock' requires a ByteArray, but its argument is String
+error E3005: <fragment>:5:13: '__Builtins.aesEncryptBlock' requires an argument of type ByteArray, but its argument is String
 ```
 
 <!-- test: aes-hardware.error.refused-outside-the-library-tiers -->
@@ -1791,8 +1791,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:13: '__Builtins.aesGcmFinish' requires a int, but its argument is String
-error E3005: <fragment>:7:13: '__Builtins.aesGcmHash' requires a ByteArray, but its argument is String
+error E3005: <fragment>:3:13: '__Builtins.aesGcmFinish' requires an argument of type int, but its argument is String
+error E3005: <fragment>:7:13: '__Builtins.aesGcmHash' requires an argument of type ByteArray, but its argument is String
 ```
 
 <!-- test: aes-hardware.gcm-large-messages-match-the-software-backing -->

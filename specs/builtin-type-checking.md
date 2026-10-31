@@ -168,7 +168,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:17: '__Builtins.subprocessResolveOnPath' requires a cstring, but its argument is __ManagedMemory with Byte
+error E3005: <fragment>:6:17: '__Builtins.subprocessResolveOnPath' requires an argument of type cstring, but its argument is __ManagedMemory with Byte
 ```
 
 <!-- test: builtin-type-checking.error-subprocess-resolve-on-path-int -->
@@ -181,7 +181,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:17: '__Builtins.subprocessResolveOnPath' requires a cstring, but its argument is int
+error E3005: <fragment>:3:17: '__Builtins.subprocessResolveOnPath' requires an argument of type cstring, but its argument is int
 ```
 
 <!-- test: builtin-type-checking.error-subprocess-get-pid-cstring -->
@@ -196,7 +196,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:17: '__Builtins.subprocessGetPid' requires a int, but its argument is cstring
+error E3005: <fragment>:5:17: '__Builtins.subprocessGetPid' requires an argument of type int, but its argument is cstring
 ```
 
 <!-- test: builtin-type-checking.subprocess-resolve-on-path-cstring -->

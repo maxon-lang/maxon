@@ -492,13 +492,18 @@ export union SourceParseError implements Error
 	// SemanticCheck's arity check reads — there is nothing there to disagree with.
 	builtinArity(name String, expected ParamCount, got ParamCount, line LineNumber, column ColumnNumber)
 
-	// A compiler builtin whose argument fails a REQUIREMENT THAT IS NOT A TYPE NAME (`trunc(flag)` wants "a
-	// number", `Builtins.sleep` wants "an integer", `panic` wants a message). Same reason as `builtinArity`:
-	// no signature exists for the ordinary argument check to consult. `required` is a phrase and not
-	// necessarily a type, which is exactly what separates this from `builtinArgumentType` below — a builtin
-	// whose argument position DOES have a named parameter and a declared type says so in the ordinary
-	// argument sentence instead.
+	// A compiler builtin whose argument is not the TYPE it requires (`readStdin` wants an `int`). Same
+	// reason as `builtinArity`: no signature exists for the ordinary argument check to consult. `required`
+	// is a type name, rendered "requires an argument of type {required}". What separates this from
+	// `builtinArgumentType` below is that a builtin whose argument position DOES have a named parameter and
+	// a declared type says so in the ordinary argument sentence instead.
 	builtinOperandType(name String, required String, got String, line LineNumber, column ColumnNumber)
+
+	// A compiler builtin whose argument fails a REQUIREMENT THAT IS NOT A TYPE NAME (`trunc(flag)` wants a
+	// number, `Builtins.sleep` an integer, `panic` a string literal). `required` is a phrase that carries
+	// its own article, rendered "requires {required}", so the sentence is grammatical for every phrase
+	// without the renderer guessing an article from its spelling.
+	builtinOperandPhrase(name String, required String, got String, line LineNumber, column ColumnNumber)
 
 	// ⭐ A builtin's NAMED, TYPED argument meeting the wrong type — the `__ManagedFile`, `__ManagedMemory`
 	// and `String.init` family, and `print` (user ruling, 2026-08-04). A SECOND variant beside
@@ -9121,7 +9126,7 @@ let BuiltinsBitsToFloatName = b"__Builtins.bitsToFloat"
 
 let OrderedWordArity = 3
 let OrderedWordAliasName = b"OrderedWord"
-let OrderedWordWidthRequirement = "constant width of 2, 4 or 8"
+let OrderedWordWidthRequirement = "a constant width of 2, 4 or 8"
 let OrderedWordSourceRequirement = "ByteArray"
 let NotACompileTimeConstant = "a value not known at compile time"
 
@@ -9498,10 +9503,10 @@ let GtIsCompleteArity = 1
 // `CurrentProcessIdArity`'s reason: the number is a fact about THIS intrinsic's contract.
 let AwaitAnyArity = 1
 
-// What `__Builtins.awaitAny` will accept, as the `builtinOperandType` sentence renders it — *"'…' requires
-// a {required}, but its argument is {got}"*. Named rather than written at the throw for
+// What `__Builtins.awaitAny` will accept, as the `builtinOperandPhrase` sentence renders it — *"'…' requires
+// {required}, but its argument is {got}"*. Named rather than written at the throw for
 // `StringLiteralRequirement`'s reason: it is a phrase a spec pins, not an incidental string.
-let PromiseArrayRequirement = "promise array — an `Array` whose element type is a `Promise with …`"
+let PromiseArrayRequirement = "a promise array — an `Array` whose element type is a `Promise with …`"
 
 // `writeStdout(mm)`/`writeStderr(mm)` each take exactly one `__ManagedMemory`. ONE constant for both, not
 // two: it is a single fact about a single shape, and the two names are the same intrinsic on two streams.
@@ -12214,7 +12219,9 @@ end 'literalEscapeKindPhrase'
 // `__DebugStream.nameId(…)` needs one so the name never exists at run time at all
 // (`parseDebugStreamNameId`). A second copy of the wording would be a second thing that can come to
 // describe the rule differently.
-let StringLiteralRequirement = "string literal"
+let StringLiteralRequirement = "a string literal"
+let NumberOperandRequirement = "a number"
+let IntegerOperandRequirement = "an integer"
 
 // ⭐ What a `__Raw` operand refusal calls its two non-value requirements. Constants for
 // `StringLiteralRequirement`'s reason: a wording a `maxoncstderr` block pins belongs in one place,
@@ -43913,7 +43920,7 @@ export type Parser
 		if not self.at(TokenKind.stringLiteral) 'notALiteral'
 			let argTok = self.current()
 			let arg = try self.parseExpression(func, block: self.bodyState.currentBlock)
-			throw SourceParseError.builtinOperandType("panic", required: StringLiteralRequirement, got: self.valueDisplayTypeName(arg), line: argTok.line, column: argTok.column)
+			throw SourceParseError.builtinOperandPhrase("panic", required: StringLiteralRequirement, got: self.valueDisplayTypeName(arg), line: argTok.line, column: argTok.column)
 		end 'notALiteral'
 
 		if self.peekKind() == TokenKind.stringInterpStart 'interpolated'
@@ -85684,7 +85691,7 @@ export type Parser
 		// (`arrayLiteralInstanceFor`), so `[b.get(0), b.get(1)]` over a byte array built an `Array with
 		// integer` — an 8-byte stride over values that came out of a 1-byte one — and the byte array
 		// could not be rebuilt from its own elements. Typed `integer`, `String.from([x, y, z])` over a
-		// `b"Hi!"` is a false reject: `E3005 requires a Array with Byte, but its argument is Array_int`.
+		// `b"Hi!"` is a false reject: `E3005 requires an argument of type Array with Byte, but its argument is Array_int`.
 		// `containerSlotValueType` is the one function that answers "what type does an element READ as",
 		// and it answered here already for a managed element; a trivial one now asks the same question of
 		// the same function.
@@ -86186,7 +86193,7 @@ export type Parser
 			// with Byte` and writing `[x, y, z]` produced an `Array with integer` — an 8-byte stride over
 			// values that came out of a 1-byte one — so a byte read back through a literal was no longer a
 			// byte. Erased, `String.from([x, y, z])` over a `b"Hi!"`'s own elements is a false reject:
-			// `E3005 requires a Array with Byte, but its argument is Array_int`. It is also what makes an
+			// `E3005 requires an argument of type Array with Byte, but its argument is Array_int`. It is also what makes an
 			// array read AGREE with a function return, which never erased: `function pick(v Byte) returns
 			// Byte` already yields a `named`-tagged value, so `[pick(72)]` was an `Array with Byte` while
 			// `[bytes.get(0)]` was not.
@@ -93415,7 +93422,7 @@ export type Parser
 				// A value whose static type is a RANGED ALIAS carries the `named` tag
 				// until TypeResolution collapses it, so the narrow test refused every argument spelled with one:
 				// `take(i ArgIndex)` calling `__Builtins.commandLineArg(i)` was
-				// `E3005 '__Builtins.commandLineArg' requires a int, but its argument is int` — a refusal naming
+				// `E3005 '__Builtins.commandLineArg' requires an argument of type int, but its argument is int` — a refusal naming
 				// one type twice — on a program the BOOTSTRAP compiles and runs (MEASURED both ways). It is the
 				// same fact `parseBuiltinIntegerArg`'s header measured at the six signature-checked builtin doors
 				// and the same one the `readStdin` arm below asks; a third spelling of one question is how a
@@ -94275,7 +94282,7 @@ export type Parser
 
 			if rawArgumentIsTheConstant(shape, position: position as ParamCount) 'compileTimeConstant'
 				if not self.constIsKnown(arg) 'notAConstant'
-					throw SourceParseError.builtinOperandType(String.from(callee), required: RawConstantOperandRequirement, got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
+					throw SourceParseError.builtinOperandPhrase(String.from(callee), required: RawConstantOperandRequirement, got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 				end 'notAConstant'
 
 				constant = self.constOf(arg)
@@ -94392,13 +94399,13 @@ export type Parser
 		// Two tests rather than one disjunction: the cast below is a RANGED door that panics on a negative,
 		// so the sign must be settled before the size can be read as one.
 		if bytes <= 0 'notPositive'
-			throw SourceParseError.builtinOperandType(String.from(callee), required: RawScratchSizeRequirement, got: "{bytes}", line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandPhrase(String.from(callee), required: RawScratchSizeRequirement, got: "{bytes}", line: calleeTok.line, column: calleeTok.column)
 		end 'notPositive'
 
 		let requested = bytes as StackSize
 
 		if (requested mod SpillSlotBytes) != 0 'notAWholeNumberOfSlots'
-			throw SourceParseError.builtinOperandType(String.from(callee), required: RawScratchSizeRequirement, got: "{bytes}", line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandPhrase(String.from(callee), required: RawScratchSizeRequirement, got: "{bytes}", line: calleeTok.line, column: calleeTok.column)
 		end 'notAWholeNumberOfSlots'
 
 		let slot = (func.stackSize / SpillSlotBytes) as FullRangeInt
@@ -94454,7 +94461,7 @@ export type Parser
 		let operandTag = self.tagOf(operand)
 
 		if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
-			throw SourceParseError.builtinOperandType(String.from(name), required: "number", got: self.valueKindWordAt(operand, tag: operandTag), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandPhrase(String.from(name), required: NumberOperandRequirement, got: self.valueKindWordAt(operand, tag: operandTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notANumber'
 
 		return operand
@@ -94549,7 +94556,7 @@ export type Parser
 		// `__float_fromString` hands it come out of `__FloatTextResult.bits(value FullRangeInt)`, so the
 		// operand is a ranged INT alias — which keeps a `named` tag at parse time (deliberately; see
 		// `floatResolvedTag`). The bare tag would refuse the one program that needs this, and would say
-		// so in the words "requires a int, but its argument is int", because `typeTagName` renders
+		// so in the words "requires an argument of type int, but its argument is int", because `typeTagName` renders
 		// `named` as `int`. Resolving first fixes the verdict AND the sentence.
 		let operandTag = self.rangedAliasResolvedTag(self.tagOf(operand), nameId: self.valueNameId(operand))
 
@@ -94627,10 +94634,10 @@ export type Parser
 		end 'notAnInteger'
 
 		if not self.constIsKnown(widthOperand) 'notConstant'
-			throw SourceParseError.builtinOperandType(String.from(callee), required: OrderedWordWidthRequirement, got: NotACompileTimeConstant, line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandPhrase(String.from(callee), required: OrderedWordWidthRequirement, got: NotACompileTimeConstant, line: calleeTok.line, column: calleeTok.column)
 		end 'notConstant'
 
-		return try wordBytesOfCount(self.constOf(widthOperand)) otherwise throw SourceParseError.builtinOperandType(String.from(callee), required: OrderedWordWidthRequirement, got: "{self.constOf(widthOperand)}", line: calleeTok.line, column: calleeTok.column)
+		return try wordBytesOfCount(self.constOf(widthOperand)) otherwise throw SourceParseError.builtinOperandPhrase(String.from(callee), required: OrderedWordWidthRequirement, got: "{self.constOf(widthOperand)}", line: calleeTok.line, column: calleeTok.column)
 	end 'requireOrderedWordOperands'
 
 	function emitFullRangeFloatBits(bits ValueId, range SourceRange) returns ValueId
@@ -94878,7 +94885,7 @@ export type Parser
 		if not self.at(TokenKind.stringLiteral) 'notALiteral'
 			let argTok = self.current()
 			let arg = try self.parseValueExpression(func)
-			throw SourceParseError.builtinOperandType(String.from(DebugStreamNameIdCallee), required: StringLiteralRequirement, got: self.valueDisplayTypeName(arg), line: argTok.line, column: argTok.column)
+			throw SourceParseError.builtinOperandPhrase(String.from(DebugStreamNameIdCallee), required: StringLiteralRequirement, got: self.valueDisplayTypeName(arg), line: argTok.line, column: argTok.column)
 		end 'notALiteral'
 
 		let nameTok = try self.consume(TokenKind.stringLiteral)
@@ -94966,7 +94973,7 @@ export type Parser
 		let argTag = self.tagOf(arg)
 
 		if not typeClassAdmits(TypeClass.numeric, tag: argTag) or tagIsFloat(argTag) 'notAnInt'
-			throw SourceParseError.builtinOperandType(String.from(BuiltinsSleepName), required: "integer", got: self.valueKindWord(arg), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandPhrase(String.from(BuiltinsSleepName), required: IntegerOperandRequirement, got: self.valueKindWord(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAnInt'
 
 		// The intrinsic returns nothing, so using its result is using a value that is not there — the same
@@ -95088,7 +95095,7 @@ export type Parser
 		// It is also the one predicate `requireIntrinsicArgs` asks one family over, which is what stops
 		// the two doors of one question from drifting.
 		if not tagIsIntegral(self.numberTagOf(handle)) 'notAnInt'
-			throw SourceParseError.builtinOperandType(String.from(builtinName), required: "integer", got: self.valueKindWord(handle), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandPhrase(String.from(builtinName), required: IntegerOperandRequirement, got: self.valueKindWord(handle), line: calleeTok.line, column: calleeTok.column)
 		end 'notAnInt'
 
 		return handle
@@ -95238,7 +95245,7 @@ export type Parser
 		let promises = try args.get(0) otherwise panic("emitAwaitAny: args.count() == AwaitAnyArity just checked but get(0) failed")
 
 		if not self.valueIsPromiseArray(promises) 'notAPromiseArray'
-			throw SourceParseError.builtinOperandType(String.from(BuiltinsAwaitAnyName), required: PromiseArrayRequirement, got: self.valueDisplayTypeName(promises), line: calleeTok.line, column: calleeTok.column)
+			throw SourceParseError.builtinOperandPhrase(String.from(BuiltinsAwaitAnyName), required: PromiseArrayRequirement, got: self.valueDisplayTypeName(promises), line: calleeTok.line, column: calleeTok.column)
 		end 'notAPromiseArray'
 
 		return self.emitAwaitAnyCall(promises, range: SourceRange.ofToken(calleeTok))

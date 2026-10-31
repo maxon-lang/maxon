@@ -351,7 +351,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:7: 'equals' requires a String, but its argument is int
+error E3005: <fragment>:4:7: 'equals' requires an argument of type String, but its argument is int
 ```
 
 <!-- test: string-conformance.the-conformance-method-may-be-named-statically -->
