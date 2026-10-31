@@ -2842,6 +2842,8 @@ type WasmFuncEmitter
 			shl or
 			shr or
 			shrLogical or
+			rotateLeft or
+			rotateRight or
 			div then self.emitFloatAluOp(lhs, rhs: rhs, opcode: opcode)
 			min or
 			max then self.emitFloatMinMax(lhs, rhs: rhs, kind: floatMinMaxKindFor(opcode))
@@ -2903,7 +2905,9 @@ type WasmFuncEmitter
 			bitXor or
 			shl or
 			shr or
-			shrLogical then panic("wasm: `binOp({opcode.rawValue})` has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
+			shrLogical or
+			rotateLeft or
+			rotateRight then panic("wasm: `binOp({opcode.rawValue})` has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
 			min or
 			max then panic("wasm: `{opcode.name}` is not an ALU opcode — it is a float compare + `select` (`emitFloatMinMax`), which needs each operand on the stack twice, and `emitFloatBinOp` routes it there")
 			mulHighSigned or
@@ -2946,6 +2950,8 @@ type WasmFuncEmitter
 			shl then self.body.i64Shl()
 			shr then self.body.i64ShrS()
 			shrLogical then self.body.i64ShrU()
+			rotateLeft then self.body.i64Rotl()
+			rotateRight then self.body.i64Rotr()
 			div or
 			min or
 			max then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`/`max`")

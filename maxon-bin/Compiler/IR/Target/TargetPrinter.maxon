@@ -820,6 +820,10 @@ function opIsArm64Band(op TargetOp) returns bool
 		shlRegCl or
 		sarRegCl or
 		shrRegCl or
+		rolRegImm8 or
+		rorRegImm8 or
+		rolRegCl or
+		rorRegCl or
 		setccReg or
 		leaRegGlobal or
 		loadRegBaseDisp or
@@ -883,6 +887,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		arm64Lslv or
 		arm64Asrv or
 		arm64Lsrv or
+		arm64Rorv or
 		arm64Neg or
 		arm64Mvn or
 		arm64Rev or
@@ -894,6 +899,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		arm64LslImm or
 		arm64AsrImm or
 		arm64LsrImm or
+		arm64RorImm or
 		arm64Cmp or
 		arm64CmpImm or
 		arm64Cset or
@@ -1018,6 +1024,10 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		shlRegCl(dest, lhs) gives "shlRegCl {vregName(dest)}, {vregName(lhs)}"
 		sarRegCl(dest, lhs) gives "sarRegCl {vregName(dest)}, {vregName(lhs)}"
 		shrRegCl(dest, lhs) gives "shrRegCl {vregName(dest)}, {vregName(lhs)}"
+		rolRegImm8(dest, lhs, imm) gives "rolRegImm8 {vregName(dest)}, {vregName(lhs)}, {imm}"
+		rorRegImm8(dest, lhs, imm) gives "rorRegImm8 {vregName(dest)}, {vregName(lhs)}, {imm}"
+		rolRegCl(dest, lhs) gives "rolRegCl {vregName(dest)}, {vregName(lhs)}"
+		rorRegCl(dest, lhs) gives "rorRegCl {vregName(dest)}, {vregName(lhs)}"
 		setccReg(dest, cond) gives "setccReg {condCodeName(cond)}, {vregName(dest)}"
 
 		// The data-section band. The LABEL is printed, because it is what a `TargetIr` pin pins: a
@@ -1109,6 +1119,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64Lslv(dest, lhs, rhs) gives "lslv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Asrv(dest, lhs, rhs) gives "asrv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Lsrv(dest, lhs, rhs) gives "lsrv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Rorv(dest, lhs, rhs) gives "rorv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Neg(dest, src) gives "neg {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Mvn(dest, src) gives "mvn {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Rev(dest, src, width) gives "rev.{wordByteCount(width)} {arm64VregName(dest)}, {arm64VregName(src)}"
@@ -1120,6 +1131,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64LslImm(dest, src, imm) gives "lsl {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
 		arm64AsrImm(dest, src, imm) gives "asr {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
 		arm64LsrImm(dest, src, imm) gives "lsr {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64RorImm(dest, src, imm) gives "ror {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
 		arm64Cmp(lhs, rhs) gives "cmp {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64CmpImm(reg, imm) gives "cmp {arm64VregName(reg)}, {imm}"
 		arm64Cset(dest, cond) gives "cset {arm64VregName(dest)}, {cond.name}"

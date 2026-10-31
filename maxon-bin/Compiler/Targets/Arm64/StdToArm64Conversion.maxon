@@ -375,6 +375,8 @@ function arm64ShiftInstrOf(opcode StdBinOpcode) returns Arm64ShiftInstr
 		max panic("arm64ShiftInstrOf: `{opcode.name}` is a FLOAT-ONLY opcode, not a shift")
 		mulHighSigned or
 		mulHighUnsigned panic("arm64ShiftInstrOf: `{opcode.name}` is a multiply, not a shift")
+		rotateLeft or
+		rotateRight panic("arm64ShiftInstrOf: `{opcode.name}` is a rotate, not a shift — `lowerBinOp` and `lowerBinOpImm` route it to `rorv`/`ror` themselves")
 	end 'o'
 end 'arm64ShiftInstrOf'
 
@@ -1344,8 +1346,16 @@ export type StdToArm64Lowering
 			mulHighSigned then self.emit(dstRef, op: TargetOp.arm64Mulh(dest, lhs: lhsReg, rhs: rhsReg, signedness: IntegerSignedness.signed))
 
 			mulHighUnsigned then self.emit(dstRef, op: TargetOp.arm64Mulh(dest, lhs: lhsReg, rhs: rhsReg, signedness: IntegerSignedness.unsigned))
+			rotateRight then self.emit(dstRef, op: TargetOp.arm64Rorv(dest, lhs: lhsReg, rhs: rhsReg))
+			rotateLeft then self.lowerRotateLeftReg(dest, lhsReg: lhsReg, rhsReg: rhsReg, dstRef: dstRef)
 		end 'op'
 	end 'lowerBinOp'
+
+	function lowerRotateLeftReg(dest TargetVReg, lhsReg TargetVReg, rhsReg TargetVReg, dstRef ElementIndex)
+		let negated = self.mintVirtual()
+		self.emit(dstRef, op: TargetOp.arm64Neg(negated, src: rhsReg))
+		self.emit(dstRef, op: TargetOp.arm64Rorv(dest, lhs: lhsReg, rhs: negated))
+	end 'lowerRotateLeftReg'
 
 	// Emit a matched `base + index*scale` address: NOTHING when the one memory op reading it
 	// carries the address itself, else the single shifted-register `add` that replaces the separate
@@ -1378,7 +1388,9 @@ export type StdToArm64Lowering
 			bitXor or
 			shl or
 			shr or
-			shrLogical then panic("lowerFloatBinOp: {opcode.rawValue} has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
+			shrLogical or
+			rotateLeft or
+			rotateRight then panic("lowerFloatBinOp: {opcode.rawValue} has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
 			mulHighSigned or
 			mulHighUnsigned then panic("lowerFloatBinOp: `{opcode.name}` is INTEGER-ONLY — it is the high half of a 128-bit integer product and no float form of it exists")
 
@@ -1528,6 +1540,8 @@ export type StdToArm64Lowering
 			max then panic("lowerBinOpImm: `{opcode.name}` is FLOAT-ONLY and no NEON form takes an immediate — foldConstOperands must never produce this")
 			mulHighSigned or
 			mulHighUnsigned then panic("lowerBinOpImm: `{opcode.name}` has no immediate form on any target — `constFitsBinOpImmediate` refuses every constant for it, so foldConstOperands must never produce this")
+			rotateRight then self.emit(dstRef, op: TargetOp.arm64RorImm(dest, src: src, imm: imm as ShiftCount))
+			rotateLeft then self.emit(dstRef, op: TargetOp.arm64RorImm(dest, src: src, imm: ((ShiftCountBits - (imm as FullRangeInt)) and MaxUnguardedShiftCount) as ShiftCount))
 		end 'op'
 	end 'lowerBinOpImm'
 

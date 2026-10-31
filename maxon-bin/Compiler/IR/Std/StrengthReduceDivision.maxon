@@ -479,7 +479,7 @@ module function reduceDivisionsInFunc(module StdModule, func IrFunction, reducti
 		block.replaceBodyOps(rebuilt)
 	end 'eachBlock'
 
-	retireDetachedDivisors(module, func: func, detached: detachedDivisors)
+	retireDetachedDefs(module, func: func, detached: detachedDivisors)
 end 'reduceDivisionsInFunc'
 
 // Whether `func` holds a `div` or a `mod` op at all — the pre-scan the function above states the
@@ -999,7 +999,8 @@ function emitReducedConst(module StdModule, value FullRangeInt, mint ValueMinter
 	return id
 end 'emitReducedConst'
 
-// Drop the divisor `const` of every rewritten site that NOTHING now reads.
+// Drop every def in `detached` that nothing now reads: the divisor consts of rewritten divisions, and
+// the shifts and complement `sub`s of fused rotates.
 //
 // ⚠ **MEMBERSHIP IS RE-DERIVED FROM THE REWRITTEN FUNCTION, NOT COUNTED DURING THE REWRITE, AND THAT
 // IS WHAT MAKES IT EXACT.** A divisor `const` may be read by two divisions this pass reduced, by one
@@ -1008,10 +1009,9 @@ end 'emitReducedConst'
 // reads" — of the function as it stands after the rewrite answers all three at once, and is the same walk
 // `foldConstOperands`' own prune makes.
 //
-// It retires ONLY the consts this pass detached, which is `foldConstOperands`' narrow rule verbatim: a
-// general dead-value DCE is its own pass, and `foldConstOperands`' header states at length why this
-// must not grow into one.
-function retireDetachedDivisors(module StdModule, func IrFunction, detached ValueIdArray)
+// It retires ONLY the defs the calling pass detached: a general dead-value DCE is its own pass, and
+// `foldConstOperands`' header states at length why this must not grow into one.
+module function retireDetachedDefs(module StdModule, func IrFunction, detached ValueIdArray)
 	if detached.count() == 0 'nothingDetached'
 		return
 	end 'nothingDetached'
@@ -1028,4 +1028,4 @@ function retireDetachedDivisors(module StdModule, func IrFunction, detached Valu
 	end 'eachDetached'
 
 	removeOpsDefining(module, func: func, doomed: doomed)
-end 'retireDetachedDivisors'
+end 'retireDetachedDefs'

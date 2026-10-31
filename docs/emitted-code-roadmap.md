@@ -95,6 +95,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | Managed-primitive inlining | ✅ `InlineManagedPrimitives` (EC1) |
 | Const **operand** → immediate | ✅ `FoldConstOperands` |
 | Algebraic identity (`x+0`, `x*1`) | ✅ `FoldConstOperands` move 3 |
+| **Rotate recognition** (`(x shl k) or (x shr (64 - k))`) | ✅ `FuseRotates` (`FoldConstOperands` move 5) — constant and proven-range variable counts on `bits(64)`, one `rol`/`ror`; matches 3 sites in AES and 10 in SHA-512, not SHA-256's rotate-by-doubling or ChaCha20's masked 32-bit rotate |
 | **Constant folding (`const ⊕ const`)** | ✅ `FoldConstants` (EC12) |
 | **CSE / GVN** | ✅ `CommonSubexpressionElimination` (EC13) — dominator-scoped, arith band, call-barriered |
 | **LICM** | ✅ `LoopInvariantCodeMotion` (EC14) — pure ops AND invariant loads, two stated speculation rules |

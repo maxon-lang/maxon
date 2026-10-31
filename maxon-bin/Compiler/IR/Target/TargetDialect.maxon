@@ -715,7 +715,8 @@ export union TargetOp
 	orRegImm32(dest TargetVReg, lhs TargetVReg, imm Imm32) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	xorRegImm32(dest TargetVReg, lhs TargetVReg, imm Imm32) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// Shift by a CONSTANT count (group-2 `C1 /4` shl, `C1 /7` sar, `C1 /5` shr).
+	// Shift or rotate by a CONSTANT count (group-2 `C1 /4` shl, `C1 /7` sar, `C1 /5` shr, `C1 /0` rol,
+	// `C1 /1` ror).
 	// Two-address ⇒ REUSE-of-`lhs`.
 	//
 	// BOTH right shifts exist, because they are two different instructions and Maxon needs
@@ -725,8 +726,11 @@ export union TargetOp
 	shlRegImm8(dest TargetVReg, lhs TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	sarRegImm8(dest TargetVReg, lhs TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	shrRegImm8(dest TargetVReg, lhs TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	rolRegImm8(dest TargetVReg, lhs TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	rorRegImm8(dest TargetVReg, lhs TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// Shift by a VARIABLE count (`shl`/`sar r/m64, cl` — group-2 `D3 /4` / `D3 /7`). x64
+	// Shift or rotate by a VARIABLE count (`shl`/`sar`/`shr`/`rol`/`ror r/m64, cl` — group-2 `D3 /4`,
+	// `/7`, `/5`, `/0`, `/1`). x64
 	// has NO register-register shift: the count must be in **CL**, and nowhere else. So
 	// the count is a FIXED-REGISTER operand, modelled exactly as `idiv`'s dividend is —
 	// StdToX64Conversion pre-moves it with `mov rcx, <count>` and the shift names RCX
@@ -744,6 +748,8 @@ export union TargetOp
 	shlRegCl(dest TargetVReg, lhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x2, implicitDefs: 0}
 	sarRegCl(dest TargetVReg, lhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x2, implicitDefs: 0}
 	shrRegCl(dest TargetVReg, lhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x2, implicitDefs: 0}
+	rolRegCl(dest TargetVReg, lhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x2, implicitDefs: 0}
+	rorRegCl(dest TargetVReg, lhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x2, implicitDefs: 0}
 
 	// MATERIALIZE a comparison's boolean into a register (`setcc dest8` + `movzx dest,
 	// dest8`) — one TargetOp, two instructions, because the pair is indivisible: `setcc`
@@ -1145,6 +1151,7 @@ export union TargetOp
 	arm64Lslv(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Asrv(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Lsrv(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64Rorv(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// 2-address negate / bitwise-NOT (`neg` = `sub xd,xzr,xn`; `mvn` = `orn xd,xzr,xn`) — `dest` is
 	// INDEPENDENT of `src` (arm64 reads the zero register as the other operand), so a PLAIN def.
@@ -1163,6 +1170,7 @@ export union TargetOp
 	arm64LslImm(dest TargetVReg, src TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64AsrImm(dest TargetVReg, src TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64LsrImm(dest TargetVReg, src TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64RorImm(dest TargetVReg, src TargetVReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Compare (register / immediate) — two-use / one-use, sets NZCV, defines no register.
 	arm64Cmp(lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}

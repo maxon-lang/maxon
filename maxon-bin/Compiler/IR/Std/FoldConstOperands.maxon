@@ -15,8 +15,8 @@
 // BOTH operands are constant, which is a different question with different traps (overflow, shift
 // windows, and a division that must not be answered for at all).
 //
-// Four moves — the design's three, plus the IDENTITY fold that only becomes visible once move 2 has
-// run:
+// Five moves — the design's three, plus the IDENTITY fold that only becomes visible once move 2 has
+// run, plus ROTATE FUSION:
 //   1. Canonicalize a COMMUTATIVE op (`add`, `mul`) so the constant lands on the
 //      rhs (swap when it started on the lhs).
 //   2. Rewrite a const-rhs `binOp`/`cmp` into the `binOpImm`/`cmpImm` form. A
@@ -27,6 +27,8 @@
 //      `x - 0`, `x & -1`, `x | 0`, `x ^ 0`, `x shl/shr 0` — by its own operand: every read of the
 //      result is rewritten to read the operand instead.
 //   4. DCE the `const` op left with no remaining reference, and the identity op left with none.
+//   5. Fuse `(x shl k) or (x shr (64 - k))` into one `rotateLeft`/`rotateRight` (`FuseRotates.maxon`),
+//      which retires the shifts it leaves unread itself.
 //
 // ⭐⭐ **WHY MOVE 3 IS HERE AND NOT IN A PASS OF ITS OWN.** It reads the form move 2 produces and it
 // pays for nothing extra: the reference set move 4 already builds is exactly what decides whether the
@@ -341,14 +343,15 @@ module function foldConstOperandsHeadline(firstFuncIndex ElementIndex, funcCount
 end 'foldConstOperandsHeadline'
 
 // ⭐ **ONE `liveOpIndices` FOR THE WHOLE PASS OVER THIS FUNCTION, NOT ONE PER WALK.** Every step below
-// visits exactly the same live ops, and none of them changes WHICH ops are live: the two rewrites replace
-// an op IN PLACE at its own index (`module.ops.set`), and the only step that touches `block.opRefs` is
-// `dceRetiredDefs`, which does it AFTER the last read of this column. So the column is built once and
-// read four times.
+// visits exactly the same live ops, and none of them changes WHICH ops are live: the rewrites replace
+// an op IN PLACE at its own index (`module.ops.set`), and the steps that touch `block.opRefs` are
+// `fuseRotates`' retirement of dead shifts and `dceRetiredDefs`; the first leaves removed ops in this
+// column, where they classify as non-retirable, so the column stays valid for `dceRetiredDefs`. So the
+// column is built once and read five times (collect, rewrite, identity, fuse, prune).
 //
 // It is not a micro-optimization: `liveOpIndices` allocates a fresh `OpIndexArray` and `push`es one
-// entry per live op into it, so a per-walk rebuild is a per-walk O(ops) allocation and copy. Four walks
-// meant four of them (five once the identity substitution fired), and the pass runs over every function
+// entry per live op into it, so a per-walk rebuild is a per-walk O(ops) allocation and copy. Five walks
+// meant five of them (six once the identity substitution fired), and the pass runs over every function
 // in the module.
 module function foldConstOperandsInFunc(module StdModule, func IrFunction)
 	let opIndices = module.liveOpIndices(func)
@@ -361,8 +364,10 @@ module function foldConstOperandsInFunc(module StdModule, func IrFunction)
 	rewriteBinAndCmpOps(module, opIndices: opIndices, constMap: constMap)
 
 	// AFTER the immediate rewrite, which is what MAKES the identity shape, and BEFORE the prune,
-	// which is what retires both kinds of def this pass detaches.
+	// which retires the consts and identity `binOpImm`s this pass detached; `fuseRotates` retires its
+	// own dead shifts itself.
 	substituteIdentityImmediates(module, func: func, opIndices: opIndices, def: def)
+	fuseRotates(module, func: func, opIndices: opIndices, constMap: constMap)
 	dceRetiredDefs(module, func: func, opIndices: opIndices, def: def)
 end 'foldConstOperandsInFunc'
 
@@ -475,7 +480,9 @@ function binOpImmIsIdentity(opcode StdBinOpcode, imm Imm32) returns bool
 		bitAnd gives imm == AllBitsSet
 		shl or
 		shr or
-		shrLogical gives imm == NoShift
+		shrLogical or
+		rotateLeft or
+		rotateRight gives imm == NoShift
 		div or
 		min or
 		max or
@@ -667,7 +674,9 @@ function constFitsBinOpImmediate(v FullRangeInt, opcode StdBinOpcode) returns bo
 		sub gives fitsImm32(v) and v != i32.min
 		shl or
 		shr or
-		shrLogical gives shiftCountIsUnguarded(v)
+		shrLogical or
+		rotateLeft or
+		rotateRight gives shiftCountIsUnguarded(v)
 
 		// The three float-only opcodes: no SSE/NEON/wasm form of `divsd`/`minsd`/`maxsd` takes an encoded
 		// immediate. Unreachable (the float guard in `tryFoldBinOp` returns first), and `false` is the
@@ -698,7 +707,7 @@ function constAsImmediate(constMap ConstValueMap, id ValueId) returns Imm32
 	return constMap.constantOf(id) as Imm32
 end 'constAsImmediate'
 
-// Drop every def this pass detached from its readers and that nothing else reads: the rhs `const`s the
+// Drop every `const` and identity `binOpImm` in `opIndices` that nothing reads: the rhs `const`s the
 // immediate rewrite took out of their `binOp`/`cmp`, and the identity `binOpImm`s whose reads
 // `substituteIdentityImmediates` moved onto their own operand. Either one still feeding another op or a
 // phi branch edge is kept.

@@ -123,6 +123,8 @@ let Arm64OpEor = 0xCA000000
 let Arm64OpLslv = 0x9AC02000
 let Arm64OpAsrv = 0x9AC02800
 let Arm64OpLsrv = 0x9AC02400
+let Arm64OpRorv = 0x9AC02C00
+let Arm64OpExtr = 0x93C00000
 
 // MSUB Xd, Xn, Xm, Xa => Xd = Xa - Xn*Xm (the remainder builder). Ra sits at bit 10.
 let Arm64OpMsub = 0x9B008000
@@ -985,6 +987,10 @@ export function arm64EmitAsrImm(code ByteArray, rd MachineWord, rn MachineWord, 
 	arm64EmitBitfield(code, opcode: Arm64OpSbfm, rd: rd, rn: rn, immr: shift, imms: Arm64WordBitMax)
 end 'arm64EmitAsrImm'
 
+function arm64EmitRorImm(code ByteArray, rd MachineWord, rn MachineWord, sh ShiftCount)
+	emitArm64Insn(code, insn: Arm64OpExtr or (rn shl Arm64RmShift) or (shiftCountBits(sh) shl Arm64BitfieldImmsShift) or (rn shl Arm64RnShift) or rd)
+end 'arm64EmitRorImm'
+
 function arm64EmitByteSwap(code ByteArray, rd MachineWord, rn MachineWord, width WordBytes)
 	let opcode = match width 'w'
 		two or
@@ -1740,6 +1746,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		shlRegCl or
 		sarRegCl or
 		shrRegCl or
+		rolRegImm8 or
+		rorRegImm8 or
+		rolRegCl or
+		rorRegCl or
 		setccReg or
 		leaRegGlobal then panic("emitArm64TargetOp: an x64 word-ALU/shift/setcc op reached the arm64 encoder")
 
@@ -1791,6 +1801,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		arm64Lslv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpLslv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64Asrv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpAsrv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64Lsrv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpLsrv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Rorv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpRorv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64Neg(dest, src) then emitArm64Rrr(code, opcode: Arm64OpSub, rd: arm64GprField(dest), rn: Arm64XzrField, rm: arm64GprField(src))
 		arm64Mvn(dest, src) then emitArm64Rrr(code, opcode: Arm64OpOrn, rd: arm64GprField(dest), rn: Arm64XzrField, rm: arm64GprField(src))
 		arm64Rev(dest, src, width) then arm64EmitByteSwap(code, rd: arm64GprField(dest), rn: arm64GprField(src), width: width)
@@ -1802,6 +1813,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		arm64LslImm(dest, src, imm) then arm64EmitLslImm(code, rd: arm64GprField(dest), rn: arm64GprField(src), sh: imm)
 		arm64AsrImm(dest, src, imm) then arm64EmitAsrImm(code, rd: arm64GprField(dest), rn: arm64GprField(src), sh: imm)
 		arm64LsrImm(dest, src, imm) then arm64EmitLsrImm(code, rd: arm64GprField(dest), rn: arm64GprField(src), sh: imm)
+		arm64RorImm(dest, src, imm) then arm64EmitRorImm(code, rd: arm64GprField(dest), rn: arm64GprField(src), sh: imm)
 		arm64Cmp(lhs, rhs) then arm64EmitCmpReg(code, rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64CmpImm(reg, imm) then arm64EmitCmpImm(code, rn: arm64GprField(reg), imm: imm)
 		arm64Cset(dest, cond) then arm64EmitCset(code, rd: arm64GprField(dest), cond: cond)

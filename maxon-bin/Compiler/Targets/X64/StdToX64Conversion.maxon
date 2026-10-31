@@ -957,15 +957,17 @@ function parityTargetOf(pred StdCmpPred, thenBlockId BlockId, elseBlockId BlockI
 	end 'p'
 end 'parityTargetOf'
 
-// The three group-2 shift instructions x64 has, and the whole of what the shift lowering needs
-// to know about a Std shift opcode. Named for the INSTRUCTIONS rather than for the opcodes,
+// The five group-2 shift and rotate instructions x64 has, and the whole of what the shift lowering
+// needs to know about a Std shift opcode. Named for the INSTRUCTIONS rather than for the opcodes,
 // because the mapping between the two is exactly the fact worth stating once: `shl`→SHL,
 // `shr`→SAR (arithmetic — a signed left operand), `shrLogical`→SHR (zero-filling — an unsigned
-// one). See `shiftInstructionOf`.
+// one), `rotateLeft`→ROL, `rotateRight`→ROR. See `shiftInstructionOf`.
 enum ShiftInstruction
 	shl
 	sar
 	shr
+	rol
+	ror
 end 'ShiftInstruction'
 
 // The label every `ordered` block carries — the second half of a split float equality (see
@@ -1940,7 +1942,9 @@ export type StdToX64Lowering
 			bitXor or
 			shl or
 			shr or
-			shrLogical gives true
+			shrLogical or
+			rotateLeft or
+			rotateRight gives true
 		end 'o'
 	end 'integerBinOpIsTwoAddress'
 
@@ -1998,7 +2002,9 @@ export type StdToX64Lowering
 			// name, and `shiftInstructionOf` is the one place that is decided.
 			shl or
 			shr or
-			shrLogical then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rightId, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
+			shrLogical or
+			rotateLeft or
+			rotateRight then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rightId, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
 
 			// ⚠ INTEGER `binOp(div)` IS ILLEGAL, and the Std dialect's validator says so before this
 			// can fire: `binOp` is the PURE arithmetic band, and integer division is not pure —
@@ -2086,7 +2092,9 @@ export type StdToX64Lowering
 			bitXor or
 			shl or
 			shr or
-			shrLogical then panic("lowerFloatBinOp: {opcode.rawValue} has no float form — the bitwise and shift operators are integer-only, and a float operand is rejected at the Maxon tier")
+			shrLogical or
+			rotateLeft or
+			rotateRight then panic("lowerFloatBinOp: {opcode.rawValue} has no float form — the bitwise and shift operators are integer-only, and a float operand is rejected at the Maxon tier")
 
 			// The high multiply is INTEGER-ONLY (`stdBinOpcodeIsFloatOnly` says so): there is no
 			// 128-bit float product to take the top half of. It is minted only by
@@ -2125,6 +2133,8 @@ export type StdToX64Lowering
 			shl gives ShiftInstruction.shl
 			shr gives ShiftInstruction.sar
 			shrLogical gives ShiftInstruction.shr
+			rotateLeft gives ShiftInstruction.rol
+			rotateRight gives ShiftInstruction.ror
 			add or
 			sub or
 			mul or
@@ -2146,6 +2156,8 @@ export type StdToX64Lowering
 			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegCl(dest, lhs: lhsReg))
 			sar then self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegCl(dest, lhs: lhsReg))
 			shr then self.targetModule.appendOp(dstBlock, op: TargetOp.shrRegCl(dest, lhs: lhsReg))
+			rol then self.targetModule.appendOp(dstBlock, op: TargetOp.rolRegCl(dest, lhs: lhsReg))
+			ror then self.targetModule.appendOp(dstBlock, op: TargetOp.rorRegCl(dest, lhs: lhsReg))
 		end 'i'
 	end 'lowerShiftCl'
 
@@ -2160,6 +2172,8 @@ export type StdToX64Lowering
 			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegImm8(dest, lhs: base, imm: count))
 			sar then self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegImm8(dest, lhs: base, imm: count))
 			shr then self.targetModule.appendOp(dstBlock, op: TargetOp.shrRegImm8(dest, lhs: base, imm: count))
+			rol then self.targetModule.appendOp(dstBlock, op: TargetOp.rolRegImm8(dest, lhs: base, imm: count))
+			ror then self.targetModule.appendOp(dstBlock, op: TargetOp.rorRegImm8(dest, lhs: base, imm: count))
 		end 'i'
 	end 'lowerShiftImm8'
 
@@ -2280,7 +2294,9 @@ export type StdToX64Lowering
 			// bothers to fold it.
 			shl or
 			shr or
-			shrLogical then self.lowerShiftImm8(dest, base: base, imm: imm, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
+			shrLogical or
+			rotateLeft or
+			rotateRight then self.lowerShiftImm8(dest, base: base, imm: imm, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
 
 			// PERMANENTLY unreachable, and it is the hardware that says so: no SSE instruction
 			// takes an immediate operand, so a float `binOp` has no immediate form to fold to

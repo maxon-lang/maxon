@@ -278,6 +278,8 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		shlRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		sarRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		shrRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		rolRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		rorRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 
 		// The variable-count shifts take their count in CL and NOWHERE ELSE, so the count is
 		// not an explicit operand at all: StdToX64Conversion pre-moves it into physical RCX
@@ -286,6 +288,8 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		shlRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		sarRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		shrRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		rolRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		rorRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 
 		// A boolean materialization reads EFLAGS — not a tracked register — and writes one
 		// fresh value. So: one plain def, no uses.
@@ -401,6 +405,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64Lslv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
 		arm64Asrv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
 		arm64Lsrv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Rorv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
 		arm64Neg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Mvn(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Rev(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
@@ -415,6 +420,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64LslImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64AsrImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64LsrImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64RorImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Cmp(lhs, rhs) then pushCmpOperands(buf, lhs: lhs, rhs: rhs)
 		arm64CmpImm(reg, _) then pushUse(buf, vreg: reg)
 		arm64Cset(dest, _) then pushDef(buf, vreg: dest)

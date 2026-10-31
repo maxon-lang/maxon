@@ -2382,6 +2382,15 @@ export function evalShift(lhs FullRangeInt, count FullRangeInt, op MaxonBinOp) r
 	return (lhs shr count) and survivingBits
 end 'evalShift'
 
+export function evalRotateLeft(value FullRangeInt, count FullRangeInt) returns FullRangeInt
+	let turn = count and MaxUnguardedShiftCount
+	return evalShift(value, count: turn, op: MaxonBinOp.shl) or evalShift(value, count: ShiftCountBits - turn, op: MaxonBinOp.shrLogical)
+end 'evalRotateLeft'
+
+export function evalRotateRight(value FullRangeInt, count FullRangeInt) returns FullRangeInt
+	return evalRotateLeft(value, count: ShiftCountBits - (count and MaxUnguardedShiftCount))
+end 'evalRotateRight'
+
 // The result of asking the parser's constant folder to evaluate an operator: either the integer it
 // computed, or a refusal. A refusal is NOT a failure — it is the folder declining to answer a
 // question whose answer would be a DIAGNOSTIC rather than a value.

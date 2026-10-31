@@ -541,8 +541,10 @@ export enum StdBinOpcode
 	// Both are COMMUTATIVE and PURE — ordinary `binOp`s in every respect.
 	mulHighSigned
 
-	// Declared LAST, so it is this case an exhaustive `match` fails to compile without.
+	// Declared before the rotates, which are the last cases.
 	mulHighUnsigned
+	rotateLeft
+	rotateRight
 end 'StdBinOpcode'
 
 // The Std binary opcodes with no integer form, stated once: it is a property of the opcode and not
@@ -570,7 +572,9 @@ export function stdBinOpcodeIsFloatOnly(opcode StdBinOpcode) returns bool
 		shr or
 		shrLogical or
 		mulHighSigned or
-		mulHighUnsigned gives false
+		mulHighUnsigned or
+		rotateLeft or
+		rotateRight gives false
 		div or
 		min or
 		max gives true
@@ -3894,6 +3898,8 @@ export function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 		shl or
 		shr or
 		shrLogical or
+		rotateLeft or
+		rotateRight or
 
 		// The three FLOAT-ONLY opcodes:
 		//   • `div` — `a / b` is not `b / a`.

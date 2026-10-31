@@ -484,10 +484,12 @@ export let Grp1ExtSub = 5  // SUB — exported: the GT syscall shim computes the
 let Grp1ExtXor = 6  // XOR (the `xor r/m, imm` immediate form — also the LOGICAL `not`)
 export let Grp1ExtCmp = 7  // CMP (the `cmp r/m, imm` immediate form)
 
-// Group-2 SHIFT opcode-extension (ModR/M reg field) values (C1 /ext ib, D3 /ext).
-// `shr` (the Maxon keyword) lowers to SAR, not SHR: Maxon's `int` is SIGNED, so a
-// logical shift would make `-8 shr 1` a huge positive number. The x86 mnemonic SHR
-// (/5) is therefore deliberately absent — nothing in the language reaches it.
+// Group-2 SHIFT and ROTATE opcode-extension (ModR/M reg field) values (C1 /ext ib, D3 /ext).
+// `shr` (the Maxon keyword) on a SIGNED operand lowers to SAR, not SHR: a logical shift would
+// make `-8 shr 1` a huge positive number. SHR (/5) serves the zero-filling right shift of an
+// unsigned (`bits`) operand.
+let Grp2ExtRol = 0  // ROL r/m, count
+let Grp2ExtRor = 1  // ROR r/m, count
 export let Grp2ExtShl = 4  // SHL r/m, count
 let Grp2ExtSar = 7  // SAR r/m, count — ARITHMETIC right shift (sign-replicating)
 export let Grp2ExtShr = 5  // SHR r/m, count — LOGICAL right shift (zero-filling)
@@ -2261,12 +2263,16 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		shlRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtShl, reg: resolveGpr(dest), count: imm)
 		sarRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtSar, reg: resolveGpr(dest), count: imm)
 		shrRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: resolveGpr(dest), count: imm)
+		rolRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtRol, reg: resolveGpr(dest), count: imm)
+		rorRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtRor, reg: resolveGpr(dest), count: imm)
 
 		// The variable-count shifts read their count from CL, which the lowering has already
 		// loaded — so, like the immediate forms, the encoded instruction names only `dest`.
 		shlRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtShl, reg: resolveGpr(dest))
 		sarRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtSar, reg: resolveGpr(dest))
 		shrRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtShr, reg: resolveGpr(dest))
+		rolRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtRol, reg: resolveGpr(dest))
+		rorRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtRor, reg: resolveGpr(dest))
 		setccReg(dest, cond) then encodeSetccReg(code, dest: resolveGpr(dest), cond: cond)
 
 		// The data-section band. Each dispatches to an encoder that ALREADY EXISTED — the
@@ -2367,6 +2373,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		arm64Lslv or
 		arm64Asrv or
 		arm64Lsrv or
+		arm64Rorv or
 		arm64Neg or
 		arm64Mvn or
 		arm64Rev or
@@ -2378,6 +2385,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		arm64LslImm or
 		arm64AsrImm or
 		arm64LsrImm or
+		arm64RorImm or
 		arm64Cmp or
 		arm64CmpImm or
 		arm64Cset or
@@ -2653,6 +2661,10 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		shlRegCl or
 		sarRegCl or
 		shrRegCl or
+		rolRegImm8 or
+		rorRegImm8 or
+		rolRegCl or
+		rorRegCl or
 		setccReg or
 		leaRegGlobal or
 		loadRegBaseDisp or
@@ -2694,6 +2706,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		arm64Lslv or
 		arm64Asrv or
 		arm64Lsrv or
+		arm64Rorv or
 		arm64Neg or
 		arm64Mvn or
 		arm64Rev or
@@ -2705,6 +2718,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		arm64LslImm or
 		arm64AsrImm or
 		arm64LsrImm or
+		arm64RorImm or
 		arm64Cmp or
 		arm64CmpImm or
 		arm64Cset or

@@ -1,0 +1,163 @@
+// FuseRotates — part of `foldConstOperands`: rewrites `(x shl k) or (x shr (64 - k))`, in either
+// operand order and either direction, into one Std `rotateLeft`/`rotateRight`, and retires the shifts
+// and the `64 - k` `sub` that nothing else reads.
+
+enum RotationShape
+	notARotation
+	constantTurn
+	leftByCount
+	rightByCount
+end 'RotationShape'
+
+module function fuseRotates(module StdModule, func IrFunction, opIndices OpIndexArray, constMap ConstValueMap)
+	let joins = rotateJoinCandidates(module, opIndices: opIndices)
+
+	if joins.count() == 0 'nothingToFuse'
+		return
+	end 'nothingToFuse'
+
+	let defs = StdValueDefs.build(module, func: func)
+	var join = StdArithOperands.create()
+	var first = StdArithOperands.create()
+	var second = StdArithOperands.create()
+	var complement = StdArithOperands.create()
+	var detachedShifts = ValueIdArray.create()
+	var detachedCounts = ValueIdArray.create()
+
+	for opIdx in joins 'eachJoin'
+		classifyArithOperands(module.getOp(opIdx), operands: join)
+
+		if not loadShiftPair(module, defs: defs, join: join, leftShift: first, rightShift: second) 'notAShiftPair'
+			continue
+		end 'notAShiftPair'
+
+		let shape = shapeOfShiftPair(module, defs: defs, constMap: constMap, join: join, leftShift: first, rightShift: second, complement: complement)
+
+		if shape == RotationShape.notARotation 'notRotating'
+			continue
+		end 'notRotating'
+
+		try module.ops.set(opIdx, value: rotationOp(shape, join: join, leftShift: first, rightShift: second, constMap: constMap)) otherwise panic("fuseRotates: ops.set OOB at {opIdx}")
+		detachedShifts.push(first.resultId)
+		detachedShifts.push(second.resultId)
+
+		if shape != RotationShape.constantTurn 'hasAComplementCount'
+			detachedCounts.push(complement.resultId)
+		end 'hasAComplementCount'
+	end 'eachJoin'
+
+	retireDetachedDefs(module, func: func, detached: detachedShifts)
+	retireDetachedDefs(module, func: func, detached: detachedCounts)
+end 'fuseRotates'
+
+function rotateJoinCandidates(module StdModule, opIndices OpIndexArray) returns OpIndexArray
+	var arith = StdArithOperands.create()
+	var candidates = OpIndexArray.create()
+
+	for opIdx in opIndices 'eachOp'
+		classifyArithOperands(module.getOp(opIdx), operands: arith)
+
+		if arith.isBinaryArith() and wordTyped(arith.operandType) and (arith.opcode == StdBinOpcode.bitOr or arith.opcode == StdBinOpcode.bitXor) 'isAJoin'
+			candidates.push(opIdx)
+		end 'isAJoin'
+	end 'eachOp'
+
+	return candidates
+end 'rotateJoinCandidates'
+
+function shiftIs(arith StdArithOperands, opcode StdBinOpcode) returns bool
+	return (arith.isBinaryArith() or arith.isBinaryArithImm()) and arith.opcode == opcode
+end 'shiftIs'
+
+// Only `shrLogical` completes a rotate: a signed `shr` is arithmetic and smears the sign into the bits
+// a rotate brings round.
+function loadShiftPair(module StdModule, defs StdValueDefs, join StdArithOperands, leftShift StdArithOperands, rightShift StdArithOperands) returns bool
+	if not defs.arithDefining(join.lhs, module: module, arith: leftShift) or not defs.arithDefining(join.rhs, module: module, arith: rightShift) 'notArithmetic'
+		return false
+	end 'notArithmetic'
+
+	if shiftIs(leftShift, opcode: StdBinOpcode.shl) and shiftIs(rightShift, opcode: StdBinOpcode.shrLogical) 'inSourceOrder'
+		return true
+	end 'inSourceOrder'
+
+	if not shiftIs(leftShift, opcode: StdBinOpcode.shrLogical) or not shiftIs(rightShift, opcode: StdBinOpcode.shl) 'notAShiftPair'
+		return false
+	end 'notAShiftPair'
+
+	if not defs.arithDefining(join.rhs, module: module, arith: leftShift) or not defs.arithDefining(join.lhs, module: module, arith: rightShift) 'reloadFailed'
+		panic("loadShiftPair: an operand classified a moment ago is no longer arithmetic")
+	end 'reloadFailed'
+
+	return true
+end 'loadShiftPair'
+
+function hasConstantCount(shift StdArithOperands, constMap ConstValueMap) returns bool
+	return shift.isBinaryArithImm() or constMap.contains(shift.rhs)
+end 'hasConstantCount'
+
+function constantCountOf(shift StdArithOperands, constMap ConstValueMap) returns FullRangeInt
+	if shift.isBinaryArithImm() 'immediate'
+		return shift.imm as FullRangeInt
+	end 'immediate'
+
+	return constMap.constantOf(shift.rhs)
+end 'constantCountOf'
+
+function shapeOfShiftPair(module StdModule, defs StdValueDefs, constMap ConstValueMap, join StdArithOperands, leftShift StdArithOperands, rightShift StdArithOperands, complement StdArithOperands) returns RotationShape
+	if leftShift.lhs != rightShift.lhs or leftShift.operandType != join.operandType or rightShift.operandType != join.operandType 'differentOperands'
+		return RotationShape.notARotation
+	end 'differentOperands'
+
+	let leftIsConstant = hasConstantCount(leftShift, constMap: constMap)
+	let rightIsConstant = hasConstantCount(rightShift, constMap: constMap)
+
+	if leftIsConstant and rightIsConstant 'bothConstant'
+		let leftCount = constantCountOf(leftShift, constMap: constMap)
+		let rightCount = constantCountOf(rightShift, constMap: constMap)
+
+		if shiftCountIsUnguarded(leftCount) and shiftCountIsUnguarded(rightCount) and leftCount + rightCount == ShiftCountBits 'complementary'
+			return RotationShape.constantTurn
+		end 'complementary'
+
+		return RotationShape.notARotation
+	end 'bothConstant'
+
+	// A bare (unguarded) shift's count was proven in range by the parser, so a count `a` and its
+	// complement `64 - a` both reaching bare shifts means `a` is in 1..63. Joined with `or` only: under
+	// the masked count of a rotate, a count of 0 turns an `xor` join into `x xor x`, not the `x` a rotate
+	// by 0 gives.
+	if leftIsConstant or rightIsConstant or join.opcode != StdBinOpcode.bitOr 'notVariableOr'
+		return RotationShape.notARotation
+	end 'notVariableOr'
+
+	if countIsWordWidthLess(module, defs: defs, constMap: constMap, candidate: rightShift.rhs, against: leftShift.rhs, complement: complement) 'rightIsTheComplement'
+		return RotationShape.leftByCount
+	end 'rightIsTheComplement'
+
+	if countIsWordWidthLess(module, defs: defs, constMap: constMap, candidate: leftShift.rhs, against: rightShift.rhs, complement: complement) 'leftIsTheComplement'
+		return RotationShape.rightByCount
+	end 'leftIsTheComplement'
+
+	return RotationShape.notARotation
+end 'shapeOfShiftPair'
+
+function countIsWordWidthLess(module StdModule, defs StdValueDefs, constMap ConstValueMap, candidate ValueId, against ValueId, complement StdArithOperands) returns bool
+	if not defs.arithDefining(candidate, module: module, arith: complement) 'notArithmetic'
+		return false
+	end 'notArithmetic'
+
+	if not complement.isBinaryArith() or complement.opcode != StdBinOpcode.sub or stdTypeIsFloat(complement.operandType) 'notASubtraction'
+		return false
+	end 'notASubtraction'
+
+	return constMap.contains(complement.lhs) and constMap.constantOf(complement.lhs) == ShiftCountBits and complement.rhs == against
+end 'countIsWordWidthLess'
+
+function rotationOp(shape RotationShape, join StdArithOperands, leftShift StdArithOperands, rightShift StdArithOperands, constMap ConstValueMap) returns StdOp
+	return match shape 'shape'
+		constantTurn gives StdOp.binOpImm(join.resultId, lhs: leftShift.lhs, imm: constantCountOf(leftShift, constMap: constMap) as Imm32, opcode: StdBinOpcode.rotateLeft, operandType: join.operandType)
+		leftByCount gives StdOp.binOp(join.resultId, lhs: leftShift.lhs, rhs: leftShift.rhs, opcode: StdBinOpcode.rotateLeft, operandType: join.operandType)
+		rightByCount gives StdOp.binOp(join.resultId, lhs: leftShift.lhs, rhs: rightShift.rhs, opcode: StdBinOpcode.rotateRight, operandType: join.operandType)
+		notARotation panic("rotationOp: a pair that is no rotation has no rotate to build")
+	end 'shape'
+end 'rotationOp'
