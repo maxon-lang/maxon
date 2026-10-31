@@ -1940,13 +1940,33 @@ function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock,
 	emitOkReturn(module, block: ok, value: value, ids: ids)
 end 'emitLoadElemAndOkReturn'
 
-// Call `__managed_cow_detach(arr)` — the one obligation every in-place mutator owes before it touches the
-// buffer (see `buildManagedCowDetach` for the rule and for which mutators call this directly). The callee is
-// void, so the minted result is unread; it exists because a `call` op always defines a value.
-export function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
+// Call `__managed_cow_detach(arr)` unconditionally; mutators go through `emitCowDetachWhenNeeded`. The callee
+// is void, so the minted result is unread; it exists because a `call` op always defines a value.
+function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
 	let detached = ids.mint()
 	module.appendOp(block, op: StdOp.call(detached, callee: ManagedCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
+
+function emitCowDetachInto(module StdModule, func IrFunction, entry IrBlock, arr ValueId, continuation IrBlock, prefix String, ids ValueMinter)
+	var checkBuffer = module.addBlock(func, label: "{prefix}dbuf".toByteArray(), heat: BlockHeat.normal)
+	var checkShared = module.addBlock(func, label: "{prefix}dshared".toByteArray(), heat: BlockHeat.normal)
+	var detach = module.addBlock(func, label: "{prefix}ddetach".toByteArray(), heat: BlockHeat.cold)
+
+	emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: continuation, ids: ids)
+	emitCowDetach(module, block: detach, arr: arr, ids: ids)
+	module.setTerminator(detach, op: StdOp.branch(continuation.id))
+end 'emitCowDetachInto'
+
+// The one obligation every in-place mutator owes before it touches the buffer (see
+// `buildManagedCowDetach` for the rule). The call sits on a cold block that `emitBranchOnDetachNeeded`
+// enters only when the detach has work to do. Returns the block to keep emitting into; `block` is
+// terminated.
+export function emitCowDetachWhenNeeded(module StdModule, func IrFunction, block IrBlock, arr ValueId, prefix String, ids ValueMinter) returns IrBlock
+	var detached = module.addBlock(func, label: "{prefix}ddone".toByteArray(), heat: BlockHeat.normal)
+	emitCowDetachInto(module, func: func, entry: block, arr: arr, continuation: detached, prefix: prefix, ids: ids)
+
+	return detached
+end 'emitCowDetachWhenNeeded'
 
 // Call `__managed_reserve(arr, n)` — make the buffer hold at least `n` elements, DETACHING a COW/rdata one
 // on the way (`__managed_grow` does that ahead of its capacity check, stated at `buildManagedGrow`). The
@@ -2956,7 +2976,7 @@ export enum ManagedHeaderEffect
 
 	// An in-place element writer: `buildManagedSet`, `buildManagedSetUnchecked`, `buildManagedMemSet`,
 	// `buildManagedSetByte`, `buildManagedFill` and `buildManagedMemSwap`. Each writes `buffer@0`, `capacity@16`, `parent@32`
-	// and the buffer's refcount word ONLY through `__managed_cow_detach` (`emitCowDetach`, or the
+	// and the buffer's refcount word ONLY through `__managed_cow_detach` (`emitCowDetachWhenNeeded`, or the
 	// detach block of `emitBufferAccessGuard`), which returns without a store exactly when
 	// `capacity@16 >= 0`, `buffer@0 != 0` and the buffer's refcount word is 0 — the three arms of
 	// `buildManagedCowDetach`. Every other write is an element slot (`emitStoreElemAt`). The invariant
@@ -3040,7 +3060,7 @@ end 'managedCalleeSucceedsOnlyInBounds'
 
 // The shape column of the roster: which entries RETURN WITHOUT AN ERROR only with the record owned,
 // allocated and unshared. `buildManagedSet` checks its bound first and returns an error without writing,
-// then `emitCowDetach` runs, which returns without a store exactly when `capacity@16 >= 0`, `buffer@0 != 0`
+// then `emitCowDetachWhenNeeded` runs, which stores nothing exactly when `capacity@16 >= 0`, `buffer@0 != 0`
 // and the buffer's refcount word is 0, and otherwise makes the record owned and unshared with a fresh
 // buffer — so a success leaves all three true. The in-place writers bound against the capacity and
 // detach before that bound (`emitBufferAccessGuard`), so their success does not prove `buffer@0 != 0` by
@@ -3447,8 +3467,9 @@ end 'emitViewRecordTail'
 // calls `__managed_cow_detach` itself.** `__managed_grow` detaches whenever the detach has work to do — asked
 // ahead of its own `capacity >= required` early-out precisely so the guarantee does not depend on the growth
 // arithmetic — so `push`/`reserve`/`resize`/`insert`/`append` are gated by construction through the call
-// they already make, and `set`/`clear`/`remove`/`pop`, which write without ever growing, call it directly.
-// Those five are the only call sites, and a sixth in (say) `insert` would be an unreachable branch: by the
+// they already make, and the mutators that write without ever growing (`set`, `clear`, `remove`, `pop`,
+// `fill`, …) call it directly, through `emitCowDetachWhenNeeded`, which makes the call only where the detach
+// has work to do. A direct call in a mutator that grows (say `insert`) would be an unreachable branch: by the
 // time it ran, `grow` would already have made `capacity >= 0`, so it could never do anything. `get`/`first`/`last`/`count`/
 // `capacity`/`is_empty` are READS and must NOT detach; `__managed_append`'s `src` is borrowed and read-only, so
 // only its `dest` is gated.
@@ -3519,8 +3540,8 @@ function buildManagedCowDetach(module StdModule)
 	module.functions.push(func)
 end 'buildManagedCowDetach'
 
-// `__managed_cow_detach`'s decision, shared with `__managed_grow`, which skips the call only where this
-// sends control to `notNeeded`; a second copy that drifted would let a grow write through a shared or
+// `__managed_cow_detach`'s decision, shared with `emitCowDetachInto`, which skips the call only where
+// this sends control to `notNeeded`; a second copy that drifted would let a write go through a shared or
 // `.rdata` buffer.
 function emitBranchOnDetachNeeded(module StdModule, entry IrBlock, checkBuffer IrBlock, checkShared IrBlock, arr ValueId, needed IrBlock, notNeeded IrBlock, ids ValueMinter)
 	// entry — ARM 1: a buffer that is not this record's must be replaced before any write. Asked FIRST, so
@@ -3610,9 +3631,6 @@ function buildManagedGrow(module StdModule)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkBuffer = module.addBlock(func, label: b"chkbuf", heat: BlockHeat.normal)
-	var checkShared = module.addBlock(func, label: b"chkshared", heat: BlockHeat.normal)
-	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
 	var checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
 	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
 	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.normal)
@@ -3630,10 +3648,7 @@ function buildManagedGrow(module StdModule)
 	// decision, so the call is skipped exactly where the detach would return untouched: an owned record with
 	// no buffer or an unshared one, the common case. `capacity` is read AFTERWARDS because the detach
 	// republishes it.
-	emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: checkCapacity, ids: ids)
-
-	emitCowDetach(module, block: detach, arr: arr, ids: ids)
-	module.setTerminator(detach, op: StdOp.branch(checkCapacity.id))
+	emitCowDetachInto(module, func: func, entry: entry, arr: arr, continuation: checkCapacity, prefix: "gr", ids: ids)
 
 	// chkcap: already big enough ⇒ nothing to do.
 	let capacity = emitLoadField(module, block: checkCapacity, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
@@ -3658,7 +3673,7 @@ end 'buildManagedGrow'
 // it with the one the SOURCE wrote. Nothing else about the two differs, and a second copy of this is a
 // second chance to get the release-then-publish order wrong.
 //
-// **PRECONDITION: the caller has already detached** (`emitCowDetach`), so `buffer@0` is this record's own
+// **PRECONDITION: the caller has already detached** (`emitCowDetachInto`, `emitCowDetachWhenNeeded`), so `buffer@0` is this record's own
 // allocation. That is why no "is this buffer MINE?" test appears below — see the release note.
 //
 // It threads `cur` (setting its terminator) and returns the block the caller resumes in. The BYTE-COUNT
@@ -3899,7 +3914,7 @@ function buildManagedSet(module StdModule)
 	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1), and after the bounds check, so a
 	// throwing `set` — which writes nothing — allocates nothing. `__managed_mem_set` detaches EARLIER, inside its
 	// guard, because its bound is the capacity and a non-owned record's capacity is a negative sentinel.
-	emitCowDetach(module, block: store, arr: arr, ids: ids)
+	store = emitCowDetachWhenNeeded(module, func: func, block: store, arr: arr, prefix: "st", ids: ids)
 	emitElementStoreAndOkReturn(module, func: func, store: store, arr: arr, index: index, value: value, ids: ids)
 
 	module.functions.push(func)
@@ -3920,7 +3935,7 @@ function buildManagedSetUnchecked(module StdModule)
 	let index = 1
 	let value = 2
 
-	emitCowDetach(module, block: entry, arr: arr, ids: ids)
+	entry = emitCowDetachWhenNeeded(module, func: func, block: entry, arr: arr, prefix: "su", ids: ids)
 	var afterStore = emitElementStore(module, func: func, store: entry, arr: arr, index: index, value: value, ids: ids)
 	module.setTerminator(afterStore, op: StdOp.retVoid)
 
@@ -4162,7 +4177,7 @@ function buildManagedClear(module StdModule)
 
 	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1). `clear` cannot throw, and an
 	// EMPTY literal detaches here too, into a zero-byte private buffer (trap 2).
-	emitCowDetach(module, block: entry, arr: arr, ids: ids)
+	entry = emitCowDetachWhenNeeded(module, func: func, block: entry, arr: arr, prefix: "cl", ids: ids)
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
@@ -4202,7 +4217,7 @@ function buildManagedRemove(module StdModule)
 
 	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1), and after the bounds check, so a
 	// throwing `remove` allocates nothing.
-	emitCowDetach(module, block: remove, arr: arr, ids: ids)
+	remove = emitCowDetachWhenNeeded(module, func: func, block: remove, arr: arr, prefix: "rm", ids: ids)
 	let es = emitLoadField(module, block: remove, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: remove, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	var afterLoad = module.addBlock(func, label: b"rmloaded", heat: BlockHeat.normal)
@@ -4657,7 +4672,7 @@ function buildManagedSetLength(module StdModule)
 
 	emitBranchOnCompare(module, block: entry, value: n, pred: StdCmpPred.lt, against: 0, whenTrue: bad, whenFalse: checkHigh, ids: ids)
 
-	emitCowDetach(module, block: checkHigh, arr: arr, ids: ids)
+	checkHigh = emitCowDetachWhenNeeded(module, func: func, block: checkHigh, arr: arr, prefix: "sl", ids: ids)
 	let capacity = emitLoadField(module, block: checkHigh, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
 	let overCapacity = emitBoundaryPositionOutOfRange(module, block: checkHigh, position: n, length: capacity, ids: ids)
 	module.setTerminator(checkHigh, op: StdOp.condBranch(overCapacity, thenBlockId: bad.id, elseBlockId: pick.id))
@@ -4780,15 +4795,16 @@ end 'buildManagedByteAt'
 // detach-with-length, split `isWrite` back into `limitOffset` + `detach` and keep the unsound pair out some
 // other way — do not read `isWrite` as a claim that the limit and the ownership are the same question.
 //
-// ⚠⚠ **THE DETACH IS UNCONDITIONAL, AND A CONDITIONAL ONE IS A MEASURED WRONG ANSWER.**
-// Running it under a hand-written copy of `emitBufferNotOwned` — `capacity < 0` — covers arm 1 of
+// ⚠⚠ **THE DETACH IS GATED ON BOTH ARMS, AND A GATE ON ARM 1 ALONE IS A MEASURED WRONG ANSWER.**
+// Gating it on a hand-written copy of `emitBufferNotOwned` — `capacity < 0` — covers arm 1 of
 // `__managed_cow_detach`'s TWO arms. Arm 2 is "the buffer IS this record's, but a view is reading it", so a
 // `setByte` through the owner of a viewed buffer writes straight through the sharing: measured at
 // **198 where the answer is 110** (`managed-memory-methods.set-byte-through-a-viewed-owner-detaches-first`).
-// `__managed_cow_detach` answers both arms and early-outs when there is nothing to do, so calling it and letting
-// it decide is both correct and shorter — which is the gating rule `buildManagedCowDetach`'s own header states
-// ("a mutator either calls `__managed_grow` before it touches the buffer, or it calls `__managed_cow_detach`
-// itself"). Re-deriving one of its arms at a call site is exactly the drifting checklist that header rejects.
+// `emitCowDetachWhenNeeded` branches on `emitBranchOnDetachNeeded`, which answers both arms exactly as
+// `__managed_cow_detach` does, so the call is made only when there is work — which is the gating rule
+// `buildManagedCowDetach`'s own header states ("a mutator either calls `__managed_grow` before it touches
+// the buffer, or it calls `__managed_cow_detach` itself"). Re-deriving one of its arms at a call site is
+// exactly the drifting checklist that header rejects.
 // The cost of the honesty is that a doomed OUT-OF-RANGE write on a non-owned record detaches before it
 // throws; that is unavoidable in either shape, since the capacity it is checked against does not exist until
 // the detach has published it.
@@ -4800,9 +4816,9 @@ end 'buildManagedByteAt'
 // ⚠⚠ **IT KEEPS TWO TESTS WHERE `emitIndexOutOfRange` TAKES ONE UNSIGNED COMPARE, AND THE REASON IS THE
 // DETACH RATHER THAN THE ARITHMETIC.** Its two limits ARE non-negative — the byte-addressed one comes out of
 // `emitBitsToBytes`' logical shift, whose top three bits are clear whatever it is handed, and the element
-// limit is `capacity@16` read AFTER `emitCowDetach` (`__managed_cow_detach` either early-outs on a record
-// whose capacity was already non-negative, or republishes `capacity = length@8`) — so the unsigned idiom is
-// SOUND here. What it is not is free: the two tests sit in two blocks BY DESIGN, the negative one before the
+// limit is `capacity@16` read AFTER `emitCowDetachWhenNeeded` (`__managed_cow_detach` either early-outs on
+// a record whose capacity was already non-negative, or republishes `capacity = length@8`) — so the unsigned
+// idiom is SOUND here. What it is not is free: the two tests sit in two blocks BY DESIGN, the negative one before the
 // detach, and merging them would move the negative refusal AFTER it. A `set(-1)` on a non-owned record would
 // then copy the buffer into a fresh allocation and only then throw, changing a provenance `__managed_capacity`
 // hands straight to user code. That is a change to what the guard DECIDES, not to how it is spelled, so it
@@ -4827,7 +4843,7 @@ function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock,
 	if isWrite 'writerMustOwnItsBuffer'
 		var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
 		limitEntryId = detach.id
-		emitCowDetach(module, block: detach, arr: arr, ids: ids)
+		detach = emitCowDetachWhenNeeded(module, func: func, block: detach, arr: arr, prefix: "mw", ids: ids)
 		module.setTerminator(detach, op: StdOp.branch(checkHigh.id))
 	end 'writerMustOwnItsBuffer'
 
@@ -4982,7 +4998,7 @@ function buildManagedFill(module StdModule)
 	let notApplied = emitConst(module, block: declined, value: PredicateFalse, ids: ids)
 	emitOkReturn(module, block: declined, value: notApplied, ids: ids)
 
-	emitCowDetach(module, block: prepare, arr: arr, ids: ids)
+	prepare = emitCowDetachWhenNeeded(module, func: func, block: prepare, arr: arr, prefix: "fl", ids: ids)
 	let buffer = emitLoadField(module, block: prepare, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: prepare, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 
@@ -5056,7 +5072,7 @@ function buildManagedMemGrow(module StdModule)
 	let arr = 0
 	let newCapacity = 1
 
-	emitCowDetach(module, block: entry, arr: arr, ids: ids)
+	entry = emitCowDetachWhenNeeded(module, func: func, block: entry, arr: arr, prefix: "mg", ids: ids)
 	let capacity = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
 	emitBranchOnCompareValues(module, block: entry, a: newCapacity, pred: StdCmpPred.lt, b: capacity, whenTrue: bad, whenFalse: grow, ids: ids)
 
@@ -5120,7 +5136,7 @@ function buildManagedMemSwap(module StdModule)
 
 	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1), and after both checks, so a
 	// refused or trivial swap allocates nothing.
-	emitCowDetach(module, block: exchange, arr: arr, ids: ids)
+	exchange = emitCowDetachWhenNeeded(module, func: func, block: exchange, arr: arr, prefix: "ex", ids: ids)
 	let es = emitLoadField(module, block: exchange, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: exchange, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let iValue = emitLoadElemAt(module, func: func, cur: exchange, exit: readSecond, buffer: buffer, index: i, es: es, ids: ids)
@@ -5165,10 +5181,10 @@ function buildManagedMemShiftRight(module StdModule)
 	let negativeArgument = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(negativeArgument, thenBlockId: bad.id, elseBlockId: checkRange.id))
 
-	let rangeEnd = emitShiftDetachedRangeEnd(module, block: checkRange, arr: arr, index: index, count: count, ids: ids)
-	let liveLength = emitLoadField(module, block: checkRange, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let pastLength = emitIndexOutOfRange(module, block: checkRange, index: rangeEnd, length: liveLength, ids: ids)
-	module.setTerminator(checkRange, op: StdOp.condBranch(pastLength, thenBlockId: bad.id, elseBlockId: shift.id))
+	var (detached, rangeEnd) = emitShiftDetachedRangeEnd(module, func: func, block: checkRange, arr: arr, index: index, count: count, prefix: "sr", ids: ids)
+	let liveLength = emitLoadField(module, block: detached, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let pastLength = emitIndexOutOfRange(module, block: detached, index: rangeEnd, length: liveLength, ids: ids)
+	module.setTerminator(detached, op: StdOp.condBranch(pastLength, thenBlockId: bad.id, elseBlockId: shift.id))
 
 	emitMemoryThrow(module, block: bad, flag: MemoryShiftOutOfBoundsFlag, ids: ids)
 
@@ -5219,10 +5235,10 @@ function buildManagedMemShiftLeft(module StdModule)
 	let belowFloor = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 1, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(belowFloor, thenBlockId: bad.id, elseBlockId: checkRange.id))
 
-	let rangeEnd = emitShiftDetachedRangeEnd(module, block: checkRange, arr: arr, index: index, count: count, ids: ids)
-	let liveLength = emitLoadField(module, block: checkRange, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let pastLength = emitBoundaryPositionOutOfRange(module, block: checkRange, position: rangeEnd, length: liveLength, ids: ids)
-	module.setTerminator(checkRange, op: StdOp.condBranch(pastLength, thenBlockId: bad.id, elseBlockId: shift.id))
+	var (detached, checkedEnd) = emitShiftDetachedRangeEnd(module, func: func, block: checkRange, arr: arr, index: index, count: count, prefix: "sl", ids: ids)
+	let liveLength = emitLoadField(module, block: detached, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let pastLength = emitBoundaryPositionOutOfRange(module, block: detached, position: checkedEnd, length: liveLength, ids: ids)
+	module.setTerminator(detached, op: StdOp.condBranch(pastLength, thenBlockId: bad.id, elseBlockId: shift.id))
 
 	emitMemoryThrow(module, block: bad, flag: MemoryShiftOutOfBoundsFlag, ids: ids)
 
@@ -5257,9 +5273,11 @@ function emitShiftArgumentIsNegative(module StdModule, block IrBlock, index Valu
 	return emitBin(module, block: block, a: indexTooLow, b: countNegative, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitShiftArgumentIsNegative'
 
-function emitShiftDetachedRangeEnd(module StdModule, block IrBlock, arr ValueId, index ValueId, count ValueId, ids ValueMinter) returns ValueId
-	emitCowDetach(module, block: block, arr: arr, ids: ids)
-	return emitBin(module, block: block, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
+function emitShiftDetachedRangeEnd(module StdModule, func IrFunction, block IrBlock, arr ValueId, index ValueId, count ValueId, prefix String, ids ValueMinter) returns (IrBlock, ValueId)
+	var detached = emitCowDetachWhenNeeded(module, func: func, block: block, arr: arr, prefix: prefix, ids: ids)
+	let rangeEnd = emitBin(module, block: detached, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
+
+	return (detached, rangeEnd)
 end 'emitShiftDetachedRangeEnd'
 
 // ⭐ `__managed_cursor_create(arr) -> (cursor, flag)` — a fresh cursor at position 0, or throw when the buffer is

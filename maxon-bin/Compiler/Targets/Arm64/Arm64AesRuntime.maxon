@@ -74,7 +74,7 @@ end 'emitArm64AesRounds'
 
 // Takes the round count, the round keys, the destination and the source in x0 to x3. The block chunks
 // use x0 to x7 and v0 to v3 and the counter-mode chunks x0 to x7, v0 to v7, v16 and v17. The
-// Galois-mode chunks use x0 to x8, x10, v0 to v7 and v16 to v29. None keeps a stack, and all of those
+// Galois-mode chunks use x0 to x15, v0 to v7 and v16 to v29. None keeps a stack, and all of those
 // are caller-saved, so they preserve d8 to d15.
 function buildArm64AesBlockChunk(name ByteArray, round MachineWord, mix MachineWord) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
@@ -268,11 +268,157 @@ let Arm64GcmWalker = Arm64Register.x6
 let Arm64GcmScratch = Arm64Register.x7
 let Arm64GcmKeys = Arm64Register.x8
 let Arm64GcmCounterTemp = Arm64Register.x10
+let Arm64GcmTailAccumulator = Arm64Register.x7
+let Arm64GcmTailPointer = Arm64Register.x9
+let Arm64GcmTailLow = Arm64Register.x11
+let Arm64GcmTailHigh = Arm64Register.x12
+let Arm64GcmTailShift = Arm64Register.x13
+let Arm64GcmTailTemp = Arm64Register.x14
+let Arm64GcmTailRest = Arm64Register.x15
+let Arm64GcmRunBytes = Arm64Register.x12
+let Arm64GcmRunPowers = Arm64Register.x13
+let Arm64GcmWordBytes = 8
+let Arm64GcmByteBits = 8
+let Arm64GcmByteBitsShift = 3
+let Arm64GcmPartialWordMask = 7
+let Arm64GcmMaskSeed = 1
+let Arm64GcmMaskBorrow = -1
+let Arm64GcmMaskZero = 0
+let Arm64GcmPartialBlockMax = AesBlockBytes - 1
 
 enum Arm64GcmBlockSource
 	registers
 	memory
 end 'Arm64GcmBlockSource'
+
+enum Arm64GcmCopyWidth
+	dword
+	half
+	byte
+end 'Arm64GcmCopyWidth'
+
+function arm64GcmCopyWidthBytes(width Arm64GcmCopyWidth) returns FullRangeInt
+	return match width 'width'
+		dword gives 4
+		half gives 2
+		byte gives 1
+	end 'width'
+end 'arm64GcmCopyWidthBytes'
+
+function arm64GcmCopyLoadOpcode(width Arm64GcmCopyWidth) returns MachineWord
+	return match width 'width'
+		dword gives Arm64OpLdrW
+		half gives Arm64OpLdrH
+		byte gives Arm64OpLdrB
+	end 'width'
+end 'arm64GcmCopyLoadOpcode'
+
+function arm64GcmCopyStoreOpcode(width Arm64GcmCopyWidth) returns MachineWord
+	return match width 'width'
+		dword gives Arm64OpStrW
+		half gives Arm64OpStrH
+		byte gives Arm64OpStrB
+	end 'width'
+end 'arm64GcmCopyStoreOpcode'
+
+function emitArm64GcmAndImm(asm Arm64RuntimeAsm, dest Arm64Register, lhs Arm64Register, value MachineWord)
+	arm64EmitLogicalImm(asm.code, opcode: Arm64OpAndImm, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(lhs), value: value)
+end 'emitArm64GcmAndImm'
+
+function emitArm64GcmLoadPartialWord(asm Arm64RuntimeAsm, dest Arm64Register)
+	arm64EmitMovRuntimeImm(asm, dest: dest, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmTailShift, value: 0)
+
+	for width in Arm64GcmCopyWidth.allCases 'eachWidth'
+		let bytes = arm64GcmCopyWidthBytes(width)
+		let skip = asm.newLabel()
+
+		emitArm64GcmAndImm(asm, dest: Arm64GcmTailTemp, lhs: Arm64GcmTailRest, value: bytes as MachineWord)
+		arm64EmitCbzTo(asm, reg: Arm64GcmTailTemp, label: skip)
+		arm64EmitScaledMem(asm.code, opcode: arm64GcmCopyLoadOpcode(width), rt: arm64RuntimeReg(Arm64GcmTailTemp), baseReg: arm64RuntimeReg(Arm64GcmTailPointer), byteOffset: 0, scale: bytes as MachineWord)
+		emitArm64Rrr(asm.code, opcode: Arm64OpLslv, rd: arm64RuntimeReg(Arm64GcmTailTemp), rn: arm64RuntimeReg(Arm64GcmTailTemp), rm: arm64RuntimeReg(Arm64GcmTailShift))
+		arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: dest, lhs: dest, rhs: Arm64GcmTailTemp)
+		arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailPointer, base: Arm64GcmTailPointer, imm: bytes as Imm32)
+		arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailShift, base: Arm64GcmTailShift, imm: (bytes * Arm64GcmByteBits) as Imm32)
+		asm.placeLabel(skip)
+	end 'eachWidth'
+end 'emitArm64GcmLoadPartialWord'
+
+// Loads exactly `count` bytes, fewer than 16, zero-extended into `vector`: a partial block ends at the
+// span, so a wider load would read past the end of the array.
+function emitArm64GcmLoadTail(asm Arm64RuntimeAsm, vector MachineWord, source Arm64Register, count Arm64Register)
+	let small = asm.newLabel()
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmTailPointer, src: source)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmTailRest, src: count)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmTailLow, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmTailHigh, value: 0)
+	arm64EmitCmpRuntimeImm(asm, reg: count, imm: Arm64GcmWordBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: small)
+	arm64EmitLoadWord64At(asm, dest: Arm64GcmTailLow, base: Arm64GcmTailPointer, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailPointer, base: Arm64GcmTailPointer, imm: Arm64GcmWordBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailRest, base: Arm64GcmTailRest, imm: -Arm64GcmWordBytes)
+
+	asm.placeLabel(small)
+	emitArm64GcmLoadPartialWord(asm, dest: Arm64GcmTailAccumulator)
+	arm64EmitCmpRuntimeImm(asm, reg: count, imm: Arm64GcmWordBytes)
+	arm64EmitCsel(asm.code, dest: arm64RuntimeReg(Arm64GcmTailHigh), ifTrue: arm64RuntimeReg(Arm64GcmTailAccumulator), ifFalse: arm64RuntimeReg(Arm64GcmTailHigh), cond: Arm64CondCode.hs)
+	arm64EmitCsel(asm.code, dest: arm64RuntimeReg(Arm64GcmTailLow), ifTrue: arm64RuntimeReg(Arm64GcmTailLow), ifFalse: arm64RuntimeReg(Arm64GcmTailAccumulator), cond: Arm64CondCode.hs)
+	emitArm64Rr(asm.code, opcode: arm64InsDwordOpcode(Arm64GcmLaneLow), rd: vector, rn: arm64RuntimeReg(Arm64GcmTailLow))
+	emitArm64Rr(asm.code, opcode: arm64InsDwordOpcode(Arm64GcmLaneHigh), rd: vector, rn: arm64RuntimeReg(Arm64GcmTailHigh))
+end 'emitArm64GcmLoadTail'
+
+function emitArm64GcmStoreTail(asm Arm64RuntimeAsm, vector MachineWord, destination Arm64Register, count Arm64Register)
+	let small = asm.newLabel()
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmTailPointer, src: destination)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmTailRest, src: count)
+	emitArm64Rr(asm.code, opcode: arm64UmovDwordOpcode(Arm64GcmLaneLow), rd: arm64RuntimeReg(Arm64GcmTailLow), rn: vector)
+	emitArm64Rr(asm.code, opcode: arm64UmovDwordOpcode(Arm64GcmLaneHigh), rd: arm64RuntimeReg(Arm64GcmTailHigh), rn: vector)
+	arm64EmitCmpRuntimeImm(asm, reg: count, imm: Arm64GcmWordBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: small)
+	arm64EmitStoreWord64At(asm, src: Arm64GcmTailLow, base: Arm64GcmTailPointer, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailPointer, base: Arm64GcmTailPointer, imm: Arm64GcmWordBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailRest, base: Arm64GcmTailRest, imm: -Arm64GcmWordBytes)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmTailLow, src: Arm64GcmTailHigh)
+
+	asm.placeLabel(small)
+
+	for width in Arm64GcmCopyWidth.allCases 'eachWidth'
+		let bytes = arm64GcmCopyWidthBytes(width)
+		let skip = asm.newLabel()
+
+		emitArm64GcmAndImm(asm, dest: Arm64GcmTailTemp, lhs: Arm64GcmTailRest, value: bytes as MachineWord)
+		arm64EmitCbzTo(asm, reg: Arm64GcmTailTemp, label: skip)
+		arm64EmitScaledMem(asm.code, opcode: arm64GcmCopyStoreOpcode(width), rt: arm64RuntimeReg(Arm64GcmTailLow), baseReg: arm64RuntimeReg(Arm64GcmTailPointer), byteOffset: 0, scale: bytes as MachineWord)
+		arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailPointer, base: Arm64GcmTailPointer, imm: bytes as Imm32)
+		arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64GcmTailLow), rn: arm64RuntimeReg(Arm64GcmTailLow), sh: (bytes * Arm64GcmByteBits) as ShiftCount)
+		asm.placeLabel(skip)
+	end 'eachWidth'
+end 'emitArm64GcmStoreTail'
+
+// Clears the bytes of `vector` from `count` on, since GHASH reads a partial block zero-padded. Each lane
+// mask is `(1 shl bits) - 1`, and a variable shift takes its amount modulo 64, so a lane that is entirely
+// kept gets an all-ones mask from the `csel` rather than from a shift.
+function emitArm64GcmMaskTail(asm Arm64RuntimeAsm, vector MachineWord, count Arm64Register)
+	emitArm64Rr(asm.code, opcode: arm64UmovDwordOpcode(Arm64GcmLaneLow), rd: arm64RuntimeReg(Arm64GcmTailLow), rn: vector)
+	emitArm64Rr(asm.code, opcode: arm64UmovDwordOpcode(Arm64GcmLaneHigh), rd: arm64RuntimeReg(Arm64GcmTailHigh), rn: vector)
+	emitArm64GcmAndImm(asm, dest: Arm64GcmTailTemp, lhs: count, value: Arm64GcmPartialWordMask as MachineWord)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64GcmTailTemp), rn: arm64RuntimeReg(Arm64GcmTailTemp), sh: Arm64GcmByteBitsShift)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmTailShift, value: Arm64GcmMaskSeed)
+	emitArm64Rrr(asm.code, opcode: Arm64OpLslv, rd: arm64RuntimeReg(Arm64GcmTailShift), rn: arm64RuntimeReg(Arm64GcmTailShift), rm: arm64RuntimeReg(Arm64GcmTailTemp))
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailShift, base: Arm64GcmTailShift, imm: Arm64GcmMaskBorrow)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmTailTemp, value: Arm64GcmMaskZero)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailTemp, base: Arm64GcmTailTemp, imm: Arm64GcmMaskBorrow)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmTailRest, value: Arm64GcmMaskZero)
+	arm64EmitCmpRuntimeImm(asm, reg: count, imm: Arm64GcmWordBytes)
+	arm64EmitCsel(asm.code, dest: arm64RuntimeReg(Arm64GcmTailTemp), ifTrue: arm64RuntimeReg(Arm64GcmTailTemp), ifFalse: arm64RuntimeReg(Arm64GcmTailShift), cond: Arm64CondCode.hs)
+	arm64EmitCsel(asm.code, dest: arm64RuntimeReg(Arm64GcmTailRest), ifTrue: arm64RuntimeReg(Arm64GcmTailShift), ifFalse: arm64RuntimeReg(Arm64GcmTailRest), cond: Arm64CondCode.hs)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64GcmTailLow, lhs: Arm64GcmTailLow, rhs: Arm64GcmTailTemp)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64GcmTailHigh, lhs: Arm64GcmTailHigh, rhs: Arm64GcmTailRest)
+	emitArm64Rr(asm.code, opcode: arm64InsDwordOpcode(Arm64GcmLaneLow), rd: vector, rn: arm64RuntimeReg(Arm64GcmTailLow))
+	emitArm64Rr(asm.code, opcode: arm64InsDwordOpcode(Arm64GcmLaneHigh), rd: vector, rn: arm64RuntimeReg(Arm64GcmTailHigh))
+end 'emitArm64GcmMaskTail'
 
 function emitArm64GcmConstants(asm Arm64RuntimeAsm)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmScratch, value: Arm64GcmPolyHighByte)
@@ -312,9 +458,7 @@ function emitArm64GcmFirstProducts(asm Arm64RuntimeAsm, block MachineWord)
 	emitArm64Rrr(asm.code, opcode: Arm64OpPmull, rd: Arm64GcmAccM, rn: Arm64GcmT0, rm: Arm64GcmT2)
 end 'emitArm64GcmFirstProducts'
 
-function emitArm64GcmAccumulate(asm Arm64RuntimeAsm, block MachineWord, pair FullRangeInt)
-	emitArm64GcmLoadPair(asm, pair: pair)
-	emitArm64Rr(asm.code, opcode: Arm64OpRev64Vec16b, rd: block, rn: block)
+function emitArm64GcmAccumulateSwapped(asm Arm64RuntimeAsm, block MachineWord)
 	emitArm64Rrr(asm.code, opcode: Arm64GcmExtHalf, rd: Arm64GcmT0, rn: block, rm: block)
 	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: Arm64GcmT0, rn: block, rm: Arm64GcmT0)
 	emitArm64Rrr(asm.code, opcode: Arm64OpPmull, rd: Arm64GcmT3, rn: block, rm: Arm64GcmT1)
@@ -323,7 +467,41 @@ function emitArm64GcmAccumulate(asm Arm64RuntimeAsm, block MachineWord, pair Ful
 	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: Arm64GcmAcc0, rn: Arm64GcmAcc0, rm: Arm64GcmT3)
 	emitArm64Rrr(asm.code, opcode: Arm64OpPmull, rd: Arm64GcmT3, rn: Arm64GcmT0, rm: Arm64GcmT2)
 	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: Arm64GcmAccM, rn: Arm64GcmAccM, rm: Arm64GcmT3)
+end 'emitArm64GcmAccumulateSwapped'
+
+function emitArm64GcmAccumulate(asm Arm64RuntimeAsm, block MachineWord, pair FullRangeInt)
+	emitArm64GcmLoadPair(asm, pair: pair)
+	emitArm64Rr(asm.code, opcode: Arm64OpRev64Vec16b, rd: block, rn: block)
+	emitArm64GcmAccumulateSwapped(asm, block: block)
 end 'emitArm64GcmAccumulate'
+
+function emitArm64GcmHashRun(asm Arm64RuntimeAsm)
+	let loop = asm.newLabel()
+	let accumulator = 1
+
+	emitArm64Rrr(asm.code, opcode: Arm64OpOrrVec16b, rd: accumulator, rn: Arm64GcmAcc0, rm: Arm64GcmAcc0)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: Arm64GcmAcc0, rn: Arm64GcmAcc0, rm: Arm64GcmAcc0)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: Arm64GcmAcc1, rn: Arm64GcmAcc1, rm: Arm64GcmAcc1)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: Arm64GcmAccM, rn: Arm64GcmAccM, rm: Arm64GcmAccM)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64GcmTailTemp), rn: arm64RuntimeReg(Arm64GcmRunBytes), sh: Arm64GcmDoubleShift)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64GcmRunPowers, value: AesGcmTableBytes)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64GcmRunPowers, lhs: Arm64GcmRunPowers, rhs: Arm64GcmTailTemp)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64GcmRunPowers, lhs: Arm64GcmRunPowers, rhs: Arm64GcmTable)
+
+	asm.placeLabel(loop)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: 0, base: Arm64GcmTailPointer, byteOffset: 0)
+	emitArm64Rr(asm.code, opcode: Arm64OpRev64Vec16b, rd: 0, rn: 0)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: 0, rn: 0, rm: accumulator)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: accumulator, rn: accumulator, rm: accumulator)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64GcmT1, base: Arm64GcmRunPowers, byteOffset: 0)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64GcmT2, base: Arm64GcmRunPowers, byteOffset: AesBlockBytes as MachineWord)
+	emitArm64GcmAccumulateSwapped(asm, block: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmTailPointer, base: Arm64GcmTailPointer, imm: AesBlockBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmRunPowers, base: Arm64GcmRunPowers, imm: Arm64GcmPairBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmRunBytes, base: Arm64GcmRunBytes, imm: -AesBlockBytes)
+	arm64EmitCbnzTo(asm, reg: Arm64GcmRunBytes, label: loop)
+	emitArm64GcmReduce(asm)
+end 'emitArm64GcmHashRun'
 
 function emitArm64GcmHashBlock(asm Arm64RuntimeAsm, block MachineWord)
 	emitArm64Rr(asm.code, opcode: Arm64OpRev64Vec16b, rd: block, rn: block)
@@ -359,6 +537,7 @@ export function buildArm64AesGcmHashChunk() returns FunctionCodeChunk
 	let octets = asm.newLabel()
 	let singles = asm.newLabel()
 	let singlesLoop = asm.newLabel()
+	let tail = asm.newLabel()
 	let done = asm.newLabel()
 
 	emitArm64GcmConstants(asm)
@@ -383,12 +562,17 @@ export function buildArm64AesGcmHashChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(singlesLoop)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64GcmControl, imm: AesBlockBytes)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: done)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: tail)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmControl, base: Arm64GcmControl, imm: -AesBlockBytes)
 	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: 0, base: Arm64GcmBuffer, byteOffset: 0)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmBuffer, base: Arm64GcmBuffer, imm: AesBlockBytes)
 	emitArm64GcmHashBlock(asm, block: 0)
 	arm64EmitBranchTo(asm, label: singlesLoop)
+
+	asm.placeLabel(tail)
+	arm64EmitCbzTo(asm, reg: Arm64GcmControl, label: done)
+	emitArm64GcmLoadTail(asm, vector: 0, source: Arm64GcmBuffer, count: Arm64GcmControl)
+	emitArm64GcmHashBlock(asm, block: 0)
 
 	asm.placeLabel(done)
 	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: Arm64GcmAcc0, base: Arm64GcmMessage, byteOffset: 0)
@@ -506,7 +690,8 @@ function emitArm64GcmCryptSetup(asm Arm64RuntimeAsm)
 
 	arm64EmitLoadWord32At(asm, dest: Arm64GcmScratch, base: Arm64GcmMessage, byteOffset: (AesGcmCounterOffset + Arm64GcmCounterWordOffset) as MachineWord)
 	emitArm64Rr(asm.code, opcode: Arm64OpRevW, rd: arm64RuntimeReg(Arm64GcmScratch), rn: arm64RuntimeReg(Arm64GcmScratch))
-	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64GcmCounterTemp), rn: arm64RuntimeReg(Arm64GcmLength), sh: AesBlockShift)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmCounterTemp, base: Arm64GcmLength, imm: Arm64GcmPartialBlockMax)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64GcmCounterTemp), rn: arm64RuntimeReg(Arm64GcmCounterTemp), sh: AesBlockShift)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64GcmScratch, lhs: Arm64GcmScratch, rhs: Arm64GcmCounterTemp)
 	emitArm64Rr(asm.code, opcode: Arm64OpRevW, rd: arm64RuntimeReg(Arm64GcmScratch), rn: arm64RuntimeReg(Arm64GcmScratch))
 	arm64EmitStoreWord32At(asm, src: Arm64GcmScratch, base: Arm64GcmMessage, byteOffset: (AesGcmCounterOffset + Arm64GcmCounterWordOffset) as MachineWord)
@@ -533,30 +718,57 @@ function emitArm64GcmEightBlocks(asm Arm64RuntimeAsm)
 	emitArm64GcmEncipher(asm, states: Arm64GcmOctetBlocks)
 end 'emitArm64GcmEightBlocks'
 
+// GHASH covers the ciphertext. Decrypting therefore hashes the whole blocks before the loop's in-place
+// XOR overwrites them with plaintext, and the tail from the register it was loaded into; encrypting
+// hashes both after.
 function emitArm64GcmSingleBlockLoop(asm Arm64RuntimeAsm, decrypting bool, done BlockId)
 	let loop = asm.newLabel()
+	let tail = asm.newLabel()
 
 	arm64EmitCbzTo(asm, reg: Arm64GcmLength, label: done)
-	emitArm64GcmLoadPair(asm, pair: Arm64GcmHashSubkeyEntry shr 1)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64GcmLength, imm: AesBlockBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: tail)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64GcmTailPointer, src: Arm64GcmBuffer)
+
+	if decrypting 'hashesTheInput'
+		arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64GcmRunBytes), rn: arm64RuntimeReg(Arm64GcmLength), sh: AesBlockShift)
+		arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64GcmRunBytes), rn: arm64RuntimeReg(Arm64GcmRunBytes), sh: AesBlockShift)
+		emitArm64GcmHashRun(asm)
+	end 'hashesTheInput' else 'countsTheOutput'
+		arm64EmitMovRuntimeImm(asm, dest: Arm64GcmRunBytes, value: 0)
+	end 'countsTheOutput'
 
 	asm.placeLabel(loop)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64GcmLength, imm: AesBlockBytes)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: done)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmLength, base: Arm64GcmLength, imm: -AesBlockBytes)
 	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64GcmLoaded, base: Arm64GcmBuffer, byteOffset: 0)
 	emitArm64GcmNextCounter(asm, block: 0)
 	emitArm64GcmEncipher(asm, states: 1)
 	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: 0, rn: 0, rm: Arm64GcmLoaded)
 	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: 0, base: Arm64GcmBuffer, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmBuffer, base: Arm64GcmBuffer, imm: AesBlockBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmRunBytes, base: Arm64GcmRunBytes, imm: AesBlockBytes)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64GcmLength, imm: AesBlockBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: loop)
 
-	if decrypting 'hashesTheInput'
-		emitArm64GcmHashBlock(asm, block: Arm64GcmLoaded)
-	end 'hashesTheInput' else 'hashesTheOutput'
-		emitArm64GcmHashBlock(asm, block: 0)
+	if not decrypting 'hashesTheOutput'
+		emitArm64GcmHashRun(asm)
 	end 'hashesTheOutput'
 
-	arm64EmitAddRuntimeImm(asm, dest: Arm64GcmBuffer, base: Arm64GcmBuffer, imm: AesBlockBytes)
-	arm64EmitBranchTo(asm, label: loop)
+	asm.placeLabel(tail)
+	emitArm64GcmLoadPair(asm, pair: Arm64GcmHashSubkeyEntry shr 1)
+	arm64EmitCbzTo(asm, reg: Arm64GcmLength, label: done)
+	emitArm64GcmLoadTail(asm, vector: Arm64GcmLoaded, source: Arm64GcmBuffer, count: Arm64GcmLength)
+	emitArm64GcmNextCounter(asm, block: 0)
+	emitArm64GcmEncipher(asm, states: 1)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: 0, rn: 0, rm: Arm64GcmLoaded)
+	emitArm64GcmStoreTail(asm, vector: 0, destination: Arm64GcmBuffer, count: Arm64GcmLength)
+
+	if decrypting 'hashesTheInputTail'
+		emitArm64GcmHashBlock(asm, block: Arm64GcmLoaded)
+	end 'hashesTheInputTail' else 'hashesTheOutputTail'
+		emitArm64GcmMaskTail(asm, vector: 0, count: Arm64GcmLength)
+		emitArm64GcmHashBlock(asm, block: 0)
+	end 'hashesTheOutputTail'
 end 'emitArm64GcmSingleBlockLoop'
 
 export function buildArm64AesGcmEncryptChunk() returns FunctionCodeChunk

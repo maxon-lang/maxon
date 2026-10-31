@@ -20,9 +20,9 @@ inside the emitted routine, so the language needs no 128-bit value type.
 | `__Builtins.aesDecryptBlock(output, outputAt, schedule, input, inputAt)` | the inverse cipher of the same shape |
 | `__Builtins.aesCtrXor(buffer, bufferAt, schedule, counterBlock, counterOffset, blocks)` | XORs `blocks` (1, 2, 4 or 8) blocks of `buffer` from `bufferAt` with the counter-mode key stream, in place |
 | `__Builtins.aesGcmInit(keyBlock, schedule)` | writes the encryption round keys of `schedule` and the table of powers of the hash subkey into `keyBlock` |
-| `__Builtins.aesGcmHash(message, keyBlock, data, dataAt, length)` | folds `length` bytes (whole blocks) of `data` from `dataAt` into the GHASH accumulator of `message` |
-| `__Builtins.aesGcmEncrypt(buffer, bufferAt, keyBlock, message, length)` | encrypts `length` bytes (whole blocks) of `buffer` in place in counter mode and folds the cipher text into the accumulator |
-| `__Builtins.aesGcmDecrypt(buffer, bufferAt, keyBlock, message, length)` | folds `length` bytes (whole blocks) of cipher text into the accumulator and decrypts them in place |
+| `__Builtins.aesGcmHash(message, keyBlock, data, dataAt, length)` | folds `length` bytes of `data` from `dataAt` into the GHASH accumulator of `message`, a partial last block zero-padded to 16 bytes |
+| `__Builtins.aesGcmEncrypt(buffer, bufferAt, keyBlock, message, length)` | encrypts `length` bytes of `buffer` in place in counter mode and folds the cipher text, a partial last block zero-padded to 16 bytes, into the accumulator |
+| `__Builtins.aesGcmDecrypt(buffer, bufferAt, keyBlock, message, length)` | folds `length` bytes of cipher text, a partial last block zero-padded to 16 bytes, into the accumulator and decrypts them in place |
 | `__Builtins.aesGcmFinish(message, keyBlock, additionalBytes, ciphertextBytes)` | folds in the length block and leaves the tag in the accumulator |
 
 The Galois-mode calls (GCM, NIST SP 800-38D, with the multiply done by `PCLMULQDQ` on x64 and `PMULL` on arm64) keep
@@ -31,11 +31,13 @@ product table (the hash subkey `E(K, 0)` and its powers up to the eighth, with t
 `16 * (rounds + 1)` bytes of encryption round keys, so it is `256 + 16 * (rounds + 1)` bytes. A message block is 48
 bytes: the accumulator (16 bytes, zero at the start), the counter block (a 12-byte nonce and the 32-bit big-endian
 counter of the last block already used) and the tag mask (the cipher of the counter block with counter 1). Encrypting
-or decrypting advances the counter by the number of blocks it processed, wrapping inside its 32-bit word, and leaves the
-accumulator at the product after the last cipher text block; the first data block uses the counter after the one the
-message block holds. `aesGcmFinish` leaves the 16-byte tag in the first 16 bytes of the message block. The routines
-take whole blocks only: a partial last block of associated data or cipher text is zero-padded to 16 bytes by the caller
-and folded in with `aesGcmHash`, and the key stream of a partial last data block comes from `aesCtrXor`.
+or decrypting advances the counter by the number of blocks it processed, a partial last block counting as one, wrapping
+inside its 32-bit word, and leaves the accumulator at the product after the last cipher text block; the first data block
+uses the counter after the one the message block holds. `aesGcmFinish` leaves the 16-byte tag in the first 16 bytes of the
+message block. The routines take any length: the partial last block of associated data or cipher text is read as exactly
+the bytes it has, zero-padded to 16 bytes inside the routine, and the key stream of a partial last data block is applied
+to exactly those bytes, so no byte of the array past the span is read or written. A call that ends in a partial block is
+the last call on its message block.
 
 `aesCtrXor` encrypts the counter blocks `counterBlock` with its last four bytes, read as a big-endian 32-bit counter,
 increased by `counterOffset`, `counterOffset + 1`, and so on, and XORs each result into the next 16 bytes of the
@@ -1428,6 +1430,159 @@ end 'main'
 0
 ```
 
+<!-- test: aes-hardware.gcm-intrinsics-take-partial-blocks -->
+<!-- tier: stdlib -->
+`aesGcmHash`, `aesGcmEncrypt` and `aesGcmDecrypt` take any length, with the array they read and write framed by bytes that must
+stay as they were. For each key size, every data length from 0 to 300 under every associated data length from 0 to 40: the
+message block built by hand from the intrinsics ends in the cipher text and tag the bitsliced backing seals, the counter has
+advanced by the number of blocks the data occupies, a partial last block counting as one, and decrypting that cipher text gives
+the plain text and the same tag.
+```maxon
+function bytesFor(seed Count, count Count) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for index in 0 upto count 'eachByte'
+		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
+		bytes.push(((mixed shr 11) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'bytesFor'
+
+function counterBlock(nonce ByteArray, counter Count) returns ByteArray
+	var block = ByteArray.create()
+	block.append(nonce)
+	block.push(((counter shr 24) and 0xFF) as Byte)
+	block.push(((counter shr 16) and 0xFF) as Byte)
+	block.push(((counter shr 8) and 0xFF) as Byte)
+	block.push((counter and 0xFF) as Byte)
+
+	return block
+end 'counterBlock'
+
+function framed(body ByteArray) returns ByteArray
+	var array = ByteArray.create()
+
+	for _ in 0 upto 3 'eachLead'
+		array.push(0x5A)
+	end 'eachLead'
+
+	array.append(body)
+
+	for _ in 0 upto 17 'eachTrail'
+		array.push(0xA5)
+	end 'eachTrail'
+
+	return array
+end 'framed'
+
+function frameIntact(array ByteArray, bodyBytes Count) returns bool
+	for position in 0 upto 3 'eachLead'
+		if (try array.get(position) otherwise 0) != 0x5A 'leadChanged'
+			return false
+		end 'leadChanged'
+	end 'eachLead'
+
+	for position in 3 + bodyBytes upto 3 + bodyBytes + 17 'eachTrail'
+		if (try array.get(position) otherwise 0) != 0xA5 'trailChanged'
+			return false
+		end 'trailChanged'
+	end 'eachTrail'
+
+	return true
+end 'frameIntact'
+
+function bodyOf(array ByteArray, bodyBytes Count) returns ByteArray
+	return try array.slice(3, endIndex: 3 + bodyBytes) otherwise panic("the body lies inside the frame")
+end 'bodyOf'
+
+function stateFor(schedule ByteArray, nonce ByteArray, additional ByteArray, keyBlock ByteArray) returns ByteArray
+	var message = ByteArray.create()
+	message.resize(16)
+	message.append(counterBlock(nonce, counter: 1))
+	message.growFilled(48, value: 0)
+	__Builtins.aesEncryptBlock(message, 32, schedule, message, 16)
+	__Builtins.aesGcmHash(message, keyBlock, framed(additional), 3, additional.count())
+
+	return message
+end 'stateFor'
+
+function tagOf(message ByteArray) returns ByteArray
+	return try message.slice(0, endIndex: 16) otherwise panic("the tag is the first block of the message")
+end 'tagOf'
+
+function counterAdvancedBy(message ByteArray, nonce ByteArray, blocks Count) returns bool
+	let counter = try message.slice(16, endIndex: 32) otherwise panic("the counter block is the second block of the message")
+
+	return counter.equals(counterBlock(nonce, counter: 1 + blocks))
+end 'counterAdvancedBy'
+
+function mismatches(schedule ByteArray, keyBlock ByteArray, nonce ByteArray, plain ByteArray, additional ByteArray, expected ByteArray) returns Count
+	var wrong = 0 as Count
+	let bytes = plain.count()
+	let blocks = (bytes + 15) shr 4
+	var sealing = stateFor(schedule, nonce: nonce, additional: additional, keyBlock: keyBlock)
+	var written = framed(plain)
+	__Builtins.aesGcmEncrypt(written, 3, keyBlock, sealing, bytes)
+	__Builtins.aesGcmFinish(sealing, keyBlock, additional.count(), bytes)
+	var produced = ByteArray.create()
+	produced.append(bodyOf(written, bodyBytes: bytes))
+	produced.append(tagOf(sealing))
+
+	if not frameIntact(written, bodyBytes: bytes) or not produced.equals(expected) or not counterAdvancedBy(sealing, nonce: nonce, blocks: blocks) 'sealDiffers'
+		wrong = wrong + 1
+	end 'sealDiffers'
+
+	let ciphertext = bodyOf(written, bodyBytes: bytes)
+	var opening = stateFor(schedule, nonce: nonce, additional: additional, keyBlock: keyBlock)
+	var read = framed(ciphertext)
+	__Builtins.aesGcmDecrypt(read, 3, keyBlock, opening, bytes)
+	__Builtins.aesGcmFinish(opening, keyBlock, additional.count(), bytes)
+
+	if not frameIntact(read, bodyBytes: bytes) or not bodyOf(read, bodyBytes: bytes).equals(plain) or not tagOf(opening).equals(tagOf(sealing)) or not counterAdvancedBy(opening, nonce: nonce, blocks: blocks) 'openDiffers'
+		wrong = wrong + 1
+	end 'openDiffers'
+
+	return wrong
+end 'mismatches'
+
+function compare(keyBytes Count) returns Count
+	let key = bytesFor(keyBytes, count: keyBytes)
+	var schedule = ByteArray.create()
+	schedule.resize((keyBytes + 28) * 8)
+	__Builtins.aesExpandKey(schedule, key)
+	var keyBlock = ByteArray.create()
+	keyBlock.resize(256 + (schedule.count() shr 1))
+	__Builtins.aesGcmInit(keyBlock, schedule)
+	let software = try AesGcm.build(key, bitsliced: true) otherwise panic("the key is valid")
+	let nonce = bytesFor(keyBytes + 7, count: 12)
+	var wrong = 0 as Count
+
+	for additionalBytes in 0 to 40 'eachAdditional'
+		let additional = bytesFor(additionalBytes + 3, count: additionalBytes)
+
+		for dataBytes in 0 to 300 'eachData'
+			let plain = bytesFor(dataBytes + 11, count: dataBytes)
+			let expected = try software.seal(nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
+			wrong = wrong + mismatches(schedule, keyBlock: keyBlock, nonce: nonce, plain: plain, additional: additional, expected: expected)
+		end 'eachData'
+	end 'eachAdditional'
+
+	return wrong
+end 'compare'
+
+function main() returns ExitCode
+	print("{compare(16)} {compare(24)} {compare(32)}\n")
+	return 0
+end 'main'
+```
+```stdout
+0 0 0
+```
+```exitcode
+0
+```
+
 <!-- test: aes-hardware.gcm-counter-wraps-inside-its-word -->
 <!-- tier: stdlib -->
 A message block whose counter is `0xFFFFFFF8` encrypts twenty blocks with the counters `0xFFFFFFF9` to `0xFFFFFFFF` and then
@@ -1637,9 +1792,10 @@ end 'main'
 fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size
 ```
 
-<!-- test: aes-hardware.a-gcm-length-that-is-not-whole-blocks-ends-the-program -->
+<!-- test: aes-hardware.a-gcm-hash-span-past-the-end-ends-the-program -->
 <!-- tier: stdlib -->
-`aesGcmHash` takes whole blocks: 32 bytes are folded, 17 are refused.
+`aesGcmHash` takes any length, but the whole span must lie inside the array: 17 bytes from byte 31 of a 48-byte array fit,
+18 bytes from there do not.
 ```maxon
 function main() returns ExitCode
 	var key = ByteArray.create()
@@ -1654,15 +1810,15 @@ function main() returns ExitCode
 	data.resize(48)
 	__Builtins.aesExpandKey(schedule, key)
 	__Builtins.aesGcmInit(keyBlock, schedule)
-	__Builtins.aesGcmHash(message, keyBlock, data, 16, 32)
-	print("two blocks fit\n")
-	__Builtins.aesGcmHash(message, keyBlock, data, 0, 17)
+	__Builtins.aesGcmHash(message, keyBlock, data, 31, 17)
+	print("a block and a byte fit\n")
+	__Builtins.aesGcmHash(message, keyBlock, data, 31, 18)
 
 	return 0
 end 'main'
 ```
 ```stdout
-two blocks fit
+a block and a byte fit
 ```
 ```exitcode
 70

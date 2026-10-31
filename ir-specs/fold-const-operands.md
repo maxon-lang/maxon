@@ -440,159 +440,164 @@ func @__managed_fill {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg r13, r9
-    x64.cmpRegImm32 r12, 0
+    x64.prologue 64
+    x64.cmpRegImm32 rdx, 0
     x64.jcc less, badrange
   chkcount:
     x64.cmpRegImm32 rax, 0
     x64.jcc less, badrange
   chkhigh:
-    x64.leaRegRegReg r14, r12, rax
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r14, rax
+    x64.leaRegRegReg rax, rdx, rax
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegReg rax, rsi
     x64.jcc belowEqual, classify
   badrange:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 1
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   classify:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, prepare
   declined:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   prepare:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_cow_detach
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-    x64.cmpRegImm32 rdx, 8
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, flddetach
+  fldbuf:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, flddone
+  fldshared:
+    x64.leaRegRegImm32 rsi, rsi, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, flddetach
+  flddone:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 24]
+    x64.cmpRegImm32 rdi, 8
     x64.jcc notEqual, esbyte
-  fillword:
-    x64.movRegReg rcx, r12
   fiwh:
-    x64.cmpRegReg rcx, r14
+    x64.cmpRegReg rdx, rax
     x64.jcc greaterEqual, applied
   fiwb:
-    x64.movRegReg rsi, rcx
-    x64.imulRegReg rsi, rcx, rdx
-    x64.leaRegRegReg rsi, rax, rsi
-    x64.storeBaseDispReg.word64 [rsi + 0], r13
-    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rcx, rdx
+    x64.imulRegReg rcx, rdx, rdi
+    x64.leaRegRegReg rcx, rsi, rcx
+    x64.storeBaseDispReg.word64 [rcx + 0], r9
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp fiwh
   esbyte:
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, fillgen
-  fillbyte:
-    x64.movRegReg rcx, r12
+    x64.cmpRegImm32 rdi, 1
+    x64.jcc notEqual, figh
   fibh:
-    x64.cmpRegReg rcx, r14
+    x64.cmpRegReg rdx, rax
     x64.jcc greaterEqual, applied
   fibb:
-    x64.movRegReg rsi, rcx
-    x64.imulRegReg rsi, rcx, rdx
-    x64.leaRegRegReg rsi, rax, rsi
-    x64.storeBaseDispReg.byte [rsi + 0], r13
-    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rcx, rdx
+    x64.imulRegReg rcx, rdx, rdi
+    x64.leaRegRegReg rcx, rsi, rcx
+    x64.storeBaseDispReg.byte [rcx + 0], r9
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp fibh
-  fillgen:
-    x64.movRegReg rsi, r12
   figh:
-    x64.cmpRegReg rsi, r14
+    x64.cmpRegReg rdx, rax
     x64.jcc less, figb
   applied:
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   figb:
-    x64.cmpRegImm32 rdx, 0
+    x64.cmpRegImm32 rdi, 0
     x64.jcc greaterEqual, stby
-  __il_body#29:
+  __il_body#33:
+    x64.movRegReg rcx, rdi
+    x64.sarRegImm8 rcx, rdi, 63
+    x64.movRegReg r8, rcx
+    x64.xorRegImm32 r8, rcx, -1
+    x64.movRegImm32 r10, 0
+    x64.subRegReg r10, r10, rdi
+    x64.movRegReg r11, rdi
+    x64.shlRegImm8 r11, rdi, 3
+    x64.andRegReg r10, r10, rcx
+    x64.andRegReg r11, r11, r8
+    x64.orRegReg r10, r10, r11
+  __il_cont#32:
     x64.movRegReg rcx, rdx
-    x64.sarRegImm8 rcx, rdx, 63
-    x64.movRegReg rdi, rcx
-    x64.xorRegImm32 rdi, rcx, -1
-    x64.movRegImm32 r8, 0
-    x64.subRegReg r8, r8, rdx
-    x64.movRegReg r9, rdx
-    x64.shlRegImm8 r9, rdx, 3
-    x64.andRegReg r8, r8, rcx
-    x64.andRegReg r9, r9, rdi
-    x64.orRegReg r8, r8, r9
-  __il_cont#28:
-    x64.movRegReg rcx, rsi
-    x64.imulRegReg rcx, rsi, r8
-    x64.movRegReg rdi, rcx
-    x64.shrRegImm8 rdi, rcx, 3
-    x64.movRegReg r9, rcx
-    x64.andRegImm32 r9, rcx, 7
+    x64.imulRegReg rcx, rdx, r10
+    x64.movRegReg r8, rcx
+    x64.shrRegImm8 r8, rcx, 3
+    x64.movRegReg r11, rcx
+    x64.andRegImm32 r11, rcx, 7
     x64.movRegImm32 rcx, 64
-    x64.subRegReg rcx, rcx, r8
-    x64.movRegImm r10, 18446744073709551615
-    x64.shrRegCl r10, r10
-    x64.leaRegRegReg r8, r9, r8
-  __il_body#30:
-    x64.leaRegRegImm32 rcx, r8, 7
+    x64.subRegReg rcx, rcx, r10
+    x64.movRegImm rbx, 18446744073709551615
+    x64.shrRegCl rbx, rbx
+    x64.leaRegRegReg r10, r11, r10
+  __il_body#34:
+    x64.leaRegRegImm32 rcx, r10, 7
     x64.shrRegImm8 rcx, rcx, 3
-  __il_cont#27:
-    x64.leaRegRegReg rdi, rax, rdi
-    x64.loadRegBaseDisp.byte r8, [rdi + 0]
-    x64.movRegReg rcx, r9
-    x64.movRegReg r11, r10
-    x64.shlRegCl r11, r10
-    x64.xorRegImm32 r11, r11, -1
-    x64.andRegReg r8, r8, r11
-    x64.movRegReg r11, r13
-    x64.andRegReg r11, r13, r10
-    x64.movRegReg rcx, r9
-    x64.shlRegCl r11, r11
-    x64.orRegReg r8, r8, r11
-    x64.storeBaseDispReg.byte [rdi + 0], r8
+  __il_cont#31:
+    x64.leaRegRegReg r8, rsi, r8
+    x64.loadRegBaseDisp.byte r10, [r8 + 0]
+    x64.movRegReg rcx, r11
+    x64.movRegReg r12, rbx
+    x64.shlRegCl r12, rbx
+    x64.xorRegImm32 r12, r12, -1
+    x64.andRegReg r10, r10, r12
+    x64.movRegReg r12, r9
+    x64.andRegReg r12, r9, rbx
+    x64.movRegReg rcx, r11
+    x64.shlRegCl r12, r12
+    x64.orRegReg r10, r10, r12
+    x64.storeBaseDispReg.byte [r8 + 0], r10
     x64.jmp figstep
   stby:
-    x64.movRegReg rcx, rsi
-    x64.imulRegReg rcx, rsi, rdx
-    x64.leaRegRegReg rdi, rax, rcx
-    x64.movRegImm32 r8, 0
+    x64.movRegReg rcx, rdx
+    x64.imulRegReg rcx, rdx, rdi
+    x64.leaRegRegReg r8, rsi, rcx
+    x64.movRegImm32 r10, 0
   steh:
-    x64.cmpRegReg r8, rdx
+    x64.cmpRegReg r10, rdi
     x64.jcc less, steb
   figstep:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp figh
   steb:
-    x64.imulRegRegImm32 rcx, r8, 8
-    x64.movRegReg r9, r13
-    x64.shrRegCl r9, r13
-    x64.leaRegRegReg r10, rdi, r8
-    x64.storeBaseDispReg.byte [r10 + 0], r9
-    x64.leaRegRegImm32 r8, r8, 1
+    x64.imulRegRegImm32 rcx, r10, 8
+    x64.movRegReg r11, r9
+    x64.shrRegCl r11, r9
+    x64.leaRegRegReg rbx, r8, r10
+    x64.storeBaseDispReg.byte [rbx + 0], r11
+    x64.leaRegRegImm32 r10, r10, 1
     x64.jmp steh
+  flddetach:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, r9
+    x64.callDirect __managed_cow_detach
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot r9, slot3
+    x64.jmp flddone
 }
 ```
 
@@ -999,159 +1004,164 @@ func @__managed_fill {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg r13, r9
-    x64.cmpRegImm32 r12, 0
+    x64.prologue 64
+    x64.cmpRegImm32 rdx, 0
     x64.jcc less, badrange
   chkcount:
     x64.cmpRegImm32 rax, 0
     x64.jcc less, badrange
   chkhigh:
-    x64.leaRegRegReg r14, r12, rax
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r14, rax
+    x64.leaRegRegReg rax, rdx, rax
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegReg rax, rsi
     x64.jcc belowEqual, classify
   badrange:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 1
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   classify:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, prepare
   declined:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   prepare:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_cow_detach
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-    x64.cmpRegImm32 rdx, 8
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, flddetach
+  fldbuf:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, flddone
+  fldshared:
+    x64.leaRegRegImm32 rsi, rsi, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, flddetach
+  flddone:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 24]
+    x64.cmpRegImm32 rdi, 8
     x64.jcc notEqual, esbyte
-  fillword:
-    x64.movRegReg rcx, r12
   fiwh:
-    x64.cmpRegReg rcx, r14
+    x64.cmpRegReg rdx, rax
     x64.jcc greaterEqual, applied
   fiwb:
-    x64.movRegReg rsi, rcx
-    x64.imulRegReg rsi, rcx, rdx
-    x64.leaRegRegReg rsi, rax, rsi
-    x64.storeBaseDispReg.word64 [rsi + 0], r13
-    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rcx, rdx
+    x64.imulRegReg rcx, rdx, rdi
+    x64.leaRegRegReg rcx, rsi, rcx
+    x64.storeBaseDispReg.word64 [rcx + 0], r9
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp fiwh
   esbyte:
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, fillgen
-  fillbyte:
-    x64.movRegReg rcx, r12
+    x64.cmpRegImm32 rdi, 1
+    x64.jcc notEqual, figh
   fibh:
-    x64.cmpRegReg rcx, r14
+    x64.cmpRegReg rdx, rax
     x64.jcc greaterEqual, applied
   fibb:
-    x64.movRegReg rsi, rcx
-    x64.imulRegReg rsi, rcx, rdx
-    x64.leaRegRegReg rsi, rax, rsi
-    x64.storeBaseDispReg.byte [rsi + 0], r13
-    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rcx, rdx
+    x64.imulRegReg rcx, rdx, rdi
+    x64.leaRegRegReg rcx, rsi, rcx
+    x64.storeBaseDispReg.byte [rcx + 0], r9
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp fibh
-  fillgen:
-    x64.movRegReg rsi, r12
   figh:
-    x64.cmpRegReg rsi, r14
+    x64.cmpRegReg rdx, rax
     x64.jcc less, figb
   applied:
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   figb:
-    x64.cmpRegImm32 rdx, 0
+    x64.cmpRegImm32 rdi, 0
     x64.jcc greaterEqual, stby
-  __il_body#29:
+  __il_body#33:
+    x64.movRegReg rcx, rdi
+    x64.sarRegImm8 rcx, rdi, 63
+    x64.movRegReg r8, rcx
+    x64.xorRegImm32 r8, rcx, -1
+    x64.movRegImm32 r10, 0
+    x64.subRegReg r10, r10, rdi
+    x64.movRegReg r11, rdi
+    x64.shlRegImm8 r11, rdi, 3
+    x64.andRegReg r10, r10, rcx
+    x64.andRegReg r11, r11, r8
+    x64.orRegReg r10, r10, r11
+  __il_cont#32:
     x64.movRegReg rcx, rdx
-    x64.sarRegImm8 rcx, rdx, 63
-    x64.movRegReg rdi, rcx
-    x64.xorRegImm32 rdi, rcx, -1
-    x64.movRegImm32 r8, 0
-    x64.subRegReg r8, r8, rdx
-    x64.movRegReg r9, rdx
-    x64.shlRegImm8 r9, rdx, 3
-    x64.andRegReg r8, r8, rcx
-    x64.andRegReg r9, r9, rdi
-    x64.orRegReg r8, r8, r9
-  __il_cont#28:
-    x64.movRegReg rcx, rsi
-    x64.imulRegReg rcx, rsi, r8
-    x64.movRegReg rdi, rcx
-    x64.shrRegImm8 rdi, rcx, 3
-    x64.movRegReg r9, rcx
-    x64.andRegImm32 r9, rcx, 7
+    x64.imulRegReg rcx, rdx, r10
+    x64.movRegReg r8, rcx
+    x64.shrRegImm8 r8, rcx, 3
+    x64.movRegReg r11, rcx
+    x64.andRegImm32 r11, rcx, 7
     x64.movRegImm32 rcx, 64
-    x64.subRegReg rcx, rcx, r8
-    x64.movRegImm r10, 18446744073709551615
-    x64.shrRegCl r10, r10
-    x64.leaRegRegReg r8, r9, r8
-  __il_body#30:
-    x64.leaRegRegImm32 rcx, r8, 7
+    x64.subRegReg rcx, rcx, r10
+    x64.movRegImm rbx, 18446744073709551615
+    x64.shrRegCl rbx, rbx
+    x64.leaRegRegReg r10, r11, r10
+  __il_body#34:
+    x64.leaRegRegImm32 rcx, r10, 7
     x64.shrRegImm8 rcx, rcx, 3
-  __il_cont#27:
-    x64.leaRegRegReg rdi, rax, rdi
-    x64.loadRegBaseDisp.byte r8, [rdi + 0]
-    x64.movRegReg rcx, r9
-    x64.movRegReg r11, r10
-    x64.shlRegCl r11, r10
-    x64.xorRegImm32 r11, r11, -1
-    x64.andRegReg r8, r8, r11
-    x64.movRegReg r11, r13
-    x64.andRegReg r11, r13, r10
-    x64.movRegReg rcx, r9
-    x64.shlRegCl r11, r11
-    x64.orRegReg r8, r8, r11
-    x64.storeBaseDispReg.byte [rdi + 0], r8
+  __il_cont#31:
+    x64.leaRegRegReg r8, rsi, r8
+    x64.loadRegBaseDisp.byte r10, [r8 + 0]
+    x64.movRegReg rcx, r11
+    x64.movRegReg r12, rbx
+    x64.shlRegCl r12, rbx
+    x64.xorRegImm32 r12, r12, -1
+    x64.andRegReg r10, r10, r12
+    x64.movRegReg r12, r9
+    x64.andRegReg r12, r9, rbx
+    x64.movRegReg rcx, r11
+    x64.shlRegCl r12, r12
+    x64.orRegReg r10, r10, r12
+    x64.storeBaseDispReg.byte [r8 + 0], r10
     x64.jmp figstep
   stby:
-    x64.movRegReg rcx, rsi
-    x64.imulRegReg rcx, rsi, rdx
-    x64.leaRegRegReg rdi, rax, rcx
-    x64.movRegImm32 r8, 0
+    x64.movRegReg rcx, rdx
+    x64.imulRegReg rcx, rdx, rdi
+    x64.leaRegRegReg r8, rsi, rcx
+    x64.movRegImm32 r10, 0
   steh:
-    x64.cmpRegReg r8, rdx
+    x64.cmpRegReg r10, rdi
     x64.jcc less, steb
   figstep:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp figh
   steb:
-    x64.imulRegRegImm32 rcx, r8, 8
-    x64.movRegReg r9, r13
-    x64.shrRegCl r9, r13
-    x64.leaRegRegReg r10, rdi, r8
-    x64.storeBaseDispReg.byte [r10 + 0], r9
-    x64.leaRegRegImm32 r8, r8, 1
+    x64.imulRegRegImm32 rcx, r10, 8
+    x64.movRegReg r11, r9
+    x64.shrRegCl r11, r9
+    x64.leaRegRegReg rbx, r8, r10
+    x64.storeBaseDispReg.byte [rbx + 0], r11
+    x64.leaRegRegImm32 r10, r10, 1
     x64.jmp steh
+  flddetach:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, r9
+    x64.callDirect __managed_cow_detach
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot r9, slot3
+    x64.jmp flddone
 }
 ```
 
@@ -1550,145 +1560,143 @@ func @__managed_get {
 func @__managed_fill {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movRegReg x21, x3
-    arm64.cmp x20, 0
+    arm64.cmp x1, 0
     arm64.b.lt badrange
   chkcount:
     arm64.cmp x2, 0
     arm64.b.lt badrange
   chkhigh:
-    arm64.add x22, x20, x2
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x22, x0
+    arm64.add x2, x1, x2
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
+    arm64.cmp x2, x4
     arm64.b.ls classify
   badrange:
     arm64.movImm x0, 0
     arm64.movImm x9, 1
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   classify:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
     arm64.b.eq prepare
   declined:
     arm64.movImm x0, 0
     arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   prepare:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_cow_detach
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 8
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 16]
+    arm64.cmp x4, 0
+    arm64.b.lt flddetach
+  fldbuf:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq flddone
+  fldshared:
+    arm64.sub x4, x4, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne flddetach
+  flddone:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 24]
+    arm64.cmp x0, 8
     arm64.b.ne esbyte
-  fillword:
-    arm64.movRegReg x2, x20
   fiwh:
-    arm64.cmp x2, x22
+    arm64.cmp x1, x2
     arm64.b.ge applied
   fiwb:
-    arm64.mul x3, x2, x1
-    arm64.add x3, x0, x3
-    arm64.storeBaseDispReg.word64 [x3 + 0], x21
-    arm64.add x2, x2, 1
+    arm64.mul x5, x1, x0
+    arm64.add x5, x4, x5
+    arm64.storeBaseDispReg.word64 [x5 + 0], x3
+    arm64.add x1, x1, 1
     arm64.b fiwh
   esbyte:
-    arm64.cmp x1, 1
-    arm64.b.ne fillgen
-  fillbyte:
-    arm64.movRegReg x2, x20
+    arm64.cmp x0, 1
+    arm64.b.ne figh
   fibh:
-    arm64.cmp x2, x22
+    arm64.cmp x1, x2
     arm64.b.ge applied
   fibb:
-    arm64.mul x3, x2, x1
-    arm64.add x3, x0, x3
-    arm64.storeBaseDispReg.byte [x3 + 0], x21
-    arm64.add x2, x2, 1
+    arm64.mul x5, x1, x0
+    arm64.add x5, x4, x5
+    arm64.storeBaseDispReg.byte [x5 + 0], x3
+    arm64.add x1, x1, 1
     arm64.b fibh
-  fillgen:
-    arm64.movRegReg x2, x20
   figh:
-    arm64.cmp x2, x22
+    arm64.cmp x1, x2
     arm64.b.lt figb
   applied:
     arm64.movImm x0, 1
     arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   figb:
-    arm64.cmp x1, 0
+    arm64.cmp x0, 0
     arm64.b.ge stby
-  __il_body#29:
-    arm64.asr x3, x1, 63
+  __il_body#33:
+    arm64.asr x5, x0, 63
     arm64.movImm x16, 18446744073709551615
-    arm64.eor x4, x3, x16
-    arm64.movImm x5, 0
-    arm64.sub x5, x5, x1
-    arm64.lsl x6, x1, 3
-    arm64.and x3, x5, x3
-    arm64.and x4, x6, x4
-    arm64.orr x3, x3, x4
-  __il_cont#28:
-    arm64.mul x4, x2, x3
-    arm64.lsr x5, x4, 3
-    arm64.and x4, x4, 7
-    arm64.movImm x6, 64
-    arm64.sub x6, x6, x3
-    arm64.movImm x7, 18446744073709551615
-    arm64.lsrv x6, x7, x6
-    arm64.add x3, x4, x3
-  __il_body#30:
-    arm64.add x3, x3, 7
-    arm64.lsr x3, x3, 3
-  __il_cont#27:
-    arm64.add x3, x0, x5
-    arm64.loadRegBaseDisp.byte x5, [x3 + 0]
-    arm64.lslv x7, x6, x4
+    arm64.eor x6, x5, x16
+    arm64.movImm x7, 0
+    arm64.sub x7, x7, x0
+    arm64.lsl x8, x0, 3
+    arm64.and x5, x7, x5
+    arm64.and x6, x8, x6
+    arm64.orr x5, x5, x6
+  __il_cont#32:
+    arm64.mul x6, x1, x5
+    arm64.lsr x7, x6, 3
+    arm64.and x6, x6, 7
+    arm64.movImm x8, 64
+    arm64.sub x8, x8, x5
+    arm64.movImm x9, 18446744073709551615
+    arm64.lsrv x8, x9, x8
+    arm64.add x5, x6, x5
+  __il_body#34:
+    arm64.add x5, x5, 7
+    arm64.lsr x5, x5, 3
+  __il_cont#31:
+    arm64.add x5, x4, x7
+    arm64.loadRegBaseDisp.byte x7, [x5 + 0]
+    arm64.lslv x9, x8, x6
     arm64.movImm x16, 18446744073709551615
-    arm64.eor x7, x7, x16
-    arm64.and x5, x5, x7
-    arm64.and x6, x21, x6
-    arm64.lslv x4, x6, x4
-    arm64.orr x4, x5, x4
-    arm64.storeBaseDispReg.byte [x3 + 0], x4
+    arm64.eor x9, x9, x16
+    arm64.and x7, x7, x9
+    arm64.and x8, x3, x8
+    arm64.lslv x6, x8, x6
+    arm64.orr x6, x7, x6
+    arm64.storeBaseDispReg.byte [x5 + 0], x6
     arm64.b figstep
   stby:
-    arm64.mul x3, x2, x1
-    arm64.add x3, x0, x3
-    arm64.movImm x4, 0
+    arm64.mul x5, x1, x0
+    arm64.add x5, x4, x5
+    arm64.movImm x6, 0
   steh:
-    arm64.cmp x4, x1
+    arm64.cmp x6, x0
     arm64.b.lt steb
   figstep:
-    arm64.add x2, x2, 1
+    arm64.add x1, x1, 1
     arm64.b figh
   steb:
-    arm64.lsl x5, x4, 3
-    arm64.lsrv x5, x21, x5
-    arm64.add x6, x3, x4
-    arm64.storeBaseDispReg.byte [x6 + 0], x5
-    arm64.add x4, x4, 1
+    arm64.lsl x7, x6, 3
+    arm64.lsrv x7, x3, x7
+    arm64.add x8, x5, x6
+    arm64.storeBaseDispReg.byte [x8 + 0], x7
+    arm64.add x6, x6, 1
     arm64.b steh
+  flddetach:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.bl __managed_cow_detach
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.b flddone
 }
 ```
 
@@ -2090,144 +2098,142 @@ func @__managed_get {
 func @__managed_fill {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movRegReg x21, x3
-    arm64.cmp x20, 0
+    arm64.cmp x1, 0
     arm64.b.lt badrange
   chkcount:
     arm64.cmp x2, 0
     arm64.b.lt badrange
   chkhigh:
-    arm64.add x22, x20, x2
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x22, x0
+    arm64.add x2, x1, x2
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
+    arm64.cmp x2, x4
     arm64.b.ls classify
   badrange:
     arm64.movImm x0, 0
     arm64.movImm x9, 1
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   classify:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
     arm64.b.eq prepare
   declined:
     arm64.movImm x0, 0
     arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   prepare:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_cow_detach
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 8
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 16]
+    arm64.cmp x4, 0
+    arm64.b.lt flddetach
+  fldbuf:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq flddone
+  fldshared:
+    arm64.sub x4, x4, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne flddetach
+  flddone:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 24]
+    arm64.cmp x0, 8
     arm64.b.ne esbyte
-  fillword:
-    arm64.movRegReg x2, x20
   fiwh:
-    arm64.cmp x2, x22
+    arm64.cmp x1, x2
     arm64.b.ge applied
   fiwb:
-    arm64.mul x3, x2, x1
-    arm64.add x3, x0, x3
-    arm64.storeBaseDispReg.word64 [x3 + 0], x21
-    arm64.add x2, x2, 1
+    arm64.mul x5, x1, x0
+    arm64.add x5, x4, x5
+    arm64.storeBaseDispReg.word64 [x5 + 0], x3
+    arm64.add x1, x1, 1
     arm64.b fiwh
   esbyte:
-    arm64.cmp x1, 1
-    arm64.b.ne fillgen
-  fillbyte:
-    arm64.movRegReg x2, x20
+    arm64.cmp x0, 1
+    arm64.b.ne figh
   fibh:
-    arm64.cmp x2, x22
+    arm64.cmp x1, x2
     arm64.b.ge applied
   fibb:
-    arm64.mul x3, x2, x1
-    arm64.add x3, x0, x3
-    arm64.storeBaseDispReg.byte [x3 + 0], x21
-    arm64.add x2, x2, 1
+    arm64.mul x5, x1, x0
+    arm64.add x5, x4, x5
+    arm64.storeBaseDispReg.byte [x5 + 0], x3
+    arm64.add x1, x1, 1
     arm64.b fibh
-  fillgen:
-    arm64.movRegReg x2, x20
   figh:
-    arm64.cmp x2, x22
+    arm64.cmp x1, x2
     arm64.b.lt figb
   applied:
     arm64.movImm x0, 1
     arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   figb:
-    arm64.cmp x1, 0
+    arm64.cmp x0, 0
     arm64.b.ge stby
-  __il_body#29:
-    arm64.asr x3, x1, 63
+  __il_body#33:
+    arm64.asr x5, x0, 63
     arm64.movImm x16, 18446744073709551615
-    arm64.eor x4, x3, x16
-    arm64.movImm x5, 0
-    arm64.sub x5, x5, x1
-    arm64.lsl x6, x1, 3
-    arm64.and x3, x5, x3
-    arm64.and x4, x6, x4
-    arm64.orr x3, x3, x4
-  __il_cont#28:
-    arm64.mul x4, x2, x3
-    arm64.lsr x5, x4, 3
-    arm64.and x4, x4, 7
-    arm64.movImm x6, 64
-    arm64.sub x6, x6, x3
-    arm64.movImm x7, 18446744073709551615
-    arm64.lsrv x6, x7, x6
-    arm64.add x3, x4, x3
-  __il_body#30:
-    arm64.add x3, x3, 7
-    arm64.lsr x3, x3, 3
-  __il_cont#27:
-    arm64.add x3, x0, x5
-    arm64.loadRegBaseDisp.byte x5, [x3 + 0]
-    arm64.lslv x7, x6, x4
+    arm64.eor x6, x5, x16
+    arm64.movImm x7, 0
+    arm64.sub x7, x7, x0
+    arm64.lsl x8, x0, 3
+    arm64.and x5, x7, x5
+    arm64.and x6, x8, x6
+    arm64.orr x5, x5, x6
+  __il_cont#32:
+    arm64.mul x6, x1, x5
+    arm64.lsr x7, x6, 3
+    arm64.and x6, x6, 7
+    arm64.movImm x8, 64
+    arm64.sub x8, x8, x5
+    arm64.movImm x9, 18446744073709551615
+    arm64.lsrv x8, x9, x8
+    arm64.add x5, x6, x5
+  __il_body#34:
+    arm64.add x5, x5, 7
+    arm64.lsr x5, x5, 3
+  __il_cont#31:
+    arm64.add x5, x4, x7
+    arm64.loadRegBaseDisp.byte x7, [x5 + 0]
+    arm64.lslv x9, x8, x6
     arm64.movImm x16, 18446744073709551615
-    arm64.eor x7, x7, x16
-    arm64.and x5, x5, x7
-    arm64.and x6, x21, x6
-    arm64.lslv x4, x6, x4
-    arm64.orr x4, x5, x4
-    arm64.storeBaseDispReg.byte [x3 + 0], x4
+    arm64.eor x9, x9, x16
+    arm64.and x7, x7, x9
+    arm64.and x8, x3, x8
+    arm64.lslv x6, x8, x6
+    arm64.orr x6, x7, x6
+    arm64.storeBaseDispReg.byte [x5 + 0], x6
     arm64.b figstep
   stby:
-    arm64.mul x3, x2, x1
-    arm64.add x3, x0, x3
-    arm64.movImm x4, 0
+    arm64.mul x5, x1, x0
+    arm64.add x5, x4, x5
+    arm64.movImm x6, 0
   steh:
-    arm64.cmp x4, x1
+    arm64.cmp x6, x0
     arm64.b.lt steb
   figstep:
-    arm64.add x2, x2, 1
+    arm64.add x1, x1, 1
     arm64.b figh
   steb:
-    arm64.lsl x5, x4, 3
-    arm64.lsrv x5, x21, x5
-    arm64.add x6, x3, x4
-    arm64.storeBaseDispReg.byte [x6 + 0], x5
-    arm64.add x4, x4, 1
+    arm64.lsl x7, x6, 3
+    arm64.lsrv x7, x3, x7
+    arm64.add x8, x5, x6
+    arm64.storeBaseDispReg.byte [x8 + 0], x7
+    arm64.add x6, x6, 1
     arm64.b steh
+  flddetach:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.bl __managed_cow_detach
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.b flddone
 }
 ```

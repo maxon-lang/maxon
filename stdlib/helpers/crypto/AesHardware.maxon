@@ -1,10 +1,10 @@
 #if arch(x64) or arch(arm64)
-	module let aesHardwareBlockBytes = 16
+	let aesHardwareBlockBytes = 16
 	let aesHardwareKeyWordShift = 2
 	let aesHardwareRoundsOverKeyWords = 6
 	let aesHardwareScheduleRoundBytes = 32
 	module let aesHardwareFirstByte = 0
-	module let aesHardwareBlockShift = 4
+	let aesHardwareBlockShift = 4
 	let aesHardwareNonceBytes = 12
 	let aesHardwareCounterBytes = 4
 	let aesHardwareCounterLimit = 4294967296
@@ -14,7 +14,7 @@
 
 	// `__Builtins.aesExpandKey` ends the program unless the array holds exactly the encryption keys and
 	// the decryption keys of a 16-, 24- or 32-byte `key`.
-	module function aesHardwareSchedule(key ByteArray) returns ByteArray
+	export function aesHardwareSchedule(key ByteArray) returns ByteArray
 		let rounds = (key.count() shr aesHardwareKeyWordShift) + aesHardwareRoundsOverKeyWords
 		var schedule = ByteArray.create()
 		schedule.resize((rounds + 1) * aesHardwareScheduleRoundBytes)
@@ -47,7 +47,7 @@
 		return opened
 	end 'aesHardwareDecrypt'
 
-	module function aesHardwareAppendCounterBlock(block ByteArray, nonce ByteArray, firstCounter AesCounter, streamBlocks Count) throws AesKeyStreamError
+	function aesHardwareCounterBlock(nonce ByteArray, firstCounter AesCounter, streamBlocks Count) returns ByteArray throws AesKeyStreamError
 		if nonce.count() != aesHardwareNonceBytes 'nonceLength'
 			throw AesKeyStreamError.invalidNonceLength
 		end 'nonceLength'
@@ -59,15 +59,11 @@
 			throw AesKeyStreamError.counterOverflow
 		end 'overflow'
 
+		var block = ByteArray.create()
+		block.reserve(aesHardwareBlockBytes)
 		block.append(nonce)
 		let counterWord = first as AesWord
 		__Builtins.appendBigEndian(block, counterWord as OrderedWord, aesHardwareCounterBytes)
-	end 'aesHardwareAppendCounterBlock'
-
-	function aesHardwareCounterBlock(nonce ByteArray, firstCounter AesCounter, streamBlocks Count) returns ByteArray throws AesKeyStreamError
-		var block = ByteArray.create()
-		block.reserve(aesHardwareBlockBytes)
-		try aesHardwareAppendCounterBlock(block, nonce: nonce, firstCounter: firstCounter, streamBlocks: streamBlocks)
 
 		return block
 	end 'aesHardwareCounterBlock'
@@ -98,7 +94,7 @@
 		output.truncate(start + data.count())
 	end 'aesHardwareXorAppend'
 
-	module function aesHardwareXorKeyStreamAppend(output ByteArray, schedule ByteArray, nonce ByteArray, counter AesCounter, data ByteArray) throws AesKeyStreamError
+	function aesHardwareXorKeyStreamAppend(output ByteArray, schedule ByteArray, nonce ByteArray, counter AesCounter, data ByteArray) throws AesKeyStreamError
 		let blocks = (data.count() + aesHardwareBlockBytes - 1) shr aesHardwareBlockShift
 		let counterBlock = try aesHardwareCounterBlock(nonce, firstCounter: counter, streamBlocks: blocks)
 		aesHardwareXorAppend(output, schedule: schedule, counterBlock: counterBlock, firstBlock: 0, data: data, blocks: blocks)

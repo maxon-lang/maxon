@@ -1,15 +1,16 @@
 #if arch(x64) or arch(arm64)
-	// The table size, message size and mask offset restate `AesGcmTableBytes`, the message block size
-	// and `AesGcmMaskOffset` in `CryptoRuntime.maxon`: its guards end the program on another size, and
-	// another mask offset is a silent wrong tag.
+	// The table size, message size, counter offset and mask offset restate `AesGcmTableBytes`, the
+	// message block size, `AesGcmCounterOffset` and `AesGcmMaskOffset` in `CryptoRuntime.maxon`: its
+	// guards end the program on another size, and another offset is a silent wrong tag.
 	let aesGcmHardwareTableBytes = 256
+	let aesGcmHardwareAccumulatorBytes = 16
 	let aesGcmHardwareMessageBytes = 48
 	let aesGcmHardwareTagBytes = 16
+	let aesGcmHardwareCounterAt = 16
 	let aesGcmHardwareMaskAt = 32
+	let aesGcmHardwareCounterWordBytes = 4
 	let aesGcmHardwareScheduleHalfShift = 1
-	let aesGcmHardwareTagMaskCounter = 1
-	let aesGcmHardwareFirstDataCounter = 2
-	let aesGcmHardwareNoStreamBlocks = 0
+	let aesGcmHardwareTagMaskCounter = 1 as OrderedWord
 
 	export function aesGcmHardwareKeys(schedule ByteArray) returns ByteArray
 		var keys = ByteArray.create()
@@ -19,67 +20,34 @@
 		return keys
 	end 'aesGcmHardwareKeys'
 
-	function aesGcmHardwareTail(data ByteArray, from Count) returns ByteArray
-		if from == 0 'whole'
-			return data
-		end 'whole'
-
-		return try data.slice(from, endIndex: data.count()) otherwise panic("aesgcm: a tail starts inside the array it was cut from")
-	end 'aesGcmHardwareTail'
-
-	function aesGcmHardwareHashTail(message ByteArray, keys ByteArray, tail ByteArray)
-		var block = ByteArray.create()
-		block.reserve(aesHardwareBlockBytes)
-		block.append(tail)
-		block.growFilled(aesHardwareBlockBytes, value: 0)
-		__Builtins.aesGcmHash(message, keys, block, aesHardwareFirstByte, aesHardwareBlockBytes)
-	end 'aesGcmHardwareHashTail'
-
-	function aesGcmHardwareHash(message ByteArray, keys ByteArray, data ByteArray)
-		let whole = (data.count() shr aesHardwareBlockShift) shl aesHardwareBlockShift
-
-		if whole > 0 'blocks'
-			__Builtins.aesGcmHash(message, keys, data, aesHardwareFirstByte, whole)
-		end 'blocks'
-
-		if data.count() > whole 'partial'
-			aesGcmHardwareHashTail(message, keys: keys, tail: aesGcmHardwareTail(data, from: whole))
-		end 'partial'
-	end 'aesGcmHardwareHash'
-
+	// Each of `aesGcmHash`, `aesGcmEncrypt` and `aesGcmDecrypt` takes a whole message part in one call:
+	// a call that ends in a partial block pads it and counts it as a whole block, so a later call on the
+	// same message block would continue from the wrong position. `specs/aes-hardware.md` owns the rule.
 	function aesGcmHardwareStart(schedule ByteArray, keys ByteArray, nonce ByteArray, additionalData ByteArray) returns ByteArray
 		var message = ByteArray.create()
 		message.reserve(aesGcmHardwareMessageBytes)
-		message.growFilled(aesHardwareBlockBytes, value: 0)
-		try aesHardwareAppendCounterBlock(message, nonce: nonce, firstCounter: aesGcmHardwareTagMaskCounter, streamBlocks: aesGcmHardwareNoStreamBlocks) otherwise panic("aesgcm: the nonce was checked before the hardware path began")
-		message.growFilled(aesGcmHardwareMessageBytes, value: 0)
-		__Builtins.aesEncryptBlock(message, aesGcmHardwareMaskAt, schedule, message, aesHardwareBlockBytes)
-		aesGcmHardwareHash(message, keys: keys, data: additionalData)
+		message.resize(aesGcmHardwareAccumulatorBytes)
+		message.append(nonce)
+		__Builtins.appendBigEndian(message, aesGcmHardwareTagMaskCounter, aesGcmHardwareCounterWordBytes)
+		message.resize(aesGcmHardwareMessageBytes)
+		__Builtins.aesEncryptBlock(message, aesGcmHardwareMaskAt, schedule, message, aesGcmHardwareCounterAt)
+
+		if additionalData.count() > 0 'hasAdditionalData'
+			__Builtins.aesGcmHash(message, keys, additionalData, aesHardwareFirstByte, additionalData.count())
+		end 'hasAdditionalData'
 
 		return message
 	end 'aesGcmHardwareStart'
 
-	function aesGcmHardwareCryptTail(output ByteArray, schedule ByteArray, nonce ByteArray, whole Count, tail ByteArray)
-		let firstBlock = (aesGcmHardwareFirstDataCounter + (whole shr aesHardwareBlockShift)) as AesCounter
-		output.truncate(whole)
-		try aesHardwareXorKeyStreamAppend(output, schedule: schedule, nonce: nonce, counter: firstBlock, data: tail) otherwise panic("aesgcm: the data was checked against the counter range before the hardware path began")
-	end 'aesGcmHardwareCryptTail'
-
 	export function aesGcmHardwareSeal(schedule ByteArray, keys ByteArray, nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray
 		var message = aesGcmHardwareStart(schedule, keys: keys, nonce: nonce, additionalData: additionalData)
-		let whole = (plaintext.count() shr aesHardwareBlockShift) shl aesHardwareBlockShift
 		var sealed = ByteArray.create()
 		sealed.reserve(plaintext.count() + aesGcmHardwareTagBytes)
 		sealed.append(plaintext)
 
-		if whole > 0 'blocks'
-			__Builtins.aesGcmEncrypt(sealed, aesHardwareFirstByte, keys, message, whole)
-		end 'blocks'
-
-		if plaintext.count() > whole 'partial'
-			aesGcmHardwareCryptTail(sealed, schedule: schedule, nonce: nonce, whole: whole, tail: aesGcmHardwareTail(plaintext, from: whole))
-			aesGcmHardwareHashTail(message, keys: keys, tail: aesGcmHardwareTail(sealed, from: whole))
-		end 'partial'
+		if plaintext.count() > 0 'hasPlaintext'
+			__Builtins.aesGcmEncrypt(sealed, aesHardwareFirstByte, keys, message, plaintext.count())
+		end 'hasPlaintext'
 
 		__Builtins.aesGcmFinish(message, keys, additionalData.count(), plaintext.count())
 		message.truncate(aesGcmHardwareTagBytes)
@@ -90,19 +58,12 @@
 
 	export function aesGcmHardwareOpen(schedule ByteArray, keys ByteArray, nonce ByteArray, ciphertext ByteArray, additionalData ByteArray, plaintext ByteArray) returns ByteArray
 		var message = aesGcmHardwareStart(schedule, keys: keys, nonce: nonce, additionalData: additionalData)
-		let whole = (ciphertext.count() shr aesHardwareBlockShift) shl aesHardwareBlockShift
 		plaintext.reserve(ciphertext.count())
 		plaintext.append(ciphertext)
 
-		if whole > 0 'blocks'
-			__Builtins.aesGcmDecrypt(plaintext, aesHardwareFirstByte, keys, message, whole)
-		end 'blocks'
-
-		if ciphertext.count() > whole 'partial'
-			let tail = aesGcmHardwareTail(ciphertext, from: whole)
-			aesGcmHardwareHashTail(message, keys: keys, tail: tail)
-			aesGcmHardwareCryptTail(plaintext, schedule: schedule, nonce: nonce, whole: whole, tail: tail)
-		end 'partial'
+		if ciphertext.count() > 0 'hasCiphertext'
+			__Builtins.aesGcmDecrypt(plaintext, aesHardwareFirstByte, keys, message, ciphertext.count())
+		end 'hasCiphertext'
 
 		__Builtins.aesGcmFinish(message, keys, additionalData.count(), ciphertext.count())
 		message.truncate(aesGcmHardwareTagBytes)

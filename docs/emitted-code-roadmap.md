@@ -1800,7 +1800,7 @@ callee it runs a forward dataflow, keyed by managed record VALUE, over the four 
 predicate; a constant-index bound's proceed arm establishes the floor; the success edge of
 `__managed_set` establishes owned, allocated and unshared — a new runtime-stated fact,
 `managedCalleeSuccessProvesShape`, beside `managedCalleeSucceedsOnlyInBounds`: `buildManagedSet`
-checks its bound first and its error path writes nothing, and `emitCowDetach` returns without a store
+checks its bound first and its error path writes nothing, and `emitCowDetachWhenNeeded` stores nothing
 exactly when the three hold and otherwise makes the record owned and unshared — never the destructor
 predicate, which a managed element's `set` succeeds through; a bounded accessor's success at a `const K`
 establishes the floor `K`. Facts survive `writesNothing` and `detachesUnlessOwnedUnshared` callees and

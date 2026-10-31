@@ -73,7 +73,6 @@ let AesGcmKeyBlockMaxBytes = AesGcmTableBytes + (AesLongRounds + 1) * AesBlockBy
 let AesGcmKeyBlockStepMask = 2 * AesBlockBytes - 1
 let AesGcmKeyBlockStepResidue = AesBlockBytes
 export let AesBlockShift = 4
-let AesBlockMask = AesBlockBytes - 1
 
 // The counter is the last word of the counter block, big-endian, and wraps modulo 2^32 inside it
 // without carrying into the nonce (GCM's inc32). The stdlib refuses a stream that would wrap before it
@@ -238,9 +237,9 @@ export function hardwareAesChunksAreEmitted(usage RuntimeUsage, target Target) r
 	return usage.usesHardwareAes and (target.cpu == CpuArch.x64 or target.cpu == CpuArch.arm64)
 end 'hardwareAesChunksAreEmitted'
 
-// The `mrt_aes_*` chunks check nothing: they read and write whole blocks and round keys through the
-// pointers they are given. These entries are the only bounds check, so every `cryptoRoutine` must be
-// reached through one.
+// The `mrt_aes_*` chunks check nothing: they read and write blocks, the bytes of a partial last block
+// and round keys through the pointers they are given. These entries are the only bounds check, so every
+// `cryptoRoutine` must be reached through one.
 export function installCryptoRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesHardwareAes 'notAsked'
 		return
@@ -288,19 +287,15 @@ type AesSizeLimits
 	end 'emitGuards'
 end 'AesSizeLimits'
 
-function emitWholeBlockSpanGuards(module StdModule, func IrFunction, entry IrBlock, next IrBlock, refused IrBlock, arr ValueId, at ValueId, length ValueId, prefix String, ids ValueMinter)
-	var aligned = module.addBlock(func, label: "{prefix}aligned".toByteArray(), heat: BlockHeat.normal)
+function emitLengthSpanGuards(module StdModule, func IrFunction, entry IrBlock, next IrBlock, refused IrBlock, arr ValueId, at ValueId, length ValueId, prefix String, ids ValueMinter)
 	var inside = module.addBlock(func, label: "{prefix}inside".toByteArray(), heat: BlockHeat.normal)
 
-	let partial = emitBin(module, block: entry, a: length, b: emitConst(module, block: entry, value: AesBlockMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	emitBranchOnCompare(module, block: entry, value: partial, pred: StdCmpPred.ne, against: 0, whenTrue: refused, whenFalse: aligned, ids: ids)
-
-	let bytes = emitLoadField(module, block: aligned, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	emitBranchOnCompareValues(module, block: aligned, a: at, pred: StdCmpPred.gt, b: bytes, whenTrue: refused, whenFalse: inside, ids: ids, operandType: StdType.u64)
+	let bytes = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	emitBranchOnCompareValues(module, block: entry, a: at, pred: StdCmpPred.gt, b: bytes, whenTrue: refused, whenFalse: inside, ids: ids, operandType: StdType.u64)
 
 	let remaining = emitBin(module, block: inside, a: bytes, b: at, opcode: StdBinOpcode.sub, ids: ids)
 	emitBranchOnCompareValues(module, block: inside, a: remaining, pred: StdCmpPred.lt, b: length, whenTrue: refused, whenFalse: next, ids: ids, operandType: StdType.u64)
-end 'emitWholeBlockSpanGuards'
+end 'emitLengthSpanGuards'
 
 function emitGcmBlockGuards(module StdModule, func IrFunction, entry IrBlock, keyBlock ValueId, message ValueId, refused IrBlock, next IrBlock, ids ValueMinter) returns ValueId
 	var messageCheck = module.addBlock(func, label: b"gkmessage", heat: BlockHeat.normal)
@@ -354,7 +349,7 @@ function buildAesExpandKey(module StdModule)
 	let expected = emitBin(module, block: sized, a: roundKeys, b: emitConst(module, block: sized, value: AesScheduleRoundShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
 	emitBranchOnCompareValues(module, block: sized, a: scheduleBytes, pred: StdCmpPred.ne, b: expected, whenTrue: bad, whenFalse: expand, ids: ids)
 
-	emitCowDetach(module, block: expand, arr: schedule, ids: ids)
+	expand = emitCowDetachWhenNeeded(module, func: func, block: expand, arr: schedule, prefix: "ak", ids: ids)
 	let encryptionKeys = emitLoadField(module, block: expand, record: schedule, offset: ManagedRecordBufferOffset, ids: ids)
 	let keyData = emitLoadField(module, block: expand, record: key, offset: ManagedRecordBufferOffset, ids: ids)
 	let halfBytes = emitBin(module, block: expand, a: scheduleBytes, b: emitConst(module, block: expand, value: AesScheduleHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
@@ -395,7 +390,7 @@ function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRo
 
 	// The detach comes first so the data pointers below are read after it: an output that shares its
 	// buffer would otherwise be written in place, and an input that is the output sees the new buffer.
-	emitCowDetach(module, block: crypt, arr: output, ids: ids)
+	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: output, prefix: "ab", ids: ids)
 	let rounds = emitRoundCount(module, block: crypt, roundKeyBytes: scheduleBytes, shift: AesScheduleRoundShift, ids: ids)
 	let scheduleData = emitLoadField(module, block: crypt, record: schedule, offset: ManagedRecordBufferOffset, ids: ids)
 	let halfBytes = emitBin(module, block: crypt, a: scheduleBytes, b: emitConst(module, block: crypt, value: AesScheduleHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
@@ -464,7 +459,7 @@ function buildAesCtrArm(module StdModule, func IrFunction, arm IrBlock, group Ae
 	var crypt = module.addBlock(func, label: "cxcrypt{group}".toByteArray(), heat: BlockHeat.normal)
 	emitSpanGuards(module, entry: arm, inside: inside, next: crypt, refused: refused, arr: buffer, at: bufferAt, byteCount: (group as FullRangeInt) * AesBlockBytes, ids: ids)
 
-	emitCowDetach(module, block: crypt, arr: buffer, ids: ids)
+	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: buffer, prefix: "cx{group}", ids: ids)
 	let rounds = emitRoundCount(module, block: crypt, roundKeyBytes: scheduleBytes, shift: AesScheduleRoundShift, ids: ids)
 	let shiftedOffset = emitBin(module, block: crypt, a: counterOffset, b: emitConst(module, block: crypt, value: AesControlFieldShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
 	let control = emitBin(module, block: crypt, a: shiftedOffset, b: rounds, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -498,7 +493,7 @@ function buildAesGcmInit(module StdModule)
 	let expected = emitBin(module, block: keyBlockCheck, a: roundKeyBytes, b: emitConst(module, block: keyBlockCheck, value: AesGcmTableBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	emitBranchOnCompareValues(module, block: keyBlockCheck, a: keyBlockBytes, pred: StdCmpPred.ne, b: expected, whenTrue: bad, whenFalse: crypt, ids: ids)
 
-	emitCowDetach(module, block: crypt, arr: keyBlock, ids: ids)
+	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: keyBlock, prefix: "gi", ids: ids)
 	let rounds = emitRoundCount(module, block: crypt, roundKeyBytes: scheduleBytes, shift: AesScheduleRoundShift, ids: ids)
 	let keyData = emitLoadField(module, block: crypt, record: keyBlock, offset: ManagedRecordBufferOffset, ids: ids)
 	let scheduleData = emitLoadField(module, block: crypt, record: schedule, offset: ManagedRecordBufferOffset, ids: ids)
@@ -529,9 +524,9 @@ function buildAesGcmHash(module StdModule)
 	let length = 4
 
 	_ = emitGcmBlockGuards(module, func: func, entry: entry, keyBlock: keyBlock, message: message, refused: bad, next: spanCheck, ids: ids)
-	emitWholeBlockSpanGuards(module, func: func, entry: spanCheck, next: crypt, refused: bad, arr: data, at: dataAt, length: length, prefix: "gh", ids: ids)
+	emitLengthSpanGuards(module, func: func, entry: spanCheck, next: crypt, refused: bad, arr: data, at: dataAt, length: length, prefix: "gh", ids: ids)
 
-	emitCowDetach(module, block: crypt, arr: message, ids: ids)
+	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: message, prefix: "gh", ids: ids)
 	let keyData = emitLoadField(module, block: crypt, record: keyBlock, offset: ManagedRecordBufferOffset, ids: ids)
 	let messageData = emitLoadField(module, block: crypt, record: message, offset: ManagedRecordBufferOffset, ids: ids)
 	let dataBase = emitLoadField(module, block: crypt, record: data, offset: ManagedRecordBufferOffset, ids: ids)
@@ -562,10 +557,10 @@ function buildAesGcmCrypt(module StdModule, name ByteArray, routine CryptoRoutin
 	let length = 4
 
 	let keyBlockBytes = emitGcmBlockGuards(module, func: func, entry: entry, keyBlock: keyBlock, message: message, refused: bad, next: spanCheck, ids: ids)
-	emitWholeBlockSpanGuards(module, func: func, entry: spanCheck, next: crypt, refused: bad, arr: buffer, at: bufferAt, length: length, prefix: "gc", ids: ids)
+	emitLengthSpanGuards(module, func: func, entry: spanCheck, next: crypt, refused: bad, arr: buffer, at: bufferAt, length: length, prefix: "gc", ids: ids)
 
-	emitCowDetach(module, block: crypt, arr: buffer, ids: ids)
-	emitCowDetach(module, block: crypt, arr: message, ids: ids)
+	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: buffer, prefix: "gb", ids: ids)
+	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: message, prefix: "gm", ids: ids)
 	let rounds = emitGcmRounds(module, block: crypt, keyBlockBytes: keyBlockBytes, ids: ids)
 	let shiftedLength = emitBin(module, block: crypt, a: length, b: emitConst(module, block: crypt, value: AesControlFieldShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
 	let control = emitBin(module, block: crypt, a: shiftedLength, b: rounds, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -598,7 +593,7 @@ function buildAesGcmFinish(module StdModule)
 
 	_ = emitGcmBlockGuards(module, func: func, entry: entry, keyBlock: keyBlock, message: message, refused: bad, next: crypt, ids: ids)
 
-	emitCowDetach(module, block: crypt, arr: message, ids: ids)
+	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: message, prefix: "gf", ids: ids)
 	let keyData = emitLoadField(module, block: crypt, record: keyBlock, offset: ManagedRecordBufferOffset, ids: ids)
 	let messageData = emitLoadField(module, block: crypt, record: message, offset: ManagedRecordBufferOffset, ids: ids)
 	let answer = ids.mint()

@@ -672,15 +672,19 @@ function aesCryptBatch(planes AesPlanes, source ByteArray, blocks AesBlockSlots,
 	aesStoreBatch(planes, output: output, blocks: blocks)
 end 'aesCryptBatch'
 
+export function aesRequireKeyLength(key ByteArray) throws AesError
+	if key.count() != aesShortKeyBytes and key.count() != aesMidKeyBytes and key.count() != aesLongKeyBytes 'keyLength'
+		throw AesError.invalidKeyLength
+	end 'keyLength'
+end 'aesRequireKeyLength'
+
 export type AesBitsliced
 	// Not zeroed when the `AesBitsliced` is dropped: there is no destructor hook to do it.
 	var roundKeys as AesWords
 	var rounds as AesRoundCount
 
 	export static function create(key ByteArray) returns AesBitsliced throws AesError
-		if key.count() != aesShortKeyBytes and key.count() != aesMidKeyBytes and key.count() != aesLongKeyBytes 'keyLength'
-			throw AesError.invalidKeyLength
-		end 'keyLength'
+		try aesRequireKeyLength(key)
 
 		let rounds = ((key.count() shr aesWordShift) + aesRoundsOverKeyWords) as AesRoundCount
 

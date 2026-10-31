@@ -120,7 +120,7 @@ export let Arm64OpUdiv = 0x9AC00800
 export let Arm64OpAnd = 0x8A000000
 export let Arm64OpOrr = 0xAA000000
 export let Arm64OpEor = 0xCA000000
-let Arm64OpLslv = 0x9AC02000
+export let Arm64OpLslv = 0x9AC02000
 let Arm64OpAsrv = 0x9AC02800
 let Arm64OpLsrv = 0x9AC02400
 let Arm64OpRorv = 0x9AC02C00
@@ -287,7 +287,7 @@ let Arm64ImmShiftHiBit = 0x400000
 let Arm64ShiftedImm12Max = Arm64ImmMask shl Arm64Imm12FieldBits
 
 // The bitmask-immediate logical ops (AND/ORR/EOR #bimm). N:immr:imms occupy bits 22:10.
-let Arm64OpAndImm = 0x92000000
+export let Arm64OpAndImm = 0x92000000
 let Arm64OpOrrImm = 0xB2000000
 let Arm64OpEorImm = 0xD2000000
 let Arm64LogicalNShift = 22
@@ -425,8 +425,8 @@ let Arm64OpLdrD = 0xFD400000
 // file's declarations are otherwise file-private.
 export let Arm64OpStrB = 0x39000000
 export let Arm64OpLdrB = 0x39400000
-let Arm64OpStrH = 0x79000000
-let Arm64OpLdrH = 0x79400000
+export let Arm64OpStrH = 0x79000000
+export let Arm64OpLdrH = 0x79400000
 let Arm64LoadStoreImm12Shift = 10
 let Arm64LoadStoreImm12Mask = 0xFFF
 
@@ -848,7 +848,7 @@ end 'fullMaskOfSize'
 
 // Emit a logical bitmask-immediate op `op Rd, Rn, #imm`. `value` is the immediate two's-complement
 // low bits; a non-encodable value panics (ISEL must materialise it — see `arm64EncodeLogicalImm`).
-function arm64EmitLogicalImm(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, value MachineWord)
+export function arm64EmitLogicalImm(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, value MachineWord)
 	match arm64EncodeLogicalImm(value) 'enc'
 		encodable(n, immr, imms) then emitArm64Insn(code, insn: opcode or (n shl Arm64LogicalNShift) or (immr shl Arm64LogicalImmrShift) or (imms shl Arm64LogicalImmsShift) or (rn shl Arm64RnShift) or rd)
 		notEncodable then panic("arm64 emitter: logical immediate {value} is not an encodable AArch64 bitmask — ISel must materialise a non-bitmask logical immediate into a register and use the register form")

@@ -19,14 +19,14 @@ enum XmmTransfer
 	store
 end 'XmmTransfer'
 
-function emitXmmTransfer(asm X64RuntimeAsm, transfer XmmTransfer, xmm X64Register, base X64Register, disp Imm32)
+function emitXmmTransfer(asm X64RuntimeAsm, transfer XmmTransfer, xmm X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex)
 	let opcode = match transfer 'transfer'
 		load gives OpcodeMovdquLoad
 		loadLowHalf gives OpcodeMovqXmmLoad
 		store gives OpcodeMovdquStore
 	end 'transfer'
 
-	encodeModRmBaseDisp(asm.code, twoByteEscape: true, opcode: opcode, regField: xmm, base: base, disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarSingle)
+	encodeModRmBaseDisp(asm.code, twoByteEscape: true, opcode: opcode, regField: xmm, base: base, disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarSingle, index: index)
 end 'emitXmmTransfer'
 
 function emitXmmPxor(asm X64RuntimeAsm, dest X64Register, src X64Register)
@@ -332,9 +332,10 @@ export function buildAesExpandKeyChunk() returns FunctionCodeChunk
 	return asm.finishFunction(AesExpandKeyChunkName)
 end 'buildAesExpandKeyChunk'
 
-// The Galois-mode chunks take four arguments in rcx, rdx, r8 and r9 and use all sixteen xmm registers,
-// so each saves xmm6 to xmm15, which are callee-saved in the custom ABI. rsi and rdi are caller-saved
-// in it (`callDirect`'s clobber mask), so the counter temporaries may live there.
+// The Galois-mode chunks take four arguments in rcx, rdx, r8 and r9. Their one-block and partial-block
+// paths run on xmm0 to xmm5 and need no save; the eight-block paths use all sixteen xmm registers and save
+// xmm6 to xmm15, which are callee-saved in the custom ABI, around that section only. rsi and rdi are
+// caller-saved in it (`callDirect`'s clobber mask), so the counter temporaries may live there.
 let GcmAcc0 = X64Register.xmm8
 let GcmAcc1 = X64Register.xmm9
 let GcmAccM = X64Register.xmm10
@@ -344,6 +345,11 @@ let GcmT2 = X64Register.xmm13
 let GcmPoly = X64Register.xmm14
 let GcmBswap = X64Register.xmm15
 let GcmFirstBlock = X64Register.xmm0
+let GcmLowAcc0 = X64Register.xmm1
+let GcmLowAcc1 = X64Register.xmm2
+let GcmLowAccM = X64Register.xmm3
+let GcmLowT0 = X64Register.xmm4
+let GcmLowT1 = X64Register.xmm5
 let GcmTable = X64Register.rdx
 let GcmMessage = X64Register.r8
 let GcmCounter = X64Register.rax
@@ -357,15 +363,20 @@ let GcmControl = X64Register.rcx
 let GcmSavedXmmFirst = 6
 let GcmSavedXmmCount = 10
 let GcmSaveSlots = 20
-let GcmEncryptAreaSlots = 32
-let GcmDecryptAreaSlots = 16
+let GcmHashAreaSlots = 2
+let GcmEncryptAreaSlots = 34
+let GcmDecryptAreaSlots = 32
+let GcmEncryptCountersOffset = 128
+let GcmEncryptTailOffset = 256
+let GcmDecryptTailOffset = 128
+let GcmDecryptScratchOffset = 144
 let GcmOctetBlocks = 8
 let GcmOctetBytes = 128
-let GcmEncryptCountersOffset = 128
 let GcmHashSubkeyEntry = 14
 let GcmKaratsubaEntry = 15
 let GcmPowerCount = 7
 let GcmPowerStride = 32
+let GcmPowerTableBytes = 256
 let GcmClmulLow = 0x00
 let GcmClmulHigh = 0x11
 let GcmClmulReduce = 0x01
@@ -377,13 +388,41 @@ let GcmHalfBlockBytes = 8
 let GcmDwordBytes = 4
 let GcmCounterWordOffset = AesBlockBytes - AesCtrCounterWordBytes
 let GcmLastLane = 1
-// Eight counters are prepared ahead, so after the last octet the counter register is this far past
-// the slot 0 counter the single-block loop starts from.
 let GcmAddedCounters = 7
 let GcmCountdownStep = 1
 let GcmCounterStep = 1
 let GcmDoubleShiftBits = 1
 let GcmScheduleBlocksOverRounds = 1
+let GcmConstantsBswapAt = 0
+let GcmConstantsPolyAt = 16
+let GcmConstantsMaskAnchor = 48
+let GcmPartialBlockMax = AesBlockBytes - 1
+
+enum GcmCopyWidth
+	qword
+	dword
+	word
+	byte
+end 'GcmCopyWidth'
+
+type GcmRegs
+	export let acc0 as X64Register
+	export let acc1 as X64Register
+	export let accM as X64Register
+	export let t0 as X64Register
+	export let scratch as X64Register
+	export let poly as X64Register
+	export let constants as X64Register
+	export let resident as bool
+
+	static function high() returns GcmRegs
+		return Self{acc0: GcmAcc0, acc1: GcmAcc1, accM: GcmAccM, t0: GcmT0, scratch: GcmBswap, poly: GcmPoly, constants: GcmControl, resident: true}
+	end 'high'
+
+	static function low(constants X64Register) returns GcmRegs
+		return Self{acc0: GcmLowAcc0, acc1: GcmLowAcc1, accM: GcmLowAccM, t0: GcmLowT0, scratch: GcmLowT1, poly: GcmLowT1, constants: constants, resident: false}
+	end 'low'
+end 'GcmRegs'
 
 function gcmByteSwapMask() returns ByteArray
 	var mask = ByteArray.create()
@@ -408,6 +447,30 @@ function gcmPolynomial() returns ByteArray
 	return polynomial
 end 'gcmPolynomial'
 
+function gcmConstants() returns ByteArray
+	var constants = gcmByteSwapMask()
+	constants.append(gcmPolynomial())
+
+	for _ in 0 upto AesBlockBytes 'eachKept'
+		constants.push(0xFF)
+	end 'eachKept'
+
+	for _ in 0 upto AesBlockBytes 'eachDropped'
+		constants.push(0)
+	end 'eachDropped'
+
+	return constants
+end 'gcmConstants'
+
+function gcmCopyWidthBytes(width GcmCopyWidth) returns FullRangeInt
+	return match width 'width'
+		qword gives 8
+		dword gives 4
+		word gives 2
+		byte gives 1
+	end 'width'
+end 'gcmCopyWidthBytes'
+
 function gcmSaveDisp(asm X64RuntimeAsm, index FullRangeInt) returns Imm32
 	return ((asm.slotDisp(GcmSaveSlots - 1) as FullRangeInt) + index * AesBlockBytes) as Imm32
 end 'gcmSaveDisp'
@@ -425,70 +488,154 @@ function gcmKeyDisp(round FullRangeInt) returns Imm32
 end 'gcmKeyDisp'
 
 function beginGcmFrame(areaSlots StackSize) returns X64RuntimeAsm
-	var asm = X64RuntimeAsm.beginFunction(GcmSaveSlots + areaSlots)
-
-	for index in 0 upto GcmSavedXmmCount 'eachSaved'
-		emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: xmmState(GcmSavedXmmFirst + index), base: X64Register.rbp, disp: gcmSaveDisp(asm, index: index))
-	end 'eachSaved'
-
-	return asm
+	return X64RuntimeAsm.beginFunction(GcmSaveSlots + areaSlots)
 end 'beginGcmFrame'
 
 function finishGcmFrame(asm X64RuntimeAsm, name ByteArray) returns FunctionCodeChunk
-	for index in 0 upto GcmSavedXmmCount 'eachSaved'
-		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: xmmState(GcmSavedXmmFirst + index), base: X64Register.rbp, disp: gcmSaveDisp(asm, index: index))
-	end 'eachSaved'
-
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
 
 	return asm.finishFunction(name)
 end 'finishGcmFrame'
 
-function emitGcmConstants(asm X64RuntimeAsm, scratch X64Register)
-	emitLeaString(asm, dest: scratch, bytes: gcmByteSwapMask())
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmBswap, base: scratch, disp: 0)
-	emitLeaString(asm, dest: scratch, bytes: gcmPolynomial())
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmPoly, base: scratch, disp: 0)
-end 'emitGcmConstants'
+function emitGcmSaveHigh(asm X64RuntimeAsm)
+	for index in 0 upto GcmSavedXmmCount 'eachSaved'
+		emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: xmmState(GcmSavedXmmFirst + index), base: X64Register.rbp, disp: gcmSaveDisp(asm, index: index))
+	end 'eachSaved'
+end 'emitGcmSaveHigh'
 
-function emitGcmReduceRound(asm X64RuntimeAsm, accumulator X64Register)
-	emitXmmMovaps(asm, dest: GcmT0, src: GcmPoly)
-	encodePclmulqdq(asm.code, dest: GcmT0, src: accumulator, selector: GcmClmulReduce)
+function emitGcmRestoreHigh(asm X64RuntimeAsm)
+	for index in 0 upto GcmSavedXmmCount 'eachSaved'
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: xmmState(GcmSavedXmmFirst + index), base: X64Register.rbp, disp: gcmSaveDisp(asm, index: index))
+	end 'eachSaved'
+end 'emitGcmRestoreHigh'
+
+function emitGcmConstantsPointer(asm X64RuntimeAsm, dest X64Register)
+	emitLeaString(asm, dest: dest, bytes: gcmConstants())
+end 'emitGcmConstantsPointer'
+
+function emitGcmEnterHigh(asm X64RuntimeAsm, low GcmRegs)
+	emitGcmSaveHigh(asm)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmBswap, base: low.constants, disp: GcmConstantsBswapAt as Imm32)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmPoly, base: low.constants, disp: GcmConstantsPolyAt as Imm32)
+	emitXmmMovaps(asm, dest: GcmAcc0, src: low.acc0)
+	emitXmmMovaps(asm, dest: GcmT0, src: low.t0)
+	emitXmmPxor(asm, dest: GcmAcc1, src: GcmAcc1)
+	emitXmmPxor(asm, dest: GcmAccM, src: GcmAccM)
+end 'emitGcmEnterHigh'
+
+function emitGcmLeaveHigh(asm X64RuntimeAsm, low GcmRegs)
+	emitXmmMovaps(asm, dest: low.acc0, src: GcmAcc0)
+	emitGcmRestoreHigh(asm)
+end 'emitGcmLeaveHigh'
+
+function emitGcmByteSwap(asm X64RuntimeAsm, regs GcmRegs, block X64Register)
+	if not regs.resident 'loadsTheMask'
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: regs.scratch, base: regs.constants, disp: GcmConstantsBswapAt as Imm32)
+	end 'loadsTheMask'
+
+	encodePshufb(asm.code, dest: block, src: regs.scratch)
+end 'emitGcmByteSwap'
+
+function emitGcmReduceRound(asm X64RuntimeAsm, regs GcmRegs, accumulator X64Register)
+	if regs.resident 'fromRegister'
+		emitXmmMovaps(asm, dest: regs.t0, src: regs.poly)
+	end 'fromRegister' else 'fromMemory'
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: regs.t0, base: regs.constants, disp: GcmConstantsPolyAt as Imm32)
+	end 'fromMemory'
+
+	encodePclmulqdq(asm.code, dest: regs.t0, src: accumulator, selector: GcmClmulReduce)
 	emitXmmPshufd(asm, dest: accumulator, src: accumulator, selector: GcmSwapQwords)
-	emitXmmPxor(asm, dest: accumulator, src: GcmT0)
+	emitXmmPxor(asm, dest: accumulator, src: regs.t0)
 end 'emitGcmReduceRound'
 
-function emitGcmFoldMiddle(asm X64RuntimeAsm)
-	emitXmmPxor(asm, dest: GcmAccM, src: GcmAcc0)
-	emitXmmPxor(asm, dest: GcmAccM, src: GcmAcc1)
-	emitXmmMovaps(asm, dest: GcmT0, src: GcmAccM)
-	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPsrldq, reg: GcmAccM, count: GcmHalfBlockBytes)
-	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPslldq, reg: GcmT0, count: GcmHalfBlockBytes)
-	emitXmmPxor(asm, dest: GcmAcc1, src: GcmAccM)
-	emitXmmPxor(asm, dest: GcmAcc0, src: GcmT0)
+function emitGcmFoldMiddle(asm X64RuntimeAsm, regs GcmRegs)
+	emitXmmPxor(asm, dest: regs.accM, src: regs.acc0)
+	emitXmmPxor(asm, dest: regs.accM, src: regs.acc1)
+	emitXmmMovaps(asm, dest: regs.t0, src: regs.accM)
+	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPsrldq, reg: regs.accM, count: GcmHalfBlockBytes)
+	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPslldq, reg: regs.t0, count: GcmHalfBlockBytes)
+	emitXmmPxor(asm, dest: regs.acc1, src: regs.accM)
+	emitXmmPxor(asm, dest: regs.acc0, src: regs.t0)
 end 'emitGcmFoldMiddle'
 
-function emitGcmReduceProducts(asm X64RuntimeAsm)
-	emitGcmFoldMiddle(asm)
-	emitGcmReduceRound(asm, accumulator: GcmAcc0)
-	emitGcmReduceRound(asm, accumulator: GcmAcc0)
-	emitXmmPxor(asm, dest: GcmAcc0, src: GcmAcc1)
+function emitGcmReduceProducts(asm X64RuntimeAsm, regs GcmRegs)
+	emitGcmFoldMiddle(asm, regs: regs)
+	emitGcmReduceRound(asm, regs: regs, accumulator: regs.acc0)
+	emitGcmReduceRound(asm, regs: regs, accumulator: regs.acc0)
+	emitXmmPxor(asm, dest: regs.acc0, src: regs.acc1)
 end 'emitGcmReduceProducts'
 
-function emitGcmMultiplyBlock(asm X64RuntimeAsm, block X64Register)
-	encodePclmulqdq(asm.code, dest: GcmAcc0, src: block, selector: GcmClmulLow)
-	encodePclmulqdq(asm.code, dest: GcmAcc1, src: block, selector: GcmClmulHigh)
-	emitXmmPshufd(asm, dest: GcmT0, src: block, selector: GcmSwapQwords)
-	emitXmmPxor(asm, dest: GcmT0, src: block)
-	encodePclmulqdq(asm.code, dest: GcmAccM, src: GcmT0, selector: GcmClmulLow)
-	emitGcmReduceProducts(asm)
+function emitGcmMultiplyBlock(asm X64RuntimeAsm, regs GcmRegs, block X64Register)
+	encodePclmulqdq(asm.code, dest: regs.acc0, src: block, selector: GcmClmulLow)
+	encodePclmulqdq(asm.code, dest: regs.acc1, src: block, selector: GcmClmulHigh)
+	emitXmmPshufd(asm, dest: regs.t0, src: block, selector: GcmSwapQwords)
+	emitXmmPxor(asm, dest: regs.t0, src: block)
+	encodePclmulqdq(asm.code, dest: regs.accM, src: regs.t0, selector: GcmClmulLow)
+	emitGcmReduceProducts(asm, regs: regs)
 end 'emitGcmMultiplyBlock'
 
-function emitGcmLoadHashSubkey(asm X64RuntimeAsm)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmAcc0, base: GcmTable, disp: gcmTableDisp(GcmHashSubkeyEntry))
-	emitXmmMovaps(asm, dest: GcmAcc1, src: GcmAcc0)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmAccM, base: GcmTable, disp: gcmTableDisp(GcmKaratsubaEntry))
+function emitGcmLoadHashSubkey(asm X64RuntimeAsm, regs GcmRegs)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: regs.acc0, base: GcmTable, disp: gcmTableDisp(GcmHashSubkeyEntry))
+	emitXmmMovaps(asm, dest: regs.acc1, src: regs.acc0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: regs.accM, base: GcmTable, disp: gcmTableDisp(GcmKaratsubaEntry))
 end 'emitGcmLoadHashSubkey'
+
+function emitGcmHashWholeBlock(asm X64RuntimeAsm, regs GcmRegs, block X64Register)
+	emitGcmByteSwap(asm, regs: regs, block: block)
+	emitXmmPxor(asm, dest: block, src: regs.acc0)
+	emitGcmLoadHashSubkey(asm, regs: regs)
+	emitGcmMultiplyBlock(asm, regs: regs, block: block)
+end 'emitGcmHashWholeBlock'
+
+function emitGcmByteSwapThrough(asm X64RuntimeAsm, block X64Register, pointer X64Register, mask X64Register)
+	emitGcmConstantsPointer(asm, dest: pointer)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: mask, base: pointer, disp: GcmConstantsBswapAt as Imm32)
+	encodePshufb(asm.code, dest: block, src: mask)
+end 'emitGcmByteSwapThrough'
+
+// Folds the `n` blocks stored at `scratch` into the accumulator with one reduction, block `i` meeting
+// the power `n - i`. The table holds eight powers, and the single-block loop has fewer than eight blocks
+// because it runs only after the octet path.
+function emitGcmHashScratch(asm X64RuntimeAsm, low GcmRegs, scratch Imm32)
+	let loop = asm.newLabel()
+	let block = GcmFirstBlock
+	let product = low.t0
+	let power = low.scratch
+	let blockOffset = GcmControl
+	let powerOffset = GcmCounterTemp
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: blockOffset, src: blockOffset, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: powerOffset, src: powerOffset, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: powerOffset, imm: GcmPowerTableBytes)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: powerOffset, src: blockOffset, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: blockOffset, src: blockOffset, wide: false)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: block, base: X64Register.rbp, disp: scratch)
+	emitXmmPxor(asm, dest: block, src: low.acc0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: block, base: X64Register.rbp, disp: scratch)
+	emitXmmPxor(asm, dest: low.acc0, src: low.acc0)
+	emitXmmPxor(asm, dest: low.acc1, src: low.acc1)
+	emitXmmPxor(asm, dest: low.accM, src: low.accM)
+
+	asm.placeLabel(loop)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: block, base: X64Register.rbp, disp: scratch, index: blockOffset)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: power, base: GcmTable, disp: 0, index: powerOffset)
+	emitXmmMovaps(asm, dest: product, src: power)
+	encodePclmulqdq(asm.code, dest: product, src: block, selector: GcmClmulLow)
+	emitXmmPxor(asm, dest: low.acc0, src: product)
+	encodePclmulqdq(asm.code, dest: power, src: block, selector: GcmClmulHigh)
+	emitXmmPxor(asm, dest: low.acc1, src: power)
+	emitXmmPshufd(asm, dest: product, src: block, selector: GcmSwapQwords)
+	emitXmmPxor(asm, dest: product, src: block)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: power, base: GcmTable, disp: AesBlockBytes as Imm32, index: powerOffset)
+	encodePclmulqdq(asm.code, dest: power, src: product, selector: GcmClmulLow)
+	emitXmmPxor(asm, dest: low.accM, src: power)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: blockOffset, imm: AesBlockBytes)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: powerOffset, imm: GcmPowerStride)
+	emitCmpRegImm(asm, reg: powerOffset, imm: GcmPowerTableBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: loop)
+	emitGcmConstantsPointer(asm, dest: low.constants)
+	emitGcmReduceProducts(asm, regs: low)
+end 'emitGcmHashScratch'
 
 function emitGcmOctetStart(asm X64RuntimeAsm, block X64Register)
 	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmAcc0, base: GcmTable, disp: gcmTableDisp(0))
@@ -517,22 +664,88 @@ function emitGcmAccumulate(asm X64RuntimeAsm, block X64Register, entry FullRange
 	emitXmmPxor(asm, dest: GcmAccM, src: GcmT1)
 end 'emitGcmAccumulate'
 
+function emitGcmWidthLoad(asm X64RuntimeAsm, width GcmCopyWidth, dest X64Register, base X64Register)
+	match width 'width'
+		qword then encodeLoadRegBaseDisp(asm.code, destReg: dest, base: base, disp: 0, wide: true)
+		dword then encodeLoadRegBaseDisp(asm.code, destReg: dest, base: base, disp: 0, wide: false)
+		word then encodeMovzxRegWordBaseDisp(asm.code, destReg: dest, base: base, disp: 0)
+		byte then encodeMovzxRegByteBaseDisp(asm.code, destReg: dest, base: base, disp: 0)
+	end 'width'
+end 'emitGcmWidthLoad'
+
+function emitGcmWidthStore(asm X64RuntimeAsm, width GcmCopyWidth, base X64Register, src X64Register)
+	match width 'width'
+		qword then encodeStoreBaseDispReg(asm.code, base: base, disp: 0, srcReg: src, wide: true)
+		dword then encodeStoreBaseDispReg(asm.code, base: base, disp: 0, srcReg: src, wide: false)
+		word then encodeStoreBaseDispReg16(asm.code, base: base, disp: 0, srcReg: src)
+		byte then encodeStoreBaseDispReg8(asm.code, base: base, disp: 0, srcReg: src)
+	end 'width'
+end 'emitGcmWidthStore'
+
+// Copies exactly `count` bytes, fewer than 16, in 8, 4, 2 and 1 byte steps: a partial block ends at the
+// span, so a wider access would read or write past the end of the array.
+function emitGcmCopyBytes(asm X64RuntimeAsm, source X64Register, destination X64Register, count X64Register, scratch X64Register)
+	for width in GcmCopyWidth.allCases 'eachWidth'
+		let bytes = gcmCopyWidthBytes(width) as Imm32
+		let skip = asm.newLabel()
+
+		encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: scratch, src: count, wide: true)
+		encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: scratch, imm: bytes)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: skip)
+		emitGcmWidthLoad(asm, width: width, dest: scratch, base: source)
+		emitGcmWidthStore(asm, width: width, base: destination, src: scratch)
+		encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: source, imm: bytes)
+		encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: destination, imm: bytes)
+		asm.placeLabel(skip)
+	end 'eachWidth'
+end 'emitGcmCopyBytes'
+
+function emitGcmLoadTail(asm X64RuntimeAsm, source X64Register, count X64Register, scratch X64Register, pointer X64Register, slot Imm32, block X64Register)
+	encodeLeaRegRegImm32(asm.code, dest: pointer, base: X64Register.rbp, disp: slot)
+	emitGcmCopyBytes(asm, source: source, destination: pointer, count: count, scratch: scratch)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: block, base: X64Register.rbp, disp: slot)
+end 'emitGcmLoadTail'
+
+function emitGcmStoreTail(asm X64RuntimeAsm, destination X64Register, count X64Register, scratch X64Register, pointer X64Register, slot Imm32, block X64Register)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: block, base: X64Register.rbp, disp: slot)
+	encodeLeaRegRegImm32(asm.code, dest: pointer, base: X64Register.rbp, disp: slot)
+	emitGcmCopyBytes(asm, source: pointer, destination: destination, count: count, scratch: scratch)
+end 'emitGcmStoreTail'
+
+// Clears the bytes of `block` from `count` on, since GHASH reads a partial block zero-padded. The mask
+// is the 16-byte window of `gcmConstants` that starts `count` bytes before the end of its 0xFF run, so
+// it holds `count` bytes of 0xFF and then zeros; a change to that layout is a silent wrong tag.
+function emitGcmMaskTail(asm X64RuntimeAsm, block X64Register, count X64Register, pointer X64Register, mask X64Register)
+	emitGcmConstantsPointer(asm, dest: pointer)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: pointer, src: count, wide: true)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: mask, base: pointer, disp: GcmConstantsMaskAnchor as Imm32)
+	encodeSseRegReg(asm.code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePand, dest: block, src: mask, wide: false)
+end 'emitGcmMaskTail'
+
 export function buildAesGcmHashChunk() returns FunctionCodeChunk
-	var asm = beginGcmFrame(0)
+	var asm = beginGcmFrame(GcmHashAreaSlots)
+	let high = GcmRegs.high()
+	let low = GcmRegs.low(X64Register.rax)
+	let tailSlot = gcmAreaBase(asm, areaSlots: GcmHashAreaSlots)
 	let length = GcmControl
 	let data = GcmBuffer
 	let done = asm.newLabel()
 	let singles = asm.newLabel()
+	let tail = asm.newLabel()
 	let octets = asm.newLabel()
+	let octetsEnd = asm.newLabel()
 
-	emitGcmConstants(asm, scratch: X64Register.rax)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmAcc0, base: GcmMessage, disp: 0)
+	emitGcmConstantsPointer(asm, dest: low.constants)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.acc0, base: GcmMessage, disp: 0)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: length, src: length, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+	emitCmpRegImm(asm, reg: length, imm: GcmOctetBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: singles)
+	emitGcmEnterHigh(asm, low: low)
 
 	asm.placeLabel(octets)
 	emitCmpRegImm(asm, reg: length, imm: GcmOctetBytes)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: singles)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: octetsEnd)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: length, imm: GcmOctetBytes)
 
 	for index in 0 upto GcmOctetBlocks 'eachLoad'
@@ -552,58 +765,87 @@ export function buildAesGcmHashChunk() returns FunctionCodeChunk
 		emitGcmAccumulate(asm, block: xmmState(index), entry: index)
 	end 'eachProduct'
 
-	emitGcmReduceProducts(asm)
+	emitGcmReduceProducts(asm, regs: high)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: octets)
+
+	asm.placeLabel(octetsEnd)
+	emitGcmLeaveHigh(asm, low: low)
 
 	asm.placeLabel(singles)
 	emitCmpRegImm(asm, reg: length, imm: AesBlockBytes)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: done)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: tail)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: length, imm: AesBlockBytes)
 	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmFirstBlock, base: data, disp: 0)
-	encodePshufb(asm.code, dest: GcmFirstBlock, src: GcmBswap)
-	emitXmmPxor(asm, dest: GcmFirstBlock, src: GcmAcc0)
-	emitGcmLoadHashSubkey(asm)
-	emitGcmMultiplyBlock(asm, block: GcmFirstBlock)
+	emitGcmHashWholeBlock(asm, regs: low, block: GcmFirstBlock)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: data, imm: AesBlockBytes)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: singles)
 
+	asm.placeLabel(tail)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: length, src: length, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+	emitGcmLoadTail(asm, source: data, count: length, scratch: GcmRemaining, pointer: GcmCounterTemp, slot: tailSlot, block: GcmFirstBlock)
+	emitGcmMaskTail(asm, block: GcmFirstBlock, count: length, pointer: GcmCounterTemp, mask: low.scratch)
+	emitGcmHashWholeBlock(asm, regs: low, block: GcmFirstBlock)
+
 	asm.placeLabel(done)
-	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmAcc0, base: GcmMessage, disp: 0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: low.acc0, base: GcmMessage, disp: 0)
 
 	return finishGcmFrame(asm, name: cryptoChunkName(CryptoRoutine.aesGcmHash))
 end 'buildAesGcmHashChunk'
 
 export function buildAesGcmFinishChunk() returns FunctionCodeChunk
-	var asm = beginGcmFrame(0)
+	var asm = X64RuntimeAsm.beginFunction(0)
+	let low = GcmRegs.low(X64Register.rax)
 	let additionalBytes = GcmControl
 	let ciphertextBytes = GcmBuffer
+	let mask = GcmLowT1
 
-	emitGcmConstants(asm, scratch: X64Register.rax)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmAcc0, base: GcmMessage, disp: 0)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT2, base: GcmMessage, disp: AesGcmMaskOffset as Imm32)
+	emitGcmConstantsPointer(asm, dest: low.constants)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.acc0, base: GcmMessage, disp: 0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: mask, base: GcmMessage, disp: AesGcmMaskOffset as Imm32)
 	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: ciphertextBytes, count: GcmLengthBitsShift)
 	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: additionalBytes, count: GcmLengthBitsShift)
 	encodeSseRegReg(asm.code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeMovqXmmRm, dest: GcmFirstBlock, src: ciphertextBytes, wide: true)
 	encodePinsrq(asm.code, dest: GcmFirstBlock, src: additionalBytes, lane: GcmLastLane)
-	emitXmmPxor(asm, dest: GcmFirstBlock, src: GcmAcc0)
-	emitGcmLoadHashSubkey(asm)
-	emitGcmMultiplyBlock(asm, block: GcmFirstBlock)
-	encodePshufb(asm.code, dest: GcmAcc0, src: GcmBswap)
-	emitXmmPxor(asm, dest: GcmAcc0, src: GcmT2)
-	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmAcc0, base: GcmMessage, disp: 0)
+	emitXmmPxor(asm, dest: GcmFirstBlock, src: low.acc0)
+	emitGcmLoadHashSubkey(asm, regs: low)
+	emitGcmMultiplyBlock(asm, regs: low, block: GcmFirstBlock)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.t0, base: low.constants, disp: GcmConstantsBswapAt as Imm32)
+	encodePshufb(asm.code, dest: low.acc0, src: low.t0)
+	emitXmmPxor(asm, dest: low.acc0, src: mask)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: low.acc0, base: GcmMessage, disp: 0)
 
 	return finishGcmFrame(asm, name: cryptoChunkName(CryptoRoutine.aesGcmFinish))
 end 'buildAesGcmFinishChunk'
 
-function emitGcmStorePowerPair(asm X64RuntimeAsm, power X64Register, base X64Register, disp Imm32)
+function emitGcmStorePowerPair(asm X64RuntimeAsm, power X64Register, scratch X64Register, base X64Register, disp Imm32)
 	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: power, base: base, disp: disp)
-	emitXmmPshufd(asm, dest: GcmT0, src: power, selector: GcmSwapQwords)
-	emitXmmPxor(asm, dest: GcmT0, src: power)
-	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmT0, base: base, disp: ((disp as FullRangeInt) + AesBlockBytes) as Imm32)
+	emitXmmPshufd(asm, dest: scratch, src: power, selector: GcmSwapQwords)
+	emitXmmPxor(asm, dest: scratch, src: power)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: scratch, base: base, disp: ((disp as FullRangeInt) + AesBlockBytes) as Imm32)
 end 'emitGcmStorePowerPair'
 
+function emitGcmAesRound(asm X64RuntimeAsm, round FullRangeInt, states FullRangeInt, roundKey X64Register)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: GcmTable, disp: gcmKeyDisp(round))
+	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenc, states: states, roundKey: roundKey)
+end 'emitGcmAesRound'
+
+function emitGcmUpperRounds(asm X64RuntimeAsm, states FullRangeInt, roundKey X64Register, rounds X64Register, last BlockId)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: GcmTable, disp: gcmKeyDisp(AesShortRounds))
+	emitCmpRegImm(asm, reg: rounds, imm: AesMediumRounds)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: last)
+	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenc, states: states, roundKey: roundKey)
+	emitGcmAesRound(asm, round: AesShortRounds + 1, states: states, roundKey: roundKey)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: GcmTable, disp: gcmKeyDisp(AesMediumRounds))
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: last)
+	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenc, states: states, roundKey: roundKey)
+	emitGcmAesRound(asm, round: AesMediumRounds + 1, states: states, roundKey: roundKey)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: GcmTable, disp: gcmKeyDisp(AesLongRounds))
+end 'emitGcmUpperRounds'
+
 export function buildAesGcmInitChunk() returns FunctionCodeChunk
-	var asm = beginGcmFrame(0)
+	var asm = X64RuntimeAsm.beginFunction(0)
+	let low = GcmRegs.low(X64Register.rax)
 	let rounds = GcmControl
 	let schedule = GcmMessage
 	let copied = GcmBuffer
@@ -623,43 +865,44 @@ export function buildAesGcmInitChunk() returns FunctionCodeChunk
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: blocksLeft, imm: GcmCountdownStep)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: copy)
 
-	emitGcmConstants(asm, scratch: X64Register.rax)
+	emitGcmConstantsPointer(asm, dest: low.constants)
 	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmFirstBlock, base: GcmTable, disp: gcmKeyDisp(0))
 
 	for round in 1 to AesFullRoundsBeforeLast 'eachRound'
-		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmTable, disp: gcmKeyDisp(round))
-		encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: GcmFirstBlock, src: GcmT0)
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.t0, base: GcmTable, disp: gcmKeyDisp(round))
+		encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: GcmFirstBlock, src: low.t0)
 	end 'eachRound'
 
-	emitGcmUpperRounds(asm, states: 1, rounds: rounds, last: last)
+	emitGcmUpperRounds(asm, states: 1, roundKey: low.t0, rounds: rounds, last: last)
 	asm.placeLabel(last)
-	encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenclast, dest: GcmFirstBlock, src: GcmT0)
-	encodePshufb(asm.code, dest: GcmFirstBlock, src: GcmBswap)
+	encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenclast, dest: GcmFirstBlock, src: low.t0)
+	emitGcmByteSwap(asm, regs: low, block: GcmFirstBlock)
 
-	emitXmmPshufd(asm, dest: GcmT0, src: GcmFirstBlock, selector: GcmBroadcastTopDword)
-	emitXmmMovaps(asm, dest: GcmT1, src: GcmFirstBlock)
-	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp13ShiftDImm8, ext: Grp13ExtPsrad, reg: GcmT0, count: GcmSignShiftBits)
-	encodeSseRegReg(asm.code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePand, dest: GcmT0, src: GcmPoly, wide: false)
-	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp13ShiftDImm8, ext: Grp13ExtPsrld, reg: GcmT1, count: GcmSignShiftBits)
-	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPslldq, reg: GcmT1, count: GcmDwordBytes)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.acc0, base: low.constants, disp: GcmConstantsPolyAt as Imm32)
+	emitXmmPshufd(asm, dest: low.t0, src: GcmFirstBlock, selector: GcmBroadcastTopDword)
+	emitXmmMovaps(asm, dest: low.scratch, src: GcmFirstBlock)
+	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp13ShiftDImm8, ext: Grp13ExtPsrad, reg: low.t0, count: GcmSignShiftBits)
+	encodeSseRegReg(asm.code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePand, dest: low.t0, src: low.acc0, wide: false)
+	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp13ShiftDImm8, ext: Grp13ExtPsrld, reg: low.scratch, count: GcmSignShiftBits)
+	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp14ShiftQImm8, ext: Grp14ExtPslldq, reg: low.scratch, count: GcmDwordBytes)
 	encodeSseShiftRegImm8(asm.code, opcode: OpcodeGrp13ShiftDImm8, ext: Grp13ExtPslld, reg: GcmFirstBlock, count: GcmDoubleShiftBits)
-	emitXmmPxor(asm, dest: GcmFirstBlock, src: GcmT0)
-	emitXmmPxor(asm, dest: GcmFirstBlock, src: GcmT1)
+	emitXmmPxor(asm, dest: GcmFirstBlock, src: low.t0)
+	emitXmmPxor(asm, dest: GcmFirstBlock, src: low.scratch)
 
 	let power = GcmFirstBlock
 	let destination = GcmRemaining
 	let powers = GcmRounds
 
-	emitGcmStorePowerPair(asm, power: power, base: GcmTable, disp: gcmTableDisp(GcmHashSubkeyEntry))
+	emitGcmStorePowerPair(asm, power: power, scratch: low.t0, base: GcmTable, disp: gcmTableDisp(GcmHashSubkeyEntry))
 	encodeLeaRegRegImm32(asm.code, dest: destination, base: GcmTable, disp: gcmTableDisp(GcmHashSubkeyEntry - 2))
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: powers, src: powers, wide: false)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: powers, imm: GcmPowerCount)
 
 	asm.placeLabel(loop)
-	emitGcmLoadHashSubkey(asm)
-	emitGcmMultiplyBlock(asm, block: power)
-	emitXmmMovaps(asm, dest: power, src: GcmAcc0)
-	emitGcmStorePowerPair(asm, power: power, base: destination, disp: 0)
+	emitGcmLoadHashSubkey(asm, regs: low)
+	emitGcmMultiplyBlock(asm, regs: low, block: power)
+	emitXmmMovaps(asm, dest: power, src: low.acc0)
+	emitGcmStorePowerPair(asm, power: power, scratch: low.t0, base: destination, disp: 0)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: powers, imm: GcmCountdownStep)
 	encodeLeaRegRegImm32(asm.code, dest: destination, base: destination, disp: -GcmPowerStride)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: loop)
@@ -683,31 +926,29 @@ function emitGcmIncrement(asm X64RuntimeAsm, counters Imm32, index FullRangeInt)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: gcmCounterSlot(counters, index: index), srcReg: GcmCounterTemp, wide: false)
 end 'emitGcmIncrement'
 
-function emitGcmCryptSetup(asm X64RuntimeAsm, counters Imm32)
+function emitGcmCryptSetup(asm X64RuntimeAsm, low GcmRegs, counters Imm32)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: GcmRemaining, src: GcmControl, wide: true)
 	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: GcmRemaining, count: AesControlFieldShift)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: GcmRounds, src: GcmControl, wide: true)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: GcmRounds, imm: AesControlRoundsMask)
-	emitGcmConstants(asm, scratch: GcmControl)
+	emitGcmConstantsPointer(asm, dest: low.constants)
 
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmAcc0, base: GcmMessage, disp: 0)
-	emitXmmPxor(asm, dest: GcmAcc1, src: GcmAcc1)
-	emitXmmPxor(asm, dest: GcmAccM, src: GcmAccM)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.acc0, base: GcmMessage, disp: 0)
 	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmFirstBlock, base: GcmMessage, disp: AesGcmCounterOffset as Imm32)
 	encodeLoadRegBaseDisp(asm.code, destReg: GcmCounter, base: GcmMessage, disp: (AesGcmCounterOffset + GcmCounterWordOffset) as Imm32, wide: false)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmTable, disp: gcmKeyDisp(0))
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.t0, base: GcmTable, disp: gcmKeyDisp(0))
 	encodeLoadRegBaseDisp(asm.code, destReg: GcmCounterKey, base: GcmTable, disp: (gcmKeyDisp(0) + GcmCounterWordOffset) as Imm32, wide: false)
 	encodeByteSwapReg(asm.code, reg: GcmCounter, width: WordBytes.four)
 	encodeByteSwapReg(asm.code, reg: GcmCounterKey, width: WordBytes.four)
 
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: GcmCounterTemp, src: GcmRemaining, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: GcmCounterTemp, base: GcmRemaining, disp: GcmPartialBlockMax)
 	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: GcmCounterTemp, count: AesBlockShift)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: GcmCounterTemp, src: GcmCounter, wide: true)
 	encodeByteSwapReg(asm.code, reg: GcmCounterTemp, width: WordBytes.four)
 	encodeStoreBaseDispReg(asm.code, base: GcmMessage, disp: (AesGcmCounterOffset + GcmCounterWordOffset) as Imm32, srcReg: GcmCounterTemp, wide: false)
 
-	emitXmmPxor(asm, dest: GcmT0, src: GcmFirstBlock)
-	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmT0, base: X64Register.rbp, disp: counters)
+	emitXmmPxor(asm, dest: low.t0, src: GcmFirstBlock)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: low.t0, base: X64Register.rbp, disp: counters)
 	emitGcmIncrement(asm, counters: counters, index: 0)
 end 'emitGcmCryptSetup'
 
@@ -724,42 +965,20 @@ function emitGcmLoadCounters(asm X64RuntimeAsm, counters Imm32)
 	end 'eachCounter'
 end 'emitGcmLoadCounters'
 
-function emitGcmAesRound(asm X64RuntimeAsm, round FullRangeInt, states FullRangeInt = GcmOctetBlocks)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmTable, disp: gcmKeyDisp(round))
-	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenc, states: states, roundKey: GcmT0)
-end 'emitGcmAesRound'
+function emitGcmKeystream(asm X64RuntimeAsm, counters Imm32)
+	let last = asm.newLabel()
 
-function emitGcmUpperRounds(asm X64RuntimeAsm, states FullRangeInt, rounds X64Register, last BlockId)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmTable, disp: gcmKeyDisp(AesShortRounds))
-	emitCmpRegImm(asm, reg: rounds, imm: AesMediumRounds)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: last)
-	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenc, states: states, roundKey: GcmT0)
-	emitGcmAesRound(asm, round: AesShortRounds + 1, states: states)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmTable, disp: gcmKeyDisp(AesMediumRounds))
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: last)
-	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenc, states: states, roundKey: GcmT0)
-	emitGcmAesRound(asm, round: AesMediumRounds + 1, states: states)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmTable, disp: gcmKeyDisp(AesLongRounds))
-end 'emitGcmUpperRounds'
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmFirstBlock, base: X64Register.rbp, disp: counters)
+	emitGcmIncrement(asm, counters: counters, index: 0)
 
-function emitGcmSingleRounds(asm X64RuntimeAsm, last BlockId)
-	for key in 1 to GcmOctetBlocks - 1 'eachResidentKey'
-		encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: GcmFirstBlock, src: xmmState(key))
-	end 'eachResidentKey'
+	for round in 1 to AesFullRoundsBeforeLast 'eachRound'
+		emitGcmAesRound(asm, round: round, states: 1, roundKey: GcmLowT0)
+	end 'eachRound'
 
-	for round in GcmOctetBlocks to AesFullRoundsBeforeLast 'eachLoadedKey'
-		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmTable, disp: gcmKeyDisp(round))
-		encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: GcmFirstBlock, src: GcmT0)
-	end 'eachLoadedKey'
-
-	emitGcmUpperRounds(asm, states: 1, rounds: GcmRounds, last: last)
-end 'emitGcmSingleRounds'
-
-function emitGcmLoadResidentKeys(asm X64RuntimeAsm)
-	for key in 1 to GcmOctetBlocks - 1 'eachResidentKey'
-		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: xmmState(key), base: GcmTable, disp: gcmKeyDisp(key))
-	end 'eachResidentKey'
-end 'emitGcmLoadResidentKeys'
+	emitGcmUpperRounds(asm, states: 1, roundKey: GcmLowT0, rounds: GcmRounds, last: last)
+	asm.placeLabel(last)
+	encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenclast, dest: GcmFirstBlock, src: GcmLowT0)
+end 'emitGcmKeystream'
 
 function emitGcmEncryptStore(asm X64RuntimeAsm, area Imm32)
 	for index in 0 upto GcmOctetBlocks 'eachXor'
@@ -783,35 +1002,106 @@ function emitGcmEncryptStore(asm X64RuntimeAsm, area Imm32)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: GcmBuffer, imm: GcmOctetBytes)
 end 'emitGcmEncryptStore'
 
+function emitGcmStoreHashedBlock(asm X64RuntimeAsm, low GcmRegs, hashArea Imm32)
+	emitGcmByteSwapThrough(asm, block: GcmFirstBlock, pointer: GcmCounterTemp, mask: low.scratch)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmFirstBlock, base: X64Register.rbp, disp: hashArea, index: GcmControl)
+end 'emitGcmStoreHashedBlock'
+
+function emitGcmHashTailBlock(asm X64RuntimeAsm, low GcmRegs)
+	emitGcmMaskTail(asm, block: GcmFirstBlock, count: GcmRemaining, pointer: GcmCounterTemp, mask: low.scratch)
+	emitGcmConstantsPointer(asm, dest: low.constants)
+	emitGcmHashWholeBlock(asm, regs: low, block: GcmFirstBlock)
+end 'emitGcmHashTailBlock'
+
+// GHASH covers the ciphertext. Decrypting therefore saves each block to `hashArea` (and hashes the tail)
+// before the in-place XOR overwrites it with plaintext; encrypting hashes the block after that store.
+function emitGcmSingleBlockLoop(asm X64RuntimeAsm, low GcmRegs, counters Imm32, hashArea Imm32, tailSlot Imm32, decrypting bool, done BlockId)
+	let loop = asm.newLabel()
+	let tail = asm.newLabel()
+	let tailInput = low.scratch if not decrypting else GcmFirstBlock
+
+	emitCmpRegImm(asm, reg: GcmRemaining, imm: AesBlockBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: tail)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: GcmControl, src: GcmControl, wide: false)
+
+	asm.placeLabel(loop)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: GcmRemaining, imm: AesBlockBytes)
+
+	if decrypting 'hashesTheInput'
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmFirstBlock, base: GcmBuffer, disp: 0)
+		emitGcmStoreHashedBlock(asm, low: low, hashArea: hashArea)
+	end 'hashesTheInput'
+
+	emitGcmKeystream(asm, counters: counters)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.scratch, base: GcmBuffer, disp: 0)
+	emitXmmPxor(asm, dest: GcmFirstBlock, src: low.scratch)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmFirstBlock, base: GcmBuffer, disp: 0)
+
+	if not decrypting 'hashesTheOutput'
+		emitGcmStoreHashedBlock(asm, low: low, hashArea: hashArea)
+	end 'hashesTheOutput'
+
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: GcmBuffer, imm: AesBlockBytes)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: GcmControl, imm: AesBlockBytes)
+	emitCmpRegImm(asm, reg: GcmRemaining, imm: AesBlockBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: loop)
+	emitGcmHashScratch(asm, low: low, scratch: hashArea)
+
+	asm.placeLabel(tail)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: GcmRemaining, src: GcmRemaining, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+	emitGcmLoadTail(asm, source: GcmBuffer, count: GcmRemaining, scratch: GcmCounterTemp, pointer: low.constants, slot: tailSlot, block: tailInput)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: GcmBuffer, src: GcmRemaining, wide: true)
+
+	if decrypting 'hashesTheInputTail'
+		emitGcmHashTailBlock(asm, low: low)
+	end 'hashesTheInputTail'
+
+	emitGcmKeystream(asm, counters: counters)
+
+	if decrypting 'reloadsTheInputTail'
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: low.scratch, base: X64Register.rbp, disp: tailSlot)
+	end 'reloadsTheInputTail'
+
+	emitXmmPxor(asm, dest: GcmFirstBlock, src: low.scratch)
+	emitGcmStoreTail(asm, destination: GcmBuffer, count: GcmRemaining, scratch: GcmCounterTemp, pointer: low.constants, slot: tailSlot, block: GcmFirstBlock)
+
+	if not decrypting 'hashesTheOutputTail'
+		emitGcmHashTailBlock(asm, low: low)
+	end 'hashesTheOutputTail'
+end 'emitGcmSingleBlockLoop'
+
 export function buildAesGcmEncryptChunk() returns FunctionCodeChunk
 	var asm = beginGcmFrame(GcmEncryptAreaSlots)
+	let high = GcmRegs.high()
+	let low = GcmRegs.low(GcmControl)
 	let area = gcmAreaBase(asm, areaSlots: GcmEncryptAreaSlots)
 	let counters = (area + GcmEncryptCountersOffset) as Imm32
+	let tailSlot = (area + GcmEncryptTailOffset) as Imm32
 	let singles = asm.newLabel()
 	let octets = asm.newLabel()
 	let octetsEnd = asm.newLabel()
-	let singlesLoop = asm.newLabel()
 	let firstLast = asm.newLabel()
 	let loopLast = asm.newLabel()
-	let singleLast = asm.newLabel()
 	let done = asm.newLabel()
 
-	emitGcmCryptSetup(asm, counters: counters)
+	emitGcmCryptSetup(asm, low: low, counters: counters)
 	emitCmpRegImm(asm, reg: GcmRemaining, imm: GcmOctetBytes)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: singles)
+	emitGcmEnterHigh(asm, low: low)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: GcmRemaining, imm: GcmOctetBytes)
 	emitGcmPrepareCounters(asm, counters: counters)
 	emitGcmLoadCounters(asm, counters: counters)
 
 	for round in 1 to AesFullRoundsBeforeLast 'eachFirstRound'
-		emitGcmAesRound(asm, round: round)
+		emitGcmAesRound(asm, round: round, states: GcmOctetBlocks, roundKey: GcmT0)
 
 		if round < AesFullRoundsBeforeLast 'prepares'
 			emitGcmIncrement(asm, counters: counters, index: round - 1)
 		end 'prepares'
 	end 'eachFirstRound'
 
-	emitGcmUpperRounds(asm, states: GcmOctetBlocks, rounds: GcmRounds, last: firstLast)
+	emitGcmUpperRounds(asm, states: GcmOctetBlocks, roundKey: GcmT0, rounds: GcmRounds, last: firstLast)
 	asm.placeLabel(firstLast)
 	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenclast, states: GcmOctetBlocks, roundKey: GcmT0)
 	emitGcmEncryptStore(asm, area: area)
@@ -825,20 +1115,20 @@ export function buildAesGcmEncryptChunk() returns FunctionCodeChunk
 	emitGcmOctetStart(asm, block: GcmT0)
 
 	for round in 1 upto GcmOctetBlocks 'eachCombinedRound'
-		emitGcmAesRound(asm, round: round)
+		emitGcmAesRound(asm, round: round, states: GcmOctetBlocks, roundKey: GcmT0)
 		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: X64Register.rbp, disp: gcmBlockSlot(area, index: round))
 		emitGcmAccumulate(asm, block: GcmT0, entry: round)
 		emitGcmIncrement(asm, counters: counters, index: round - 1)
 	end 'eachCombinedRound'
 
-	emitGcmAesRound(asm, round: GcmOctetBlocks)
+	emitGcmAesRound(asm, round: GcmOctetBlocks, states: GcmOctetBlocks, roundKey: GcmT0)
 	emitGcmIncrement(asm, counters: counters, index: GcmOctetBlocks - 1)
-	emitGcmFoldMiddle(asm)
-	emitGcmReduceRound(asm, accumulator: GcmAcc0)
-	emitGcmAesRound(asm, round: AesFullRoundsBeforeLast)
-	emitGcmReduceRound(asm, accumulator: GcmAcc0)
+	emitGcmFoldMiddle(asm, regs: high)
+	emitGcmReduceRound(asm, regs: high, accumulator: GcmAcc0)
+	emitGcmAesRound(asm, round: AesFullRoundsBeforeLast, states: GcmOctetBlocks, roundKey: GcmT0)
+	emitGcmReduceRound(asm, regs: high, accumulator: GcmAcc0)
 	emitXmmPxor(asm, dest: GcmAcc0, src: GcmAcc1)
-	emitGcmUpperRounds(asm, states: GcmOctetBlocks, rounds: GcmRounds, last: loopLast)
+	emitGcmUpperRounds(asm, states: GcmOctetBlocks, roundKey: GcmT0, rounds: GcmRounds, last: loopLast)
 	asm.placeLabel(loopLast)
 	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenclast, states: GcmOctetBlocks, roundKey: GcmT0)
 	emitGcmEncryptStore(asm, area: area)
@@ -853,53 +1143,38 @@ export function buildAesGcmEncryptChunk() returns FunctionCodeChunk
 		emitGcmAccumulate(asm, block: GcmT0, entry: round)
 	end 'eachProduct'
 
-	emitGcmReduceProducts(asm)
+	emitGcmReduceProducts(asm, regs: high)
+	emitGcmLeaveHigh(asm, low: low)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: GcmRemaining, src: GcmRemaining, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: GcmCounter, imm: GcmAddedCounters)
 
 	asm.placeLabel(singles)
-	emitGcmLoadResidentKeys(asm)
-
-	asm.placeLabel(singlesLoop)
-	emitCmpRegImm(asm, reg: GcmRemaining, imm: AesBlockBytes)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: done)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: GcmRemaining, imm: AesBlockBytes)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmFirstBlock, base: X64Register.rbp, disp: counters)
-	emitGcmIncrement(asm, counters: counters, index: 0)
-	emitGcmSingleRounds(asm, last: singleLast)
-	asm.placeLabel(singleLast)
-	encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenclast, dest: GcmFirstBlock, src: GcmT0)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmBuffer, disp: 0)
-	emitXmmPxor(asm, dest: GcmFirstBlock, src: GcmT0)
-	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmFirstBlock, base: GcmBuffer, disp: 0)
-	encodePshufb(asm.code, dest: GcmFirstBlock, src: GcmBswap)
-	emitXmmPxor(asm, dest: GcmFirstBlock, src: GcmAcc0)
-	emitGcmLoadHashSubkey(asm)
-	emitGcmMultiplyBlock(asm, block: GcmFirstBlock)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: GcmBuffer, imm: AesBlockBytes)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: singlesLoop)
+	emitGcmSingleBlockLoop(asm, low: low, counters: counters, hashArea: area, tailSlot: tailSlot, decrypting: false, done: done)
 
 	asm.placeLabel(done)
-	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmAcc0, base: GcmMessage, disp: 0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: low.acc0, base: GcmMessage, disp: 0)
 
 	return finishGcmFrame(asm, name: cryptoChunkName(CryptoRoutine.aesGcmEncrypt))
 end 'buildAesGcmEncryptChunk'
 
 export function buildAesGcmDecryptChunk() returns FunctionCodeChunk
 	var asm = beginGcmFrame(GcmDecryptAreaSlots)
+	let high = GcmRegs.high()
+	let low = GcmRegs.low(GcmControl)
 	let counters = gcmAreaBase(asm, areaSlots: GcmDecryptAreaSlots)
+	let tailSlot = (counters + GcmDecryptTailOffset) as Imm32
+	let scratch = (counters + GcmDecryptScratchOffset) as Imm32
 	let singles = asm.newLabel()
 	let octets = asm.newLabel()
 	let octetsEnd = asm.newLabel()
-	let singlesLoop = asm.newLabel()
 	let loopLast = asm.newLabel()
-	let singleLast = asm.newLabel()
 	let done = asm.newLabel()
 
-	emitGcmCryptSetup(asm, counters: counters)
+	emitGcmCryptSetup(asm, low: low, counters: counters)
 	emitCmpRegImm(asm, reg: GcmRemaining, imm: GcmOctetBytes)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: singles)
+	emitGcmEnterHigh(asm, low: low)
 	emitGcmPrepareCounters(asm, counters: counters)
 
 	asm.placeLabel(octets)
@@ -913,21 +1188,21 @@ export function buildAesGcmDecryptChunk() returns FunctionCodeChunk
 	emitGcmOctetStart(asm, block: GcmT0)
 
 	for round in 1 upto GcmOctetBlocks 'eachCombinedRound'
-		emitGcmAesRound(asm, round: round)
+		emitGcmAesRound(asm, round: round, states: GcmOctetBlocks, roundKey: GcmT0)
 		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmT0, base: GcmBuffer, disp: (round * AesBlockBytes) as Imm32)
 		encodePshufb(asm.code, dest: GcmT0, src: GcmBswap)
 		emitGcmAccumulate(asm, block: GcmT0, entry: round)
 		emitGcmIncrement(asm, counters: counters, index: round - 1)
 	end 'eachCombinedRound'
 
-	emitGcmAesRound(asm, round: GcmOctetBlocks)
+	emitGcmAesRound(asm, round: GcmOctetBlocks, states: GcmOctetBlocks, roundKey: GcmT0)
 	emitGcmIncrement(asm, counters: counters, index: GcmOctetBlocks - 1)
-	emitGcmFoldMiddle(asm)
-	emitGcmReduceRound(asm, accumulator: GcmAcc0)
-	emitGcmAesRound(asm, round: AesFullRoundsBeforeLast)
-	emitGcmReduceRound(asm, accumulator: GcmAcc0)
+	emitGcmFoldMiddle(asm, regs: high)
+	emitGcmReduceRound(asm, regs: high, accumulator: GcmAcc0)
+	emitGcmAesRound(asm, round: AesFullRoundsBeforeLast, states: GcmOctetBlocks, roundKey: GcmT0)
+	emitGcmReduceRound(asm, regs: high, accumulator: GcmAcc0)
 	emitXmmPxor(asm, dest: GcmAcc0, src: GcmAcc1)
-	emitGcmUpperRounds(asm, states: GcmOctetBlocks, rounds: GcmRounds, last: loopLast)
+	emitGcmUpperRounds(asm, states: GcmOctetBlocks, roundKey: GcmT0, rounds: GcmRounds, last: loopLast)
 	asm.placeLabel(loopLast)
 	emitAesRoundAcross(asm, instruction: AesNiInstruction.aesenclast, states: GcmOctetBlocks, roundKey: GcmT0)
 
@@ -944,33 +1219,14 @@ export function buildAesGcmDecryptChunk() returns FunctionCodeChunk
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: octets)
 
 	asm.placeLabel(octetsEnd)
+	emitGcmLeaveHigh(asm, low: low)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: GcmCounter, imm: GcmAddedCounters)
 
 	asm.placeLabel(singles)
-	emitGcmLoadResidentKeys(asm)
-
-	asm.placeLabel(singlesLoop)
-	emitCmpRegImm(asm, reg: GcmRemaining, imm: AesBlockBytes)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: done)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: GcmRemaining, imm: AesBlockBytes)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmFirstBlock, base: GcmBuffer, disp: 0)
-	emitXmmMovaps(asm, dest: GcmT1, src: GcmFirstBlock)
-	encodePshufb(asm.code, dest: GcmFirstBlock, src: GcmBswap)
-	emitXmmPxor(asm, dest: GcmFirstBlock, src: GcmAcc0)
-	emitGcmLoadHashSubkey(asm)
-	emitGcmMultiplyBlock(asm, block: GcmFirstBlock)
-	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: GcmFirstBlock, base: X64Register.rbp, disp: counters)
-	emitGcmIncrement(asm, counters: counters, index: 0)
-	emitGcmSingleRounds(asm, last: singleLast)
-	asm.placeLabel(singleLast)
-	encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenclast, dest: GcmFirstBlock, src: GcmT0)
-	emitXmmPxor(asm, dest: GcmFirstBlock, src: GcmT1)
-	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmFirstBlock, base: GcmBuffer, disp: 0)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: GcmBuffer, imm: AesBlockBytes)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: singlesLoop)
+	emitGcmSingleBlockLoop(asm, low: low, counters: counters, hashArea: scratch, tailSlot: tailSlot, decrypting: true, done: done)
 
 	asm.placeLabel(done)
-	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: GcmAcc0, base: GcmMessage, disp: 0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: low.acc0, base: GcmMessage, disp: 0)
 
 	return finishGcmFrame(asm, name: cryptoChunkName(CryptoRoutine.aesGcmDecrypt))
 end 'buildAesGcmDecryptChunk'

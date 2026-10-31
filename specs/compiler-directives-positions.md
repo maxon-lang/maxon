@@ -233,6 +233,50 @@ end 'main'
 35
 ```
 
+<!-- test: directives.match-arms -->
+A directive BETWEEN `match` arms, with an arm before it and one after — the shape `stdlib/AesGcm.maxon`
+uses to take a backing's arm off a target. The union gates the same case, so the exhaustive `match`
+compiles only if the dead arms are skipped and the live `cached` arm is the one taken.
+```maxon
+union Backing
+	software
+	cached
+	closed
+
+	#if testing(true)
+		hardware
+	#endif
+end 'Backing'
+
+function describe(backing Backing)
+	match backing 'backing'
+		software then print("software\n")
+
+		#if testing(true)
+			hardware then print("dead hardware\n")
+			cached then print("dead cached\n")
+		#else
+			cached then print("live cached\n")
+		#endif
+
+		closed then print("closed\n")
+	end 'backing'
+end 'describe'
+
+function main() returns ExitCode
+	describe(Backing.software)
+	describe(Backing.cached)
+	describe(Backing.closed)
+
+	return 0
+end 'main'
+```
+```stdout
+software
+live cached
+closed
+```
+
 <!-- test: directives.dead-branch-unparsed-at-top-level -->
 A dead branch at TOP LEVEL holding a call to a function that does not exist. The corpus proves
 token-level skipping inside a function body; this proves it where declarations live, which is a

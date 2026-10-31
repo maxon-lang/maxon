@@ -18,73 +18,80 @@ public enum AesKeyStreamError implements Error
 	counterOverflow
 end 'AesKeyStreamError'
 
+union AesBacking
+	bitsliced(cipher AesBitsliced)
+
+	#if not arch(wasm32)
+		hardware(schedule ByteArray)
+	#endif
+end 'AesBacking'
+
+export function aesHardwareAvailable() returns bool
+	#if not arch(wasm32)
+		return __Builtins.cpuHasAes()
+	#else
+		return false
+	#endif
+end 'aesHardwareAvailable'
+
 /// An AES key schedule, ready to encrypt and decrypt 16-byte blocks in constant time.
 public type Aes
-	let software as AesBitsliced
-
-	// Empty when the software cipher is in use.
-	export let schedule as ByteArray
+	let backing as AesBacking
 
 	/// The cipher for a 16-, 24- or 32-byte `key` (AES-128, AES-192 or AES-256).
 	public static function create(key ByteArray) returns Aes throws AesError
-		let software = try AesBitsliced.create(key)
+		#if not arch(wasm32)
+			if aesHardwareAvailable() 'hardware'
+				try aesRequireKeyLength(key)
 
-		#if arch(x64) or arch(arm64)
-			if __Builtins.cpuHasAes() 'hardware'
-				return Self{software: software, schedule: aesHardwareSchedule(key)}
+				return Self{backing: AesBacking.hardware(aesHardwareSchedule(key))}
 			end 'hardware'
 		#endif
 
-		return Self{software: software, schedule: ByteArray.create()}
+		return Self{backing: AesBacking.bitsliced(try AesBitsliced.create(key))}
 	end 'create'
-
-	export static function createBitsliced(key ByteArray) returns Aes throws AesError
-		let software = try AesBitsliced.create(key)
-
-		return Self{software: software, schedule: ByteArray.create()}
-	end 'createBitsliced'
 
 	/// The encryption of one 16-byte block.
 	public function encryptBlock(block ByteArray) returns ByteArray throws AesError
-		#if arch(x64) or arch(arm64)
-			if not schedule.isEmpty() 'hardware'
-				return try aesHardwareEncrypt(schedule, block: block)
-			end 'hardware'
-		#endif
+		match backing 'backing'
+			bitsliced(cipher) then return try cipher.encryptBlock(block)
 
-		return try software.encryptBlock(block)
+			#if not arch(wasm32)
+				hardware(schedule) then return try aesHardwareEncrypt(schedule, block: block)
+			#endif
+		end 'backing'
 	end 'encryptBlock'
 
 	/// The decryption of one 16-byte block.
 	public function decryptBlock(block ByteArray) returns ByteArray throws AesError
-		#if arch(x64) or arch(arm64)
-			if not schedule.isEmpty() 'hardware'
-				return try aesHardwareDecrypt(schedule, block: block)
-			end 'hardware'
-		#endif
+		match backing 'backing'
+			bitsliced(cipher) then return try cipher.decryptBlock(block)
 
-		return try software.decryptBlock(block)
+			#if not arch(wasm32)
+				hardware(schedule) then return try aesHardwareDecrypt(schedule, block: block)
+			#endif
+		end 'backing'
 	end 'decryptBlock'
 
 	/// `data` XORed with the counter-mode key stream of a 12-byte `nonce`, the first block's counter being
 	/// `counter`. Encryption and decryption are the same call.
 	public function xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
-		#if arch(x64) or arch(arm64)
-			if not schedule.isEmpty() 'hardware'
-				return try aesHardwareXorKeyStream(schedule, nonce: nonce, counter: counter, data: data)
-			end 'hardware'
-		#endif
+		match backing 'backing'
+			bitsliced(cipher) then return try cipher.xorKeyStream(nonce, counter: counter, data: data)
 
-		return try software.xorKeyStream(nonce, counter: counter, data: data)
+			#if not arch(wasm32)
+				hardware(schedule) then return try aesHardwareXorKeyStream(schedule, nonce: nonce, counter: counter, data: data)
+			#endif
+		end 'backing'
 	end 'xorKeyStream'
 
 	export function xorKeyStreamPastFirstBlock(nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
-		#if arch(x64) or arch(arm64)
-			if not schedule.isEmpty() 'hardware'
-				return try aesHardwareXorKeyStreamPastFirstBlock(schedule, nonce: nonce, counter: counter, data: data, output: output)
-			end 'hardware'
-		#endif
+		match backing 'backing'
+			bitsliced(cipher) then return try cipher.xorKeyStreamPastFirstBlock(nonce, counter: counter, data: data, output: output)
 
-		return try software.xorKeyStreamPastFirstBlock(nonce, counter: counter, data: data, output: output)
+			#if not arch(wasm32)
+				hardware(schedule) then return try aesHardwareXorKeyStreamPastFirstBlock(schedule, nonce: nonce, counter: counter, data: data, output: output)
+			#endif
+		end 'backing'
 	end 'xorKeyStreamPastFirstBlock'
 end 'Aes'
