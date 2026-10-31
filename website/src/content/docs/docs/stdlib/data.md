@@ -447,7 +447,9 @@ Output: `invalidPublicKey`.
 AES-GCM (NIST SP 800-38D) with a 12-byte nonce and a 16-byte tag, implementing [`Aead`](#aead).
 `AesGcm.create(key ByteArray)` takes a 16-, 24- or 32-byte key and throws `AeadError.invalidKeyLength`
 for any other. `seal` accepts up to 2^36 − 32 bytes of plaintext, the most its 32-bit block counter
-covers.
+covers. The AES block operations run on AES-NI on x64 and on the ARMv8 Crypto extension on arm64 when the
+CPU provides AES and carry-less multiplication, and on a constant-time software cipher otherwise, including
+on `wasm32-wasi`; the work takes the same time on either path.
 
 ### Aead
 

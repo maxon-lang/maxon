@@ -535,6 +535,7 @@ type PrimitiveInliner
 			covPoint or
 			osHostProcess or
 			osNetpoll or
+			cryptoRoutine or
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then break
@@ -947,12 +948,12 @@ type PrimitiveInliner
 		return self.finish(frame.carve)
 	end 'expandWordPut'
 
-	// The span check is `ManagedWordRuntime.emitWordSpanGuards`', shared with the runtime word read.
+	// The span check is `ManagedWordRuntime.emitSpanGuards`', shared with the runtime word read.
 	function guardWordSpan(cur IrBlock, arr ValueId, at ValueId, width WordBytes, slow IrBlock) returns IrBlock
 		var inside = self.module.addBlock(self.func, label: InlineBoundsLabel, heat: BlockHeat.normal)
 		var next = self.module.addBlock(self.func, label: InlineLoadLabel, heat: BlockHeat.normal)
 
-		emitWordSpanGuards(self.module, entry: cur, inside: inside, next: next, refused: slow, arr: arr, at: at, width: width, ids: self.valueIds())
+		emitSpanGuards(self.module, entry: cur, inside: inside, next: next, refused: slow, arr: arr, at: at, byteCount: wordByteCount(width), ids: self.valueIds())
 
 		return next
 	end 'guardWordSpan'

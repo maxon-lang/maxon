@@ -1,0 +1,254 @@
+let ExpandSplitShuffle = 0xFF
+let Expand192Shuffle = 0x55
+let Expand256bShuffle = 0xAA
+let ExpandFoldFirst = 0x10
+let ExpandFoldSecond = 0x8C
+let ExpandPairLowHalves = 0x44
+let ExpandPairMiddle = 0x4E
+let ExpandCarryShiftBytes = 4
+let Expand128Steps = 10
+let Expand192Steps = 8
+let Expand256Steps = 7
+let Expand192Period = 2
+
+enum XmmTransfer
+	load
+	loadLowHalf
+	store
+end 'XmmTransfer'
+
+function emitXmmTransfer(asm X64RuntimeAsm, transfer XmmTransfer, xmm X64Register, base X64Register, disp Imm32)
+	let opcode = match transfer 'transfer'
+		load gives OpcodeMovdquLoad
+		loadLowHalf gives OpcodeMovqXmmLoad
+		store gives OpcodeMovdquStore
+	end 'transfer'
+
+	encodeModRmBaseDisp(asm.code, twoByteEscape: true, opcode: opcode, regField: xmm, base: base, disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarSingle)
+end 'emitXmmTransfer'
+
+function emitXmmPxor(asm X64RuntimeAsm, dest X64Register, src X64Register)
+	encodeSseRegReg(asm.code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePxor, dest: dest, src: src, wide: false)
+end 'emitXmmPxor'
+
+function emitXmmMovaps(asm X64RuntimeAsm, dest X64Register, src X64Register)
+	encodeSseRegReg(asm.code, prefix: SseMandatoryPrefix.none, opcode: OpcodeMovaps, dest: dest, src: src, wide: false)
+end 'emitXmmMovaps'
+
+function emitXmmPshufd(asm X64RuntimeAsm, dest X64Register, src X64Register, selector MachineWord)
+	encodeSseRegRegImm8(asm.code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePshufd, dest: dest, src: src, imm: selector)
+end 'emitXmmPshufd'
+
+function emitXmmShufps(asm X64RuntimeAsm, dest X64Register, src X64Register, selector MachineWord)
+	encodeSseRegRegImm8(asm.code, prefix: SseMandatoryPrefix.none, opcode: OpcodeShufps, dest: dest, src: src, imm: selector)
+end 'emitXmmShufps'
+
+function emitAesRoundPair(asm X64RuntimeAsm, instruction AesNiInstruction)
+	let state = X64Register.xmm0
+	let roundKey = X64Register.xmm1
+	let keys = X64Register.rdx
+
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: keys, disp: 0)
+	encodeAesNiRegReg(asm.code, instruction: instruction, dest: state, src: roundKey)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: keys, disp: AesBlockBytes)
+	encodeAesNiRegReg(asm.code, instruction: instruction, dest: state, src: roundKey)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: keys, imm: AesRoundPairBytes)
+end 'emitAesRoundPair'
+
+// Takes the round count, the round keys, the destination and the source in rcx, rdx, r8 and r9. The
+// AES chunks use xmm0 to xmm5 and no stack: x64-windows keeps xmm6 to xmm15 across a call and these
+// chunks do not save them.
+function buildAesBlockChunk(name ByteArray, round AesNiInstruction, last AesNiInstruction) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+	let rounds = X64Register.rcx
+	let keys = X64Register.rdx
+	let destination = X64Register.r8
+	let source = X64Register.r9
+	let state = X64Register.xmm0
+	let roundKey = X64Register.xmm1
+	let from192 = asm.newLabel()
+	let from128 = asm.newLabel()
+
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: keys, disp: 0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: state, base: source, disp: 0)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: keys, imm: AesBlockBytes)
+	emitXmmPxor(asm, dest: state, src: roundKey)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: rounds, imm: AesMediumRounds)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: from192)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: from128)
+
+	emitAesRoundPair(asm, instruction: round)
+
+	asm.placeLabel(from192)
+	emitAesRoundPair(asm, instruction: round)
+
+	asm.placeLabel(from128)
+
+	for index in 0 upto AesFullRoundsBeforeLast 'eachRound'
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: keys, disp: (index * AesBlockBytes) as Imm32)
+		encodeAesNiRegReg(asm.code, instruction: round, dest: state, src: roundKey)
+	end 'eachRound'
+
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: keys, disp: (AesFullRoundsBeforeLast * AesBlockBytes) as Imm32)
+	encodeAesNiRegReg(asm.code, instruction: last, dest: state, src: roundKey)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: state, base: destination, disp: 0)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+
+	return asm.finishFunction(name)
+end 'buildAesBlockChunk'
+
+export function buildAesEncryptBlockChunk() returns FunctionCodeChunk
+	return buildAesBlockChunk(AesEncryptBlockChunkName, round: AesNiInstruction.aesenc, last: AesNiInstruction.aesenclast)
+end 'buildAesEncryptBlockChunk'
+
+export function buildAesDecryptBlockChunk() returns FunctionCodeChunk
+	return buildAesBlockChunk(AesDecryptBlockChunkName, round: AesNiInstruction.aesdec, last: AesNiInstruction.aesdeclast)
+end 'buildAesDecryptBlockChunk'
+
+// Lane 0 of xmm4 must stay zero: both `shufps` copy it from xmm4 itself, and the chunk's one `pxor`
+// is the only other write to it.
+function emitExpandFold(asm X64RuntimeAsm, key X64Register)
+	let carry = X64Register.xmm4
+
+	emitXmmShufps(asm, dest: carry, src: key, selector: ExpandFoldFirst)
+	emitXmmPxor(asm, dest: key, src: carry)
+	emitXmmShufps(asm, dest: carry, src: key, selector: ExpandFoldSecond)
+	emitXmmPxor(asm, dest: key, src: carry)
+end 'emitExpandFold'
+
+function emitExpandAdvance(asm X64RuntimeAsm, bytes Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r8, imm: bytes)
+end 'emitExpandAdvance'
+
+function emitExpandStore(asm X64RuntimeAsm, xmm X64Register, disp Imm32)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: xmm, base: X64Register.r8, disp: disp)
+end 'emitExpandStore'
+
+function emitExpandAssist(asm X64RuntimeAsm, assistSource X64Register, roundConstant MachineWord, shuffle MachineWord)
+	encodeAeskeygenassist(asm.code, dest: X64Register.xmm1, src: assistSource, roundConstant: roundConstant)
+	emitXmmPshufd(asm, dest: X64Register.xmm1, src: X64Register.xmm1, selector: shuffle)
+end 'emitExpandAssist'
+
+function emitExpandKeyStep(asm X64RuntimeAsm, key X64Register, assistSource X64Register, roundConstant MachineWord, shuffle MachineWord)
+	emitExpandAssist(asm, assistSource: assistSource, roundConstant: roundConstant, shuffle: shuffle)
+	emitExpandFold(asm, key: key)
+	emitXmmPxor(asm, dest: key, src: X64Register.xmm1)
+	emitExpandStore(asm, xmm: key, disp: 0)
+	emitExpandAdvance(asm, bytes: AesBlockBytes)
+end 'emitExpandKeyStep'
+
+function emitExpand192Step(asm X64RuntimeAsm, wide bool, roundConstant MachineWord)
+	let key = X64Register.xmm0
+	let assist = X64Register.xmm1
+	let tail = X64Register.xmm2
+	let spread = X64Register.xmm3
+	let shifted = X64Register.xmm5
+
+	emitExpandAssist(asm, assistSource: tail, roundConstant: roundConstant, shuffle: Expand192Shuffle)
+	emitExpandFold(asm, key: key)
+	emitXmmPxor(asm, dest: key, src: assist)
+	emitXmmMovaps(asm, dest: shifted, src: tail)
+
+	if wide 'keepTail'
+		emitXmmMovaps(asm, dest: assist, src: tail)
+	end 'keepTail'
+
+	encodeSseShiftQRegImm8(asm.code, ext: Grp14ExtPslldq, reg: shifted, count: ExpandCarryShiftBytes)
+	emitXmmPshufd(asm, dest: spread, src: key, selector: ExpandSplitShuffle)
+	emitXmmPxor(asm, dest: tail, src: spread)
+	emitXmmPxor(asm, dest: tail, src: shifted)
+
+	if wide 'pair'
+		emitXmmShufps(asm, dest: assist, src: key, selector: ExpandPairLowHalves)
+		emitExpandStore(asm, xmm: assist, disp: 0)
+		emitXmmMovaps(asm, dest: assist, src: key)
+		emitXmmShufps(asm, dest: assist, src: tail, selector: ExpandPairMiddle)
+		emitExpandStore(asm, xmm: assist, disp: AesBlockBytes)
+		emitExpandAdvance(asm, bytes: AesRoundPairBytes)
+	end 'pair' else 'single'
+		emitExpandStore(asm, xmm: key, disp: 0)
+		emitExpandAdvance(asm, bytes: AesBlockBytes)
+	end 'single'
+end 'emitExpand192Step'
+
+// Takes the round count, the key, the encryption keys and the decryption keys in rcx, rdx, r8 and r9,
+// under the register rule of `buildAesBlockChunk`.
+export function buildAesExpandKeyChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+	let rounds = X64Register.rcx
+	let key = X64Register.rdx
+	let encryption = X64Register.r8
+	let decryption = X64Register.r9
+	let from192 = asm.newLabel()
+	let from128 = asm.newLabel()
+	let derive = asm.newLabel()
+	let derivation = asm.newLabel()
+	let keyLow = X64Register.xmm0
+	let keyHigh = X64Register.xmm2
+
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: keyLow, base: key, disp: 0)
+	emitExpandStore(asm, xmm: keyLow, disp: 0)
+	emitExpandAdvance(asm, bytes: AesBlockBytes)
+	emitXmmPxor(asm, dest: X64Register.xmm4, src: X64Register.xmm4)
+	emitCmpRegImm(asm, reg: rounds, imm: AesMediumRounds)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: from192)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: from128)
+
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: keyHigh, base: key, disp: AesBlockBytes)
+	emitExpandStore(asm, xmm: keyHigh, disp: 0)
+	emitExpandAdvance(asm, bytes: AesBlockBytes)
+
+	var roundConstant = AesFirstRoundConstant as MachineWord
+
+	for step in 0 upto Expand256Steps 'eachRound256'
+		emitExpandKeyStep(asm, key: keyLow, assistSource: keyHigh, roundConstant: roundConstant, shuffle: ExpandSplitShuffle)
+
+		if step + 1 < Expand256Steps 'notTheLast'
+			emitExpandKeyStep(asm, key: keyHigh, assistSource: keyLow, roundConstant: roundConstant, shuffle: Expand256bShuffle)
+		end 'notTheLast'
+
+		roundConstant = nextAesRoundConstant(roundConstant)
+	end 'eachRound256'
+
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: derive)
+
+	asm.placeLabel(from192)
+	emitXmmTransfer(asm, transfer: XmmTransfer.loadLowHalf, xmm: keyHigh, base: key, disp: AesBlockBytes)
+	roundConstant = AesFirstRoundConstant as MachineWord
+
+	for step in 0 upto Expand192Steps 'eachRound192'
+		emitExpand192Step(asm, wide: step mod Expand192Period == 0, roundConstant: roundConstant)
+		roundConstant = nextAesRoundConstant(roundConstant)
+	end 'eachRound192'
+
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: derive)
+
+	asm.placeLabel(from128)
+	roundConstant = AesFirstRoundConstant as MachineWord
+
+	for _ in 0 upto Expand128Steps 'eachRound128'
+		emitExpandKeyStep(asm, key: keyLow, assistSource: keyLow, roundConstant: roundConstant, shuffle: ExpandSplitShuffle)
+		roundConstant = nextAesRoundConstant(roundConstant)
+	end 'eachRound128'
+
+	asm.placeLabel(derive)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: encryption, imm: AesBlockBytes)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: X64Register.xmm1, base: encryption, disp: 0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: X64Register.xmm1, base: decryption, disp: 0)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: rounds, imm: 1)
+
+	asm.placeLabel(derivation)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: X64Register.xmm1, base: encryption, disp: -AesBlockBytes)
+	encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesimc, dest: X64Register.xmm0, src: X64Register.xmm1)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: X64Register.xmm0, base: decryption, disp: AesBlockBytes)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: encryption, imm: AesBlockBytes)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: decryption, imm: AesBlockBytes)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: rounds, imm: 1)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: derivation)
+
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: X64Register.xmm0, base: encryption, disp: -AesBlockBytes)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: X64Register.xmm0, base: decryption, disp: AesBlockBytes)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+
+	return asm.finishFunction(AesExpandKeyChunkName)
+end 'buildAesExpandKeyChunk'

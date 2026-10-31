@@ -21,21 +21,41 @@ end 'AesKeyStreamError'
 /// An AES key schedule, ready to encrypt and decrypt 16-byte blocks in constant time.
 public type Aes
 	let software as AesBitsliced
+	// Empty when the software cipher is in use.
+	let schedule as ByteArray
 
 	/// The cipher for a 16-, 24- or 32-byte `key` (AES-128, AES-192 or AES-256).
 	public static function create(key ByteArray) returns Aes throws AesError
 		let software = try AesBitsliced.create(key)
 
-		return Self{software: software}
+		#if arch(x64) or arch(arm64)
+			if __Builtins.cpuHasAes() 'hardware'
+				return Self{software: software, schedule: aesHardwareSchedule(key)}
+			end 'hardware'
+		#endif
+
+		return Self{software: software, schedule: ByteArray.create()}
 	end 'create'
 
 	/// The encryption of one 16-byte block.
 	public function encryptBlock(block ByteArray) returns ByteArray throws AesError
+		#if arch(x64) or arch(arm64)
+			if not schedule.isEmpty() 'hardware'
+				return try aesHardwareEncrypt(schedule, block: block)
+			end 'hardware'
+		#endif
+
 		return try software.encryptBlock(block)
 	end 'encryptBlock'
 
 	/// The decryption of one 16-byte block.
 	public function decryptBlock(block ByteArray) returns ByteArray throws AesError
+		#if arch(x64) or arch(arm64)
+			if not schedule.isEmpty() 'hardware'
+				return try aesHardwareDecrypt(schedule, block: block)
+			end 'hardware'
+		#endif
+
 		return try software.decryptBlock(block)
 	end 'decryptBlock'
 

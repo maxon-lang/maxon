@@ -1,0 +1,42 @@
+#if arch(x64) or arch(arm64)
+	let aesHardwareBlockBytes = 16
+	let aesHardwareKeyWordShift = 2
+	let aesHardwareRoundsOverKeyWords = 6
+	let aesHardwareScheduleRoundBytes = 32
+	let aesHardwareFirstByte = 0
+
+	// `__Builtins.aesExpandKey` ends the program unless the array holds exactly the encryption keys and
+	// the decryption keys of a 16-, 24- or 32-byte `key`.
+	module function aesHardwareSchedule(key ByteArray) returns ByteArray
+		let rounds = (key.count() shr aesHardwareKeyWordShift) + aesHardwareRoundsOverKeyWords
+		var schedule = ByteArray.create()
+		schedule.resize((rounds + 1) * aesHardwareScheduleRoundBytes)
+		__Builtins.aesExpandKey(schedule, key)
+
+		return schedule
+	end 'aesHardwareSchedule'
+
+	module function aesHardwareEncrypt(schedule ByteArray, block ByteArray) returns ByteArray throws AesError
+		if block.count() != aesHardwareBlockBytes 'wrongLength'
+			throw AesError.invalidBlockLength
+		end 'wrongLength'
+
+		var sealed = ByteArray.create()
+		sealed.resize(aesHardwareBlockBytes)
+		__Builtins.aesEncryptBlock(sealed, aesHardwareFirstByte, schedule, block, aesHardwareFirstByte)
+
+		return sealed
+	end 'aesHardwareEncrypt'
+
+	module function aesHardwareDecrypt(schedule ByteArray, block ByteArray) returns ByteArray throws AesError
+		if block.count() != aesHardwareBlockBytes 'wrongLength'
+			throw AesError.invalidBlockLength
+		end 'wrongLength'
+
+		var opened = ByteArray.create()
+		opened.resize(aesHardwareBlockBytes)
+		__Builtins.aesDecryptBlock(opened, aesHardwareFirstByte, schedule, block, aesHardwareFirstByte)
+
+		return opened
+	end 'aesHardwareDecrypt'
+#endif

@@ -727,6 +727,7 @@ export type StdToArm64Lowering
 			osHostProcess or
 			osPathQuery or
 			osNetpoll or
+			cryptoRoutine or
 			osSocketOverlapped gives 0
 			call(_, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count() as ParamCount, registerCapacity: arm64RegisterArgCapacity()), argCount: args.count() as ParamCount)
 			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count() as ParamCount, registerCapacity: arm64RegisterArgCapacity()), argCount: args.count() as ParamCount)
@@ -1027,6 +1028,7 @@ export type StdToArm64Lowering
 
 			osHostProcess(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, _) then self.lowerOsHostProcess(resultId, service: service, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
+			cryptoRoutine(resultId, routine, a0Id, a1Id, a2Id, a3Id) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(cryptoChunkName(routine)), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstRef: dstRef)
 			osSocketOverlapped then panic("StdToArm64Lowering: `osSocketOverlapped` is an OVERLAPPED Winsock transfer and this lane has no Winsock — its sockets are driven by readiness, so `ManagedSocketRuntime.socketWaitShape` answers `polled` and emits none")
 			osPathQuery(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsPathQuery(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstRef: dstRef)
 
@@ -1260,6 +1262,7 @@ export type StdToArm64Lowering
 			covPoint then panic("StdToArm64Lowering: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
 			osHostProcess then panic("StdToArm64Lowering: an `osHostProcess` appeared as a block terminator (lowering bug — a host process call produces a value and does not terminate)")
 			osNetpoll then panic("StdToArm64Lowering: an `osNetpoll` appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
+			cryptoRoutine then panic("StdToArm64Lowering: a `cryptoRoutine` appeared as a block terminator (lowering bug — a crypto routine produces a value and does not terminate)")
 			osSocketOverlapped then panic("StdToArm64Lowering: an `osSocketOverlapped` appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
 			osPathQuery then panic("StdToArm64Lowering: an `osPathQuery` appeared as a block terminator (lowering bug — a path query produces a value and does not terminate)")
 		end 'lower'

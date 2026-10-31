@@ -1943,7 +1943,7 @@ end 'emitLoadElemAndOkReturn'
 // Call `__managed_cow_detach(arr)` — the one obligation every in-place mutator owes before it touches the
 // buffer (see `buildManagedCowDetach` for the rule and for which mutators call this directly). The callee is
 // void, so the minted result is unread; it exists because a `call` op always defines a value.
-function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
+export function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
 	let detached = ids.mint()
 	module.appendOp(block, op: StdOp.call(detached, callee: ManagedCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
@@ -2915,7 +2915,7 @@ let BoundsCompareOperandType = StdType.u64
 // A user index is OUT OF RANGE for a length-`length` array when it is NEGATIVE or at/above the length — the
 // ONE home of the "reject this index" test `__managed_get`/`__managed_set`/`__managed_remove`/
 // `__managed_mem_swap` share, along with the cursor's four fallible members (`emitCursorPositionOutOfRange`,
-// whose limit is the SOURCE record's `length@8`), the byte-order reads (`ManagedWordRuntime.emitWordSpanGuards`)
+// whose limit is the SOURCE record's `length@8`), the byte-order reads (`ManagedWordRuntime.emitSpanGuards`)
 // and — exported for it — `ListRuntime.__list_get`, whose
 // index is a position into a `count`-long chain: the same question over the same two words, differing only
 // in what the caller does with the answer.
@@ -3807,7 +3807,7 @@ end 'emitGetLoadAndReturn'
 // absent rather than missing. Its three callers each hold the bound: `Parser.parseForStatement` supplies a
 // counter it minted itself and compared against a live `__managed_count` in the same iteration,
 // `LowerMaxonToStd.lowerSlottedOrProvenCall` an index the parser proved inside the fixed size, and
-// `ManagedWordRuntime.buildWordGet` an index its `emitWordSpanGuards` check put inside the record.
+// `ManagedWordRuntime.buildWordGet` an index its `emitSpanGuards` check put inside the record.
 function buildManagedGetUnchecked(module StdModule)
 	var func = IrFunction.createFromStd(ManagedGetUncheckedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)

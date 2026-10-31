@@ -87,7 +87,7 @@ end 'emitArm64Rrr'
 
 // A 2-register instruction `op Rd, Rn` (NEG/MVN/FMOV/SCVTF/FCVTZS/FSQRT/FRINT and the ORR-based
 // MOV) — Rm is fixed in the opcode (XZR for NEG/MVN, none for the FP unary/convert forms).
-function emitArm64Rr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord)
+export function emitArm64Rr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord)
 	emitArm64Insn(code, insn: opcode or (rn shl Arm64RnShift) or rd)
 end 'emitArm64Rr'
 
@@ -119,7 +119,7 @@ let Arm64OpSdiv = 0x9AC00C00
 export let Arm64OpUdiv = 0x9AC00800
 export let Arm64OpAnd = 0x8A000000
 export let Arm64OpOrr = 0xAA000000
-let Arm64OpEor = 0xCA000000
+export let Arm64OpEor = 0xCA000000
 let Arm64OpLslv = 0x9AC02000
 let Arm64OpAsrv = 0x9AC02800
 let Arm64OpLsrv = 0x9AC02400
@@ -540,6 +540,17 @@ let Arm64OpFcselD = 0x1E600C00
 // cycle-break's float arm (AArch64 has no `fmov`-based swap and no reserved FP scratch, exactly as
 // x64 has no `xchg xmm` and swaps XMMs with a triple-xorpd).
 let Arm64OpEorVec8b = 0x2E201C00
+export let Arm64OpEorVec16b = 0x6E201C00
+export let Arm64OpExtVec16b = 0x6E000000
+export let Arm64OpDupWordsFromGpr = 0x4E040C00
+export let Arm64OpUmovWord = 0x0E043C00
+export let Arm64OpAese = 0x4E284800
+export let Arm64OpAesd = 0x4E285800
+export let Arm64OpAesmc = 0x4E286800
+export let Arm64OpAesimc = 0x4E287800
+export let Arm64OpLdrQ = 0x3DC00000
+export let Arm64OpStrQ = 0x3D800000
+export let Arm64ExtImmShift = 11
 
 // The largest immediate `arm64EmitAddSubImmWide`'s hi/lo split encodes — 24 bits, as two imm12 fields,
 // which is exactly the two fields above OR'd together. It bounds BOTH of that helper's callers, and they
@@ -3251,6 +3262,12 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// among runtime chunks is inert (they all fall inside `[mrt_start, __symtable)`, the only range the
 	// text guard tests), so this is about reading order rather than about layout.
 	appendArm64FaultRuntimeChunks(chunks, globalData: globalData, usesGt: usage.usesGt, carriesHostLock: posixUsesHostLock(usage), recordsCpuFeatures: cpuFeaturesAreProbed(usage, target: target), errnoHome: linuxErrnoHome(usage), target: target)
+
+	if hardwareAesChunksAreEmitted(usage, target: target) 'hardwareAes'
+		chunks.push(buildArm64AesExpandKeyChunk())
+		chunks.push(buildArm64AesEncryptBlockChunk())
+		chunks.push(buildArm64AesDecryptBlockChunk())
+	end 'hardwareAes'
 
 	// The HOST SURFACE — the sequences behind the `os*` ops. EXACTLY ONE lane's chunks are appended, which
 	// is what lets both build under the shared `mrt_host_*` names (`Arm64PosixRuntime`'s header): macOS's

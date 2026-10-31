@@ -351,6 +351,7 @@ let OpcodeMovqXmmRm = 0x6E
 let OpcodeGrp14ShiftQImm8 = 0x73
 let Grp14ExtPsrlq = 2
 let Grp14ExtPsllq = 6
+export let Grp14ExtPslldq = 7
 
 // The shift COUNT both halves of the sign-bit clear use: one bit, which is the sign bit's whole width.
 let SignBitShiftCount = 1
@@ -419,7 +420,7 @@ let TwoByteOpcodeEscape = 0x0F
 // ordering is precisely why this rides the SHARED ModR/M assemblers as a PARAMETER (they emit
 // it immediately before their own `emitRex` call) instead of being pushed by callers, who by
 // construction could not get a byte in ahead of a REX the assembler has not written yet.
-enum SseMandatoryPrefix
+export enum SseMandatoryPrefix
 	// No mandatory prefix — every GPR instruction in this file but the 16-bit store (`operandSize16`).
 	none
 
@@ -435,11 +436,14 @@ enum SseMandatoryPrefix
 	// `packedDouble` for the current set rather than reading one here.
 	packedDouble
 
+	scalarSingle
+
 	operandSize16
 end 'SseMandatoryPrefix'
 
 let SsePrefixScalarDoubleByte = 0xF2
 let SsePrefixPackedDoubleByte = 0x66
+let SsePrefixScalarSingleByte = 0xF3
 let OperandSize16PrefixByte = 0x66
 
 // The two segment-override legacy prefixes. On Win64 `gs:` addresses the Thread Information Block, whose
@@ -468,6 +472,7 @@ function emitSseMandatoryPrefix(code ByteArray, prefix SseMandatoryPrefix)
 		none then break
 		scalarDouble then code.push(SsePrefixScalarDoubleByte)
 		packedDouble then code.push(SsePrefixPackedDoubleByte)
+		scalarSingle then code.push(SsePrefixScalarSingleByte)
 		operandSize16 then code.push(OperandSize16PrefixByte)
 	end 'p'
 end 'emitSseMandatoryPrefix'
@@ -672,7 +677,7 @@ end 'encodeModRmExtBaseDisp'
 // `ssePrefix` mirrors `encodeModRmDirect`'s: emitted before the REX, defaulted to `none`, so
 // `movsd xmm, [base+disp]` shares this assembler — and therefore the rsp-SIB and rbp-disp8
 // traps — with every GPR load and store rather than forking a second memory-operand path.
-function encodeModRmBaseDisp(code ByteArray, twoByteEscape bool, opcode MachineWord, regField X64Register, base X64Register, disp Imm32, wide bool, forceRex bool = false, ssePrefix SseMandatoryPrefix = SseMandatoryPrefix.none, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+export function encodeModRmBaseDisp(code ByteArray, twoByteEscape bool, opcode MachineWord, regField X64Register, base X64Register, disp Imm32, wide bool, forceRex bool = false, ssePrefix SseMandatoryPrefix = SseMandatoryPrefix.none, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	emitSseMandatoryPrefix(code, prefix: ssePrefix)
 
 	// REX.X extends the SIB INDEX. `X64SibNoIndex` is rsp, whose encoding number is 4, so the absent
@@ -810,7 +815,7 @@ end 'encodeSetccReg'
 // already chosen scalar-double. It is `true` for exactly the two CONVERTS, where REX.W selects
 // the 64-bit GPR half, and `false` everywhere else; passing `true` for an `addsd` would emit a
 // pointless REX and stop the bytes matching an assembler's.
-function encodeSseRegReg(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, wide bool)
+export function encodeSseRegReg(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, wide bool)
 	encodeModRmDirect(code, twoByteEscape: true, opcode: opcode, regField: dest, rmField: src, wide: wide, ssePrefix: prefix)
 end 'encodeSseRegReg'
 
@@ -844,14 +849,64 @@ end 'encodeMovqGprXmm'
 // form). ⚠ NO REX.W: both operands are XMM, and the mandatory 66 has already selected the form —
 // REX.W would only lengthen the encoding and stop the bytes matching an assembler's.
 function encodeRoundsdRegReg(code ByteArray, dest X64Register, src X64Register, mode FloatRoundMode)
+	encodeSseMap3ARegRegImm8(code, opcode: OpcodeRoundsd, dest: dest, src: src, imm: roundsdImm8(mode))
+end 'encodeRoundsdRegReg'
+
+export let OpcodeMovdquLoad = 0x6F
+export let OpcodeMovdquStore = 0x7F
+export let OpcodeMovqXmmLoad = 0x7E
+export let OpcodeMovaps = 0x28
+export let OpcodePxor = 0xEF
+export let OpcodePshufd = 0x70
+export let OpcodeShufps = 0xC6
+let OpcodeThreeByteEscape38 = 0x38
+let OpcodeAeskeygenassist = 0xDF
+
+export enum AesNiInstruction
+	aesimc
+	aesenc
+	aesenclast
+	aesdec
+	aesdeclast
+end 'AesNiInstruction'
+
+function aesNiOpcode(instruction AesNiInstruction) returns MachineWord
+	return match instruction 'instruction'
+		aesimc gives 0xDB
+		aesenc gives 0xDC
+		aesenclast gives 0xDD
+		aesdec gives 0xDE
+		aesdeclast gives 0xDF
+	end 'instruction'
+end 'aesNiOpcode'
+
+function encodeSseMap3ARegRegImm8(code ByteArray, opcode MachineWord, dest X64Register, src X64Register, imm MachineWord)
 	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
 	emitRex(code, wide: false, regField: dest, rmField: src)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeThreeByteEscape3A)
-	code.push(OpcodeRoundsd)
+	code.push(opcode)
 	emitModRmRegReg(code, regField: dest, rmField: src)
-	code.push(roundsdImm8(mode))
-end 'encodeRoundsdRegReg'
+	code.push(imm)
+end 'encodeSseMap3ARegRegImm8'
+
+export function encodeAesNiRegReg(code ByteArray, instruction AesNiInstruction, dest X64Register, src X64Register)
+	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
+	emitRex(code, wide: false, regField: dest, rmField: src)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeThreeByteEscape38)
+	code.push(aesNiOpcode(instruction))
+	emitModRmRegReg(code, regField: dest, rmField: src)
+end 'encodeAesNiRegReg'
+
+export function encodeAeskeygenassist(code ByteArray, dest X64Register, src X64Register, roundConstant MachineWord)
+	encodeSseMap3ARegRegImm8(code, opcode: OpcodeAeskeygenassist, dest: dest, src: src, imm: roundConstant)
+end 'encodeAeskeygenassist'
+
+export function encodeSseRegRegImm8(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, imm MachineWord)
+	encodeSseRegReg(code, prefix: prefix, opcode: opcode, dest: dest, src: src, wide: false)
+	code.push(imm)
+end 'encodeSseRegRegImm8'
 
 // `abs(x)` for an f64 already in `reg`: shift the sign bit out and shift the rest back
 // (`OpcodeGrp14ShiftQImm8`'s comment carries the argument). IN PLACE, on one register — the op is
@@ -944,7 +999,7 @@ end 'encodeCvtu64sdRegReg'
 // `encodeModRmExtDirect`'s reason — the `/ext` reg field is an opcode extension 0..7 and never needs
 // REX.R — while REX.B still extends the r/m register. ⚠ NO REX.W: the mandatory 66 has already chosen
 // the form, and REX.W would only lengthen the encoding and stop the bytes matching an assembler's.
-function encodeSseShiftQRegImm8(code ByteArray, ext MachineWord, reg X64Register, count ShiftCount)
+export function encodeSseShiftQRegImm8(code ByteArray, ext MachineWord, reg X64Register, count ShiftCount)
 	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
 	code.push(TwoByteOpcodeEscape)

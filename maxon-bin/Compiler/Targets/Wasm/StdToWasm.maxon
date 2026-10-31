@@ -1278,6 +1278,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		covPoint or
 		osHostProcess or
 		osNetpoll or
+		cryptoRoutine or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then break
@@ -1894,6 +1895,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osHostProcess or
 		osPathQuery or
 		osSocketOverlapped or
+		cryptoRoutine or
 		osSocketServe then break
 
 		osNetpoll(resultId, _, _, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
@@ -2452,6 +2454,7 @@ type WasmFuncEmitter
 			osHostProcess then panic("emitTerminator: a host process call is a body op, never a terminator")
 			osNetpoll then panic("emitTerminator: a poller call is a body op, never a terminator")
 			osPathQuery then panic("emitTerminator: a path query is a body op, never a terminator")
+			cryptoRoutine or
 			osSocketOverlapped or
 			osSocketServe then panic("emitTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
 		end 'term'
@@ -2686,6 +2689,7 @@ type WasmFuncEmitter
 			// neither — so this is a permanent absence rather than an unwritten lowering.
 			osHostProcess then panic("emitBodyOp: `osHostProcess` has no wasm32-wasi spelling — process sampling is `HostFacility.processSampling`, which this lane does not provide, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
 			osNetpoll(resultId, verb, microsecondsId, _, _, _, _) then self.emitOsNetpoll(resultId, verb: verb, microsecondsId: microsecondsId)
+			cryptoRoutine then panic("emitBodyOp: `cryptoRoutine` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `cpuFeatureProbe` on this lane, so a hardware AES call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past it")
 			osSocketOverlapped then panic("emitBodyOp: `osSocketOverlapped` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `managedSocket` on this lane, so a socket call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
 			osPathQuery then panic("emitBodyOp: `osPathQuery` has no wasm32-wasi spelling — it is emitted only by the `PATH` walk and by `__md_resolve_path`; WASI has no process-spawn primitive, so a subprocess call is refused at its own source span (E3074) and the `PATH` walk is never installed, and a resolve (`FilePath.resolvedPhysically`) is refused earlier by E3104; this is the backstop for a compiler bug that got one past those refusals")
 			osSocketServe then panic("emitBodyOp: `osSocketServe` has no wasm32-wasi spelling — binding, listening and accepting need `wasi:sockets`, which this lane does not use, so `TargetFacilities.targetProvidesFacility` denies `managedSocket` here and a listener call is refused at its own source span (E3104); this is the backstop for a compiler bug that got one past that gate")

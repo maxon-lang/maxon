@@ -1,0 +1,48 @@
+diff --git a/stdlib/helpers/crypto/Aes.maxon b/stdlib/helpers/crypto/Aes.maxon
+--- a/stdlib/helpers/crypto/Aes.maxon
++++ b/stdlib/helpers/crypto/Aes.maxon
+@@ -29,7 +29,7 @@ public type Aes
+ 		let software = try AesBitsliced.create(key)
+ 
+ 		#if arch(x64) or arch(arm64)
+-			if __Builtins.cpuHasAes() 'hardware'
++			if false 'hardware'
+ 				return Self{software: software, schedule: aesHardwareSchedule(key)}
+ 			end 'hardware'
+ 		#endif
+diff --git a/stdlib/helpers/crypto/AesHardware.maxon b/stdlib/helpers/crypto/AesHardware.maxon
+--- a/stdlib/helpers/crypto/AesHardware.maxon
++++ b/stdlib/helpers/crypto/AesHardware.maxon
+@@ -11,7 +11,9 @@
+ 		let rounds = (key.count() shr aesHardwareKeyWordShift) + aesHardwareRoundsOverKeyWords
+ 		var schedule = ByteArray.create()
+ 		schedule.resize((rounds + 1) * aesHardwareScheduleRoundBytes)
+-		__Builtins.aesExpandKey(schedule, key)
++		if key.count() > 0 'needsANewerCompiler'
++			panic("hardware AES needs a compiler newer than the seed")
++		end 'needsANewerCompiler'
+ 
+ 		return schedule
+ 	end 'aesHardwareSchedule'
+@@ -23,7 +25,9 @@
+ 
+ 		var sealed = ByteArray.create()
+ 		sealed.resize(aesHardwareBlockBytes)
+-		__Builtins.aesEncryptBlock(sealed, aesHardwareFirstByte, schedule, block, aesHardwareFirstByte)
++		if block.count() == aesHardwareBlockBytes 'needsANewerCompiler'
++			panic("hardware AES needs a compiler newer than the seed: {schedule.count()}")
++		end 'needsANewerCompiler'
+ 
+ 		return sealed
+ 	end 'aesHardwareEncrypt'
+@@ -35,7 +39,9 @@
+ 
+ 		var opened = ByteArray.create()
+ 		opened.resize(aesHardwareBlockBytes)
+-		__Builtins.aesDecryptBlock(opened, aesHardwareFirstByte, schedule, block, aesHardwareFirstByte)
++		if block.count() == aesHardwareBlockBytes 'needsANewerCompiler'
++			panic("hardware AES needs a compiler newer than the seed: {schedule.count()}")
++		end 'needsANewerCompiler'
+ 
+ 		return opened
+ 	end 'aesHardwareDecrypt'

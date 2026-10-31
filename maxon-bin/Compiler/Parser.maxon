@@ -93795,6 +93795,11 @@ export type Parser
 				return try self.emitBitsToFloat(args, calleeTok: anchor)
 			end 'bitsToFloat'
 
+			if isAesCipherIntrinsic(callee) 'aesCipher'
+				let intrinsic = try aesCipherIntrinsicNamed(callee) otherwise panic("parseCallNamed: '{String.from(callee)}' passed `isAesCipherIntrinsic` and names no AES cipher intrinsic")
+				return try self.emitAesCipherIntrinsic(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, callee: callee, intrinsic: intrinsic, calleeTok: anchor, calleeIndex: calleeIndex, resultUsed: resultUsed)
+			end 'aesCipher'
+
 			if isOrderedWordIntrinsic(callee) 'orderedWord'
 				let intrinsic = try orderedWordIntrinsicNamed(callee) otherwise panic("parseCallNamed: '{String.from(callee)}' passed `isOrderedWordIntrinsic` and names no ordered-word intrinsic")
 				return try self.emitOrderedWordAccess(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, callee: callee, intrinsic: intrinsic, calleeTok: anchor, calleeIndex: calleeIndex, resultUsed: resultUsed)
@@ -94554,6 +94559,34 @@ export type Parser
 
 		return self.emitFullRangeFloatBits(operand, range: SourceRange.ofToken(calleeTok))
 	end 'emitBitsToFloat'
+
+	function emitAesCipherIntrinsic(func IrFunction, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, callee ByteArray, intrinsic AesCipherIntrinsic, calleeTok Token, calleeIndex ElementIndex, resultUsed bool) returns ValueId throws SourceParseError
+		try requireBuiltinArity(args, builtinName: callee, arity: aesCipherArity(intrinsic), calleeTok: calleeTok)
+
+		if resultUsed 'noValueToUse'
+			throw SourceParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		for index in 0 upto args.count() 'eachOperand'
+			let operand = try args.get(index) otherwise panic("emitAesCipherIntrinsic: args.count() == aesCipherArity just checked but get({index}) failed")
+
+			if aesCipherOperandIsOffset(intrinsic, index: index as ParamCount) 'anOffset'
+				let operandTag = self.rangedAliasResolvedTag(self.tagOf(operand), nameId: self.valueNameId(operand))
+
+				if not tagIsInteger(operandTag) 'notAnInteger'
+					throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWordAt(operand, tag: operandTag), line: calleeTok.line, column: calleeTok.column)
+				end 'notAnInteger'
+			end 'anOffset' else 'aBuffer'
+				if not self.valueIsByteArray(operand) 'notAByteArray'
+					throw SourceParseError.builtinOperandType(String.from(callee), required: AesCipherBufferRequirement, got: self.valueDisplayTypeName(operand), line: calleeTok.line, column: calleeTok.column)
+				end 'notAByteArray'
+			end 'aBuffer'
+		end 'eachOperand'
+
+		self.noteFirstArgumentWrite(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex)
+
+		return self.emitRuntimeCall(aesCipherRuntimeName(intrinsic), args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitAesCipherIntrinsic'
 
 	function emitOrderedWordAccess(func IrFunction, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, callee ByteArray, intrinsic OrderedWordIntrinsic, calleeTok Token, calleeIndex ElementIndex, resultUsed bool) returns ValueId throws SourceParseError
 		try requireBuiltinArity(args, builtinName: callee, arity: OrderedWordArity, calleeTok: calleeTok)

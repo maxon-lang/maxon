@@ -164,7 +164,7 @@ function buildWordGet(module StdModule, order WordByteOrder, width WordBytes)
 	let arr = 0
 	let at = 1
 
-	emitWordSpanGuards(module, entry: entry, inside: short, next: read, refused: oob, arr: arr, at: at, width: width, ids: ids)
+	emitSpanGuards(module, entry: entry, inside: short, next: read, refused: oob, arr: arr, at: at, byteCount: wordByteCount(width), ids: ids)
 	emitOobReturn(module, block: oob, ids: ids)
 
 	let first = emitConst(module, block: read, value: WordFirstByteIndex, ids: ids)
@@ -187,17 +187,17 @@ function buildWordGet(module StdModule, order WordByteOrder, width WordBytes)
 	module.functions.push(func)
 end 'buildWordGet'
 
-// Bounded as `at < length`, then `length - at >= width`, and never as `at + width <= length`: an `at`
-// near `u64.max` would wrap that sum into range and read outside the buffer.
-export function emitWordSpanGuards(module StdModule, entry IrBlock, inside IrBlock, next IrBlock, refused IrBlock, arr ValueId, at ValueId, width WordBytes, ids ValueMinter)
+// Bounded as `at < length`, then `length - at >= byteCount`, and never as `at + byteCount <= length`: an
+// `at` near `u64.max` would wrap that sum into range and reach outside the buffer.
+export function emitSpanGuards(module StdModule, entry IrBlock, inside IrBlock, next IrBlock, refused IrBlock, arr ValueId, at ValueId, byteCount FullRangeInt, ids ValueMinter)
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let pastEnd = emitIndexOutOfRange(module, block: entry, index: at, length: length, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(pastEnd, thenBlockId: refused.id, elseBlockId: inside.id))
 
 	let remaining = emitBin(module, block: inside, a: length, b: at, opcode: StdBinOpcode.sub, ids: ids)
-	let tooShort = emitCompareWithConstant(module, block: inside, value: remaining, pred: StdCmpPred.lt, against: wordByteCount(width), ids: ids)
+	let tooShort = emitCompareWithConstant(module, block: inside, value: remaining, pred: StdCmpPred.lt, against: byteCount, ids: ids)
 	module.setTerminator(inside, op: StdOp.condBranch(tooShort, thenBlockId: refused.id, elseBlockId: next.id))
-end 'emitWordSpanGuards'
+end 'emitSpanGuards'
 
 function buildWordPut(module StdModule, order WordByteOrder, width WordBytes)
 	var func = IrFunction.createFromStd(wordEntryName(WordAccess.put, order: order, width: width), returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())

@@ -1253,6 +1253,7 @@ export type StdToX64Lowering
 			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
+			cryptoRoutine or
 			covPoint gives 0
 
 			// ⚠ `MapViewOfFile` takes five, so `dwNumberOfBytesToMap` is a real outgoing stack argument
@@ -1516,6 +1517,7 @@ export type StdToX64Lowering
 			osHostProcess(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, a5Id) then self.lowerOsHostProcess(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstBlock: dstBlock)
 			osSocketOverlapped(resultId, verb, a0Id, a1Id, a2Id, a3Id) then self.lowerOsSocketOverlapped(resultId, verb: verb, operands: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
+			cryptoRoutine(resultId, routine, a0Id, a1Id, a2Id, a3Id) then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(cryptoChunkName(routine)), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
 			osProcessTerminate(resultId, handleId, exitCodeId) then self.lowerOsProcessTerminate(resultId, handleId: handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
 			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
@@ -1788,6 +1790,7 @@ export type StdToX64Lowering
 			osHostProcess then panic("StdToX64Lowering: an `osHostProcess` op appeared as a block terminator (lowering bug — a host process call produces a value and does not terminate)")
 			osNetpoll then panic("StdToX64Lowering: an `osNetpoll` op appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 			osSocketOverlapped then panic("StdToX64Lowering: an `osSocketOverlapped` op appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
+			cryptoRoutine then panic("StdToX64Lowering: a `cryptoRoutine` op appeared as a block terminator (lowering bug — a crypto routine produces a value and does not terminate a block)")
 			osPathQuery then panic("StdToX64Lowering: an `osPathQuery` op appeared as a block terminator (lowering bug — a path query produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
@@ -5446,6 +5449,7 @@ export type StdToX64Lowering
 			covPoint or
 			osHostProcess or
 			osNetpoll or
+			cryptoRoutine or
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe gives false
@@ -5701,6 +5705,7 @@ export type StdToX64Lowering
 			osHostProcess panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHostProcess`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osNetpoll panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osNetpoll`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osSocketOverlapped panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osSocketOverlapped`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			cryptoRoutine panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `cryptoRoutine`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPathQuery panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPathQuery`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'

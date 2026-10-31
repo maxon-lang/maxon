@@ -2125,7 +2125,7 @@ end 'emitLinuxSigactionCall'
 // (`x64OsCallKind`) — it is not re-stated as a literal inside each lane appender. This is the only place
 // in the x64 backend that holds a `Target` at the moment the chunk set is chosen, so it is the only place
 // that can answer without repeating itself; the lane appenders receive the answer and pass it on.
-export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, carriesHostLock bool, probesCpuFeatures bool, context HostContextLayout)
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, carriesHostLock bool, probesCpuFeatures bool, emitsHardwareAes bool, context HostContextLayout)
 	let exitRoute = x64OsCallKind(target.os)
 
 	match target.os 'os'
@@ -2138,6 +2138,12 @@ export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Tar
 	if probesCpuFeatures 'probe'
 		chunks.push(buildCpuFeatureProbeChunk())
 	end 'probe'
+
+	if emitsHardwareAes 'hardwareAes'
+		chunks.push(buildAesExpandKeyChunk())
+		chunks.push(buildAesEncryptBlockChunk())
+		chunks.push(buildAesDecryptBlockChunk())
+	end 'hardwareAes'
 end 'appendX64RuntimeChunks'
 
 // ⭐ THE CHUNKS BOTH LANES NEED, WRITTEN ONCE. A per-lane copy of this list is not a compile error when

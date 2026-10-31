@@ -1209,6 +1209,13 @@ export let NetpollBreakToken = 0xEE1EB9F4 as FullRangeInt
 // apart by these two words alone, and neither may equal a source key.
 export let NetpollOverlappedToken = 0xEE1EB9F5 as FullRangeInt
 
+// The hand-assembled routines `StdOp.cryptoRoutine` calls; `cryptoChunkName` maps each to its chunk.
+export enum CryptoRoutine
+	aesExpandKey
+	aesEncryptBlock
+	aesDecryptBlock
+end 'CryptoRoutine'
+
 // ⭐⭐ **WHICH WINSOCK ENTRY POINT ONE `osSocketOverlapped` ASKS FOR, AND WHICH OPERANDS IT READS.** Each verb
 // is one call with one argument list; the op carries four operands and a verb reads a prefix of them, so the
 // operands a verb does not name are passed zero.
@@ -3188,6 +3195,12 @@ export union StdOp
 	// be still holding, and `ManagedSocketRuntime.socketWaitShape` emits none of this there.
 	osSocketOverlapped(resultId ValueId, verb SocketOverlappedVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
+	// A call to the routine's chunk with the four operands in its argument registers, and a result that
+	// is always 0. The routines write through their pointer operands, so `isStore` and `isMemory` must
+	// stay set: without them a pass would treat the op as pure and drop it, or hoist a load of the
+	// destination above it.
+	cryptoRoutine(resultId ValueId, routine CryptoRoutine, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// ⭐⭐ **THE SERVER SIDE OF A SOCKET, AS ONE FAMILY OP** — `osSocketServe(result, verb, a0…a2) -> the
 	// host's raw answer`, in the lane's own failure vocabulary (`osSocketCreate`'s: `-errno` on a POSIX lane,
 	// -1 on Winsock, and every reader tests `< 0`). It is `osSocketOverlapped`'s arrangement for that op's
@@ -3267,6 +3280,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		atomicRmw or
 		loadAcquire or
 		storeRelease or
+		cryptoRoutine or
 
 		// The `schedulerBound` OS ops: the scheduler's own machinery, and the bounded-and-short rest.
 		//
@@ -3596,7 +3610,8 @@ export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 		osUnpublishNamedSegment or
 		covPoint or
 		osHostProcess or
-		osNetpoll then return StdOpLabelKind.none
+		osNetpoll or
+		cryptoRoutine then return StdOpLabelKind.none
 		globalAddr then return StdOpLabelKind.dataSlot
 		rdataAddr then return StdOpLabelKind.rdata
 	end 'op'
@@ -4036,6 +4051,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		covPoint or
 		osHostProcess or
 		osNetpoll or
+		cryptoRoutine or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then operands.recordNeither()
@@ -4291,6 +4307,7 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		covPoint or
 		osHostProcess or
 		osNetpoll or
+		cryptoRoutine or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then access.recordNeither()
@@ -4615,6 +4632,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 		covPoint or
 		osHostProcess or
 		osNetpoll or
+		cryptoRoutine or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then call.recordOther()
@@ -4789,6 +4807,7 @@ module function classifyWitnessOperands(op StdOp, w StdWitnessOperands)
 		covPoint or
 		osHostProcess or
 		osNetpoll or
+		cryptoRoutine or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then w.recordOther()
@@ -5288,6 +5307,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osHostProcess(_, _, a0, a1, a2, a3, a4, a5) then insertUseSextet(referenced, a: a0, b: a1, c: a2, d: a3, e: a4, f: a5)
 		osNetpoll(_, _, a0, a1, a2, a3, a4) then insertUseQuint(referenced, a: a0, b: a1, c: a2, d: a3, e: a4)
 		osSocketOverlapped(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
+		cryptoRoutine(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
 		osSocketServe(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
 		osPathQuery(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
 		osOpenNamedSegment(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
@@ -5456,6 +5476,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osHostProcess(resultId, _, _, _, _, _, _, _) then def.recordOne(resultId)
 		osNetpoll(resultId, _, _, _, _, _, _) then def.recordOne(resultId)
 		osSocketOverlapped(resultId, _, _, _, _, _) then def.recordOne(resultId)
+		cryptoRoutine(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		osSocketServe(resultId, _, _, _, _) then def.recordOne(resultId)
 		osPathQuery(resultId, _, _, _, _) then def.recordOne(resultId)
 		osFileSize(resultId, _, _) then def.recordOne(resultId)
@@ -5732,6 +5753,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osHostProcess(resultId, service, a0, a1, a2, a3, a4, a5) gives StdOp.osHostProcess(resultId, service: service, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst), a5Id: remappedValue(a5, subst: subst))
 		osNetpoll(resultId, verb, a0, a1, a2, a3, a4) gives StdOp.osNetpoll(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst))
 		osSocketOverlapped(resultId, verb, a0, a1, a2, a3) gives StdOp.osSocketOverlapped(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
+		cryptoRoutine(resultId, routine, a0, a1, a2, a3) gives StdOp.cryptoRoutine(resultId, routine: routine, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osSocketServe(resultId, verb, a0, a1, a2) gives StdOp.osSocketServe(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
 		osPathQuery(resultId, verb, a0, a1, a2) gives StdOp.osPathQuery(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
@@ -6072,6 +6094,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		covPoint or
 		osHostProcess or
 		osNetpoll or
+		cryptoRoutine or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe gives refuseUnclonable(op)
@@ -6635,6 +6658,7 @@ export function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		covPoint or
 		osHostProcess or
 		osNetpoll or
+		cryptoRoutine or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then break
@@ -6839,6 +6863,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 		covPoint or
 		osHostProcess or
 		osNetpoll or
+		cryptoRoutine or
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then out.recordOther()
