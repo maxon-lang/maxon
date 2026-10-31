@@ -1384,7 +1384,7 @@ end 'emitLoadByteIndexed'
 // ⭐⭐ **ITS BODY IS `emitForwardCopy`, WHICH IS THE WHOLE FUNCTION.** Hand-building the header-guarded
 // byte loop the two copy helpers in `ManagedMemoryRuntime` build would be one shape written down three
 // times, in the three places a wider store would have to land at once. It is the LOW-ADDRESS-FIRST copy
-// those helpers are: a machine word per trip and a byte tail. MEASURED on this tree's own
+// those helpers are, at `emitForwardCopy`'s default word width. MEASURED on this tree's own
 // self-compile (`--emit-ir`, `callDirect __str_copy`): 23,745 call sites — every String interpolation part
 // and every String clone in the compiler — which makes it the most-called loop the language emits.
 //
@@ -1512,9 +1512,70 @@ export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBloc
 	emitBranchCarrying(module, from: tail, to: loop.header, values: backValues)
 end 'closeCountedLoop'
 
-// `byteCount and -8` — how many of `byteCount`'s bytes a run of WHOLE machine words covers. Derived from the
-// word size rather than written as a `-8` beside it: the mask and the step of the word loop are one fact.
-let WholeWordsMask = -(MachineWordBytes as FullRangeInt)
+// Declared widest first: `openCopyRunSplit` takes `widest` and every chunk after it in this order, and
+// the run ends at `byteCount` only because `byte` is last.
+export enum CopyChunk
+	block
+	word
+	byte
+end 'CopyChunk'
+
+export typealias AccessShift = int(0 to 3)
+export typealias AccessCount = int(1 to 8)
+
+let BlockAccessShift = 2
+let SingleAccessShift = 0
+
+export type CopyChunkShape
+	export let accessType as StdType
+	export let accessShift as AccessShift
+	export let loopLetter as String
+
+	static function create(accessType StdType, accessShift AccessShift, loopLetter String) returns CopyChunkShape
+		return Self{accessType: accessType, accessShift: accessShift, loopLetter: loopLetter}
+	end 'create'
+
+	export function accesses() returns AccessCount
+		return (1 shl self.accessShift) as AccessCount
+	end 'accesses'
+
+	export function accessBytes() returns ByteOffset
+		return stdTypeStorageBytes(self.accessType) as ByteOffset
+	end 'accessBytes'
+
+	export function strideBytes() returns ByteOffset
+		return self.accessBytes() shl self.accessShift
+	end 'strideBytes'
+
+	// `-stride` rounds a count down to whole chunks only because the stride is a power of two, which
+	// `accessBytes shl accessShift` always is (a byte or a word, shifted).
+	export function wholeChunksMask() returns FullRangeInt
+		return -(self.strideBytes() as FullRangeInt)
+	end 'wholeChunksMask'
+end 'CopyChunkShape'
+
+export function copyChunkShape(chunk CopyChunk) returns CopyChunkShape
+	return match chunk 'c'
+		block gives CopyChunkShape.create(StdType.i64, accessShift: BlockAccessShift, loopLetter: "k")
+		word gives CopyChunkShape.create(StdType.i64, accessShift: SingleAccessShift, loopLetter: "w")
+		byte gives CopyChunkShape.create(StdType.u8, accessShift: SingleAccessShift, loopLetter: "t")
+	end 'c'
+end 'copyChunkShape'
+
+export type CopyRun
+	export let chunk as CopyChunk
+	export let lower as ValueId
+	export let upper as ValueId
+	export let label as ByteArray
+
+	export static function create(chunk CopyChunk, lower ValueId, upper ValueId, label ByteArray) returns CopyRun
+		return Self{chunk: chunk, lower: lower, upper: upper, label: label}
+	end 'create'
+end 'CopyRun'
+
+export typealias CopyRunArray = Array with CopyRun
+
+typealias CopyChunkArray = Array with CopyChunk
 
 // The step of a counted loop that advances ONE item per trip — one byte, one element, one slot. Named
 // because `closeCountedLoop`'s step is a WIDTH everywhere else in this family (a word copy steps eight), so
@@ -1522,17 +1583,18 @@ let WholeWordsMask = -(MachineWordBytes as FullRangeInt)
 // one".
 export let SingleStep = 1 as Imm32
 
-// ⭐⭐ **THE WORD/TAIL PARTITION EVERY EMITTED CONTIGUOUS COPY RUNS ON, DERIVED IN ONE PLACE.** A
-// range of `byteCount` bytes splits into `[0, byteCount and -8)`, which whole machine words cover exactly,
-// and `[byteCount and -8, byteCount)`, the `byteCount mod 8` left over. `openWordTailSplit` emits that
-// split's guard and its one piece of arithmetic; the caller emits the two runs, in whatever ORDER its
-// direction needs, and branches its last one into `done`.
+// ⭐⭐ **THE CHUNK PARTITION EVERY EMITTED CONTIGUOUS COPY RUNS ON, DERIVED IN ONE PLACE.** A range of
+// `byteCount` bytes splits from offset 0 into one run per chunk from `widest` down to `byte`: each
+// run ends at `byteCount and -stride` of its chunk, which whole chunks cover exactly, the next narrower
+// run starts there, and the byte run ends at `byteCount`. `openCopyRunSplit` emits that split's guard and
+// its masks; the caller emits the runs, in whatever ORDER its direction needs, and branches its last one
+// into `done`.
 //
 // ⭐ **THE SPLIT AND THE RUNS ARE SEPARATE CALLS BECAUSE THE ORDER IS THE PART THAT VARIES.** A
-// low-address-first copy (`emitForwardCopy`) runs the words then the tail; an overlap-safe HIGH-address-first
-// copy (`emitBackwardCopy`) must run the TAIL first, since it sits at the top of the range and a backward move
-// has to touch the highest bytes before anything overwrites them. One partition, two orders — so the
-// partition is what is shared.
+// low-address-first copy (`emitForwardCopy`) runs the widest chunk first and the bytes last; an
+// overlap-safe HIGH-address-first copy (`emitBackwardCopy`) must run the BYTES first, since they sit at
+// the top of the range and a backward move has to touch the highest bytes before anything overwrites
+// them. One partition, two orders — so the partition is what is shared.
 //
 // ⚠ **THE CONTIGUOUS FILL IS NOT A CALLER.** A fill is
 // `StdOp.memFill` — one op, lowered by each target as a size ladder of its own
@@ -1545,7 +1607,7 @@ export let SingleStep = 1 as Imm32
 // alignment is a HINT that never changes what the access does. Every address this family is handed is an
 // arbitrary interior one — an element slot, a payload pointer, a String record's inline buffer — so this is
 // not a precondition the callers have to satisfy but the reason no alignment fixup is needed anywhere.
-export type WordTailSplit
+export type CopyRunSplit
 	// Where the caller emits its runs. Reached only when `byteCount > 0`.
 	export var run as IrBlock
 
@@ -1553,35 +1615,59 @@ export type WordTailSplit
 	// lands here, so a caller threads exactly one exit.
 	export var done as IrBlock
 
-	// `byteCount and -8` — the end of the word run and the start of the byte tail, the one boundary both
-	// runs read.
-	export let wordEnd as ValueId
+	// Widest chunk first; each run's `lower` is the previous run's `upper`, so a boundary is computed once
+	// and both neighbours read it.
+	export let runs as CopyRunArray
 
-	export static function create(run IrBlock, done IrBlock, wordEnd ValueId) returns WordTailSplit
-		return Self{run: run, done: done, wordEnd: wordEnd}
+	export static function create(run IrBlock, done IrBlock, runs CopyRunArray) returns CopyRunSplit
+		return Self{run: run, done: done, runs: runs}
 	end 'create'
-end 'WordTailSplit'
+end 'CopyRunSplit'
 
-// Open the word/tail split off `cur`, labelling its two blocks `<label>run` and `<label>d`.
+// Open the chunk split off `cur`, labelling its two blocks `<label>run` and `<label>d`.
 //
 // ⚠ **THE `byteCount <= 0` DOOR IS A CORRECTNESS GUARD, NOT A FAST PATH FOR THE EMPTY RANGE.** A NEGATIVE
-// count masks to a NEGATIVE word end, and the byte tail would then walk `[byteCount and -8, byteCount)` —
-// touching up to seven bytes BEFORE `dest`. The single byte loops this family replaces were safe under that
-// by accident (their `i >= byteCount` held at once), and memory-writing primitives under every array move
-// and String copy do not get to lose that. No caller passes one today; the guard is what keeps that from
-// being load-bearing. It absorbs the empty range (a zero-length `__str_copy`, a move of no elements) on the
-// way past.
-export function openWordTailSplit(module StdModule, func IrFunction, cur IrBlock, byteCount ValueId, label ByteArray, ids ValueMinter) returns WordTailSplit
+// count masks to NEGATIVE boundaries, and the runs below the widest would then start at a negative offset
+// and walk up to `byteCount` — touching up to thirty-one bytes BEFORE `dest`. A plain byte loop would be
+// safe under that by accident (its `i >= byteCount` holds at once), but the memory-writing primitives
+// under every array move and String copy do not get to lose that. No caller passes one today; the guard
+// is what keeps that from being load-bearing. It absorbs the empty range (a zero-length `__str_copy`, a
+// move of no elements) on the way past.
+export function openCopyRunSplit(module StdModule, func IrFunction, cur IrBlock, byteCount ValueId, widest CopyChunk, label ByteArray, ids ValueMinter) returns CopyRunSplit
 	var run = module.addBlock(func, label: "{String.from(label)}run".toByteArray(), heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: cur, value: byteCount, pred: StdCmpPred.le, against: 0, whenTrue: done, whenFalse: run, ids: ids)
 
-	let wordMask = emitConst(module, block: run, value: WholeWordsMask, ids: ids)
-	let wordEnd = emitBin(module, block: run, a: byteCount, b: wordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	var used = CopyChunkArray.create()
+	var ends = ValueIdArray.create()
 
-	return WordTailSplit.create(run, done: done, wordEnd: wordEnd)
-end 'openWordTailSplit'
+	for chunk in CopyChunk.allCases 'eachChunk'
+		if chunk.ordinal >= widest.ordinal 'usedChunk'
+			var upper = byteCount
+
+			if chunk != CopyChunk.byte 'wholeChunksOnly'
+				let mask = emitConst(module, block: run, value: copyChunkShape(chunk).wholeChunksMask(), ids: ids)
+				upper = emitBin(module, block: run, a: byteCount, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+			end 'wholeChunksOnly'
+
+			used.push(chunk)
+			ends.push(upper)
+		end 'usedChunk'
+	end 'eachChunk'
+
+	var runs = CopyRunArray.create()
+	var lower = emitConst(module, block: run, value: 0, ids: ids)
+
+	for (iter, chunk) in used.withIterator() 'eachRun'
+		let upper = try ends.get(iter.index()) otherwise panic("every used chunk has an end")
+
+		runs.push(CopyRun.create(chunk, lower: lower, upper: upper, label: "{String.from(label)}{copyChunkShape(chunk).loopLetter}".toByteArray()))
+		lower = upper
+	end 'eachRun'
+
+	return CopyRunSplit.create(run, done: done, runs: runs)
+end 'openCopyRunSplit'
 
 // Close the split: `tail` is the block the caller's LAST run ended in, and this branches it into the
 // continuation and answers that continuation. `closeCountedLoop`'s counterpart one level up.
@@ -1589,11 +1675,11 @@ end 'openWordTailSplit'
 // It exists so that no caller has to know HOW the two exits meet. The empty-range door and the completed
 // runs land in the same block by a plain branch today; a caller that spelled `branch(split.done.id)` itself
 // would be a third party stating that, in two places, for a join it does not own.
-export function closeWordTailSplit(module StdModule, split WordTailSplit, tail IrBlock) returns IrBlock
+export function closeCopyRunSplit(module StdModule, split CopyRunSplit, tail IrBlock) returns IrBlock
 	module.setTerminator(tail, op: StdOp.branch(split.done.id))
 
 	return split.done
-end 'closeWordTailSplit'
+end 'closeCopyRunSplit'
 
 // `__mm_alloc(size, destructor) -> ptr` — a managed box: a header plus `size` bytes of payload.
 //

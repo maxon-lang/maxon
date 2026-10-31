@@ -72919,3 +72919,1803 @@ chunk @mrt_write_stream {
     0b00: 00 00 5d c3
 }
 ```
+
+<!-- test: an-array-move-copies-whole-blocks-in-both-directions -->
+`__managed_move_elems` — the one body behind `Array.insert`, `Array.remove` and `Array.append`'s copy of a
+source's elements. Its byte arm routes on one direction test (`dest > src` within one buffer), and each
+direction copies 32-byte blocks (four `i64` loads, then four `i64` stores), then single words, then single
+bytes: the `cpyfk`/`cpyfw`/`cpyft` loops low address first and the `cpybt`/`cpybw`/`cpybk` loops high address
+first, the tail running before the words so a shift up never reads a byte it already overwrote. This block is
+the only gate on the backward block loop.
+
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+	bytes.push(1)
+	bytes.push(2)
+	bytes.insert(0, value: 9)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```RequiredRuntime
+__managed_move_elems
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 9
+  __il_body:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.jcc aboveEqual, ifcont#8
+  clampHigh:
+    x64.movRegReg r12, r14
+  ifcont#8:
+    x64.leaRegRegImm32 rdx, r14, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.cmpRegReg r12, r14
+    x64.jcc aboveEqual, ifcont#12
+  shift:
+    x64.movRegReg rax, r14
+    x64.subRegReg rax, r14, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_shift_right
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, ifcont#12
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:279: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within the resized length\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow
+  __im_store:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.storeBaseIndexScaleReg.word64 [rax + r12*8 + 0], r13
+    x64.jmp __il_cont
+  __im_stride:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.leaRegRegReg rax, rax, r12
+    x64.storeBaseDispReg.byte [rax + 0], r13
+    x64.jmp __il_cont
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Array.maxon:284: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and resized to len + 1\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at an-array-move-copies-whole-blocks-in-both-directions.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__managed_move_elems {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 16
+    x64.movRegReg r8, rcx
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, mvother
+  mvsame:
+    x64.cmpRegReg rdx, r9
+    x64.setccReg greater, rcx
+    x64.jmp mvdir
+  mvother:
+    x64.movRegImm32 rcx, 0
+  mvdir:
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc greaterEqual, mvbyte
+  mvpack:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, mvpacktop
+  mvpackbot:
+    x64.movRegImm32 r10, 0
+  pmvh#14:
+    x64.cmpRegReg r10, rsi
+    x64.jcc greaterEqual, done
+  pmvb#15:
+    x64.leaRegRegReg rcx, r9, r10
+  __il_body#57:
+    x64.movRegReg r11, rdi
+    x64.sarRegImm8 r11, rdi, 63
+    x64.movRegReg rbx, r11
+    x64.xorRegImm32 rbx, r11, -1
+    x64.movRegImm32 r12, 0
+    x64.subRegReg r12, r12, rdi
+    x64.movRegReg r13, rdi
+    x64.shlRegImm8 r13, rdi, 3
+    x64.andRegReg r12, r12, r11
+    x64.andRegReg r13, r13, rbx
+    x64.orRegReg r12, r12, r13
+  __il_cont#56:
+    x64.imulRegReg rcx, rcx, r12
+    x64.movRegReg rbx, rcx
+    x64.shrRegImm8 rbx, rcx, 3
+    x64.movRegReg r14, rcx
+    x64.andRegImm32 r14, rcx, 7
+    x64.movRegImm32 rcx, 64
+    x64.subRegReg rcx, rcx, r12
+    x64.movRegImm r15, 18446744073709551615
+    x64.shrRegCl r15, r15
+    x64.leaRegRegReg r12, r14, r12
+  __il_body#58:
+    x64.leaRegRegImm32 rcx, r12, 7
+    x64.shrRegImm8 rcx, rcx, 3
+  __il_cont#55:
+    x64.leaRegRegReg rcx, rax, rbx
+    x64.loadRegBaseDisp.byte rbx, [rcx + 0]
+    x64.movRegReg rcx, r14
+    x64.shrRegCl rbx, rbx
+    x64.andRegReg rbx, rbx, r15
+    x64.leaRegRegReg r12, rdx, r10
+  __il_body#59:
+    x64.movRegImm32 rcx, 0
+    x64.subRegReg rcx, rcx, rdi
+    x64.andRegReg rcx, rcx, r11
+    x64.movRegReg r11, rcx
+    x64.orRegReg r11, rcx, r13
+  __il_cont#54:
+    x64.imulRegReg r12, r12, r11
+    x64.movRegReg r13, r12
+    x64.shrRegImm8 r13, r12, 3
+    x64.andRegImm32 r12, r12, 7
+    x64.movRegImm32 rcx, 64
+    x64.subRegReg rcx, rcx, r11
+    x64.movRegImm r14, 18446744073709551615
+    x64.shrRegCl r14, r14
+    x64.leaRegRegReg r11, r12, r11
+  __il_body#60:
+    x64.leaRegRegImm32 rcx, r11, 7
+    x64.shrRegImm8 rcx, rcx, 3
+  __il_cont#53:
+    x64.leaRegRegReg r11, r8, r13
+    x64.loadRegBaseDisp.byte r13, [r11 + 0]
+    x64.movRegReg rcx, r12
+    x64.movRegReg r15, r14
+    x64.shlRegCl r15, r14
+    x64.xorRegImm32 r15, r15, -1
+    x64.andRegReg r13, r13, r15
+    x64.andRegReg rbx, rbx, r14
+    x64.movRegReg rcx, r12
+    x64.shlRegCl rbx, rbx
+    x64.orRegReg r13, r13, rbx
+    x64.storeBaseDispReg.byte [r11 + 0], r13
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.jmp pmvh#14
+  mvpacktop:
+    x64.movRegImm32 rcx, 0
+  pmvh#11:
+    x64.storeSlotReg slot0, rcx
+    x64.cmpRegReg rcx, rsi
+    x64.jcc greaterEqual, done
+  pmvb#12:
+    x64.leaRegRegImm32 r10, rsi, -1
+    x64.subRegReg r10, r10, rcx
+    x64.leaRegRegReg rcx, r9, r10
+  __il_body#49:
+    x64.movRegReg r11, rdi
+    x64.sarRegImm8 r11, rdi, 63
+    x64.movRegReg rbx, r11
+    x64.xorRegImm32 rbx, r11, -1
+    x64.movRegImm32 r12, 0
+    x64.subRegReg r12, r12, rdi
+    x64.movRegReg r13, rdi
+    x64.shlRegImm8 r13, rdi, 3
+    x64.andRegReg r12, r12, r11
+    x64.andRegReg r13, r13, rbx
+    x64.orRegReg r12, r12, r13
+  __il_cont#48:
+    x64.imulRegReg rcx, rcx, r12
+    x64.movRegReg rbx, rcx
+    x64.shrRegImm8 rbx, rcx, 3
+    x64.movRegReg r14, rcx
+    x64.andRegImm32 r14, rcx, 7
+    x64.movRegImm32 rcx, 64
+    x64.subRegReg rcx, rcx, r12
+    x64.movRegImm r15, 18446744073709551615
+    x64.shrRegCl r15, r15
+    x64.leaRegRegReg r12, r14, r12
+  __il_body#50:
+    x64.leaRegRegImm32 rcx, r12, 7
+    x64.shrRegImm8 rcx, rcx, 3
+  __il_cont#47:
+    x64.leaRegRegReg rcx, rax, rbx
+    x64.loadRegBaseDisp.byte rbx, [rcx + 0]
+    x64.movRegReg rcx, r14
+    x64.shrRegCl rbx, rbx
+    x64.andRegReg rbx, rbx, r15
+    x64.leaRegRegReg r10, rdx, r10
+  __il_body#51:
+    x64.movRegImm32 rcx, 0
+    x64.subRegReg rcx, rcx, rdi
+    x64.andRegReg rcx, rcx, r11
+    x64.movRegReg r11, rcx
+    x64.orRegReg r11, rcx, r13
+  __il_cont#46:
+    x64.imulRegReg r10, r10, r11
+    x64.movRegReg r12, r10
+    x64.shrRegImm8 r12, r10, 3
+    x64.andRegImm32 r10, r10, 7
+    x64.movRegImm32 rcx, 64
+    x64.subRegReg rcx, rcx, r11
+    x64.movRegImm r13, 18446744073709551615
+    x64.shrRegCl r13, r13
+    x64.leaRegRegReg r11, r10, r11
+  __il_body#52:
+    x64.leaRegRegImm32 rcx, r11, 7
+    x64.shrRegImm8 rcx, rcx, 3
+  __il_cont#45:
+    x64.leaRegRegReg r11, r8, r12
+    x64.loadRegBaseDisp.byte r12, [r11 + 0]
+    x64.movRegReg rcx, r10
+    x64.movRegReg r14, r13
+    x64.shlRegCl r14, r13
+    x64.xorRegImm32 r14, r14, -1
+    x64.andRegReg r12, r12, r14
+    x64.andRegReg rbx, rbx, r13
+    x64.movRegReg rcx, r10
+    x64.shlRegCl rbx, rbx
+    x64.orRegReg r12, r12, rbx
+    x64.storeBaseDispReg.byte [r11 + 0], r12
+    x64.loadRegSlot r10, slot0
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.movRegReg rcx, r10
+    x64.jmp pmvh#11
+  mvbyte:
+    x64.imulRegReg rdx, rdx, rdi
+    x64.leaRegRegReg rdx, r8, rdx
+    x64.imulRegReg r9, r9, rdi
+    x64.leaRegRegReg rax, rax, r9
+  __il_body#43:
+    x64.movRegReg r8, rdi
+    x64.sarRegImm8 r8, rdi, 63
+    x64.movRegReg r9, r8
+    x64.xorRegImm32 r9, r8, -1
+    x64.movRegImm32 r10, 0
+    x64.subRegReg r10, r10, rdi
+    x64.shlRegImm8 rdi, rdi, 3
+    x64.andRegReg r10, r10, r8
+    x64.andRegReg rdi, rdi, r9
+    x64.orRegReg r10, r10, rdi
+  __il_cont#42:
+    x64.imulRegReg rsi, rsi, r10
+  __il_body#44:
+    x64.leaRegRegImm32 rsi, rsi, 7
+    x64.shrRegImm8 rsi, rsi, 3
+  __il_cont#39:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, mvbytetop
+  mvbytebot:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc lessEqual, done
+  cpyfrun:
+    x64.movRegReg rcx, rsi
+    x64.andRegImm32 rcx, rsi, -32
+    x64.movRegReg rdi, rsi
+    x64.andRegImm32 rdi, rsi, -8
+    x64.movRegImm32 r8, 0
+  cpyfkh:
+    x64.cmpRegReg r8, rcx
+    x64.jcc less, cpyfkb
+  cpyfwh:
+    x64.cmpRegReg rcx, rdi
+    x64.jcc less, cpyfwb
+  cpyfth:
+    x64.cmpRegReg rdi, rsi
+    x64.jcc greaterEqual, done
+  cpyftb:
+    x64.leaRegRegReg rcx, rax, rdi
+    x64.loadRegBaseDisp.byte rcx, [rcx + 0]
+    x64.leaRegRegReg r8, rdx, rdi
+    x64.storeBaseDispReg.byte [r8 + 0], rcx
+    x64.leaRegRegImm32 rdi, rdi, 1
+    x64.jmp cpyfth
+  cpyfwb:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.loadRegBaseDisp.word64 r8, [r8 + 0]
+    x64.leaRegRegReg r9, rdx, rcx
+    x64.storeBaseDispReg.word64 [r9 + 0], r8
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.jmp cpyfwh
+  cpyfkb:
+    x64.leaRegRegReg r9, rax, r8
+    x64.loadRegBaseDisp.word64 r10, [r9 + 0]
+    x64.loadRegBaseDisp.word64 r11, [r9 + 8]
+    x64.loadRegBaseDisp.word64 rbx, [r9 + 16]
+    x64.loadRegBaseDisp.word64 r9, [r9 + 24]
+    x64.leaRegRegReg r12, rdx, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], r10
+    x64.storeBaseDispReg.word64 [r12 + 8], r11
+    x64.storeBaseDispReg.word64 [r12 + 16], rbx
+    x64.storeBaseDispReg.word64 [r12 + 24], r9
+    x64.leaRegRegImm32 r8, r8, 32
+    x64.jmp cpyfkh
+  mvbytetop:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc lessEqual, done
+  cpybrun:
+    x64.movRegReg rcx, rsi
+    x64.andRegImm32 rcx, rsi, -32
+    x64.movRegReg rdi, rsi
+    x64.andRegImm32 rdi, rsi, -8
+    x64.movRegImm32 r8, 0
+    x64.leaRegRegReg r9, rdi, rsi
+    x64.leaRegRegImm32 r9, r9, -1
+    x64.leaRegRegReg r10, rax, r9
+    x64.leaRegRegReg r9, rdx, r9
+    x64.movRegReg r11, rdi
+  cpybth:
+    x64.cmpRegReg r11, rsi
+    x64.jcc less, cpybtb
+  cpybtd:
+    x64.leaRegRegReg rsi, rcx, rdi
+    x64.leaRegRegImm32 rsi, rsi, -8
+    x64.leaRegRegReg r9, rax, rsi
+    x64.leaRegRegReg rsi, rdx, rsi
+    x64.movRegReg r10, rcx
+  cpybwh:
+    x64.cmpRegReg r10, rdi
+    x64.jcc less, cpybwb
+  cpybwd:
+    x64.leaRegRegImm32 rsi, rcx, -32
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rdx, rdx, rsi
+  cpybkh:
+    x64.cmpRegReg r8, rcx
+    x64.jcc less, cpybkb
+  done:
+    x64.epilogue 16
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  cpybkb:
+    x64.movRegReg rsi, rax
+    x64.subRegReg rsi, rax, r8
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.loadRegBaseDisp.word64 r9, [rsi + 8]
+    x64.loadRegBaseDisp.word64 r10, [rsi + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 24]
+    x64.movRegReg r11, rdx
+    x64.subRegReg r11, rdx, r8
+    x64.storeBaseDispReg.word64 [r11 + 0], rdi
+    x64.storeBaseDispReg.word64 [r11 + 8], r9
+    x64.storeBaseDispReg.word64 [r11 + 16], r10
+    x64.storeBaseDispReg.word64 [r11 + 24], rsi
+    x64.leaRegRegImm32 r8, r8, 32
+    x64.jmp cpybkh
+  cpybwb:
+    x64.movRegReg r11, r9
+    x64.subRegReg r11, r9, r10
+    x64.loadRegBaseDisp.word64 r11, [r11 + 0]
+    x64.movRegReg rbx, rsi
+    x64.subRegReg rbx, rsi, r10
+    x64.storeBaseDispReg.word64 [rbx + 0], r11
+    x64.leaRegRegImm32 r10, r10, 8
+    x64.jmp cpybwh
+  cpybtb:
+    x64.movRegReg rbx, r10
+    x64.subRegReg rbx, r10, r11
+    x64.loadRegBaseDisp.byte rbx, [rbx + 0]
+    x64.movRegReg r12, r9
+    x64.subRegReg r12, r9, r11
+    x64.storeBaseDispReg.byte [r12 + 0], rbx
+    x64.leaRegRegImm32 r11, r11, 1
+    x64.jmp cpybth
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 9
+  __il_body:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.jcc aboveEqual, ifcont#8
+  clampHigh:
+    x64.movRegReg r12, r14
+  ifcont#8:
+    x64.leaRegRegImm32 rdx, r14, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.cmpRegReg r12, r14
+    x64.jcc aboveEqual, ifcont#12
+  shift:
+    x64.movRegReg rax, r14
+    x64.subRegReg rax, r14, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_shift_right
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, ifcont#12
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:279: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within the resized length\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow
+  __im_store:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.storeBaseIndexScaleReg.word64 [rax + r12*8 + 0], r13
+    x64.jmp __il_cont
+  __im_stride:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.leaRegRegReg rax, rax, r12
+    x64.storeBaseDispReg.byte [rax + 0], r13
+    x64.jmp __il_cont
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Array.maxon:284: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and resized to len + 1\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at an-array-move-copies-whole-blocks-in-both-directions.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__managed_move_elems {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 16
+    x64.movRegReg r8, rcx
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, mvother
+  mvsame:
+    x64.cmpRegReg rdx, r9
+    x64.setccReg greater, rcx
+    x64.jmp mvdir
+  mvother:
+    x64.movRegImm32 rcx, 0
+  mvdir:
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc greaterEqual, mvbyte
+  mvpack:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, mvpacktop
+  mvpackbot:
+    x64.movRegImm32 r10, 0
+  pmvh#14:
+    x64.cmpRegReg r10, rsi
+    x64.jcc greaterEqual, done
+  pmvb#15:
+    x64.leaRegRegReg rcx, r9, r10
+  __il_body#57:
+    x64.movRegReg r11, rdi
+    x64.sarRegImm8 r11, rdi, 63
+    x64.movRegReg rbx, r11
+    x64.xorRegImm32 rbx, r11, -1
+    x64.movRegImm32 r12, 0
+    x64.subRegReg r12, r12, rdi
+    x64.movRegReg r13, rdi
+    x64.shlRegImm8 r13, rdi, 3
+    x64.andRegReg r12, r12, r11
+    x64.andRegReg r13, r13, rbx
+    x64.orRegReg r12, r12, r13
+  __il_cont#56:
+    x64.imulRegReg rcx, rcx, r12
+    x64.movRegReg rbx, rcx
+    x64.shrRegImm8 rbx, rcx, 3
+    x64.movRegReg r14, rcx
+    x64.andRegImm32 r14, rcx, 7
+    x64.movRegImm32 rcx, 64
+    x64.subRegReg rcx, rcx, r12
+    x64.movRegImm r15, 18446744073709551615
+    x64.shrRegCl r15, r15
+    x64.leaRegRegReg r12, r14, r12
+  __il_body#58:
+    x64.leaRegRegImm32 rcx, r12, 7
+    x64.shrRegImm8 rcx, rcx, 3
+  __il_cont#55:
+    x64.leaRegRegReg rcx, rax, rbx
+    x64.loadRegBaseDisp.byte rbx, [rcx + 0]
+    x64.movRegReg rcx, r14
+    x64.shrRegCl rbx, rbx
+    x64.andRegReg rbx, rbx, r15
+    x64.leaRegRegReg r12, rdx, r10
+  __il_body#59:
+    x64.movRegImm32 rcx, 0
+    x64.subRegReg rcx, rcx, rdi
+    x64.andRegReg rcx, rcx, r11
+    x64.movRegReg r11, rcx
+    x64.orRegReg r11, rcx, r13
+  __il_cont#54:
+    x64.imulRegReg r12, r12, r11
+    x64.movRegReg r13, r12
+    x64.shrRegImm8 r13, r12, 3
+    x64.andRegImm32 r12, r12, 7
+    x64.movRegImm32 rcx, 64
+    x64.subRegReg rcx, rcx, r11
+    x64.movRegImm r14, 18446744073709551615
+    x64.shrRegCl r14, r14
+    x64.leaRegRegReg r11, r12, r11
+  __il_body#60:
+    x64.leaRegRegImm32 rcx, r11, 7
+    x64.shrRegImm8 rcx, rcx, 3
+  __il_cont#53:
+    x64.leaRegRegReg r11, r8, r13
+    x64.loadRegBaseDisp.byte r13, [r11 + 0]
+    x64.movRegReg rcx, r12
+    x64.movRegReg r15, r14
+    x64.shlRegCl r15, r14
+    x64.xorRegImm32 r15, r15, -1
+    x64.andRegReg r13, r13, r15
+    x64.andRegReg rbx, rbx, r14
+    x64.movRegReg rcx, r12
+    x64.shlRegCl rbx, rbx
+    x64.orRegReg r13, r13, rbx
+    x64.storeBaseDispReg.byte [r11 + 0], r13
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.jmp pmvh#14
+  mvpacktop:
+    x64.movRegImm32 rcx, 0
+  pmvh#11:
+    x64.storeSlotReg slot0, rcx
+    x64.cmpRegReg rcx, rsi
+    x64.jcc greaterEqual, done
+  pmvb#12:
+    x64.leaRegRegImm32 r10, rsi, -1
+    x64.subRegReg r10, r10, rcx
+    x64.leaRegRegReg rcx, r9, r10
+  __il_body#49:
+    x64.movRegReg r11, rdi
+    x64.sarRegImm8 r11, rdi, 63
+    x64.movRegReg rbx, r11
+    x64.xorRegImm32 rbx, r11, -1
+    x64.movRegImm32 r12, 0
+    x64.subRegReg r12, r12, rdi
+    x64.movRegReg r13, rdi
+    x64.shlRegImm8 r13, rdi, 3
+    x64.andRegReg r12, r12, r11
+    x64.andRegReg r13, r13, rbx
+    x64.orRegReg r12, r12, r13
+  __il_cont#48:
+    x64.imulRegReg rcx, rcx, r12
+    x64.movRegReg rbx, rcx
+    x64.shrRegImm8 rbx, rcx, 3
+    x64.movRegReg r14, rcx
+    x64.andRegImm32 r14, rcx, 7
+    x64.movRegImm32 rcx, 64
+    x64.subRegReg rcx, rcx, r12
+    x64.movRegImm r15, 18446744073709551615
+    x64.shrRegCl r15, r15
+    x64.leaRegRegReg r12, r14, r12
+  __il_body#50:
+    x64.leaRegRegImm32 rcx, r12, 7
+    x64.shrRegImm8 rcx, rcx, 3
+  __il_cont#47:
+    x64.leaRegRegReg rcx, rax, rbx
+    x64.loadRegBaseDisp.byte rbx, [rcx + 0]
+    x64.movRegReg rcx, r14
+    x64.shrRegCl rbx, rbx
+    x64.andRegReg rbx, rbx, r15
+    x64.leaRegRegReg r10, rdx, r10
+  __il_body#51:
+    x64.movRegImm32 rcx, 0
+    x64.subRegReg rcx, rcx, rdi
+    x64.andRegReg rcx, rcx, r11
+    x64.movRegReg r11, rcx
+    x64.orRegReg r11, rcx, r13
+  __il_cont#46:
+    x64.imulRegReg r10, r10, r11
+    x64.movRegReg r12, r10
+    x64.shrRegImm8 r12, r10, 3
+    x64.andRegImm32 r10, r10, 7
+    x64.movRegImm32 rcx, 64
+    x64.subRegReg rcx, rcx, r11
+    x64.movRegImm r13, 18446744073709551615
+    x64.shrRegCl r13, r13
+    x64.leaRegRegReg r11, r10, r11
+  __il_body#52:
+    x64.leaRegRegImm32 rcx, r11, 7
+    x64.shrRegImm8 rcx, rcx, 3
+  __il_cont#45:
+    x64.leaRegRegReg r11, r8, r12
+    x64.loadRegBaseDisp.byte r12, [r11 + 0]
+    x64.movRegReg rcx, r10
+    x64.movRegReg r14, r13
+    x64.shlRegCl r14, r13
+    x64.xorRegImm32 r14, r14, -1
+    x64.andRegReg r12, r12, r14
+    x64.andRegReg rbx, rbx, r13
+    x64.movRegReg rcx, r10
+    x64.shlRegCl rbx, rbx
+    x64.orRegReg r12, r12, rbx
+    x64.storeBaseDispReg.byte [r11 + 0], r12
+    x64.loadRegSlot r10, slot0
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.movRegReg rcx, r10
+    x64.jmp pmvh#11
+  mvbyte:
+    x64.imulRegReg rdx, rdx, rdi
+    x64.leaRegRegReg rdx, r8, rdx
+    x64.imulRegReg r9, r9, rdi
+    x64.leaRegRegReg rax, rax, r9
+  __il_body#43:
+    x64.movRegReg r8, rdi
+    x64.sarRegImm8 r8, rdi, 63
+    x64.movRegReg r9, r8
+    x64.xorRegImm32 r9, r8, -1
+    x64.movRegImm32 r10, 0
+    x64.subRegReg r10, r10, rdi
+    x64.shlRegImm8 rdi, rdi, 3
+    x64.andRegReg r10, r10, r8
+    x64.andRegReg rdi, rdi, r9
+    x64.orRegReg r10, r10, rdi
+  __il_cont#42:
+    x64.imulRegReg rsi, rsi, r10
+  __il_body#44:
+    x64.leaRegRegImm32 rsi, rsi, 7
+    x64.shrRegImm8 rsi, rsi, 3
+  __il_cont#39:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, mvbytetop
+  mvbytebot:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc lessEqual, done
+  cpyfrun:
+    x64.movRegReg rcx, rsi
+    x64.andRegImm32 rcx, rsi, -32
+    x64.movRegReg rdi, rsi
+    x64.andRegImm32 rdi, rsi, -8
+    x64.movRegImm32 r8, 0
+  cpyfkh:
+    x64.cmpRegReg r8, rcx
+    x64.jcc less, cpyfkb
+  cpyfwh:
+    x64.cmpRegReg rcx, rdi
+    x64.jcc less, cpyfwb
+  cpyfth:
+    x64.cmpRegReg rdi, rsi
+    x64.jcc greaterEqual, done
+  cpyftb:
+    x64.leaRegRegReg rcx, rax, rdi
+    x64.loadRegBaseDisp.byte rcx, [rcx + 0]
+    x64.leaRegRegReg r8, rdx, rdi
+    x64.storeBaseDispReg.byte [r8 + 0], rcx
+    x64.leaRegRegImm32 rdi, rdi, 1
+    x64.jmp cpyfth
+  cpyfwb:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.loadRegBaseDisp.word64 r8, [r8 + 0]
+    x64.leaRegRegReg r9, rdx, rcx
+    x64.storeBaseDispReg.word64 [r9 + 0], r8
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.jmp cpyfwh
+  cpyfkb:
+    x64.leaRegRegReg r9, rax, r8
+    x64.loadRegBaseDisp.word64 r10, [r9 + 0]
+    x64.loadRegBaseDisp.word64 r11, [r9 + 8]
+    x64.loadRegBaseDisp.word64 rbx, [r9 + 16]
+    x64.loadRegBaseDisp.word64 r9, [r9 + 24]
+    x64.leaRegRegReg r12, rdx, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], r10
+    x64.storeBaseDispReg.word64 [r12 + 8], r11
+    x64.storeBaseDispReg.word64 [r12 + 16], rbx
+    x64.storeBaseDispReg.word64 [r12 + 24], r9
+    x64.leaRegRegImm32 r8, r8, 32
+    x64.jmp cpyfkh
+  mvbytetop:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc lessEqual, done
+  cpybrun:
+    x64.movRegReg rcx, rsi
+    x64.andRegImm32 rcx, rsi, -32
+    x64.movRegReg rdi, rsi
+    x64.andRegImm32 rdi, rsi, -8
+    x64.movRegImm32 r8, 0
+    x64.leaRegRegReg r9, rdi, rsi
+    x64.leaRegRegImm32 r9, r9, -1
+    x64.leaRegRegReg r10, rax, r9
+    x64.leaRegRegReg r9, rdx, r9
+    x64.movRegReg r11, rdi
+  cpybth:
+    x64.cmpRegReg r11, rsi
+    x64.jcc less, cpybtb
+  cpybtd:
+    x64.leaRegRegReg rsi, rcx, rdi
+    x64.leaRegRegImm32 rsi, rsi, -8
+    x64.leaRegRegReg r9, rax, rsi
+    x64.leaRegRegReg rsi, rdx, rsi
+    x64.movRegReg r10, rcx
+  cpybwh:
+    x64.cmpRegReg r10, rdi
+    x64.jcc less, cpybwb
+  cpybwd:
+    x64.leaRegRegImm32 rsi, rcx, -32
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rdx, rdx, rsi
+  cpybkh:
+    x64.cmpRegReg r8, rcx
+    x64.jcc less, cpybkb
+  done:
+    x64.epilogue 16
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  cpybkb:
+    x64.movRegReg rsi, rax
+    x64.subRegReg rsi, rax, r8
+    x64.loadRegBaseDisp.word64 rdi, [rsi + 0]
+    x64.loadRegBaseDisp.word64 r9, [rsi + 8]
+    x64.loadRegBaseDisp.word64 r10, [rsi + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 24]
+    x64.movRegReg r11, rdx
+    x64.subRegReg r11, rdx, r8
+    x64.storeBaseDispReg.word64 [r11 + 0], rdi
+    x64.storeBaseDispReg.word64 [r11 + 8], r9
+    x64.storeBaseDispReg.word64 [r11 + 16], r10
+    x64.storeBaseDispReg.word64 [r11 + 24], rsi
+    x64.leaRegRegImm32 r8, r8, 32
+    x64.jmp cpybkh
+  cpybwb:
+    x64.movRegReg r11, r9
+    x64.subRegReg r11, r9, r10
+    x64.loadRegBaseDisp.word64 r11, [r11 + 0]
+    x64.movRegReg rbx, rsi
+    x64.subRegReg rbx, rsi, r10
+    x64.storeBaseDispReg.word64 [rbx + 0], r11
+    x64.leaRegRegImm32 r10, r10, 8
+    x64.jmp cpybwh
+  cpybtb:
+    x64.movRegReg rbx, r10
+    x64.subRegReg rbx, r10, r11
+    x64.loadRegBaseDisp.byte rbx, [rbx + 0]
+    x64.movRegReg r12, r9
+    x64.subRegReg r12, r9, r11
+    x64.storeBaseDispReg.byte [r12 + 0], rbx
+    x64.leaRegRegImm32 r11, r11, 1
+    x64.jmp cpybth
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x20, 0
+    arm64.movImm x21, 9
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.cmp x22, 0
+    arm64.b.hs ifcont#8
+  clampHigh:
+    arm64.movRegReg x20, x22
+  ifcont#8:
+    arm64.add x1, x22, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_resize
+    arm64.cmp x20, x22
+    arm64.b.hs ifcont#12
+  shift:
+    arm64.sub x2, x22, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_mem_shift_right
+    arm64.cmp x9, 0
+    arm64.b.eq ifcont#12
+  tryerr#11:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Array.maxon:279: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within the resized length\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne __im_slow
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x20, x0
+    arm64.b.hs __im_slow
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_slow
+  __im_store:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+    arm64.cmp x1, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x20*8 + 0], x21
+    arm64.b __il_cont
+  __im_stride:
+    arm64.cmp x1, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.add x0, x0, x20
+    arm64.storeBaseDispReg.byte [x0 + 0], x21
+    arm64.b __il_cont
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __managed_mem_set
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont
+  tryerr#14:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at Array.maxon:284: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and resized to len + 1\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at an-array-move-copies-whole-blocks-in-both-directions.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @__managed_move_elems {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, x2
+    arm64.b.ne mvother
+  mvsame:
+    arm64.cmp x1, x3
+    arm64.cset x6, gt
+    arm64.b mvdir
+  mvother:
+    arm64.movImm x6, 0
+  mvdir:
+    arm64.cmp x5, 0
+    arm64.b.ge mvbyte
+  mvpack:
+    arm64.cmp x6, 0
+    arm64.b.ne mvpacktop
+  mvpackbot:
+    arm64.movImm x6, 0
+  pmvh#14:
+    arm64.cmp x6, x4
+    arm64.b.ge done
+  pmvb#15:
+    arm64.add x7, x3, x6
+  __il_body#57:
+    arm64.asr x8, x5, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x9, x8, x16
+    arm64.movImm x10, 0
+    arm64.sub x10, x10, x5
+    arm64.lsl x11, x5, 3
+    arm64.and x10, x10, x8
+    arm64.and x9, x11, x9
+    arm64.orr x10, x10, x9
+  __il_cont#56:
+    arm64.mul x7, x7, x10
+    arm64.lsr x11, x7, 3
+    arm64.and x7, x7, 7
+    arm64.movImm x12, 64
+    arm64.sub x12, x12, x10
+    arm64.movImm x13, 18446744073709551615
+    arm64.lsrv x12, x13, x12
+    arm64.add x10, x7, x10
+  __il_body#58:
+    arm64.add x10, x10, 7
+    arm64.lsr x10, x10, 3
+  __il_cont#55:
+    arm64.add x10, x2, x11
+    arm64.loadRegBaseDisp.byte x10, [x10 + 0]
+    arm64.lsrv x7, x10, x7
+    arm64.and x7, x7, x12
+    arm64.add x10, x1, x6
+  __il_body#59:
+    arm64.movImm x11, 0
+    arm64.sub x11, x11, x5
+    arm64.and x8, x11, x8
+    arm64.orr x8, x8, x9
+  __il_cont#54:
+    arm64.mul x9, x10, x8
+    arm64.lsr x10, x9, 3
+    arm64.and x9, x9, 7
+    arm64.movImm x11, 64
+    arm64.sub x11, x11, x8
+    arm64.movImm x12, 18446744073709551615
+    arm64.lsrv x11, x12, x11
+    arm64.add x8, x9, x8
+  __il_body#60:
+    arm64.add x8, x8, 7
+    arm64.lsr x8, x8, 3
+  __il_cont#53:
+    arm64.add x8, x0, x10
+    arm64.loadRegBaseDisp.byte x10, [x8 + 0]
+    arm64.lslv x12, x11, x9
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x12, x12, x16
+    arm64.and x10, x10, x12
+    arm64.and x7, x7, x11
+    arm64.lslv x7, x7, x9
+    arm64.orr x7, x10, x7
+    arm64.storeBaseDispReg.byte [x8 + 0], x7
+    arm64.add x6, x6, 1
+    arm64.b pmvh#14
+  mvpacktop:
+    arm64.movImm x6, 0
+  pmvh#11:
+    arm64.cmp x6, x4
+    arm64.b.ge done
+  pmvb#12:
+    arm64.sub x7, x4, 1
+    arm64.sub x7, x7, x6
+    arm64.add x8, x3, x7
+  __il_body#49:
+    arm64.asr x9, x5, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x10, x9, x16
+    arm64.movImm x11, 0
+    arm64.sub x11, x11, x5
+    arm64.lsl x12, x5, 3
+    arm64.and x11, x11, x9
+    arm64.and x10, x12, x10
+    arm64.orr x11, x11, x10
+  __il_cont#48:
+    arm64.mul x8, x8, x11
+    arm64.lsr x12, x8, 3
+    arm64.and x8, x8, 7
+    arm64.movImm x13, 64
+    arm64.sub x13, x13, x11
+    arm64.movImm x14, 18446744073709551615
+    arm64.lsrv x13, x14, x13
+    arm64.add x11, x8, x11
+  __il_body#50:
+    arm64.add x11, x11, 7
+    arm64.lsr x11, x11, 3
+  __il_cont#47:
+    arm64.add x11, x2, x12
+    arm64.loadRegBaseDisp.byte x11, [x11 + 0]
+    arm64.lsrv x8, x11, x8
+    arm64.and x8, x8, x13
+    arm64.add x7, x1, x7
+  __il_body#51:
+    arm64.movImm x11, 0
+    arm64.sub x11, x11, x5
+    arm64.and x9, x11, x9
+    arm64.orr x9, x9, x10
+  __il_cont#46:
+    arm64.mul x7, x7, x9
+    arm64.lsr x10, x7, 3
+    arm64.and x7, x7, 7
+    arm64.movImm x11, 64
+    arm64.sub x11, x11, x9
+    arm64.movImm x12, 18446744073709551615
+    arm64.lsrv x11, x12, x11
+    arm64.add x9, x7, x9
+  __il_body#52:
+    arm64.add x9, x9, 7
+    arm64.lsr x9, x9, 3
+  __il_cont#45:
+    arm64.add x9, x0, x10
+    arm64.loadRegBaseDisp.byte x10, [x9 + 0]
+    arm64.lslv x12, x11, x7
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x12, x12, x16
+    arm64.and x10, x10, x12
+    arm64.and x8, x8, x11
+    arm64.lslv x7, x8, x7
+    arm64.orr x7, x10, x7
+    arm64.storeBaseDispReg.byte [x9 + 0], x7
+    arm64.add x6, x6, 1
+    arm64.b pmvh#11
+  mvbyte:
+    arm64.mul x1, x1, x5
+    arm64.add x0, x0, x1
+    arm64.mul x1, x3, x5
+    arm64.add x1, x2, x1
+  __il_body#43:
+    arm64.asr x2, x5, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x3, x2, x16
+    arm64.movImm x7, 0
+    arm64.sub x7, x7, x5
+    arm64.lsl x5, x5, 3
+    arm64.and x2, x7, x2
+    arm64.and x3, x5, x3
+    arm64.orr x2, x2, x3
+  __il_cont#42:
+    arm64.mul x2, x4, x2
+  __il_body#44:
+    arm64.add x2, x2, 7
+    arm64.lsr x2, x2, 3
+  __il_cont#39:
+    arm64.cmp x6, 0
+    arm64.b.ne mvbytetop
+  mvbytebot:
+    arm64.cmp x2, 0
+    arm64.b.le done
+  cpyfrun:
+    arm64.and x3, x2, -32
+    arm64.and x4, x2, -8
+    arm64.movImm x5, 0
+  cpyfkh:
+    arm64.cmp x5, x3
+    arm64.b.lt cpyfkb
+  cpyfwh:
+    arm64.cmp x3, x4
+    arm64.b.lt cpyfwb
+  cpyfth:
+    arm64.cmp x4, x2
+    arm64.b.ge done
+  cpyftb:
+    arm64.add x3, x1, x4
+    arm64.loadRegBaseDisp.byte x3, [x3 + 0]
+    arm64.add x5, x0, x4
+    arm64.storeBaseDispReg.byte [x5 + 0], x3
+    arm64.add x4, x4, 1
+    arm64.b cpyfth
+  cpyfwb:
+    arm64.add x5, x1, x3
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 0]
+    arm64.add x6, x0, x3
+    arm64.storeBaseDispReg.word64 [x6 + 0], x5
+    arm64.add x3, x3, 8
+    arm64.b cpyfwh
+  cpyfkb:
+    arm64.add x6, x1, x5
+    arm64.loadRegBaseDisp.word64 x7, [x6 + 0]
+    arm64.loadRegBaseDisp.word64 x8, [x6 + 8]
+    arm64.loadRegBaseDisp.word64 x9, [x6 + 16]
+    arm64.loadRegBaseDisp.word64 x6, [x6 + 24]
+    arm64.add x10, x0, x5
+    arm64.storeBaseDispReg.word64 [x10 + 0], x7
+    arm64.storeBaseDispReg.word64 [x10 + 8], x8
+    arm64.storeBaseDispReg.word64 [x10 + 16], x9
+    arm64.storeBaseDispReg.word64 [x10 + 24], x6
+    arm64.add x5, x5, 32
+    arm64.b cpyfkh
+  mvbytetop:
+    arm64.cmp x2, 0
+    arm64.b.le done
+  cpybrun:
+    arm64.and x3, x2, -32
+    arm64.and x4, x2, -8
+    arm64.movImm x5, 0
+    arm64.add x6, x4, x2
+    arm64.sub x6, x6, 1
+    arm64.add x7, x1, x6
+    arm64.add x6, x0, x6
+    arm64.movRegReg x8, x4
+  cpybth:
+    arm64.cmp x8, x2
+    arm64.b.lt cpybtb
+  cpybtd:
+    arm64.add x2, x3, x4
+    arm64.sub x2, x2, 8
+    arm64.add x6, x1, x2
+    arm64.add x2, x0, x2
+    arm64.movRegReg x7, x3
+  cpybwh:
+    arm64.cmp x7, x4
+    arm64.b.lt cpybwb
+  cpybwd:
+    arm64.sub x2, x3, 32
+    arm64.add x1, x1, x2
+    arm64.add x0, x0, x2
+  cpybkh:
+    arm64.cmp x5, x3
+    arm64.b.lt cpybkb
+  done:
+    arm64.epilogue 16
+    arm64.ret
+  cpybkb:
+    arm64.sub x2, x1, x5
+    arm64.loadRegBaseDisp.word64 x4, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x6, [x2 + 8]
+    arm64.loadRegBaseDisp.word64 x7, [x2 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 24]
+    arm64.sub x8, x0, x5
+    arm64.storeBaseDispReg.word64 [x8 + 0], x4
+    arm64.storeBaseDispReg.word64 [x8 + 8], x6
+    arm64.storeBaseDispReg.word64 [x8 + 16], x7
+    arm64.storeBaseDispReg.word64 [x8 + 24], x2
+    arm64.add x5, x5, 32
+    arm64.b cpybkh
+  cpybwb:
+    arm64.sub x8, x6, x7
+    arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
+    arm64.sub x9, x2, x7
+    arm64.storeBaseDispReg.word64 [x9 + 0], x8
+    arm64.add x7, x7, 8
+    arm64.b cpybwh
+  cpybtb:
+    arm64.sub x9, x7, x8
+    arm64.loadRegBaseDisp.byte x9, [x9 + 0]
+    arm64.sub x10, x6, x8
+    arm64.storeBaseDispReg.byte [x10 + 0], x9
+    arm64.add x8, x8, 1
+    arm64.b cpybth
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x20, 0
+    arm64.movImm x21, 9
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.cmp x22, 0
+    arm64.b.hs ifcont#8
+  clampHigh:
+    arm64.movRegReg x20, x22
+  ifcont#8:
+    arm64.add x1, x22, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_resize
+    arm64.cmp x20, x22
+    arm64.b.hs ifcont#12
+  shift:
+    arm64.sub x2, x22, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_mem_shift_right
+    arm64.cmp x9, 0
+    arm64.b.eq ifcont#12
+  tryerr#11:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Array.maxon:279: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within the resized length\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne __im_slow
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x20, x0
+    arm64.b.hs __im_slow
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_slow
+  __im_store:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+    arm64.cmp x1, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x20*8 + 0], x21
+    arm64.b __il_cont
+  __im_stride:
+    arm64.cmp x1, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.add x0, x0, x20
+    arm64.storeBaseDispReg.byte [x0 + 0], x21
+    arm64.b __il_cont
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __managed_mem_set
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont
+  tryerr#14:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at Array.maxon:284: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and resized to len + 1\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at an-array-move-copies-whole-blocks-in-both-directions.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @__managed_move_elems {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, x2
+    arm64.b.ne mvother
+  mvsame:
+    arm64.cmp x1, x3
+    arm64.cset x6, gt
+    arm64.b mvdir
+  mvother:
+    arm64.movImm x6, 0
+  mvdir:
+    arm64.cmp x5, 0
+    arm64.b.ge mvbyte
+  mvpack:
+    arm64.cmp x6, 0
+    arm64.b.ne mvpacktop
+  mvpackbot:
+    arm64.movImm x6, 0
+  pmvh#14:
+    arm64.cmp x6, x4
+    arm64.b.ge done
+  pmvb#15:
+    arm64.add x7, x3, x6
+  __il_body#57:
+    arm64.asr x8, x5, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x9, x8, x16
+    arm64.movImm x10, 0
+    arm64.sub x10, x10, x5
+    arm64.lsl x11, x5, 3
+    arm64.and x10, x10, x8
+    arm64.and x9, x11, x9
+    arm64.orr x10, x10, x9
+  __il_cont#56:
+    arm64.mul x7, x7, x10
+    arm64.lsr x11, x7, 3
+    arm64.and x7, x7, 7
+    arm64.movImm x12, 64
+    arm64.sub x12, x12, x10
+    arm64.movImm x13, 18446744073709551615
+    arm64.lsrv x12, x13, x12
+    arm64.add x10, x7, x10
+  __il_body#58:
+    arm64.add x10, x10, 7
+    arm64.lsr x10, x10, 3
+  __il_cont#55:
+    arm64.add x10, x2, x11
+    arm64.loadRegBaseDisp.byte x10, [x10 + 0]
+    arm64.lsrv x7, x10, x7
+    arm64.and x7, x7, x12
+    arm64.add x10, x1, x6
+  __il_body#59:
+    arm64.movImm x11, 0
+    arm64.sub x11, x11, x5
+    arm64.and x8, x11, x8
+    arm64.orr x8, x8, x9
+  __il_cont#54:
+    arm64.mul x9, x10, x8
+    arm64.lsr x10, x9, 3
+    arm64.and x9, x9, 7
+    arm64.movImm x11, 64
+    arm64.sub x11, x11, x8
+    arm64.movImm x12, 18446744073709551615
+    arm64.lsrv x11, x12, x11
+    arm64.add x8, x9, x8
+  __il_body#60:
+    arm64.add x8, x8, 7
+    arm64.lsr x8, x8, 3
+  __il_cont#53:
+    arm64.add x8, x0, x10
+    arm64.loadRegBaseDisp.byte x10, [x8 + 0]
+    arm64.lslv x12, x11, x9
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x12, x12, x16
+    arm64.and x10, x10, x12
+    arm64.and x7, x7, x11
+    arm64.lslv x7, x7, x9
+    arm64.orr x7, x10, x7
+    arm64.storeBaseDispReg.byte [x8 + 0], x7
+    arm64.add x6, x6, 1
+    arm64.b pmvh#14
+  mvpacktop:
+    arm64.movImm x6, 0
+  pmvh#11:
+    arm64.cmp x6, x4
+    arm64.b.ge done
+  pmvb#12:
+    arm64.sub x7, x4, 1
+    arm64.sub x7, x7, x6
+    arm64.add x8, x3, x7
+  __il_body#49:
+    arm64.asr x9, x5, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x10, x9, x16
+    arm64.movImm x11, 0
+    arm64.sub x11, x11, x5
+    arm64.lsl x12, x5, 3
+    arm64.and x11, x11, x9
+    arm64.and x10, x12, x10
+    arm64.orr x11, x11, x10
+  __il_cont#48:
+    arm64.mul x8, x8, x11
+    arm64.lsr x12, x8, 3
+    arm64.and x8, x8, 7
+    arm64.movImm x13, 64
+    arm64.sub x13, x13, x11
+    arm64.movImm x14, 18446744073709551615
+    arm64.lsrv x13, x14, x13
+    arm64.add x11, x8, x11
+  __il_body#50:
+    arm64.add x11, x11, 7
+    arm64.lsr x11, x11, 3
+  __il_cont#47:
+    arm64.add x11, x2, x12
+    arm64.loadRegBaseDisp.byte x11, [x11 + 0]
+    arm64.lsrv x8, x11, x8
+    arm64.and x8, x8, x13
+    arm64.add x7, x1, x7
+  __il_body#51:
+    arm64.movImm x11, 0
+    arm64.sub x11, x11, x5
+    arm64.and x9, x11, x9
+    arm64.orr x9, x9, x10
+  __il_cont#46:
+    arm64.mul x7, x7, x9
+    arm64.lsr x10, x7, 3
+    arm64.and x7, x7, 7
+    arm64.movImm x11, 64
+    arm64.sub x11, x11, x9
+    arm64.movImm x12, 18446744073709551615
+    arm64.lsrv x11, x12, x11
+    arm64.add x9, x7, x9
+  __il_body#52:
+    arm64.add x9, x9, 7
+    arm64.lsr x9, x9, 3
+  __il_cont#45:
+    arm64.add x9, x0, x10
+    arm64.loadRegBaseDisp.byte x10, [x9 + 0]
+    arm64.lslv x12, x11, x7
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x12, x12, x16
+    arm64.and x10, x10, x12
+    arm64.and x8, x8, x11
+    arm64.lslv x7, x8, x7
+    arm64.orr x7, x10, x7
+    arm64.storeBaseDispReg.byte [x9 + 0], x7
+    arm64.add x6, x6, 1
+    arm64.b pmvh#11
+  mvbyte:
+    arm64.mul x1, x1, x5
+    arm64.add x0, x0, x1
+    arm64.mul x1, x3, x5
+    arm64.add x1, x2, x1
+  __il_body#43:
+    arm64.asr x2, x5, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x3, x2, x16
+    arm64.movImm x7, 0
+    arm64.sub x7, x7, x5
+    arm64.lsl x5, x5, 3
+    arm64.and x2, x7, x2
+    arm64.and x3, x5, x3
+    arm64.orr x2, x2, x3
+  __il_cont#42:
+    arm64.mul x2, x4, x2
+  __il_body#44:
+    arm64.add x2, x2, 7
+    arm64.lsr x2, x2, 3
+  __il_cont#39:
+    arm64.cmp x6, 0
+    arm64.b.ne mvbytetop
+  mvbytebot:
+    arm64.cmp x2, 0
+    arm64.b.le done
+  cpyfrun:
+    arm64.and x3, x2, -32
+    arm64.and x4, x2, -8
+    arm64.movImm x5, 0
+  cpyfkh:
+    arm64.cmp x5, x3
+    arm64.b.lt cpyfkb
+  cpyfwh:
+    arm64.cmp x3, x4
+    arm64.b.lt cpyfwb
+  cpyfth:
+    arm64.cmp x4, x2
+    arm64.b.ge done
+  cpyftb:
+    arm64.add x3, x1, x4
+    arm64.loadRegBaseDisp.byte x3, [x3 + 0]
+    arm64.add x5, x0, x4
+    arm64.storeBaseDispReg.byte [x5 + 0], x3
+    arm64.add x4, x4, 1
+    arm64.b cpyfth
+  cpyfwb:
+    arm64.add x5, x1, x3
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 0]
+    arm64.add x6, x0, x3
+    arm64.storeBaseDispReg.word64 [x6 + 0], x5
+    arm64.add x3, x3, 8
+    arm64.b cpyfwh
+  cpyfkb:
+    arm64.add x6, x1, x5
+    arm64.loadRegBaseDisp.word64 x7, [x6 + 0]
+    arm64.loadRegBaseDisp.word64 x8, [x6 + 8]
+    arm64.loadRegBaseDisp.word64 x9, [x6 + 16]
+    arm64.loadRegBaseDisp.word64 x6, [x6 + 24]
+    arm64.add x10, x0, x5
+    arm64.storeBaseDispReg.word64 [x10 + 0], x7
+    arm64.storeBaseDispReg.word64 [x10 + 8], x8
+    arm64.storeBaseDispReg.word64 [x10 + 16], x9
+    arm64.storeBaseDispReg.word64 [x10 + 24], x6
+    arm64.add x5, x5, 32
+    arm64.b cpyfkh
+  mvbytetop:
+    arm64.cmp x2, 0
+    arm64.b.le done
+  cpybrun:
+    arm64.and x3, x2, -32
+    arm64.and x4, x2, -8
+    arm64.movImm x5, 0
+    arm64.add x6, x4, x2
+    arm64.sub x6, x6, 1
+    arm64.add x7, x1, x6
+    arm64.add x6, x0, x6
+    arm64.movRegReg x8, x4
+  cpybth:
+    arm64.cmp x8, x2
+    arm64.b.lt cpybtb
+  cpybtd:
+    arm64.add x2, x3, x4
+    arm64.sub x2, x2, 8
+    arm64.add x6, x1, x2
+    arm64.add x2, x0, x2
+    arm64.movRegReg x7, x3
+  cpybwh:
+    arm64.cmp x7, x4
+    arm64.b.lt cpybwb
+  cpybwd:
+    arm64.sub x2, x3, 32
+    arm64.add x1, x1, x2
+    arm64.add x0, x0, x2
+  cpybkh:
+    arm64.cmp x5, x3
+    arm64.b.lt cpybkb
+  done:
+    arm64.epilogue 16
+    arm64.ret
+  cpybkb:
+    arm64.sub x2, x1, x5
+    arm64.loadRegBaseDisp.word64 x4, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x6, [x2 + 8]
+    arm64.loadRegBaseDisp.word64 x7, [x2 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 24]
+    arm64.sub x8, x0, x5
+    arm64.storeBaseDispReg.word64 [x8 + 0], x4
+    arm64.storeBaseDispReg.word64 [x8 + 8], x6
+    arm64.storeBaseDispReg.word64 [x8 + 16], x7
+    arm64.storeBaseDispReg.word64 [x8 + 24], x2
+    arm64.add x5, x5, 32
+    arm64.b cpybkh
+  cpybwb:
+    arm64.sub x8, x6, x7
+    arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
+    arm64.sub x9, x2, x7
+    arm64.storeBaseDispReg.word64 [x9 + 0], x8
+    arm64.add x7, x7, 8
+    arm64.b cpybwh
+  cpybtb:
+    arm64.sub x9, x7, x8
+    arm64.loadRegBaseDisp.byte x9, [x9 + 0]
+    arm64.sub x10, x6, x8
+    arm64.storeBaseDispReg.byte [x10 + 0], x9
+    arm64.add x8, x8, 1
+    arm64.b cpybth
+}
+```
