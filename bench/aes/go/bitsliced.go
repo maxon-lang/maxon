@@ -1,4 +1,4 @@
-// The encrypt path of stdlib/helpers/crypto/Aes.maxon and the GHASH and GCM of stdlib/AesGcm.maxon,
+// The encrypt path of stdlib/helpers/crypto/AesBitsliced.maxon and the GHASH and GCM of stdlib/AesGcm.maxon,
 // function for function. A change to either is ported here in the same commit: otherwise the
 // bitsliced arm times an algorithm the stdlib no longer runs, and its digests still agree, because
 // both are correct AES.

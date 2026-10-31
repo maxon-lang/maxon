@@ -134,6 +134,11 @@ export enum HostFacility
 	// How many processors the machine has (`__cpu_count`).
 	cpuCount
 
+	// Whether the CPU has hardware AES and carry-less multiply (`__cpufeat_aes_usable`), asked of the CPU at
+	// startup (`cpuid`, the auxiliary vector) or known by construction. Withheld where the machine offers no way
+	// to ask.
+	cpuFeatureProbe
+
 	// ⭐⭐ **PAGES FROM THE OS — reserve, commit, decommit and free (`StdOp.osAllocPages`,
 	// `osReservePages`, `osCommitPages`, `osDecommitPages`, `osFreePages`).** One facility over all five
 	// rather than one per verb, on this enum's stated rule that a facility is named for what the HOST
@@ -584,6 +589,12 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.cpuCount)
 	end 'cpuCountBand'
 
+	// A word the startup probe fills, so a lane with no probe (wasm32-wasi) must refuse the question at the
+	// call: a body reading the unfilled word would answer "no hardware" for a machine nobody asked.
+	if isCpuFeatureRuntimeCallee(callee) 'cpuFeatureBand'
+		return CalleeFacility.needs(HostFacility.cpuFeatureProbe)
+	end 'cpuFeatureBand'
+
 	// ⭐⭐ **A `__Raw` ROW ARRIVES HERE AS A SUBSTRATE ENTRY, NOT AS A CALLEE.** A `rawIntrinsic` op names no
 	// callee at all (`MaxonDialect.maxonOpCalleeKind` answers `noCallee`), so nothing can ever CALL one of
 	// these names — what reaches this door is the entry `StdlibSource.noteSubstrateRawIntrinsic` seeded a
@@ -664,6 +675,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			entropy or
 			trustStore or
 			cpuCount or
+			cpuFeatureProbe or
 			pageMemory or
 			hostMutex or
 			threadLocalSlot or
@@ -719,6 +731,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			entropy or
 			trustStore or
 			cpuCount or
+			cpuFeatureProbe or
 			pageMemory or
 			hostMutex or
 			threadLocalSlot or
@@ -793,6 +806,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processNamespace or
 			entropy or
 			cpuCount or
+			cpuFeatureProbe or
 			pageMemory or
 			hostMutex or
 			threadLocalSlot or
@@ -846,6 +860,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			threadCpuClock or
 			processInfo or
 			cpuCount or
+			cpuFeatureProbe or
 			pageMemory or
 			hostMutex or
 			threadLocalSlot or
@@ -911,6 +926,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processLiveness or
 			processNamespace or
 			cpuCount or
+			cpuFeatureProbe or
 			threadLocalSlot or
 			terminalDetection or
 			sharedMemory or

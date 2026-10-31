@@ -8344,6 +8344,9 @@ let BuiltinsSchedMaxActiveWorkersName = b"__Builtins.schedMaxActiveWorkers"
 let CpuCountArity = 0
 let SchedMaxActiveWorkersArity = 0
 
+let BuiltinsCpuHasAesName = b"__Builtins.cpuHasAes"
+let CpuHasAesArity = 0
+
 // ⭐⭐ **`__Builtins.enterBackgroundPriority()` — THE ONLY INTRINSIC THAT CHANGES THE PROCESS RATHER THAN
 // REPORTING ON IT.** Everything in the band above asks a question; this one answers a question it first
 // made true. It lowers to `__proc_bg_priority`, which is why it is refused off x64-windows by the `__proc_`
@@ -93521,6 +93524,10 @@ export type Parser
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedMaxActiveWorkersName, runtimeName: SchedMaxActiveWorkersName, arity: SchedMaxActiveWorkersArity, resultTag: ValueTypeTag.integer, resultAlias: CountAliasName, calleeTok: anchor)
 			end 'schedMaxActiveWorkers'
 
+			if callee.equals(BuiltinsCpuHasAesName) 'cpuHasAes'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsCpuHasAesName, runtimeName: CpuAesUsableName, arity: CpuHasAesArity, resultTag: ValueTypeTag.boolean, resultAlias: NoAnswerAlias, calleeTok: anchor)
+			end 'cpuHasAes'
+
 			// ⭐ **THE PRIORITY DOOR**, through the same argumentless-integer emit as the queries above even
 			// though it is not a query: its answer is an `int` and it takes nothing, and what differs — that
 			// it CHANGES this process before reporting on it — is not visible at this tier and is not this
@@ -94315,6 +94322,7 @@ export type Parser
 			scratch or
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
+			cpuAesUsableAddr or
 			slabArenaListAddr or
 			slabArenaMapL1Addr or
 			slabStateAddr or

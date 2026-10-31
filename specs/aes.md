@@ -657,3 +657,124 @@ last192-144 [0e68583d3b6afe777e84fea4986fd0fc7321da6f6290dbc93f955330b66365b8025
 batch256-65 [e012423e47bb46046c37c083b4e9e54100f14b10b623f13f2383cbddc355bb3de6941bd8486943a5a8db7fb6fddc975a5830d29134cc3f85535435de085ff4667b]
 batch256-120 [e012423e47bb46046c37c083b4e9e54100f14b10b623f13f2383cbddc355bb3de6941bd8486943a5a8db7fb6fddc975a5830d29134cc3f85535435de085ff4667bf56ac12fb587add9f344bf3a7597c7a9fd4b4baca1a379b39df0d8f044336fe57a01060bb17698d8d1df1ddc6c0e90f8952779be11fd0c]
 ```
+
+<!-- test: aes.the-bitsliced-software-path-matches-aes -->
+<!-- tier: stdlib -->
+`Aes` forwards to `AesBitsliced`. Driven directly, the software path answers the FIPS 197 appendix C vectors, undoes
+them, produces the counter-mode key stream `Aes.xorKeyStream` produces, and refuses what `Aes` refuses. It stays
+tested on a host whose `Aes` will one day take the hardware path.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function blockVector(keyHex String, expectedHex String)
+	let software = try AesBitsliced.create(fromHex(keyHex)) otherwise panic("the key is valid")
+	let plain = fromHex("00112233445566778899aabbccddeeff")
+	let sealed = try software.encryptBlock(plain) otherwise panic("the block is 16 bytes")
+	let opened = try software.decryptBlock(sealed) otherwise panic("the block is 16 bytes")
+
+	print("{toHex(sealed) == expectedHex} {toHex(opened) == toHex(plain)}\n")
+end 'blockVector'
+
+function errorName(failure AesError) returns String
+	return match failure 'name'
+		invalidKeyLength gives "invalidKeyLength"
+		invalidBlockLength gives "invalidBlockLength"
+	end 'name'
+end 'errorName'
+
+function keyRefusal(key ByteArray) returns String
+	let software = try AesBitsliced.create(key) otherwise (failure) 'refused'
+		return errorName(failure)
+	end 'refused'
+
+	let sealed = try software.encryptBlock(fromHex("00112233445566778899aabbccddeeff")) otherwise (failure) 'blockRefused'
+		return errorName(failure)
+	end 'blockRefused'
+
+	return "created {toHex(sealed)}"
+end 'keyRefusal'
+
+function blockRefusal(software AesBitsliced) returns String
+	let sealed = try software.encryptBlock(fromHex("00")) otherwise (failure) 'refused'
+		return errorName(failure)
+	end 'refused'
+
+	return toHex(sealed)
+end 'blockRefusal'
+
+function main() returns ExitCode
+	blockVector("000102030405060708090a0b0c0d0e0f", expectedHex: "69c4e0d86a7b0430d8cdb78070b4c55a")
+	blockVector("000102030405060708090a0b0c0d0e0f1011121314151617", expectedHex: "dda97ca4864cdfe06eaf70a0ec0d7191")
+	blockVector("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", expectedHex: "8ea2b7ca516745bfeafc49904b496089")
+
+	let key = fromHex("2b7e151628aed2a6abf7158809cf4f3c")
+	let nonce = fromHex("f0f1f2f3f4f5f6f7f8f9fafb")
+	let software = try AesBitsliced.create(key) otherwise panic("the key is valid")
+	let aes = try Aes.create(key) otherwise panic("the key is valid")
+	var data = ByteArray.create()
+
+	for position in 0 upto 133 'eachByte'
+		data.push(((position * 7 + 3) and 0xFF) as Byte)
+	end 'eachByte'
+
+	let throughSoftware = try software.xorKeyStream(nonce, counter: 0xFFFFFFF0, data: data) otherwise panic("the nonce is 12 bytes")
+	let throughAes = try aes.xorKeyStream(nonce, counter: 0xFFFFFFF0, data: data) otherwise panic("the nonce is 12 bytes")
+	print("{toHex(throughSoftware) == toHex(throughAes)}\n")
+
+	var pastMaskSoftware = ByteArray.create()
+	var pastMaskAes = ByteArray.create()
+	pastMaskSoftware.reserve(data.count())
+	pastMaskAes.reserve(data.count())
+	let (softwareLow, softwareHigh) = try software.xorKeyStreamPastFirstBlock(nonce, counter: 1, data: data, output: pastMaskSoftware) otherwise panic("the nonce is 12 bytes")
+	let (aesLow, aesHigh) = try aes.xorKeyStreamPastFirstBlock(nonce, counter: 1, data: data, output: pastMaskAes) otherwise panic("the nonce is 12 bytes")
+	print("{toHex(pastMaskSoftware) == toHex(pastMaskAes)} {softwareLow == aesLow and softwareHigh == aesHigh}\n")
+
+	print("{keyRefusal(fromHex("00"))} {blockRefusal(software)}\n")
+	return 0
+end 'main'
+```
+```stdout
+true true
+true true
+true true
+true
+true true
+invalidKeyLength invalidBlockLength
+```
+```exitcode
+0
+```

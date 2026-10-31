@@ -461,7 +461,7 @@ function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
 	return asm.finishFunction(LinuxSignalStackSizeName)
 end 'buildArm64LinuxSignalStackSizeChunk'
 
-function buildArm64LinuxHwcapProbeChunk() returns FunctionCodeChunk
+function buildArm64LinuxHwcapProbeChunk(recordsCpuFeatures bool) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 	let found = asm.newLabel()
 	let next = asm.newLabel()
@@ -471,6 +471,21 @@ function buildArm64LinuxHwcapProbeChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(found)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x9, byteOffset: LinuxAuxValueOffset)
+
+	if recordsCpuFeatures 'recordAes'
+		let aesStored = asm.newLabel()
+
+		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x14, value: LinuxHwcapHardwareAes)
+		arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x15, lhs: Arm64Register.x12, rhs: Arm64Register.x14)
+		arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x15, rhs: Arm64Register.x14)
+		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x15, value: 0)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: aesStored)
+		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x15, value: 1)
+		asm.placeLabel(aesStored)
+		arm64EmitDataAddr(asm, dest: Arm64Register.x13, label: CpuAesUsableLabel)
+		arm64EmitStoreWord64At(asm, src: Arm64Register.x15, base: Arm64Register.x13, byteOffset: 0)
+	end 'recordAes'
+
 	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x12), rn: arm64RuntimeReg(Arm64Register.x12), sh: LinuxHwcapAtomicsShift)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x11, value: 1)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x12, lhs: Arm64Register.x12, rhs: Arm64Register.x11)
@@ -640,7 +655,7 @@ end 'arm64EmitLinuxSigactionCall'
 // ⛔ **THE INSTALL IS A `match` PER OS.** Each lane's install reads its own struct layout and reaches the
 // kernel its own way, and an arm that inherited the other's would be a `sigaction` GOT call in an ELF image
 // or a raw `svc` in a Mach-O one.
-export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, usesGt bool, carriesHostLock bool, errnoHome LinuxErrnoHome, target Target)
+export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, usesGt bool, carriesHostLock bool, recordsCpuFeatures bool, errnoHome LinuxErrnoHome, target Target)
 	match target.os 'installLane'
 		macos then chunks.push(buildArm64DarwinRuntimeInitChunk(usesGt, target: target))
 		linux then chunks.push(buildArm64LinuxRuntimeInitChunk(usesGt, carriesHostLock: carriesHostLock, target: target))
@@ -653,7 +668,7 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 
 	if target.os == Os.linux 'sizedFromTheAuxiliaryVector'
 		chunks.push(buildArm64LinuxSignalStackSizeChunk())
-		chunks.push(buildArm64LinuxHwcapProbeChunk())
+		chunks.push(buildArm64LinuxHwcapProbeChunk(recordsCpuFeatures))
 	end 'sizedFromTheAuxiliaryVector'
 
 	chunks.push(buildArm64FaultHandlerChunk(globalData, os: target.os))

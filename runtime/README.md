@@ -23,6 +23,7 @@ self-compiles `maxon-bin/AGENTS.md` describes.
 |---|---|---|
 | `Clock.maxon` | `__clock_now_unix_s`, `__clock_now_unix_ns`, `__clock_now_filetime`, `__uptime_ms` | `__Builtins.currentUnixTimeSeconds`, `currentUnixTimeNanos`, `profileNowFileTime`, `tickCountMs` |
 | `CpuParallel.maxon` | `__cpu_count`, `__sched_max_active_workers`, `__sched_processor_count` | `__Builtins.cpuCount`, `schedMaxActiveWorkers`, `schedProcessorCount` |
+| `CpuFeatures.maxon` | `__cpufeat_aes_usable` | `__Builtins.cpuHasAes` |
 | `FaultProbe.maxon` | `maxon_force_segfault` | `__Builtins.forceSegfault` |
 | `ParallelBoundary.maxon` | `__parallel_boundary` | `__Builtins.parallelBoundary` |
 | `Process.maxon` | `__proc_pid`, `__proc_bg_priority`, `__proc_alive` | `__Builtins.currentProcessId`, `enterBackgroundPriority`, `processIsAlive` |
@@ -362,7 +363,7 @@ A row naming a facility is carried out to user code by the substrate fixpoint:
 `StdlibSource.noteSubstrateRawIntrinsic` seeds it with the row's spelling, and
 `SemanticCheck.requireTargetSupportsCallee` reports E3104 at the first user call into the library body that
 reaches the op. Where a callee band also answers (`TargetFacilities.calleeHostFacility`: the `__clock_`,
-`__uptime_`, `__cpu_` and `__proc_` bands, and `__proc_bg_priority`/`__proc_alive` by name), that refusal
+`__uptime_`, `__cpu_`, `__cpufeat_` and `__proc_` bands, and `__proc_bg_priority`/`__proc_alive` by name), that refusal
 ranks first (`SemanticCheck.substrateEntryRank`).
 
 ⚠ A tier body whose only callers are installer-minted `StdOp.call`s has no user-code crossing to report at.

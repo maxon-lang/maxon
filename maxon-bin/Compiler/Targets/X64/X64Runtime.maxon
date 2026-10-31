@@ -1649,9 +1649,13 @@ end 'buildFaultThunkChunk'
 // the previous one back).
 //
 // Slots: 0 = the guarantee's size.
-function buildRuntimeInitChunk() returns FunctionCodeChunk
+function buildRuntimeInitChunk(probesCpuFeatures bool) returns FunctionCodeChunk
 	let SlotGuaranteeBytes = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
+
+	if probesCpuFeatures 'probe'
+		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: CpuFeatureProbeName)
+	end 'probe'
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: SignalStackBytes)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGuaranteeBytes), srcReg: X64Register.rax, wide: true)
@@ -1664,6 +1668,44 @@ function buildRuntimeInitChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildRuntimeInitChunk'
+
+let CpuidFeatureLeaf = 1
+let CpuidEcxPclmulqdq = 0x2
+let CpuidEcxSsse3 = 0x200
+let CpuidEcxAesNi = 0x2000000
+let CpuidEcxHardwareAes = CpuidEcxAesNi or CpuidEcxPclmulqdq or CpuidEcxSsse3
+
+// `mrt_cpu_feature_probe` — stores 1 in `__mrt_cpu_aes_usable` when leaf 1 reports AES-NI, PCLMULQDQ and
+// SSSE3, else 0. Leaf 0's maximum is read first because leaf 1 is undefined below it. These instructions use
+// only SSE state, which every x64 OS enables, so no XGETBV check is owed. `cpuid` clobbers rbx, which is
+// callee-saved in the custom ABI, so it is saved in slot 0 and restored on the one path out.
+function buildCpuFeatureProbeChunk() returns FunctionCodeChunk
+	let SlotSavedRbx = 0
+	var asm = X64RuntimeAsm.beginFunction(1)
+	let stored = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRbx), srcReg: X64Register.rbx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.r8, src: X64Register.r8, wide: true)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+	encodeCpuid(asm.code)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: CpuidFeatureLeaf)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: stored)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: CpuidFeatureLeaf)
+	encodeCpuid(asm.code)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rcx, imm: CpuidEcxHardwareAes as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: CpuidEcxHardwareAes as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: stored)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: 1)
+
+	asm.placeLabel(stored)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rcx, label: CpuAesUsableLabel)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rbx, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRbx), wide: true)
+
+	return asm.finishFunction(CpuFeatureProbeName)
+end 'buildCpuFeatureProbeChunk'
 
 module function emitStoreGlobalImm(asm X64RuntimeAsm, label ByteArray, value MachineWord, width X64AccessWidth, through X64Register)
 	if through == X64Register.rax 'theValueWouldOverwriteTheAddress'
@@ -2014,13 +2056,17 @@ end 'buildLinuxSignalStackSizeChunk'
 //
 // Each later install rewrites only the handler: the flags, the restorer and the mask are the same for every
 // signal.
-function buildLinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, target Target) returns FunctionCodeChunk
+function buildLinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, probesCpuFeatures bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0
 	var asm = X64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
 	if carriesHostLock 'ownsABlock'
 		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxMainThreadBlockName)
 	end 'ownsABlock'
+
+	if probesCpuFeatures 'probe'
+		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: CpuFeatureProbeName)
+	end 'probe'
 
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
@@ -2079,15 +2125,19 @@ end 'emitLinuxSigactionCall'
 // (`x64OsCallKind`) — it is not re-stated as a literal inside each lane appender. This is the only place
 // in the x64 backend that holds a `Target` at the moment the chunk set is chosen, so it is the only place
 // that can answer without repeating itself; the lane appenders receive the answer and pass it on.
-export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, carriesHostLock bool, context HostContextLayout)
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, carriesHostLock bool, probesCpuFeatures bool, context HostContextLayout)
 	let exitRoute = x64OsCallKind(target.os)
 
 	match target.os 'os'
-		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target, context: context)
-		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, carriesHostLock: carriesHostLock, target: target)
+		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, probesCpuFeatures: probesCpuFeatures, target: target, context: context)
+		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, carriesHostLock: carriesHostLock, probesCpuFeatures: probesCpuFeatures, target: target)
 		macos or
 		wasi then panic("appendX64RuntimeChunks: no x64 fault runtime for {targetToString(target)} — this is appended only for windows/linux")
 	end 'os'
+
+	if probesCpuFeatures 'probe'
+		chunks.push(buildCpuFeatureProbeChunk())
+	end 'probe'
 end 'appendX64RuntimeChunks'
 
 // ⭐ THE CHUNKS BOTH LANES NEED, WRITTEN ONCE. A per-lane copy of this list is not a compile error when
@@ -2145,8 +2195,8 @@ end 'buildGtStackOverflowChunk'
 // ⚠ `usesGt` travels this far because `mrt_write_stream` and both diagnostics' `ExitProcess` call the IAT by
 // hand, and a hand-assembled call is not routed through the green-thread shim by `emitFunctionChunk` the way a
 // compiled function's is — and because `mrt_panic` guards its own stack on a green thread.
-function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target, context HostContextLayout)
-	chunks.push(buildRuntimeInitChunk())
+function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, probesCpuFeatures bool, target Target, context HostContextLayout)
+	chunks.push(buildRuntimeInitChunk(probesCpuFeatures))
 	chunks.push(buildFaultThunkChunk(usesGt, target: target, context: context))
 	chunks.push(buildWriteStreamChunk(usesGt, target: target))
 	chunks.push(buildWriteStderrChunk())
@@ -2273,8 +2323,8 @@ end 'appendX64WindowsHostSurfaceChunks'
 //
 // ⚠ Every OS call in this half is a raw `syscall` instruction, which runs on whatever stack it is on and asks
 // the scheduler nothing; `usesGt` reaches here for `mrt_panic`'s stack guard alone.
-function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, carriesHostLock bool, target Target)
-	chunks.push(buildLinuxRuntimeInitChunk(usesGt, carriesHostLock: carriesHostLock, target: target))
+function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, carriesHostLock bool, probesCpuFeatures bool, target Target)
+	chunks.push(buildLinuxRuntimeInitChunk(usesGt, carriesHostLock: carriesHostLock, probesCpuFeatures: probesCpuFeatures, target: target))
 	chunks.push(buildX64LinuxCheckStdFdsChunk())
 	chunks.push(buildLinuxSignalStackInstallChunk())
 	chunks.push(buildLinuxSignalStackSizeChunk())

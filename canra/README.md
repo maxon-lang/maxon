@@ -16,8 +16,8 @@ of the spec here.
 | `base64` | `stdlib/Base64.maxon` | `specs/base64.md` |
 | `pem` | `stdlib/Pem.maxon` | `specs/pem.md` |
 | `secure-random-bytes` | `stdlib/Random.maxon` | `specs/random.md` |
-| `aes` | `stdlib/helpers/crypto/Aes.maxon` | `specs/aes.md` |
-| `aes-ctr` | `stdlib/helpers/crypto/Aes.maxon` | `specs/aes.md` |
+| `aes` | `stdlib/helpers/crypto/Aes.maxon`, `stdlib/helpers/crypto/AesBitsliced.maxon` | `specs/aes.md` |
+| `aes-ctr` | `stdlib/helpers/crypto/Aes.maxon`, `stdlib/helpers/crypto/AesBitsliced.maxon` | `specs/aes.md` |
 | `aes-gcm` | `stdlib/AesGcm.maxon` | `specs/aes-gcm.md` |
 | `chacha20` | `stdlib/helpers/crypto/ChaCha20.maxon` | `specs/chacha20.md` |
 | `poly1305` | `stdlib/helpers/crypto/Poly1305.maxon` | `specs/poly1305.md` |

@@ -77,7 +77,7 @@ iterations and repeats.
 - **`hardware`** (`go-aesni`, `go-armv8`) is AES-NI and PCLMULQDQ on x64 and the ARMv8 Crypto Extensions
   on arm64. It runs on the native lanes.
 
-⛔ **`go/bitsliced.go` MIRRORS `stdlib/helpers/crypto/Aes.maxon`'s encrypt path and
+⛔ **`go/bitsliced.go` MIRRORS `stdlib/helpers/crypto/AesBitsliced.maxon`'s encrypt path and
 `stdlib/AesGcm.maxon`, function for function. Every change to either is ported into it in the same
 commit.** Both are correct AES, so a stale port still prints matching digests: the bitsliced arm would
 time an algorithm the stdlib has left behind while every check stays green.

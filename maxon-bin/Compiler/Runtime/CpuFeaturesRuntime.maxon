@@ -1,0 +1,73 @@
+// The `__cpufeat_` band: questions the startup probe answers into one `.data` word each. `__cpufeat_aes_usable`
+// is ONE flag for AES and carry-less multiply together, because the only consumer (AES-GCM) needs both and a
+// half-answer would be a wrong one. The probe runs only for a program that asks (`usesCpuFeatures`): `cpuid`
+// traps to the hypervisor under virtualization, so every other program must not pay for it. Deliberately not
+// `__cpu_`, whose prefix is the processor-COUNT band (`CpuParallelRuntime`).
+let CpuFeatureRuntimeCallPrefix = b"__cpufeat_"
+
+export let CpuAesUsableName = b"__cpufeat_aes_usable"
+export let CpuAesUsableLabel = b"__mrt_cpu_aes_usable"
+export let CpuFeatureProbeName = b"mrt_cpu_feature_probe"
+
+let CpuFeaturePresentSeed = 1
+
+export function isCpuFeatureRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: CpuFeatureRuntimeCallPrefix)
+end 'isCpuFeatureRuntimeCallee'
+
+enum CpuFeatureSource
+	cpuid
+	auxiliaryVector
+	alwaysPresent
+	absent
+end 'CpuFeatureSource'
+
+function cpuFeatureSource(target Target) returns CpuFeatureSource
+	if target.cpu == CpuArch.x64 and (target.os == Os.windows or target.os == Os.linux) 'x64'
+		return CpuFeatureSource.cpuid
+	end 'x64'
+
+	if target.cpu == CpuArch.arm64 and target.os == Os.linux 'arm64Linux'
+		return CpuFeatureSource.auxiliaryVector
+	end 'arm64Linux'
+
+	if target.cpu == CpuArch.arm64 and target.os == Os.macos 'arm64Macos'
+		return CpuFeatureSource.alwaysPresent
+	end 'arm64Macos'
+
+	if target.cpu == CpuArch.wasm32 and target.os == Os.wasi 'wasm'
+		return CpuFeatureSource.absent
+	end 'wasm'
+
+	panic("cpuFeatureSource: no CPU feature source is stated for target {targetToString(target)}")
+end 'cpuFeatureSource'
+
+export function cpuFeaturesAreProbed(usage RuntimeUsage, target Target) returns bool
+	if not usage.usesCpuFeatures 'notAsked'
+		return false
+	end 'notAsked'
+
+	return match cpuFeatureSource(target) 'source'
+		cpuid or
+		auxiliaryVector gives true
+		alwaysPresent or
+		absent gives false
+	end 'source'
+end 'cpuFeaturesAreProbed'
+
+export function cpuFeatureRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if not usage.usesCpuFeatures 'notAsked'
+		return out
+	end 'notAsked'
+
+	match cpuFeatureSource(target) 'source'
+		cpuid or
+		auxiliaryVector then pushRuntimeGlobal(out, label: CpuAesUsableLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+		alwaysPresent then pushRuntimeGlobal(out, label: CpuAesUsableLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked, seed: CpuFeaturePresentSeed)
+		absent then break
+	end 'source'
+
+	return out
+end 'cpuFeatureRuntimeGlobals'
