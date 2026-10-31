@@ -14,10 +14,9 @@
 //     register-allocator consumers; the edge/arg pairing is resolved locally instead so a
 //     wasm arity mismatch reports against wasm, not a mislabelled `ssaDestruction`.
 //
-// ⭐ CONTROL FLOW IS A `loop`+`br_table` STATE MACHINE, NOT A RELOOPER. Each block gets a
-// dispatch index; a single outer `loop` wrapped in one `block` per basic block re-enters and
-// `br_table`s to the current block. It handles ANY reducible CFG shape with no structural
-// analysis.
+// ⭐ CONTROL FLOW: a reducible CFG is emitted as structured `block`/`loop`/`if`, laid out over the
+// dominator tree (`WasmFlowPlan`, WasmStructuredFlow.maxon). An irreducible one falls back to a
+// `loop`+`br_table` state machine (`emitDispatcher`), which handles any CFG shape.
 //
 // SCOPE: scalar core, f64, top-level-`var` globals + String literals (`.data`/`.rdata` active
 // segments, `print`), the HEAP — `osAllocPages` → `memory.grow`, the narrow BYTE load/store band a
@@ -48,7 +47,7 @@
 // (= int(0 to u32.max)) and `Wasm32IndexArray` for every function/type/local/dispatch index,
 // so the values flow into the `WasmBinary` seam's params with no cast. The narrowings are the two
 // places a value crosses in from an IR-tier id space: the `ValueId → local index` boundary, and
-// `dispatchIndexOf`'s read of the shared `blockIndexById` table. Both always fit u32.
+// `blockPositionOf`'s read of the shared `blockIndexById` table. Both always fit u32.
 
 // The cycle-break scratch local reserved for each valtype that appears among a function's
 // block-args — the local a phi-copy cycle stages through (wasm has no register exchange).
@@ -261,6 +260,7 @@ let ByteSwap64RotateTop = 56
 let ByteSwap64RotateUpper = 40
 let ByteSwap64RotateLower = 24
 let ByteSwap64RotateBottom = 8
+
 // `0xFF000000FF000000`: a literal above `i64.max` is not a `FullRangeInt`, the type the mask travels as.
 let ByteSwap64MaskTop = i64.min + 0x7F000000FF000000
 let ByteSwap64MaskUpper = 0x00FF000000FF0000
@@ -1985,21 +1985,22 @@ type WasmFuncEmitter
 	// `buildWasmCoreModule`.
 	export var localTypes as WasmValTypeArray
 
-	// Multi-block functions (and single-block self-loops) run under the loop+br_table
-	// dispatcher; a lone straight-line block that ends in a return does not.
-	let useDispatcher as bool
+	// A function whose CFG branches is emitted as structured block/loop/if control flow, or under the
+	// loop+br_table dispatcher when it is irreducible; a lone block that does not branch emits
+	// straight-line.
+	let plan as WasmFlowPlan
+	var flowState as WasmFlowState
 
-	// The i32 local holding the next block's dispatch index (only when `useDispatcher`).
+	// The i32 local holding the next block's dispatch index, only when the plan's flow is `dispatcher`.
 	var dispatchLocal as Wasm32Index
 
-	// Valtype → its reserved cycle-break scratch local (only for valtypes present among
-	// block-args, only when `useDispatcher`).
+	// Valtype → its reserved cycle-break scratch local, only for valtypes present among block-args,
+	// whenever the function branches.
 	var scratchLocalByValType as ScratchLocalMap
 
-	// Block id → dispatch index, for branch targets. The dispatch index IS the block's position in
-	// `func.blockRefs`, so this is exactly `IrModule.blockIndexById` and not a second thing that
-	// happens to agree with it.
-	var blockDispatchById as BlockIndexById
+	// Block id → its position in `func.blockRefs`, the index both the flow plan and the dispatcher use;
+	// it is exactly `IrModule.blockIndexById`.
+	var blockPositionById as BlockIndexById
 
 	let ownFuncIdx as Wasm32Index
 	let frames as WasmFrameStack
@@ -2010,7 +2011,8 @@ type WasmFuncEmitter
 
 	static function create(module StdModule, func IrFunction, funcIdx Wasm32Index, frames WasmFrameStack, firstPosition Wasm32Index, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, scratchFrameBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
 		var valtypes = buildValtypeTable(module, func: func, funcNames: funcNames)
-		let useDispatcher = decideDispatcher(module, func: func)
+		let plan = WasmFlowPlan.build(module, func: func)
+		let flowBlockCount = func.blockRefs.count() if plan.flow == WasmControlFlow.structured else 0
 
 		var emitter = Self{
 			module: module,
@@ -2025,10 +2027,11 @@ type WasmFuncEmitter
 			valtypes: valtypes,
 			body: WasmBody.create(),
 			localTypes: WasmValTypeArray.create(),
-			useDispatcher: useDispatcher,
+			plan: plan,
+			flowState: WasmFlowState.create(flowBlockCount),
 			dispatchLocal: 0,
 			scratchLocalByValType: ScratchLocalMap.create(),
-			blockDispatchById: module.blockIndexById(func),
+			blockPositionById: module.blockIndexById(func),
 			ownFuncIdx: funcIdx,
 			frames: frames,
 			savedDepthLocal: valtypes.count() as Wasm32Index,
@@ -2045,8 +2048,9 @@ type WasmFuncEmitter
 	//   0..paramCount-1        parameters (from the function SIGNATURE, NOT declared here)
 	//   paramCount..maxValueId value locals (identity model: value id == local index)
 	//   maxValueId+1           saved frame-stack depth (i32), always
-	//   maxValueId+2           dispatch local (i32), when the dispatcher is used
-	//   then                   one scratch local per block-arg valtype, when the dispatcher is used
+	//   then                   inline-position slot offset (i32), when `tracksInlinePositions`
+	//   then                   dispatch local (i32), only under the dispatcher
+	//   then                   one scratch local per block-arg valtype, whenever the function branches
 	// A single running cursor assigns the reserved locals so adding one never renumbers another.
 	function buildLocalDeclarations()
 		let valueLocalCount = self.valtypes.count()
@@ -2064,14 +2068,18 @@ type WasmFuncEmitter
 			nextLocal = (nextLocal + 1) as Wasm32Index
 		end 'slotOffset'
 
-		if not self.useDispatcher 'noDispatcher'
+		if self.plan.flow == WasmControlFlow.straightLine 'noPhis'
 			return
-		end 'noDispatcher'
+		end 'noPhis'
 
-		self.dispatchLocal = nextLocal
-		self.localTypes.push(WasmValType.i32)
+		var nextScratch = nextLocal
 
-		var nextScratch = (self.dispatchLocal + 1) as Wasm32Index
+		if self.plan.flow == WasmControlFlow.dispatcher 'dispatchLocal'
+			self.dispatchLocal = nextLocal
+			self.localTypes.push(WasmValType.i32)
+			nextScratch = (nextLocal + 1) as Wasm32Index
+		end 'dispatchLocal'
+
 		let phiValTypes = self.collectPhiValTypes()
 
 		for vt in WasmValType.allCases 'canonical'
@@ -2119,165 +2127,177 @@ type WasmFuncEmitter
 			self.body.localSet(self.slotOffsetLocal)
 		end 'slotOffset'
 
-		if self.useDispatcher 'dispatch'
-			self.emitDispatcher(blockCount)
-		end 'dispatch' else 'single'
-			self.emitSingleBlock()
-		end 'single'
+		match self.plan.flow 'flow'
+			structured then self.emitStructured()
+			dispatcher then self.emitDispatcher(blockCount)
+			straightLine then self.emitBlockCode(StdEntryBlockPosition)
+		end 'flow'
 	end 'emit'
 
-	// A lone block that returns: straight-line body then its return terminator. No dispatcher,
-	// no dispatch local, no wrapping structure.
-	function emitSingleBlock()
-		let blockRef = try self.func.blockRefs.get(0) otherwise panic("emitSingleBlock: blockRefs.get(0) OOB")
-		view block = try self.module.blocks.get(blockRef) otherwise panic("emitSingleBlock: blockRef {blockRef} not in module.blocks")
+	function emitBlockCode(position ElementIndex)
+		view block = self.module.blockAtPosition(self.func, position: position)
 		self.currentSite = copiedInlineSite(block.inlineSite)
 
 		for opIdx in block.bodyOps() 'eachOp'
-			self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitSingleBlock: opIdx {opIdx} not in module.ops"))
+			self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitBlockCode: opIdx {opIdx} not in module.ops"))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
-			self.emitStraightLineTerminator(try self.module.ops.get(block.terminatorIndex()) otherwise panic("emitSingleBlock: terminatorIndex not in module.ops"))
+			self.emitTerminator(try self.module.ops.get(block.terminatorIndex()) otherwise panic("emitBlockCode: terminatorIndex not in module.ops"), currentBlock: block, position: position)
 		end 'hasTerm' else 'noTerm'
 			self.body.unreachable()
 		end 'noTerm'
-	end 'emitSingleBlock'
+	end 'emitBlockCode'
 
-	function emitStraightLineTerminator(op StdOp)
-		match op 'term'
-			ret(retValId) then self.emitRet(retValId)
-			retVoid then self.emitRetVoid()
-			const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod then panic("emitStraightLineTerminator: an arith op is not a terminator")
-			condBranch then panic("emitStraightLineTerminator: a `condBranch` block should have taken the dispatcher path")
-			branch then panic("emitStraightLineTerminator: a `branch` block should have taken the dispatcher path")
-			param then panic("emitStraightLineTerminator: a `param` op is not a terminator")
-			call then panic("emitStraightLineTerminator: a `call` op is not a terminator")
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr then panic("emitStraightLineTerminator: a memory/system op is not a terminator")
-			tryCall then panic("emitStraightLineTerminator: a `tryCall` is a value-producing body op, never a terminator")
-			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
-			osExit then panic("emitStraightLineTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
-			funcAddr then panic("emitStraightLineTerminator: a `funcAddr` is a value-producing body op, never a terminator")
-			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages then panic("emitStraightLineTerminator: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
+	function emitStructured()
+		self.flowState.push(WasmFlowTask.tree, source: StdEntryBlockPosition, target: StdEntryBlockPosition)
 
-			// A jump table has multiple successors, so `decideDispatcher` always routes its function through
-			// the loop+br_table dispatcher — it never reaches the straight-line terminator path.
-			switch then panic("emitStraightLineTerminator: a `switch` (multiway) block always takes the dispatcher path, never straight-line")
-			witnessCall then panic("emitStraightLineTerminator: a `witnessCall` is a value-producing body op, never a terminator")
-			witnessTryCall then panic("emitStraightLineTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
-			osLockInit or
-			osLockEnter or
-			osLockLeave then panic("emitStraightLineTerminator: an `osLock*` op is a body op, never a terminator")
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile then panic("emitStraightLineTerminator: an IOCP op is a body op, never a terminator")
-			osReadWallClock then panic("emitStraightLineTerminator: an `osReadWallClock` is a body op, never a terminator")
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osFileOpenCreateNew or
-			osFileOpenWriteExecutable then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
-			osPanicValue then panic("emitStraightLineTerminator: an `osPanicValue` is a body op, never a terminator")
-			osCommandLine then panic("emitStraightLineTerminator: an `osCommandLine` is a body op, never a terminator")
-			osStdHandle then panic("emitStraightLineTerminator: an `osStdHandle` is a body op, never a terminator")
-			osExecutablePath then panic("emitStraightLineTerminator: an `osExecutablePath` is a body op, never a terminator")
-			osProcessNamespace then panic("emitStraightLineTerminator: an `osProcessNamespace` is a body op, never a terminator")
-			osRandomFill then panic("emitStraightLineTerminator: an `osRandomFill` is a body op, never a terminator")
-			osWriteStderr then panic("emitStraightLineTerminator: an `osWriteStderr` is a body op, never a terminator")
-			stackRecordAddr then panic("emitStraightLineTerminator: a `stackRecordAddr` is a body op, never a terminator")
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs then panic("emitStraightLineTerminator: a DebugStream host primitive is a body op, never a terminator")
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate then panic("emitStraightLineTerminator: an attached-subprocess host primitive is a body op, never a terminator")
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose then panic("emitStraightLineTerminator: a socket host primitive is a body op, never a terminator")
-			osCpuCount then panic("emitStraightLineTerminator: an `osCpuCount` is a body op, never a terminator")
-			osThreadCpuTicks then panic("emitStraightLineTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
-			osDecommitPages then panic("emitStraightLineTerminator: an `osDecommitPages` is a body op, never a terminator")
-			osGuardPages or
-			osCommitPages or
-			osReservePages then panic("emitStraightLineTerminator: a page reserve or commit is a body op, never a terminator")
-			memFill then panic("emitStraightLineTerminator: a `memFill` is a body op, never a terminator")
-			atomicCas or
-			atomicRmw then panic("emitStraightLineTerminator: an atomic is a body op, never a terminator")
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osThreadToken or
-			osSetEvent or
-			osEnterBackgroundPriority then panic("emitStraightLineTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
-			osEnvBlock or
-			osEnvBlockFree then panic("emitStraightLineTerminator: an environment-block read or release is a body op, never a terminator")
-			loadAcquire or
-			storeRelease then panic("emitStraightLineTerminator: an ordered load or store is a body op, never a terminator")
-			osHandleFileType then panic("emitStraightLineTerminator: `osHandleFileType` is a body op, never a terminator")
-			osProcessProbe then panic("emitStraightLineTerminator: `osProcessProbe` is a body op, never a terminator")
-			osProcessExitSignal then panic("emitStraightLineTerminator: `osProcessExitSignal` is a body op, never a terminator")
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment then panic("emitStraightLineTerminator: a named-section create or unmap is a body op, never a terminator")
-			covPoint then panic("emitStraightLineTerminator: a coverage counter is a body op, never a terminator")
-			osHostProcess then panic("emitStraightLineTerminator: a host process call is a body op, never a terminator")
-			osNetpoll then panic("emitStraightLineTerminator: a poller call is a body op, never a terminator")
-			osPathQuery then panic("emitStraightLineTerminator: a path query is a body op, never a terminator")
-			osSocketOverlapped or
-			osSocketServe then panic("emitStraightLineTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
-		end 'term'
-	end 'emitStraightLineTerminator'
+		while self.flowState.advance() 'tasks'
+			match self.flowState.task 'task'
+				tree then self.emitFlowTree(self.flowState.taskFrom)
+				body then self.emitBlockCode(self.flowState.taskFrom)
+				endBlock or
+				endLoop or
+				endConstruct then self.closeFlowConstruct()
+				edge then self.emitFlowEdge(self.flowState.taskFrom, target: self.flowState.taskTo)
+			end 'task'
+		end 'tasks'
+
+		self.flowState.finish()
+		self.body.unreachable()
+	end 'emitStructured'
+
+	function closeFlowConstruct()
+		self.body.endOp()
+		self.flowState.closeCurrent()
+	end 'closeFlowConstruct'
+
+	function emitFlowTree(position ElementIndex)
+		if self.plan.isLoopHeader(position) 'loop'
+			self.flowState.push(WasmFlowTask.endLoop, source: position, target: position)
+			self.body.beginLoop()
+			self.flowState.openLoop(position)
+		end 'loop'
+
+		// Merge children open highest-RPO outermost, so every forward predecessor's `br` to a merge
+		// finds its block still open.
+		var merges = BlockPositionColumn.create()
+		self.plan.appendLabelledChildren(position, into: merges)
+		var remaining = merges.count()
+
+		while remaining > 0 'eachMerge'
+			remaining = remaining - 1
+			let merge = try merges.get(remaining) otherwise panic("emitFlowTree: merges.get OOB at {remaining}")
+			self.flowState.push(WasmFlowTask.tree, source: merge, target: merge)
+			self.flowState.push(WasmFlowTask.endBlock, source: merge, target: merge)
+			self.body.beginBlock()
+			self.flowState.openBlock(merge)
+		end 'eachMerge'
+
+		self.flowState.push(WasmFlowTask.body, source: position, target: position)
+	end 'emitFlowTree'
+
+	function emitFlowEdge(source ElementIndex, target ElementIndex)
+		self.emitEdgePhiCopies(self.module.blockAtPosition(self.func, position: source), targetBlockId: self.module.blockAtPosition(self.func, position: target).id)
+
+		if not self.plan.isInlineEdge(source, to: target) 'branch'
+			self.body.br(self.flowBranchDepth(source, target: target))
+			return
+		end 'branch'
+
+		if self.plan.tree.immediateDominatorOf(target) != source 'notDominated'
+			panic("emitFlowEdge: block position {target} has one forward predecessor, {source}, but is dominated by {self.plan.tree.immediateDominatorOf(target)} — the CFG is not the reducible shape the structured emitter requires")
+		end 'notDominated'
+
+		self.flowState.push(WasmFlowTask.tree, source: target, target: target)
+	end 'emitFlowEdge'
+
+	function flowBranchDepth(source ElementIndex, target ElementIndex) returns Wasm32Index
+		if self.plan.isBackEdge(source, to: target) 'back'
+			return self.flowState.loopDepth(target)
+		end 'back'
+
+		return self.flowState.blockDepth(target)
+	end 'flowBranchDepth'
+
+	function emitFlowCondBranch(condId ValueId, thenTarget ElementIndex, elseTarget ElementIndex, source ElementIndex)
+		let nestThen = self.plan.nestsThenArm(source, thenTarget: thenTarget, elseTarget: elseTarget)
+		let nested = thenTarget if nestThen else elseTarget
+		let flat = elseTarget if nestThen else thenTarget
+
+		self.pushOperandAt(condId, targetVt: WasmValType.i32)
+
+		if not nestThen 'invert'
+			self.body.i32Eqz()
+		end 'invert'
+
+		if not self.plan.isInlineEdge(source, to: nested) and self.module.blockAtPosition(self.func, position: nested).blockArgs.count() == 0 'plainBranch'
+			self.body.brIf(self.flowBranchDepth(source, target: nested))
+			self.flowState.push(WasmFlowTask.edge, source: source, target: flat)
+			return
+		end 'plainBranch'
+
+		self.body.beginIf()
+		self.flowState.openConstruct()
+		self.flowState.push(WasmFlowTask.edge, source: source, target: flat)
+		self.flowState.push(WasmFlowTask.endConstruct, source: source, target: source)
+		self.flowState.push(WasmFlowTask.edge, source: source, target: nested)
+	end 'emitFlowCondBranch'
+
+	function emitFlowSwitch(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, source ElementIndex)
+		let distinct = distinctSwitchTargets(caseTargets, exclude: defaultTarget)
+		let m = distinct.count()
+
+		// Counts the `m + 1` landing blocks `emitSwitchTable` opens; if the two disagree, every `br`
+		// depth computed inside a landing is off.
+		for _ in 0 upto (m + 1) 'openLandings'
+			self.flowState.openConstruct()
+		end 'openLandings'
+
+		self.emitSwitchTable(subjectId, caseTargets: caseTargets, distinct: distinct)
+		var landing = m + 1
+
+		while landing > 0 'eachLanding'
+			landing = landing - 1
+			let target = switchLandingTarget(distinct, defaultTarget: defaultTarget, landing: landing)
+			self.flowState.push(WasmFlowTask.edge, source: source, target: self.blockPositionOf(target))
+			self.flowState.push(WasmFlowTask.endConstruct, source: source, target: source)
+		end 'eachLanding'
+	end 'emitFlowSwitch'
+
+	function emitBranch(targetBlockId BlockId, currentBlock IrBlock, position ElementIndex)
+		match self.plan.flow 'flow'
+			structured then self.emitFlowEdge(position, target: self.blockPositionOf(targetBlockId))
+			dispatcher then self.emitDispatchBranch(targetBlockId, currentBlock: currentBlock, loopDepth: self.dispatcherLoopDepth(position))
+			straightLine then panic("emitBranch: a `branch` block should have taken a branching path")
+		end 'flow'
+	end 'emitBranch'
+
+	function emitCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, currentBlock IrBlock, position ElementIndex)
+		match self.plan.flow 'flow'
+			structured then self.emitFlowCondBranch(condId, thenTarget: self.blockPositionOf(thenBlockId), elseTarget: self.blockPositionOf(elseBlockId), source: position)
+			dispatcher then self.emitDispatchCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, currentBlock: currentBlock, loopDepth: self.dispatcherLoopDepth(position))
+			straightLine then panic("emitCondBranch: a `condBranch` block should have taken a branching path")
+		end 'flow'
+	end 'emitCondBranch'
+
+	function emitSwitch(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, currentBlock IrBlock, position ElementIndex)
+		match self.plan.flow 'flow'
+			structured then self.emitFlowSwitch(subjectId, caseTargets: caseTargets, defaultTarget: defaultTarget, source: position)
+			dispatcher then self.emitDispatchSwitch(subjectId, caseTargets: caseTargets, defaultTarget: defaultTarget, currentBlock: currentBlock, loopDepth: self.dispatcherLoopDepth(position))
+			straightLine then panic("emitSwitch: a `switch` (multiway) block should have taken a branching path")
+		end 'flow'
+	end 'emitSwitch'
+
+	function dispatcherLoopDepth(position ElementIndex) returns Wasm32Index
+		return (self.func.blockRefs.count() - 1 - position) as Wasm32Index
+	end 'dispatcherLoopDepth'
 
 	// The loop+br_table dispatcher (CONTRACT §1). One outer `loop`; one
 	// `block` nested per basic block; a `br_table` off the dispatch local jumps to block N's
 	// code (which sits just after the N-th nested `end`). Each block ends by either returning or
-	// setting the dispatch local and branching back to the loop. Handles any reducible CFG.
+	// setting the dispatch local and branching back to the loop. Handles any CFG, irreducible
+	// included; it is the fallback for a function `WasmFlowPlan` cannot structure.
 	function emitDispatcher(blockCount ElementIndex)
 		self.body.beginLoop()
 
@@ -2299,23 +2319,7 @@ type WasmFuncEmitter
 			// `br_table` entry i lands here.
 			self.body.endOp()
 
-			let blockRef = try self.func.blockRefs.get(i) otherwise panic("emitDispatcher: blockRefs.get OOB at {i}")
-			view block = try self.module.blocks.get(blockRef) otherwise panic("emitDispatcher: blockRef {blockRef} not in module.blocks")
-			self.currentSite = copiedInlineSite(block.inlineSite)
-
-			for opIdx in block.bodyOps() 'eachOp'
-				self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitDispatcher: opIdx {opIdx} not in module.ops"))
-			end 'eachOp'
-
-			// The distance from block-code depth to the outer loop: after i+1 `end`s, the loop is
-			// the (blockCount-1-i)-th enclosing structure.
-			let loopDepth = (blockCount - 1 - i) as Wasm32Index
-
-			if block.hasTerminatorOp() 'hasTerm'
-				self.emitDispatcherTerminator(try self.module.ops.get(block.terminatorIndex()) otherwise panic("emitDispatcher: terminatorIndex not in module.ops"), currentBlock: block, loopDepth: loopDepth)
-			end 'hasTerm' else 'noTerm'
-				self.body.unreachable()
-			end 'noTerm'
+			self.emitBlockCode(i)
 		end 'eachBlock'
 
 		self.body.endOp()
@@ -2326,13 +2330,13 @@ type WasmFuncEmitter
 		self.body.unreachable()
 	end 'emitDispatcher'
 
-	function emitDispatcherTerminator(op StdOp, currentBlock IrBlock, loopDepth Wasm32Index)
+	function emitTerminator(op StdOp, currentBlock IrBlock, position ElementIndex)
 		match op 'term'
 			ret(retValId) then self.emitRet(retValId)
 			retVoid then self.emitRetVoid()
-			branch(targetBlockId) then self.emitDispatchBranch(targetBlockId, currentBlock: currentBlock, loopDepth: loopDepth)
-			condBranch(condId, thenBlockId, elseBlockId) then self.emitDispatchCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, currentBlock: currentBlock, loopDepth: loopDepth)
-			switch(subjectId, denseTargetBlockIds, defaultBlockId) then self.emitDispatchSwitch(subjectId, caseTargets: denseTargetBlockIds, defaultTarget: defaultBlockId, currentBlock: currentBlock, loopDepth: loopDepth)
+			branch(targetBlockId) then self.emitBranch(targetBlockId, currentBlock: currentBlock, position: position)
+			condBranch(condId, thenBlockId, elseBlockId) then self.emitCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, currentBlock: currentBlock, position: position)
+			switch(subjectId, denseTargetBlockIds, defaultBlockId) then self.emitSwitch(subjectId, caseTargets: denseTargetBlockIds, defaultTarget: defaultBlockId, currentBlock: currentBlock, position: position)
 			const or
 			binOp or
 			unaryOp or
@@ -2340,20 +2344,20 @@ type WasmFuncEmitter
 			binOpImm or
 			cmpImm or
 			div or
-			mod then panic("emitDispatcherTerminator: an arith op is not a terminator")
-			param then panic("emitDispatcherTerminator: a `param` op is not a terminator")
-			call then panic("emitDispatcherTerminator: a `call` op is not a terminator")
+			mod then panic("emitTerminator: an arith op is not a terminator")
+			param then panic("emitTerminator: a `param` op is not a terminator")
+			call then panic("emitTerminator: a `call` op is not a terminator")
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
 			osAllocPages or
 			osWriteStdout or
-			rdataAddr then panic("emitDispatcherTerminator: a memory/system op is not a terminator")
-			tryCall then panic("emitDispatcherTerminator: a `tryCall` is a value-producing body op, never a terminator")
+			rdataAddr then panic("emitTerminator: a memory/system op is not a terminator")
+			tryCall then panic("emitTerminator: a `tryCall` is a value-producing body op, never a terminator")
 			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
-			osExit then panic("emitDispatcherTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
-			funcAddr then panic("emitDispatcherTerminator: a `funcAddr` is a value-producing body op, never a terminator")
-			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
+			osExit then panic("emitTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
+			funcAddr then panic("emitTerminator: a `funcAddr` is a value-producing body op, never a terminator")
+			callIndirect then panic("emitTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osPanic or
 			osReadClock or
 			osProcessSpawn or
@@ -2361,12 +2365,12 @@ type WasmFuncEmitter
 			osCloseHandle or
 			osWaitHandle or
 			osWaitChild or
-			osFreePages then panic("emitDispatcherTerminator: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
-			witnessCall then panic("emitDispatcherTerminator: a `witnessCall` is a value-producing body op, never a terminator")
-			witnessTryCall then panic("emitDispatcherTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
+			osFreePages then panic("emitTerminator: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
+			witnessCall then panic("emitTerminator: a `witnessCall` is a value-producing body op, never a terminator")
+			witnessTryCall then panic("emitTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
 			osLockInit or
 			osLockEnter or
-			osLockLeave then panic("emitDispatcherTerminator: an `osLock*` op is a body op, never a terminator")
+			osLockLeave then panic("emitTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
 			osEventCreate or
 			osThreadCreate or
@@ -2376,8 +2380,8 @@ type WasmFuncEmitter
 			osCancelIo or
 			osGetPid or
 			osPipeCreateOutbound or
-			osWriteFile then panic("emitDispatcherTerminator: an IOCP op is a body op, never a terminator")
-			osReadWallClock then panic("emitDispatcherTerminator: an `osReadWallClock` is a body op, never a terminator")
+			osWriteFile then panic("emitTerminator: an IOCP op is a body op, never a terminator")
+			osReadWallClock then panic("emitTerminator: an `osReadWallClock` is a body op, never a terminator")
 			osFileOpenRead or
 			osFileClose or
 			osReadFile or
@@ -2393,22 +2397,22 @@ type WasmFuncEmitter
 			osDirCurrentPath or
 			osFileAttributes or
 			osFileOpenCreateNew or
-			osFileOpenWriteExecutable then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
-			osPanicValue then panic("emitDispatcherTerminator: an `osPanicValue` is a body op, never a terminator")
-			osCommandLine then panic("emitDispatcherTerminator: an `osCommandLine` is a body op, never a terminator")
-			osStdHandle then panic("emitDispatcherTerminator: an `osStdHandle` is a body op, never a terminator")
-			osExecutablePath then panic("emitDispatcherTerminator: an `osExecutablePath` is a body op, never a terminator")
-			osProcessNamespace then panic("emitDispatcherTerminator: an `osProcessNamespace` is a body op, never a terminator")
-			osRandomFill then panic("emitDispatcherTerminator: an `osRandomFill` is a body op, never a terminator")
-			osWriteStderr then panic("emitDispatcherTerminator: an `osWriteStderr` is a body op, never a terminator")
-			stackRecordAddr then panic("emitDispatcherTerminator: a `stackRecordAddr` is a body op, never a terminator")
+			osFileOpenWriteExecutable then panic("emitTerminator: a file-IO op is a body op, never a terminator")
+			osPanicValue then panic("emitTerminator: an `osPanicValue` is a body op, never a terminator")
+			osCommandLine then panic("emitTerminator: an `osCommandLine` is a body op, never a terminator")
+			osStdHandle then panic("emitTerminator: an `osStdHandle` is a body op, never a terminator")
+			osExecutablePath then panic("emitTerminator: an `osExecutablePath` is a body op, never a terminator")
+			osProcessNamespace then panic("emitTerminator: an `osProcessNamespace` is a body op, never a terminator")
+			osRandomFill then panic("emitTerminator: an `osRandomFill` is a body op, never a terminator")
+			osWriteStderr then panic("emitTerminator: an `osWriteStderr` is a body op, never a terminator")
+			stackRecordAddr then panic("emitTerminator: a `stackRecordAddr` is a body op, never a terminator")
 			osOpenNamedSegment or
 			osMapNamedSegment or
-			osTickCountMs then panic("emitDispatcherTerminator: a DebugStream host primitive is a body op, never a terminator")
+			osTickCountMs then panic("emitTerminator: a DebugStream host primitive is a body op, never a terminator")
 			osHandleSetInherit or
 			osPipePeek or
 			osEnvRead or
-			osProcessTerminate then panic("emitDispatcherTerminator: an attached-subprocess host primitive is a body op, never a terminator")
+			osProcessTerminate then panic("emitTerminator: an attached-subprocess host primitive is a body op, never a terminator")
 			osSocketStartup or
 			osSocketResolve or
 			osSocketFreeAddrInfo or
@@ -2417,41 +2421,41 @@ type WasmFuncEmitter
 			osSocketSend or
 			osSocketError or
 			osSocketRecv or
-			osSocketClose then panic("emitDispatcherTerminator: a socket host primitive is a body op, never a terminator")
-			osCpuCount then panic("emitDispatcherTerminator: an `osCpuCount` is a body op, never a terminator")
-			osThreadCpuTicks then panic("emitDispatcherTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
-			osDecommitPages then panic("emitDispatcherTerminator: an `osDecommitPages` is a body op, never a terminator")
+			osSocketClose then panic("emitTerminator: a socket host primitive is a body op, never a terminator")
+			osCpuCount then panic("emitTerminator: an `osCpuCount` is a body op, never a terminator")
+			osThreadCpuTicks then panic("emitTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
+			osDecommitPages then panic("emitTerminator: an `osDecommitPages` is a body op, never a terminator")
 			osGuardPages or
 			osCommitPages or
-			osReservePages then panic("emitDispatcherTerminator: a page reserve or commit is a body op, never a terminator")
-			memFill then panic("emitDispatcherTerminator: a `memFill` is a body op, never a terminator")
+			osReservePages then panic("emitTerminator: a page reserve or commit is a body op, never a terminator")
+			memFill then panic("emitTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas or
-			atomicRmw then panic("emitDispatcherTerminator: an atomic is a body op, never a terminator")
+			atomicRmw then panic("emitTerminator: an atomic is a body op, never a terminator")
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
 			osThreadToken or
 			osSetEvent or
-			osEnterBackgroundPriority then panic("emitDispatcherTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
+			osEnterBackgroundPriority then panic("emitTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
 			osEnvBlock or
-			osEnvBlockFree then panic("emitDispatcherTerminator: an environment-block read or release is a body op, never a terminator")
+			osEnvBlockFree then panic("emitTerminator: an environment-block read or release is a body op, never a terminator")
 			loadAcquire or
-			storeRelease then panic("emitDispatcherTerminator: an ordered load or store is a body op, never a terminator")
-			osHandleFileType then panic("emitDispatcherTerminator: `osHandleFileType` is a body op, never a terminator")
-			osProcessProbe then panic("emitDispatcherTerminator: `osProcessProbe` is a body op, never a terminator")
-			osProcessExitSignal then panic("emitDispatcherTerminator: `osProcessExitSignal` is a body op, never a terminator")
+			storeRelease then panic("emitTerminator: an ordered load or store is a body op, never a terminator")
+			osHandleFileType then panic("emitTerminator: `osHandleFileType` is a body op, never a terminator")
+			osProcessProbe then panic("emitTerminator: `osProcessProbe` is a body op, never a terminator")
+			osProcessExitSignal then panic("emitTerminator: `osProcessExitSignal` is a body op, never a terminator")
 			osCreateNamedSegment or
 			osAdoptNamedSegment or
 			osUnmapNamedSegment or
-			osUnpublishNamedSegment then panic("emitDispatcherTerminator: a named-section create or unmap is a body op, never a terminator")
-			covPoint then panic("emitDispatcherTerminator: a coverage counter is a body op, never a terminator")
-			osHostProcess then panic("emitDispatcherTerminator: a host process call is a body op, never a terminator")
-			osNetpoll then panic("emitDispatcherTerminator: a poller call is a body op, never a terminator")
-			osPathQuery then panic("emitDispatcherTerminator: a path query is a body op, never a terminator")
+			osUnpublishNamedSegment then panic("emitTerminator: a named-section create or unmap is a body op, never a terminator")
+			covPoint then panic("emitTerminator: a coverage counter is a body op, never a terminator")
+			osHostProcess then panic("emitTerminator: a host process call is a body op, never a terminator")
+			osNetpoll then panic("emitTerminator: a poller call is a body op, never a terminator")
+			osPathQuery then panic("emitTerminator: a path query is a body op, never a terminator")
 			osSocketOverlapped or
-			osSocketServe then panic("emitDispatcherTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
+			osSocketServe then panic("emitTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
 		end 'term'
-	end 'emitDispatcherTerminator'
+	end 'emitTerminator'
 
 	// ----------------------------------------------------------------------
 	// Per-StdOp body emitters (arith + call bands)
@@ -3955,7 +3959,7 @@ type WasmFuncEmitter
 
 	function emitDispatchBranch(targetBlockId BlockId, currentBlock IrBlock, loopDepth Wasm32Index)
 		self.emitEdgePhiCopies(currentBlock, targetBlockId: targetBlockId)
-		self.emitSetDispatch(self.dispatchIndexOf(targetBlockId))
+		self.emitSetDispatch(self.blockPositionOf(targetBlockId))
 		self.body.br(loopDepth)
 	end 'emitDispatchBranch'
 
@@ -3973,12 +3977,12 @@ type WasmFuncEmitter
 		self.body.beginIf()
 
 		self.emitEdgePhiCopies(currentBlock, targetBlockId: thenBlockId)
-		self.emitSetDispatch(self.dispatchIndexOf(thenBlockId))
+		self.emitSetDispatch(self.blockPositionOf(thenBlockId))
 
 		self.body.elseClause()
 
 		self.emitEdgePhiCopies(currentBlock, targetBlockId: elseBlockId)
-		self.emitSetDispatch(self.dispatchIndexOf(elseBlockId))
+		self.emitSetDispatch(self.blockPositionOf(elseBlockId))
 
 		self.body.endOp()
 		self.body.br(loopDepth)
@@ -3992,8 +3996,8 @@ type WasmFuncEmitter
 	// ⭐ **THE DENSE-MATCH JUMP TABLE ON wasm** — a value `br_table` over the biased subject, wrapped in one
 	// nested landing block per DISTINCT case target plus the default. wasm has no relocation to patch, so the
 	// table is the `br_table` immediate itself; but a `br_table` cannot run per-edge phi copies, so each
-	// landing runs `emitDispatchBranch` (its target's phi copies + set-dispatch + `br` to the loop) exactly
-	// as the two-way dispatcher does. A native jump table's UNSIGNED bounds check has no `br_table` analog —
+	// landing runs its own edge: here `emitDispatchBranch` (its target's phi copies + set-dispatch + `br`
+	// to the loop), and in structured flow `emitFlowSwitch`'s `emitFlowEdge`. A native jump table's UNSIGNED bounds check has no `br_table` analog —
 	// `br_table` bound-checks only the low 32 bits of an i64 index — so an explicit `i64.ge_u` guard routes a
 	// wrapped-negative or high-bit-set index to the default first, matching x64's `jae` / arm64's `b.hs`.
 	//
@@ -4005,10 +4009,20 @@ type WasmFuncEmitter
 	function emitDispatchSwitch(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, currentBlock IrBlock, loopDepth Wasm32Index)
 		let distinct = distinctSwitchTargets(caseTargets, exclude: defaultTarget)
 		let m = distinct.count()
+		self.emitSwitchTable(subjectId, caseTargets: caseTargets, distinct: distinct)
 
-		// Open `m + 1` nested landing blocks (one per distinct target, plus the default). The loop is now at
-		// `loopDepth + m + 1`.
-		for _ in 0 upto (m + 1) 'openLandings'
+		// Close each landing and emit its target's dispatch. `end` #1 exposes the default landing; `end` #(k+1)
+		// exposes `distinct[m − k]`. The loop is `loopDepth + m − k` deep at the k-th code point.
+		for k in 0 upto (m + 1) 'landings'
+			self.body.endOp()
+			let landingLoopDepth = (loopDepth + m as Wasm32Index - k) as Wasm32Index
+			self.emitDispatchBranch(switchLandingTarget(distinct, defaultTarget: defaultTarget, landing: k), currentBlock: currentBlock, loopDepth: landingLoopDepth)
+		end 'landings'
+	end 'emitDispatchSwitch'
+
+	function emitSwitchTable(subjectId ValueId, caseTargets BlockIdArray, distinct BlockIdArray)
+		// Open `m + 1` nested landing blocks (one per distinct target, plus the default).
+		for _ in 0 upto (distinct.count() + 1) 'openLandings'
 			self.body.beginBlock()
 		end 'openLandings'
 
@@ -4031,21 +4045,7 @@ type WasmFuncEmitter
 		// after the guard, correct anyway).
 		self.pushOperandAt(subjectId, targetVt: WasmValType.i32)
 		self.body.brTable(self.slotLandingDepths(caseTargets, distinct: distinct), defaultTarget: 0)
-
-		// Close each landing and emit its target's dispatch. `end` #1 exposes the default landing; `end` #(k+1)
-		// exposes `distinct[m − k]`. The loop is `loopDepth + m − k` deep at the k-th code point.
-		for k in 0 upto (m + 1) 'landings'
-			self.body.endOp()
-			let landingLoopDepth = (loopDepth + m as Wasm32Index - k) as Wasm32Index
-			var target = defaultTarget
-
-			if k > 0 'caseLanding'
-				target = try distinct.get(m - k) otherwise panic("emitDispatchSwitch: distinct.get OOB at {m - k} (m={m}, k={k})")
-			end 'caseLanding'
-
-			self.emitDispatchBranch(target, currentBlock: currentBlock, loopDepth: landingLoopDepth)
-		end 'landings'
-	end 'emitDispatchSwitch'
+	end 'emitSwitchTable'
 
 	// The `i64.ge_u span` bounds guard `br_if`ing an out-of-range index to the default landing (depth 0). An
 	// i32 subject (never produced for a switch today — every biased index is i64) needs no i64 guard: its own
@@ -4122,10 +4122,10 @@ type WasmFuncEmitter
 	// The narrowing to `Wasm32Index` is at the READ and not in the table because the table is the
 	// IR-tier `blockIndexById` column every backend shares; a `blockRefs` position always fits u32
 	// for the same reason a function's block count does.
-	function dispatchIndexOf(blockId BlockId) returns Wasm32Index
-		let position = try self.blockDispatchById.get(blockId) otherwise panic("dispatchIndexOf: branch targets block id {blockId} not in func.blockRefs")
+	function blockPositionOf(blockId BlockId) returns Wasm32Index
+		let position = try self.blockPositionById.get(blockId) otherwise panic("blockPositionOf: branch targets block id {blockId} not in func.blockRefs")
 		return position as Wasm32Index
-	end 'dispatchIndexOf'
+	end 'blockPositionOf'
 
 	// ----------------------------------------------------------------------
 	// Phi (block-arg) parallel copies on a branch edge
@@ -4137,7 +4137,7 @@ type WasmFuncEmitter
 	// `blockArgs`. A target with block-args must have a matching edge from every predecessor
 	// (IrBlock's phi-model contract), so a missing edge is only valid when the target has none.
 	function emitEdgePhiCopies(currentBlock IrBlock, targetBlockId BlockId)
-		let targetBlock = self.blockById(targetBlockId)
+		let targetBlock = self.module.blockAtPosition(self.func, position: self.blockPositionOf(targetBlockId))
 
 		// A condBranch's then/else targets are distinct and a branch has one target, so a target
 		// appears at most once among the predecessor's phi edges — the first match is the edge.
@@ -4170,12 +4170,6 @@ type WasmFuncEmitter
 
 		copy.sequence(WasmPhiCopies.create(self.body, valtypes: self.valtypes, scratchLocalByValType: self.scratchLocalByValType))
 	end 'emitPhiCopyForEdge'
-
-	function blockById(blockId BlockId) returns IrBlock
-		let idx = self.dispatchIndexOf(blockId)
-		let blockRef = try self.func.blockRefs.get(idx) otherwise panic("blockById: blockRefs.get OOB at {idx}")
-		return try self.module.blocks.get(blockRef) otherwise panic("blockById: blockRef {blockRef} not in module.blocks")
-	end 'blockById'
 end 'WasmFuncEmitter'
 
 type WasmPhiCopies implements ParallelCopyEmitter
@@ -4223,7 +4217,7 @@ type WasmPhiCopies implements ParallelCopyEmitter
 end 'WasmPhiCopies'
 
 // ==========================================================================
-// Free helpers: constant narrowing, dispatcher decision
+// Free helpers: constant narrowing, switch landings
 // ==========================================================================
 
 // The low 32 bits of `value`, reinterpreted as a signed i32 — what a wasm `i32.const` (an
@@ -4296,159 +4290,11 @@ function wasmMemOffset(offset ByteOffset) returns Wasm32Index
 	return offset as Wasm32Index
 end 'wasmMemOffset'
 
-// Whether `func` needs the loop+br_table dispatcher. Any multi-block function does; a
-// single-block function does too when its terminator branches (a self-loop) rather than
-// returning — a lone returning block emits straight-line.
-function decideDispatcher(module StdModule, func IrFunction) returns bool
-	let blockCount = func.blockRefs.count()
+function switchLandingTarget(distinct BlockIdArray, defaultTarget BlockId, landing ElementIndex) returns BlockId
+	if landing == 0 'defaultLanding'
+		return defaultTarget
+	end 'defaultLanding'
 
-	if blockCount > 1 'multi'
-		return true
-	end 'multi'
-
-	if blockCount == 0 'empty'
-		return false
-	end 'empty'
-
-	let blockRef = try func.blockRefs.get(0) otherwise panic("decideDispatcher: blockRefs.get(0) OOB")
-	let block = try module.blocks.get(blockRef) otherwise panic("decideDispatcher: blockRef {blockRef} not in module.blocks")
-
-	if not block.hasTerminatorOp() 'noTerm'
-		return false
-	end 'noTerm'
-
-	let term = try module.ops.get(block.terminatorIndex()) otherwise panic("decideDispatcher: terminatorIndex not in module.ops")
-
-	match term 'k'
-		const or
-		binOp or
-		unaryOp or
-		cmp or
-		binOpImm or
-		cmpImm or
-		div or
-		mod or
-		ret or
-		param or
-		call or
-		retVoid or
-		globalAddr or
-		loadIndirect or
-		storeIndirect or
-		osAllocPages or
-		osWriteStdout or
-		rdataAddr or
-
-		// `errorReturn` is a return terminator, so a throwing function's single block ending in it is
-		// straight-line, like `ret`.
-		errorReturn or
-		witnessCall or
-		witnessTryCall then break
-		condBranch or
-		branch or
-
-		// A `match` always creates several arm-body blocks, so `blockCount > 1` catches a jump table
-		// first; this arm makes a single-block switch force the dispatcher too.
-		switch then return true
-		tryCall then panic("decideDispatcher: a `tryCall` is a value-producing body op, never a terminator")
-		osExit then panic("decideDispatcher: an `osExit` is a body op followed by a dead return, never a terminator")
-		funcAddr then panic("decideDispatcher: a `funcAddr` is a value-producing body op, never a terminator")
-		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
-		osPanic or
-		osReadClock or
-		osProcessSpawn or
-		osProcessExitCode or
-		osCloseHandle or
-		osWaitHandle or
-		osWaitChild or
-		osFreePages then panic("decideDispatcher: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
-		osLockInit or
-		osLockEnter or
-		osLockLeave then panic("decideDispatcher: an `osLock*` op is a body op, never a terminator")
-		osPipeCreate or
-		osEventCreate or
-		osThreadCreate or
-		osReadOverlapped or
-		osLastError or
-		osProcessSpawnInherit or
-		osCancelIo or
-		osGetPid or
-		osPipeCreateOutbound or
-		osWriteFile then panic("decideDispatcher: an IOCP op is a body op, never a terminator")
-		osReadWallClock then panic("decideDispatcher: an `osReadWallClock` is a body op, never a terminator")
-		osFileOpenRead or
-		osFileClose or
-		osReadFile or
-		osFileOpenWrite or
-		osFileSize or
-		osFileDelete or
-		osFileRename or
-		osFileFindFirst or
-		osFileFindClose or
-		osFileFindNext or
-		osDirCreate or
-		osDirRemove or
-		osDirCurrentPath or
-		osFileAttributes or
-		osFileOpenCreateNew or
-		osFileOpenWriteExecutable then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
-		osPanicValue then panic("decideDispatcher: an `osPanicValue` is a body op, never a terminator")
-		osCommandLine then panic("decideDispatcher: an `osCommandLine` is a body op, never a terminator")
-		osStdHandle then panic("decideDispatcher: an `osStdHandle` is a body op, never a terminator")
-		osExecutablePath then panic("decideDispatcher: an `osExecutablePath` is a body op, never a terminator")
-		osProcessNamespace then panic("decideDispatcher: an `osProcessNamespace` is a body op, never a terminator")
-		osRandomFill then panic("decideDispatcher: an `osRandomFill` is a body op, never a terminator")
-		osWriteStderr then panic("decideDispatcher: an `osWriteStderr` is a body op, never a terminator")
-		stackRecordAddr then panic("decideDispatcher: a `stackRecordAddr` is a body op, never a terminator")
-		osOpenNamedSegment or
-		osMapNamedSegment or
-		osTickCountMs then panic("decideDispatcher: a DebugStream host primitive is a body op, never a terminator")
-		osHandleSetInherit or
-		osPipePeek or
-		osEnvRead or
-		osProcessTerminate then panic("decideDispatcher: an attached-subprocess host primitive is a body op, never a terminator")
-		osSocketStartup or
-		osSocketResolve or
-		osSocketFreeAddrInfo or
-		osSocketCreate or
-		osSocketConnect or
-		osSocketSend or
-		osSocketError or
-		osSocketRecv or
-		osSocketClose then panic("decideDispatcher: a socket host primitive is a body op, never a terminator")
-		osCpuCount then panic("decideDispatcher: an `osCpuCount` is a body op, never a terminator")
-		osThreadCpuTicks then panic("decideDispatcher: an `osThreadCpuTicks` is a body op, never a terminator")
-		osDecommitPages then panic("decideDispatcher: an `osDecommitPages` is a body op, never a terminator")
-		osGuardPages or
-		osCommitPages or
-		osReservePages then panic("decideDispatcher: a page reserve or commit is a body op, never a terminator")
-		memFill then panic("decideDispatcher: a `memFill` is a body op, never a terminator")
-		atomicCas or
-		atomicRmw then panic("decideDispatcher: an atomic is a body op, never a terminator")
-		tlsAlloc or
-		tlsSetValue or
-		tlsSlotLoad or
-		osThreadToken or
-		osSetEvent or
-		osEnterBackgroundPriority then panic("decideDispatcher: a TLS op, an event signal or the priority door is a body op, never a terminator")
-		osEnvBlock or
-		osEnvBlockFree then panic("decideDispatcher: an environment-block read or release is a body op, never a terminator")
-		loadAcquire or
-		storeRelease then panic("decideDispatcher: an ordered load or store is a body op, never a terminator")
-		osHandleFileType then panic("decideDispatcher: `osHandleFileType` is a body op, never a terminator")
-		osProcessProbe then panic("decideDispatcher: `osProcessProbe` is a body op, never a terminator")
-		osProcessExitSignal then panic("decideDispatcher: `osProcessExitSignal` is a body op, never a terminator")
-		osCreateNamedSegment or
-		osAdoptNamedSegment or
-		osUnmapNamedSegment or
-		osUnpublishNamedSegment then panic("decideDispatcher: a named-section create or unmap is a body op, never a terminator")
-		covPoint then panic("decideDispatcher: a coverage counter is a body op, never a terminator")
-		osHostProcess then panic("decideDispatcher: a host process call is a body op, never a terminator")
-		osNetpoll then panic("decideDispatcher: a poller call is a body op, never a terminator")
-		osPathQuery then panic("decideDispatcher: a path query is a body op, never a terminator")
-		osSocketOverlapped or
-		osSocketServe then panic("decideDispatcher: a socket transfer or a server-side socket call is a body op, never a terminator")
-	end 'k'
-
-	return false
-end 'decideDispatcher'
+	let m = distinct.count()
+	return try distinct.get(m - landing) otherwise panic("switchLandingTarget: landing {landing} is past the {m} distinct case targets")
+end 'switchLandingTarget'

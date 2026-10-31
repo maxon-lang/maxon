@@ -2067,7 +2067,7 @@ INTO ONE."* ⚠ **The frontend refuses dead source** (E3012 unused-variable), so
 this compiler has little to collect — the real producers are inlining, identity folds and proven-redundant
 range checks. **Measure the corpus first**; this may be a row with nothing behind it.
 
-#### `EC24` · Direct calls for the `withIterator()` loop over an `Array`
+#### `EC35` · Direct calls for the `withIterator()` loop over an `Array`
 
 `for (iter, x) in array.withIterator()` allocates nothing per element, in a body that returns early
 too: `ValueTupleReturn` elides the `(iter, x)` pair each step builds, takes it in two registers where
@@ -2079,6 +2079,29 @@ A loop whose tables are constant splices `current`, resolving the cursor's witne
 descriptor's ownership words at compile time, so each step makes no call (~45 x64 instructions per
 element; `ir-specs/witness-devirtualization.md`). The shared call stands only where a request keeps the
 body.
+
+**Deferred: the per-element retain/destroy pair.** Each step still runs one `__mm_retain` and one
+iterator destructor (`__destruct_ArrayIterator_Byte` for an `Array with Byte`), because the shared
+`WithIterIterator.current` co-owns `source` into the tuple it returns. The ruling (user) is to stop
+emitting the pair, with no canceller pass deleting it afterwards; the design is for `current` to lend
+`source`. Lending needs `HoldResolution` to judge the shared generic body's window clean, and it judges
+it unclean for three reasons:
+
+1. witness-dispatch candidates are chosen by bare method name;
+2. a call carrying a type-parameter value is treated as unknown;
+3. the generic body's `self` and the concrete instance use different record keys (`structRef` and
+   `InstanceBase`), so their field events never meet.
+
+#### `EC34` · Structured control flow on wasm32-wasi
+
+`StdToWasm` emits a reducible CFG as structured `block`/`loop`/`if`, laid out over the dominator tree
+(`WasmFlowPlan`, `maxon-bin/Compiler/Targets/Wasm/WasmStructuredFlow.maxon`): a two-way branch is a
+`br_if` or an `if`, a dense switch a `br_table` over landing blocks, and an edge into a merge or loop
+header a `br`. An irreducible CFG takes the `loop`+`br_table` dispatcher, where every IR edge is an
+indirect jump in the engine and every local is live across one loop header; all 10,493 corpus
+functions are structured. AES on wasm32-wasi runs about 5× faster (CTR-128 3.2 → 16.7 MB/s; 1.6× the
+time of Go's same algorithm, from 8.3×) and the binary is 20% smaller. `specs/control-flow-shapes.md`
+pins the CFG shapes the structured emitter handles, with exact answers on every lane.
 
 ## What is deliberately absent from this roadmap
 

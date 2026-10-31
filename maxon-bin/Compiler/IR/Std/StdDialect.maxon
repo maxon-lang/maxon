@@ -6501,10 +6501,11 @@ end 'assertCallsMatchCalleeArity'
 //
 // ⭐ It lives HERE, beside `collectStdOpUses` and `stdOpDefinedValue`, because it is the third
 // exhaustive `StdOp` roster and they belong in one file: a new variant is then a compile error in three
-// adjacent matches rather than in three files that learn about it separately. TWO readers —
-// `foldConstants.dropUnreachableBlocks`, which owns the reachability walk, and
-// `StdDominatorTree.build`, which needs the same edges to compute dominance.
-module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out BlockIdArray)
+// adjacent matches rather than in three files that learn about it separately. Its readers are
+// `foldConstants.dropUnreachableBlocks`, which owns the reachability walk, `RuntimeLockUse`,
+// `StdDominatorTree.build`, which needs the same edges to compute dominance, and the wasm backend's
+// `WasmFlowPlan.branches`, which is why it is `export`.
+export function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out BlockIdArray)
 	if not block.hasTerminatorOp() 'noTerminatorOp'
 		return
 	end 'noTerminatorOp'

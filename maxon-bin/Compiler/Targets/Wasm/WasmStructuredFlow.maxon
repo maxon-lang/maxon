@@ -1,0 +1,278 @@
+export enum WasmControlFlow
+	straightLine
+	structured
+	dispatcher
+end 'WasmControlFlow'
+
+export enum WasmFlowTask
+	tree
+	body
+	endBlock
+	endLoop
+	endConstruct
+	edge
+end 'WasmFlowTask'
+
+typealias WasmFlowTaskArray = Array with WasmFlowTask
+
+export type WasmFlowPlan
+	export let flow as WasmControlFlow
+	export var tree as StdDominatorTree
+	var rpoIndex as BlockPositionColumn
+	var labelled as BoolArray
+	var loopHeader as BoolArray
+	var subtreeSize as BlockPositionColumn
+
+	export static function build(module StdModule, func IrFunction) returns WasmFlowPlan
+		let blockCount = func.blockRefs.count()
+
+		if not Self.branches(module, func: func) 'straightLine'
+			return Self.withoutBranches()
+		end 'straightLine'
+
+		let tree = StdDominatorTree.build(module, func: func)
+		let order = tree.reverseOrder
+		var rpoIndex = BlockPositionColumn.create()
+		rpoIndex.growFilled(blockCount, value: 0 as ElementIndex)
+
+		for orderIndex in 0 upto order.count() 'rank'
+			let position = try order.get(orderIndex) otherwise panic("WasmFlowPlan.build: order.get OOB at {orderIndex}")
+			try rpoIndex.set(position, value: orderIndex) otherwise panic("WasmFlowPlan.build: rpoIndex.set OOB at {position}")
+		end 'rank'
+
+		let stamps = DominatorStamps.build(tree)
+		var forwardInEdges = BlockPositionColumn.create()
+		forwardInEdges.growFilled(blockCount, value: 0 as ElementIndex)
+		var loopHeader = BoolArray.create()
+		loopHeader.growFilled(blockCount, value: false)
+		var reducible = true
+
+		for tail in order 'eachReachable'
+			let tailRank = try rpoIndex.get(tail) otherwise panic("WasmFlowPlan.build: rpoIndex.get OOB at {tail}")
+
+			for k in 0 upto tree.succ.degree(tail as CsrIndex) 'eachSuccessor'
+				let head = tree.succ.neighbour(tail as CsrIndex, k: k)
+				let headRank = try rpoIndex.get(head) otherwise panic("WasmFlowPlan.build: rpoIndex.get OOB at {head}")
+
+				if headRank <= tailRank 'backEdge'
+					// A retreating edge whose head does not dominate its tail enters a loop other
+					// than through its header: no nesting of `loop`s expresses it.
+					if not stamps.dominates(head, b: tail) 'irreducible'
+						reducible = false
+					end 'irreducible'
+
+					try loopHeader.set(head, value: true) otherwise panic("WasmFlowPlan.build: loopHeader.set OOB at {head}")
+				end 'backEdge' else 'forwardEdge'
+					let seen = try forwardInEdges.get(head) otherwise panic("WasmFlowPlan.build: forwardInEdges.get OOB at {head}")
+					try forwardInEdges.set(head, value: seen + 1) otherwise panic("WasmFlowPlan.build: forwardInEdges.set OOB at {head}")
+				end 'forwardEdge'
+			end 'eachSuccessor'
+		end 'eachReachable'
+
+		var labelled = BoolArray.create()
+		labelled.growFilled(blockCount, value: false)
+		var subtreeSize = BlockPositionColumn.create()
+		subtreeSize.growFilled(blockCount, value: 1 as ElementIndex)
+
+		for position in order 'eachMerge'
+			let seen = try forwardInEdges.get(position) otherwise panic("WasmFlowPlan.build: forwardInEdges.get OOB at {position}")
+			try labelled.set(position, value: seen >= MergeNodeForwardEdges) otherwise panic("WasmFlowPlan.build: labelled.set OOB at {position}")
+		end 'eachMerge'
+
+		var remaining = order.count()
+
+		while remaining > 0 'sizes'
+			remaining = remaining - 1
+			let position = try order.get(remaining) otherwise panic("WasmFlowPlan.build: order.get OOB at {remaining}")
+
+			if position == StdEntryBlockPosition 'entry'
+				continue
+			end 'entry'
+
+			let parent = tree.immediateDominatorOf(position)
+			let own = try subtreeSize.get(position) otherwise panic("WasmFlowPlan.build: subtreeSize.get OOB at {position}")
+			let inParent = try subtreeSize.get(parent) otherwise panic("WasmFlowPlan.build: subtreeSize.get OOB at {parent}")
+			try subtreeSize.set(parent, value: inParent + own) otherwise panic("WasmFlowPlan.build: subtreeSize.set OOB at {parent}")
+		end 'sizes'
+
+		let flow = WasmControlFlow.structured if reducible else WasmControlFlow.dispatcher
+		return Self{flow: flow, tree: tree, rpoIndex: rpoIndex, labelled: labelled, loopHeader: loopHeader, subtreeSize: subtreeSize}
+	end 'build'
+
+	static function branches(module StdModule, func IrFunction) returns bool
+		let blockCount = func.blockRefs.count()
+
+		if blockCount != 1 'notOneBlock'
+			return blockCount > 1
+		end 'notOneBlock'
+
+		var successors = BlockIdArray.create()
+		collectStdBlockSuccessorIds(module, block: module.blockAtPosition(func, position: StdEntryBlockPosition), out: successors)
+		return successors.count() > 0
+	end 'branches'
+
+	static function withoutBranches() returns WasmFlowPlan
+		let noEdges = buildCsr(CsrColumn.create(), to: CsrColumn.create(), nodeCount: 0)
+		return Self{flow: WasmControlFlow.straightLine, tree: StdDominatorTree.buildFromSuccessors(noEdges, blockCount: 0), rpoIndex: BlockPositionColumn.create(), labelled: BoolArray.create(), loopHeader: BoolArray.create(), subtreeSize: BlockPositionColumn.create()}
+	end 'withoutBranches'
+
+	export function isBackEdge(from ElementIndex, to ElementIndex) returns bool
+		return self.rankOf(to) <= self.rankOf(from)
+	end 'isBackEdge'
+
+	export function isLabelled(position ElementIndex) returns bool
+		return try self.labelled.get(position) otherwise panic("WasmFlowPlan.isLabelled: labelled.get OOB at {position}")
+	end 'isLabelled'
+
+	export function isLoopHeader(position ElementIndex) returns bool
+		return try self.loopHeader.get(position) otherwise panic("WasmFlowPlan.isLoopHeader: loopHeader.get OOB at {position}")
+	end 'isLoopHeader'
+
+	// An edge into a labelled node is a `br`, never inlined, so every arm ends in a `br`, a return or
+	// `unreachable`; that is what makes an else-less `if … end` valid.
+	export function isInlineEdge(from ElementIndex, to ElementIndex) returns bool
+		return not self.isBackEdge(from, to: to) and not self.isLabelled(to)
+	end 'isInlineEdge'
+
+	export function appendLabelledChildren(position ElementIndex, into BlockPositionColumn)
+		for k in 0 upto self.tree.children.degree(position as CsrIndex) 'eachChild'
+			let child = self.tree.children.neighbour(position as CsrIndex, k: k)
+
+			if self.isLabelled(child) 'merge'
+				into.push(child)
+			end 'merge'
+		end 'eachChild'
+	end 'appendLabelledChildren'
+
+	export function nestsThenArm(from ElementIndex, thenTarget ElementIndex, elseTarget ElementIndex) returns bool
+		let thenInline = self.isInlineEdge(from, to: thenTarget)
+		let elseInline = self.isInlineEdge(from, to: elseTarget)
+
+		if thenInline != elseInline 'oneInline'
+			return elseInline
+		end 'oneInline'
+
+		if not thenInline 'bothBranch'
+			return true
+		end 'bothBranch'
+
+		// Nesting the smaller dominator subtree bounds `if` depth at log n.
+		return self.sizeOf(thenTarget) <= self.sizeOf(elseTarget)
+	end 'nestsThenArm'
+
+	function rankOf(position ElementIndex) returns ElementIndex
+		return try self.rpoIndex.get(position) otherwise panic("WasmFlowPlan.rankOf: rpoIndex.get OOB at {position}")
+	end 'rankOf'
+
+	function sizeOf(position ElementIndex) returns ElementIndex
+		return try self.subtreeSize.get(position) otherwise panic("WasmFlowPlan.sizeOf: subtreeSize.get OOB at {position}")
+	end 'sizeOf'
+end 'WasmFlowPlan'
+
+let MergeNodeForwardEdges = 2
+
+export type WasmFlowState
+	var level as Wasm32Index
+	var blockLevel as Wasm32IndexArray
+	var loopLevel as Wasm32IndexArray
+	// An explicit task stack: emitting by host recursion would overflow on a long block chain.
+	var taskKinds as WasmFlowTaskArray
+	var taskFroms as BlockPositionColumn
+	var taskTos as BlockPositionColumn
+	export var task as WasmFlowTask
+	export var taskFrom as ElementIndex
+	export var taskTo as ElementIndex
+
+	export static function create(blockCount ElementIndex) returns WasmFlowState
+		var state = Self{level: 0, blockLevel: Wasm32IndexArray.create(), loopLevel: Wasm32IndexArray.create(), taskKinds: WasmFlowTaskArray.create(), taskFroms: BlockPositionColumn.create(), taskTos: BlockPositionColumn.create(), task: WasmFlowTask.tree, taskFrom: 0, taskTo: 0}
+		state.blockLevel.growFilled(blockCount, value: 0 as Wasm32Index)
+		state.loopLevel.growFilled(blockCount, value: 0 as Wasm32Index)
+		return state
+	end 'create'
+
+	export function push(kind WasmFlowTask, source ElementIndex, target ElementIndex)
+		self.taskKinds.push(kind)
+		self.taskFroms.push(source)
+		self.taskTos.push(target)
+	end 'push'
+
+	export function advance() returns bool
+		if self.taskKinds.count() == 0 'drained'
+			return false
+		end 'drained'
+
+		self.task = try self.taskKinds.pop() otherwise panic("WasmFlowState.advance: taskKinds.pop on a non-empty stack failed")
+		self.taskFrom = try self.taskFroms.pop() otherwise panic("WasmFlowState.advance: taskFroms.pop on a non-empty stack failed")
+		self.taskTo = try self.taskTos.pop() otherwise panic("WasmFlowState.advance: taskTos.pop on a non-empty stack failed")
+		return true
+	end 'advance'
+
+	export function openBlock(position ElementIndex)
+		self.level = (self.level + 1) as Wasm32Index
+		try self.blockLevel.set(position, value: self.level) otherwise panic("WasmFlowState.openBlock: blockLevel.set OOB at {position}")
+	end 'openBlock'
+
+	export function openLoop(position ElementIndex)
+		self.level = (self.level + 1) as Wasm32Index
+		try self.loopLevel.set(position, value: self.level) otherwise panic("WasmFlowState.openLoop: loopLevel.set OOB at {position}")
+	end 'openLoop'
+
+	export function openConstruct()
+		self.level = (self.level + 1) as Wasm32Index
+	end 'openConstruct'
+
+	export function closeCurrent()
+		match self.task 'kind'
+			endBlock then self.closeBlock(self.taskFrom)
+			endLoop then self.closeLoop(self.taskFrom)
+			endConstruct then self.closeConstruct()
+			tree or
+			body or
+			edge then panic("WasmFlowState.closeCurrent: a `{self.task.name}` task closes nothing")
+		end 'kind'
+	end 'closeCurrent'
+
+	export function closeBlock(position ElementIndex)
+		try self.blockLevel.set(position, value: 0) otherwise panic("WasmFlowState.closeBlock: blockLevel.set OOB at {position}")
+		self.closeConstruct()
+	end 'closeBlock'
+
+	export function closeLoop(position ElementIndex)
+		try self.loopLevel.set(position, value: 0) otherwise panic("WasmFlowState.closeLoop: loopLevel.set OOB at {position}")
+		self.closeConstruct()
+	end 'closeLoop'
+
+	export function closeConstruct()
+		if self.level == 0 'nothingOpen'
+			panic("WasmFlowState.closeConstruct: no construct is open")
+		end 'nothingOpen'
+
+		self.level = (self.level - 1) as Wasm32Index
+	end 'closeConstruct'
+
+	export function blockDepth(position ElementIndex) returns Wasm32Index
+		let opened = try self.blockLevel.get(position) otherwise panic("WasmFlowState.blockDepth: blockLevel.get OOB at {position}")
+
+		if opened == 0 'closed'
+			panic("WasmFlowState.blockDepth: the block ending before position {position} is not open at a branch to it")
+		end 'closed'
+
+		return (self.level - opened) as Wasm32Index
+	end 'blockDepth'
+
+	export function loopDepth(position ElementIndex) returns Wasm32Index
+		let opened = try self.loopLevel.get(position) otherwise panic("WasmFlowState.loopDepth: loopLevel.get OOB at {position}")
+
+		if opened == 0 'closed'
+			panic("WasmFlowState.loopDepth: the loop headed by position {position} is not open at a back edge to it")
+		end 'closed'
+
+		return (self.level - opened) as Wasm32Index
+	end 'loopDepth'
+
+	export function finish()
+		if self.level != 0 or self.taskKinds.count() != 0 'unbalanced'
+			panic("WasmFlowState.finish: {self.level} construct(s) still open and {self.taskKinds.count()} task(s) pending at the end of a function")
+		end 'unbalanced'
+	end 'finish'
+end 'WasmFlowState'
