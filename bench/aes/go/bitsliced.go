@@ -16,7 +16,28 @@ const (
 	m2 = 0x3333333333333333
 	m4 = 0x0F0F0F0F0F0F0F0F
 
+	byteLaneMask   = 0x00FF00FF00FF00FF
+	rowLaneMask    = 0x0000FFFF0000FFFF
+	secondByteMask = 0xFF00
+	wordMask       = 0xFFFFFFFF
+	rowMask        = 0xFFFF
+	byteMask       = 0xFF
+	row1Nibble0    = 0x00000000000F0000
+	row1Nibble3    = 0x00000000F0000000
+	row1First3     = 0x000000000FFF0000
+	row1Last3      = 0x00000000FFF00000
+	row2LowPair    = 0x000000FF00000000
+	row2HighPair   = 0x0000FF0000000000
+	row3Nibble0    = 0x000F000000000000
+	row3Nibble3    = 0xF000000000000000
+	row3First3     = 0x0FFF000000000000
+	row3Last3      = 0xFFF0000000000000
+
 	blockBytes       = 16
+	laneBytes        = 8
+	batchBlocks      = 4
+	rowWrapBits      = 12
+	counterSwapBits  = 24
 	wordBytes        = 4
 	ghashWordBytes   = 8
 	nonceBytes       = 12
@@ -106,21 +127,19 @@ func ortho(p *planes) {
 	swapPlanes(p, 3, 7, m4, 4)
 }
 
+func spreadBytes(column uint64) uint64 {
+	halves := (column | (column << 16)) & rowLaneMask
+	return (halves | (halves << 8)) & byteLaneMask
+}
+
 func interleave(even, odd uint64) uint64 {
-	var spread uint64
-	for row := uint(0); row < 4; row++ {
-		spread |= ((even >> (row * 8)) & 0xFF) << (row * 16)
-		spread |= ((odd >> (row * 8)) & 0xFF) << (row*16 + 8)
-	}
-	return spread
+	return spreadBytes(even) | (spreadBytes(odd) << 8)
 }
 
 func deinterleave(spread uint64, parity uint) uint64 {
-	var column uint64
-	for row := uint(0); row < 4; row++ {
-		column |= ((spread >> (row*16 + parity*8)) & 0xFF) << (row * 8)
-	}
-	return column
+	bytes := (spread >> (parity * 8)) & byteLaneMask
+	halves := (bytes | (bytes >> 8)) & rowLaneMask
+	return (halves | (halves >> 16)) & wordMask
 }
 
 func packColumns(c0, c1, c2, c3 uint64) (uint64, uint64) {
@@ -169,30 +188,26 @@ func storeBatch(p *planes, out []byte, blocks int) []byte {
 	return out
 }
 
-func rotateRow(word uint64, row, nibbles uint) uint64 {
-	shift := row * 16
-	amount := nibbles * 4
-	chunk := (word >> shift) & 0xFFFF
-	rotated := ((chunk << amount) | (chunk >> (16 - amount))) & 0xFFFF
-	return rotated << shift
+func swapRow2(word uint64) uint64 {
+	return ((word & row2HighPair) >> 8) | ((word & row2LowPair) << 8)
 }
 
-func shiftRowsWord(word uint64, inverse bool) uint64 {
-	shifted := word & 0xFFFF
-	for row := uint(1); row < 4; row++ {
-		nibbles := 4 - row
-		if inverse {
-			nibbles = row
-		}
-		shifted |= rotateRow(word, row, nibbles)
-	}
-	return shifted
+func shiftRowsWord(word uint64) uint64 {
+	row1 := ((word & row1Last3) >> 4) | ((word & row1Nibble0) << rowWrapBits)
+	row2 := swapRow2(word)
+	row3 := ((word & row3Nibble3) >> rowWrapBits) | ((word & row3First3) << 4)
+	return (word & rowMask) | row1 | row2 | row3
 }
 
-func shiftRows(p *planes, inverse bool) {
-	for i := range p {
-		p[i] = shiftRowsWord(p[i], inverse)
-	}
+func shiftRows(p *planes) {
+	p[0] = shiftRowsWord(p[0])
+	p[1] = shiftRowsWord(p[1])
+	p[2] = shiftRowsWord(p[2])
+	p[3] = shiftRowsWord(p[3])
+	p[4] = shiftRowsWord(p[4])
+	p[5] = shiftRowsWord(p[5])
+	p[6] = shiftRowsWord(p[6])
+	p[7] = shiftRowsWord(p[7])
 }
 
 func rowsUp(w uint64) uint64   { return (w >> 16) | (w << 48) }
@@ -352,12 +367,12 @@ func encryptPlanes(p *planes, keys []uint64, rounds int) {
 	addRoundKey(p, keys, 0)
 	for round := 1; round < rounds; round++ {
 		subBytes(p)
-		shiftRows(p, false)
+		shiftRows(p)
 		mixColumns(p)
 		addRoundKey(p, keys, round)
 	}
 	subBytes(p)
-	shiftRows(p, false)
+	shiftRows(p)
 	addRoundKey(p, keys, rounds)
 }
 
@@ -441,32 +456,56 @@ func (a *BitslicedAes) XorKeyStream(nonce []byte, counter uint32, data []byte) [
 	if int(counter)+blocks > counterLimit {
 		panic("bitsliced aes: the block counter overflows")
 	}
+	nonceLow := interleave(aesReadWord(nonce, 0), aesReadWord(nonce, 2*wordBytes))
+	nonceMid := aesReadWord(nonce, wordBytes)
 	var p planes
-	counterBlocks := make([]byte, 0, 64)
-	keystream := make([]byte, 0, 64)
 	output := make([]byte, 0, len(data))
-	for done := 0; done < blocks; {
-		batch := blocks - done
-		if batch > 4 {
-			batch = 4
-		}
-		counterBlocks = counterBlocks[:0]
-		for slot := 0; slot < batch; slot++ {
-			counterBlocks = append(counterBlocks, nonce...)
-			counterBlocks = binary.BigEndian.AppendUint32(counterBlocks, uint32(uint64(counter)+uint64(done+slot)))
-		}
-		keystream = keystream[:0]
-		loadBatch(&p, counterBlocks, batch)
+	for done := 0; done < blocks; done += batchBlocks {
+		loadCounters(&p, nonceLow, nonceMid, uint64(counter)+uint64(done))
 		encryptPlanes(&p, a.keys, a.rounds)
-		keystream = storeBatch(&p, keystream, batch)
-		off := done << 4
-		for i, pad := range keystream {
-			if off+i >= len(data) {
-				break
-			}
-			output = append(output, data[off+i]^pad)
-		}
-		done += batch
+		output = xorBatch(output, data, &p, done<<4)
+	}
+	return output
+}
+
+func counterWord(counter uint64) uint64 {
+	low := counter & wordMask
+	return ((low & byteMask) << counterSwapBits) | ((low & secondByteMask) << 8) | ((low >> 8) & secondByteMask) | (low >> counterSwapBits)
+}
+
+func loadCounters(p *planes, nonceLow, nonceMid, firstCounter uint64) {
+	for slot := 0; slot < batchBlocks; slot++ {
+		p[slot] = nonceLow
+		p[slot+batchBlocks] = interleave(nonceMid, counterWord(firstCounter+uint64(slot)))
+	}
+	ortho(p)
+}
+
+func keyLane(low, high uint64, parity uint) uint64 {
+	return deinterleave(low, parity) | (deinterleave(high, parity) << 32)
+}
+
+func xorLane(output, data []byte, at int, lane uint64) []byte {
+	total := len(data)
+	if at >= total {
+		return output
+	}
+	if at+laneBytes <= total {
+		return binary.LittleEndian.AppendUint64(output, binary.LittleEndian.Uint64(data[at:])^lane)
+	}
+	for index := at; index < total; index++ {
+		output = append(output, data[index]^byte(lane>>(uint(index-at)*bitsPerByte)))
+	}
+	return output
+}
+
+func xorBatch(output, data []byte, p *planes, off int) []byte {
+	ortho(p)
+	for slot := 0; slot < batchBlocks; slot++ {
+		low, high := p[slot], p[slot+batchBlocks]
+		at := off + slot*blockBytes
+		output = xorLane(output, data, at, keyLane(low, high, 0))
+		output = xorLane(output, data, at+laneBytes, keyLane(low, high, 1))
 	}
 	return output
 }

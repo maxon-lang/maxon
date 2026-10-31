@@ -533,3 +533,127 @@ aes-ctr-err-015 invalidNonceLength
 aes-ctr-err-016 invalidKeyLength
 aes-ctr-err-017 invalidNonceLength
 ```
+
+<!-- test: aes.xor-key-stream-edges -->
+Key streams checked against Go crypto/aes (block j is the cipher of the nonce and the 32-bit big-endian counter c + j), over data of every tail length after 0, 8, 16 and 56 bytes: a batch whose last blocks are unused with the counter ending at 2^32 - 1, a counter carried across the 16-bit boundary between batches, a 192-bit key ending exactly at the last counter, and a 256-bit key over a second batch.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function patterned(count Count) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for index in 0 upto count 'eachByte'
+		bytes.push(((index * 7 + 3) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'patterned'
+
+function report(id String, keyHex String, counter AesCounter, count Count)
+	let aes = try Aes.create(fromHex(keyHex)) otherwise panic("the key is valid")
+	let output = try aes.xorKeyStream(fromHex("f0f1f2f3f4f5f6f7f8f9fafb"), counter: counter, data: patterned(count)) otherwise panic("the stream fits the counter")
+	print("{id}-{count} [{toHex(output)}]\n")
+end 'report'
+
+function main() returns ExitCode
+	let k128 = "2b7e151628aed2a6abf7158809cf4f3c"
+	let k192 = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b"
+	let k256 = "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"
+
+	for count in [0, 1, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33, 39, 40, 41, 47, 48] 'wrapCounts'
+		report("wrap", keyHex: k128, counter: 4294967293, count: count)
+	end 'wrapCounts'
+
+	for count in [55, 56, 57, 63, 64, 65, 71, 72, 73, 79, 80, 127, 128, 129, 130, 136] 'carryCounts'
+		report("carry", keyHex: k128, counter: 65530, count: count)
+	end 'carryCounts'
+
+	for count in [129, 144] 'lastCounts'
+		report("last192", keyHex: k192, counter: 4294967287, count: count)
+	end 'lastCounts'
+
+	for count in [65, 120] 'batchCounts'
+		report("batch256", keyHex: k256, counter: 255, count: count)
+	end 'batchCounts'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+wrap-0 []
+wrap-1 [61]
+wrap-7 [618b49cdf23c96]
+wrap-8 [618b49cdf23c9650]
+wrap-9 [618b49cdf23c965014]
+wrap-15 [618b49cdf23c965014053d77795a3f]
+wrap-16 [618b49cdf23c965014053d77795a3f84]
+wrap-17 [618b49cdf23c965014053d77795a3f845c]
+wrap-23 [618b49cdf23c965014053d77795a3f845c274c19a282b1]
+wrap-24 [618b49cdf23c965014053d77795a3f845c274c19a282b199]
+wrap-25 [618b49cdf23c965014053d77795a3f845c274c19a282b199ec]
+wrap-31 [618b49cdf23c965014053d77795a3f845c274c19a282b199ecab92811639f6]
+wrap-32 [618b49cdf23c965014053d77795a3f845c274c19a282b199ecab92811639f699]
+wrap-33 [618b49cdf23c965014053d77795a3f845c274c19a282b199ecab92811639f699df]
+wrap-39 [618b49cdf23c965014053d77795a3f845c274c19a282b199ecab92811639f699df0b917b9fde36]
+wrap-40 [618b49cdf23c965014053d77795a3f845c274c19a282b199ecab92811639f699df0b917b9fde36e7]
+wrap-41 [618b49cdf23c965014053d77795a3f845c274c19a282b199ecab92811639f699df0b917b9fde36e763]
+wrap-47 [618b49cdf23c965014053d77795a3f845c274c19a282b199ecab92811639f699df0b917b9fde36e763884630385fc7]
+wrap-48 [618b49cdf23c965014053d77795a3f845c274c19a282b199ecab92811639f699df0b917b9fde36e763884630385fc78e]
+carry-55 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580]
+carry-56 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580ca]
+carry-57 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef]
+carry-63 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f]
+carry-64 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c]
+carry-65 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2b]
+carry-71 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e]
+carry-72 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e53]
+carry-73 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e533c]
+carry-79 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e533c828694ed399d]
+carry-80 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e533c828694ed399d90]
+carry-127 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e533c828694ed399d900daf6140341a64ed94d872c4d43c405802cae0e26b044583e265009e09cc18a479c32b44aa9bbb6afe6a2ef5a2a625]
+carry-128 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e533c828694ed399d900daf6140341a64ed94d872c4d43c405802cae0e26b044583e265009e09cc18a479c32b44aa9bbb6afe6a2ef5a2a625b4]
+carry-129 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e533c828694ed399d900daf6140341a64ed94d872c4d43c405802cae0e26b044583e265009e09cc18a479c32b44aa9bbb6afe6a2ef5a2a625b461]
+carry-130 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e533c828694ed399d900daf6140341a64ed94d872c4d43c405802cae0e26b044583e265009e09cc18a479c32b44aa9bbb6afe6a2ef5a2a625b461b4]
+carry-136 [10280baea4527e796a3a82438bf17868f51f7dcaf8f96f0d0ba65c8d647a1e15dc9a1cea6e932105d611157beba591e65655ab99326580caef1738d611d72f6c2bfd19814e160e533c828694ed399d900daf6140341a64ed94d872c4d43c405802cae0e26b044583e265009e09cc18a479c32b44aa9bbb6afe6a2ef5a2a625b461b41636d6ebdafa]
+last192-129 [0e68583d3b6afe777e84fea4986fd0fc7321da6f6290dbc93f955330b66365b80254706145f877306b8560d26a1596591ded385c2190ffc710f78a2e599c6bd0a1ad51cd2da1bb34d6aa96afa50f89b260eee85e0d0e018ed8c44c6c2a5ccfe4d3cbceb3649a1bf366c65a95d2da1100c74ee2370ee19817af3507756f638349bf]
+last192-144 [0e68583d3b6afe777e84fea4986fd0fc7321da6f6290dbc93f955330b66365b80254706145f877306b8560d26a1596591ded385c2190ffc710f78a2e599c6bd0a1ad51cd2da1bb34d6aa96afa50f89b260eee85e0d0e018ed8c44c6c2a5ccfe4d3cbceb3649a1bf366c65a95d2da1100c74ee2370ee19817af3507756f638349bf78523f9dd6dfb24e9c1a24b002ab40]
+batch256-65 [e012423e47bb46046c37c083b4e9e54100f14b10b623f13f2383cbddc355bb3de6941bd8486943a5a8db7fb6fddc975a5830d29134cc3f85535435de085ff4667b]
+batch256-120 [e012423e47bb46046c37c083b4e9e54100f14b10b623f13f2383cbddc355bb3de6941bd8486943a5a8db7fb6fddc975a5830d29134cc3f85535435de085ff4667bf56ac12fb587add9f344bf3a7597c7a9fd4b4baca1a379b39df0d8f044336fe57a01060bb17698d8d1df1ddc6c0e90f8952779be11fd0c]
+```

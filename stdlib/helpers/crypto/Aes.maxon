@@ -2,8 +2,9 @@
 /// @category Crypto
 // Bitsliced, so no table is indexed by a secret and no branch depends on one: a table lookup leaks the key
 // through cache timing. Four blocks share eight `bits(64)` planes, a byte of row `r`, column parity `p` and
-// block `b` at lane `8 * (2r + p) + b`. That is why ShiftRows rotates each 16-bit row by nibbles and
-// MixColumns rotates rows by 16 bits and swaps 32-bit halves.
+// block `b` at lane `8 * (2r + p) + b`. That is why ShiftRows rotates rows 1 to 3 of every plane by one to
+// three nibbles with fixed masks and shifts, and MixColumns rotates rows by 16 bits and swaps 32-bit
+// halves.
 // bench/aes/go/bitsliced.go mirrors this file function for function; a change here is ported there in the
 // same commit.
 typealias AesWord = bits(64)
@@ -14,8 +15,6 @@ typealias AesPair = (AesWord, AesWord)
 typealias AesPlaneIndex = int(0 to 7) implements ElementIndex
 typealias AesRoundCount = int(10 to 14)
 typealias AesRoundIndex = int(0 to 14) implements ElementIndex
-typealias AesRowIndex = int(1 to 3)
-typealias AesNibbleCount = int(1 to 3)
 typealias AesParity = int(0 to 1)
 typealias AesBlockSlots = int(0 to 4) implements ElementIndex
 typealias AesStride = int(1 to 4)
@@ -45,9 +44,8 @@ end 'AesDirection'
 let aesBlockBytes = 16
 let aesBlockShift = 4
 let aesBatchBlocks = 4
-let aesBatchBytes = 64
-let aesRowCount = 4
 let aesBlockWords = 4
+let aesLaneBytes = 8
 let aesWordBytes = 4
 let aesWordShift = 2
 let aesBitsPerByte = 8
@@ -55,6 +53,8 @@ let aesRowBits = 16
 let aesNibbleBits = 4
 let aesHalfBits = 32
 let aesWordBits = 64
+let aesRowWrapBits = 12
+let aesCounterSwapBits = 24
 let aesShortKeyBytes = 16
 let aesMidKeyBytes = 24
 let aesLongKeyBytes = 32
@@ -62,7 +62,6 @@ let aesRoundsOverKeyWords = 6
 let aesLongKeyWords = 8
 let aesLongKeySubSlot = 4
 let aesNonceBytes = 12
-let aesCounterBytes = 4
 let aesCounterLimit = 4294967296
 
 let aesZeroWord = 0 as AesWord
@@ -74,6 +73,21 @@ let aesAllOnes = u64.max as AesWord
 let aesOrthoMask1 = 0x5555555555555555
 let aesOrthoMask2 = 0x3333333333333333
 let aesOrthoMask4 = 0x0F0F0F0F0F0F0F0F
+let aesByteLaneMask = 0x00FF00FF00FF00FF
+let aesRowLaneMask = 0x0000FFFF0000FFFF
+let aesSecondByteMask = 0xFF00
+
+// Row `r` is bits `16r` to `16r + 15` of a plane; each name selects the nibbles of that row it moves.
+let aesRow1Nibble0 = 0x00000000000F0000
+let aesRow1Nibble3 = 0x00000000F0000000
+let aesRow1First3 = 0x000000000FFF0000
+let aesRow1Last3 = 0x00000000FFF00000
+let aesRow2LowPair = 0x000000FF00000000
+let aesRow2HighPair = 0x0000FF0000000000
+let aesRow3Nibble0 = 0x000F000000000000
+let aesRow3Nibble3 = 0xF000000000000000 as AesWord
+let aesRow3First3 = 0x0FFF000000000000
+let aesRow3Last3 = 0xFFF0000000000000 as AesWord
 let aesRoundConstants = AesWords from [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
 
 function aesSwapPlanes(planes AesPlanes, low AesPlaneIndex, high AesPlaneIndex, mask AesWord, stride AesStride)
@@ -100,27 +114,21 @@ function aesOrtho(planes AesPlanes)
 	aesSwapPlanes(planes, low: 3, high: 7, mask: aesOrthoMask4, stride: 4)
 end 'aesOrtho'
 
+function aesSpreadBytes(column AesWord) returns AesWord
+	let halves = (column or (column shl aesRowBits)) and aesRowLaneMask
+
+	return (halves or (halves shl aesBitsPerByte)) and aesByteLaneMask
+end 'aesSpreadBytes'
+
 function aesInterleave(even AesWord, odd AesWord) returns AesWord
-	var spread = aesZeroWord
-
-	for row in 0 upto aesRowCount 'eachRow'
-		let sourceShift = row * aesBitsPerByte
-		let targetShift = row * aesRowBits
-		spread = spread or (((even shr sourceShift) and aesByteMask) shl targetShift) or (((odd shr sourceShift) and aesByteMask) shl (targetShift + aesBitsPerByte))
-	end 'eachRow'
-
-	return spread
+	return aesSpreadBytes(even) or (aesSpreadBytes(odd) shl aesBitsPerByte)
 end 'aesInterleave'
 
 function aesDeinterleave(spread AesWord, parity AesParity) returns AesWord
-	var column = aesZeroWord
+	let bytes = (spread shr (parity * aesBitsPerByte)) and aesByteLaneMask
+	let halves = (bytes or (bytes shr aesBitsPerByte)) and aesRowLaneMask
 
-	for row in 0 upto aesRowCount 'eachRow'
-		let sourceShift = row * aesRowBits + parity * aesBitsPerByte
-		column = column or (((spread shr sourceShift) and aesByteMask) shl (row * aesBitsPerByte))
-	end 'eachRow'
-
-	return column
+	return (halves or (halves shr aesRowBits)) and aesWordMask
 end 'aesDeinterleave'
 
 function aesPackColumns(c0 AesWord, c1 AesWord, c2 AesWord, c3 AesWord) returns AesPair
@@ -140,18 +148,62 @@ function aesPackBlock(source ByteArray, off ElementIndex) returns AesPair
 	return aesPackColumns(c0, c1: c1, c2: c2, c3: c3)
 end 'aesPackBlock'
 
-function aesXorKeyStream(output ByteArray, data ByteArray, keystream ByteArray, off ElementIndex)
-	for (iter, pad) in keystream.withIterator() 'eachByte'
-		let index = off + iter.index()
+function aesCounterWord(counter Count) returns AesWord
+	let low = (counter as AesWord) and aesWordMask
 
-		if index >= data.count() 'finished'
-			return
-		end 'finished'
+	return ((low and aesByteMask) shl aesCounterSwapBits) or ((low and aesSecondByteMask) shl aesBitsPerByte) or ((low shr aesBitsPerByte) and aesSecondByteMask) or (low shr aesCounterSwapBits)
+end 'aesCounterWord'
 
+// A final partial batch still loads counters for its unused slots: skipping them would branch per
+// slot, their counters are public, and `aesCounterWord` masks one past `2^32 - 1` to 32 bits.
+function aesLoadCounters(planes AesPlanes, nonceLow AesWord, nonceMid AesWord, firstCounter Count)
+	for slot in 0 upto aesBatchBlocks 'eachSlot'
+		planes.set(slot, value: nonceLow)
+		planes.set(slot + aesBatchBlocks, value: aesInterleave(nonceMid, odd: aesCounterWord(firstCounter + slot)))
+	end 'eachSlot'
+
+	aesOrtho(planes)
+end 'aesLoadCounters'
+
+function aesKeyLane(low AesWord, high AesWord, parity AesParity) returns AesWord
+	return aesDeinterleave(low, parity: parity) or (aesDeinterleave(high, parity: parity) shl aesHalfBits)
+end 'aesKeyLane'
+
+function aesXorLane(output ByteArray, data ByteArray, at ElementIndex, lane AesWord)
+	let total = data.count()
+
+	if at >= total 'finished'
+		return
+	end 'finished'
+
+	// A whole lane is one 8-byte word access; only the final partial lane goes byte by byte. Both
+	// branches depend on the public data length alone.
+	if at + aesLaneBytes <= total 'whole'
+		let plain = (try __Builtins.readLittleEndian(data, at, aesLaneBytes) otherwise panic("aes: a word inside the data is missing")) as AesWord
+		__Builtins.appendLittleEndian(output, (plain xor lane) as OrderedWord, aesLaneBytes)
+
+		return
+	end 'whole'
+
+	for index in at upto total 'eachByte'
 		let plain = try data.get(index) otherwise panic("aes: data index unreachable")
+		let pad = ((lane shr ((index - at) * aesBitsPerByte)) and aesByteMask) as Byte
 		output.push(plain xor pad)
 	end 'eachByte'
-end 'aesXorKeyStream'
+end 'aesXorLane'
+
+function aesXorBatch(output ByteArray, data ByteArray, planes AesPlanes, off ElementIndex)
+	aesOrtho(planes)
+
+	for slot in 0 upto aesBatchBlocks 'eachSlot'
+		let low = planes.get(slot)
+		let high = planes.get(slot + aesBatchBlocks)
+		let at = off + slot * aesBlockBytes
+
+		aesXorLane(output, data: data, at: at, lane: aesKeyLane(low, high: high, parity: 0))
+		aesXorLane(output, data: data, at: at + aesLaneBytes, lane: aesKeyLane(low, high: high, parity: 1))
+	end 'eachSlot'
+end 'aesXorBatch'
 
 function aesAppendBlock(output ByteArray, low AesWord, high AesWord)
 	__Builtins.appendLittleEndian(output, aesDeinterleave(low, parity: 0) as OrderedWord, aesWordBytes)
@@ -196,31 +248,47 @@ function aesStoreBatch(planes AesPlanes, output ByteArray, blocks AesBlockSlots)
 	end 'eachSlot'
 end 'aesStoreBatch'
 
-function aesRotateRow(word AesWord, row AesRowIndex, nibbles AesNibbleCount) returns AesWord
-	let rowShift = row * aesRowBits
-	let amount = nibbles * aesNibbleBits
-	let chunk = (word shr rowShift) and aesRowMask
-	let rotated = ((chunk shl amount) or (chunk shr (aesRowBits - amount))) and aesRowMask
+function aesSwapRow2(word AesWord) returns AesWord
+	return ((word and aesRow2HighPair) shr aesBitsPerByte) or ((word and aesRow2LowPair) shl aesBitsPerByte)
+end 'aesSwapRow2'
 
-	return rotated shl rowShift
-end 'aesRotateRow'
+function aesShiftRowsWord(word AesWord) returns AesWord
+	let row1 = ((word and aesRow1Last3) shr aesNibbleBits) or ((word and aesRow1Nibble0) shl aesRowWrapBits)
+	let row2 = aesSwapRow2(word)
+	let row3 = ((word and aesRow3Nibble3) shr aesRowWrapBits) or ((word and aesRow3First3) shl aesNibbleBits)
 
-function aesShiftRowsWord(word AesWord, inverse bool) returns AesWord
-	var shifted = word and aesRowMask
-
-	for row in 1 upto aesRowCount 'eachRow'
-		let nibbles = row if inverse else aesRowCount - row
-		shifted = shifted or aesRotateRow(word, row: row as AesRowIndex, nibbles: nibbles as AesNibbleCount)
-	end 'eachRow'
-
-	return shifted
+	return (word and aesRowMask) or row1 or row2 or row3
 end 'aesShiftRowsWord'
 
-function aesShiftRows(planes AesPlanes, inverse bool)
-	for plane in 0 upto countof(AesPlanes) 'eachPlane'
-		planes.set(plane, value: aesShiftRowsWord(planes.get(plane), inverse: inverse))
-	end 'eachPlane'
+function aesInvShiftRowsWord(word AesWord) returns AesWord
+	let row1 = ((word and aesRow1First3) shl aesNibbleBits) or ((word and aesRow1Nibble3) shr aesRowWrapBits)
+	let row2 = aesSwapRow2(word)
+	let row3 = ((word and aesRow3Nibble0) shl aesRowWrapBits) or ((word and aesRow3Last3) shr aesNibbleBits)
+
+	return (word and aesRowMask) or row1 or row2 or row3
+end 'aesInvShiftRowsWord'
+
+function aesShiftRows(planes AesPlanes)
+	planes.set(0, value: aesShiftRowsWord(planes.get(0)))
+	planes.set(1, value: aesShiftRowsWord(planes.get(1)))
+	planes.set(2, value: aesShiftRowsWord(planes.get(2)))
+	planes.set(3, value: aesShiftRowsWord(planes.get(3)))
+	planes.set(4, value: aesShiftRowsWord(planes.get(4)))
+	planes.set(5, value: aesShiftRowsWord(planes.get(5)))
+	planes.set(6, value: aesShiftRowsWord(planes.get(6)))
+	planes.set(7, value: aesShiftRowsWord(planes.get(7)))
 end 'aesShiftRows'
+
+function aesInvShiftRows(planes AesPlanes)
+	planes.set(0, value: aesInvShiftRowsWord(planes.get(0)))
+	planes.set(1, value: aesInvShiftRowsWord(planes.get(1)))
+	planes.set(2, value: aesInvShiftRowsWord(planes.get(2)))
+	planes.set(3, value: aesInvShiftRowsWord(planes.get(3)))
+	planes.set(4, value: aesInvShiftRowsWord(planes.get(4)))
+	planes.set(5, value: aesInvShiftRowsWord(planes.get(5)))
+	planes.set(6, value: aesInvShiftRowsWord(planes.get(6)))
+	planes.set(7, value: aesInvShiftRowsWord(planes.get(7)))
+end 'aesInvShiftRows'
 
 function aesRowsUp(word AesWord) returns AesWord
 	return (word shr aesRowBits) or (word shl (aesWordBits - aesRowBits))
@@ -477,11 +545,11 @@ end 'aesAddRoundKey'
 
 function aesSubShift(planes AesPlanes)
 	aesSubBytes(planes)
-	aesShiftRows(planes, inverse: false)
+	aesShiftRows(planes)
 end 'aesSubShift'
 
 function aesInvShiftSub(planes AesPlanes)
-	aesShiftRows(planes, inverse: true)
+	aesInvShiftRows(planes)
 	aesInvSubBytes(planes)
 end 'aesInvShiftSub'
 
@@ -651,30 +719,18 @@ public type Aes
 			throw AesKeyStreamError.counterOverflow
 		end 'overflow'
 
+		let nonceLow = aesInterleave(aesReadWord(nonce, at: 0), odd: aesReadWord(nonce, at: 2 * aesWordBytes))
+		let nonceMid = aesReadWord(nonce, at: aesWordBytes)
 		var planes = AesPlanes.create()
-		var counterBlocks = ByteArray.create()
-		counterBlocks.reserve(aesBatchBytes)
-		var keystream = ByteArray.create()
-		keystream.reserve(aesBatchBytes)
 		var output = ByteArray.create()
 		output.reserve(data.count())
 		var done = 0 as Count
 
 		while done < blocks 'eachBatch'
-			let remaining = blocks - done
-			let batch = (aesBatchBlocks if remaining > aesBatchBlocks else remaining) as AesBlockSlots
-			counterBlocks.clear()
-
-			for slot in 0 upto batch 'eachCounter'
-				counterBlocks.append(nonce)
-				let blockCounter = (firstBlock + done + slot) as AesCounter
-				__Builtins.appendBigEndian(counterBlocks, blockCounter as OrderedWord, aesCounterBytes)
-			end 'eachCounter'
-
-			keystream.clear()
-			aesCryptBatch(planes, source: counterBlocks, blocks: batch, keys: roundKeys, rounds: rounds, direction: AesDirection.encrypt, output: keystream)
-			aesXorKeyStream(output, data: data, keystream: keystream, off: done shl aesBlockShift)
-			done = done + batch
+			aesLoadCounters(planes, nonceLow: nonceLow, nonceMid: nonceMid, firstCounter: firstBlock + done)
+			aesEncryptPlanes(planes, keys: roundKeys, rounds: rounds)
+			aesXorBatch(output, data: data, planes: planes, off: done shl aesBlockShift)
+			done = done + aesBatchBlocks
 		end 'eachBatch'
 
 		return output
