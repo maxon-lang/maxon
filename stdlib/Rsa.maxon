@@ -698,7 +698,7 @@ end 'rsaPssMatches'
 type RsaPublicKey
 	var modulus as RsaLimbs
 	var exponent as RsaLimbs
-	var modulusBits as Count
+	module let modulusBits as Count
 	var montgomery as RsaMontgomery
 
 	static function create(modulus ByteArray, exponent ByteArray) returns RsaPublicKey
@@ -711,7 +711,7 @@ type RsaPublicKey
 	static function parse(der ByteArray) returns RsaPublicKey throws RsaError
 		let (algorithm, key) = try rsaPublicKeyParts(der) otherwise throw RsaError.invalidPublicKey
 
-		if not constantTimeEqual(algorithm, b: rsaEncryptionOid) or key.unusedBits() != 0 'notRsa'
+		if not constantTimeEqual(algorithm, b: rsaEncryptionOid) or key.unusedBits != 0 'notRsa'
 			throw RsaError.invalidPublicKey
 		end 'notRsa'
 
@@ -733,10 +733,6 @@ type RsaPublicKey
 	function width() returns Count
 		return modulus.count()
 	end 'width'
-
-	function modulusBits() returns Count
-		return modulusBits
-	end 'modulusBits'
 
 	function modulusBytes() returns Count
 		return (modulusBits + rsaBitsPerByte - 1) / rsaBitsPerByte
@@ -826,7 +822,7 @@ module type RsaPrivateKey
 	end 'signPss'
 
 	function modulusBits() returns Count
-		return publicKey.modulusBits()
+		return publicKey.modulusBits
 	end 'modulusBits'
 
 	function modulusBytes() returns Count

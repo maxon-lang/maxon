@@ -230,7 +230,7 @@ function joinFiles(sidecar MxdbgReader, data MxcovData) returns CovFileArray
 		merged.upsert(key, value: winner)
 	end 'eachPoint'
 
-	order.sort(function(left CovLineKey, right CovLineKey) gives compareLinePosition(left, right: right))
+	order.sortBy(function(left CovLineKey, right CovLineKey) gives compareLinePosition(left, right: right))
 
 	return groupedFiles(order, merged: merged)
 end 'joinFiles'
@@ -303,7 +303,7 @@ function joinBranches(sidecar MxdbgReader, data MxcovData) returns CovBranchArra
 		rows.push(CovArmRow.create(point.file, branchLine: point.branchLine as CovLineNumber, branchColumn: point.branchColumn as CovSourceColumn, arm: arm))
 	end 'eachPoint'
 
-	rows.sort(function(left CovArmRow, right CovArmRow) gives compareBranchPosition(left, right: right))
+	rows.sortBy(function(left CovArmRow, right CovArmRow) gives compareBranchPosition(left, right: right))
 
 	return groupedBranches(rows)
 end 'joinBranches'
@@ -416,7 +416,7 @@ let JsonElementSeparator = ","
 
 function renderText(report CovReport) returns String
 	let totals = summarize(report)
-	var out = "coverage: {reportPathDisplay(report.exePath)}{LineFeed}"
+	var out = "coverage: {reportSpelledPathDisplay(report.exePath)}{LineFeed}"
 	out.append(targetStatusLine(report.targetStatus))
 
 	if not report.runCompleted 'diedBeforeItsDump'
@@ -427,7 +427,7 @@ function renderText(report CovReport) returns String
 	out.append("legend: a count = executed, {NotCoveredMarker} = never executed, {EliminatedMarker} = no code emitted (optimized away), blank = no coverage point{LineFeed}")
 
 	for file in report.files 'eachFile'
-		out.append("{LineFeed}{SectionRule} {reportPathDisplay(file.path)} {SectionRule}{LineFeed}")
+		out.append("{LineFeed}{SectionRule} {reportSpelledPathDisplay(file.path)} {SectionRule}{LineFeed}")
 		out.append(renderListing(file))
 	end 'eachFile'
 
@@ -452,7 +452,7 @@ function targetStatusLine(status CovTargetStatus) returns String
 end 'targetStatusLine'
 
 function renderBranchRow(branch CovBranch) returns String
-	var row = "  {reportPathDisplay(branch.file)}{PositionSeparator}{branch.line}{PositionSeparator}{branch.column}"
+	var row = "  {reportSpelledPathDisplay(branch.file)}{PositionSeparator}{branch.line}{PositionSeparator}{branch.column}"
 
 	for arm in branch.arms 'eachArm'
 		row.append("  {armText(arm)}")
@@ -481,7 +481,7 @@ function renderListing(file CovFile) returns String
 end 'renderListing'
 
 function renderStatesOnly(file CovFile) returns String
-	var out = "  (source not available: {reportPathDisplay(file.path)}){LineFeed}"
+	var out = "  (source not available: {reportSpelledPathDisplay(file.path)}){LineFeed}"
 
 	for line in file.lines 'eachLine'
 		out.append("{padLeft(marker(line), width: CountColumnWidth)} {ColumnSeparator}{line.line}{LineFeed}")
@@ -549,7 +549,7 @@ end 'sourceLines'
 function renderJson(report CovReport) returns String
 	let totals = summarize(report)
 	var out = "\{"
-	out.append("\"exe\":{Json.quote(reportPathDisplay(report.exePath))},")
+	out.append("\"exe\":{Json.quote(reportSpelledPathDisplay(report.exePath))},")
 	out.append("\"runCompleted\":{jsonBool(report.runCompleted)},")
 	out.append(jsonTargetStatus(report.targetStatus))
 	out.append("\"linesCovered\":{totals.linesCovered},")
@@ -597,7 +597,7 @@ function jsonFile(file CovFile) returns String
 		lines.push(jsonLine(line))
 	end 'eachLine'
 
-	return "\{\"path\":{Json.quote(reportPathDisplay(file.path))},\"lines\":[{joinedWith(lines, separator: JsonElementSeparator)}]\}"
+	return "\{\"path\":{Json.quote(reportSpelledPathDisplay(file.path))},\"lines\":[{joinedWith(lines, separator: JsonElementSeparator)}]\}"
 end 'jsonFile'
 
 // An eliminated line reports no count at all rather than a zero a consumer would read as "never executed".
@@ -622,7 +622,7 @@ function jsonBranch(branch CovBranch) returns String
 		arms.push(jsonArm(arm))
 	end 'eachArm'
 
-	return "\{\"file\":{Json.quote(reportPathDisplay(branch.file))},\"line\":{branch.line},\"col\":{branch.column},\"arms\":[{joinedWith(arms, separator: JsonElementSeparator)}]\}"
+	return "\{\"file\":{Json.quote(reportSpelledPathDisplay(branch.file))},\"line\":{branch.line},\"col\":{branch.column},\"arms\":[{joinedWith(arms, separator: JsonElementSeparator)}]\}"
 end 'jsonBranch'
 
 // `implicit` is written only where it is TRUE: an arm the source did write has nothing to say here, and a
@@ -725,16 +725,16 @@ function loadCounters(exePath String, sidecar MxdbgReader, buildId HashDigest, d
 	// Zero points is not an empty measurement — it is a binary nobody instrumented, and reporting
 	// `0/0 lines covered` for one would be an answer to a question it cannot be asked.
 	if sidecar.coveragePointCount() == 0 'notInstrumented'
-		return CovLoad.refused("{reportPathDisplay(exePath)} was not built with coverage instrumentation — it has no coverage points to report on")
+		return CovLoad.refused("{reportSpelledPathDisplay(exePath)} was not built with coverage instrumentation — it has no coverage points to report on")
 	end 'notInstrumented'
 
 	let data = try FilePath.from(dataPath) otherwise return CovLoad.refused("'{dataPath}' is not a spellable path")
 
 	if not File.exists(data) 'noCounters'
-		return CovLoad.refused("no coverage data at {reportPathDisplay(dataPath)} — the program wrote none, so the run did not complete")
+		return CovLoad.refused("no coverage data at {reportSpelledPathDisplay(dataPath)} — the program wrote none, so the run did not complete")
 	end 'noCounters'
 
-	let image = try File.readBinary(data) otherwise return CovLoad.refused("cannot read {reportPathDisplay(dataPath)}")
+	let image = try File.readBinary(data) otherwise return CovLoad.refused("cannot read {reportSpelledPathDisplay(dataPath)}")
 
 	let counters = try MxcovData.parse(image) otherwise (e) 'badImage'
 		return CovLoad.refused(e.displayReason())

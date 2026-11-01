@@ -59,10 +59,6 @@ lowering picks, not the language's. It disagrees with `stdlib/Process.maxon` and
 `docs/LANGUAGE_REFERENCE.md` — both of which key the exit-status domain by the OS,
 because the OS is what defines it.
 
-`function-overloads.md`'s `enum-raw-value-argument` states the same platform rule — *"`ExitCode`
-is `int(0 to u32.max)` on Windows but `int(0 to 255)` on Linux, macOS and wasi (`stdlib/Process.maxon`)"* —
-and keeps its addends small so that it runs on every target.
-
 **A range derived from the width would make two doors unable to refuse anything.** At `u32` width
 `int(0 to u32.max)` **is** the full span of the slot, so *every bit pattern is in range*: there is no
 predicate that separates a wrapped `-5` from an honest `4294967291`, and no check standing anywhere on that

@@ -1,4 +1,4 @@
-let CaseLabel = "shared-segment-word-ordering"
+let ASharedSegmentWordIsReadWithAnAcquireAndWrittenWithAReleaseCaseLabel = "shared-segment-word-ordering"
 let SharedSegmentFixtureName = "shared-segment"
 
 let ReadWordName = "__shm_read_word"
@@ -9,7 +9,7 @@ let OrderedAccessesPerBody = 1 as LineTally
 let OrderingReason = "A shared segment is the one memory two PROCESSES both map, and a word in it is how one of them tells the other that the bytes it covers are ready. No lock spans the two processes, so the edge has to travel on the accesses themselves. A plain `ldr` orders nothing after itself and a plain `str` nothing before itself, so armv8 may serve the reader bytes older than the word that announced them. The read is `StdOp.loadAcquire`, which is `ldar` on both arm64 lanes, and the write `StdOp.storeRelease`, which is `stlr`; both are the same plain `mov` on x64."
 
 test 'a shared segment word is read with an acquire and written with a release'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: CaseLabel, fixture: SharedSegmentFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ASharedSegmentWordIsReadWithAnAcquireAndWrittenWithAReleaseCaseLabel, fixture: SharedSegmentFixtureName)
 
 	var findings = StringArray.create()
 	noteSegmentAccessors(findings, staged: staged, target: MacosTargetName)
@@ -19,7 +19,7 @@ test 'a shared segment word is read with an acquire and written with a release'
 end 'a shared segment word is read with an acquire and written with a release'
 
 function noteSegmentAccessors(findings StringArray, staged FilePath, target String)
-	let lines = irLines(buildStagedProgram(staged, caseLabel: CaseLabel, target: target, functionName: "{ReadWordName}{EmittedNameSeparator}{WriteWordName}"))
+	let lines = irLines(buildStagedProgram(staged, caseLabel: ASharedSegmentWordIsReadWithAnAcquireAndWrittenWithAReleaseCaseLabel, target: target, functionName: "{ReadWordName}{EmittedNameSeparator}{WriteWordName}"))
 
 	noteSegmentWordAccess(findings, body: functionBody(lines, functionName: ReadWordName, target: target), target: target, functionName: ReadWordName, plainPrefix: PlainLoadPrefix, orderedMnemonic: AcquireLoadMnemonic)
 	noteSegmentWordAccess(findings, body: functionBody(lines, functionName: WriteWordName, target: target), target: target, functionName: WriteWordName, plainPrefix: PlainStorePrefix, orderedMnemonic: ReleaseStoreMnemonic)

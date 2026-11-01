@@ -595,3 +595,63 @@ end 'main'
 ```maxoncstderr
 error E3004: <fragment>:12:12: call to undefined function 'brokeHidden'
 ```
+
+<!-- test: cross-file-signatures.a-defaulted-parameter-of-a-factory-in-another-file-fills-in-a-global-initializer -->
+`main.maxon`'s initializer omits `create`'s defaulted `n`, so the compiler calls the default's helper, which `types.maxon` declares. The helper is the compiler's call and no name `main.maxon` wrote, so the initializer is not refused for a file that cannot name it. It prints `6`.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+
+export type Rec
+	export var v as Integer
+
+	export static function create(n Integer = 5) returns Self
+		return Self{v: n + 1}
+	end 'create'
+end 'Rec'
+
+// --- file: main.maxon
+var r = Rec.create()
+
+function main() returns ExitCode
+	print("{r.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: cross-file-signatures.a-field-default-built-by-a-helper-in-another-file-fills-in-a-global-initializer -->
+`Bag.items` is defaulted by a call, which `types.maxon` declares as a helper. `main.maxon`'s initializer builds a `Bag` without naming that helper, so the compiler's call to it is not refused for a file that cannot name it. It prints `3 0`.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias IntArray = Array with Integer
+
+export type Bag
+	export var items = IntArray.create()
+	export var tag as Integer
+
+	export static function create(tag Integer) returns Self
+		return Self{tag: tag}
+	end 'create'
+end 'Bag'
+
+// --- file: main.maxon
+var bag = Bag.create(3)
+
+function main() returns ExitCode
+	print("{bag.tag} {bag.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 0
+```

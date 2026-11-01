@@ -314,13 +314,17 @@ Numbers, `bool`, `Character` and `String` interpolate directly. A type interpola
 `toString()` method (`Stringable`). A `{` that does not open an interpolation must be escaped as `\{`
 (**E1006**).
 
-**Format specifiers.** `{expression:spec}` formats a number:
+**Format specifiers.** `{expression:spec}` formats a number, or quotes a `String` or `Character`:
 
 - Integers: `[0][width][base]` — `0` pads with zeros, `width` is the minimum width (right-aligned), and
   `base` is `x`, `X`, `o` or `b` (decimal otherwise). Hexadecimal, octal and binary print the bit pattern,
   never a sign.
 - Floats: `[0][width][.precision]` — `precision` is the number of decimal places, rounded half to even;
   without it the float keeps its shortest round-trip spelling. A width never changes the digits.
+- `String` and `Character`: `[width]q` — the value prints as a valid Maxon literal, between double quotes
+  for a `String` and single quotes for a `Character`, with the escapes a literal spells: `\"` and `\\`, `\{`
+  and `\}` in a `String`, `\'` in a `Character`, `\n`, `\t` and `\r`, and every other control character as
+  `\uXXXX`. `width` pads the quoted text on the left with spaces. Every other type prints plain under `q`.
 
 ```maxon
 function main() returns ExitCode
@@ -333,7 +337,7 @@ function main() returns ExitCode
 end 'main'
 ```
 
-A specifier has no effect on a `String` or `bool`. A type that implements `FormattedStringable` receives the
+Any other specifier leaves a `String` or `bool` as it is. A type that implements `FormattedStringable` receives the
 specifier text in `toString(format String)`, so `{value:verbose}` calls `value.toString("verbose")`.
 
 ### Byte String Literals
@@ -766,7 +770,7 @@ end 'main'
   aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
   and array elements — and a `float` alias value at an `int` alias place is **E3005**, as `Age` at a `Year`
   place is.
-- Two declarations of one alias name, in two files, are two types too, even over the same range. An
+- Two declarations of one alias name, in two directories, are two types too, even over the same range. An
   operator, an argument, a store or a join that mixes them is **E3005** (**E2028** for a join) until one side
   is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds
   for every alias form — ranged, function, generic-instance and tuple — and for the elements of a container
@@ -849,8 +853,8 @@ A cast of that literal to the alias the destination declares converts nothing an
 (`unneeded cast: the literal 8080 already fits in 'Port'`). The destinations are a call argument (direct or
 through an interface), a `return` (a parameter default included), a struct-literal field and a store to a
 declared field — `open(8080 as Port)`, `return 0 as ExitCode` from `main`, `Config{port: 8080 as Port}`.
-A cast to a different alias of the same name converts and is legal: this file's `Item = int(0 to 200)` at a
-parameter declared with another file's `Item = int(0 to 255)`, or an alias nested in a type or extension
+A cast to a different alias of the same name converts and is legal: this directory's `Item = int(0 to 200)` at a
+parameter declared with another directory's `Item = int(0 to 255)`, or an alias nested in a type or extension
 body at a place declared with a file-scope one.
 
 A literal cast in an unannotated `let` (`let p = 8080 as Port`) is **E3010** when every use of the `let`
@@ -860,9 +864,7 @@ takes the plain constant the same way (`unneeded cast: the literal 8080 already 
 A literal cast is how a type is fixed where nothing declares one, and there it is legal: an unannotated
 `var` (`var p = 8080 as Port`), a `let` some use of which needs the alias, a field default whose type the
 cast gives (`var port = 8080 as Port`), an array-literal element, an argument or field of a generic type parameter, an operator operand, and a value
-joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
-call, the unneeded literal casts of one call are reported together, and only when removing all of them
-still selects the same overload — a cast that decides which overload runs is needed.
+joined by `if`/`else`, `gives` or `otherwise`.
 
 Write `value as Alias` to convert a value of another alias.
 
@@ -877,9 +879,7 @@ refuses the same pairs. A shift takes the alias of its left operand.
 Two subtypes of one parent make a *mixed* expression. It lands in any destination one of its operands'
 aliases satisfies — a parameter, a field, an `otherwise` or `match` merge — computed into a temporary of the
 destination's alias, so the result is range-checked there. Anywhere else its type is the operands' nearest
-common ancestor, and a diagnostic names that ancestor. At an overloaded call each operand's alias counts:
-`show(block + varId)` against `show(b BlockId)` and `show(v VarId)` is **E3007**, and the candidate list
-names the aliases (`Candidates: (b BlockId), (v VarId)`).
+common ancestor, and a diagnostic names that ancestor.
 Unary `-`, `not`, `or` and `xor` keep the operand's alias only where its range is closed under the operator: a full-width unsigned alias (`int(0 to u64.max)`, `bits(64)`) wraps modulo 2^64 and keeps it, and a range symmetric about zero keeps it under `-`. Over any other alias the result is an unnamed signed value carrying the range it computes (`-b` over `int(0 to 100)` is `[-100, 0]`), and it needs `as` to reach an alias slot. `and` always keeps the alias.
 
 ```maxon
@@ -994,11 +994,10 @@ distinct from the library's. A program's declaration of a library name is
 what the bare name means in every author file — the library's stays reachable as `stdlib.Name` — so the two
 are two types and every value crossing between them needs a cast.
 
-A non-exported ranged alias is private to its file: two files may declare one name over different ranges,
-or one over `int` and the other over `float`, and each file's uses mean its own declaration. Exported
-declarations of one name live in different directories, whatever their ranges, and a bare name that reaches
-more than one of them is ambiguous in every file, the declaring files included (see
-[Bare Names and Ambiguity](#bare-names-and-ambiguity)).
+A directory declares a ranged alias once, exported or not: two directories may each declare one name over
+different ranges, or one over `int` and the other over `float`, and a bare name means the reading file's own
+directory's declaration. A bare name that reaches several directories' declarations, none nearer, is
+ambiguous (see [Bare Names and Ambiguity](#bare-names-and-ambiguity)).
 
 ### Generic-Instance and Function-Type Aliases Are Brands
 
@@ -1026,17 +1025,17 @@ no cost, and `return` re-brands implicitly.
 - Two **file-scope** function aliases of one shape still refuse each other — including two
   directory-qualified ones, `api.Score` and `legacy.Score`, which are file-scope declarations wearing
   their directory and can be written in a type position.
-- A non-exported function alias is **private to its file**, so two files declaring one name have two
-  brands and two types, whatever their shapes: each file's declarations mean its own, and a value of one
-  reaches a door declared with the other only through `as`. Two declarations of one generic-instance alias over the
+- A function alias is declared once per directory, so two directories declaring one name have two
+  brands and two types, whatever their shapes: each directory's declarations mean its own, and a value of
+  one reaches a door declared with the other only through `as`. Two declarations of one generic-instance alias over the
   same instance are two brands in the same way.
 - A call's result wears the alias its callee's `returns` clause names, bare or directory-qualified, as the
   file that declares the callee resolves it: a caller's own declaration of that name is another brand.
 - A field read, a read of a module-level `var` and a `match` payload binding wear the alias the field,
   variable or payload was declared with, as its declaring file resolves it: with `held(v Xs)`, the
   binding `v` in `held(v) then …` is an `Xs`.
-- A bare reference that reaches two `export`ed declarations is ambiguous in every file, a declaring file
-  included: **E3063**, resolved by qualifying with the directory namespace or by renaming.
+- A bare reference that reaches two `export`ed declarations, with none in the reading file's directory or
+  the root, is ambiguous: **E3063**, resolved by qualifying with the directory namespace.
 - A diagnostic names each type as source would qualify it: the standard library's as `stdlib.Name`,
   another directory's as `dir.Name`, the root's bare. Where the two sides would still print alike, it adds
   a parenthesised note — the shape where two function shapes differ, otherwise `(declared in <file>)`. A
@@ -1126,8 +1125,8 @@ a visibility modifier is spelled from its own file only: another file's extensio
 [E3008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3008).
 
 A per-instance **function** alias is unbranded: it spells the shared body's signature over the type's own
-parameters. `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
-function(Row, Row) returns Ordering` passes straight through: `rows.sort(self.compare)` compiles with no
+parameters. `Array.sortBy` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
+function(Row, Row) returns Ordering` passes straight through: `rows.sortBy(self.compare)` compiles with no
 cast and no wrapping closure.
 
 ---
@@ -1274,15 +1273,13 @@ An instance method called with no receiver is [E3193](../maxon-bin/Compiler/Erro
 a bare call to it from a static method, a file-scope initializer or a `static var` initializer, or
 `Type.name()` with no arguments. `Type.name(value, …)` calls it on `value`.
 
-A type may declare a static and an instance method with the same name, in its body or in an `extension` of
-it; `Type.name()` calls the static one and `value.name()` the instance one. A bare `name()` calls the
-instance one where `self` is reachable, in an instance method and its closures, and the static one
-everywhere else in the type: in a static method and its closures, and in an initializer. This holds
-whichever of the two is declared first. An `extension` member with the
-name and kind of a member the type's own body declares is
-[E3176](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3176), in any file and for a standard-library type
-too. An [interface extension](#interface-extensions)'s method is a default: a conforming type may declare its
-own method of that name, and its values call that one.
+A type declares each method name once. A static and an instance method of one name, a method in the type's
+body and one an `extension` of it adds, and a field and a method are each two declarations of one name, and
+the second is [E3006](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3006), in any file and for a
+standard-library type too (`Duplicate method 'add' in type 'Counter'`, `'total' names both a field and a
+method of type 'Counter'`). Give the second its own name. An [interface extension](#interface-extensions)'s
+method is a default: a conforming type may declare its own method of that name, and its values call that
+one.
 
 ### Static Fields
 
@@ -1477,7 +1474,8 @@ on the terms [Explicit Cloning](#explicit-cloning) states.
 | `Parsable` | `static function fromString(input String) returns Self throws Error` |
 
 A type used in string interpolation needs a `toString()` method; one used with a format specifier
-(`{value:spec}`) needs `toString(format String)`.
+(`{value:spec}`) needs `toString(format String)`. A type declares `toString` once, so it implements
+`Stringable` or `FormattedStringable`.
 
 ### Hashable and Hasher
 
@@ -1523,14 +1521,14 @@ returns a `HashDigest` (`bits(64)`):
 ```maxon
 function main() returns ExitCode
 	var hasher = Hasher.create()
-	hasher.combine("abc".toByteArray())
+	hasher.combineBytes("abc".toByteArray())
 	print("{hasher.finalize():016x}\n")     // e71fa2190541574b
 	return 0
 end 'main'
 ```
 
 The fold carries no length tag — combining `"ab"` then `"c"` equals combining `"abc"` — so combine each
-part's length yourself when the boundaries matter. `Hasher.empty()` and `Hasher.combined(state, bytes:)`
+part's length yourself when the boundaries matter. `Hasher.empty()` and `Hasher.combinedBytes(state, bytes:)`
 are the same fold as pure functions.
 
 ### Parsable
@@ -1670,8 +1668,7 @@ end 'main'
 
 - Several parameters: `type Pair uses A, B`, instantiated `Pair with (Integer, String)`.
 - A static called on the bare generic name infers the arguments from its parameters: a parameter written
-  at a type parameter, or at an instance over one (`Array with T`, or the generic itself). An overloaded
-  static infers them from the overload its arguments bind. A call whose result is
+  at a type parameter, or at an instance over one (`Array with T`, or the generic itself). A call whose result is
   written over a parameter that no argument fixes (`Holder.make()` declared `returns T`) has no type and is
   **E3162**; inside the generic's own body the enclosing instance types it.
 - One compiled body serves every instantiation. A method learns how its type arguments are laid out and
@@ -1698,7 +1695,7 @@ Inside `type Outer uses T`, another generic type written without `with` argument
 binds nothing and stays the bare base, and a call on it — static (`Box.create(first)`) or through a receiver
 of that type — may neither hand a slot written over one of its type parameters (`Element`, or
 `Array with Element`) a value typed at `Outer`'s parameters nor call a method that needs a layout descriptor
-(**E3162**); an overloaded callee is judged by the member its arguments pick. Name the instance with a
+(**E3162**). Name the instance with a
 `typealias` instead: `typealias Inner = Box with T`. Outside a generic type body, a layout-needing call on a
 bare generic base is **E3162** as well unless the calling function carries a layout descriptor of its own — a
 static whose arguments do not fix every one of the base's parameters (`Holder.create()` in `main`), or a
@@ -1781,21 +1778,15 @@ because the caller granted the conformance by passing the type. The grant reache
 the copy too. Every other member of the type needs ordinary visibility from the declaring file. A generic
 function is itself visible like any function: a private one called from another file is **E3008**.
 
-A non-generic declaration of the same name is chosen when every argument fits its parameter exactly: a
-value of the parameter's own type, or a value with no alias — a literal, a negated literal, a loop counter or
-a value computed from them — that lies inside the parameter's range. A value known to leave the range is
-taken by the generic, and a parameter whose alias admits every value of its type takes any of them. Since a
-literal already binds the non-generic declaration, casting it to that parameter's alias is **E3010**
-(`describe(5 as Score)`); a cast to another alias fixes `T` to that alias, and the generic binds. Two generic
-declarations that both infer a type for one call are **E3007**.
+A generic function and a non-generic one of the same name in one directory are two declarations of one name
+(**E3006**); name each its own.
 
 A generic function's result may declare `returns sole T` or `returns readonly T` (see
 [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)); a body that breaks it is **E3189**.
 
-A generic function may reassign a parameter declared `T`, and the argument is then passed by reference, as
-for any function (see [Parameter Passing](#parameter-passing)). When a call's name reaches more than one
-declaration — generic or not — and they disagree about which parameters they reassign, each call passes
-its arguments the way the declaration it resolves to takes them.
+A generic body is checked against the bound of `T` only, so it never reassigns a parameter declared `T`,
+marked `mutable` or not (**E2013**, `'item' is a generic parameter and cannot be reassigned; return the new
+value`); see [Parameter Passing](#parameter-passing).
 
 ### Associated Types
 
@@ -2941,6 +2932,9 @@ end 'main'
 ```
 
 - `var` declares module state any function in the file can reassign; `let` declares a constant.
+- A binding shares its directory's one namespace with every other top-level name (see
+  [Bare Names and Ambiguity](#bare-names-and-ambiguity)), and another directory's binding is read through
+  its directory: `alpha.LIMIT`.
 - An initializer is any expression a function body accepts, with the same meaning, the same types and the
   same diagnostics: literals, arithmetic, casts, enum and union cases, array, map and tuple literals,
   `Type from "literal"`, `ArrayAlias from [...]`, factory and function calls (`let shared = Cache.create()`,
@@ -2980,7 +2974,7 @@ end 'main'
   module-level `var` that holds a record — a String, an array, a struct, a boxed union — through any function
   it calls (**E3165**, reported at the `var`'s use with its declaration as a note). A `let` is fixed at startup
   and may not hold what a `var` owns, and what the initializer keeps is not followed, so reading only a number
-  out of the `var` is refused too. "Reaches" is the call graph after overload resolution, dispatches
+  out of the `var` is refused too. "Reaches" is the call graph, dispatches
   included. A scalar `var` is readable, a `var`'s initializer may reach any global, and a `let`'s may reach
   other `let`s.
 - The other direction is refused too: a `var`'s initializer may not call anything whose result may be, lie
@@ -3147,82 +3141,53 @@ end 'main'
 - `__file__` is always relative, so the same source builds the same binary on any machine.
 - Anywhere else — an ordinary expression, a struct field default — is **E2060**.
 
-### Function Overloads
+### One Declaration per Name
 
-Several functions may share a name when their parameters differ.
+Maxon has no overloading. A function name is declared once per directory, a method name once per type, and
+an interface requirement name once per interface. A second declaration is
+[E3006](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3006), reported at its name:
 
-**By parameter type** — the argument types choose the overload:
+```text
+error E3006: main.maxon:5:10: duplicate definition of 'measure' — already declared as `function measure`
+```
+
+Give each function its own name, or make the differing argument optional with a default parameter:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-function measure(value Tally) returns Tally
+function measureNumber(value Tally) returns Tally
 	return value * 2
-end 'measure'
+end 'measureNumber'
 
-function measure(value String) returns Tally
+function measureText(value String) returns Tally
 	return value.count()
-end 'measure'
+end 'measureText'
 
 function main() returns ExitCode
-	print("{measure(21)} {measure("hello")}\n")    // 42 5
+	print("{measureNumber(21)} {measureText("hello")}\n")    // 42 5
 	return 0
 end 'main'
 ```
 
-**By parameter name** — overloads whose later parameters have different names are chosen by the labels
-at the call:
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-function slice(start Integer, endIndex Integer) returns Integer
-	return endIndex - start
-end 'slice'
-
-function slice(start Integer, length Integer) returns Integer
-	return start + length
-end 'slice'
-
-function main() returns ExitCode
-	print("{slice(10, endIndex: 32)} {slice(10, length: 32)}\n")    // 22 42
-	return 0
-end 'main'
-```
-
-- Each argument ranks the overloads it fits: a parameter declared with the argument's own alias ranks
-  first, a parameter whose type is exactly the argument's next, and a parameter the argument widens to
-  (an int at a `float`) last. The call binds the overload whose arguments rank highest in total, so
-  beside `create(n Count)` and `create(n Integer)`, `create(7 as Count)` binds `Count`.
-- A call that more than one overload matches equally is **E3007** (`Ambiguous overload`) — two
-  overloads each preferred at a different argument, for one — and so is a `spawn` or an `async` call
-  that does. The message lists each tied overload's parameters as its declaration writes
-  them (`Candidates: (b BlockId), (v VarId)`). A first argument
-  is labelled only at a defaulted parameter, and overloads of one name that declare defaults must agree
-  on their parameters, so two single-parameter overloads of the same type cannot be told apart.
-- A literal, a negated literal, a loop counter or a value computed from them fits a ranged-alias
-  parameter when it lies inside the alias's range, so beside `pick(n Small)` (`int(0 to 10)`) and
-  `pick(n Wide)` (`int(0 to 1000)`), `pick(50)` binds `Wide`.
-- Declaring the same overload twice, with the same parameter names and types, is a duplicate
-  definition (**E3006**). Overloads with the same parameter types but different parameter names are
-  separate declarations; a call whose labels cannot tell them apart is **E3007**.
-- Where a diagnostic tells overloads of one name apart, it names each by its parameter types,
-  `pick(String)`, adding the parameter names where only those differ:
-  `slice(start Integer, length Integer)`.
-- A type may declare a `static` method and an instance method with the same name and parameters:
-  `Type.name()` calls the static one and `value.name()` the instance one, and a bare `name()` calls the one
-  [Static Methods](#static-methods) names.
+- A method of a type and a method an `extension` of it adds share the type's one namespace, so they are one
+  declaration of one name. A `static` and an instance method of one name are two declarations of it, and a
+  field and a method of a type never share a name.
+- A standard-library operation that varies by argument type has one name per form: `Array.containsSequence`,
+  `Array.sortBy`, `String.containsCharacter`, `String.sliceLength` and the like. See
+  [STDLIB_REFERENCE.md](STDLIB_REFERENCE.md).
 
 ### Parameter Passing
 
-A parameter the function only reads is passed by value. A parameter the function **assigns to** — directly,
-or through one of its fields or elements — is passed by reference, so the write reaches the caller's
-variable:
+A parameter is a `let` binding passed by value: reassigning it is **E2013** (`'n' is a parameter and cannot be
+reassigned; mark it mutable or copy it into a local var`). A parameter of a value type — a number, `bool`, an
+enum or `String` — that the function reassigns is marked `mutable` before its type. A `mutable` parameter is
+passed by reference, so the write reaches the caller's variable:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-function increment(n Tally)
+function increment(n mutable Tally)
 	n = n + 1
 end 'increment'
 
@@ -3234,43 +3199,38 @@ function main() returns ExitCode
 end 'main'
 ```
 
+- A record-type parameter is never rebound, marked or not: reassigning one is **E2013** (`'r' is a record
+  parameter and cannot be reassigned; copy it into a local var`). Writing through it — a field store
+  (`p.x = 99`) or a mutating call on a field (`p.items.push(x)`) — is not a reassignment and reaches the
+  caller's record. A generic body is checked against the bound of its type parameter only, so a parameter
+  whose type is a type parameter is never reassigned either: the function returns the new value.
+- A message parameter and a factory parameter cannot be marked `mutable` (**E2076**): a message hands its
+  arguments to another green thread and a `spawn` hands the factory's arguments to the service, which owns
+  them and writes nothing back.
 - Passing a `var` lets the callee's writes propagate. Any storage you could assign to at that point may be
   passed and is written in place: a local `var`, a module-level `var`, a field of a binding (`p.x`), a field
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
   assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
   the call site would be accepted.
-- Passing a [read-only](#read-only-values) value to a parameter the callee writes is **E3159** (`cannot pass
-  'y', which is read-only (a `let` binding), to a function that writes parameter 'n'`). The receiver of a
-  method counts as a parameter, so `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add`
-  writes a field of `acc`, is refused too. A `let` field, or anything reached through a read-only value, is
-  refused for the same reason the equivalent assignment is.
-- A call through a function value passes its arguments as a direct call does. A function value of arity n
-  passes the argument's own storage at position i exactly when some free function of arity n writes its
-  parameter i, whichever body the call reaches: a body that writes the parameter updates the variable, and
-  one that only reads it reads the value held there. After `let f = bump` with `bump` assigning its
-  parameter, `f(v)` updates `v` exactly as `bump(v)` does. The argument is held to the rules above. When the
-  value is the function or closure a reference names, the callee is that body; a value read out of storage
-  (a variable, a field, an element, a capture) or arriving through a parameter or a merge may hold any
-  function used as a value whose shape agrees with its function type. A read-only value handed to a position
-  the callee may write is **E3159**, reported for every such argument and once for each body that writes it,
-  naming that body's parameter, also when a closure captured it; a callback that only reads accepts it. An
-  expression that is not storage gives the callee a temporary. A function that forwards a parameter to such a
-  callback writes that parameter when any candidate does.
-- A callback parameter typed over a type parameter (`f function(T) returns T` in a generic body) holds the
-  functions handed in for it, so a read-only value passed to it is refused only where a writing function is
-  handed in, and the refusal names that call (`'isBig' writes its parameter 'n', but 'Array.filter' passes it
-  the immutable 'item'`).
-- A call through an interface follows the same rule as a call through a function value: a requirement's
-  position is passed as the argument's storage when any conformer writes it, the caller's `var` is updated,
-  and a read-only value there is **E3159**, once for each conformer that writes it (`'Doubler.bump' writes
-  its parameter 'n', but 'bump' passes it the immutable 'x'`).
+- Passing a [read-only](#read-only-values) value to a `mutable` parameter is **E3159** (`cannot pass
+  'y', which is read-only (a `let` binding), to a function that writes parameter 'n'`). A literal or another
+  expression is no storage for the write to reach, so it is **E3159** too (`cannot pass a literal to a
+  function that writes parameter 'n'; pass a `var``). The receiver of a method counts as a parameter, so
+  `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add` writes a field of `acc`, is refused.
+  A `let` field, or anything reached through a read-only value, is refused for the same reason the
+  equivalent assignment is.
+- A function type spells the marker: `typealias Step = function(mutable Tally)`. A function, closure or
+  interface conformer fits a function type or requirement only when every parameter's marker is the same as
+  the type's, so a function that reassigns its parameter does not convert to `function(Tally)` (**E3005**),
+  and one that declares `mutable` but only reads does not either. A call through a function value or an
+  interface passes the argument's storage at each `mutable` position, and a read-only value handed to such
+  a position is **E3159**, as at a direct call; a literal or another expression is **E3159** too. Through
+  a function value or an interface requirement the message names the position (`to a function that writes
+  argument 1`).
 - A variable passed by reference to a parameter whose alias is wider than its own, or that names no alias,
   is range-checked when the call returns.
 - Passing storage to a parameter the callee **reassigns**, while another argument of the same call reaches
   that storage, is **E3186** (see [Aliasing Between Arguments](#aliasing-between-arguments)).
-- Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
-- A parameter declared at a type parameter — in a method of a generic type or in a generic function — is
-  passed by reference on the same terms.
 
 ### Function Types and Function Values
 
@@ -3302,8 +3262,8 @@ end 'main'
 ```
 
 A function value fits a function type only by variance. A read-only parameter
-may be wider than the type's (the function accepts every value the type's callers pass), a parameter the
-function writes by reference must be the same type, and the result may be narrower (everything the function
+may be wider than the type's (the function accepts every value the type's callers pass), a `mutable`
+parameter must be the same type and carry the same marker, and the result may be narrower (everything the function
 returns is something the type promises). A bare `int` in the type's declaration is an unranged integer, so
 a function over a narrower alias does not fit it. That is checked wherever the value meets the type: a
 variable, a global, a field, a tuple or container element, a union payload, an argument and a `return`
@@ -3426,9 +3386,8 @@ it. Two names for one record that only exist at run time are beyond what the com
 
 - A parameter's type may be omitted when the closure is written directly as a call argument whose parameter
   is declared with a function type: the closure's parameters take that type's parameter types, in order —
-  `scores.sort(function(a, b) gives b.compare(a))`. A parameter past that function type's arity is **E2003**,
-  and an omitted type anywhere else is **E2015**. When overloads of the callee declare different function
-  types at that argument, the closure writes its parameter types. A member called on an undefined
+  `scores.sortBy(function(a, b) gives b.compare(a))`. A parameter past that function type's arity is **E2003**,
+  and an omitted type anywhere else is **E2015**. A member called on an undefined
   function's result accepts an untyped closure argument, and the call's
   [E3004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3004) is the error reported.
 - Closure parameters must be used (**E3012**); write `_` for an unused one.
@@ -3473,7 +3432,7 @@ closure is judged by the closure's own body when the closure is known where the 
 literal, or a named function, handed to a helper that only calls it. A closure the call cannot identify (one
 read out of a field, say) makes the caller impure. Releasing a value that can own a green thread, a mailbox or an
 operating-system handle (a promise, a file, a socket, a type parameter's value) is an effect of the function that
-releases it. A call to an overloaded name is judged by the overload its arguments select.
+releases it.
 
 A function that returns nothing has no result to discard. Destructuring a pure function's tuple result must
 keep at least one element (`(_, _) = pure()` is **E3064**). A throwing call is judged the same way: a pure
@@ -4754,8 +4713,8 @@ A scriptlib package's namespace is `scriptlib.<package>`: `scriptlib/text/Lines.
 ### Visibility
 
 Top-level declarations — functions, types, enums, unions, typealiases, variables — are **private to their
-file** unless marked: only that file may name them. The name of a type, enum, union or interface is still
-the whole program's, so a second declaration of it anywhere is **E3006** (see
+file** unless marked: only that file may name them. A top-level name is declared once per directory,
+whatever its visibility: a second declaration of it in one directory is **E3006** (see
 [Bare Names and Ambiguity](#bare-names-and-ambiguity)). Three modifiers widen visibility:
 
 | Modifier | Visible to | Checked for unused exports |
@@ -4884,7 +4843,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Qualification works for functions and for every kind of type name — typealiases, types, enums, unions and
+Qualification works for functions, for another directory's top-level `let` and `var` (`alpha.LIMIT`), and
+for every kind of type name — typealiases, types, enums, unions and
 interfaces (`lib.fmt.format(x)`, `50 as api.Score`, `api.Point.origin()`) — at every position a type name
 is written: a declaration, a cast, a construction, a static call's base, a `spawn`'s target, an
 `extension`'s target, a `throws`, `implements`, `where` or `extends` clause, and the head of a top-level
@@ -4912,46 +4872,59 @@ keyword.
 
 ### Bare Names and Ambiguity
 
-A bare name resolves when exactly one visible declaration has it. Only a declaration the referring file may
-name is a candidate: a file-private function counts only in its own file and a `module` function only
-inside its subtree, and the candidate list an error prints names only visible ones. A bare call or a bare
-function value takes the type of the declaration it resolves to, and a function-backed enum case's function
-is resolved from the file that declares the enum, whichever file reads the case; a case that resolves to no
-single declaration is reported in that file.
+A directory declares each top-level name once, in one namespace for every kind — a `type`, `enum`, `union`,
+`interface`, `typealias`, top-level `let` or `var`, and `function` — whether the declaration is file-private,
+`module` or `export`. A second declaration of the name in the same directory is
+[E3006](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3006), in one file or across the files of the
+directory (`duplicate definition of 'Point' — already declared as `type Point``), and a typealias against a
+typealias is **E3061**. The declaration kept is the earlier one in a file, and across files the one in the
+file whose absolute path, with `/` separators, sorts first byte by byte; each other one is reported at its
+name. Directories are separate scopes, so a name two directories declare is two names. Locals and parameters
+keep block scope and may shadow a top-level name.
 
-**A type name** — a typealias of any form, a type, an enum, a union or an interface — that reaches more than
-one project declaration is ambiguous, **E3063**, in every file, a file that declares one of them included.
-The message lists the spellings that resolve it, a declaration at the project root as `export.Name`:
+A bare name resolves the same way for every kind of declaration, and the first step that has a declaration
+decides:
+
+1. the referring file's own directory's declaration;
+2. else the project root's;
+3. else the one declaration the file may name;
+4. else it is ambiguous: **E3063** for a type name and **E3095** for a binding or a function, each listing the
+   spellings that resolve it (`export.Name` for a declaration at the project root).
+
+Only a declaration the referring file may name is a candidate: a file-private declaration counts only in its
+own file and a `module` one only inside its subtree, and the candidate list an error prints names only
+visible ones. A bare call or a bare function value takes the type of the declaration it resolves to, and a
+function-backed enum case's function is resolved from the file that declares the enum, whichever file reads
+the case; a case that resolves to no single declaration is reported in that file.
+
+**A type name** — a typealias of any form, a type, an enum, a union or an interface — resolves by that order,
+so a file reads its own directory's declaration bare and reaches another directory's through the directory:
 
 ```text
 error E3063: app/main.maxon:7:11: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, lib.Score
 ```
 
-In a file whose own declaration is file-private, the message ends `, or rename this file's own declaration`:
-renaming is the remedy in the declaring file, and other files qualify.
+**A function name or a top-level binding** resolves by the same order, and a bare call, function value or
+read that reaches several declarations none nearer is **E3095** in every form it takes — plain, under `try`,
+or spawned with `async` (`Ambiguous bare-name call to 'describe': more than one visible declaration matches it.
+Qualify it as one of: alpha.describe, beta.describe`) — worded for a function value, an enum case's backing or
+a read where the name is one. A call (`api.format(...)`), a function value (`let f = api.format`), a
+function-backed enum case (`plain = api.format`) and a read of another directory's top-level `let` or `var`
+(`alpha.LIMIT`) all accept the qualified form. A bare read of a name the reader's directory declares as a
+function means that function, even where another directory exports a `let` of it; `dir.name` reads the `let`.
+A generic function resolves by the same order.
 
-Only project declarations take part. A project declaration of a library name is what the bare name means in
-every project file, so a project's `export typealias StringArray` is the one a bare
-`StringArray` names, and the library's stays reachable as `stdlib.StringArray`. The standard library's own
-files see only the library's declarations. The same holds for the protocols the library defines —
-`Stringable`, `FormattedStringable`, `Hashable`, `Equatable`, `Comparable`, `Cloneable` and `Error`: a
-project's own `interface Comparable` is what `implements Comparable` names in project files, while the
-library's generics, such as `sort` and `contains`, keep their library constraints. `int`, `float`, `bool`,
-`Character`, `String`, arrays and payload-free enums meet the library's protocols. A `b"…"` literal's
-element is the type the file's bare `Byte` names when that is an integer alias — the file's own, else the one project alias it sees, else the
-library's; a `type Byte` leaves the literal on the library's, and an ambiguous bare `Byte` refuses the
-literal with **E3063**.
-
-**A function name** that reaches several declarations resolves to one at the project root, or in an
-enclosing directory, over one in a nested directory, and to a project function over a standard-library one.
-Otherwise the call is ambiguous, **E3095**, in every form it takes — plain, under `try`, or spawned with
-`async` (`Ambiguous bare-name call to 'describe': more than one visible declaration matches it. Qualify it
-as one of: alpha.describe, beta.describe`) — worded for a function value or an enum case's backing where
-the name is one. A call (`api.format(...)`), a function value (`let f = api.format`) and a function-backed
-enum case (`plain = api.format`) all accept the qualified form. A call to a generic function first keeps the
-declarations its arguments fit, then the nearest of those: one in the calling file's own directory, then
-one at the project root, then any other — so an overload of another arity in a farther directory serves the
-calls the nearer one cannot take.
+A program's own declarations shadow the standard library's and the runtime tier's: they are different scopes. A
+project declaration of a library name is what the bare name means in every project file, so a project's
+`export typealias StringArray` is the one a bare `StringArray` names, and the library's stays reachable as
+`stdlib.StringArray`. The standard library's own files see only the library's declarations. The same holds
+for the protocols the library defines — `Stringable`, `FormattedStringable`, `Hashable`, `Equatable`,
+`Comparable`, `Cloneable` and `Error`: a project's own `interface Comparable` is what `implements Comparable`
+names in project files, while the library's generics, such as `sort` and `contains`, keep their library
+constraints. `int`, `float`, `bool`, `Character`, `String`, arrays and payload-free enums meet the library's
+protocols. A `b"…"` literal's element is the type the file's bare `Byte` names when that is an integer alias —
+the file's own, else the one project alias it sees, else the library's; a `type Byte` leaves the literal on the
+library's, and an ambiguous bare `Byte` refuses the literal with **E3063**.
 
 **Only a declaration the file can see counts**, for every kind of name. A project type named like a
 primitive (`byte`, say) and declared where a file cannot see it leaves that name the primitive in that file.
@@ -4959,15 +4932,6 @@ What a call knows about its callee comes from the declaration it binds, too: whe
 returns (its body ends in `panic`) or can only throw, and which generic template it instantiates. A function
 value (`let f = helper`) is the one declaration of its name the file can see, with that declaration's
 parameters and return type, whatever other files declare under the name.
-
-**Every candidate is nameable.** Two type declarations of one name that can both be named from outside
-their files may not share a directory: two typealiases are **E3061** and a pair involving a type, enum,
-union or interface is **E3006**. Two typealiases of one name in one file are **E3061** too. The declaration
-kept is the earlier one in a file, and across files the one in the file whose absolute path, with `/`
-separators, sorts first byte by byte; each other one is reported at its name. Declarations in different directories
-coexist — a typealias in one and a type in another included — and a file-private typealias coexists with
-anything, since only its own file can name it. A type, enum, union or interface name is the whole program's:
-two of them sharing a name are **E3006** wherever they sit and whatever their modifiers.
 
 Every typealias a `public` standard-library signature names is itself `public` — an inner one such as
 `Array.ElementIterator` included — so a value can always be cast to the alias a library signature asks for
@@ -5067,11 +5031,10 @@ not 80.
   is copied. Passing a handle is how a socket or a server is shared with a coroutine.
 - **A promise argument moves.** A coroutine can still be running after the frame that started it has ended,
   so an `async` call hands a promise, or a value whose type holds one, only to a parameter the callee takes
-  — one it awaits, cancels, stores or returns; for an overloaded callee, the overload the call's arguments
-  bind. The coroutine then owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
+  — one it awaits, cancels, stores or returns. The coroutine then owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
   promise to one that takes it, or await it and pass the result. One promise at two arguments of one call is
   **E3102**.
-- A parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
+- A `mutable` parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
   caller. A coroutine that writes a parameter is refused a [read-only](#read-only-values) argument
   (**E3159**), as an ordinary call is.
 - A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
@@ -5145,7 +5108,7 @@ handed to a parameter, or to a container's method such as `Map.upsert`, is held 
 through a function value hands a promise over exactly where the function type says the callee takes it (see
 [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)).
 
-A promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
+A `mutable` promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
 callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
 other promise name. The same holds through a function that only hands the parameter on, and at a position a
 function type passes by reference. The argument is a `var` the caller owns: a `let`, a `let` field, a name a
@@ -5208,9 +5171,8 @@ a promise parameter it awaits, cancels, stores or returns, or hands on to a call
 passed to a parameter the callee only reads stays with the caller. A call of `push`, `set`, `insert`,
 `upsert`, `append` or `prepend` stores its bare arguments whatever the receiver is, so a function that
 hands its promise parameter to such a method takes the promise even where the receiver's own method only
-reads it. Where the overloads a call may bind differ about taking it, the overload the
-call binds decides. An `async` call is stricter (see [Starting a Coroutine](#starting-a-coroutine)): the
-overload it binds must take the promise. A store into a promise field also releases the thread that field was
+reads it. An `async` call is stricter (see [Starting a Coroutine](#starting-a-coroutine)): the
+callee must take the promise. A store into a promise field also releases the thread that field was
 holding, exactly once. Three refusals follow:
 
 - **E3141** — the slot a read came out of has already been spent, at any of those doors. Two reads of one slot
@@ -5348,9 +5310,6 @@ end 'main'
   arguments off the factory's arguments; a factory that fixes no type is **E2015**. A factory argument held
   at an opaque type parameter — a `T` value inside a generic function — is **E2015**; spawn from a function
   of a concrete type.
-- **Overloaded factories.** A `spawn` binds the factory overload its arguments fit, as any call does, and
-  that overload must start the service (**E3134** when it returns another type). Two overloads that fit
-  equally are **E3007**, and arguments that bind no single overload of a generic factory are **E2015**.
 - A refusal of a `spawn`'s target or factory (**E3134**, **E3008**, **E2015**) points at the `spawn`
   keyword.
 - Services that `await` each other in a cycle are **E3139**; a factory's `await` counts as its service's.
@@ -5554,10 +5513,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A `T.handle` converts to `I.handle` wherever an `I.handle` is expected: a binding, an argument (an
-  overloaded callee's included), a return, a field, an array element, a message argument, a
+- A `T.handle` converts to `I.handle` wherever an `I.handle` is expected: a binding, an argument, a return, a field, an array element, a message argument, a
   `Key.register` and a call through a function value or a closure. `as I.handle` converts explicitly.
-  A value that converts equally well to two overloads' interface handles is ambiguous (**E3007**).
 - Every requirement must be sendable: its parameters must cross a message (**E3135**) and its reply must be
   carriable (**E3140**). One send serves every implementer, so the services a program sends to through
   `I.handle` declare each requirement with the same parameter, return and `throws` types
@@ -6126,11 +6083,11 @@ end 'main'
 | `let b = e`, `e` state something may still write | **E3188**; `view b = e` reads it, `var b = e` writes it |
 | `view b = e` | `b` names the record read-only; other names may still write it |
 | `var b = a`, `a` read-only (a `let` included) | **E3078**; `a.clone()` is the mutable copy |
-| an ordinary call argument | shared with the callee for the call, counted where needed; a parameter the callee reassigns gets its own storage |
+| an ordinary call argument | shared with the callee for the call, counted where needed; a `mutable` parameter is the caller's own storage, so the callee's writes reach it |
 | an argument the callee keeps where something may write it | a fresh `let` at its last use moves; any other read-only value is **E3078** |
 | an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
 | an argument to a [`sole`](#capability-qualifiers-keep-sole-returns-readonly) parameter | moves: a fresh value, or a `let` or `var` at its last use |
-| an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
+| an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a `mutable` parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
 | a [closure](#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
 | a `spawn` factory argument | moves to the service's green thread; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
@@ -6140,7 +6097,7 @@ end 'main'
 
 Reads are counted, so two arguments that reach the same storage are safe in most calls: `s.append(s)` is
 legal. The one refused overlap is a **by-reference parameter** whose storage another argument of the same call
-also reaches. A by-reference parameter is one the callee reassigns. The refusal is **E3186**; pass a `clone()` as
+also reaches. A by-reference parameter is one marked `mutable`. The refusal is **E3186**; pass a `clone()` as
 one of the two. A promise, or a value of an opaque type parameter, passed at two arguments whose parameters
 take it moves at the first, so the second is **E3102**.
 
@@ -6374,7 +6331,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | [E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) | a shared value whose graph holds an OS handle, a function value or a promise |
 | [E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174) | a published value that is not solely owned |
 | [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) | raw memory or a raw handle used outside the library tier |
-| [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a by-reference parameter that overlaps another argument |
+| [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a `mutable` parameter that overlaps another argument |
 | [E5004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e5004) | a chain of unchecked runtime functions that can exceed the stack margin |
 | exit 96 | a mutable value sent to another thread while not solely owned |
 | exit 101 | memory still allocated when `main` returns |
@@ -6640,10 +6597,10 @@ let a = Point.create(1)
 var c = a                     // E3078: cannot assign the read-only 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
 ```
 
-**Handing a by-reference parameter storage another argument reaches**
+**Handing a `mutable` parameter storage another argument reaches**
 
 ```maxon
-rebindThenRead(h, inner: h.inner)   // E3186: argument 'h.inner' overlaps argument 'h', which 'rebindThenRead' reassigns (parameter 'h') — …
+bump(h.n, h: h)   // E3186: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — …
 ```
 
 **Reaching raw memory from a program**

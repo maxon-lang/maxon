@@ -913,7 +913,7 @@ error E4006: <fragment>:7:15: Type 'FixedArray' has no method named 'remove'
 <!-- test: error.a-bare-growth-call-inside-an-extension-body-is-refused -->
 ⛔⛔ **THE SECOND ENTRANCE `W86`'s LANDMINE COULD HAVE COME IN BY, AND IT IS SHUT FOR A DIFFERENT REASON
 FROM THE FIVE ABOVE.** `implicitSelfTakesTheArrayRoster` gives a BARE call inside a container's own body
-the ARRAY roster, which is what makes `stdlib/Array.maxon`'s own `contains(sequence)` reach `get`. Its gate
+the ARRAY roster, which is what makes `stdlib/Array.maxon`'s own `containsSequence(sequence)` reach `get`. Its gate
 is `declarationIsTheManagedRecord` — the GROWABLE record's declaration and not
 `declarationsValueIsTheManagedRecord`, which is the `or` that also admits the sized one — so an
 `extension FixedArray` body does not take that roster and a bare `push` resolves as an ordinary sibling call to

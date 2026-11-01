@@ -5,35 +5,29 @@
 // clobber op, so the words visited per extra statement grow with the program, while a walk over the
 // live set costs the live population plus one summary word per 64 row words - a constant this
 // fixture's shape fixes. The SLOPE across two bodies of that one shape is the property itself.
-typealias BlockRepetition = int(0 to 4096)
-typealias StatementTally = int(0 to u32.max)
 
-let CaseDirName = "regalloc-live-row"
-let SmallAppDirName = "small"
-let LargeAppDirName = "large"
+let RegallocLiveRowWalksScaleWithTheLiveSetCaseDirName = "regalloc-live-row"
 
-let SmallRepetitions = 8
 let LargeRepetitions = 512
 
-let LogFlag = "--log=codegen:debug"
 let RowWordsFieldPrefix = "row-words visited total="
 
 let StatementsPerBlock = 4
 let FixtureSetupStatements = 4
 let RowWordsPerStatementBound = 16
 
-let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction sink(x Word) returns Word\n\treturn (x + (((try Process.environmentVariable(\"PATH\") otherwise \"\").byteLength() and 0xFF) as Word)) and 0xFFFF\nend 'sink'\n\nfunction work(seed Word) returns Word\n\tvar v0 = (seed shr 0) and 0xFFFF\n\tvar v1 = (seed shr 1) and 0xFFFF\n\tvar v2 = (seed shr 2) and 0xFFFF\n\tvar v3 = (seed shr 3) and 0xFFFF\n"
+let RegallocLiveRowWalksScaleWithTheLiveSetFixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction sink(x Word) returns Word\n\treturn (x + (((try Process.environmentVariable(\"PATH\") otherwise \"\").byteLength() and 0xFF) as Word)) and 0xFFFF\nend 'sink'\n\nfunction work(seed Word) returns Word\n\tvar v0 = (seed shr 0) and 0xFFFF\n\tvar v1 = (seed shr 1) and 0xFFFF\n\tvar v2 = (seed shr 2) and 0xFFFF\n\tvar v3 = (seed shr 3) and 0xFFFF\n"
 let FixtureBlock = "\n\tv0 = (v0 + sink(v1)) and 0xFFFF\n\tv1 = (v1 xor sink(v2)) and 0xFFFF\n\tv2 = (v2 + sink(v3)) and 0xFFFF\n\tv3 = (v3 xor sink(v0)) and 0xFFFF\n"
-let FixtureFooter = "\n\treturn v0 + v1 + v2 + v3\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tlet answer = work((spelled.byteLength() and 0xFFFF) as Word)\n\n\tif answer > 0 'produced'\n\t\treturn 0\n\tend 'produced'\n\n\treturn 1\nend 'main'\n"
+let RegallocLiveRowWalksScaleWithTheLiveSetFixtureFooter = "\n\treturn v0 + v1 + v2 + v3\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tlet answer = work((spelled.byteLength() and 0xFFFF) as Word)\n\n\tif answer > 0 'produced'\n\t\treturn 0\n\tend 'produced'\n\n\treturn 1\nend 'main'\n"
 
 function rowWalkFixtureSource(repetitions BlockRepetition) returns String
-	var out = FixtureHeader
+	var out = RegallocLiveRowWalksScaleWithTheLiveSetFixtureHeader
 
 	for _ in 0 upto repetitions 'eachBlock'
 		out.append(FixtureBlock)
 	end 'eachBlock'
 
-	out.append(FixtureFooter)
+	out.append(RegallocLiveRowWalksScaleWithTheLiveSetFixtureFooter)
 	return out
 end 'rowWalkFixtureSource'
 
@@ -65,7 +59,7 @@ function rowWordsFor(dir FilePath, appDirName String, repetitions BlockRepetitio
 end 'rowWordsFor'
 
 test 'a live row walk costs its live values, not the value space'
-	requireHeldOutsideCheckout(CaseDirName, check: RowWalksScaleWithTheLiveSet.create())
+	requireHeldOutsideCheckout(RegallocLiveRowWalksScaleWithTheLiveSetCaseDirName, check: RowWalksScaleWithTheLiveSet.create())
 end 'a live row walk costs its live values, not the value space'
 
 type RowWalksScaleWithTheLiveSet implements OutsideCheckoutCase

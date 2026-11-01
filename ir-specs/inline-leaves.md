@@ -2653,8 +2653,8 @@ func @walk {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
   __il_body#14:
-    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
@@ -2896,8 +2896,8 @@ func @walk {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
   __il_body#14:
-    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
@@ -3150,8 +3150,8 @@ func @walk {
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
   __il_body#14:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.leaRdata x1, __str_rec_1  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
@@ -3400,8 +3400,8 @@ func @walk {
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
   __il_body#14:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.leaRdata x1, __str_rec_1  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x4, [x3 + 8]

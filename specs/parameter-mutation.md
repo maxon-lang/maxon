@@ -415,7 +415,7 @@ through it writes read-only memory. Refusing the call is what makes that unreach
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function grow(s String) returns Integer
+function grow(s mutable String) returns Integer
 	s.append("XY")
 	return s.byteLength()
 end 'grow'
@@ -435,7 +435,7 @@ A `var` String owns a real heap record, so the same helper is legal on it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function grow(s String) returns Integer
+function grow(s mutable String) returns Integer
 	s.append("XY")
 	return s.byteLength()
 end 'grow'
@@ -728,7 +728,7 @@ typealias Integer = int(i64.min to i64.max)
 
 let GREETING = "hi"
 
-function grow(s String) returns Integer
+function grow(s mutable String) returns Integer
 	s.append("XY")
 	return s.byteLength()
 end 'grow'
@@ -749,7 +749,7 @@ typealias Integer = int(i64.min to i64.max)
 
 var greeting = "hi"
 
-function grow(s String) returns Integer
+function grow(s mutable String) returns Integer
 	s.append("XY")
 	return s.byteLength()
 end 'grow'
@@ -1875,7 +1875,7 @@ type Holder
 	end 'create'
 end 'Holder'
 
-function grow(s String)
+function grow(s mutable String)
 	s.append("XY")
 end 'grow'
 

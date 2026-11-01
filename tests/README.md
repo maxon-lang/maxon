@@ -87,8 +87,9 @@ tests/
       expected-tree/             stored names only  — see rule 1
       expected-stdout.txt  expected-stderr.txt  expected-exit.txt  argv.txt?
   testCommand/
-    fixtures.maxtest             the shared half: paths, argv, the staging under `temp/testCommand/`, the two corpus guards
+    fixtures.maxtest             the shared half: paths, argv, the staging under `temp/testCommand/`, the flag spellings (`--list`, `--build`, `--json`), the `binary` key, the clean exit, the two corpus guards
     <case>.maxtest               ONE spawning `test` per file - see rule 5
+    duplicate-private-functions-refused.maxtest      a free function declared twice in one directory is a compile error naming each later declaration, never a crash
     list-build.maxtest           `--list --build --json` names an absolute binary with its sidecar; each listed `select` runs one test
     no-debug-info.maxtest        `--list --build --json --no-debug-info` builds the binary with no sidecar beside it
     a-test-project-compiles-the-sources-its-project-lists.maxtest      `maxon test` of a project whose `.maxproj` lists `.` and `../shared` compiles the sibling, and its test passes
@@ -567,10 +568,12 @@ tests/
     WarmRebuildHarness.maxon                the shared half: the `verify-warm-rebuild` spawn, which asserts `PASS immutable:`
     warm-equals-cold.maxtest                `verify-warm-rebuild` holds on a program whose parses mint instances
     filed-type-reuse.maxtest                a bytes-only edit re-parses one file when a parse files a type
-    a-literal-cast-picking-an-overload-leaves-the-reused-parse-as-merged.maxtest a literal cast that picks an overload leaves the reused parse as merged
+    a-literal-cast-leaves-the-reused-parse-as-merged.maxtest a literal cast leaves the reused parse as merged
     an-inline-record-keeps-its-reused-layout-as-merged.maxtest an inline record leaves its reused layout as merged
     a-second-program-reuses-library-parses.maxtest    a second program in one session reuses every library parse and equals its cold compile
     a-shadowing-program-parses-the-library-cold.maxtest a program shadowing a library type parses the library cold, still equal to cold
+    a-program-with-top-level-names-two-directories-declare-rebuilds-warm.maxtest a bytes-only edit rebuilds warm, determinism and library reuse hold, in a program whose directories each declare a type and a binding of one name
+    a-program-with-top-level-names-two-directories-declare-rechecks-cleanly.maxtest `verify-recheck` agrees with itself on that program and clears an undone edit
     fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
   mcp/
     McpHarness.maxon                        the shared half: stdio and `--http` sessions, the debug tool readers, the spec-file staging, and JSON helpers
@@ -1459,7 +1462,7 @@ the case asserts the driver's invalidation property: the edit re-parses the edit
 Every case also asserts the driver's `PASS immutable:` line (`spawnVerify`): each parse the warm compile
 reuses is the same object the first merge left, and every part of it reads the same after both pipelines
 and the second merge. Two fixtures exist for it, each in a file the edit leaves alone: `literal-casts/`
-passes a cast literal to one of two overloads whose parameters are ranged, and `inline-record/` declares a
+binds a cast literal to a `var` of a ranged alias and passes it on, and `inline-record/` declares a
 record of three `int(0 to 255)` fields, whose packing each compile settles.
 
 The `a-…-reuses-library-parses` cases assert the driver's library-reuse property: in one session, later
@@ -1468,7 +1471,9 @@ each emits. The case name says what its fixture's program declares: `library-reu
 `own-types/`, `own-type-names/` (type names different from the first's), `iterating/` (an interface),
 `managed-clone/` (nested managed elements cloned), `batch-shape/` (per-case directories after a primer
 of another shape) and `library-interface-aliases/` (typealiases implementing `ElementIndex` and
-`FullRangeFloat`, which move the library hash, so the driver's sibling program is what serves its third). `shadowing/` declares its own `Clock`, and its case asserts the library is parsed cold
+`FullRangeFloat`, which move the library hash, so the driver's sibling program is what serves its third)
+and `contested-names/` (directories `a` and `b` each declare a `Box` and a `counter`, so the names are minted
+`<dir>~Name`; its two cases run `verify-warm-rebuild` and `verify-recheck` over it). `shadowing/` declares its own `Clock`, and its case asserts the library is parsed cold
 instead (`library parsed cold (shadowed)`). `contested-library-function/` declares `sleep` in two
 per-case directories, which `stdlib/Sleep.maxon` also declares, and its case asserts the same
 (`library parsed cold (namesOverlap)`).

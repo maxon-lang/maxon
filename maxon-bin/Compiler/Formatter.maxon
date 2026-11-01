@@ -258,13 +258,13 @@ function authorLeftBlankBetween(above LineNumber, below LineNumber) returns bool
 	return below >= above + LinesInABlankSeparation
 end 'authorLeftBlankBetween'
 
-function joinedWith(joined String, piece String) returns String
+function joinedWithPiece(joined String, piece String) returns String
 	if joined.isEmpty() 'first'
 		return piece
 	end 'first'
 
 	return "{joined}{CommentGap}{piece}"
-end 'joinedWith'
+end 'joinedWithPiece'
 
 // The lines whose leading, or whose trailing, comments have already been written out. Each is
 // reachable from several emit paths and must be written by exactly one of them.
@@ -449,7 +449,7 @@ type CommentMapBuilder
 	function anchorToToken(span CommentSpan, anchored InPlaceCommentMap)
 		let text = self.lines.textBetween(span.startByte, to: span.endByte)
 		let before = try anchored.get(span.followingToken) otherwise ""
-		anchored.upsert(span.followingToken, value: joinedWith(before, piece: text))
+		anchored.upsert(span.followingToken, value: joinedWithPiece(before, piece: text))
 	end 'anchorToToken'
 
 	function takeBlock(span CommentSpan)
@@ -475,9 +475,9 @@ type CommentMapBuilder
 		end 'newLine'
 
 		if not continuation and self.codePrecedes(line, column: column) 'afterCode'
-			self.trailingText = joinedWith(self.trailingText, piece: text)
+			self.trailingText = joinedWithPiece(self.trailingText, piece: text)
 		end 'afterCode' else 'beforeCode'
-			self.leadingText = joinedWith(self.leadingText, piece: text)
+			self.leadingText = joinedWithPiece(self.leadingText, piece: text)
 		end 'beforeCode'
 
 		self.lineContinues = self.lineContinues or continuation
@@ -2149,8 +2149,8 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray thr
 		// `Directory.list` answers in FILESYSTEM order, which is not stable across hosts and would make
 		// the `formatted:` lines a different list on every machine. Directories go onto the stack
 		// DESCENDING so they come back off ascending; files are appended ascending as they are found.
-		subdirectories.sort(function(a FilePath, b FilePath) gives comparePathSpelling(b, right: a))
-		here.sort(function(a FilePath, b FilePath) gives comparePathSpelling(a, right: b))
+		subdirectories.sortBy(function(a FilePath, b FilePath) gives comparePathSpelling(b, right: a))
+		here.sortBy(function(a FilePath, b FilePath) gives comparePathSpelling(a, right: b))
 
 		for subdirectory in subdirectories 'eachSubdirectory'
 			pending.push(subdirectory)
@@ -2170,8 +2170,6 @@ end 'collectFormattableFiles'
 
 // A subtree `fmt` must not descend into: another checkout, or a directory taken out of every project.
 function prunedSubdirectory(dir FilePath) returns bool
-	// Interpolated so the argument is a committed `String` — a bare module-`let` is ambiguous between
-	// `join`'s two overloads, the same reason `Compiler.holdsIgnoreMarker` spells its name this way.
 	let marker = dir.join("{GitCheckoutMarkerName}")
 	return holdsIgnoreMarker(dir) or Directory.exists(marker) or File.exists(marker)
 end 'prunedSubdirectory'

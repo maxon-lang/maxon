@@ -1,5 +1,4 @@
-let CaseDirName = "build-a-library-edit-recompiles"
-let OutputStem = "program"
+let BuildALibraryEditRecompilesCaseDirName = "build-a-library-edit-recompiles"
 let EditedStdlibFile = "stdlib/Sleep.maxon"
 let EditedRuntimeFile = "runtime/Clock.maxon"
 let EditedUnicodeTable = "stdlib/helpers/string/ucd_supp.bin"
@@ -7,7 +6,7 @@ let UnicodeTableFileName = "ucd_supp.bin"
 let AppendedLine = "\n// appended by build-a-library-edit-recompiles\n"
 
 test 'an edit to a standard library or runtime file the compiler reads compiles the program again'
-	requireHeldInAnInstallOutsideCheckout(CaseDirName, check: LibraryEditRecompiles.create())
+	requireHeldInAnInstallOutsideCheckout(BuildALibraryEditRecompilesCaseDirName, check: LibraryEditRecompiles.create())
 end 'an edit to a standard library or runtime file the compiler reads compiles the program again'
 
 type LibraryEditRecompiles implements OutsideCheckoutCase
@@ -36,15 +35,15 @@ type LibraryEditRecompiles implements OutsideCheckoutCase
 end 'LibraryEditRecompiles'
 
 function rewriteWithItsOwnBytes(dir FilePath, relative String)
-	let spelled = try FilePath.from(relative) otherwise panic("{CaseDirName}: the gate could not run - '{relative}' is not a spellable path")
+	let spelled = try FilePath.from(relative) otherwise panic("{BuildALibraryEditRecompilesCaseDirName}: the gate could not run - '{relative}' is not a spellable path")
 	let file = spelled.resolve(dir)
 	let bytes = fileBytes(file)
 
-	try File.writeBinary(file, content: bytes) otherwise panic("{CaseDirName}: the gate could not run - could not write {file.toString()}.")
+	try File.writeBinary(file, content: bytes) otherwise panic("{BuildALibraryEditRecompilesCaseDirName}: the gate could not run - could not write {file.toString()}.")
 end 'rewriteWithItsOwnBytes'
 
 function appendedTo(dir FilePath, relative String) returns FilePath
-	let spelled = try FilePath.from(relative) otherwise panic("{CaseDirName}: the gate could not run - '{relative}' is not a spellable path")
+	let spelled = try FilePath.from(relative) otherwise panic("{BuildALibraryEditRecompilesCaseDirName}: the gate could not run - '{relative}' is not a spellable path")
 	let file = spelled.resolve(dir)
 	let text = fileText(file)
 	writeStagedFile(file, content: "{text}{AppendedLine}")

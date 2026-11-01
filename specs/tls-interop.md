@@ -3239,7 +3239,7 @@ type InteropHandler implements HttpHandler
 			plaintext gives "plaintext"
 			tls(protocol, _, alpn, chain) gives "{protocol.name} alpn={alpnName(alpn)} {chainSummary(chain)}"
 		end 'security'
-		let summary = "{request.method().name} {request.url().path()}?{query} body={request.body()} {connection}\n"
+		let summary = "{request.method().name} {request.url().path}?{query} body={request.body()} {connection}\n"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'

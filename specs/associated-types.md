@@ -2613,7 +2613,7 @@ function main() returns ExitCode
 	return 1
 end 'main'
 
-// --- file: z.maxon
+// --- file: z/z.maxon
 typealias Level = int(0 to 3)
 
 export function smallOk() returns bool
@@ -2670,7 +2670,7 @@ function main() returns ExitCode
 	return 1
 end 'main'
 
-// --- file: z.maxon
+// --- file: z/z.maxon
 typealias Percent = float(0.0 to 1.0)
 
 export function smallOk() returns bool
@@ -2685,7 +2685,7 @@ error E3010: <fragment>:29:28: unneeded cast: 'Percent' already fits in 'Percent
 <!-- test: an-instance-bound-result-reads-its-alias-where-the-instance-is-written -->
 An interface instance's result is typed by the alias its binding names in the file that writes the instance, not by a same-named alias of the interface's file.
 ```maxon
-// --- file: a.maxon
+// --- file: a/a.maxon
 typealias Level = int(0 to 100)
 
 export interface Cursor uses Element
@@ -2732,7 +2732,7 @@ end 'main'
 <!-- test: error.an-exported-conformance-with-a-file-private-alias-is-refused -->
 An interface instance written in the interface's file names that file's file-private `Level`. `Tick` binds the interface's `Element` to it in its `implements` clause and `LevelCursor` is the alias of the instance, and neither may be exported over a file-private alias, so a file with its own `Level` can never call through them.
 ```maxon
-// --- file: a.maxon
+// --- file: a/a.maxon
 typealias Level = int(0 to 100)
 
 export interface Cursor uses Element
@@ -2769,8 +2769,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:9:13: exported type 'Tick' names file-private typealias 'Level' in its implements clause
-error E3167: <fragment>:21:18: exported typealias 'LevelCursor' names file-private typealias 'Level' in its target
+error E3167: a/<fragment>:9:13: exported type 'a.Tick' names file-private typealias 'Level' in its implements clause
+error E3167: a/<fragment>:21:18: exported typealias 'a.LevelCursor' names file-private typealias 'Level' in its target
 ```
 
 <!-- test: error.associated-return-bound-to-a-generic-instance -->
@@ -4100,6 +4100,54 @@ end 'main'
 ```maxoncstderr
 error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
   - current() returns String (expected current() returns Pos)
+```
+
+
+### …and a clause that disagrees with itself about an inherited name is refused
+
+⚖ `Child` redeclares `Parent`'s `uses Element`, and the clause binds the name twice: `Child with Whole`
+and `Parent with Real`. The clause entry is consulted before the declaring entry, so the two routes to
+`Parent`'s slot compare different requirements, and one `current()` cannot satisfy both.
+
+<!-- test: error.extends.a-clause-binding-one-inherited-name-two-ways-is-refused -->
+```maxon
+interface Parent uses Element
+	function current() returns Element
+end 'Parent'
+
+interface Child extends Parent uses Element
+	function retreat()
+end 'Child'
+
+typealias Whole = int(0 to 100)
+typealias Real = float(f64.min to f64.max)
+
+type Walker implements Child with Whole, Parent with Real
+	var pos as Whole
+
+	static function create(p Whole) returns Self
+		return Self{pos: p}
+	end 'create'
+
+	function current() returns Whole
+		return pos
+	end 'current'
+
+	function retreat()
+		pos = pos - 1
+	end 'retreat'
+end 'Walker'
+
+function main() returns ExitCode
+	var w = Walker.create(8)
+	w.retreat()
+	print("{w.current()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:13:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+  - current() returns Whole (expected current() returns Real)
 ```
 
 

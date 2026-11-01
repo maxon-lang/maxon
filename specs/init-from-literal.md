@@ -130,39 +130,12 @@ end 'main'
 len: 0
 ```
 
-<!-- test: init-from-string-literal-init-reassigns-its-parameter -->
-An `init` that reassigns its parameter takes it by reference, and the literal is handed to it exactly as the
-written-out `Tag.init("hello")` hands its argument: in a cell of its own.
-```maxon
-type Tag implements InitableFromStringLiteral
-	export let text as String
-
-	static function init(value String) returns Tag
-		value = "{value}!"
-
-		return Self{text: value}
-	end 'init'
-end 'Tag'
-
-function main() returns ExitCode
-	let tag = Tag from "hello"
-	let written = Tag.init("hello")
-	print("{tag.text} {written.text}\n")
-
-	return 0
-end 'main'
-```
-```stdout
-hello! hello!
-```
-
 ### From a character literal
 
-`<Type> from 'A'` is the same sugar over `stdlib/Builtins.maxon:47`'s
-`interface InitableFromCharLiteral`, whose `init` takes a `Character` where the String form's takes a
-`String`. It desugars to the identical `<Type>.init(<the literal>)` call, so the arity check, the argument
-type check, the ownership of the returned struct and the E3004 for a type with no `init` are the ones every
-other static call gets.
+`<Type> from 'A'` is the same sugar over `stdlib/Builtins.maxon`'s `interface InitableFromCharLiteral`, whose
+`init` takes a `Character` where the String form's takes a `String`. It desugars to the identical
+`<Type>.init(<the literal>)` call, so the arity check, the argument type check, the ownership of the returned
+struct and the E3004 for a type with no `init` are the ones every other static call gets.
 
 <!-- test: init-from-char-literal-basic -->
 ```maxon

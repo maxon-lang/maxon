@@ -699,7 +699,7 @@ end 'main'
 <!-- test: a-bare-roster-member-inside-an-extension-body-resolves -->
 <!-- tier: stdlib -->
 An `extension` body's bare `count()` / `get(i)` is the same rule one declaration over, and it is what
-`stdlib/Array.maxon`'s `contains(sequence)` is written in. The sibling walk cannot see them — they belong
+`stdlib/Array.maxon`'s `containsSequence(sequence)` is written in. The sibling walk cannot see them — they belong
 to the type's OWN body — so the call was `E3004 call to undefined function 'get'`, a diagnostic no reader
 ever saw because the `E3005` the untyped result then caused is THROWN and discards the file's recorded
 diagnostics. The extension member is not called: The compiler compiles every declared body, so the compile IS the

@@ -1689,16 +1689,13 @@ end 'main'
 71
 ```
 
-### A child interface OVERLOADING an inherited name: two requirements, two slots, two impls
+### A child interface requirement beside an inherited one: two slots, two impls
 
-`Base.label()` and `Derived.label(width)` are DISTINCT requirements and take DISTINCT witness slots, so the
-argument COUNT is what tells a dispatch which one it means. ⚠ **A resolver that matched by NAME alone would
-bind both calls to whichever requirement it reached first and then report the OTHER one's arity against the
-call: `E3036 'Derived.label' expects 1 argument(s) but 0 were provided`** — a sentence that is false about an
-interface inheriting a zero-argument `label()`. The two calls below must reach DIFFERENT impls, which is what
-`7` and `21` prove: a single slot serving both would return one of them twice. Target-independent.
+`Base.label()` and `Derived.scaled(width)` are two requirements and take two witness slots. The two calls below
+must reach DIFFERENT impls, which is what `7` and `21` prove: a single slot serving both would return one of
+them twice. Target-independent.
 
-<!-- test: where-clauses.inherited-overload-dispatch -->
+<!-- test: where-clauses.a-child-requirement-and-an-inherited-one-reach-different-impls -->
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -1707,7 +1704,7 @@ interface Base
 end 'Base'
 
 interface Derived extends Base
-	function label(width Code) returns Code
+	function scaled(width Code) returns Code
 end 'Derived'
 
 type Widget implements Derived
@@ -1721,9 +1718,9 @@ type Widget implements Derived
 		return self.seed
 	end 'label'
 
-	function label(width Code) returns Code
+	function scaled(width Code) returns Code
 		return self.seed * width
-	end 'label'
+	end 'scaled'
 end 'Widget'
 
 type Box uses T where T is Derived
@@ -1738,7 +1735,7 @@ type Box uses T where T is Derived
 	end 'zeroArg'
 
 	function oneArg() returns Code
-		return self.item.label(3)
+		return self.item.scaled(3)
 	end 'oneArg'
 end 'Box'
 
@@ -2095,56 +2092,6 @@ exist and the call matches none: blaming an arbitrary one prints a true sentence
 requirement. E3115 lists them all instead. ⚠ With a SINGLE requirement of the name there is nothing to
 select between and the arity is E3036's to report — that is what `where-clauses.error.witness-too-few-args`
 above pins. Target-independent.
-
-<!-- test: where-clauses.error.no-witness-requirement-of-that-arity -->
-```maxon
-typealias Code = int(0 to u32.max)
-
-interface Base
-	function label() returns Code
-end 'Base'
-
-interface Derived extends Base
-	function label(a Code, b Code) returns Code
-end 'Derived'
-
-type Widget implements Derived
-	export var seed as Code
-
-	static function create(seed Code) returns Self
-		return Self{ seed: seed }
-	end 'create'
-
-	function label() returns Code
-		return self.seed
-	end 'label'
-
-	function label(a Code, b Code) returns Code
-		return a + b
-	end 'label'
-end 'Widget'
-
-type Box uses T where T is Derived
-	export var item as T
-
-	static function create(item T) returns Self
-		return Self{ item: item }
-	end 'create'
-
-	function go() returns Code
-		return self.item.label(1)
-	end 'go'
-end 'Box'
-
-typealias WidgetBox = Box with Widget
-
-function main() returns ExitCode
-	return WidgetBox.create(Widget.create(7)).go() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3115: <fragment>:36:20: no requirement named 'label' provided by the constraints on type parameter 'T' takes 1 argument(s); they provide Derived.label(a Code, b Code) returns Code, Base.label() returns Code
-```
 
 ### The OPERATOR path refuses an ambiguity too, and for the same reason
 
@@ -2623,18 +2570,18 @@ interface HasAge
 end 'HasAge'
 
 type Person implements HasName, HasAge
-		let age as Integer
+		let years as Integer
 
 		function name() returns Integer
 				return 1
 		end 'name'
 
 		function age() returns Integer
-				return self.age
+				return self.years
 		end 'age'
 
 		static function create(age Integer) returns Self
-			return Self{age: age}
+			return Self{years: age}
 		end 'create'
 end 'Person'
 
@@ -2995,9 +2942,9 @@ end 'main'
 error E2015: specs/where-clauses/where-clauses.error.a-closure-in-an-instance-method-hashing-a-type-parameter-array.maxon:14:40: Unsupported: a closure that calls 'hash' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter — a closure inherits a witness table through its environment only for a direct dispatch on a type-parameter value, so it has none to hand on to a callee. Make the call in the method that builds the closure and let the closure use the result, or take the operation as a function parameter
 ```
 
-### A static calling an overloaded extension method on a type-parameter instance
+### A static calling a conditional extension method on a type-parameter instance
 
-<!-- test: where-clauses.a-static-calling-an-overloaded-extension-method-on-a-type-parameter-instance -->
+<!-- test: where-clauses.a-static-calling-a-conditional-extension-method-on-a-type-parameter-instance -->
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -3010,9 +2957,9 @@ type Box uses Item
 end 'Box'
 
 extension Box
-	function describe() returns HashValue
+	function plain() returns HashValue
 		return 0
-	end 'describe'
+	end 'plain'
 end 'Box'
 
 extension Box where Item is Hashable
@@ -3678,10 +3625,10 @@ end 'main'
 true false
 ```
 
-### An overloaded static takes its tables per overload
+### A static takes its tables when it dispatches
 
-<!-- test: where-clauses.an-overloaded-static-takes-the-call-sites-tables-for-the-overload-that-dispatches -->
-`pick(a, b)` dispatches through `Comparable` and `pick(n)` dispatches through nothing. Both ends of the hidden-argument ABI decide on the overload set's one name, so each call passes what its overload reserved.
+<!-- test: where-clauses.a-static-takes-the-call-sites-tables-when-it-dispatches -->
+`pick(a, b)` dispatches through `Comparable` and `bump(n)` dispatches through nothing. Both ends of the hidden-argument ABI decide on the function's own name, so each call passes what its function reserved.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3692,16 +3639,16 @@ type Pair uses T where T is Comparable
 		return a < b
 	end 'pick'
 
-	static function pick(n Integer) returns Integer
+	static function bump(n Integer) returns Integer
 		return n + 1
-	end 'pick'
+	end 'bump'
 end 'Pair'
 
 typealias IntPair = Pair with Integer
 typealias StrPair = Pair with String
 
 function main() returns ExitCode
-	print("{IntPair.pick(1, b: 2)} {StrPair.pick("b", b: "a")} {IntPair.pick(4)} {StrPair.pick(5)}\n")
+	print("{IntPair.pick(1, b: 2)} {StrPair.pick("b", b: "a")} {IntPair.bump(4)} {StrPair.bump(5)}\n")
 	return 0
 end 'main'
 ```

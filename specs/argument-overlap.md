@@ -1,28 +1,27 @@
 ---
 feature: argument-overlap
 status: stable
-keywords: [argument, overlap, alias, exclusivity, parameter, reassign, by-reference, clone, E3186]
+keywords: [argument, overlap, alias, exclusivity, parameter, mutable, by-reference, clone, E3186]
 category: memory
 ---
-# Argument overlap (E3186) — a parameter passed by reference may not overlap another argument
+# Argument overlap (E3186) — a `mutable` parameter may not overlap another argument
 
 ## Documentation
 
-A function REASSIGNS a parameter when its body assigns to the parameter itself (`h = Holder.create(5)`),
-and a reassigned parameter is passed by reference: it names the caller's storage, not a value of its
-own. A call may not pass, as one argument, storage the callee reassigns and, as another, a view of that
-same storage. Two arguments overlap when one names the other's storage or storage inside it: the same
-variable, or a variable and a field reached through it. The check compares the arguments as written — a
-root binding, then its field steps — and does not see through a call result or a `match`, `try` or
-conditional merge, each of which is a fresh counted value. A receiver is never passed by reference (a
-method cannot assign to `self`), so it is never the reassigned argument; it is still a view, and a receiver that
-overlaps an argument the method reassigns is refused like any other. Each overload of a
-name is its own callee: a call is judged against the declaration it binds to.
+A parameter declared `mutable` (`function bump(n mutable Coord, h Holder)`) is passed by reference: it
+names the caller's storage, not a value of its own, and the function may reassign it. A call may not pass,
+as one argument, storage the callee takes as a `mutable` parameter and, as another, a view of that same
+storage. Two arguments overlap when one names the other's storage or storage inside it: the same variable,
+or a variable and a field reached through it. The check compares the arguments as written — a root
+binding, then its field steps — and does not see through a call result or a `match`, `try` or conditional
+merge, each of which is a fresh counted value. A receiver is never a `mutable` argument (a method cannot
+assign to `self`); it is still a view, and a receiver that overlaps an argument the method takes as
+`mutable` is refused like any other. A call is judged against the declaration of the function it names.
 
-The refusal is E3186, reported at the argument the callee does NOT reassign:
+The refusal is E3186, reported at the argument the callee does NOT take as `mutable`:
 
 ```text
-error E3186: argument 'h.inner' overlaps argument 'h', which 'rebindThenRead' reassigns (parameter 'h') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.inner.clone()'
+error E3186: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
 ```
 
 A by-reference parameter points into the caller's storage without a count of its own, so reassigning
@@ -37,198 +36,6 @@ parameter, `readThenClear(r, log: r.ids)`, `assign(a, src: a)` and `a.absorb(a)`
 is visible through both parameters because they name one record.
 
 ## Tests
-
-<!-- test: error.a-field-handed-beside-its-owner-to-a-callee-that-reassigns-the-owner -->
-`rebindThenRead` assigns to `h`, so `h` is passed by reference and the call replaces the record `x`
-was read out of.
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Inner
-	export var v as Coord
-
-	static function create(v Coord) returns Inner
-		return Inner{v: v}
-	end 'create'
-end 'Inner'
-
-type Holder
-	export let inner as Inner
-
-	static function create(v Coord) returns Holder
-		return Holder{inner: Inner.create(v)}
-	end 'create'
-end 'Holder'
-
-function rebindThenRead(x Inner, h Holder) returns Coord
-	h = Holder.create(5)
-	let filler = Inner.create(77)
-	return x.v + filler.v - 77 + h.inner.v - 5
-end 'rebindThenRead'
-
-function main() returns ExitCode
-	var h = Holder.create(1234)
-	let got = rebindThenRead(h.inner, h: h)
-	print("{got} {h.inner.v}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3186: <fragment>:28:27: argument 'h.inner' overlaps argument 'h', which 'rebindThenRead' reassigns (parameter 'h') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.inner.clone()'
-```
-
-<!-- test: error.a-reassigned-parameter-first-and-a-field-of-it-second -->
-The same overlap with the reassigned parameter written first: the refusal is still at the argument the
-callee does not reassign, which is now the second.
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Inner
-	export var v as Coord
-
-	static function create(v Coord) returns Inner
-		return Inner{v: v}
-	end 'create'
-end 'Inner'
-
-type Holder
-	export let inner as Inner
-
-	static function create(v Coord) returns Holder
-		return Holder{inner: Inner.create(v)}
-	end 'create'
-end 'Holder'
-
-function rebindThenRead(h Holder, x Inner) returns Coord
-	h = Holder.create(5)
-	let filler = Inner.create(77)
-	return x.v + filler.v - 77 + h.inner.v - 5
-end 'rebindThenRead'
-
-function main() returns ExitCode
-	var h = Holder.create(1234)
-	let got = rebindThenRead(h, x: h.inner)
-	print("{got} {h.inner.v}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3186: <fragment>:28:33: argument 'h.inner' overlaps argument 'h', which 'rebindThenRead' reassigns (parameter 'h') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.inner.clone()'
-```
-
-<!-- test: error.only-the-overload-that-reassigns-refuses-the-overlap -->
-Two overloads of `settle` take the same arguments; the three-parameter one only reads `h`, the
-two-parameter one reassigns it. The call bound to the reader is legal, and only the call bound to the
-reassigning overload is refused.
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Inner
-	export var v as Coord
-
-	static function create(v Coord) returns Inner
-		return Inner{v: v}
-	end 'create'
-end 'Inner'
-
-type Holder
-	export let inner as Inner
-
-	static function create(v Coord) returns Holder
-		return Holder{inner: Inner.create(v)}
-	end 'create'
-end 'Holder'
-
-function settle(x Inner, h Holder, scale Coord) returns Coord
-	return (x.v + h.inner.v) * scale
-end 'settle'
-
-function settle(x Inner, h Holder) returns Coord
-	h = Holder.create(5)
-	let filler = Inner.create(77)
-	return x.v + filler.v - 77 + h.inner.v - 5
-end 'settle'
-
-function main() returns ExitCode
-	var h = Holder.create(1234)
-	let doubled = settle(h.inner, h: h, scale: 2)
-	let got = settle(h.inner, h: h)
-	print("{doubled} {got} {h.inner.v}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3186: <fragment>:33:19: argument 'h.inner' overlaps argument 'h', which 'settle' reassigns (parameter 'h') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.inner.clone()'
-```
-
-<!-- test: the-overload-that-only-reads-accepts-the-overlap -->
-The call with `scale` binds the reading overload and runs; the call without it binds the reassigning overload and
-passes a clone.
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Inner
-	export var v as Coord
-
-	static function create(v Coord) returns Inner
-		return Inner{v: v}
-	end 'create'
-end 'Inner'
-
-type Holder
-	export let inner as Inner
-
-	static function create(v Coord) returns Holder
-		return Holder{inner: Inner.create(v)}
-	end 'create'
-end 'Holder'
-
-function settle(x Inner, h Holder, scale Coord) returns Coord
-	return (x.v + h.inner.v) * scale
-end 'settle'
-
-function settle(x Inner, h Holder) returns Coord
-	h = Holder.create(5)
-	let filler = Inner.create(77)
-	return x.v + filler.v - 77 + h.inner.v - 5
-end 'settle'
-
-function main() returns ExitCode
-	var h = Holder.create(1234)
-	let doubled = settle(h.inner, h: h, scale: 2)
-	let got = settle(h.inner.clone(), h: h)
-	print("{doubled} {got} {h.inner.v}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-4936 1234 5
-```
-
-<!-- test: error.an-array-handed-twice-to-a-callee-that-reassigns-one-parameter -->
-`look` reads an element out of `a` and assigns a fresh array to `b`, and both are `x`.
-```maxon
-typealias StringArray = Array with String
-
-function look(a StringArray, b StringArray)
-	let s = try a.get(0) otherwise ""
-	b = StringArray.create()
-	print("[{s}] {b.count()}\n")
-end 'look'
-
-function main() returns ExitCode
-	var x = StringArray.create()
-	x.push("hello {40 + 2} world, long enough for the heap")
-	look(x, b: x)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3186: <fragment>:13:7: argument 'x' overlaps argument 'x', which 'look' reassigns (parameter 'b') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'x.clone()'
-```
 
 <!-- test: an-array-handed-twice-to-a-callee-that-clears-one-parameter -->
 `look` reads an element out of `a` and clears `b`, and both are `x`. The element is counted, so it
@@ -397,165 +204,6 @@ end 'main'
 true 1
 ```
 
-<!-- test: a-clone-of-the-array-survives-the-parameter-being-reassigned -->
-`x.clone()` is a second array, so `look` reassigning `b` leaves the element it read out of the copy
-intact, and the caller's `x` is the fresh array the callee assigned.
-```maxon
-typealias StringArray = Array with String
-
-function look(a StringArray, b StringArray)
-	let s = try a.get(0) otherwise ""
-	b = StringArray.create()
-	print("[{s}] {a.count()} {b.count()}\n")
-end 'look'
-
-function main() returns ExitCode
-	var x = StringArray.create()
-	x.push("hello {40 + 2} world, long enough for the heap")
-	look(x.clone(), b: x)
-	print("{x.count()}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-[hello 42 world, long enough for the heap] 1 0
-0
-```
-
-<!-- test: a-clone-of-the-field-survives-the-owner-being-reassigned -->
-`h.inner.clone()` is a record of its own, so `rebindThenRead` replacing `h` leaves `x` reading 1234, and
-the caller's `h` is the record the callee assigned.
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Inner
-	export var v as Coord
-
-	static function create(v Coord) returns Inner
-		return Inner{v: v}
-	end 'create'
-end 'Inner'
-
-type Holder
-	export let inner as Inner
-
-	static function create(v Coord) returns Holder
-		return Holder{inner: Inner.create(v)}
-	end 'create'
-end 'Holder'
-
-function rebindThenRead(x Inner, h Holder) returns Coord
-	h = Holder.create(5)
-	let filler = Inner.create(77)
-	return x.v + filler.v - 77 + h.inner.v - 5
-end 'rebindThenRead'
-
-function main() returns ExitCode
-	var h = Holder.create(1234)
-	let got = rebindThenRead(h.inner.clone(), h: h)
-	print("{got} {h.inner.v}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1234 5
-```
-
-<!-- test: error.a-receiver-handed-beside-an-argument-the-method-reassigns -->
-A receiver is never the reassigned side, but it is a view like any other argument: `settle` assigns to `other`, so
-handing it `h` while `h` is also the receiver is the same overlap.
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Inner
-	export var v as Coord
-
-	static function create(v Coord) returns Inner
-		return Inner{v: v}
-	end 'create'
-end 'Inner'
-
-type Holder
-	export let inner as Inner
-
-	static function create(v Coord) returns Holder
-		return Holder{inner: Inner.create(v)}
-	end 'create'
-
-	function settle(other Holder) returns Coord
-		other = Holder.create(5)
-		let filler = Inner.create(77)
-		return self.inner.v + filler.v - 77 + other.inner.v - 5
-	end 'settle'
-end 'Holder'
-
-function main() returns ExitCode
-	var h = Holder.create(1234)
-	let got = h.settle(h)
-	print("{got} {h.inner.v}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3186: <fragment>:28:12: argument 'h' overlaps argument 'h', which 'settle' reassigns (parameter 'other') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
-```
-
-<!-- test: a-call-result-and-a-merge-are-fresh-counted-values-beside-a-reassigned-parameter -->
-The check compares arguments as written, so a field handed back by a call and a field chosen by a conditional are
-each a counted value of their own: the callee reassigning `h` leaves the record `x` names alive.
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Inner
-	export var v as Coord
-
-	static function create(v Coord) returns Inner
-		return Inner{v: v}
-	end 'create'
-end 'Inner'
-
-type Holder
-	export let inner as Inner
-
-	static function create(v Coord) returns Holder
-		return Holder{inner: Inner.create(v)}
-	end 'create'
-end 'Holder'
-
-function rebindThenRead(x Inner, h Holder) returns Coord
-	h = Holder.create(5)
-	let filler = Inner.create(77)
-	return x.v + filler.v - 77 + h.inner.v - 5
-end 'rebindThenRead'
-
-function same(inner Inner) returns Inner
-	return inner
-end 'same'
-
-function main() returns ExitCode
-	var h = Holder.create(1234)
-	let viaCall = rebindThenRead(same(h.inner), h: h)
-	print("{viaCall} {h.inner.v}\n")
-	var g = Holder.create(99)
-	let viaMerge = rebindThenRead(g.inner if viaCall > 0 else Inner.create(1), h: g)
-	print("{viaMerge} {g.inner.v}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1234 5
-99 5
-```
-
 <!-- test: a-string-appended-to-itself -->
 `append` writes its receiver, which is also its argument, and a callee that only writes may overlap: the argument is
 a counted value taken before the call.
@@ -572,4 +220,195 @@ end 'main'
 ```
 ```stdout
 abab
+```
+
+<!-- test: error.a-field-handed-beside-its-owner-to-a-callee-that-takes-the-field-mutable -->
+`bump` takes `n` as `mutable`, so `n` is the caller's `h.n`, and the record `h` handed beside it is a view of the
+storage `bump` reassigns.
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+type Holder
+	export var n as Coord
+
+	static function create(n Coord) returns Holder
+		return Holder{n: n}
+	end 'create'
+
+	function copy() returns Holder
+		return Holder.create(self.n)
+	end 'copy'
+end 'Holder'
+
+function bump(n mutable Coord, h Holder) returns Coord
+	n = n + 1
+	return h.n
+end 'bump'
+
+function main() returns ExitCode
+	var h = Holder.create(5)
+	print("{bump(h.n, h: h)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3186: <fragment>:23:23: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+```
+
+<!-- test: error.a-record-handed-first-and-a-field-of-it-to-a-mutable-parameter-second -->
+The overlap is the same whichever order the two arguments are written in.
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+type Holder
+	export var n as Coord
+
+	static function create(n Coord) returns Holder
+		return Holder{n: n}
+	end 'create'
+end 'Holder'
+
+function bump(h Holder, n mutable Coord) returns Coord
+	n = n + 1
+	return h.n
+end 'bump'
+
+function main() returns ExitCode
+	var h = Holder.create(5)
+	print("{bump(h, n: h.n)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3186: <fragment>:19:15: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+```
+
+<!-- test: error.only-the-function-that-takes-the-parameter-mutable-refuses-the-overlap -->
+`peek` takes `n` by value, so the call to it is legal; `settle` takes `n` as `mutable`, and only the call to
+`settle` is refused.
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+type Holder
+	export var n as Coord
+
+	static function create(n Coord) returns Holder
+		return Holder{n: n}
+	end 'create'
+end 'Holder'
+
+function settle(n mutable Coord, h Holder) returns Coord
+	n = n + 1
+	return h.n
+end 'settle'
+
+function peek(n Coord, h Holder) returns Coord
+	return n + h.n
+end 'peek'
+
+function main() returns ExitCode
+	var h = Holder.create(5)
+	print("{peek(h.n, h: h)}\n")
+	print("{settle(h.n, h: h)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3186: <fragment>:24:25: argument 'h' overlaps argument 'h.n', which 'settle' reassigns (parameter 'n') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+```
+
+<!-- test: the-function-that-takes-the-parameter-by-value-accepts-the-overlap -->
+`peek` reads `n` and `h` and reassigns nothing, so handing it a record and a field of that record is legal.
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+type Holder
+	export var n as Coord
+
+	static function create(n Coord) returns Holder
+		return Holder{n: n}
+	end 'create'
+end 'Holder'
+
+function peek(n Coord, h Holder) returns Coord
+	return n + h.n
+end 'peek'
+
+function main() returns ExitCode
+	let h = Holder.create(5)
+	print("{peek(h.n, h: h)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: error.a-receiver-handed-beside-a-field-the-method-takes-mutable -->
+A receiver is a view of its record, so a method that takes a field of the receiver as `mutable` is refused at the
+receiver.
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+type Holder
+	export var n as Coord
+
+	static function create(n Coord) returns Holder
+		return Holder{n: n}
+	end 'create'
+
+	function settle(m mutable Coord) returns Coord
+		m = m + 1
+		return self.n
+	end 'settle'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create(5)
+	print("{h.settle(h.n)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3186: <fragment>:19:10: argument 'h' overlaps argument 'h.n', which 'settle' reassigns (parameter 'm') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+```
+
+<!-- test: a-call-result-beside-a-mutable-parameter-is-a-fresh-counted-value -->
+`h.copy()` is a fresh record, not a view of `h.n`'s storage, so it may travel beside the `mutable` field, and the
+copy keeps the value it was built from.
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+type Holder
+	export var n as Coord
+
+	static function create(n Coord) returns Holder
+		return Holder{n: n}
+	end 'create'
+
+	function copy() returns Holder
+		return Holder.create(self.n)
+	end 'copy'
+end 'Holder'
+
+function bump(n mutable Coord, h Holder) returns Coord
+	n = n + 1
+	return h.n
+end 'bump'
+
+function main() returns ExitCode
+	var h = Holder.create(5)
+	let seen = bump(h.n, h: h.copy())
+	print("{seen} {h.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 6
 ```

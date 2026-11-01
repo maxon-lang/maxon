@@ -603,41 +603,6 @@ end 'main'
 12 52
 ```
 
-<!-- test: default-values.overloads-agreeing-on-a-defaulted-first-parameter-may-name-it -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-function scale(factor Integer = 2, unit String) returns String
-	return "{factor} {unit}"
-end 'scale'
-
-function scale(factor Integer = 2, unit bool) returns String
-	if unit 'metric'
-		return "{factor} metric"
-	end 'metric'
-
-	return "{factor} imperial"
-end 'scale'
-
-function main() returns ExitCode
-	let named = scale(factor: 3, unit: "cm")
-	let flagged = scale(factor: 4, unit: true)
-	let namedDefault = scale(unit: "mm")
-	let flaggedDefault = scale(unit: false)
-	print("{named}\n{flagged}\n{namedDefault}\n{flaggedDefault}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-3 cm
-4 metric
-2 mm
-2 imperial
-```
-
 <!-- test: default-values.an-async-call-may-name-a-defaulted-first-parameter -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

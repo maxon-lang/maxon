@@ -44,35 +44,6 @@ leak gate against the reciprocal over-retain.
 
 ## Tests
 
-<!-- test: byref-param-reassign-then-read-borrow -->
-Reading a by-ref managed param, reassigning it, then using the pre-read borrow.
-```maxon
-typealias Int = int(0 to 1000000)
-
-type Node
-	export var tag as Int
-
-	static function create(t Int) returns Self
-		return Self{tag: t}
-	end 'create'
-end 'Node'
-
-function swap(n Node) returns Int
-	view old = n
-	n = Node.create(99)
-	return old.tag
-end 'swap'
-
-function main() returns ExitCode
-	var owned = Node.create(5)
-	let r = swap(owned)
-	return r
-end 'main'
-```
-```exitcode
-5
-```
-
 <!-- test: module-global-reassign-then-read-borrow -->
 Reading a module global, reassigning it, then using the pre-read borrow.
 ```maxon
@@ -128,35 +99,6 @@ end 'main'
 ```
 ```exitcode
 6
-```
-
-<!-- test: borrow-dead-before-reassign-no-overacquire -->
-A borrow whose last use PRECEDES the reassignment must not be over-acquired (leak gate).
-```maxon
-typealias Int = int(0 to 1000000)
-
-type Node
-	export var tag as Int
-
-	static function create(t Int) returns Self
-		return Self{tag: t}
-	end 'create'
-end 'Node'
-
-function swap(n Node) returns Int
-	view old = n
-	let t = old.tag
-	n = Node.create(99)
-	return t
-end 'swap'
-
-function main() returns ExitCode
-	var owned = Node.create(4)
-	return swap(owned)
-end 'main'
-```
-```exitcode
-4
 ```
 
 <!-- test: unrelated-global-reassign-keeps-borrow -->

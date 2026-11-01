@@ -42,10 +42,6 @@ let BeganFieldCount = 2
 let EndedFieldCount = 4
 let ThrewFieldCount = 4
 
-// The line terminator a redirected stream can carry on Windows. Stripped from the END of a line only —
-// a `\r` the program itself wrote mid-line is its own text and stays.
-let CarriageReturn = "\r"
-
 // ⭐⭐ **READ A TEST BINARY'S STDERR AS ONE ORDERED STREAM** — protocol lines and the program's own
 // output interleaved exactly as it wrote them.
 export function parseTestEvents(stderr String) returns TestEventArray
@@ -72,14 +68,16 @@ export function parseTestEvents(stderr String) returns TestEventArray
 	return events
 end 'parseTestEvents'
 
-// One line with a trailing `\r` removed, if it had one. A lone `\r` at the end of a line split on `\n`
-// is one grapheme, which is what makes the length arithmetic exact.
+// One line with a trailing `\r` removed, if it had one: a redirected stream can carry one on Windows. Only
+// the END of a line is stripped — a `\r` the program itself wrote mid-line is its own text and stays. A
+// lone `\r` at the end of a line split on `\n` is one grapheme, which is what makes the length arithmetic
+// exact.
 function withoutTrailingReturn(line String) returns String
 	if not line.endsWith(CarriageReturn) 'noReturnToStrip'
 		return line
 	end 'noReturnToStrip'
 
-	return line.slice(line.startIndex(), length: line.count() - 1)
+	return line.sliceLength(line.startIndex(), length: line.count() - 1)
 end 'withoutTrailingReturn'
 
 // Whether one line was protocol, and what it said.

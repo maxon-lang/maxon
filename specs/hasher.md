@@ -14,7 +14,7 @@ incremental fold:
 
 ```
 var hasher = Hasher.create()
-hasher.combine(bytes)
+hasher.combineBytes(bytes)
 let digest = hasher.finalize()
 ```
 
@@ -33,7 +33,7 @@ wrapping multiply of a 64-bit fold would trip its range check.
 ### The same fold has a second, PURE face — because a mutable hasher has no expression position
 
 ```
-let digest = Hasher.combined(Hasher.combined(Hasher.empty(), bytes: name), value: name.count())
+let digest = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: name), value: name.count())
 ```
 
 `Hasher.empty()` is the state of a fold with nothing in it, and `Hasher.combined(state, ...)` takes a
@@ -58,7 +58,7 @@ after this fold moved to stdlib it is the ONE function left in it:
 
 ```
 export function mixBytes(state HashDigest, bytes ByteArray) returns HashDigest
-	return Hasher.combined(Hasher.combined(state, bytes: bytes), value: bytes.count())
+	return Hasher.combined(Hasher.combinedBytes(state, bytes: bytes), value: bytes.count())
 end 'mixBytes'
 ```
 
@@ -83,7 +83,7 @@ determinism would pass over the exact defect this pins.
 ```maxon
 function digestOf(text String) returns HashDigest
 	var hasher = Hasher.create()
-	hasher.combine(text.toByteArray())
+	hasher.combineBytes(text.toByteArray())
 	return hasher.finalize()
 end 'digestOf'
 
@@ -115,7 +115,7 @@ function main() returns ExitCode
 	byValue.combine(42)
 
 	var byByte = Hasher.create()
-	byByte.combine(b"\x2A")
+	byByte.combineBytes(b"\x2A")
 
 	print("value={byValue.finalize():016x}\n")
 	print("byte={byByte.finalize():016x}\n")
@@ -140,7 +140,7 @@ typealias PartArray = Array with String
 function foldParts(parts PartArray) returns HashDigest
 	var hasher = Hasher.create()
 	for part in parts 'each'
-		hasher.combine(part.toByteArray())
+		hasher.combineBytes(part.toByteArray())
 	end 'each'
 	return hasher.finalize()
 end 'foldParts'
@@ -173,7 +173,7 @@ typealias PartArray = Array with String
 function taggedFold(state HashDigest, text String) returns HashDigest
 	let bytes = text.toByteArray()
 	var hasher = Hasher.resume(state)
-	hasher.combine(bytes)
+	hasher.combineBytes(bytes)
 	hasher.combine(bytes.count() as HashDigest)
 	return hasher.finalize()
 end 'taggedFold'
@@ -216,11 +216,11 @@ the duplication this file exists to end.
 ```maxon
 function main() returns ExitCode
 	var first = Hasher.create()
-	first.combine("hel".toByteArray())
+	first.combineBytes("hel".toByteArray())
 	let carried = first.finalize()
 
 	var second = Hasher.resume(carried)
-	second.combine("lo".toByteArray())
+	second.combineBytes("lo".toByteArray())
 
 	print("carried={carried:016x}\n")
 	print("resumed={second.finalize():016x}\n")
@@ -243,10 +243,10 @@ the pin has to be the CROSS-face comparison and not a determinism check.
 ```maxon
 function main() returns ExitCode
 	var byObject = Hasher.create()
-	byObject.combine("hello".toByteArray())
+	byObject.combineBytes("hello".toByteArray())
 	byObject.combine(42)
 
-	let byValue = Hasher.combined(Hasher.combined(Hasher.empty(), bytes: "hello".toByteArray()), value: 42)
+	let byValue = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: "hello".toByteArray()), value: 42)
 
 	print("basis-object={Hasher.create().finalize():016x}\n")
 	print("basis-pure={Hasher.empty():016x}\n")
@@ -276,7 +276,7 @@ typealias PartArray = Array with String
 function foldParts(parts PartArray) returns HashDigest
 	var state = Hasher.empty()
 	for part in parts 'each'
-		state = Hasher.combined(state, bytes: part.toByteArray())
+		state = Hasher.combinedBytes(state, bytes: part.toByteArray())
 	end 'each'
 	return state
 end 'foldParts'
@@ -306,7 +306,7 @@ would redden here rather than silently rekeying every memo in the query spine.
 typealias PartArray = Array with String
 
 function mixBytes(state HashDigest, bytes ByteArray) returns HashDigest
-	return Hasher.combined(Hasher.combined(state, bytes: bytes), value: bytes.count() as HashDigest)
+	return Hasher.combined(Hasher.combinedBytes(state, bytes: bytes), value: bytes.count() as HashDigest)
 end 'mixBytes'
 
 function foldParts(parts PartArray) returns HashDigest

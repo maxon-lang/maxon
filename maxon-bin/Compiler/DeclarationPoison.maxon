@@ -218,19 +218,13 @@ export type DeclarationPoison
 		self.duplicated.insert(registrationName)
 	end 'noteDuplicatedFunction'
 
-	export function duplicatesAMemberOf(members NameRoster) returns bool
+	export function duplicates(registrationName ByteArray) returns bool
 		if self.duplicated.count() == 0 'nothingIsDeclaredTwice'
 			return false
 		end 'nothingIsDeclaredTwice'
 
-		for member in members 'eachMember'
-			if self.duplicated.contains(member) 'declaredTwice'
-				return true
-			end 'declaredTwice'
-		end 'eachMember'
-
-		return false
-	end 'duplicatesAMemberOf'
+		return self.duplicated.contains(registrationName)
+	end 'duplicates'
 
 	export function holdsAFailedFile() returns bool
 		return self.files.count() > 0
@@ -368,7 +362,7 @@ export type DeclarationPoison
 			return false
 		end 'noDeclarationWasRefused'
 
-		return self.refusesAPartOfFrom(overloadRegistrationBaseName(callee), reader: reader, signatures: signatures, counting: PoisonEntriesCounted.everyEntry)
+		return self.refusesAPartOfFrom(genericTemplateName(callee), reader: reader, signatures: signatures, counting: PoisonEntriesCounted.everyEntry)
 	end 'refusesACalleeFrom'
 
 	export function refusesAnyPartOfFrom(callees NameRoster, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool

@@ -27,16 +27,23 @@ error E3063: Ambiguous type name 'Score': more than one visible declaration matc
 
 The qualifying namespace is the declaring file's directory (joined with `.` for nested directories — e.g. `lib.fmt.Score` for a file at `lib/fmt/types.maxon`). A declaration at the project root is spelled `export.Score`, and the standard library's is spelled `stdlib.Score`.
 
-**Every visible author declaration counts, and none outranks another** — the reading file's own included: a file that declares a private `Score` and sees another file's exported `Score` is E3063 at its own bare `Score`, and the remedy there is to rename its alias. A nested directory's export competes with its enclosing directory's on equal terms, read from either. The rule covers every kind of type name — ranged, function, generic and tuple aliases, and `type`, `enum`, `union` and `interface` declarations, in any mix — and every position a type name is written in, including a static call's base, a `from` head and a top-level constant's cast target.
+A bare type name resolves in this order, and the first step that has a declaration decides:
 
-What is NOT a competitor:
+1. **The reading file's own directory's declaration.** A file that declares a private `Score`, or whose directory declares an exported one, means that one by its bare `Score`, whatever other directories export.
+2. **Else the project root's declaration.** A declaration in a root-level file is what a bare name means in every directory that declares none of its own.
+3. **Else the one visible declaration.** One author declaration the reader may name is the answer.
+4. **Else E3063.** Two or more visible declarations, none in the reader's directory or the root, are ambiguous at the reference.
 
-- **A standard-library declaration.** Beside one visible author declaration of the name, the bare name means the author's; `stdlib.Name` still reaches the library's.
+The rule covers every kind of type name — ranged, function, generic and tuple aliases, and `type`, `enum`, `union` and `interface` declarations, in any mix — and every position a type name is written in, including a static call's base, a `from` head and a top-level constant's cast target. A nested directory's declaration does not outrank its enclosing directory's: each directory is its own scope, so a reader in either means its own.
+
+What is NOT a candidate:
+
+- **A standard-library declaration.** Beside an author declaration of the name, the bare name means the author's; `stdlib.Name` still reaches the library's.
 - **A file-private alias** (`typealias` with no modifier) is visible only in its declaring file.
 - **A declaration the reader may not see** — a `module` one outside its directory subtree, or a library declaration without `public`.
 - **Author declarations, read from a library file.** A library file never sees them.
 
-Two nameable declarations of one name in ONE directory are refused where they are declared (E3061 for two aliases, E3006 otherwise), and so are two in one file, because no qualification could tell them apart. A directory whose path cannot be written as a qualifier is refused when the compile starts (E3182): a top-level piece that is `stdlib`, `export`, `runtime` or a keyword, or any piece that is not a name (`my-dir`).
+Two declarations of one name in ONE directory, whatever their visibility, are refused where they are declared (E3061 for two aliases, E3006 otherwise), and so are two in one file, because a top-level name is declared once per directory. A directory whose path cannot be written as a qualifier is refused when the compile starts (E3182): a top-level piece that is `stdlib`, `export`, `runtime` or a keyword, or any piece that is not a name (`my-dir`).
 
 The rule is the same for a FUNCTION typealias (`export typealias Step = function(…) returns …`): two exported declarations of one bare name earn E3063 at the reference, whether or not the two shapes agree.
 
@@ -155,27 +162,74 @@ end 'main'
 ```
 
 
-<!-- test: nested-export-shadowed-by-enclosing-dir -->
-A file in `Compiler/` exports `Tally`, and a file in the nested
-`Compiler/Coverage/` subdirectory also exports `Tally`. The reader is a third file
-in `Compiler/`, and the enclosing directory's export does not outrank the nested
-one: both are visible, so the bare reference is E3063, listing
-`Compiler.Coverage.Tally` and `Compiler.Tally`.
+<!-- test: a-directorys-own-export-outranks-its-nested-directorys -->
+A file in `Compiler/` exports `Tally` over `int(0 to 200)`, and a file in the nested `Compiler/Coverage/`
+subdirectory exports another over `int(0 to 100)`. Both are visible to the reader, a third file in `Compiler/`,
+and the reader's own directory decides: its bare `Tally` is `Compiler.Tally`. `150` fits only that one, so a
+bare `Tally` read as the nested declaration would be E3005. The nested declaration is named through its
+directory.
 ```maxon
 // --- file: Compiler/types.maxon
-export typealias Tally = int(0 to 100)
-
-// --- file: Compiler/Coverage/types.maxon
 export typealias Tally = int(0 to 200)
 
+// --- file: Compiler/Coverage/types.maxon
+export typealias Tally = int(0 to 100)
+
 // --- file: Compiler/main.maxon
-function main() returns ExitCode
-	let x = 42 as Tally
+export function readerOwn() returns ExitCode
+	let x = 150 as Tally
+
 	return x
+end 'readerOwn'
+
+// --- file: app/main.maxon
+function seedNested() returns Compiler.Coverage.Tally
+	return 40
+end 'seedNested'
+
+function seedOuter() returns Compiler.Tally
+	return 10
+end 'seedOuter'
+
+function main() returns ExitCode
+	return readerOwn() + (seedNested() as ExitCode) - (seedOuter() as ExitCode) - 100
 end 'main'
 ```
-```maxoncstderr
-error E3063: Compiler/<fragment>:10:16: Ambiguous type name 'Tally': more than one visible declaration matches it. Qualify it as one of: Compiler.Coverage.Tally, Compiler.Tally
+```exitcode
+80
+```
+
+<!-- test: a-nested-directorys-own-export-outranks-its-enclosing-directorys -->
+The same pair read from the nested directory: a file in `Compiler/Coverage/` means its own directory's `Tally`,
+over `int(0 to 100)`, and not the enclosing directory's that is visible to it too. `main` hands `nestedKeep` a
+value of `Compiler.Coverage.Tally`, which only a parameter declared with that alias accepts: two declarations of
+one name are two types.
+```maxon
+// --- file: Compiler/types.maxon
+export typealias Tally = int(0 to 200)
+
+// --- file: Compiler/Coverage/types.maxon
+export typealias Tally = int(0 to 100)
+
+export function nestedKeep(n Tally) returns Tally
+	return n
+end 'nestedKeep'
+
+// --- file: app/main.maxon
+function seedNested() returns Compiler.Coverage.Tally
+	return 90
+end 'seedNested'
+
+function seedWide() returns Compiler.Tally
+	return 150
+end 'seedWide'
+
+function main() returns ExitCode
+	return (nestedKeep(seedNested()) as ExitCode) + (seedWide() as ExitCode) - 198
+end 'main'
+```
+```exitcode
+42
 ```
 
 

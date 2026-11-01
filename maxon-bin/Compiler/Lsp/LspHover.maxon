@@ -315,17 +315,17 @@ end 'HoverLookupError'
 type HoverNaming
 	export let roster as ShadowSpellingRoster
 	export let respellsLibraryNames as bool
-	export let compilerRespellings as ShadowRespellingArray
+	export let compilerRespellings as ShadowRespellings
 
 	static function of(corpus LspCorpus, consultedLibrary bool) returns HoverNaming
 		match corpus 'held'
 			loaded(project, signatures, readerPath) then return Self.read(signatures.shadowRoster(), reader: shadowSpellingReaderOf(project, path: readerPath), consultedLibrary: consultedLibrary)
-			unavailable then return Self{roster: ShadowSpellingRoster.none(), respellsLibraryNames: false, compilerRespellings: ShadowRespellingArray.create()}
+			unavailable then return Self{roster: ShadowSpellingRoster.none(), respellsLibraryNames: false, compilerRespellings: ShadowRespellings.none()}
 		end 'held'
 	end 'of'
 
 	static function read(roster ShadowSpellingRoster, reader ShadowSpellingReader, consultedLibrary bool) returns HoverNaming
-		return Self{roster: roster, respellsLibraryNames: consultedLibrary and reader == ShadowSpellingReader.authorCode, compilerRespellings: shadowRespellings(roster.spellings, reader: reader, written: WrittenMintSet.create())}
+		return Self{roster: roster, respellsLibraryNames: consultedLibrary and reader == ShadowSpellingReader.authorCode, compilerRespellings: roster.respellingsFor(reader)}
 	end 'read'
 end 'HoverNaming'
 
@@ -380,7 +380,7 @@ module type HoverDocument
 	end 'compilerNameOf'
 
 	function spelledInThisDocument(name ByteArray) returns ByteArray
-		return bareSpellingOf(name, spellings: self.naming.roster.spellings) if self.consultedLibrary else name
+		return self.naming.roster.bareSpellingOf(name) if self.consultedLibrary else name
 	end 'spelledInThisDocument'
 
 	function writtenType(name ByteArray, rendered String) returns HoverType
@@ -389,7 +389,7 @@ module type HoverDocument
 		end 'shownAsWritten'
 
 		let compiled = self.compilerNameOf(name)
-		return HoverType.named(compiled, rendered: respelledText(rendered, respellings: libraryNameRespellings(self.naming.roster.spellings)), written: compiled)
+		return HoverType.named(compiled, rendered: libraryNameRespellings(self.naming.roster.spellings).respell(rendered), written: compiled)
 	end 'writtenType'
 
 	function writtenNamedType(name ByteArray) returns HoverType
@@ -397,7 +397,7 @@ module type HoverDocument
 	end 'writtenNamedType'
 
 	function compilerNamedType(name ByteArray) returns HoverType
-		return HoverType.named(name, rendered: respelledText(String.from(name), respellings: self.naming.compilerRespellings), written: name)
+		return HoverType.named(name, rendered: self.naming.compilerRespellings.respell(String.from(name)), written: name)
 	end 'compilerNamedType'
 
 	function hoverMarkdownHere(code String, prose StringArray) returns String
@@ -409,7 +409,7 @@ module type HoverDocument
 		var respelled = StringArray.create()
 
 		for paragraph in prose 'eachParagraph'
-			respelled.push(respelledText(paragraph, respellings: respellings))
+			respelled.push(respellings.respell(paragraph))
 		end 'eachParagraph'
 
 		return hoverMarkdown(code, prose: respelled)
@@ -1782,7 +1782,7 @@ module type HoverDocument
 
 	function stdlibDocumentFor(owner ByteArray) returns HoverDeclaringDocument
 		let directory = try locateStdlibDir() otherwise return HoverDeclaringDocument.none
-		let path = directory.join("{String.from(bareSpellingOf(owner, spellings: self.naming.roster.spellings))}{MaxonSourceExtension}")
+		let path = directory.join("{String.from(self.naming.roster.bareSpellingOf(owner))}{MaxonSourceExtension}")
 
 		if not File.exists(path) 'notALibraryType'
 			return HoverDeclaringDocument.none

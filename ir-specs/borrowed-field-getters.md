@@ -1240,10 +1240,9 @@ func @main {
   __il_body#11:
     x64.movRegImm32 rcx, 2
     x64.callDirect Note.create
-    x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
     x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [r12 + 0], r13
   __il_cont#6:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 1
@@ -1335,10 +1334,9 @@ func @main {
   __il_body#11:
     x64.movRegImm32 rcx, 2
     x64.callDirect Note.create
-    x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
     x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [r12 + 0], r13
   __il_cont#6:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 1
@@ -1423,10 +1421,10 @@ func @main {
   __il_body#11:
     arm64.movImm x0, 2
     arm64.bl Note.create
-    arm64.movRegReg x21, x0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x1
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x21
   __il_cont#6:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 1
@@ -1513,10 +1511,10 @@ func @main {
   __il_body#11:
     arm64.movImm x0, 2
     arm64.bl Note.create
-    arm64.movRegReg x21, x0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x1
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x21
   __il_cont#6:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 1

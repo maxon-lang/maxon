@@ -449,9 +449,9 @@ end 'buildArm64PosixAttrsFromModeChunk'
 // `nFileSizeHigh` sits at 28 and `nFileSizeLow` at 32, so on a little-endian machine the word that lands
 // correctly is `(low << 32) | high` — a 64-bit rotate of the size by 32.
 export function buildArm64PosixFillFindDataChunk(layout PosixStatLayout) returns FunctionCodeChunk
-	let SlotFindData = 0 as StackSize
-	let SlotStat = 1 as StackSize
-	let SlotName = 2 as StackSize
+	let SlotFindData = 0
+	let SlotStat = 1
+	let SlotName = 2
 	var asm = Arm64RuntimeAsm.beginFunction(3)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFindData)
@@ -599,8 +599,8 @@ end 'arm64EmitDwordWidening'
 // would be a second clock choice that can silently become a different clock. The conversion is DERIVED from the frequency that chunk reports rather than assuming the
 // 1e9 both lanes happen to answer today, so a lane that ever reports raw counter ticks needs no edit here.
 export function buildArm64PosixTickMsChunk() returns FunctionCodeChunk
-	let SlotTicks = 0 as StackSize
-	let SlotFreq = 1 as StackSize
+	let SlotTicks = 0
+	let SlotFreq = 1
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotTicks)
@@ -642,8 +642,8 @@ end 'buildArm64PosixTickMsChunk'
 // descriptor 0 in a process that still holds its standard streams, so a real end is never mistaken
 // for the absence of one.
 export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) returns FunctionCodeChunk
-	let SlotReadOut = 0 as StackSize
-	let SlotWriteOut = 1 as StackSize
+	let SlotReadOut = 0
+	let SlotWriteOut = 1
 	let SlotFds = 2
 	var asm = Arm64RuntimeAsm.beginFunction(3)
 
@@ -768,7 +768,7 @@ end 'buildArm64PosixCheckStdFdsChunk'
 // `PeekNamedPipe` — "are there bytes to read, without committing to a read". `PosixPipeReadyBytes` above
 // carries the whole argument for the count this answers and for where EOF is reported.
 export function buildArm64PosixPipePeekChunk(poll PosixPollCall) returns FunctionCodeChunk
-	let SlotAvailOut = 0 as StackSize
+	let SlotAvailOut = 0
 	let SlotPollfd = 1
 	let SlotTsSec = 2
 	let SlotTsNsec = 3
@@ -950,8 +950,8 @@ end 'arm64PosixEmitPpoll'
 // and NULL discards it; Darwin's `waitpid` is a three-argument call that never reads the register. Setting it
 // on both is one instruction and is what lets the two share this body.
 export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns FunctionCodeChunk
-	let SlotObj = 0 as StackSize
-	let SlotBlocking = 1 as StackSize
+	let SlotObj = 0
+	let SlotBlocking = 1
 	let SlotStatus = 2
 	var asm = Arm64RuntimeAsm.beginFunction(3)
 
@@ -1097,9 +1097,9 @@ end 'buildArm64PosixSpinPauseChunk'
 //
 // ⚠ **IT CONTAINS NO OS CALL AT ALL**, which is why one body serves both lanes: two `bl`s and a compare.
 export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
-	let SlotObj = 0 as StackSize
-	let SlotTimeout = 1 as StackSize
-	let SlotDeadline = 2 as StackSize
+	let SlotObj = 0
+	let SlotTimeout = 1
+	let SlotDeadline = 2
 	var asm = Arm64RuntimeAsm.beginFunction(3)
 
 	let bounded = asm.newLabel()
@@ -1163,7 +1163,7 @@ end 'buildArm64PosixProcAwaitChunk'
 // other path already took. Answering the last known status beats inventing one, and there is no route in this
 // runtime that reaps a child twice.
 export function buildArm64PosixProcExitCodeChunk() returns FunctionCodeChunk
-	let SlotCodeOut = 0 as StackSize
+	let SlotCodeOut = 0
 	let SlotObj = 1
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
@@ -1215,8 +1215,8 @@ end 'arm64PosixEmitReapedField'
 // ⛔⛔ **AND A ZERO PID IS SKIPPED RATHER THAN NEGATED.** `kill(0, …)` signals the CALLER's OWN group, so a
 // record whose pid was never filled would kill this process and every sibling it shares a group with.
 export function buildArm64PosixProcTerminateChunk(kill PosixHostCall) returns FunctionCodeChunk
-	let SlotObj = 0 as StackSize
-	let SlotCode = 1 as StackSize
+	let SlotObj = 0
+	let SlotCode = 1
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 	let noChild = asm.newLabel()
 	let delivered = asm.newLabel()
@@ -1292,8 +1292,8 @@ end 'buildArm64PosixProcProbeChunk'
 // SUCCEEDED never has it: neither kernel hands a user process an address out of the kernel half. A test for
 // zero would be wrong on both — a failed mapping is negative, never NULL.
 export function buildArm64PosixShmMapChunk(call PosixHostCall) returns FunctionCodeChunk
-	let SlotFd = 0 as StackSize
-	let SlotBytes = 1 as StackSize
+	let SlotFd = 0
+	let SlotBytes = 1
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	let refused = asm.newLabel()
@@ -1366,9 +1366,9 @@ export type PosixShmHost
 	end 'create'
 end 'PosixShmHost'
 
-let ShmSlotName = 0 as StackSize
-let ShmSlotBytes = 1 as StackSize
-let ShmSlotFd = 2 as StackSize
+let ShmSlotName = 0
+let ShmSlotBytes = 1
+let ShmSlotFd = 2
 let ShmSlotStat = 3
 
 function shmPathSlot(host PosixShmHost) returns StackSize

@@ -1,9 +1,7 @@
 let CondUnknownCaseLabel = "cond-unknown-local-refused"
 
-let AnchorName = "hit-body"
-let CountedLinePrefix = "hit "
 let UnknownLocalName = "nothere"
-let ConditionText = "nothere == 1"
+let CondUnknownLocalRefusedConditionText = "nothere == 1"
 
 test 'a condition naming a local the stop pc has no record for is refused, and the breakpoint is not armed'
 	let staged = builtFixture(CondUnknownCaseLabel, fixture: ConditionFixtureName)
@@ -14,7 +12,7 @@ test 'a condition naming a local the stop pc has no record for is refused, and t
 	Expect.equal(stagedLinesContaining(staged, needle: UnknownLocalName), expected: 0, message: "this case is about a name the fixture does not declare, and the staged source spells `{UnknownLocalName}`.")
 	Expect.atLeast(iterations, than: 1, message: "the anchored line must run, or an unarmed breakpoint would be indistinguishable from an unreached one. It ran it {iterations} times.")
 
-	let commands = debugCommandLine([conditionalBreak(lineTarget(hitLine), condition: ConditionText), RunCommand])
+	let commands = debugCommandLine([conditionalBreak(lineTarget(hitLine), condition: CondUnknownLocalRefusedConditionText), RunCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)

@@ -1,17 +1,12 @@
 let ListBuildCase = "list-build"
 let PassingTestName = "a deposit adds to the balance"
 let FailingTestName = "a deposit is counted twice"
-let ListFlag = "--list"
-let BuildFlag = "--build"
-let JsonFlag = "--json"
 let SelectFlagPrefix = "--select="
 let RanMarker = "ran: "
 let LineBreak = "\n"
-let BinaryKey = "binary"
 let TestsKey = "tests"
 let NameKey = "name"
 let SelectKey = "select"
-let ListedCleanly = 0
 let BinaryPassedExit = 0
 let BinaryFailedExit = 3
 let OneTestRan = 1
@@ -24,7 +19,7 @@ let PortableSeparator = "/"
 
 test 'list-build builds a binary with its sidecar, each select runs one test, and a failing one exits 3'
 	let listed = runFixture(ListBuildCase, extraArguments: [ListFlag, BuildFlag, JsonFlag])
-	try Expect.equal(listed.exitCode(), expected: ListedCleanly, message: "`{TestCommandName} {ListFlag} {BuildFlag} {JsonFlag}` builds and lists; it printed {listed.stdout} and {listed.stderr}")
+	try Expect.equal(listed.exitCode(), expected: CleanExitCode, message: "`{TestCommandName} {ListFlag} {BuildFlag} {JsonFlag}` builds and lists; it printed {listed.stdout} and {listed.stderr}")
 
 	let document = try Json.parse(listed.stdout) otherwise panic("list-build.test: `{ListFlag} {BuildFlag} {JsonFlag}` printed no JSON document: {listed.stdout}")
 	let binarySpelled = try document.getString(document.root, key: BinaryKey) otherwise ""

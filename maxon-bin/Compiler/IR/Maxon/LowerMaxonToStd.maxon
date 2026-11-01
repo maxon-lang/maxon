@@ -976,6 +976,7 @@ end 'HiddenArgumentSource'
 
 union ByReferenceParamSource
 	indirectCallee
+
 	// A runtime primitive's arguments, which are always values whatever the source call's ABI.
 	valueArguments
 	directCallee(let name ByteArray)
@@ -1405,7 +1406,6 @@ type MaxonToStdLowering
 	// its four halves, so the two sites cannot come to hold different ones. Copied out of `Project` at
 	// `create` like every other registry here, so the lowering still holds no `Project`.
 	var functionTypes as FunctionTypeRegistry
-	var conventions as FunctionValueConventions
 
 	// The whole-program signature index (`queryProgramSignatures`) — the source for a generic
 	// instance's `(baseId, args)` payload: `ensureLayoutDescriptor` sizes and mangles a descriptor
@@ -1694,7 +1694,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		var signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), conventions: project.functionValueConventions, signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), emittedServiceStarts: ServiceStartNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), emittedServiceStarts: ServiceStartNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -3347,26 +3347,12 @@ type MaxonToStdLowering
 		let reinterpretedParams = self.witnessSlotReinterpretedParams(typeName, implName: implName, slot: slot, tableInterface: tableInterface)
 		self.requireWitnessSlotResultKeepsItsRegister(typeName, implName: implName, slot: slot, tableInterface: tableInterface)
 
-		if self.witnessSlotImplIsSlotShaped(implName, method: slot.method) and reinterpretedParams == 0 and self.witnessSlotCellLoads(implName, cellMask: cellMask) == NoParamPositions 'theImplNeedsNoAdapter'
+		if self.witnessSlotImplIsSlotShaped(implName, method: slot.method) and reinterpretedParams == 0 'theImplNeedsNoAdapter'
 			return implName
 		end 'theImplNeedsNoAdapter'
 
 		return self.witnessSlotAdapter(typeName, instance: instance, slot: slot, reinterpretedParams: reinterpretedParams, cellMask: cellMask)
 	end 'witnessSlotCallee'
-
-	function witnessSlotCellLoads(implName ByteArray, cellMask ParamPositionMask) returns ParamPositionMask
-		if cellMask == NoParamPositions 'everyFormalIsAValue'
-			return NoParamPositions
-		end 'everyFormalIsAValue'
-
-		let impl = try self.signedWitnessImpl(implName) otherwise panic("witnessSlotCellLoads: the compiler-built entry '{String.from(implName)}' fills a slot that passes a position as a cell — only a requirement a conformer's method writes does, and the compiler-built entries fill `hash`, `equals` and `compare`: `hash` takes no parameter, and the semantic check refuses an `equals` or `compare` that writes its operand")
-
-		if (impl.reassignedParamMask and not cellMask) != NoParamPositions 'aCellTheSlotDoesNotPass'
-			panic("witnessSlotCellLoads: '{String.from(implName)}' takes a position by reference that its requirement's slot passes by value — the slot's convention is every position any conformer of the requirement writes, so an impl's own positions are a subset of it")
-		end 'aCellTheSlotDoesNotPass'
-
-		return cellMask and not impl.reassignedParamMask
-	end 'witnessSlotCellLoads'
 
 	function witnessSlotAdapter(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod, reinterpretedParams ArgFloatMask, cellMask ParamPositionMask) returns ByteArray
 		// ⭐ **THE ADAPTER IS NAMED OFF THE TABLE'S OWN LABEL COMPONENT, NEVER OFF THE CONFORMER** —
@@ -3518,7 +3504,6 @@ type MaxonToStdLowering
 
 		var ids = ValueMinter.resuming(args.count() as ValueId)
 		self.reinterpretSlotWords(args, request: request, entry: entry, ids: ids)
-		self.loadSlotCellOccupants(args, request: request, impl: impl, entry: entry, ids: ids)
 
 		// Every id below `ids.nextId()` is a parameter, a dictionary address or a reinterpreted word, so the
 		// call's own result is the next one — and the error flag, when the impl produces one, the one after that.
@@ -3535,21 +3520,6 @@ type MaxonToStdLowering
 
 		self.stdModule.functions.push(adapter)
 	end 'synthesizeWitnessSlotAdapter'
-
-	function loadSlotCellOccupants(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, ids ValueMinter)
-		let loads = request.cellMask and not impl.reassignedParamMask
-
-		for k in 0 upto request.slotArity 'eachSlotWord'
-			if not maskHasParam(loads, param: k) 'passedAsIs'
-				continue
-			end 'passedAsIs'
-
-			let occupant = ids.mint()
-			let valueType = cellOccupantStdType(self.signatures, declared: try impl.maxonParamTypes.get(k) otherwise panic("loadSlotCellOccupants: '{String.from(request.implName)}' declares {impl.maxonParamTypes.count()} parameter types but its slot reads a cell at {k}"), typeNames: self.typeNames, readerFilePath: impl.sourceFilePath)
-			self.stdModule.appendOp(entry, op: StdOp.loadIndirect(occupant, addrId: try args.get(k) otherwise panic("loadSlotCellOccupants: args.get OOB at {k} below count {args.count()}"), offset: ParameterCellValueOffset, valueType: valueType))
-			try args.set(k, value: occupant) otherwise panic("loadSlotCellOccupants: args.set OOB at {k} below count {args.count()}")
-		end 'eachSlotWord'
-	end 'loadSlotCellOccupants'
 
 	function reinterpretSlotWords(args ValueIdArray, request WitnessAdapterRequest, entry IrBlock, ids ValueMinter)
 		for k in 0 upto request.slotArity 'eachSlotWord'
@@ -3993,16 +3963,15 @@ type MaxonToStdLowering
 	end 'stampOwnershipWord'
 
 	// ⭐⭐ **THE SYMBOL A WITNESS SLOT POINTS AT IS THE MEMBER `checkConformance` ACCEPTED — NOT A SECOND JOIN
-	// OF THE SAME TWO NAMES.** A `qualifiedMethodName(typeName, method.name)` minted here would be a bare key,
-	// and a type whose matching member is a LATER overload (registered `Type.method#Suffix`) does not answer to
-	// it — a wrong `.text` address in the dictionary, with no diagnostic, at runtime. So the decision is made
-	// ONCE, by the check, and read here.
+	// OF THE SAME TWO NAMES.** A `qualifiedMethodName(typeName, method.name)` minted here would be a second
+	// decision about the pair, free to drift from the check's — a wrong `.text` address in the dictionary, with
+	// no diagnostic, at runtime. So the decision is made ONCE, by the check, and read here.
 	//
 	// ⚠ **A MISS IS AN INTERNAL DISAGREEMENT AND PANICS — with ONE legitimate exception, and it is not a
 	// fallback.** A BUILTIN conformer (`int`/`float`/`bool`/`String`/`Character`) declares no `implements`, so
 	// `checkConformance` never ran for it and there is no selection to be the same value as: its impls are
 	// SYNTHESIZED one per `(conformer, method)` by `installBuiltinConformanceRuntime`, which mints them by
-	// this very join and cannot overload them. The join IS the registration name there, and the gate is
+	// this very join. The join IS the registration name there, and the gate is
 	// `isIntrinsicBuiltinConformance` — the SAME predicate that decides the conformance and decides which
 	// impls are installed, so the three cannot come to disagree about which pairs are builtin. Any other miss
 	// means this table is stamping a slot no conformance accepted, which is a pipeline-ordering break rather
@@ -4600,7 +4569,7 @@ type MaxonToStdLowering
 	function refuseSpawnOfACarrier(call CarrierCall, project Project) returns bool
 		view caller = self.functionAt(call.caller, reader: "refuseSpawnOfACarrier")
 		view callee = self.functionAt(call.callee, reader: "refuseSpawnOfACarrier")
-		self.reportAtOp(project, func: caller, opIndex: call.opIndex, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("`async {String.from(overloadRegistrationBaseName(callee.name))}(…)` reads the enclosing instance's layout descriptor, which a spawn cannot hand it — the green thread's argument region carries the written arguments only. Call it directly, or spawn a function that carries none"))
+		self.reportAtOp(project, func: caller, opIndex: call.opIndex, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("`async {String.from(genericTemplateName(callee.name))}(…)` reads the enclosing instance's layout descriptor, which a spawn cannot hand it — the green thread's argument region carries the written arguments only. Call it directly, or spawn a function that carries none"))
 		return true
 	end 'refuseSpawnOfACarrier'
 
@@ -4763,7 +4732,7 @@ type MaxonToStdLowering
 
 	function refuseDescriptorSubject(site DescriptorSubjectSite, project Project, reason String) throws CompileError
 		let func = self.functionAt(site.funcIndex, reader: "refuseDescriptorSubject")
-		reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("'{String.from(overloadRegistrationBaseName(site.callee))}' {reason}"))
+		reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("'{String.from(genericTemplateName(site.callee))}' {reason}"))
 		throw CompileError.compileError
 	end 'refuseDescriptorSubject'
 
@@ -5807,16 +5776,12 @@ type MaxonToStdLowering
 	// reads XMM makes `v * 2.0` multiply whatever was in the register — a silent wrong answer.
 	// A helper because `lowerIndirectCall`'s arm must hand `args` to a function and touch it no other way.
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
-		let arity = userArityOfIndirectCall(args)
-		let byReference = self.conventions.maskAtArity(arity)
+		let byReference = self.indirectCalleeByRefMask(callee)
 		view declaredParams = cellPositionsAsWords(self.indirectCalleeParamTypes(callee), byReference: byReference)
 		let crossed = self.crossFloatDomainArgs(args, paramTypes: declaredParams, byReference: ByReferenceParamSource.indirectCallee, dstBlock: dstBlock)
 
 		if let target = try self.functionValueTargetOf(callee) 'aNamedFunctionsRecord'
-			var ids = ValueMinter.resuming(self.nextValueId)
-			let occupants = appendCellOccupantLoads(self.stdModule, block: dstBlock, ids: ids, conventions: self.conventions, target: target, arity: arity, args: crossed)
-			self.nextValueId = ids.nextId()
-			let targetArgs = self.argsTheTargetTakes(target, args: occupants)
+			let targetArgs = self.argsTheTargetTakes(target, args: crossed)
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: target, args: targetArgs))
 			return
 		end 'aNamedFunctionsRecord'
@@ -5834,6 +5799,10 @@ type MaxonToStdLowering
 	// `declaredFunctionShapeOf` is the one lookup that answers for all three, and it is the SAME one
 	// `SemanticCheck.checkIndirectCall` proves the arity and the argument types through — so the check and
 	// the lowering cannot come to disagree about which signature this call binds against.
+	function indirectCalleeByRefMask(callee ValueId) returns ParamPositionMask
+		return requireFunctionShapeOf(self.functionTypes, name: self.functionValueName(callee), side: "called").byRefParams
+	end 'indirectCalleeByRefMask'
+
 	function indirectCalleeParamTypes(callee ValueId) returns MaxonTypeArray
 		return requireFunctionShapeOf(self.functionTypes, name: self.functionValueName(callee), side: "called").paramTypes
 	end 'indirectCalleeParamTypes'
@@ -6491,7 +6460,7 @@ type MaxonToStdLowering
 	// (`FunctionValueConventions.adaptsAClosure`).
 	function lowerFunctionRef(result ValueId, funcName ByteArray, form FunctionRefForm, dstBlock IrBlock)
 		match form 'form'
-			codeAddress then self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: fnRefThunkName(funcName) if self.conventions.adaptsAClosure(funcName) else funcName))
+			codeAddress then self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: funcName))
 			functionValue then self.lowerFunctionValueRef(result, funcName: funcName, dstBlock: dstBlock)
 		end 'form'
 	end 'lowerFunctionRef'
@@ -6536,7 +6505,7 @@ type MaxonToStdLowering
 		end 'alreadyRecorded'
 
 		self.emittedFunctionRecords.insert(label)
-		return registerFunctionRecord(self.globalData, funcName: funcName, funcSignatures: self.funcSignatures, conventions: self.conventions, debugStream: self.debugStream)
+		return registerFunctionRecord(self.globalData, funcName: funcName, funcSignatures: self.funcSignatures, debugStream: self.debugStream)
 	end 'ensureFunctionRecord'
 
 	// ⭐ **int→float ARGUMENT WIDENING** — the CALL-SITE dual of the `return`/assignment float

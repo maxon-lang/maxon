@@ -56,8 +56,6 @@
 
 // ── What is seeded ───────────────────────────────────────────────────────────────────────────────
 
-// Which namespace a tracked declaration lives in. A reference names a FUNCTION, a TYPE or a top-level
-// BINDING, and the three cannot be confused for one another at a use site, so they are keyed apart.
 enum TrackedDeclKind
 	trackedFunction
 	trackedType
@@ -108,20 +106,17 @@ end 'TrackedDecl'
 
 typealias TrackedDeclArray = Array with TrackedDecl
 
-// ⛔⛔ **A BARE NAME IS NOT A DECLARATION'S IDENTITY, AND KEYING THIS BY ONE PANICKED.** Two files in
+// ⛔⛔ **A BARE NAME IS NOT A DECLARATION'S IDENTITY, AND KEYING THIS BY ONE WOULD PANIC.** Two files in
 // DIFFERENT DIRECTORIES may each declare `type NsDeep` or `function pick` — that is what a namespace is
-// FOR, and `specs/namespace-qualified-resolution.md` is thirty cases about it. The index was a
-// `Map with (ByteArray, ElementIndex)`, so the second declaration's `insert` threw `keyAlreadyExists`
-// and the pass aborted the compile: MEASURED by `scale-test`'s generated corpus, which emits a namespace
-// ladder — and NOT by any of the 6,377 spec cases, because none of them declares a contested name in a
-// program that also compiles clean.
+// FOR, and `specs/namespace-qualified-resolution.md` pins it. A `Map with (ByteArray, ElementIndex)`
+// would throw `keyAlreadyExists` on the second declaration's `insert` and abort the compile.
 //
 // ⇒ One name maps to EVERY declaration wearing it, and a reference to that name credits all of them.
 // That OVER-approximates where two namespaces contest a name — a use of `alpha.pick` also credits
 // `beta.pick` — and the direction is deliberate: crediting a reference too widely can only SUPPRESS a
 // finding, while resolving to the wrong one of two claimants would report a live declaration as dead.
-// Telling them apart needs the reader's own namespace precedence, which is `ProgramSignatures`' answer to
-// give, not this pass's to re-derive.
+// Telling them apart needs the reader's own namespace precedence, which `NameScope.maxon` and
+// `ProgramSignatures` own, not this pass.
 typealias TrackedDeclIndexArray = Array with ElementIndex
 typealias TrackedDeclIndexMap = Map with (ByteArray, TrackedDeclIndexArray)
 

@@ -1,7 +1,6 @@
 let TraceSliceCaseLabel = "trace-slice-at-stop"
 
-let AnchorName = "after-await"
-let TracedBuildLabel = "debugstream"
+let TraceSliceAtStopAnchorName = "after-await"
 
 test 'trace at a stop shows the scheduler events the program committed before it'
 	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TraceSliceCaseLabel, fixture: TracedFixtureName)
@@ -12,7 +11,7 @@ test 'trace at a stop shows the scheduler events the program committed before it
 	end 'didNotBuild'
 
 	let undebugged = runBuiltProgram(staged)
-	let stopLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
+	let stopLine = anchorLine(staged.join(StagedProgramFileName), anchor: TraceSliceAtStopAnchorName)
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(stopLine)}", RunCommand, TraceCommand, ContinueCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [DebugTraceOption])
 	let events = batchEvents(session.stdout)

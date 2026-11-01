@@ -1,0 +1,150 @@
+module function callNamesNothingTheReaderWrote(mint CalleeMint, readerFilePath FilePath) returns bool
+	return mintSpellsTheWholeCallee(mint) or readerFilePath.isEmpty()
+end 'callNamesNothingTheReaderWrote'
+
+module function sweptSlotNames(candidate SweptDeclaration) returns NameRoster
+	return callAlignedFrom(candidate.paramNames) if candidate.takesReceiver else candidate.paramNames
+end 'sweptSlotNames'
+
+module function aggregateNameIn(signatures ProgramSignatures, interner TypeNameInterner, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns ByteArray
+	if tagNamesADeclaredType(tag) 'struct'
+		return try interner.nameOf(nameId) otherwise panic("aggregateNameIn: structRef id {nameId} is not in the interner the caller named — a structRef's name id is minted in it")
+	end 'struct'
+
+	// ⚠ The EXACT interface name, never the `extends`-transitive rule: a `Derived` existential's witness
+	// addresses `Derived`'s table, whose slot order is not `Base`'s, so one standing at a `Base` place would
+	// dispatch through the wrong function pointers.
+	if tag == ValueTypeTag.interfaceRef 'existential'
+		return try interner.nameOf(nameId) otherwise panic("aggregateNameIn: interfaceRef id {nameId} is not in the interner the caller named — an interface name id is minted in it")
+	end 'existential'
+
+	// The compiled name is an exact identity because `checkTypeSymbolNamespace` refuses (E3006) any program
+	// in which two instances compile to one name, and an instance a declared type's name would also claim
+	// is compiled behind the reserved `__` prefix (`mangleGenericInstance`).
+	if tag == ValueTypeTag.genericInstance 'genericInstance'
+		return signatures.canonicalInstanceName(nameId as GenericInstanceId)
+	end 'genericInstance'
+
+	if not valueTagWearsAnAlias(tag, nameId: nameId) 'namesNoAlias'
+		return EmptySourceText
+	end 'namesNoAlias'
+
+	let name = try interner.nameOf(nameId) otherwise panic("aggregateNameIn: named id {nameId} is not in the interner the caller named — a named value's name id is minted in it")
+	return signatures.namedIdentityOf(name, readerFilePath: readerFilePath)
+end 'aggregateNameIn'
+
+module function aggregateCannotDecayIn(signatures ProgramSignatures, interner TypeNameInterner, tag ValueTypeTag, nameId TypeNameId) returns bool
+	if tagNamesADeclaredType(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.string or tag == ValueTypeTag.character 'alwaysARecord'
+		return true
+	end 'alwaysARecord'
+
+	if tag != ValueTypeTag.named 'notNamed'
+		return false
+	end 'notNamed'
+
+	let name = try interner.nameOf(nameId) otherwise panic("aggregateCannotDecayIn: named id {nameId} is not in the interner the caller named — a named value's name id is minted in it")
+
+	if signatures.containsStructInAnyFile(name) 'namedStruct'
+		return true
+	end 'namedStruct'
+
+	return signatures.enumNameIsBoxed(name)
+end 'aggregateCannotDecayIn'
+
+// ⭐⭐ **ONE SLOT SUBSTITUTED THROUGH AN INSTANCE, CROSSED BACK INTO THE CALLER'S INTERNER — the first of the
+// two steps `Parser.slotTypeThroughReceiver` takes one tier down.**
+// The substitution is asked in the INDEX's space and only the ANSWER crosses, which is that door's own rule;
+// what it adds is that a bare-`T` slot's answer is the instance's ARGUMENT, and that comes back in the WRONG
+// TABLE. `substitutedInstanceArg` answers in `ProgramSignatures.typeNames`, a different interner with its own
+// insertion order, so the id means whatever name happens to sit at that number in `interner`.
+//
+// ⚠ **GATED ON THE DECLARED SLOT, NOT ON THE ANSWER, for `slotTypeThroughReceiver`'s reason turned to this
+// door's shape.** The bare-`T` arm is the ONE arm of `substituteThroughInstanceInterned` that hands back an
+// index-space id — a tuple crossed as a NAME into the interner it was GIVEN, a nested instance answers a
+// whole-program giid, and every other slot is returned untouched — so adopting an answer that never left
+// would re-read a project id in the index's table, which is this same bug pointed the other way.
+//
+// The answer is deliberately still UNRESOLVED, because its two readers need it in that order: the TYPE wants
+// the erasure `resolveTypes` already performed on the arriving side (`resolvedSlotThroughCallInstance`), and
+// `substitutedSlotIdentity` wants the name that erasure destroys. One crossing, two readers.
+module function slotThroughInstance(signatures ProgramSignatures, interner TypeNameInterner, slotType MaxonType, gid GenericInstanceId) returns MaxonType
+	if signatures.slotNamesTheInstancesBase(slotType, interner: interner, gid: gid) 'theDeclarationsSelf'
+		return MaxonType.genericInstance(gid)
+	end 'theDeclarationsSelf'
+
+	var index = signatures
+	let substituted = index.substituteThroughInstanceInterned(slotType, id: gid, interner: interner)
+
+	if not slotIsBareTypeParameter(slotType) 'noIndexSpaceIdCrossedOut'
+		return substituted
+	end 'noIndexSpaceIdCrossedOut'
+
+	return index.adoptType(substituted, into: interner)
+end 'slotThroughInstance'
+
+module function paramTagCarriesADeclarationView(paramTag ValueTypeTag) returns bool
+	return paramTag == ValueTypeTag.structRef or paramTag == ValueTypeTag.genericInstance
+end 'paramTagCarriesADeclarationView'
+
+module function paramTypeAtInstance(signatures ProgramSignatures, interner TypeNameInterner, gid GenericInstanceId, paramType MaxonType) returns MaxonType
+	if maxonTypeTag(paramType) == ValueTypeTag.structRef 'maybeSelf'
+		return slotThroughInstance(signatures, interner: interner, slotType: paramType, gid: gid)
+	end 'maybeSelf'
+
+	var index = signatures
+	return index.substituteThroughInstance(paramType, id: gid)
+end 'paramTypeAtInstance'
+
+// The one rule for "may this file name this declaration". Past the ordinary tier rule, a conformance
+// grants a generic instance, or a body extending an interface, every member the interface's surface
+// declares for its conformer, whatever that member's tier.
+//
+// ⭐ A `runtime/` entry answers to no directory's module scope: the compiler reaches one by name out of
+// whatever file wrote the construct that needs it, so no author wrote the call. ⛔ The test is that the
+// name is RESERVED (`isCompilerInternalCallee`), not merely declared in the tier: the tier's other
+// declarations are module-scoped (E3154 is its ceiling), and keyed on the tier alone this would publish
+// every one of them to every file in the program.
+module function declarationMayBeNamed(signatures ProgramSignatures, visibility Visibility, declFilePath FilePath, registeredName ByteArray, readerFilePath FilePath, callerName ByteArray) returns bool
+	if declFilePath.isEmpty() or signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerFilePath) 'theOrdinaryRule'
+		return true
+	end 'theOrdinaryRule'
+
+	if signatures.interfaceSurfaceGrantsCall(callerName, callee: registeredName) 'aConformanceTheCallerGranted'
+		return true
+	end 'aConformanceTheCallerGranted'
+
+	return isCompilerInternalCallee(registeredName) and signatures.declaredInTheRuntimeTier(declFilePath)
+end 'declarationMayBeNamed'
+
+// ⚠ **A SWEPT `structRef` IS THE ONE REPAIRED TAG THAT CAN ARRIVE NON-CANONICAL, AND A TUPLE IS WHERE IT
+// SHOWS.** `canonicalNameOfStruct` is behind `allFilesFolded`, so the SWEEP spells a tuple by its
+// elements' SOURCE names (`__Tuple2.Tally.String`) while the real parse spells the same tuple by their
+// canonical ones (`__Tuple2.int.String`) — two names for one type, and a closure offered at a parameter
+// declared with a tuple-slot function alias was refused on the difference. Outermost step, because it
+// must see the name the three repairs and the scope crossing below settled on.
+module function canonicalizeSweptTupleName(signatures ProgramSignatures, interner TypeNameInterner, repaired MaxonType) returns MaxonType
+	if maxonTypeTag(repaired) != ValueTypeTag.structRef 'carriesNoStructName'
+		return repaired
+	end 'carriesNoStructName'
+
+	let name = try interner.nameOf(typeNameIdOf(repaired)) otherwise panic("canonicalizeSweptTupleName: structRef id {typeNameIdOf(repaired)} is not in the interner the caller named")
+	view canonical = signatures.canonicalNameOfStruct(name)
+
+	if canonical.equals(name) 'theSweepSpelledItCanonically'
+		return repaired
+	end 'theSweepSpelledItCanonically'
+
+	return MaxonType.structRef(interner.intern(canonical))
+end 'canonicalizeSweptTupleName'
+
+module function declaredBrandInFile(signatures ProgramSignatures, spelled ByteArray, declFilePath FilePath) returns ByteArray
+	if spelled.isEmpty() 'nothingSpelled'
+		return EmptySourceText
+	end 'nothingSpelled'
+
+	if signatures.genericAliasMintIsABrand(spelled) 'aDeclarationsOwnMint'
+		return spelled
+	end 'aDeclarationsOwnMint'
+
+	return signatures.authorsAliasBrand(spelled, readerFilePath: declFilePath)
+end 'declaredBrandInFile'

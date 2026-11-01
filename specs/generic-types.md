@@ -3221,12 +3221,10 @@ end 'main'
 r=3
 ```
 
-<!-- test: generic-managed-return-overload-selection -->
-⭐ **THE RETYPE IS WHAT LETS OVERLOAD RESOLUTION CHOOSE.** An overloaded callee handed an opaque-tagged
-value has nothing to choose by, and the compiler says so rather than guessing (`resolving an overload of
-'over' against an argument of opaque generic type`). Retyped, the argument is an `Alpha` and there is
-nothing left to disambiguate. The value 7 is the non-generic `over(Alpha.create(3))`'s answer, which this
-program must agree with.
+<!-- test: generic-managed-return-is-retyped-at-the-call -->
+⭐ **THE RETYPE IS WHAT MAKES THE ARGUMENT AN `Alpha`.** `b.get()` yields an opaque-tagged value, and
+retyped it is the `Alpha` that `overAlpha` declares. The value 7 is the non-generic
+`overAlpha(Alpha.create(3))`'s answer, which this program must agree with.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Alpha
@@ -3245,15 +3243,15 @@ type Box uses T
 	end 'get'
 end 'Box'
 typealias AlphaBox = Box with Alpha
-function over(x Alpha) returns Integer
+function overAlpha(x Alpha) returns Integer
 	return x.a + 4
-end 'over'
-function over(x Integer) returns Integer
+end 'overAlpha'
+function overInteger(x Integer) returns Integer
 	return x + 22
-end 'over'
+end 'overInteger'
 function main() returns ExitCode
 	let b = AlphaBox.create(Alpha.create(3))
-	print("{over(b.get())}\n")
+	print("{overAlpha(b.get())}\n")
 	return 0
 end 'main'
 ```
@@ -3264,12 +3262,12 @@ end 'main'
 7
 ```
 
-<!-- test: generic-managed-union-return-overload-selection -->
+<!-- test: generic-managed-union-return-is-retyped-at-the-call -->
 ⛔⛔ **`Box with Shape` for a BOXED UNION: THE SUBSTITUTED TYPE IS THE UNION ITSELF.** Were the substituted
-type left a bare `named` (which reads as an INTEGER), `over(b.get())` would choose `over(x Integer)` and do
-arithmetic on the payload word — exit 25 where 7 is correct. The substitution goes through
-`declaredSlotType`, so the union name is re-interned as itself and picks its own overload, and this case
-is what says so. The non-generic `over(Shape.circle(3))` answers 7, and so must this program.
+type left a bare `named` (which reads as an INTEGER), the argument of `overShape(b.get())` would be an
+Integer and not the union. The substitution goes through `declaredSlotType`, so the union name is
+re-interned as itself and `overShape` takes it, and this case is what says so. The non-generic
+`overShape(Shape.circle(3))` answers 7, and so must this program.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 union Shape
@@ -3286,18 +3284,18 @@ type Box uses T
 	end 'get'
 end 'Box'
 typealias ShapeBox = Box with Shape
-function over(x Shape) returns Integer
+function overShape(x Shape) returns Integer
 	match x 'k'
 		circle(r) then return r + 4
 		square(s) then return s + 5
 	end 'k'
-end 'over'
-function over(x Integer) returns Integer
+end 'overShape'
+function overInteger(x Integer) returns Integer
 	return x + 22
-end 'over'
+end 'overInteger'
 function main() returns ExitCode
 	let b = ShapeBox.create(Shape.circle(3))
-	print("{over(b.get())}\n")
+	print("{overShape(b.get())}\n")
 	return 0
 end 'main'
 ```
@@ -4766,8 +4764,8 @@ refused
 0
 ```
 
-<!-- test: a-generic-factory-pushes-a-type-parameter-argument-it-also-reassigns -->
-A generic factory that reassigns its `T` parameter and pushes it into an array it builds owns neither the
+<!-- test: a-generic-factory-pushes-a-copy-of-a-type-parameter-argument-it-also-reassigns -->
+A generic factory that copies its `T` parameter into a local it reassigns and pushes the local into an array it builds owns neither the
 caller's cell nor a second reference to the pushed value: the caller's variable and the array each keep what
 they hold, and the leak gate is clean.
 ```maxon
@@ -4784,12 +4782,13 @@ type Hold uses U
 
 	static function of(first U, replacement U, swap bool) returns Hold
 		var xs = Items.create()
+		var chosen = first
 
 		if swap 'swapped'
-			first = replacement
+			chosen = replacement
 		end 'swapped'
 
-		xs.push(first)
+		xs.push(chosen)
 		return Hold{items: xs}
 	end 'of'
 end 'Hold'
@@ -4797,9 +4796,9 @@ end 'Hold'
 typealias TextHold = Hold with String
 
 function main() returns ExitCode
-	var original = longText("original")
+	let original = longText("original")
 	let swapped = TextHold.of(original, replacement: longText("replacement"), swap: true)
-	var other = longText("kept")
+	let other = longText("kept")
 	let kept = TextHold.of(other, replacement: longText("unused"), swap: false)
 
 	for s in swapped.items 'each'
@@ -4822,7 +4821,7 @@ kept payload long enough to allocate
 ```
 
 <!-- test: a-concrete-factory-pushes-a-string-argument-it-also-reassigns -->
-The concrete twin of the case above: a `String` parameter that is reassigned and then pushed into an array the
+The concrete twin of the case above: a `mutable` `String` parameter that is reassigned and then pushed into an array the
 factory builds, with the caller's variable and the array each keeping what they hold.
 ```maxon
 function longText(tag String) returns String
@@ -4836,7 +4835,7 @@ type Hold
 	typealias Items = Array with String
 	export var items as Items
 
-	static function of(first String, replacement String, swap bool) returns Hold
+	static function of(first mutable String, replacement String, swap bool) returns Hold
 		var xs = Items.create()
 
 		if swap 'swapped'
@@ -5093,8 +5092,8 @@ end 'main'
 0
 ```
 
-<!-- test: a-generic-factory-stores-a-type-parameter-argument-it-also-reassigns -->
-A generic factory that reassigns its `T` parameter and then stores it in the record it builds leaves the caller's
+<!-- test: a-generic-factory-stores-a-copy-of-a-type-parameter-argument-it-also-reassigns -->
+A generic factory that copies its `T` parameter into a local it reassigns and then stores the local in the record it builds leaves the caller's
 variable and the record each holding their own reference, and the leak gate is clean.
 ```maxon
 function longText(tag String) returns String
@@ -5108,20 +5107,22 @@ type Wrap uses U
 	export var item as U
 
 	static function of(first U, replacement U, swap bool) returns Wrap
+		var chosen = first
+
 		if swap 'swapped'
-			first = replacement
+			chosen = replacement
 		end 'swapped'
 
-		return Wrap{item: first}
+		return Wrap{item: chosen}
 	end 'of'
 end 'Wrap'
 
 typealias TextWrap = Wrap with String
 
 function main() returns ExitCode
-	var original = longText("original")
+	let original = longText("original")
 	let swapped = TextWrap.of(original, replacement: longText("replacement"), swap: true)
-	var other = longText("kept")
+	let other = longText("kept")
 	let kept = TextWrap.of(other, replacement: longText("unused"), swap: false)
 	print("{swapped.item}\n")
 	print("{kept.item}\n")
@@ -5133,7 +5134,7 @@ end 'main'
 ```stdout
 replacement payload long enough to allocate
 kept payload long enough to allocate
-replacement payload long enough to allocate
+original payload long enough to allocate
 kept payload long enough to allocate
 ```
 ```exitcode

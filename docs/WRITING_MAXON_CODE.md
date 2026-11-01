@@ -407,7 +407,7 @@ function printStatus()
 	print("OK\n")
 end 'printStatus'
 
-// Default parameters (not on an overloaded name whose declarations differ — E2015):
+// Default parameters:
 function connect(host String, port Port = 8080) returns Connection
 	// ...
 end 'connect'
@@ -822,8 +822,8 @@ let gone = try arr.remove(0) otherwise 0  // remove at index (throws)
 arr.clear()                               // remove all
 arr.sort()                                // in-place stable sort (Element is Comparable)
 arr.sortUnstable()                        // in-place unstable sort (Element is Comparable)
-arr.sort(cmp)                             // sort with comparator: function(Element, Element) returns Ordering
-arr.sortUnstable(cmp)                     // unstable sort with comparator
+arr.sortBy(cmp)                           // sort with comparator: function(Element, Element) returns Ordering
+arr.sortUnstableBy(cmp)                   // unstable sort with comparator
 ```
 
 ### Maps
@@ -1032,7 +1032,7 @@ Closure literals start with the `function` keyword:
 typealias Integer = int(i64.min to i64.max)
 
 let double = function(n Integer) gives n * 2
-items.sort(function(a, b) gives a.priority.compare(b.priority))
+items.sortBy(function(a, b) gives a.priority.compare(b.priority))
 let always42 = function(_ Integer) gives 42
 ```
 
@@ -1152,6 +1152,13 @@ payloads, a typealias's target, an `implements`, `where` or `extends` clause, an
 For that rule the tiers are ordered default < `module` < `export` < `public`, and naming a narrower type is
 E3167.
 
+A top-level name is declared once per directory, whatever its visibility and kind: a `type`, `enum`,
+`union`, `interface`, `typealias`, top-level `let` or `var`, and `function` share one namespace, and a second
+declaration in the directory is **E3006**. Two directories may each declare the name; a bare name means the
+reader's own directory's declaration, else the root's, else the one visible declaration, and
+**E3063**/**E3095** ask for `dir.name` where several are equally near. A function name is declared once per
+directory and a method name once per type: Maxon has no overloading.
+
 At most one modifier may be written. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `var`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.
 
 ```maxon
@@ -1206,8 +1213,9 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
   that does more than they declare is **E3189**.
 - `var b = a` and `let b = a` from a `var` `a` **move** it: reading `a` afterwards is **E3102**. `var b = a`
   from a `let` `a` is **E3078**; use `.clone()` for a mutable copy.
-- A parameter the function assigns to is passed by reference; passing a read-only value to it is **E3159**.
-  Passing storage to a parameter the callee reassigns while another argument reaches it is **E3186**.
+- A parameter is a `let`: reassigning it is **E2013**. A value-type parameter the function reassigns is marked
+  `mutable` and is passed by reference; passing a read-only value, a literal or an expression to it is
+  **E3159**. Passing storage to a `mutable` parameter while another argument reaches it is **E3186**.
 
 ### Purity and discarded results
 

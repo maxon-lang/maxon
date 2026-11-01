@@ -653,9 +653,9 @@ stage-2 self-compile.
 `emitStrideDispatch`'s two constants now come out of `singleOpStrideBytes` too, so the two stamps are
 written ONCE and the compile-time answer cannot disagree with the runtime compares it replaces.
 
-Two same-named non-`export` file-level `let`s in different files each resolve to their own declaration, so
+Two same-named non-`export` file-level `let`s in files of different directories each resolve to their own declaration, so
 this pass's labels and `InlineLeaves`' cannot collide;
-`top-level-let/file-private-same-name-same-directory-every-kind` pins it.
+`top-level-let/file-private-same-name-three-directories-every-kind` pins it.
 
 **Left open**: the byte arm above; block REORDERING, whose clearest exhibit this loop was and no longer is;
 and the type/layout incoherence itself — a container declared over a type parameter genuinely has a

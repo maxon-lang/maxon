@@ -1,5 +1,4 @@
-let CaseLabel = "freed-box-fill"
-let HeapFixtureName = "heap"
+let AFreedBoxIsFilledOnlyWhenTheBuildAsksForItCaseLabel = "freed-box-fill"
 
 let BoxFreeName = "__mm_free"
 let FreedBoxDoorName = "__slab_free_box"
@@ -7,14 +6,12 @@ let PlainFreeName = "__slab_free_tracked"
 
 let BranchLinkPrefix = "arm64.bl "
 let FillMnemonic = "arm64.arm64MemFill 0x3f"
-let BuildTargetOption = "--target="
-let EmitRuntimeOption = "--emit-ir-runtime="
 let AbsentFunctionPhrase = "this program contains nothing named "
 
 let FillReason = "A freed managed box is filled with 0x3F only by a build that asks for it with the poison option. Every other build frees a box through the plain slab free without writing to it, so the fill costs nothing there; a build that asks must route `__mm_free` through the door that fills, whose body writes the fill byte."
 
 test 'a freed box is filled only when the build asks for it'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: CaseLabel, fixture: HeapFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: AFreedBoxIsFilledOnlyWhenTheBuildAsksForItCaseLabel, fixture: HeapFixtureName)
 
 	var findings = StringArray.create()
 	noteUnpoisoned(findings, staged: staged, target: MacosTargetName)
@@ -26,7 +23,7 @@ test 'a freed box is filled only when the build asks for it'
 end 'a freed box is filled only when the build asks for it'
 
 function noteUnpoisoned(findings StringArray, staged FilePath, target String)
-	let label = "{CaseLabel}-default"
+	let label = "{AFreedBoxIsFilledOnlyWhenTheBuildAsksForItCaseLabel}-default"
 	let body = functionBody(irLines(buildStagedProgram(staged, caseLabel: label, target: target, functionName: BoxFreeName)), functionName: BoxFreeName, target: target)
 
 	if bodyLineCount(body, startingWith: BranchLinkPrefix, containing: "", endingWith: " {PlainFreeName}") != 1 'noPlainFree'
@@ -38,20 +35,20 @@ function noteUnpoisoned(findings StringArray, staged FilePath, target String)
 	end 'callsTheFillingDoor'
 
 	var extra = StringArray.create()
-	extra.push("{BuildTargetOption}{target}")
-	extra.push("{EmitRuntimeOption}{FreedBoxDoorName}")
+	extra.push("{TargetOptionPrefix}{target}")
+	extra.push("{EmitIrRuntimeOptionPrefix}{FreedBoxDoorName}")
 
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join("{OutputFileStem}-{label}-door-{target}"), label: label, extraArguments: extra)
 
 	if build.exitCode() == 0 'builtTheDoor'
 		findings.push("on {target}, a default build carries `{FreedBoxDoorName}`")
 	end 'builtTheDoor' else if not "{build.stdout}{build.stderr}".contains("{AbsentFunctionPhrase}'{FreedBoxDoorName}'") 'refusedForAnotherReason'
-		findings.push("on {target}, a default build refused `{EmitRuntimeOption}{FreedBoxDoorName}` without saying the program contains nothing named it. It said: {oneLine(build.stdout)}{oneLine(build.stderr)}")
+		findings.push("on {target}, a default build refused `{EmitIrRuntimeOptionPrefix}{FreedBoxDoorName}` without saying the program contains nothing named it. It said: {oneLine(build.stdout)}{oneLine(build.stderr)}")
 	end 'refusedForAnotherReason'
 end 'noteUnpoisoned'
 
 function notePoisoned(findings StringArray, staged FilePath, target String)
-	let label = "{CaseLabel}-poisoned"
+	let label = "{AFreedBoxIsFilledOnlyWhenTheBuildAsksForItCaseLabel}-poisoned"
 	let lines = irLines(buildStagedProgram(staged, caseLabel: label, target: target, functionName: "{BoxFreeName}{EmittedNameSeparator}{FreedBoxDoorName}", poisonFreed: true))
 	let freeBody = functionBody(lines, functionName: BoxFreeName, target: target)
 	let doorBody = functionBody(lines, functionName: FreedBoxDoorName, target: target)

@@ -31,7 +31,7 @@ export union DiagnosticNote
 	function respelledFor(respellingsOf ShadowRespellingsOf) returns DiagnosticNote
 		return match self 'note'
 			none gives DiagnosticNote.none
-			at(message, line, column, filePath) gives DiagnosticNote.at(respelledText(message, respellings: respellingsOf(filePath)), line: line, column: column, filePath: filePath)
+			at(message, line, column, filePath) gives DiagnosticNote.at(respellingsOf(filePath).respell(message), line: line, column: column, filePath: filePath)
 		end 'note'
 	end 'respelledFor'
 end 'DiagnosticNote'
@@ -102,6 +102,10 @@ export type StdlibShadowSpelling
 		return ShadowRespelling.create(self.bare, shown: self.qualified)
 	end 'libraryNameRespelling'
 
+	function isAuthorNominal() returns bool
+		return self.minted.contains(AuthorMintSeparatorByte as Byte)
+	end 'isAuthorNominal'
+
 	function bareName() returns ByteArray
 		return self.bare
 	end 'bareName'
@@ -154,18 +158,275 @@ end 'cacheReadStdlibShadowSpellingArray'
 
 // @generated library-cache end
 
-export type ShadowRespelling
-	export let minted as ByteArray
-	export let shown as ByteArray
+type ShadowRespelling
+	let minted as ByteArray
+	let shown as ByteArray
 
 	static function create(minted ByteArray, shown ByteArray) returns ShadowRespelling
 		return Self{minted: minted, shown: shown}
 	end 'create'
+
+	function mintedName() returns ByteArray
+		return self.minted
+	end 'mintedName'
+
+	function mintedLength() returns ElementIndex
+		return self.minted.count()
+	end 'mintedLength'
+
+	function beginsAtAWordStart() returns bool
+		return identifierWordEnd(self.minted, from: 0) > 0
+	end 'beginsAtAWordStart'
+
+	function standsAt(bytes ByteArray, at ElementIndex) returns bool
+		return identifierStandsAt(bytes, identifier: self.minted, at: at)
+	end 'standsAt'
+
+	function respell(text String) returns String
+		return withIdentifierRespelled(text, identifier: self.minted, spelling: self.shown)
+	end 'respell'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.minted)
+		writer.bytes(self.shown)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ShadowRespelling throws LibraryCacheDamage
+		let f_minted = try reader.bytes()
+		let f_shown = try reader.bytes()
+
+		return Self{minted: f_minted, shown: f_shown}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ShadowRespelling) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ShadowRespelling'
 
-export typealias ShadowRespellingArray = Array with ShadowRespelling
+typealias ShadowRespellingArray = Array with ShadowRespelling
 
-export typealias ShadowRespellingsOf = function(FilePath) returns ShadowRespellingArray
+// @generated library-cache begin
+function cacheWriteShadowRespellingArray(writer LibraryCacheWriter, value ShadowRespellingArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteShadowRespellingArray'
+
+function cacheReadShadowRespellingArray(reader LibraryCacheReader) returns ShadowRespellingArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ShadowRespellingArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ShadowRespelling.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadShadowRespellingArray'
+
+// @generated library-cache end
+
+typealias RespellingPositionArray = Array with ElementIndex
+
+// @generated library-cache begin
+function cacheWriteRespellingPositionArray(writer LibraryCacheWriter, value RespellingPositionArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteRespellingPositionArray'
+
+function cacheReadRespellingPositionArray(reader LibraryCacheReader) returns RespellingPositionArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RespellingPositionArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRespellingPositionArray'
+
+// @generated library-cache end
+
+typealias RespellingPositionSet = Set with ElementIndex
+
+typealias RespellingPositionsByMint = Map with (ByteArray, RespellingPositionArray)
+
+// @generated library-cache begin
+function cacheWriteRespellingPositionsByMint(writer LibraryCacheWriter, value RespellingPositionsByMint)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteRespellingPositionArray(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteRespellingPositionsByMint'
+
+function cacheReadRespellingPositionsByMint(reader LibraryCacheReader) returns RespellingPositionsByMint throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RespellingPositionsByMint.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadRespellingPositionArray(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadRespellingPositionsByMint'
+
+// @generated library-cache end
+
+export type ShadowRespellings
+	let entries as ShadowRespellingArray
+	let byMinted as RespellingPositionsByMint
+	let unanchored as RespellingPositionArray
+	let reach as ElementIndex
+
+	static function of(entries ShadowRespellingArray) returns ShadowRespellings
+		var byMinted = RespellingPositionsByMint.create()
+		var unanchored = RespellingPositionArray.create()
+		var reach = 0 as ElementIndex
+
+		for (iter, respelling) in entries.withIterator() 'eachRespelling'
+			if not respelling.beginsAtAWordStart() 'noLeadingWordByte'
+				unanchored.push(iter.index())
+				continue
+			end 'noLeadingWordByte'
+
+			var positions = try byMinted.get(respelling.mintedName()) otherwise RespellingPositionArray.create()
+			positions.push(iter.index())
+			byMinted.upsert(respelling.mintedName(), value: positions)
+
+			if respelling.mintedLength() > reach 'aLongerMint'
+				reach = respelling.mintedLength()
+			end 'aLongerMint'
+		end 'eachRespelling'
+
+		return Self{entries: entries, byMinted: byMinted, unanchored: unanchored, reach: reach}
+	end 'of'
+
+	export static function none() returns ShadowRespellings
+		return Self.of(ShadowRespellingArray.create())
+	end 'none'
+
+	// One indexed pass over the original text equals respelling every entry in turn: a replacement never
+	// contains a mint, so no respelling creates an occurrence another one must then find.
+	export function respell(text String) returns String
+		if self.entries.isEmpty() 'nothingToRespell'
+			return text
+		end 'nothingToRespell'
+
+		var spelled = text
+
+		for position in self.candidatePositionsIn(text.toByteArray()) 'eachCandidate'
+			spelled = self.respellingAt(position).respell(spelled)
+		end 'eachCandidate'
+
+		return spelled
+	end 'respell'
+
+	function respellingAt(position ElementIndex) returns ShadowRespelling
+		return try self.entries.get(position) otherwise panic("ShadowRespellings.respellingAt: entries.get OOB at {position}, a position the index recorded over {self.entries.count()} entries")
+	end 'respellingAt'
+
+	function candidatePositionsIn(bytes ByteArray) returns RespellingPositionArray
+		var seen = RespellingPositionSet.create()
+		var found = RespellingPositionArray.create()
+
+		for position in self.unanchored 'eachUnanchored'
+			seen.insert(position)
+			found.push(position)
+		end 'eachUnanchored'
+
+		var at = 0 as ElementIndex
+
+		while at < bytes.count() 'eachWord'
+			let wordEnd = identifierWordEnd(bytes, from: at)
+
+			if wordEnd == at 'notAWordByte'
+				at = at + 1
+				continue
+			end 'notAWordByte'
+
+			self.noteMintsStandingAt(bytes, at: at, seen: seen, found: found)
+			at = wordEnd
+		end 'eachWord'
+
+		found.sort()
+		return found
+	end 'candidatePositionsIn'
+
+	function noteMintsStandingAt(bytes ByteArray, at ElementIndex, seen RespellingPositionSet, found RespellingPositionArray)
+		let limit = at + self.reach
+		var stop = at + 1
+
+		while stop <= limit and stop <= bytes.count() 'eachStopInReach'
+			if stop < bytes.count() and isAlphaNum(try bytes.get(stop) otherwise panic("ShadowRespellings.noteMintsStandingAt: {stop} is below the count the test above bounds")) 'insideAWord'
+				stop = stop + 1
+				continue
+			end 'insideAWord'
+
+			let spelled = try bytes.slice(at, endIndex: stop) otherwise panic("ShadowRespellings.noteMintsStandingAt: slice({at}, {stop}) is inside the text's {bytes.count()} bytes")
+
+			if let positions = try self.byMinted.get(spelled) 'someMintIsSpelledSo'
+				for position in positions 'eachRespellingOfIt'
+					if not seen.contains(position) and self.respellingAt(position).standsAt(bytes, at: at) 'aMintStandsHere'
+						seen.insert(position)
+						found.push(position)
+					end 'aMintStandsHere'
+				end 'eachRespellingOfIt'
+			end 'someMintIsSpelledSo'
+
+			stop = stop + 1
+		end 'eachStopInReach'
+	end 'noteMintsStandingAt'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteShadowRespellingArray(writer, value: self.entries)
+		cacheWriteRespellingPositionsByMint(writer, value: self.byMinted)
+		cacheWriteRespellingPositionArray(writer, value: self.unanchored)
+		writer.unsigned(self.reach as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ShadowRespellings throws LibraryCacheDamage
+		let f_entries = try cacheReadShadowRespellingArray(reader)
+		let f_byMinted = try cacheReadRespellingPositionsByMint(reader)
+		let f_unanchored = try cacheReadRespellingPositionArray(reader)
+		let f_reach = (try reader.unsigned()) as ElementIndex
+
+		return Self{entries: f_entries, byMinted: f_byMinted, unanchored: f_unanchored, reach: f_reach}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(ShadowRespellings) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ShadowRespellings'
+
+function identifierWordEnd(bytes ByteArray, from ElementIndex) returns ElementIndex
+	var at = from
+
+	while at < bytes.count() and isAlphaNum(try bytes.get(at) otherwise panic("identifierWordEnd: {at} is below the count the loop is bounded by")) 'eachWordByte'
+		at = at + 1
+	end 'eachWordByte'
+
+	return at
+end 'identifierWordEnd'
+
+export typealias ShadowRespellingsOf = function(FilePath) returns ShadowRespellings
 
 export typealias WrittenMintSet = Set with ByteArray
 
@@ -192,45 +453,120 @@ end 'cacheReadWrittenMintSet'
 
 // @generated library-cache end
 
+typealias SpellingPositionByMint = Map with (ByteArray, ElementIndex)
+
+// @generated library-cache begin
+function cacheWriteSpellingPositionByMint(writer LibraryCacheWriter, value SpellingPositionByMint)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		writer.unsigned(entry as CacheUnsigned)
+	end 'eachEntry'
+end 'cacheWriteSpellingPositionByMint'
+
+function cacheReadSpellingPositionByMint(reader LibraryCacheReader) returns SpellingPositionByMint throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = SpellingPositionByMint.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = (try reader.unsigned()) as ElementIndex
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadSpellingPositionByMint'
+
+// @generated library-cache end
+
 export type ShadowSpellingRoster
 	export let spellings as StdlibShadowSpellingArray
 	export let mints as WrittenMintSet
+	let authorRespellings as ShadowRespellings
+	let libraryCodeRespellings as ShadowRespellings
+	let positionByMint as SpellingPositionByMint
 
 	export static function of(spellings StdlibShadowSpellingArray) returns ShadowSpellingRoster
 		var mints = WrittenMintSet.create()
+		var positionByMint = SpellingPositionByMint.create()
 
-		for spelling in spellings 'eachSpelling'
+		for (iter, spelling) in spellings.withIterator() 'eachSpelling'
 			mints.insert(spelling.minted)
+
+			if not positionByMint.contains(spelling.minted) 'firstSpellingOfThisMint'
+				positionByMint.upsert(spelling.minted, value: iter.index())
+			end 'firstSpellingOfThisMint'
 		end 'eachSpelling'
 
-		return Self{spellings: spellings, mints: mints}
+		return Self{spellings: spellings, mints: mints, authorRespellings: shadowRespellings(spellings, reader: ShadowSpellingReader.authorCode, written: WrittenMintSet.create()), libraryCodeRespellings: shadowRespellings(spellings, reader: ShadowSpellingReader.libraryCode, written: WrittenMintSet.create()), positionByMint: positionByMint}
 	end 'of'
 
+	export function respellingsFor(reader ShadowSpellingReader) returns ShadowRespellings
+		return match reader 'reader'
+			authorCode gives self.authorRespellings
+			libraryCode gives self.libraryCodeRespellings
+		end 'reader'
+	end 'respellingsFor'
+
 	export static function none() returns ShadowSpellingRoster
-		return Self{spellings: StdlibShadowSpellingArray.create(), mints: WrittenMintSet.create()}
+		return Self.of(StdlibShadowSpellingArray.create())
 	end 'none'
+
+	export function bareSpellingOf(name ByteArray) returns ByteArray
+		let position = try self.positionByMint.get(name) otherwise return name
+		view spelling = try self.spellings.get(position) otherwise panic("ShadowSpellingRoster.bareSpellingOf: spellings.get OOB at {position} of {self.spellings.count()} spellings, a position the roster indexed")
+
+		return spelling.bareName()
+	end 'bareSpellingOf'
+
+	export function authorBareSpellingOf(name ByteArray) returns ByteArray
+		if not name.contains(AuthorMintSeparatorByte as Byte) 'notMintedByTheAuthorsDirectory'
+			return name
+		end 'notMintedByTheAuthorsDirectory'
+
+		return self.bareSpellingOf(name)
+	end 'authorBareSpellingOf'
+
+	export function authorSpelledName(name ByteArray) returns ByteArray
+		if self.spellings.isEmpty() 'nothingIsRenamed'
+			return name
+		end 'nothingIsRenamed'
+
+		return self.authorSpelledText(String.from(name)).toByteArray()
+	end 'authorSpelledName'
+
+	export function authorSpelledText(text String) returns String
+		return self.authorRespellings.respell(text)
+	end 'authorSpelledText'
 
 	// @generated library-cache begin
 	module function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteStdlibShadowSpellingArray(writer, value: self.spellings)
 		cacheWriteWrittenMintSet(writer, value: self.mints)
+		self.authorRespellings.cacheWrite(writer)
+		self.libraryCodeRespellings.cacheWrite(writer)
+		cacheWriteSpellingPositionByMint(writer, value: self.positionByMint)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns ShadowSpellingRoster throws LibraryCacheDamage
 		let f_spellings = try cacheReadStdlibShadowSpellingArray(reader)
 		let f_mints = try cacheReadWrittenMintSet(reader)
+		let f_authorRespellings = try ShadowRespellings.cacheRead(reader)
+		let f_libraryCodeRespellings = try ShadowRespellings.cacheRead(reader)
+		let f_positionByMint = try cacheReadSpellingPositionByMint(reader)
 
-		return Self{spellings: f_spellings, mints: f_mints}
+		return Self{spellings: f_spellings, mints: f_mints, authorRespellings: f_authorRespellings, libraryCodeRespellings: f_libraryCodeRespellings, positionByMint: f_positionByMint}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(ShadowSpellingRoster) as CacheSize16
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(ShadowSpellingRoster) as CacheSize40
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
 end 'ShadowSpellingRoster'
 
-module function shadowRespellings(spellings StdlibShadowSpellingArray, reader ShadowSpellingReader, written WrittenMintSet) returns ShadowRespellingArray
+module function shadowRespellings(spellings StdlibShadowSpellingArray, reader ShadowSpellingReader, written WrittenMintSet) returns ShadowRespellings
 	var respellings = ShadowRespellingArray.create()
 
 	for spelling in spellings 'eachSpelling'
@@ -241,54 +577,22 @@ module function shadowRespellings(spellings StdlibShadowSpellingArray, reader Sh
 		respellings.push(ShadowRespelling.create(spelling.minted, shown: spelling.spellingFor(reader)))
 	end 'eachSpelling'
 
-	return respellings
+	return ShadowRespellings.of(respellings)
 end 'shadowRespellings'
 
-module function authorSpelledText(text String, spellings StdlibShadowSpellingArray) returns String
-	return respelledText(text, respellings: authorCodeRespellings(spellings))
-end 'authorSpelledText'
-
-module function authorCodeRespellings(spellings StdlibShadowSpellingArray) returns ShadowRespellingArray
-	return shadowRespellings(spellings, reader: ShadowSpellingReader.authorCode, written: WrittenMintSet.create())
-end 'authorCodeRespellings'
-
-module function libraryNameRespellings(spellings StdlibShadowSpellingArray) returns ShadowRespellingArray
+module function libraryNameRespellings(spellings StdlibShadowSpellingArray) returns ShadowRespellings
 	var respellings = ShadowRespellingArray.create()
 
 	for spelling in spellings 'eachSpelling'
+		if spelling.isAuthorNominal() 'anAuthorsOwnTypeIsNotALibraryName'
+			continue
+		end 'anAuthorsOwnTypeIsNotALibraryName'
+
 		respellings.push(spelling.libraryNameRespelling())
 	end 'eachSpelling'
 
-	return respellings
+	return ShadowRespellings.of(respellings)
 end 'libraryNameRespellings'
-
-module function bareSpellingOf(name ByteArray, spellings StdlibShadowSpellingArray) returns ByteArray
-	for spelling in spellings 'eachSpelling'
-		if spelling.minted.equals(name) 'thisMint'
-			return spelling.bareName()
-		end 'thisMint'
-	end 'eachSpelling'
-
-	return name
-end 'bareSpellingOf'
-
-module function authorSpelledName(name ByteArray, spellings StdlibShadowSpellingArray) returns ByteArray
-	if spellings.isEmpty() 'nothingIsRenamed'
-		return name
-	end 'nothingIsRenamed'
-
-	return authorSpelledText(String.from(name), spellings: spellings).toByteArray()
-end 'authorSpelledName'
-
-module function respelledText(text String, respellings ShadowRespellingArray) returns String
-	var spelled = text
-
-	for respelling in respellings 'eachRespelling'
-		spelled = withIdentifierRespelled(spelled, identifier: respelling.minted, spelling: respelling.shown)
-	end 'eachRespelling'
-
-	return spelled
-end 'respelledText'
 
 function withIdentifierRespelled(text String, identifier ByteArray, spelling ByteArray) returns String
 	let bytes = text.toByteArray()
@@ -334,20 +638,30 @@ function identifierStandsAt(bytes ByteArray, identifier ByteArray, at ElementInd
 		end 'differs'
 	end 'eachIdentifierByte'
 
-	if at > 0 and continuesAName(try bytes.get(at - 1) otherwise panic("identifierStandsAt: {at - 1} precedes an index within the text")) 'continuesAnEarlierName'
+	if at > 0 and continuesAName(try bytes.get(at - 1) otherwise panic("identifierStandsAt: {at - 1} precedes an index within the text"), identifier: identifier) 'continuesAnEarlierName'
 		return false
 	end 'continuesAnEarlierName'
 
-	if past < bytes.count() and isAlphaNum(try bytes.get(past) otherwise panic("identifierStandsAt: {past} is below the text's count")) 'continuesIntoALongerName'
+	if past < bytes.count() and isMintNameByte(try bytes.get(past) otherwise panic("identifierStandsAt: {past} is below the text's count")) 'continuesIntoALongerName'
 		return false
 	end 'continuesIntoALongerName'
 
 	return true
 end 'identifierStandsAt'
 
-function continuesAName(before Byte) returns bool
-	return isAlphaNum(before) or before == '.'
+function continuesAName(before Byte, identifier ByteArray) returns bool
+	if before == '.' and identifier.contains(AuthorMintSeparatorByte as Byte) 'aMintShownQualified'
+		return false
+	end 'aMintShownQualified'
+
+	return isMintNameByte(before) or before == '.'
 end 'continuesAName'
+
+// A mint is `~`-joined words, so the separator is a name byte: a shorter mint (`b~Box`) is never a
+// standalone word inside a longer one (`a~b~Box`).
+function isMintNameByte(b Byte) returns bool
+	return isAlphaNum(b) or b == AuthorMintSeparatorByte as Byte
+end 'isMintNameByte'
 
 // ⭐⭐ **THE USER CONSTRUCT A LIBRARY-BODY DIAGNOSTIC IS REALLY ABOUT (BLAME).**
 //
@@ -391,7 +705,7 @@ export union DiagnosticAnchor
 		end 'anchor'
 	end 'reportedUnder'
 
-	function respellings(programWide ShadowRespellingArray, respellingsOf ShadowRespellingsOf) returns ShadowRespellingArray
+	function respellings(programWide ShadowRespellings, respellingsOf ShadowRespellingsOf) returns ShadowRespellings
 		return match self 'anchor'
 			programWide gives programWide
 			file(filePath) gives respellingsOf(filePath)
@@ -540,8 +854,8 @@ export type Diagnostic
 		return Self{code: self.code, message: self.message, anchor: self.anchor.reportedUnder(origins), note: self.note.reportedUnder(origins)}
 	end 'reportedUnder'
 
-	export function respelledFor(programWide ShadowRespellingArray, respellingsOf ShadowRespellingsOf) returns Diagnostic
-		return Self{code: self.code, message: respelledText(self.message, respellings: self.anchor.respellings(programWide, respellingsOf: respellingsOf)), anchor: self.anchor, note: self.note.respelledFor(respellingsOf)}
+	export function respelledFor(programWide ShadowRespellings, respellingsOf ShadowRespellingsOf) returns Diagnostic
+		return Self{code: self.code, message: self.anchor.respellings(programWide, respellingsOf: respellingsOf).respell(self.message), anchor: self.anchor, note: self.note.respelledFor(respellingsOf)}
 	end 'respelledFor'
 
 	// Render as `error <code>: <message>` — the exact wire format the spec's

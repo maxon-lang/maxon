@@ -139,3 +139,21 @@ end 'main'
 ```maxoncstderr
 error E2067: <fragment>:3:14: a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)
 ```
+
+<!-- test: abs.a-generic-function-named-abs-is-the-one-called -->
+A file that declares `abs` means its own: the math builtin is the compiler's only while no file declares the
+name. Returns 7.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function abs(x T) uses T returns T
+	return x
+end 'abs'
+
+function main() returns ExitCode
+	return (abs(0 - 3 as Integer) + 10) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```

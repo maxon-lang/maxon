@@ -35,7 +35,7 @@ public type Hasher
 		return (state xor value) * Fnv1aPrime
 	end 'combined'
 
-	public static function combined(state HashDigest, bytes ByteArray) returns HashDigest
+	public static function combinedBytes(state HashDigest, bytes ByteArray) returns HashDigest
 		var folded = state
 
 		for b in bytes 'each'
@@ -43,7 +43,7 @@ public type Hasher
 		end 'each'
 
 		return folded
-	end 'combined'
+	end 'combinedBytes'
 
 	/// Start a fold at the FNV-1a offset basis.
 	public static function create() returns Self
@@ -60,9 +60,9 @@ public type Hasher
 		state = Self.combined(state, value: value)
 	end 'combine'
 
-	public function combine(bytes ByteArray)
-		state = Self.combined(state, bytes: bytes)
-	end 'combine'
+	public function combineBytes(bytes ByteArray)
+		state = Self.combinedBytes(state, bytes: bytes)
+	end 'combineBytes'
 
 	/// The RAW running state, never an avalanched digest: `resume(finalize())` must reconstruct
 	/// the fold exactly, and a caller threading the value through its own structures relies on it.

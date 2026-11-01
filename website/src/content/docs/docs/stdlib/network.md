@@ -26,8 +26,7 @@ lines, asks that one nameserver only, and waits on it for as long as it takes to
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Resolve `host` and connect. `resolveFailed` or `connectFailed`. |
-| `TcpClient.connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs)` | `TcpClient` | `NetworkError` | The same, throwing `timedOut` when the connection is not made within `deadlineMs`; `0` waits with no deadline. |
+| `TcpClient.connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs = 0)` | `TcpClient` | `NetworkError` | Resolve `host` and connect. `resolveFailed` or `connectFailed`, or `timedOut` when the connection is not made within `deadlineMs`; `0` waits with no deadline. |
 | `TcpClient.adopt(socket)` | `TcpClient` | — | Wrap an already-connected socket; how `TcpListener.accept()` returns its connections. |
 | `send(data String)` | `int(0 to u64.max)` | `NetworkError` | Send every byte, looping over partial sends; returns the byte count. |
 | `recv(bufferSize RecvCapacity)` | `String` | `NetworkError` | Between one and `bufferSize` bytes. Throws `connectionClosed` when the peer has closed. |
@@ -248,7 +247,7 @@ bytes are the application data, and a write is split into records of at most 16 
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `send(data String)`, `send(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. A send that fails part-way, at its write deadline or on a transport error, fails the write side for good: this call throws the failure and every later `send` and `shutdownWrite` throws the same one, because the peer may hold part of a record. |
+| `send(data String)`, `sendBytes(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. A send that fails part-way, at its write deadline or on a transport error, fails the write side for good: this call throws the failure and every later `send` and `shutdownWrite` throws the same one, because the peer may hold part of a record. |
 | `handshake()` | — | `TlsError` | Run the handshake if it has not run; a stream whose handshake has completed returns at once. `send`, `recv` and `shutdownWrite` run it first. A failure is thrown here, closes the connection, and every later call throws `closed`. |
 | `recv(bufferSize RecvCapacity)` | `String` | `TlsError` | Between one and `bufferSize` bytes of application data. |
 | `recvBytes(bufferSize RecvCapacity)` | `ByteArray` | `TlsError` | The same bytes, unconverted. After the peer's close_notify and the data before it, `connectionClosed`; a TCP connection that ends without one, `truncated`. |
@@ -746,7 +745,7 @@ lines ahead of the request line are skipped. Header lines follow [Header parsing
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `security()` | `HttpConnectionSecurity` | — | Whether the request arrived over TLS, and what the handshake settled. See [HTTPS server](#https-server). |
-| `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>` (`https://` on a TLS server), so `path()` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
+| `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>` (`https://` on a TLS server), so `path` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
 | `respond(response HttpResponse)` | — | `HttpServerError` | Write the response and close the connection. Throws `alreadyResponded` on a second answer, `invalidResponse` for a response the rules below refuse, and `sendFailed` when the write fails or outlasts `writeDeadlineMs`. |
 | `respondWith(code StatusCode, body String, contentType String)` | — | `HttpServerError` | Answer a status, a body and its content type, as `respond` does. |
 
@@ -862,8 +861,8 @@ end 'main'
 |--------|---------|--------|-------------|
 | `URL.parse(input String)` | `URL` | `URLError` | Parse an absolute URL or a relative reference. |
 | `URL.resolve(base URL, reference String)` | `URL` | `URLError` | Resolve `reference` against `base` (RFC 3986 section 5). |
-| `scheme()` | `String` | — | `""` for a relative reference. |
-| `path()` | `String` | — | Always present, possibly empty. |
+| `scheme` | `String` | — | A field: `""` for a relative reference. |
+| `path` | `String` | — | A field: always present, possibly empty. |
 | `host()` | `String` | `URLError.fieldNotPresent` | The host with an IP literal's brackets removed: `::1` for `http://[::1]/`, the address a socket connects to. |
 | `authorityHost()` | `String` | `URLError.fieldNotPresent` | The host as the authority spells it, an IP literal keeping its brackets: `[::1]`. It is what `toString()` writes and what a `Host` header carries. |
 | `port()` | `int(0 to 65535)` | `URLError.fieldNotPresent` | |
@@ -890,7 +889,7 @@ function main() returns ExitCode
 	let host = try url.host() otherwise ""
 	let port = try url.port() otherwise 0
 	let query = try url.query() otherwise ""
-	print("{url.scheme()} {host} {port} {url.path()} {query} {url}\n")
+	print("{url.scheme} {host} {port} {url.path} {query} {url}\n")
 
 	let base = try URL.parse("http://a/b/c/d?q") otherwise return 1
 	let resolved = try URL.resolve(base, reference: "../g") otherwise return 1

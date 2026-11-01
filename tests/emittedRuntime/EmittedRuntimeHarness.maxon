@@ -1,11 +1,12 @@
 export let FixturesDirName = "tests/emittedRuntime/fixtures"
 export let SpawnFixtureName = "spawn"
 export let PinnedMachineFixtureName = "pinned-machine"
+export let HeapFixtureName = "heap"
 export let PinnedMachineBlockedFixtureName = "pinned-machine-blocked"
 export let StagingRootDirName = "temp/emittedRuntime"
 
-let TargetOptionPrefix = "--target="
-let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
+export let TargetOptionPrefix = "--target="
+export let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
 let DebugStreamOption = "--debugstream"
 export let PoisonFreedOption = "--poison-freed"
 export let EmittedNameSeparator = ","
@@ -481,7 +482,7 @@ export function buildMacosImage(staged FilePath, label String) returns FilePath
 end 'buildMacosImage'
 
 export function noteImageName(findings StringArray, image ByteArray, name String, present bool, why String)
-	if image.contains(asciiBytes(name)) == present 'asDemanded'
+	if image.containsSequence(asciiBytes(name)) == present 'asDemanded'
 		return
 	end 'asDemanded'
 
@@ -500,3 +501,8 @@ function asciiBytes(name String) returns ByteArray
 
 	return bytes
 end 'asciiBytes'
+
+module let RunDeadline = 30000 as DurationMs
+module let SoleProcessor = 1
+module let TwoProcessors = 2
+module let FourProcessors = 4

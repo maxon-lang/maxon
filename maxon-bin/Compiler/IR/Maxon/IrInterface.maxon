@@ -216,10 +216,7 @@ end 'witnessTableLabel'
 // ⭐⭐ **THE KEY IDENTIFYING ONE WITNESS-TABLE SLOT — `(conformer, interface, method)`.** It is what
 // `ConformanceCheck` files its SELECTED impl under and what `LowerMaxonToStd.ensureWitnessTable` reads that
 // selection back by, so the member a conformance ACCEPTED and the symbol a slot's relocation NAMES are one
-// value rather than two joins of the same names that happen to agree. The two joins genuinely diverge under
-// overload resolution: a requirement satisfied by a later overload is registered `Type.method#Suffix` while
-// an un-suffixed join spells the FIRST declaration, so both sites minting their own is a silent wrong
-// dispatch.
+// value rather than two joins of the same names that happen to agree.
 //
 // It is BUILT ON the table label rather than beside it, so the pair half of the key cannot drift from the
 // label the slot actually belongs to — and the method half is held to the same separator-freedom the
@@ -1006,6 +1003,7 @@ export type InterfaceMethodSig
 	// parameter `k + 1` of a conformer's body (`SummaryCallDispatch.requirementFirstPosition`).
 	export let paramCapabilities as ParamCapabilityArray
 	export let returnCapability as ResultCapability
+	export let byRefParams as ParamPositionMask
 
 	export function paramCapabilityAt(position ElementIndex) returns ParamCapability
 		return try self.paramCapabilities.get(position) otherwise panic("InterfaceMethodSig.paramCapabilityAt: position {position} is past the {self.paramCapabilities.count()} parameters of '{String.from(self.name)}'")
@@ -1031,12 +1029,12 @@ export type InterfaceMethodSig
 
 	export let written as WrittenTypeNames
 
-	export static function create(name ByteArray, paramNames NameRoster, paramTypeNames NameRoster, paramTypes RequirementTypeArray, returnTypeName ByteArray, returnType RequirementType, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, nameLine LineNumber, nameColumn ColumnNumber, written WrittenTypeNames) returns InterfaceMethodSig
-		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnTypeName, returnType: returnType, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: returnCapability, nameLine: nameLine, nameColumn: nameColumn, written: written}
+	export static function create(name ByteArray, paramNames NameRoster, paramTypeNames NameRoster, paramTypes RequirementTypeArray, returnTypeName ByteArray, returnType RequirementType, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, byRefParams ParamPositionMask, nameLine LineNumber, nameColumn ColumnNumber, written WrittenTypeNames) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnTypeName, returnType: returnType, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: returnCapability, byRefParams: byRefParams, nameLine: nameLine, nameColumn: nameColumn, written: written}
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns InterfaceMethodSig
-		return Self{name: self.name, paramNames: self.paramNames, paramTypeNames: self.paramTypeNames, paramTypes: renumberedRequirements(self.paramTypes, remap: remap), returnTypeName: self.returnTypeName, returnType: self.returnType.withInstancesRenumbered(remap), isStatic: self.isStatic, throwsClause: self.throwsClause, paramIsBuffer: self.paramIsBuffer, paramCapabilities: self.paramCapabilities, returnCapability: self.returnCapability, nameLine: self.nameLine, nameColumn: self.nameColumn, written: self.written}
+		return Self{name: self.name, paramNames: self.paramNames, paramTypeNames: self.paramTypeNames, paramTypes: renumberedRequirements(self.paramTypes, remap: remap), returnTypeName: self.returnTypeName, returnType: self.returnType.withInstancesRenumbered(remap), isStatic: self.isStatic, throwsClause: self.throwsClause, paramIsBuffer: self.paramIsBuffer, paramCapabilities: self.paramCapabilities, returnCapability: self.returnCapability, byRefParams: self.byRefParams, nameLine: self.nameLine, nameColumn: self.nameColumn, written: self.written}
 	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
@@ -1052,6 +1050,7 @@ export type InterfaceMethodSig
 		cacheWriteBoolArray(writer, value: self.paramIsBuffer)
 		cacheWriteParamCapabilityArray(writer, value: self.paramCapabilities)
 		writer.unsigned(self.returnCapability.ordinal as CacheUnsigned)
+		writer.unsigned(self.byRefParams as CacheUnsigned)
 		writer.unsigned(self.nameLine as CacheUnsigned)
 		writer.unsigned(self.nameColumn as CacheUnsigned)
 		self.written.cacheWrite(writer)
@@ -1069,15 +1068,16 @@ export type InterfaceMethodSig
 		let f_paramIsBuffer = try cacheReadBoolArray(reader)
 		let f_paramCapabilities = try cacheReadParamCapabilityArray(reader)
 		let f_returnCapability = try cacheReadResultCapability(reader)
+		let f_byRefParams = (try reader.unsigned()) as ParamPositionMask
 		let f_nameLine = (try reader.unsigned()) as LineNumber
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
 		let f_written = try WrittenTypeNames.cacheRead(reader)
 
-		return Self{name: f_name, paramNames: f_paramNames, paramTypeNames: f_paramTypeNames, paramTypes: f_paramTypes, returnTypeName: f_returnTypeName, returnType: f_returnType, isStatic: f_isStatic, throwsClause: f_throwsClause, paramIsBuffer: f_paramIsBuffer, paramCapabilities: f_paramCapabilities, returnCapability: f_returnCapability, nameLine: f_nameLine, nameColumn: f_nameColumn, written: f_written}
+		return Self{name: f_name, paramNames: f_paramNames, paramTypeNames: f_paramTypeNames, paramTypes: f_paramTypes, returnTypeName: f_returnTypeName, returnType: f_returnType, isStatic: f_isStatic, throwsClause: f_throwsClause, paramIsBuffer: f_paramIsBuffer, paramCapabilities: f_paramCapabilities, returnCapability: f_returnCapability, byRefParams: f_byRefParams, nameLine: f_nameLine, nameColumn: f_nameColumn, written: f_written}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize112
-		return sizeof(InterfaceMethodSig) as CacheSize112
+	static function cacheLayoutBytes() returns CacheSize120
+		return sizeof(InterfaceMethodSig) as CacheSize120
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2381,7 +2381,7 @@ end 'witnessTargetIsProtocol'
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
 // runtime chunks with no error channel — so the throws clause is `none` at both helpers.
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray, returnType RequirementType) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(), paramTypeNames: NameRoster.create(), paramTypes: RequirementTypeArray.create(), returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: lentParams(0), returnCapability: ResultCapability.unqualified, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(), paramTypeNames: NameRoster.create(), paramTypes: RequirementTypeArray.create(), returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: lentParams(0), returnCapability: ResultCapability.unqualified, byRefParams: NoParamPositions, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
@@ -2394,7 +2394,7 @@ function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName
 	paramTypes.push(paramType)
 	let paramIsBuffer = InterfaceMethodSig.noBufferParams(paramNames.count() as ParamCount)
 	let paramCapabilities = lentParams(paramNames.count() as ParamCount)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: ResultCapability.unqualified, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: ResultCapability.unqualified, byRefParams: NoParamPositions, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'unaryInterfaceMethod'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized

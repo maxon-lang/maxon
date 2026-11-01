@@ -201,7 +201,7 @@ The real motivation: Array.contains requiring Element is Equatable.
 ```maxon
 function main() returns ExitCode
 	let nums = [10, 20, 30, 40]
-	if nums.contains([20]) 'found'
+	if nums.containsSequence([20]) 'found'
 		return 1
 	end 'found'
 	return 0
@@ -371,7 +371,7 @@ from the name withholds the method from `Packed`.
 
 <!-- test: conditional-extensions.binding-over-an-alias-two-files-declare -->
 ```maxon
-// --- file: holder.maxon
+// --- file: holder/holder.maxon
 export interface Holder uses Item
 	function get() returns Item
 end 'Holder'
@@ -382,7 +382,7 @@ extension Holder where Item is Equatable
 	end 'witnessed'
 end 'Holder'
 
-// --- file: packed.maxon
+// --- file: packed/packed.maxon
 typealias Bag = Array with Byte
 
 type Packed implements Holder with Bag
@@ -401,7 +401,7 @@ export function packedWitnessed() returns ExitCode
 	return Packed.create().witnessed()
 end 'packedWitnessed'
 
-// --- file: loose.maxon
+// --- file: loose/loose.maxon
 type Opaque
 	let tag as ExitCode
 end 'Opaque'
@@ -447,7 +447,7 @@ type `other` as an array of strings.
 
 <!-- test: conditional-extensions.associated-type-in-an-extension-body-over-an-alias-two-files-declare -->
 ```maxon
-// --- file: holder.maxon
+// --- file: holder/holder.maxon
 typealias Bag = Array with String
 
 export interface Holder uses Item
@@ -461,7 +461,7 @@ extension Holder where Item is Equatable
 	end 'weigh'
 end 'Holder'
 
-// --- file: packed.maxon
+// --- file: packed/packed.maxon
 typealias Bag = Array with Byte
 
 type Packed implements Holder with Bag
@@ -480,7 +480,7 @@ export function packedWeight() returns ExitCode
 	return Packed.create().weigh(Bag from [1, 2, 3])
 end 'packedWeight'
 
-// --- file: loose.maxon
+// --- file: loose/loose.maxon
 type Opaque
 	let tag as ExitCode
 end 'Opaque'

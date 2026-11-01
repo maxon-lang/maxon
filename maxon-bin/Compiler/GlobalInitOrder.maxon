@@ -26,9 +26,8 @@
 // ⚠ **"NAMED" IS ABOUT WHICH FUNCTION, NOT ABOUT WHETHER THE BRANCH RUNS.** A call under an `if` is an edge
 // like any other — that is what every reachability walk in this compiler means by a call graph, and what the
 // cycle case in `specs/lazy-static-observable.md` rests on. What `named` excludes is an edge to a
-// function the op does not name at all: a member of an OVERLOAD SET (a call op carries the set's base name
-// until `SemanticCheck.resolveOverloadedCalls`, which runs after this), a minted parameter-default helper,
-// and the witness impls a reached conformer's tables might dispatch through.
+// function the op does not name at all: a minted parameter-default helper, and the witness impls a reached
+// conformer's tables might dispatch through.
 //
 // ⭐ **THE EVIDENCE IS THE EMITTED `globalAddr`, AND IT IS BIDIRECTIONAL** — the same op, read the same way,
 // as `DeadGlobalElimination.liveGlobalLabels`. A WRITE opens with `globalAddr` exactly as a read does, so an
@@ -37,8 +36,8 @@
 // from inside an initializer.
 //
 // ⭐ **THE EDGE PRIMITIVES ARE `StdlibSource`'s** — `markMaxonCalleeEdge` for a direct call / `functionRef` /
-// `serviceSend`, `markReachable` for the overload-set and parameter-default widening,
-// `markConformerWitnessImpls` for a reached type's witness impls, `markOneReachable` for the unwidened edge.
+// `serviceSend`, `markConformerWitnessImpls` for a reached type's witness impls, `markOneReachable` for one
+// callee name.
 // It is deliberately NOT the same WALK, and both divergences are in the safe direction for the set that
 // reads them:
 //
@@ -181,9 +180,8 @@ end 'anyInitializerCalls'
 // is the failure this split exists to prevent.
 //
 // ⚠ **A DROPPED EDGE IS A RESIDUAL, STATED RATHER THAN HIDDEN.** Were such an edge real, the order it would
-// have forced is lost and that global reads a zero. The alternative is refusing every program whose overload
-// members happen to cross-reference — MEASURED, and the defect this split repairs. Removing the residual
-// means resolving overloads, which happens after this point in the pipeline.
+// have forced is lost and that global reads a zero. The alternative is refusing every program whose witness
+// impls happen to cross-reference, and which impl a dispatch runs is a fact about its receiver.
 function buildEffectiveDeps(nodeCount ElementIndex, named GlobalInitDependencies, possible GlobalInitDependencies, refusal InitCycleRefusal, project Project) returns GlobalInitDependencies throws CompileError
 	var effective = GlobalInitDependencies.create()
 
@@ -366,7 +364,7 @@ function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSi
 	var worklist = FuncIndexArray.create()
 
 	for root in roots 'eachRoot'
-		markCalleeEdge(root, project: project, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
+		markCalleeEdge(root, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
 	end 'eachRoot'
 
 	while worklist.count() > 0 'walk'
@@ -382,7 +380,7 @@ function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSi
 
 			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("slotsReadFrom: opRef {opIdx} not in module.ops")
-				markOpCallee(op, project: project, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
+				markOpCallee(op, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
 				noteSlotNamed(op, slotOf: slotOf, claimed: claimed, found: found)
 			end 'eachOp'
 		end 'eachBlock'
@@ -392,40 +390,34 @@ function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSi
 end 'slotsReadFrom'
 
 // The callee an op binds, credited at this confidence. `possible` is `StdlibSource`'s own edge; `named` asks
-// the same dialect classifier and then declines every name that denotes a SET rather than a function.
-function markOpCallee(op MaxonOp, project Project, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+// the same dialect classifier and then declines a minted parameter-default helper.
+function markOpCallee(op MaxonOp, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match edges 'edges'
-		possible then markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		named then markNamedOpCallee(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		possible then markMaxonCalleeEdge(op, byName: byName, reached: reached, worklist: worklist, names: names)
+		named then markNamedOpCallee(op, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'edges'
 end 'markOpCallee'
 
-function markNamedOpCallee(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markNamedOpCallee(op MaxonOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
-		functionValue then markCalleeEdge(maxonOpCalleeName(op), project: project, edges: EdgeConfidence.named, byName: byName, reached: reached, worklist: worklist, names: names)
+		functionValue then markCalleeEdge(maxonOpCalleeName(op), edges: EdgeConfidence.named, byName: byName, reached: reached, worklist: worklist, names: names)
 		noCallee then break
 	end 'kind'
 end 'markNamedOpCallee'
 
 // One callee NAME, credited at this confidence.
-//
-// ⛔ **A NAME AN OVERLOAD SET CLAIMS IS NOT AN EDGE AT `named` CONFIDENCE, AND NEITHER IS ITS FIRST MEMBER.**
-// A call op carries the SET's base name until `SemanticCheck.resolveOverloadedCalls` rebinds it, so the
-// function that happens to hold the bare spelling is no more the callee than any other member; crediting it
-// would be an unprovable edge wearing an exact one's clothes. The same holds for a minted parameter-default
-// helper, which the same pass re-points.
-function markCalleeEdge(name ByteArray, project Project, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markCalleeEdge(name ByteArray, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match edges 'edges'
-		possible then markReachable(name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		named then markNamedCallee(name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		possible then markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
+		named then markNamedCallee(name, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'edges'
 end 'markCalleeEdge'
 
-function markNamedCallee(name ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	if project.overloadSets.contains(name) or isParamDefaultHelperName(name) 'namesASetRatherThanAFunction'
+function markNamedCallee(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	if isParamDefaultHelperName(name) 'aParamDefaultHelper'
 		return
-	end 'namesASetRatherThanAFunction'
+	end 'aParamDefaultHelper'
 
 	markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
 end 'markNamedCallee'

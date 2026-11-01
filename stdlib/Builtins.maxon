@@ -2196,6 +2196,99 @@ function __radixDigitText(digit RadixDigit, uppercase bool) returns String
 	end 'letter'
 end '__radixDigitText'
 
+enum __QuoteByte
+	tab = 0x09
+	newline = 0x0A
+	carriageReturn = 0x0D
+	doubleQuote = 0x22
+	singleQuote = 0x27
+	backslash = 0x5C
+	openBrace = 0x7B
+	closeBrace = 0x7D
+	delete = 0x7F
+	letterN = 0x6E
+	letterR = 0x72
+	letterT = 0x74
+	letterU = 0x75
+end '__QuoteByte'
+
+let __FirstPrintableByte = 0x20
+let __NybbleShift = 4
+let __NybbleMask = 0xF
+let __ZeroDigitByte = 0x30
+let __UpperLetterAByte = 0x41
+
+public function __String_toQuoted(value String, width PadWidth) returns String
+	return __quotedText(value.toByteArray(), delimiter: __QuoteByte.doubleQuote, escapesBraces: true, width: width)
+end '__String_toQuoted'
+
+public function __Character_toQuoted(value Character, width PadWidth) returns String
+	return __quotedText(value.toString().toByteArray(), delimiter: __QuoteByte.singleQuote, escapesBraces: false, width: width)
+end '__Character_toQuoted'
+
+function __quotedText(bytes ByteArray, delimiter __QuoteByte, escapesBraces bool, width PadWidth) returns String
+	var out = ByteArray.create()
+	out.push(delimiter)
+
+	for b in bytes 'eachByte'
+		__pushQuotedByte(b, out: out, delimiter: delimiter, escapesBraces: escapesBraces)
+	end 'eachByte'
+
+	out.push(delimiter)
+
+	return __leftPadded(String.from(out), width: width as RepeatCount, fill: __SpaceFillText)
+end '__quotedText'
+
+function __pushQuotedByte(b Byte, out ByteArray, delimiter __QuoteByte, escapesBraces bool)
+	if b == delimiter or b == __QuoteByte.backslash or (escapesBraces and (b == __QuoteByte.openBrace or b == __QuoteByte.closeBrace)) 'escapedAsItself'
+		out.push(__QuoteByte.backslash)
+		out.push(b)
+		return
+	end 'escapedAsItself'
+
+	if b == __QuoteByte.newline 'newline'
+		__pushShortEscape(__QuoteByte.letterN, out: out)
+		return
+	end 'newline'
+
+	if b == __QuoteByte.carriageReturn 'carriageReturn'
+		__pushShortEscape(__QuoteByte.letterR, out: out)
+		return
+	end 'carriageReturn'
+
+	if b == __QuoteByte.tab 'tab'
+		__pushShortEscape(__QuoteByte.letterT, out: out)
+		return
+	end 'tab'
+
+	if b < __FirstPrintableByte or b == __QuoteByte.delete 'control'
+		out.push(__QuoteByte.backslash)
+		out.push(__QuoteByte.letterU)
+
+		out.push(__ZeroDigitByte)
+		out.push(__ZeroDigitByte)
+		__pushHexNybble((b shr __NybbleShift) as RadixDigit, out: out)
+		__pushHexNybble((b and __NybbleMask) as RadixDigit, out: out)
+		return
+	end 'control'
+
+	out.push(b)
+end '__pushQuotedByte'
+
+function __pushShortEscape(letter __QuoteByte, out ByteArray)
+	out.push(__QuoteByte.backslash)
+	out.push(letter)
+end '__pushShortEscape'
+
+function __pushHexNybble(nybble RadixDigit, out ByteArray)
+	if nybble < __FirstLetterRadixDigit 'numeral'
+		out.push((__ZeroDigitByte + nybble) as Byte)
+		return
+	end 'numeral'
+
+	out.push((__UpperLetterAByte + nybble - __FirstLetterRadixDigit) as Byte)
+end '__pushHexNybble'
+
 /// A value every thread reads without a lock and a writer replaces whole. Named through an alias
 /// (`typealias ConfigCell = SharedValue with Config`), `ConfigCell.create(v)` makes one;
 /// `current()` returns the value in force; `publish(v)` replaces it; `publish(v, replacing: old)`

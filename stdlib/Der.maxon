@@ -129,35 +129,21 @@ let derLastCodepoint = 0x10FFFF
 
 /// The identifier and length octets of one element.
 public type DerHeader
-	var tagClass as DerTagClass
-	var constructed as bool
-	var tagNumber as DerTagNumber
-	var length as DerLength
-	var contentStart as ElementIndex
-
 	/// The class of the tag.
-	public function tagClass() returns DerTagClass
-		return tagClass
-	end 'tagClass'
+	public let tagClass as DerTagClass
+	var constructed as bool
+
+	/// The tag number within its class.
+	public let tagNumber as DerTagNumber
+
+	/// The number of content octets.
+	public let length as DerLength
+	module let contentStart as ElementIndex
 
 	/// Whether the element holds further elements rather than content octets.
 	public function isConstructed() returns bool
 		return constructed
 	end 'isConstructed'
-
-	/// The tag number within its class.
-	public function tagNumber() returns DerTagNumber
-		return tagNumber
-	end 'tagNumber'
-
-	/// The number of content octets.
-	public function length() returns DerLength
-		return length
-	end 'length'
-
-	function contentStart() returns ElementIndex
-		return contentStart
-	end 'contentStart'
 
 	function contentEnd() returns ElementIndex
 		return contentStart + length
@@ -180,21 +166,18 @@ end 'DerHeader'
 
 /// A BIT STRING's content: whole octets, the last of which may carry unused low bits, always zero.
 public type DerBitString
-	var bytes as ByteArray
-	var unusedBits as DerUnusedBits
+	var storedBytes as ByteArray
+
+	/// How many low bits of the last octet are not part of the string.
+	public let unusedBits as DerUnusedBits
 
 	/// The content octets after the unused-bits octet.
 	public function bytes() returns ByteArray
-		return bytes
+		return storedBytes
 	end 'bytes'
 
-	/// How many low bits of the last octet are not part of the string.
-	public function unusedBits() returns DerUnusedBits
-		return unusedBits
-	end 'unusedBits'
-
 	static function create(bytes ByteArray, unusedBits DerUnusedBits) returns DerBitString
-		return DerBitString{bytes: bytes, unusedBits: unusedBits}
+		return DerBitString{storedBytes: bytes, unusedBits: unusedBits}
 	end 'create'
 end 'DerBitString'
 
@@ -222,7 +205,7 @@ public type DerReader
 			throw DerError.trailingData
 		end 'trailing'
 
-		return DerReader.over(bytes, start: header.contentStart(), limit: header.contentEnd())
+		return DerReader.over(bytes, start: header.contentStart, limit: header.contentEnd())
 	end 'wholeSequence'
 
 	static function over(bytes ByteArray, start ElementIndex, limit ElementIndex) returns DerReader
@@ -279,7 +262,7 @@ public type DerReader
 	public function enterExplicit(tagNumber DerTagNumber) returns DerReader throws DerError
 		let header = try peekHeader()
 
-		if header.tagClass() != DerTagClass.contextSpecific or not header.isConstructed() or header.tagNumber() != tagNumber 'otherTag'
+		if header.tagClass != DerTagClass.contextSpecific or not header.isConstructed() or header.tagNumber != tagNumber 'otherTag'
 			throw DerError.unexpectedTag
 		end 'otherTag'
 
@@ -350,7 +333,7 @@ public type DerReader
 	public function readImplicit(tagNumber DerTagNumber) returns ByteArray throws DerError
 		let header = try peekHeader()
 
-		if header.tagClass() != DerTagClass.contextSpecific or header.isConstructed() or header.tagNumber() != tagNumber 'otherTag'
+		if header.tagClass != DerTagClass.contextSpecific or header.isConstructed() or header.tagNumber != tagNumber 'otherTag'
 			throw DerError.unexpectedTag
 		end 'otherTag'
 
@@ -368,11 +351,11 @@ public type DerReader
 	public function readString() returns String throws DerError
 		let header = try peekHeader()
 
-		if header.tagClass() != DerTagClass.universal or header.isConstructed() 'notString'
+		if header.tagClass != DerTagClass.universal or header.isConstructed() 'notString'
 			throw DerError.unexpectedTag
 		end 'notString'
 
-		let kind = try DerStringType.fromRawValue(header.tagNumber()) otherwise throw DerError.unexpectedTag
+		let kind = try DerStringType.fromRawValue(header.tagNumber) otherwise throw DerError.unexpectedTag
 
 		return try derDecodeString(take(header), kind: kind)
 	end 'readString'
@@ -502,7 +485,7 @@ public type DerReader
 	function enter(header DerHeader) returns DerReader
 		position = header.contentEnd()
 
-		return DerReader.over(bytes, start: header.contentStart(), limit: header.contentEnd())
+		return DerReader.over(bytes, start: header.contentStart, limit: header.contentEnd())
 	end 'enter'
 
 	function enterUniversal(tag DerUniversalTag) returns DerReader throws DerError
@@ -528,7 +511,7 @@ public type DerReader
 	function take(header DerHeader) returns ByteArray
 		position = header.contentEnd()
 
-		return try bytes.slice(header.contentStart(), endIndex: header.contentEnd()) otherwise panic("a header's content lies inside its reader")
+		return try bytes.slice(header.contentStart, endIndex: header.contentEnd()) otherwise panic("a header's content lies inside its reader")
 	end 'take'
 end 'DerReader'
 

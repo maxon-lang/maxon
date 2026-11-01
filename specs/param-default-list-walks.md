@@ -403,8 +403,8 @@ end 'main'
 5
 ```
 
-<!-- test: overloads-with-defaulted-discards-each-fill-their-own-slots -->
-Two members of one name declaring the same two defaulted `_` parameters and differing in the type of the named one.
+<!-- test: functions-with-defaulted-discards-each-fill-their-own-slots -->
+Two functions declaring the same two defaulted `_` parameters and differing in the type of the named one.
 ```maxon
 typealias Small = int(0 to 5)
 typealias Num = int(0 to 1000)
@@ -413,12 +413,12 @@ function f(_ Small = 3, _ SourceLineNumber = __line__, tag Num) returns Num
 	return tag
 end 'f'
 
-function f(_ Small = 3, _ SourceLineNumber = __line__, tag String) returns Num
+function fText(_ Small = 3, _ SourceLineNumber = __line__, tag String) returns Num
 	return tag.count() as Num
-end 'f'
+end 'fText'
 
 function main() returns ExitCode
-	return (f(tag: 7) + f(tag: "two")) as ExitCode
+	return (f(tag: 7) + fText(tag: "two")) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -743,8 +743,8 @@ end 'main'
 error E3038: <fragment>:9:25: duplicate argument for parameter '_' of 'f'
 ```
 
-<!-- test: a-module-scope-overloaded-factory-runs-the-default-of-the-member-it-binds -->
-Two members of one factory name with different defaults for `n`. A module-scope call fills its omitted argument at parse time from the first member, so it has to be re-pointed at the member the argument types pick, exactly as a body's call is: `two` runs, and `one` does not.
+<!-- test: a-module-scope-factory-call-runs-the-default-of-the-factory-it-names -->
+Two factories with different defaults for `n`. A module-scope call fills its omitted argument at parse time from the factory it names: `two` runs, and `one` does not.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -765,12 +765,12 @@ type Maker
 		return Self{n: a + n}
 	end 'make'
 
-	static function make(a String, n Num = two()) returns Self
+	static function makeText(a String, n Num = two()) returns Self
 		return Self{n: n + a.count() as Num}
-	end 'make'
+	end 'makeText'
 end 'Maker'
 
-var g = Maker.make("s")
+var g = Maker.makeText("s")
 
 function main() returns ExitCode
 	return g.n as ExitCode
@@ -815,8 +815,8 @@ end 'main'
 12
 ```
 
-<!-- test: overloaded-instance-methods-run-the-default-of-the-member-they-bind -->
-Two overloaded instance methods with a defaulted `_` each. The receiver sits at position 0 of both signatures, and the default of the member each call binds is the one that runs.
+<!-- test: instance-methods-run-their-own-defaults -->
+Two instance methods with a defaulted `_` each. The receiver sits at position 0 of both signatures, and the default each call runs is its own method's.
 ```maxon
 typealias Small = int(0 to 5)
 typealias Num = int(0 to 1000)
@@ -837,14 +837,14 @@ type Gadget
 		return self.n + tag
 	end 'm'
 
-	function m(_ Small = note(2), tag String) returns Num
+	function mText(_ Small = note(2), tag String) returns Num
 		return self.n + tag.count() as Num
-	end 'm'
+	end 'mText'
 end 'Gadget'
 
 function main() returns ExitCode
 	let g = Gadget.create()
-	return (g.m(tag: 3) + g.m(tag: "s")) as ExitCode
+	return (g.m(tag: 3) + g.mText(tag: "s")) as ExitCode
 end 'main'
 ```
 ```exitcode

@@ -83,7 +83,7 @@ let SharedTierReadyName = "staged.ok"
 
 let SharedTierReadyContent = "staged\n"
 
-let CarriageReturn = "\r"
+module let CarriageReturn = "\r"
 
 let FragmentTestPrefix = "// Test: "
 
@@ -1846,13 +1846,9 @@ end 'specTempDirFor'
 
 // The root the per-spec scratch directories hang off. The pool creates it once, in the parent,
 // so N workers don't race `Directory.create`'s mkdir -p on the shared parent.
-//
-// Built through a FilePath component (not the String overload): `SpecScratchDirName` is a fixed
-// valid relative path, and a FilePath argument picks `join(FilePath)` unambiguously (a bare
-// String constant is ambiguous between join's String/FilePath overloads).
 export function specTempRootDir(specDir FilePath) returns FilePath
 	let tempSub = try FilePath.from(SpecScratchDirName) otherwise panic("SpecTestRunner: SpecScratchDirName '{SpecScratchDirName}' must be a valid relative path")
-	return specDir.join(tempSub)
+	return specDir.joinPath(tempSub)
 end 'specTempRootDir'
 
 // The cwd every test binary is spawned with — `<checkoutRoot>/temp/`. See `RunWorkingSubdirName` for
@@ -1867,7 +1863,7 @@ end 'specTempRootDir'
 // as a wrong answer from a test rather than a missing directory.
 export function specRunWorkingDir() returns FilePath
 	let runSub = try FilePath.from(RunWorkingSubdirName) otherwise panic("SpecTestRunner: RunWorkingSubdirName '{RunWorkingSubdirName}' must be a valid relative path")
-	return Directory.currentPath().join(runSub)
+	return Directory.currentPath().joinPath(runSub)
 end 'specRunWorkingDir'
 
 module typealias PatternMatch = function(String) returns bool
@@ -2595,7 +2591,7 @@ function spliceRemintedBlocks(specPath FilePath, parsedText String, reminted Blo
 	var lines = specLinesOf(original)
 	let lineTail = CarriageReturn if original.contains("{CarriageReturn}{LineSeparator}") else ""
 
-	reminted.sort(function(left BlockRemint, right BlockRemint) gives right.slice.blockStart.compare(left.slice.blockStart))
+	reminted.sortBy(function(left BlockRemint, right BlockRemint) gives right.slice.blockStart.compare(left.slice.blockStart))
 
 	var out = StringArray.create()
 	var copied = 0 as ElementIndex
@@ -3322,7 +3318,7 @@ function stagedSectionDestination(wording StagedSectionWording, name String, roo
 
 	let relative = try FilePath.from(key) otherwise throw TierStagingError.refused("'{wording.marker}' names '{name}', which is not a valid relative path")
 
-	return root.join(relative)
+	return root.joinPath(relative)
 end 'stagedSectionDestination'
 
 // Write each `// --- runtime-file:` section as a NEW file in the staged `runtime/`, and record where the
@@ -3880,7 +3876,7 @@ function guestCompilerPath(projectRoot FilePath, harnessExe FilePath, effectiveT
 	let outputDir = try FilePath.from(ProjectProductsDirName) otherwise panic("SpecTestRunner: '{ProjectProductsDirName}' is not a valid path component")
 	let exeName = try FilePath.from("{harnessExe.stem()}-{targetToString(effectiveTarget)}") otherwise panic("SpecTestRunner: '{harnessExe.stem()}-{targetToString(effectiveTarget)}' is not a valid file name")
 
-	return projectRoot.join(outputDir).join(exeName)
+	return projectRoot.joinPath(outputDir).joinPath(exeName)
 end 'guestCompilerPath'
 
 // Announced, because the pause is minutes long: a caller who typed `spec-test --target=arm64-linux`
@@ -4470,7 +4466,7 @@ end 'BatchLaunch'
 // (`GuestBaseShellName`).
 function runGuestBatch(executions ExecutionArray, launcher BatchLauncher, specName String, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
 	let batchSubdir = batchSubdirPath()
-	let batchDir = tempDir.join(batchSubdir)
+	let batchDir = tempDir.joinPath(batchSubdir)
 
 	// ⭐ ONE BREADCRUMB FOR THE WHOLE ENTRY, because the entry is one blocking call and no line can come
 	// out of it. It names the batch's SIZE rather than a test, and that is not decoration: the pool's
@@ -4603,8 +4599,6 @@ function emptyBatchCapture() returns ProcessCapture
 	return ProcessCapture.create(0, stdout: "", stderr: "")
 end 'emptyBatchCapture'
 
-// The capture subdirectory as a path component. A FilePath (not the String overload) for
-// `specTempRootDir`'s reason: a bare String constant is ambiguous between `join`'s two overloads.
 function batchSubdirPath() returns FilePath
 	return try FilePath.from(BatchSubdirName) otherwise panic("SpecTestRunner: BatchSubdirName '{BatchSubdirName}' must be a valid relative path")
 end 'batchSubdirPath'

@@ -217,6 +217,9 @@ end 'main'
 ```
 
 - `var` declares module state any function in the file can reassign; `let` declares a constant.
+- A binding shares its directory's one namespace with every other top-level name (see
+  [Bare Names and Ambiguity](/docs/language/namespaces/#bare-names-and-ambiguity)), and another directory's binding is read through
+  its directory: `alpha.LIMIT`.
 - An initializer is any expression a function body accepts, with the same meaning, the same types and the
   same diagnostics: literals, arithmetic, casts, enum and union cases, array, map and tuple literals,
   `Type from "literal"`, `ArrayAlias from [...]`, factory and function calls (`let shared = Cache.create()`,
@@ -256,7 +259,7 @@ end 'main'
   module-level `var` that holds a record — a String, an array, a struct, a boxed union — through any function
   it calls (**E3165**, reported at the `var`'s use with its declaration as a note). A `let` is fixed at startup
   and may not hold what a `var` owns, and what the initializer keeps is not followed, so reading only a number
-  out of the `var` is refused too. "Reaches" is the call graph after overload resolution, dispatches
+  out of the `var` is refused too. "Reaches" is the call graph, dispatches
   included. A scalar `var` is readable, a `var`'s initializer may reach any global, and a `let`'s may reach
   other `let`s.
 - The other direction is refused too: a `var`'s initializer may not call anything whose result may be, lie

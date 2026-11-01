@@ -47,7 +47,7 @@ out.
 
 ### A conformer field named like an extension local
 
-`item` is `map`/`filter`/`contains`'s own loop binding in `stdlib/Interfaces.maxon`, and `Bag.item` is this
+`item` is `map`/`filter`/`containsWhere`'s own loop binding in `stdlib/Interfaces.maxon`, and `Bag.item` is this
 program's field. Nothing connects them.
 
 <!-- test: a-conformer-field-named-like-an-extension-local -->
@@ -90,7 +90,7 @@ end 'isBig'
 
 function main() returns ExitCode
 	var b = IntBag.create(30)
-	if b.contains(isBig) 'yes'
+	if b.containsWhere(isBig) 'yes'
 		return 1
 	end 'yes'
 	return 0
@@ -147,7 +147,7 @@ end 'isLong'
 
 function main() returns ExitCode
 	var b = StrBag.create("a string long enough to be heap allocated")
-	if b.contains(isLong) 'long'
+	if b.containsWhere(isLong) 'long'
 		print("long\n")
 		return 1
 	end 'long'

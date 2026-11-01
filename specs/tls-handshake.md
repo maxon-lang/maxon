@@ -2054,10 +2054,10 @@ function main() returns ExitCode
 		let records = client.session().takeRecords()
 		let alertRecord = try records.get(0) otherwise return 8
 		let keys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: fromHex("9e40646ce79a7f9dc05af8889bce6552875afa0b06df0087f792ebb7c17504a5")) otherwise return 9
-		var reader = try Tls13RecordProtection.create(suite, key: keys.key(), iv: keys.iv()) otherwise return 10
+		var reader = try Tls13RecordProtection.create(suite, key: keys.key, iv: keys.iv) otherwise return 10
 		let opened = try reader.open(alertRecord) otherwise return 11
 
-		print("records={records.count()} prefix={toHex(try alertRecord.slice(0, endIndex: 5) otherwise return 12)} type={opened.contentType().rawValue} plaintext={toHex(opened.plaintext())}\n")
+		print("records={records.count()} prefix={toHex(try alertRecord.slice(0, endIndex: 5) otherwise return 12)} type={opened.contentType.rawValue} plaintext={toHex(opened.plaintext())}\n")
 	end 'refused'
 
 	return 0
@@ -2121,7 +2121,7 @@ function serverWriter() returns Tls13RecordProtection
 	let suite = Tls13CipherSuite.aes128GcmSha256
 	let keys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: fromHex("a11af9f05531f856ad47116b45a950328204b4f44bfb6b3a4b4f1f3fcb631643")) otherwise panic("keys")
 
-	return try Tls13RecordProtection.create(suite, key: keys.key(), iv: keys.iv()) otherwise panic("writer")
+	return try Tls13RecordProtection.create(suite, key: keys.key, iv: keys.iv) otherwise panic("writer")
 end 'serverWriter'
 
 function scenario(label String, types ContentTypeArray, payloads ByteArrays)

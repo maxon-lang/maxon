@@ -2171,47 +2171,6 @@ typealias Integer = int(i64.min to i64.max)
 10
 ```
 
-<!-- test: error.a-buffer-returning-function-cannot-be-overloaded -->
-<!-- tier: stdlib -->
-
-⭐⭐ **THE THIRD FACT THE DECLARATION SWEEP PUBLISHES PER BARE NAME.** The sweep is
-keyed by the name the source WROTE, so an overload set leaves one entry — and the return spelling decides
-which roster a call's result carries. The mark is made when the call is PARSED and `resolveOverloadedCalls`
-rebinds the callee a whole pass later, so nothing downstream can repair a surface taken from the wrong
-member. **Without this refusal, on this exact program: with the buffer member written FIRST,
-`make().length()` is refused — the member that genuinely returns the buffer, denied the buffer's roster;
-with it written LAST, `make(1).count()` is refused instead — the member that returns an `Array`, handed the
-buffer's.** A wrong surface either way, decided by declaration order. It joins the consume bits and the
-`throws` clause under `requireOverloadableName`, refused with the same E2015 and for the same reason: the
-cure is per-member facts in the sweep, and until then a refusal beats a silent wrong answer. A set with only
-ONE declaration is untouched — that is the whole corpus, and the cases above.
-
-⚠ **The refusal covers a declaration that NAMES `__ManagedMemory`, not only one that `returns` it, and the
-sentence says so.** A tuple slot and an array element name the buffer through the same one-entry-per-bare-name
-sweep, are chosen at the same moment, and are just as unrepairable — see the tuple-slot case further down,
-which without the refusal is ACCEPTED with a silently wrong surface.
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
-function make() returns __ManagedMemory
-	return "hello".toByteArray()
-end 'make'
-
-function make(n Int) returns ByteArray
-	return "abc".toByteArray()
-end 'make'
-
-function main() returns ExitCode
-	let a = make()
-	return a.length() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED, from the one spelling kept per NAME, so nothing downstream can repair it. Give the overloads distinct names
-```
-
 ### The `Array` roster is DERIVED from the arms it describes
 
 <!-- test: error.array-roster-names-managed-and-not-create -->
@@ -2847,32 +2806,6 @@ end 'main'
 ```
 ```exitcode
 3
-```
-
-<!-- test: error.a-tuple-returning-overload-is-refused-the-same-way -->
-<!-- tier: stdlib -->
-
-⭐ **THE WIDENED HALF.** Neither declaration RETURNS `__ManagedMemory`; one of them names it at a tuple
-SLOT, which is the identical ambiguity through the identical channel. Without the refusal this program
-compiles, and the surface `make()`'s result carries is decided by which member was written first.
-```maxon
-typealias Int = int(i64.min to i64.max)
-
-function make() returns (__ManagedMemory, Int)
-	return ("hello".toByteArray(), 7)
-end 'make'
-
-function make(n Int) returns (ByteArray, Int)
-	return ("abc".toByteArray(), n)
-end 'make'
-
-function main() returns ExitCode
-	let a = make()
-	return a.0.length() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:8:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED, from the one spelling kept per NAME, so nothing downstream can repair it. Give the overloads distinct names
 ```
 
 ### Every door out of an array of buffers, and every copy of one
@@ -4118,7 +4051,7 @@ Both halves in one program, so neither can be satisfied by handing everything on
 parameter must reach `length` (its file spelled the buffer) and `arrayWidth`'s must reach `count` (its file
 did not), under one alias name. Both `B`s are file-private, so each file sees one.
 ```maxon
-// --- file: buffer.maxon
+// --- file: buffer/buffer.maxon
 export typealias Int = int(i64.min to i64.max)
 typealias B = __ManagedMemory with Byte
 
@@ -4159,7 +4092,7 @@ so the surface reaches this position only if `recordGenericAliasContest` filed e
 both file orders**, `b.items.count()`, on a field of the `Array` kind, is refused with the buffer's
 roster.
 ```maxon
-// --- file: buffer.maxon
+// --- file: buffer/buffer.maxon
 export typealias Int = int(i64.min to i64.max)
 typealias B = __ManagedMemory with Byte
 

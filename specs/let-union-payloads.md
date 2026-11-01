@@ -739,7 +739,7 @@ function main() returns ExitCode
 	return (a.count() + b.count()) as ExitCode
 end 'main'
 
-// --- file: b.maxon
+// --- file: b/b.maxon
 typealias Bytes = Array with String
 
 function names(xs Bytes) returns Count

@@ -1448,8 +1448,7 @@ end 'main'
 ## A type's own nested typealias and an extension's of the same name follow the method rule
 
 A nested typealias is a member of its type exactly as a method is, and a name written by the type's body and
-by an extension is resolved the way two methods of that name are (`same-name-methods.md`'s
-`error.an-extension-instance-method-colliding-with-the-types-own` and `extension-overload-set.md`'s
+by an extension is resolved the way two methods of that name are (`interface-extensions.md`'s
 `a-conformers-own-declaration-still-shadows-an-extensions`):
 
 - **A type extension** (`extension Box`) that declares a member the type's own body declares would hide it,
@@ -1920,7 +1919,7 @@ of the type, spelled with the same name inside the program's extension bodies.
   member, for the declaring body and for a sibling body in another file alike.
 - **A caller of the program's method** sees the program's member in its signature.
 - **A library body, and a caller of a library method, keeps the library's member**: `xs.map(…)` still returns
-  an `Array`, and `xs.sort(…)` still takes a two-parameter comparator.
+  an `Array`, and `xs.sortBy(…)` still takes a two-parameter comparator.
 - **A file-private member** is spelled from its own file only; another file's extension body naming it is
   [E3008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3008), as for any member declared elsewhere.
 
@@ -1966,7 +1965,7 @@ function main() returns ExitCode
 	var zs = xs.spare()
 	zs.prepend(4)
 
-	xs.sort(function(a, b) gives a.compare(b))
+	xs.sortBy(function(a, b) gives a.compare(b))
 	print("{mapped.count()} {ys.count()} {zs.count()} {xs.count()}\n")
 	return 0
 end 'main'
@@ -1997,7 +1996,7 @@ typealias Numbers = Array with Number
 
 function main() returns ExitCode
 	var xs = Numbers from [3, 1, 2]
-	xs.sort(function(a, b) gives a.compare(b))
+	xs.sortBy(function(a, b) gives a.compare(b))
 	let first = try xs.rank(function(_) gives Ordering.equalTo) otherwise Ordering.lessThan
 	print("{xs.count()} {first.rawValue}\n")
 	return 0
@@ -2037,7 +2036,7 @@ function main() returns ExitCode
 		xs.push(((i * 7) mod 100) as Number)
 	end 'fill'
 
-	xs.sort(function(a, b) gives a.compare(b))
+	xs.sortBy(function(a, b) gives a.compare(b))
 	print("{xs.count()} {xs.power(5)} {marker}\n")
 	return 0
 end 'main'

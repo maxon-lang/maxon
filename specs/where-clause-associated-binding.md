@@ -338,7 +338,7 @@ error E3133: <fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor w
 
 <!-- test: error.a-constraint-over-one-files-limit-is-not-met-by-another-files-wider-or-narrower-limit -->
 The binding is a declaration, not a spelling. `pkg/lib.maxon`'s constraint binds `Element` to its own
-`Limit`; `Tick` binds it to `pkg/main.maxon`'s `Limit`, a different declaration over a different range. The exported
+`Limit`; `Tick` binds it to `app/main.maxon`'s `Limit`, a different declaration over a different range. The exported
 `Wrap` names the file-private `Limit` in its `where` clause, which E3167 refuses too.
 ```maxon
 // --- file: pkg/lib.maxon
@@ -356,7 +356,7 @@ export type Wrap uses S where S is Cursor with Limit
 	end 'create'
 end 'Wrap'
 
-// --- file: pkg/main.maxon
+// --- file: app/main.maxon
 typealias Limit = int(0 to 5)
 
 type Tick implements Cursor with Limit
@@ -379,7 +379,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3133: pkg/<fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Limit', but 'Tick' binds 'Cursor's associated type 'Element' to 'Limit' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
+error E3133: app/<fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with pkg.Limit', but 'Tick' binds 'Cursor's associated type 'Element' to 'app.Limit' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
 error E3167: pkg/<fragment>:9:13: exported type 'pkg.Wrap' names file-private typealias 'Limit' in its where clause
 ```
 
@@ -402,7 +402,7 @@ export type Wrap uses S where S is Cursor with Limit
 	end 'create'
 end 'Wrap'
 
-// --- file: pkg/main.maxon
+// --- file: app/main.maxon
 typealias Limit = int(0 to 9)
 
 type Tick implements Cursor with Limit
@@ -425,7 +425,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3133: pkg/<fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Limit', but 'Tick' binds 'Cursor's associated type 'Element' to 'Limit' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
+error E3133: app/<fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with pkg.Limit', but 'Tick' binds 'Cursor's associated type 'Element' to 'app.Limit' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
 error E3167: pkg/<fragment>:9:13: exported type 'pkg.Wrap' names file-private typealias 'Limit' in its where clause
 ```
 

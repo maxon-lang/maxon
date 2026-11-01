@@ -612,7 +612,7 @@ function observe(held __ManagedMemory, step Integer)
 	print("{held.length()} {step}\n")
 end 'observe'
 
-function advance(dest Integer, step Integer)
+function advance(dest mutable Integer, step Integer)
 	dest = dest + step
 end 'advance'
 

@@ -399,30 +399,56 @@ type KnownFieldStores
 	var offsets as ByteOffsetArray
 	var values as ValueIdArray
 
+	// The record a just-returned `__mm_alloc` handed back: no earlier address names it, so a store into it
+	// forgets only its own address's entries. Every op that could let the pointer escape ends this, and a
+	// stale entry here would keep forwarding a value a hidden alias had overwritten.
+	var fresh as ValueIdArray
+
 	static function create() returns KnownFieldStores
-		return Self{addrs: ValueIdArray.create(), offsets: ByteOffsetArray.create(), values: ValueIdArray.create()}
+		return Self{addrs: ValueIdArray.create(), offsets: ByteOffsetArray.create(), values: ValueIdArray.create(), fresh: ValueIdArray.create()}
 	end 'create'
 
 	function copy() returns KnownFieldStores
-		return Self{addrs: self.addrs.clone(), offsets: self.offsets.clone(), values: self.values.clone()}
+		return Self{addrs: self.addrs.clone(), offsets: self.offsets.clone(), values: self.values.clone(), fresh: ValueIdArray.create()}
 	end 'copy'
+
+	function noteFresh(record ValueId)
+		self.fresh.clear()
+		self.fresh.push(record)
+	end 'noteFresh'
+
+	function endFresh()
+		self.fresh.clear()
+	end 'endFresh'
+
+	function isFresh(record ValueId) returns bool
+		for candidate in self.fresh 'eachFresh'
+			if candidate == record 'found'
+				return true
+			end 'found'
+		end 'eachFresh'
+
+		return false
+	end 'isFresh'
 
 	function forget()
 		self.addrs.clear()
 		self.offsets.clear()
 		self.values.clear()
+		self.fresh.clear()
 	end 'forget'
 
 	// Two addresses may name one record, so a store forgets what any address stored at its offset.
 	function stored(addr ValueId, offset ByteOffset, value ValueId)
 		var kept = 0 as ElementIndex
 		var at = 0 as ElementIndex
+		let intoAFreshRecord = self.isFresh(addr)
 
 		while at < self.offsets.count() 'eachKnown'
 			let knownOffset = try self.offsets.get(at) otherwise panic("KnownFieldStores.stored: offsets.get OOB at {at}")
+			let knownAddr = try self.addrs.get(at) otherwise panic("KnownFieldStores.stored: addrs.get OOB at {at}")
 
-			if knownOffset != offset 'anotherField'
-				let knownAddr = try self.addrs.get(at) otherwise panic("KnownFieldStores.stored: addrs.get OOB at {at}")
+			if knownOffset != offset or (intoAFreshRecord and knownAddr != addr) 'anotherField'
 				let knownValue = try self.values.get(at) otherwise panic("KnownFieldStores.stored: values.get OOB at {at}")
 				try self.addrs.set(kept, value: knownAddr) otherwise panic("KnownFieldStores.stored: addrs.set OOB at {kept}")
 				try self.offsets.set(kept, value: knownOffset) otherwise panic("KnownFieldStores.stored: offsets.set OOB at {kept}")
@@ -624,6 +650,11 @@ type CycleTrace implements SummaryCallWalker
 
 	function noteFieldStore(addr ValueId, offset ByteOffset, value ValueId, opIdx ElementIndex, known KnownFieldStores)
 		known.stored(addr, offset: offset, value: value)
+
+		if known.isFresh(value) 'theRecordIsStoredAway'
+			known.endFresh()
+		end 'theRecordIsStoredAway'
+
 		self.fieldStoreOps.upsert(keyOf(addr, low: value), value: opIdx)
 		self.fieldStoreOpsByLine.upsert(keyOf(addr, low: self.checker.project.opRanges.get(opIdx).line as ElementIndex), value: opIdx)
 	end 'noteFieldStore'
@@ -633,7 +664,7 @@ type CycleTrace implements SummaryCallWalker
 			loadIndirect(result, addr, offset, _) then self.noteForwardedLoad(result, addr: addr, offset: offset, known: known)
 			storeIndirect(addr, offset, value, _) then self.noteFieldStore(addr, offset: offset, value: value, opIdx: opIdx, known: known)
 			globalAddr(result, _) then try self.tracked.set(result, value: true) otherwise panic("CycleTrace.noteKnownStores: v{result} is past the value columns")
-			call(_, callee, _, _, _, _, _, _) then self.forgetAcrossACall(callee, known: known)
+			call(result, callee, _, _, _, _, _, _) then self.noteCall(result, callee: callee, known: known)
 			tryCall(_, _, callee, _, _, _, _, _, _) then self.forgetAcrossACall(callee, known: known)
 			asyncCall or
 			witnessDispatch or
@@ -645,32 +676,41 @@ type CycleTrace implements SummaryCallWalker
 			serviceSend or
 			serviceReplyCell then known.forget()
 			literal or
+			functionRef or
+			compare or
+			stringLiteral or
+			sizeofType or
+			covPoint then break
 			ret or
 			retVoid or
 			binOp or
 			unaryOp or
-			compare or
 			condBranch or
 			branch or
-			stringLiteral or
 			throwError or
 			propagateError or
 			panicAbort or
-			functionRef or
-			sizeofType or
 			constArrayLiteral or
 			switch or
 			panicAbortValue or
 			errorFlagEncode or
 			immortalStructRecord or
 			immortalStringTable or
-			covPoint or
 			rawIntrinsic or
 			existentialWitness or
 			holdValue or
-			holdEnd then break
+			holdEnd then known.endFresh()
 		end 'op'
 	end 'noteKnownStores'
+
+	function noteCall(result ValueId, callee ByteArray, known KnownFieldStores)
+		if callee.equals(MmAllocName) 'aNewRecord'
+			known.noteFresh(result)
+			return
+		end 'aNewRecord'
+
+		self.forgetAcrossACall(callee, known: known)
+	end 'noteCall'
 
 	function noteForwardedLoad(result ValueId, addr ValueId, offset ByteOffset, known KnownFieldStores)
 		if let stored = try known.valueAt(addr, offset: offset) 'storedBeforeOnEveryPath'
@@ -679,6 +719,8 @@ type CycleTrace implements SummaryCallWalker
 	end 'noteForwardedLoad'
 
 	function forgetAcrossACall(callee ByteArray, known KnownFieldStores)
+		known.endFresh()
+
 		if self.checker.calls.resolution.declaresFunction(callee) 'mayWriteAField'
 			known.forget()
 		end 'mayWriteAField'

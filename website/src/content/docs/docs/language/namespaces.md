@@ -28,8 +28,8 @@ A scriptlib package's namespace is `scriptlib.<package>`: `scriptlib/text/Lines.
 ## Visibility
 
 Top-level declarations — functions, types, enums, unions, typealiases, variables — are **private to their
-file** unless marked: only that file may name them. The name of a type, enum, union or interface is still
-the whole program's, so a second declaration of it anywhere is **E3006** (see
+file** unless marked: only that file may name them. A top-level name is declared once per directory,
+whatever its visibility: a second declaration of it in one directory is **E3006** (see
 [Bare Names and Ambiguity](#bare-names-and-ambiguity)). Three modifiers widen visibility:
 
 | Modifier | Visible to | Checked for unused exports |
@@ -158,7 +158,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Qualification works for functions and for every kind of type name — typealiases, types, enums, unions and
+Qualification works for functions, for another directory's top-level `let` and `var` (`alpha.LIMIT`), and
+for every kind of type name — typealiases, types, enums, unions and
 interfaces (`lib.fmt.format(x)`, `50 as api.Score`, `api.Point.origin()`) — at every position a type name
 is written: a declaration, a cast, a construction, a static call's base, a `spawn`'s target, an
 `extension`'s target, a `throws`, `implements`, `where` or `extends` clause, and the head of a top-level
@@ -186,46 +187,59 @@ keyword.
 
 ## Bare Names and Ambiguity
 
-A bare name resolves when exactly one visible declaration has it. Only a declaration the referring file may
-name is a candidate: a file-private function counts only in its own file and a `module` function only
-inside its subtree, and the candidate list an error prints names only visible ones. A bare call or a bare
-function value takes the type of the declaration it resolves to, and a function-backed enum case's function
-is resolved from the file that declares the enum, whichever file reads the case; a case that resolves to no
-single declaration is reported in that file.
+A directory declares each top-level name once, in one namespace for every kind — a `type`, `enum`, `union`,
+`interface`, `typealias`, top-level `let` or `var`, and `function` — whether the declaration is file-private,
+`module` or `export`. A second declaration of the name in the same directory is
+[E3006](/docs/cli/error-codes/#e3006--duplicatedefinition), in one file or across the files of the
+directory (`duplicate definition of 'Point' — already declared as `type Point``), and a typealias against a
+typealias is **E3061**. The declaration kept is the earlier one in a file, and across files the one in the
+file whose absolute path, with `/` separators, sorts first byte by byte; each other one is reported at its
+name. Directories are separate scopes, so a name two directories declare is two names. Locals and parameters
+keep block scope and may shadow a top-level name.
 
-**A type name** — a typealias of any form, a type, an enum, a union or an interface — that reaches more than
-one project declaration is ambiguous, **E3063**, in every file, a file that declares one of them included.
-The message lists the spellings that resolve it, a declaration at the project root as `export.Name`:
+A bare name resolves the same way for every kind of declaration, and the first step that has a declaration
+decides:
+
+1. the referring file's own directory's declaration;
+2. else the project root's;
+3. else the one declaration the file may name;
+4. else it is ambiguous: **E3063** for a type name and **E3095** for a binding or a function, each listing the
+   spellings that resolve it (`export.Name` for a declaration at the project root).
+
+Only a declaration the referring file may name is a candidate: a file-private declaration counts only in its
+own file and a `module` one only inside its subtree, and the candidate list an error prints names only
+visible ones. A bare call or a bare function value takes the type of the declaration it resolves to, and a
+function-backed enum case's function is resolved from the file that declares the enum, whichever file reads
+the case; a case that resolves to no single declaration is reported in that file.
+
+**A type name** — a typealias of any form, a type, an enum, a union or an interface — resolves by that order,
+so a file reads its own directory's declaration bare and reaches another directory's through the directory:
 
 ```text
 error E3063: app/main.maxon:7:11: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, lib.Score
 ```
 
-In a file whose own declaration is file-private, the message ends `, or rename this file's own declaration`:
-renaming is the remedy in the declaring file, and other files qualify.
+**A function name or a top-level binding** resolves by the same order, and a bare call, function value or
+read that reaches several declarations none nearer is **E3095** in every form it takes — plain, under `try`,
+or spawned with `async` (`Ambiguous bare-name call to 'describe': more than one visible declaration matches it.
+Qualify it as one of: alpha.describe, beta.describe`) — worded for a function value, an enum case's backing or
+a read where the name is one. A call (`api.format(...)`), a function value (`let f = api.format`), a
+function-backed enum case (`plain = api.format`) and a read of another directory's top-level `let` or `var`
+(`alpha.LIMIT`) all accept the qualified form. A bare read of a name the reader's directory declares as a
+function means that function, even where another directory exports a `let` of it; `dir.name` reads the `let`.
+A generic function resolves by the same order.
 
-Only project declarations take part. A project declaration of a library name is what the bare name means in
-every project file, so a project's `export typealias StringArray` is the one a bare
-`StringArray` names, and the library's stays reachable as `stdlib.StringArray`. The standard library's own
-files see only the library's declarations. The same holds for the protocols the library defines —
-`Stringable`, `FormattedStringable`, `Hashable`, `Equatable`, `Comparable`, `Cloneable` and `Error`: a
-project's own `interface Comparable` is what `implements Comparable` names in project files, while the
-library's generics, such as `sort` and `contains`, keep their library constraints. `int`, `float`, `bool`,
-`Character`, `String`, arrays and payload-free enums meet the library's protocols. A `b"…"` literal's
-element is the type the file's bare `Byte` names when that is an integer alias — the file's own, else the one project alias it sees, else the
-library's; a `type Byte` leaves the literal on the library's, and an ambiguous bare `Byte` refuses the
-literal with **E3063**.
-
-**A function name** that reaches several declarations resolves to one at the project root, or in an
-enclosing directory, over one in a nested directory, and to a project function over a standard-library one.
-Otherwise the call is ambiguous, **E3095**, in every form it takes — plain, under `try`, or spawned with
-`async` (`Ambiguous bare-name call to 'describe': more than one visible declaration matches it. Qualify it
-as one of: alpha.describe, beta.describe`) — worded for a function value or an enum case's backing where
-the name is one. A call (`api.format(...)`), a function value (`let f = api.format`) and a function-backed
-enum case (`plain = api.format`) all accept the qualified form. A call to a generic function first keeps the
-declarations its arguments fit, then the nearest of those: one in the calling file's own directory, then
-one at the project root, then any other — so an overload of another arity in a farther directory serves the
-calls the nearer one cannot take.
+A program's own declarations shadow the standard library's and the runtime tier's: they are different scopes. A
+project declaration of a library name is what the bare name means in every project file, so a project's
+`export typealias StringArray` is the one a bare `StringArray` names, and the library's stays reachable as
+`stdlib.StringArray`. The standard library's own files see only the library's declarations. The same holds
+for the protocols the library defines — `Stringable`, `FormattedStringable`, `Hashable`, `Equatable`,
+`Comparable`, `Cloneable` and `Error`: a project's own `interface Comparable` is what `implements Comparable`
+names in project files, while the library's generics, such as `sort` and `contains`, keep their library
+constraints. `int`, `float`, `bool`, `Character`, `String`, arrays and payload-free enums meet the library's
+protocols. A `b"…"` literal's element is the type the file's bare `Byte` names when that is an integer alias —
+the file's own, else the one project alias it sees, else the library's; a `type Byte` leaves the literal on the
+library's, and an ambiguous bare `Byte` refuses the literal with **E3063**.
 
 **Only a declaration the file can see counts**, for every kind of name. A project type named like a
 primitive (`byte`, say) and declared where a file cannot see it leaves that name the primitive in that file.
@@ -233,15 +247,6 @@ What a call knows about its callee comes from the declaration it binds, too: whe
 returns (its body ends in `panic`) or can only throw, and which generic template it instantiates. A function
 value (`let f = helper`) is the one declaration of its name the file can see, with that declaration's
 parameters and return type, whatever other files declare under the name.
-
-**Every candidate is nameable.** Two type declarations of one name that can both be named from outside
-their files may not share a directory: two typealiases are **E3061** and a pair involving a type, enum,
-union or interface is **E3006**. Two typealiases of one name in one file are **E3061** too. The declaration
-kept is the earlier one in a file, and across files the one in the file whose absolute path, with `/`
-separators, sorts first byte by byte; each other one is reported at its name. Declarations in different directories
-coexist — a typealias in one and a type in another included — and a file-private typealias coexists with
-anything, since only its own file can name it. A type, enum, union or interface name is the whole program's:
-two of them sharing a name are **E3006** wherever they sit and whatever their modifiers.
 
 Every typealias a `public` standard-library signature names is itself `public` — an inner one such as
 `Array.ElementIterator` included — so a value can always be cast to the alias a library signature asks for

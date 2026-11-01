@@ -250,8 +250,8 @@ end 'cacheReadSpelledFieldNameArray'
 // file or directory name may not contain. So the join is injective and the segment test is sound. The
 // `.`-joined spelling the language shows a user is DERIVED from this one
 // (`namespaceForModuleDirectory`) and is never what a visibility question is asked on.
-let ModuleDirectorySeparator = "/"
-let NoModuleDirectoryPrefix = ""
+module let ModuleDirectorySeparator = "/"
+module let NoModuleDirectoryPrefix = ""
 
 // The one spelling that has to be rewritten: `FilePath` normalizes to the PLATFORM separator on
 // construction, so a Windows host hands back `feature\sub` where a POSIX host hands back `feature/sub`,
@@ -433,56 +433,9 @@ module enum CandidateReach
 	author
 end 'CandidateReach'
 
-module enum MeaningsReached
-	none
-	theLibrarys
-	oneAuthors
-	several
-end 'MeaningsReached'
-
-module function meaningsAfter(sofar MeaningsReached, reach CandidateReach) returns MeaningsReached
-	match reach 'reach'
-		hidden then return sofar
-		library then return libraryMeaningAfter(sofar)
-		author then return authorMeaningAfter(sofar)
-	end 'reach'
-end 'meaningsAfter'
-
-function libraryMeaningAfter(sofar MeaningsReached) returns MeaningsReached
-	match sofar 'sofar'
-		none or
-		theLibrarys then return MeaningsReached.theLibrarys
-		oneAuthors then return MeaningsReached.oneAuthors
-		several then return MeaningsReached.several
-	end 'sofar'
-end 'libraryMeaningAfter'
-
-function authorMeaningAfter(sofar MeaningsReached) returns MeaningsReached
-	match sofar 'sofar'
-		none or
-		theLibrarys then return MeaningsReached.oneAuthors
-		oneAuthors or
-		several then return MeaningsReached.several
-	end 'sofar'
-end 'authorMeaningAfter'
-
-module function severalMeanings(reached MeaningsReached) returns bool
-	match reached 'reached'
-		several then return true
-		none or
-		theLibrarys or
-		oneAuthors then return false
-	end 'reached'
-end 'severalMeanings'
-
-// ⭐ **ONE E3063 CANDIDATE, AS THE USER WOULD HAVE TO WRITE IT** — `api.Score`, `lib.fmt.Score`,
-// `export.Score`.
-//
-// ⚠ **E3095 DOES NOT USE THIS, and the asymmetry is the shapes' asymmetry.** A contested FUNCTION already
-// carries its qualified spelling as its registration NAME (`ProgramSignatures.contestedFreeFunctions`), so
-// its candidate list is read off the index; a contested ALIAS is filed under its bare name and the qualified
-// form has to be RENDERED from the declaring file's directory. Handing the function side this renderer would
-// have it re-derive a string it is already holding, and the two could then disagree.
+// ⭐ **ONE E3063 OR E3095 CANDIDATE, AS THE USER WOULD HAVE TO WRITE IT** — `api.Score`, `lib.fmt.Score`,
+// `export.Score`. It is rendered from the declaring directory and the bare name, not read off a minted
+// `<dir>~Name`.
 //
 // ⚠ **THE LAST JOIN GOES THROUGH `joinQualifiedName`, AND THE CONSTANT IT DOES *NOT* USE IS THE
 // POINT.** `NamespaceSeparator` is the byte a module DIRECTORY renders its own internal separators
@@ -563,8 +516,6 @@ end 'stringBytesPrecede'
 // Joins the candidate trailer every ambiguity message ends with: the diagnostics say the identical
 // sentence about different kinds of declaration.
 module let CandidateListSeparator = ", "
-
-module let RenameOwnDeclarationAdvice = "or rename this file's own declaration"
 
 // ⭐ THE ONE EMPTY `StringArray` every UNAMBIGUOUS name answers with — so the common path allocates
 // nothing. NEVER mutated: the only writer builds a fresh array.
@@ -1533,10 +1484,6 @@ module function cacheReadServiceAwaitSiteMap(reader LibraryCacheReader) returns 
 end 'cacheReadServiceAwaitSiteMap'
 
 // @generated library-cache end
-
-export typealias RefusedOverloadCallSet = Set with ElementIndex
-
-export typealias UndecidedOverloadCallSet = Set with ElementIndex
 
 export typealias SynthesizedOpFileMap = Map with (ElementIndex, FilePath)
 
@@ -2569,8 +2516,8 @@ end 'cacheReadRangeContestedAliasMap'
 
 // @generated library-cache end
 
-// ⭐ **THE RANGED-ALIAS REGISTRY — file-scoped resolution.** Two files may each declare `Limit` over
-// a different range (`specs/duplicate-typealias.md`), and each file's uses must be checked against
+// ⭐ **THE RANGED-ALIAS REGISTRY — file-scoped resolution.** Two files of different directories may each
+// declare `Limit` over a different range (`specs/duplicate-typealias.md`), and each file's uses must be checked against
 // its own. Filed under the bare name alone, whichever file merged last would decide every file's
 // range checks, in an order the loader deliberately does not fix.
 //
@@ -2674,15 +2621,8 @@ function builtinExitCodeAlias(readerFilePath FilePath, high FullRangeInt) return
 	return RangedTypeAlias.create(ExitCodeBuiltinName, underlying: MaxonType.integer, low: ExitCodeAliasLow, high: high, visibility: Visibility.public, declFilePath: readerFilePath, nameLine: 0, nameColumn: 0)
 end 'builtinExitCodeAlias'
 
-typealias ScopedAliasTier = int(0 to 3)
-
-let ScopedAliasTierHiddenFromTheReader = 0
-let ScopedAliasTierTheLibrarys = 1 as ScopedAliasTier
-let ScopedAliasTierSomeAuthors = 2 as ScopedAliasTier
-let ScopedAliasTierReadersOwnFile = 3
-
-// How near a claimant of a contested type name is to the file reading it — the tier half of
-// `ClaimantProvenance.rankedClaimIn`, the ONE ranking behind every scoped type-name door.
+// How near a claimant of a contested name is to the file reading it — the ONE tier order, which every
+// kind of top-level name is resolved by (`NameScope.maxon`).
 //
 // ⚠ **ANOTHER AUTHOR'S FILE OUTRANKS THE LIBRARY FOR AN AUTHOR READER, AND IS HIDDEN FROM A LIBRARY
 // READER.** An author's declaration of a library name is what that name means to every author file,
@@ -2690,22 +2630,21 @@ let ScopedAliasTierReadersOwnFile = 3
 // means a sibling user file's, which `specs/bytearray-element-size.md`'s
 // `error.a-byte-string-literal-takes-the-sibling-files-wide-byte-it-names-bare` pins: the element width a
 // literal is folded at follows this answer.
-//
-// ⛔ **A TIE IN TIER GOES TO THE DECLARATION THAT FOLDS LATER** (`foldsLaterThan`): the later layer —
-// authors, then library, the sweep's order — and within one layer the byte-wise later project-relative
-// path (`ClaimantProvenance.foldKeyOf`). A tie broken any other way would read a hash map's bucket order,
-// which is no fact about the program.
-function scopedAliasTier(declPath String, readerPath String, declaredByTheCorpus bool, readerIsTheCorpus bool, visibleToReader bool) returns ScopedAliasTier
+function scopeTierOf(declPath String, readerPath String, declaredByTheCorpus bool, readerIsTheCorpus bool, visibleToReader bool, nearness DirectoryNearness) returns ScopeTier
 	if declPath.equals(readerPath) 'theReadersOwnDeclaration'
-		return ScopedAliasTierReadersOwnFile
+		return ScopeTierReadersFile
 	end 'theReadersOwnDeclaration'
 
 	if not visibleToReader or layerHidesDeclaration(declaredByTheCorpus, readerIsTheCorpus: readerIsTheCorpus) 'hiddenFromThisReader'
-		return ScopedAliasTierHiddenFromTheReader
+		return ScopeTierHidden
 	end 'hiddenFromThisReader'
 
-	return ScopedAliasTierTheLibrarys if declaredByTheCorpus else ScopedAliasTierSomeAuthors
-end 'scopedAliasTier'
+	if declaredByTheCorpus 'aLibraryDeclaration'
+		return ScopeTierLibrary
+	end 'aLibraryDeclaration'
+
+	return tierOfNearness(nearness)
+end 'scopeTierOf'
 
 function layerHidesDeclaration(declaredByTheCorpus bool, readerIsTheCorpus bool) returns bool
 	return readerIsTheCorpus and not declaredByTheCorpus
@@ -2719,37 +2658,6 @@ let FoldLayerLibrary = 1 as FoldLayer
 function foldLayerFor(declaredByTheCorpus bool) returns FoldLayer
 	return FoldLayerLibrary if declaredByTheCorpus else FoldLayerAuthors
 end 'foldLayerFor'
-
-type ClaimantRanking
-	var bestTier as ScopedAliasTier
-	var bestPosition as FoldPosition
-
-	static function seededWith(tier ScopedAliasTier, position FoldPosition) returns ClaimantRanking
-		return Self{bestTier: tier, bestPosition: position}
-	end 'seededWith'
-
-	function admits(tier ScopedAliasTier, position FoldPosition) returns bool
-		if not self.isOutrankedBy(tier, position: position) 'theBestSoFarStands'
-			return false
-		end 'theBestSoFarStands'
-
-		self.bestTier = tier
-		self.bestPosition = position
-		return true
-	end 'admits'
-
-	function winnerIsHiddenFromTheReader() returns bool
-		return self.bestTier == ScopedAliasTierHiddenFromTheReader
-	end 'winnerIsHiddenFromTheReader'
-
-	function isOutrankedBy(tier ScopedAliasTier, position FoldPosition) returns bool
-		if tier != self.bestTier 'differentTiers'
-			return tier > self.bestTier
-		end 'differentTiers'
-
-		return foldsLaterThan(position, than: self.bestPosition)
-	end 'isOutrankedBy'
-end 'ClaimantRanking'
 
 export type RankedClaimPosition
 	export let at as ElementIndex
@@ -2867,26 +2775,117 @@ export type ClaimantProvenance
 		return (try claims.get(ranked.at) otherwise panic("ClaimantProvenance.rankedDeclaringPath: the ranked position {ranked.at} is one of the {claims.count()} claims it was ranked among")).declFilePath.toString()
 	end 'rankedDeclaringPath'
 
+	// ⛔ **A TIE IN TIER IS AMBIGUOUS, NOT RESOLVED.** When the tally is `ambiguous` or `nowhere`, the
+	// claim answered is only a deterministic representative for the ambiguity another door reports
+	// (`ProgramSignatures.ambiguousAliasCandidates`): the declaration that folds later (`foldsLaterThan`) —
+	// the later layer, then the byte-wise later project-relative path. Any other pick would read a hash
+	// map's bucket order, which is no fact about the program.
 	export function rankedClaimIn(claims TypeNameClaimArray, readerPath String) returns RankedClaimPosition
-		let seedAt = claims.count() - 1
-		let seed = try claims.get(seedAt) otherwise panic("ClaimantProvenance.rankedClaimIn: a name's claims are ranked only once at least one declaration holds it")
-		var ranking = ClaimantRanking.seededWith(self.tierOfClaim(seed, readerPath: readerPath), position: self.foldPositionOf(seed.declFilePath.toString()))
-		var bestAt = seedAt
+		if claims.isEmpty() 'nothingHoldsTheName'
+			panic("ClaimantProvenance.rankedClaimIn: a name's claims are ranked only once at least one declaration holds it")
+		end 'nothingHoldsTheName'
 
-		for at in 0 upto claims.count() 'eachClaim'
-			let claim = try claims.get(at) otherwise panic("ClaimantProvenance.rankedClaimIn: claims.get OOB at {at} inside its own count()")
+		let tally = self.tallyOfClaims(claims, readerPath: readerPath, authorsOnly: false)
 
-			if ranking.admits(self.tierOfClaim(claim, readerPath: readerPath), position: self.foldPositionOf(claim.declFilePath.toString())) 'nearerThanTheBestSoFar'
-				bestAt = at
-			end 'nearerThanTheBestSoFar'
-		end 'eachClaim'
+		match tally.verdict() 'verdict'
+			meant(index, _) then return RankedClaimPosition.create(index, hiddenFromTheReader: false)
+			nowhere or
+			ambiguous then break
+		end 'verdict'
 
-		return RankedClaimPosition.create(bestAt, hiddenFromTheReader: ranking.winnerIsHiddenFromTheReader())
+		return RankedClaimPosition.create(self.latestToFoldAmong(claims, readerPath: readerPath, tier: tally.bestTier), hiddenFromTheReader: tally.bestTier == ScopeTierHidden)
 	end 'rankedClaimIn'
 
-	function tierOfClaim(claim TypeNameClaim, readerPath String) returns ScopedAliasTier
-		return scopedAliasTier(claim.declFilePath.toString(), readerPath: readerPath, declaredByTheCorpus: claim.declaredByTheCorpus, readerIsTheCorpus: self.declaresInTheCorpus(readerPath), visibleToReader: self.claimIsVisibleFrom(claim, readerPath: readerPath))
+	function latestToFoldAmong(claims TypeNameClaimArray, readerPath String, tier ScopeTier) returns ElementIndex
+		var latestAt = 0 as ElementIndex
+		var seen = false
+
+		for (iter, claim) in claims.withIterator() 'eachClaim'
+			if self.tierOfClaim(claim, readerPath: readerPath) != tier 'anotherTier'
+				continue
+			end 'anotherTier'
+
+			if seen 'aLaterOneMayDisplace'
+				view latest = try claims.get(latestAt) otherwise panic("ClaimantProvenance.latestToFoldAmong: claims.get OOB at {latestAt} of {claims.count()} claims, a position this walk recorded")
+
+				if self.foldsLater(latest.declFilePath.toString(), thanPath: claim.declFilePath.toString()) 'theHeldOneFoldsLater'
+					continue
+				end 'theHeldOneFoldsLater'
+			end 'aLaterOneMayDisplace'
+
+			latestAt = iter.index()
+			seen = true
+		end 'eachClaim'
+
+		return latestAt
+	end 'latestToFoldAmong'
+
+	module function tallyOfClaims(claims TypeNameClaimArray, readerPath String, authorsOnly bool) returns NameScopeTally
+		var tally = NameScopeTally.create()
+
+		for (iter, claim) in claims.withIterator() 'eachClaim'
+			tally.note(self.tierOfNameableClaim(claim, readerPath: readerPath, authorsOnly: authorsOnly), at: iter.index())
+		end 'eachClaim'
+
+		return tally
+	end 'tallyOfClaims'
+
+	function tierOfNameableClaim(claim TypeNameClaim, readerPath String, authorsOnly bool) returns ScopeTier
+		if authorsOnly and claim.declaredByTheCorpus 'aLibrarysClaim'
+			return ScopeTierHidden
+		end 'aLibrarysClaim'
+
+		return self.tierOfClaim(claim, readerPath: readerPath)
+	end 'tierOfNameableClaim'
+
+	// Answers what `meantAuthorClaimIn`'s scan answers, from the two directories' holders alone: a name
+	// the reader's directory or the root holds once decides without visiting the other claimants, and any
+	// other holding falls to the scan.
+	module function meantAuthorClaimNear(claims TypeNameClaimArray, readerPath String, readersDirectory DirectoryHolder, theRoot DirectoryHolder) returns NameScopeVerdict
+		match nearNameScope(self.holdingOfAuthorClaim(claims, holder: readersDirectory, readerPath: readerPath), theRoot: self.holdingOfAuthorClaim(claims, holder: theRoot, readerPath: readerPath)) 'near'
+			held(index, tier) then return NameScopeVerdict.meant(index, tier: tier)
+			vacant or
+			contested then break
+		end 'near'
+
+		return self.meantAuthorClaimIn(claims, readerPath: readerPath)
+	end 'meantAuthorClaimNear'
+
+	function holdingOfAuthorClaim(claims TypeNameClaimArray, holder DirectoryHolder, readerPath String) returns ScopeHolding
+		return match holder 'holder'
+			absent gives ScopeHolding.vacant
+			several gives ScopeHolding.contested
+			one(index) gives heldIfNameable(index, tier: self.tierOfNameableClaim(try claims.get(index) otherwise panic("ClaimantProvenance.holdingOfAuthorClaim: claims.get OOB at {index} of {claims.count()} claims, a position the holder index recorded"), readerPath: readerPath, authorsOnly: true))
+		end 'holder'
+	end 'holdingOfAuthorClaim'
+
+	module function meantAuthorClaimIn(claims TypeNameClaimArray, readerPath String) returns NameScopeVerdict
+		return self.tallyOfClaims(claims, readerPath: readerPath, authorsOnly: true).verdict()
+	end 'meantAuthorClaimIn'
+
+	module function tierOfClaim(claim TypeNameClaim, readerPath String) returns ScopeTier
+		return self.tierOfDeclaredIn(claim.declFilePath.toString(), readerPath: readerPath, declaredByTheCorpus: claim.declaredByTheCorpus, visible: self.claimIsVisibleFrom(claim, readerPath: readerPath))
 	end 'tierOfClaim'
+
+	module function tierOfDeclaration(declFilePath FilePath, visibility Visibility, readerPath String) returns ScopeTier
+		let declPath = declFilePath.toString()
+		return self.tierOfDeclaredIn(declPath, readerPath: readerPath, declaredByTheCorpus: self.declaresInTheCorpus(declPath), visible: visibleThroughModuleDirectories(self.moduleDirectories, visibility: visibility, declPath: declPath, readerPath: readerPath))
+	end 'tierOfDeclaration'
+
+	function tierOfDeclaredIn(declPath String, readerPath String, declaredByTheCorpus bool, visible bool) returns ScopeTier
+		let readerIsTheCorpus = self.declaresInTheCorpus(readerPath)
+		let nearness = DirectoryNearness.elsewhere if declaredByTheCorpus or readerIsTheCorpus else self.directoryNearnessOf(declPath, readerPath: readerPath)
+
+		return scopeTierOf(declPath, readerPath: readerPath, declaredByTheCorpus: declaredByTheCorpus, readerIsTheCorpus: readerIsTheCorpus, visibleToReader: visible, nearness: nearness)
+	end 'tierOfDeclaredIn'
+
+	function directoryNearnessOf(declPath String, readerPath String) returns DirectoryNearness
+		if not self.moduleDirectories.contains(declPath) or not self.moduleDirectories.contains(readerPath) 'aPathTheSweepNeverVisited'
+			return DirectoryNearness.elsewhere
+		end 'aPathTheSweepNeverVisited'
+
+		return nearnessOfDirectory(moduleDirectoryIn(self.moduleDirectories, path: declPath), readerDirectory: moduleDirectoryIn(self.moduleDirectories, path: readerPath))
+	end 'directoryNearnessOf'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
@@ -2927,7 +2926,7 @@ function foldRankOrdering(left FoldRankedAlias, right FoldRankedAlias) returns O
 	return Ordering.lessThan if foldsLaterThan(right.position, than: left.position) else Ordering.equalTo
 end 'foldRankOrdering'
 
-module typealias DeclaringFilePathSet = Set with String
+typealias DeclaringFilePathSet = Set with String
 
 function admitEnvironment(environments FilePathArray, seen DeclaringFilePathSet, path FilePath)
 	if seen.contains(path.toString()) 'alreadyAnEnvironment'
@@ -3832,7 +3831,7 @@ export type RangedAliasRegistry
 			ranked.push(FoldRankedAlias.create(self.provenance.foldPositionOf(declPath), alias: alias))
 		end 'eachAlias'
 
-		ranked.sort(function(left FoldRankedAlias, right FoldRankedAlias) gives foldRankOrdering(left, right: right))
+		ranked.sortBy(function(left FoldRankedAlias, right FoldRankedAlias) gives foldRankOrdering(left, right: right))
 		var ordered = RangedTypeAliasArray.create()
 
 		for entry in ranked 'eachRanked'
@@ -4420,27 +4419,23 @@ end 'TypeNameAdmissionVerdict'
 // compiler cannot refuse a pair it also resolves, or resolve one it refuses. Three indexes, three
 // refusals:
 //
-//   • `nameableInDirectory` — two declarations nameable outside their files, from two FILES of one
-//     module directory: both are spelled `dir.Name`, so no qualification tells them apart;
+//   • `inDirectory` — two declarations from two FILES of one module directory, whatever their tier
+//     and kind: a directory declares a name once;
 //   • `crossFile` — the pair rule, `typeNamePairMayCoexist`, against the name's refusal slots;
 //   • `sameFile` — one file declaring a name twice, whatever the kinds.
 type TypeNameAdmission
 	var crossFile as CoexistingTypeNameClaimMap
 	var sameFile as AdmittedTypeNameClaimMap
-	var nameableInDirectory as AdmittedTypeNameClaimMap
+	var inDirectory as AdmittedTypeNameClaimMap
 
 	static function create() returns TypeNameAdmission
-		return Self{crossFile: CoexistingTypeNameClaimMap.create(), sameFile: AdmittedTypeNameClaimMap.create(), nameableInDirectory: AdmittedTypeNameClaimMap.create()}
+		return Self{crossFile: CoexistingTypeNameClaimMap.create(), sameFile: AdmittedTypeNameClaimMap.create(), inDirectory: AdmittedTypeNameClaimMap.create()}
 	end 'create'
 
-	function admit(name ByteArray, claim TypeNameClaim, id ElementIndex, directories ModuleDirectoryByFile) returns TypeNameAdmissionVerdict
-		if not nameableOutsideItsFile(claim) 'reachableFromItsOwnFileAlone'
-			return self.admitAcrossDirectories(name, claim: claim, id: id, directories: directories)
-		end 'reachableFromItsOwnFileAlone'
+	function admit(name ByteArray, bareName ByteArray, claim TypeNameClaim, id ElementIndex, directories ModuleDirectoryByFile) returns TypeNameAdmissionVerdict
+		let directoryKey = directoryScopedNameKey(bareName, declFilePath: claim.declFilePath, directories: directories)
 
-		let directoryKey = directoryScopedTypeNameKey(name, declFilePath: claim.declFilePath, directories: directories)
-
-		if let incumbent = try self.nameableInDirectory.get(directoryKey) 'thisDirectoryAlreadyNamesIt'
+		if let incumbent = try self.inDirectory.get(directoryKey) 'thisDirectoryAlreadyNamesIt'
 			if not incumbent.claim.declFilePath.equals(claim.declFilePath) 'anotherFileOfThisDirectory'
 				return TypeNameAdmissionVerdict.refusedBy(incumbent.id)
 			end 'anotherFileOfThisDirectory'
@@ -4449,7 +4444,7 @@ type TypeNameAdmission
 		let verdict = self.admitAcrossDirectories(name, claim: claim, id: id, directories: directories)
 
 		match verdict 'verdict'
-			admitted then self.nameableInDirectory.upsert(directoryKey, value: AdmittedTypeNameClaim.create(claim, id: id))
+			admitted then self.inDirectory.upsert(directoryKey, value: AdmittedTypeNameClaim.create(claim, id: id))
 			refusedBy then break
 		end 'verdict'
 
@@ -4495,8 +4490,8 @@ end 'TypeNameRefusal'
 // that turns on what each one's reach contains (`heldRefusesEverythingTheNewcomerWould`).
 //
 // ⚠ **A FILE-PRIVATE ALIAS IS `none`, AND THAT IS THE RULE RATHER THAN A GAP.** It is reachable from the
-// one file that declared it, so the only pair it can be half of is a SAME-FILE one, which
-// `TypeNameAdmission.sameFile` answers.
+// one file that declared it, so the only pairs it can be half of are a SAME-FILE one and a SAME-DIRECTORY
+// one, which `TypeNameAdmission.sameFile` and `TypeNameAdmission.inDirectory` answer.
 //
 // ⚠ The NOMINAL half is split by layer even though at most one nominal declaration of a name is
 // ever ACCEPTED: `everyClaimMayCoexist` is handed claims that have not been through the merge, and
@@ -4587,9 +4582,9 @@ end 'cacheReadTypeNameCollisionArray'
 // E3061). Without it, which of a `type Box` and a `typealias Box` a reference meant would be
 // decided by `denotedNamedType`'s arm order and the merge order, never by the author.
 //
-// **THE RULE: a type name is declared exactly once IN ANY ONE SCOPE.** Two declarations that cannot
-// SEE each other are not two claims on one name; they are two names that happen to be spelled
-// alike. `TypeNameAdmission` applies it, so the cross-kind contest
+// **THE RULE: a type name is declared exactly once PER MODULE DIRECTORY.** Declarations in two
+// directories are two names that happen to be spelled alike, except for the pairs
+// `typeNamePairMayCoexist` refuses. `TypeNameAdmission` applies it, so the cross-kind contest
 // (`ProgramSignatures.settleCrossKindContests`, through `everyClaimMayCoexist`), which decides
 // which of two coexisting declarations a file MEANS, reads the identical rule.
 //
@@ -4609,11 +4604,11 @@ export type TypeNameRegistry
 		return Self{admission: TypeNameAdmission.create(), accepted: TypeNameDeclArray.create()}
 	end 'create'
 
-	export function recordAll(decls TypeNameDeclArray, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
+	export function recordAll(decls TypeNameDeclArray, roster ShadowSpellingRoster, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
 		var collisions = TypeNameCollisionArray.create()
 
 		for decl in decls 'eachDecl'
-			match self.record(decl, directories: directories) 'collision'
+			match self.record(decl, roster: roster, directories: directories) 'collision'
 				accepted then continue
 				collides(winner) then collisions.push(TypeNameCollision.create(decl, winner: winner))
 			end 'collision'
@@ -4622,8 +4617,8 @@ export type TypeNameRegistry
 		return collisions
 	end 'recordAll'
 
-	export function record(decl TypeNameDecl, directories ModuleDirectoryByFile) returns TypeNameRecordOutcome
-		match self.admission.admit(decl.name, claim: decl.claim, id: self.accepted.count(), directories: directories) 'admission'
+	export function record(decl TypeNameDecl, roster ShadowSpellingRoster, directories ModuleDirectoryByFile) returns TypeNameRecordOutcome
+		match self.admission.admit(decl.name, bareName: roster.authorBareSpellingOf(decl.name), claim: decl.claim, id: self.accepted.count(), directories: directories) 'admission'
 			admitted then break
 			refusedBy(id) then return TypeNameRecordOutcome.collides(self.acceptedAt(id))
 		end 'admission'
@@ -4645,13 +4640,13 @@ export type TypeNameRegistry
 	end 'acceptedAt'
 end 'TypeNameRegistry'
 
-function nameableOutsideItsFile(claim TypeNameClaim) returns bool
-	return not isTypeAliasDecl(claim.kind) or claim.visibility != Visibility.file
-end 'nameableOutsideItsFile'
+module function directoryScopedNameKey(name ByteArray, declFilePath FilePath, directories ModuleDirectoryByFile) returns ByteArray
+	return directoryNameKey(name, directory: moduleDirectoryIn(directories, path: declFilePath.toString()))
+end 'directoryScopedNameKey'
 
-function directoryScopedTypeNameKey(name ByteArray, declFilePath FilePath, directories ModuleDirectoryByFile) returns ByteArray
-	return "{moduleDirectoryIn(directories, path: declFilePath.toString())}{DirectoryScopedKeySeparator}{String.from(name)}".toByteArray()
-end 'directoryScopedTypeNameKey'
+module function directoryNameKey(name ByteArray, directory String) returns ByteArray
+	return "{directory}{DirectoryScopedKeySeparator}{String.from(name)}".toByteArray()
+end 'directoryNameKey'
 
 let DirectoryScopedKeySeparator = "|"
 
@@ -4659,7 +4654,7 @@ module function everyClaimMayCoexist(name ByteArray, claims TypeNameClaimArray, 
 	var admission = TypeNameAdmission.create()
 
 	for (iter, claim) in claims.withIterator() 'eachClaim'
-		match admission.admit(name, claim: claim, id: iter.index(), directories: directories) 'admission'
+		match admission.admit(name, bareName: name, claim: claim, id: iter.index(), directories: directories) 'admission'
 			admitted then continue
 			refusedBy then return false
 		end 'admission'
@@ -4710,16 +4705,24 @@ function heldRefusesEverythingTheNewcomerWould(held TypeNameClaim, newcomer Type
 	end 'slot'
 end 'heldRefusesEverythingTheNewcomerWould'
 
+function declaredInOneModuleDirectory(first TypeNameClaim, other TypeNameClaim, directories ModuleDirectoryByFile) returns bool
+	return moduleDirectoryIn(directories, path: first.declFilePath.toString()) == moduleDirectoryIn(directories, path: other.declFilePath.toString())
+end 'declaredInOneModuleDirectory'
+
 // ⭐⭐ **MAY TWO DECLARATIONS OF ONE TYPE NAME, FROM TWO FILES, COEXIST?** — the pair rule
 // `TypeNameAdmission` applies against the name's refusal slots. Refused:
 //
 //   • **ONE FILE, TWICE** — whatever the kinds. No qualification could ever disambiguate the pair,
 //     and it is tested FIRST so no later arm can admit it.
-//   • **TWO NOMINAL DECLARATIONS.** A `type`/`enum`/`union`/`interface` name is whole-program.
+//   • **TWO NOMINAL DECLARATIONS** (`type`/`enum`/`union`/`interface`), unless both are the user's and
+//     in different module directories, where each is reachable as `dir.Name`.
 //   • **TWO LIBRARY ALIASES SOME READER CAN NAME BOTH OF** (`libraryAliasesSomeReaderNamesBoth`) —
 //     E3061.
 //   • **A NOMINAL AND A NAMEABLE ALIAS OF ONE LAYER IN ONE MODULE DIRECTORY**, which share
 //     `dir.Name`.
+//
+// Two files of one module directory never reach this rule: `TypeNameAdmission.inDirectory` refuses the
+// pair first, private or not.
 //
 // Every other pair coexists: two aliases a reader may both name are an ambiguous REFERENCE, E3063
 // at the use; a FILE-PRIVATE alias is reachable from its own file alone; a `stdlib/` declaration
@@ -4740,7 +4743,7 @@ function typeNamePairMayCoexist(winner TypeNameClaim, newcomer TypeNameClaim, di
 	end 'twoAliases'
 
 	if not winnerIsAlias and not newcomerIsAlias 'twoNominalDeclarations'
-		return false
+		return not winner.declaredByTheCorpus and not newcomer.declaredByTheCorpus and not declaredInOneModuleDirectory(winner, other: newcomer, directories: directories)
 	end 'twoNominalDeclarations'
 
 	let alias = winner if winnerIsAlias else newcomer
@@ -4753,7 +4756,7 @@ function typeNamePairMayCoexist(winner TypeNameClaim, newcomer TypeNameClaim, di
 		return true
 	end 'twoLayers'
 
-	return moduleDirectoryIn(directories, path: winner.declFilePath.toString()) != moduleDirectoryIn(directories, path: newcomer.declFilePath.toString())
+	return not declaredInOneModuleDirectory(winner, other: newcomer, directories: directories)
 end 'typeNamePairMayCoexist'
 
 function libraryAliasesSomeReaderNamesBoth(winner TypeNameClaim, newcomer TypeNameClaim, directories ModuleDirectoryByFile) returns bool
@@ -5195,41 +5198,8 @@ export type RangeCheckArgSite
 end 'RangeCheckArgSite'
 
 export union ArgSiteParameter
-	// ⭐⭐ **`bareCallee` IS WHICH CALL THIS SITE CAME FROM — the name the SOURCE wrote, and the one
-	// field of the pair that is never rewritten.** `callee` is RETARGETED to the resolved overload
-	// member in the copy `Project.rangeSiteFacts` files (`SemanticCheck.retargetArgRangeSites`), so
-	// after a retarget that copy no longer answers *"whose call was this?"* — and that retarget finds
-	// its sites by matching the argument's `value`, which a `let` binding passed to two different
-	// calls shares. Without `bareCallee`, two DIFFERENT
-	// overloaded functions sharing one `let` argument would read each other's sites as claimed by
-	// another member and refuse a legal program with E2015.
-	//
-	// ⚠ The residual the retarget's own header describes is UNAFFECTED and still reported: two calls of the
-	// SAME bare name resolving to two members share this field as well as the value, which is exactly the
-	// case that cannot be told apart and the one the diagnostic is about.
-	ofCallee(let bareCallee ByteArray, let callee ByteArray, argIndex ParamCount, let label ByteArray)
+	ofCallee(let callee ByteArray, argIndex ParamCount, let label ByteArray)
 	slotAlias(alias RangedTypeAlias)
-
-	export function bareCalleeIs(callee ByteArray) returns bool
-		return match self 'parameter'
-			ofCallee(bareCallee, _, _, _) gives bareCallee.equals(callee)
-			slotAlias gives false
-		end 'parameter'
-	end 'bareCalleeIs'
-
-	export function resolvedCallee() returns ByteArray
-		match self 'parameter'
-			ofCallee(_, callee, _, _) then return callee
-			slotAlias then panic("ArgSiteParameter.resolvedCallee: a site checked against its slot's alias names no callee, and the retarget reaches only the sites of a named call")
-		end 'parameter'
-	end 'resolvedCallee'
-
-	export function retargetedTo(member ByteArray) returns ArgSiteParameter
-		match self 'parameter'
-			ofCallee(bareCallee, _, argIndex, label) then return ArgSiteParameter.ofCallee(bareCallee.clone(), callee: member.clone(), argIndex: argIndex, label: label.clone())
-			slotAlias then panic("ArgSiteParameter.retargetedTo: a site checked against its slot's alias names no callee, and the retarget reaches only the sites of a named call")
-		end 'parameter'
-	end 'retargetedTo'
 end 'ArgSiteParameter'
 
 // @generated library-cache begin
@@ -5237,16 +5207,15 @@ function cacheWriteArgSiteParameter(writer LibraryCacheWriter, value ArgSitePara
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		ofCallee(a0, a1, a2, a3) then cacheWriteArgSiteParameterOfCallee(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		ofCallee(a0, a1, a2) then cacheWriteArgSiteParameterOfCallee(writer, a0: a0, a1: a1, a2: a2)
 		slotAlias(a0) then cacheWriteArgSiteParameterSlotAlias(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteArgSiteParameter'
 
-function cacheWriteArgSiteParameterOfCallee(writer LibraryCacheWriter, a0 ByteArray, a1 ByteArray, a2 ParamCount, a3 ByteArray)
+function cacheWriteArgSiteParameterOfCallee(writer LibraryCacheWriter, a0 ByteArray, a1 ParamCount, a2 ByteArray)
 	writer.bytes(a0)
-	writer.bytes(a1)
-	writer.unsigned(a2 as CacheUnsigned)
-	writer.bytes(a3)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.bytes(a2)
 end 'cacheWriteArgSiteParameterOfCallee'
 
 function cacheWriteArgSiteParameterSlotAlias(writer LibraryCacheWriter, a0 RangedTypeAlias)
@@ -5265,11 +5234,10 @@ end 'cacheReadArgSiteParameter'
 
 function cacheReadArgSiteParameterOfCallee(reader LibraryCacheReader) returns ArgSiteParameter throws LibraryCacheDamage
 	let a0 = try reader.bytes()
-	let a1 = try reader.bytes()
-	let a2 = (try reader.unsigned()) as ParamCount
-	let a3 = try reader.bytes()
+	let a1 = (try reader.unsigned()) as ParamCount
+	let a2 = try reader.bytes()
 
-	return ArgSiteParameter.ofCallee(a0, callee: a1, argIndex: a2, label: a3)
+	return ArgSiteParameter.ofCallee(a0, argIndex: a1, label: a2)
 end 'cacheReadArgSiteParameterOfCallee'
 
 function cacheReadArgSiteParameterSlotAlias(reader LibraryCacheReader) returns ArgSiteParameter throws LibraryCacheDamage
@@ -5887,10 +5855,6 @@ export typealias RangeSitePositionArray = Array with ElementIndex
 
 export typealias RangeSitePositionMap = Map with (ByteArray, RangeSitePositionArray)
 
-typealias ArgSiteParameterArray = Array with ArgSiteParameter
-
-typealias RetargetedArgParameterMap = Map with (ByteArray, ArgSiteParameterArray)
-
 // This compile's facts about `Project.rangeChecks`' sites, keyed by function name. A site
 // belongs to the parse artifact a warm compile reuses, so no pass writes one;
 // `Queries.resetMergeTargets` resets these with the fold. ⚠ Read a site's Maxon ordinal through
@@ -5899,10 +5863,9 @@ typealias RetargetedArgParameterMap = Map with (ByteArray, ArgSiteParameterArray
 export type RangeSiteFacts
 	export var shiftedMaxonPositions as RangeSitePositionMap
 	export var stdPositions as RangeSitePositionMap
-	var retargetedArgParameters as RetargetedArgParameterMap
 
 	export static function create() returns RangeSiteFacts
-		return Self{shiftedMaxonPositions: RangeSitePositionMap.create(), stdPositions: RangeSitePositionMap.create(), retargetedArgParameters: RetargetedArgParameterMap.create()}
+		return Self{shiftedMaxonPositions: RangeSitePositionMap.create(), stdPositions: RangeSitePositionMap.create()}
 	end 'create'
 
 	export function fillMaxonPositions(into RangeSitePositionArray, name ByteArray, sites RangeCheckSiteArray)
@@ -5927,32 +5890,6 @@ export type RangeSiteFacts
 		self.stdPositions.upsert(name, value: positions)
 		return positions
 	end 'openStdPositions'
-
-	export function retargetedParameter(name ByteArray, index ElementIndex) returns ArgSiteParameter throws MapError
-		if self.retargetedArgParameters.count() == 0 'noFunctionRetargeted'
-			throw MapError.keyNotFound
-		end 'noFunctionRetargeted'
-
-		let parameters = try self.retargetedArgParameters.get(name)
-		return try parameters.get(index) otherwise throw MapError.keyNotFound
-	end 'retargetedParameter'
-
-	export function retargetArgParameter(name ByteArray, argSites RangeCheckArgSiteArray, index ElementIndex, to ArgSiteParameter)
-		var parameters = try self.retargetedArgParameters.get(name) otherwise self.openArgParameters(name, argSites: argSites)
-		try parameters.set(index, value: to) otherwise panic("RangeSiteFacts.retargetArgParameter: '{String.from(name)}' has {parameters.count()} argument sites and the caller named site {index}")
-	end 'retargetArgParameter'
-
-	function openArgParameters(name ByteArray, argSites RangeCheckArgSiteArray) returns ArgSiteParameterArray
-		var parameters = ArgSiteParameterArray.create()
-		parameters.reserve(argSites.count())
-
-		for site in argSites 'eachSite'
-			parameters.push(site.parameter.clone())
-		end 'eachSite'
-
-		self.retargetedArgParameters.upsert(name, value: parameters)
-		return parameters
-	end 'openArgParameters'
 end 'RangeSiteFacts'
 
 // ⭐ WHAT A FUNCTION VALUE TAKES AND RETURNS, AND WHOSE SLOT THOSE TYPES ARE — what
@@ -5964,9 +5901,10 @@ export type FunctionValueShape
 	export let returnType as MaxonReturnType
 	export let scopeFilePath as FilePath
 	export let promisesTaken as BoolArray
+	export let byRefParams as ParamPositionMask
 
-	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, scopeFilePath FilePath, promisesTaken BoolArray) returns FunctionValueShape
-		return Self{paramTypes: paramTypes, returnType: returnType, scopeFilePath: scopeFilePath, promisesTaken: promisesTaken}
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, scopeFilePath FilePath, promisesTaken BoolArray, byRefParams ParamPositionMask) returns FunctionValueShape
+		return Self{paramTypes: paramTypes, returnType: returnType, scopeFilePath: scopeFilePath, promisesTaken: promisesTaken, byRefParams: byRefParams}
 	end 'create'
 
 	export function takesPromiseAt(position ElementIndex) returns bool
@@ -6076,6 +6014,22 @@ export type FunctionTypeAlias
 		return (try self.paramTypes.get(position) otherwise panic("FunctionTypeAlias.paramCapabilityAt: position {position} is past the {self.paramTypes.count()} parameters of '{String.from(self.name)}'")).capability
 	end 'paramCapabilityAt'
 
+	export function paramByReferenceAt(position ElementIndex) returns bool
+		return (try self.paramTypes.get(position) otherwise panic("FunctionTypeAlias.paramByReferenceAt: position {position} is past the {self.paramTypes.count()} parameters of '{String.from(self.name)}'")).byReference
+	end 'paramByReferenceAt'
+
+	export function byRefParamMask() returns ParamPositionMask
+		var mask = NoParamPositions
+
+		for position in 0 upto self.paramTypes.count() 'eachParam'
+			if self.paramByReferenceAt(position) 'aMutableParameter'
+				mask = maskWithParam(mask, param: position as ParamCount)
+			end 'aMutableParameter'
+		end 'eachParam'
+
+		return mask
+	end 'byRefParamMask'
+
 	export function paramNameAt(position ElementIndex) returns ByteArray
 		return (try self.paramTypes.get(position) otherwise panic("FunctionTypeAlias.paramNameAt: position {position} is past the {self.paramTypes.count()} parameters of '{String.from(self.name)}'")).name
 	end 'paramNameAt'
@@ -6085,7 +6039,7 @@ export type FunctionTypeAlias
 		var params = FunctionAliasParamArray.create()
 
 		for param in self.paramTypes 'eachParam'
-			params.push(FunctionAliasParam.create(param.tag, name: param.name, typeName: param.typeName, identity: remappedAliasSlotIdentity(param.identity, remap: remap), aggregateName: param.aggregateName, capability: param.capability))
+			params.push(FunctionAliasParam.create(param.tag, name: param.name, typeName: param.typeName, identity: remappedAliasSlotIdentity(param.identity, remap: remap), aggregateName: param.aggregateName, capability: param.capability, byReference: param.byReference))
 		end 'eachParam'
 
 		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: remappedAliasSlotIdentity(self.returnIdentity, remap: remap), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written, typeSites: self.typeSites}
@@ -6170,9 +6124,10 @@ export type FunctionAliasParam
 	export let identity as AliasSlotIdentity
 
 	export let capability as ParamCapability
+	export let byReference as bool
 
-	export static function create(tag ValueTypeTag, name ByteArray, typeName ByteArray, identity AliasSlotIdentity, aggregateName ByteArray, capability ParamCapability) returns FunctionAliasParam
-		return Self{tag: tag, name: name, typeName: typeName, identity: identity, aggregateName: aggregateName, capability: capability}
+	export static function create(tag ValueTypeTag, name ByteArray, typeName ByteArray, identity AliasSlotIdentity, aggregateName ByteArray, capability ParamCapability, byReference bool) returns FunctionAliasParam
+		return Self{tag: tag, name: name, typeName: typeName, identity: identity, aggregateName: aggregateName, capability: capability, byReference: byReference}
 	end 'create'
 
 	// @generated library-cache begin
@@ -6183,6 +6138,7 @@ export type FunctionAliasParam
 		writer.bytes(self.aggregateName)
 		cacheWriteAliasSlotIdentity(writer, value: self.identity)
 		writer.unsigned(self.capability.ordinal as CacheUnsigned)
+		writer.flag(self.byReference)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns FunctionAliasParam throws LibraryCacheDamage
@@ -6192,12 +6148,13 @@ export type FunctionAliasParam
 		let f_aggregateName = try reader.bytes()
 		let f_identity = try cacheReadAliasSlotIdentity(reader)
 		let f_capability = try cacheReadParamCapability(reader)
+		let f_byReference = try reader.flag()
 
-		return Self{tag: f_tag, name: f_name, typeName: f_typeName, aggregateName: f_aggregateName, identity: f_identity, capability: f_capability}
+		return Self{tag: f_tag, name: f_name, typeName: f_typeName, aggregateName: f_aggregateName, identity: f_identity, capability: f_capability, byReference: f_byReference}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize48
-		return sizeof(FunctionAliasParam) as CacheSize48
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(FunctionAliasParam) as CacheSize56
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -6347,8 +6304,8 @@ end 'functionAliasShapeKeyOf'
 export typealias FunctionAliasShapeKeyMap = Map with (String, HashDigest)
 
 // Every function typealias in the program, on `RangedAliasRegistry`'s model and for its reason: two
-// files may each declare one name, so a whole-program name key alone hands one file the other's
-// shape.
+// files of different directories may each declare one name, so a whole-program name key alone hands one
+// file the other's shape.
 export type FunctionAliasRegistry
 	var byName as FunctionTypeAliasMap
 	var multiplyDeclared as MultiplyDeclaredFunctionAliasMap
@@ -6673,9 +6630,10 @@ export type FunctionShape
 
 	export let paramCapabilities as ParamCapabilityArray
 	export let returnCapability as ResultCapability
+	export let byRefParams as ParamPositionMask
 
-	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability) returns FunctionShape
-		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramCapabilities: paramCapabilities, returnCapability: returnCapability}
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, byRefParams ParamPositionMask) returns FunctionShape
+		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramCapabilities: paramCapabilities, returnCapability: returnCapability, byRefParams: byRefParams}
 	end 'create'
 
 	export function paramCapabilityAt(position ElementIndex) returns ParamCapability
@@ -7132,6 +7090,13 @@ export function whereConstraintListReserves(reserved WhereConstraintArray, const
 	return false
 end 'whereConstraintListReserves'
 
+// ⭐ **THE E4006 A CONDITIONAL TYPE EXTENSION'S UNMET CLAUSE EARNS.** `Queries.parseErrorDiagnostic` renders
+// it from the parser's `conditionalExtensionWithheld` arm, and every raiser of that arm quotes the same
+// sentence. It lives beside `renderWhereConstraints`, which builds the `clause` it quotes.
+export function conditionalExtensionWithheldMessage(typeName String, methodName String, clause String, unmetInterfaceName String, bindingName String) returns String
+	return "Type '{typeName}' has no field named '{methodName}' ('{methodName}' is available as a conditional extension {clause}, but '{bindingName}' does not implement '{unmetInterfaceName}')"
+end 'conditionalExtensionWithheldMessage'
+
 // ⭐ **RENDER A CONSTRAINT LIST BACK TO THE CLAUSE THE AUTHOR WROTE** — `where T is A and B, U is C`. The
 // flattening `readWhereClause` performs is LOSSLESS in source order (one entry per (param, interface) pair,
 // params in the order they were written), so regrouping the consecutive run that shares a `typeParamIndex`
@@ -7140,16 +7105,7 @@ end 'whereConstraintListReserves'
 // grammar at the message site is how a `where` form grows a second, stale renderer.
 //
 // `paramNames` is the declaration the indices are positions in — a type's `uses` list, or an
-// interface's associated-type names. ⭐ **THE E4006 A CONDITIONAL TYPE EXTENSION'S UNMET CLAUSE
-// EARNS — written once because TWO parties now render it.** `Queries.parseErrorDiagnostic` renders
-// the parser's `conditionalExtensionWithheld` arm and
-// `SemanticCheck.checkResolvedExtensionConstraints` renders the post-resolution one; they are the
-// same refusal asked at two points (see `ConformanceCheck.receiverMeetsExtensionConstraints`), so
-// the sentence lives beside `renderWhereConstraints`, which builds the `clause` both of them quote.
-export function conditionalExtensionWithheldMessage(typeName String, methodName String, clause String, unmetInterfaceName String, bindingName String) returns String
-	return "Type '{typeName}' has no field named '{methodName}' ('{methodName}' is available as a conditional extension {clause}, but '{bindingName}' does not implement '{unmetInterfaceName}')"
-end 'conditionalExtensionWithheldMessage'
-
+// interface's associated-type names.
 export function renderWhereConstraints(constraints WhereConstraintArray, paramNames NameRoster) returns String
 	var text = "where "
 	var previousParam = 0 as ElementIndex
@@ -10424,21 +10380,7 @@ export type FuncSignature
 	// the witness-slot count this function's ABI reserves. EMPTY for everything else, which is every function
 	// in a program that declares no conditional type extension.
 	//
-	// ⛔⛔ **IT LIVES ON THE SIGNATURE BECAUSE THE QUESTION IS PER *REGISTRATION NAME* AND
-	// `ProgramSignatures.extensionMethodConstraints` IS KEYED PER *DECLARED* NAME — one key, and a contested
-	// set has several declarations behind it.** `Array.contains` is declared by `stdlib/Array.maxon`'s
-	// `where Element is Equatable` extension AND by `stdlib/Interfaces.maxon`'s unconditional
-	// `extension Iterable`, so its members register as `Array.contains#type parameter`,
-	// `Array.contains#struct` and `Array.contains#Array.ElementPredicate` and NOBODY keeps the bare spelling.
-	// The bare-keyed map then answered the SUPPLY side (`ProgramSignatures.witnessParamCountForCallee`) with
-	// nothing at all while the body reserved a slot from its lexical clause — **MEASURED: the caller passed 3
-	// arguments where the callee read 4, `bindImplicitParams` computed the layout descriptor's id as
-	// `paramCount - witnessCount - 1` and landed on the WITNESS slot, and `[10].contains(10)` segfaulted
-	// (0xC0000005).** The mirror shape is a same-file pair where the UNCONDITIONAL declaration is written
-	// first and keeps the bare name: there the bare key answered with the CONDITIONAL sibling's clause and
-	// every caller pushed a witness argument the callee never reserved.
-	//
-	// ⭐ **AND IT IS FILLED WHERE THE REGISTRATION NAME IS MINTED** (`Parser.parseFunction`), from the very
+	// ⭐ **IT IS FILLED WHERE THE REGISTRATION NAME IS MINTED** (`Parser.parseFunction`), from the very
 	// clause `Parser.openTypeExtensionBodyScope` opened the body with — so the reservation and the supply are
 	// not two agreeing derivations, they are one recorded list read twice. A witness-slot count is ABI, and a
 	// reservation and a supply that disagree is an argument-register mismatch nothing downstream can notice.
@@ -10449,11 +10391,12 @@ export type FuncSignature
 
 	export var writtenTypeNames as WrittenTypeNames
 	export let selfSpelledParams as ParamPositionMask
+	export let byRefParams as ParamPositionMask
 	export let returnCapability as ResultCapability
 	export let offeredResultAlias as ByteArray
 
-	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, returnBrand ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask, offeredResultAlias ByteArray, returnCapability ResultCapability = ResultCapability.unqualified) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, returnBrand: returnBrand, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams, offeredResultAlias: offeredResultAlias, returnCapability: returnCapability}
+	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, returnBrand ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask, offeredResultAlias ByteArray, byRefParams ParamPositionMask, returnCapability ResultCapability = ResultCapability.unqualified) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, returnBrand: returnBrand, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams, byRefParams: byRefParams, offeredResultAlias: offeredResultAlias, returnCapability: returnCapability}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.
@@ -10521,6 +10464,7 @@ export type FuncSignature
 		cacheWriteWhereConstraintArray(writer, value: self.extensionConstraints)
 		self.writtenTypeNames.cacheWrite(writer)
 		writer.unsigned(self.selfSpelledParams as CacheUnsigned)
+		writer.unsigned(self.byRefParams as CacheUnsigned)
 		writer.unsigned(self.returnCapability.ordinal as CacheUnsigned)
 		writer.bytes(self.offeredResultAlias)
 	end 'cacheWrite'
@@ -10537,14 +10481,15 @@ export type FuncSignature
 		let f_extensionConstraints = try cacheReadWhereConstraintArray(reader)
 		let f_writtenTypeNames = try WrittenTypeNames.cacheRead(reader)
 		let f_selfSpelledParams = (try reader.unsigned()) as ParamPositionMask
+		let f_byRefParams = (try reader.unsigned()) as ParamPositionMask
 		let f_returnCapability = try cacheReadResultCapability(reader)
 		let f_offeredResultAlias = try reader.bytes()
 
-		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, returnBrand: f_returnBrand, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams, returnCapability: f_returnCapability, offeredResultAlias: f_offeredResultAlias}
+		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, returnBrand: f_returnBrand, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams, byRefParams: f_byRefParams, returnCapability: f_returnCapability, offeredResultAlias: f_offeredResultAlias}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize104
-		return sizeof(FuncSignature) as CacheSize104
+	static function cacheLayoutBytes() returns CacheSize112
+		return sizeof(FuncSignature) as CacheSize112
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -10556,120 +10501,20 @@ end 'FuncSignature'
 // validation) and lowerCall (label→positional arg slotting).
 export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 
-// ⭐ **AN OVERLOAD SET — the bare SOURCE name a call is WRITTEN with ⇒ every REGISTRATION name that
-// answers to it, in declaration order**. The compiler registers the FIRST declaration of a name
-// under the name itself and every later one under a mangled variant (`process`, then
-// `process#String`), so the callee a call op carries is the bare name while the key
-// `funcSignatures` holds a later overload under is not. This map is what turns one into the other,
-// and `SemanticCheck.resolveOverloadedCalls` is its only reader.
-//
-// ⚠ **A CONTESTED EXTENSION METHOD PUTS NO MEMBER AT ALL UNDER THE BARE NAME** — every
-// declaration of a `<Conformer>.<method>` that two files' extensions declare is registered under its
-// parameter-type suffix. The bare name is still the KEY here and still the callee a call op carries; it is
-// simply not one of the values. See `Parser.overloadRegistrationNameFor`.
-//
-// It is EMPTY for every program that overloads nothing, which is what keeps the resolver a single
-// `isEmpty()` test on that overwhelming majority.
-//
-// ⚠⚠ **IT IS A UNION ACROSS FILES, AND SO IT IS IN `resetMergeTargets`.** Keeping it out would be sound
-// only if one file declared every member of a set, so that `commitOverloadSets` could UPSERT the whole
-// value and a re-merge would REPLACE it. A
-// cross-file set has no such file. Three files each declaring one member each know only their own, so the
-// members have to ACCUMULATE — and the moment they accumulate, a warm rebuild that re-merges the same files
-// would append every member a second time. `commitOverloadSets` dedups by name, so the doubling itself is
-// inert; the reset is what keeps a member of a set the sources no longer declare from surviving the edit
-// that deleted it. (The resolver's `funcSignatures` filter still makes such a leftover harmless — see
-// `SemanticCheck.overloadCandidates` — but "harmless because a second mechanism catches it" is the
-// arrangement this compiler keeps paying for.)
-export typealias OverloadSetMap = Map with (ByteArray, NameRoster)
-
-// @generated library-cache begin
-function cacheWriteOverloadSetMap(writer LibraryCacheWriter, value OverloadSetMap)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for (key, entry) in value 'eachEntry'
-		writer.bytes(key)
-		cacheWriteNameRoster(writer, value: entry)
-	end 'eachEntry'
-end 'cacheWriteOverloadSetMap'
-
-function cacheReadOverloadSetMap(reader LibraryCacheReader) returns OverloadSetMap throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = OverloadSetMap.create()
-
-	for _ in 0 upto count 'eachEntry'
-		let key = try reader.bytes()
-		let entry = try cacheReadNameRoster(reader)
-		result.upsert(key, value: entry)
-	end 'eachEntry'
-
-	return result
-end 'cacheReadOverloadSetMap'
-
-// @generated library-cache end
-
-// ⭐ **"THIS FILE OVERLOADS NOTHING" AS A SPELLED STATE** — `Parser`'s columns' reason: a shared empty
-// container seed is IMAGE DATA, so the artifact holds a private clone of it and a test asking whether the
-// field holds the shared record answers false whatever it was seeded with.
-export union OverloadSetTable
-	unwritten
-	entries(byBase OverloadSetMap)
-end 'OverloadSetTable'
-
-// @generated library-cache begin
-module function cacheWriteOverloadSetTable(writer LibraryCacheWriter, value OverloadSetTable)
-	writer.unsigned(value.ordinal as CacheUnsigned)
-
-	match value 'payload'
-		unwritten then break
-		entries(a0) then cacheWriteOverloadSetTableEntries(writer, a0: a0)
-	end 'payload'
-end 'cacheWriteOverloadSetTable'
-
-function cacheWriteOverloadSetTableEntries(writer LibraryCacheWriter, a0 OverloadSetMap)
-	cacheWriteOverloadSetMap(writer, value: a0)
-end 'cacheWriteOverloadSetTableEntries'
-
-module function cacheReadOverloadSetTable(reader LibraryCacheReader) returns OverloadSetTable throws LibraryCacheDamage
-	let tag = try reader.unsigned()
-
-	return match tag 'case'
-		0 gives OverloadSetTable.unwritten
-		1 gives try cacheReadOverloadSetTableEntries(reader)
-		default throws LibraryCacheDamage.unknownTag(tag)
-	end 'case'
-end 'cacheReadOverloadSetTable'
-
-function cacheReadOverloadSetTableEntries(reader LibraryCacheReader) returns OverloadSetTable throws LibraryCacheDamage
-	let a0 = try cacheReadOverloadSetMap(reader)
-
-	return OverloadSetTable.entries(a0)
-end 'cacheReadOverloadSetTableEntries'
-
-// @generated library-cache end
-
-export let noOverloadSets = OverloadSetTable.unwritten
-
 // ⭐⭐ **WHICH MEMBER SATISFIES EACH WITNESS-TABLE SLOT — THE CONFORMANCE DECISION, WRITTEN DOWN ONCE.**
 // `witnessSlotImplKey(<conformer>, <interface>, <method>)` ⇒ the REGISTRATION name of the member
 // `ConformanceCheck` accepted for that requirement. `LowerMaxonToStd.ensureWitnessTable` stamps the slot's
 // `funcAbs64InRdata` relocation from this, instead of re-joining `<Type>.<method>` for itself.
 //
-// ⚠ **TWO SITES MINTING THAT JOIN INDEPENDENTLY AGREE ONLY BY BOTH BEING WRONG.** A later overload
-// registers as `Type.method#Suffix` while the un-suffixed join spells the FIRST
-// declaration, so a conformance satisfied by a later overload and a slot stamped with the bare name name
-// DIFFERENT functions — a wrong `.text` address in the dictionary, no diagnostic, at runtime. Recording the
-// selection is what makes them one value; a slot with no recording PANICS in the lowering rather than
-// falling back to a second derivation (the one exception being a builtin conformer, which declares no
-// `implements` and so has no conformance decision to record — see `ensureWitnessTable`).
+// A slot with no recording PANICS in the lowering rather than falling back to a second derivation (the one
+// exception being a builtin conformer, which declares no `implements` and so has no conformance decision to
+// record — see `ensureWitnessTable`).
 //
-// ⚠⚠ **IT IS IN `resetMergeTargets`, AND *"an UPSERT … so re-running REPLACES"* IS NOT AN ARGUMENT AGAINST
-// THAT — it describes a different function.** That is `OverloadSetMap`'s property and not this map's:
-// `ConformanceCheck.recordWitnessSlotImpl` does the
-// opposite — it RETURNS EARLY when a key is already filed, because two routes reaching one slot must AGREE
-// (that is what E3111 detects). So a stale entry is not inert, it WINS: on a warm rebuild whose sources
-// changed which member satisfies a requirement, the previous compile's answer either contradicts the new
-// one (a spurious E3111 about a member the source no longer declares) or, when the new selection is never
+// ⚠⚠ **IT IS IN `resetMergeTargets`, BECAUSE `ConformanceCheck.recordWitnessSlotImpl` RETURNS EARLY WHEN A
+// KEY IS ALREADY FILED** — two routes reaching one slot must AGREE (it panics when they differ). So a stale
+// entry is not inert, it WINS: on a warm rebuild whose sources changed which member satisfies a
+// requirement, the previous compile's answer either contradicts the new one (a panic about a member the
+// source no longer declares) or, when the new selection is never
 // filed, leaves the slot's relocation naming the STALE symbol — a wrong function pointer, silently.
 //
 // It resets beside `conformances` and `interfaces`, the two stores it is derived from, so the three cannot
@@ -10678,177 +10523,43 @@ export let noOverloadSets = OverloadSetTable.unwritten
 // compiles each test in a fresh `Project` and has no mid-session source edit to express this with.
 export typealias WitnessSlotImplMap = Map with (ByteArray, readonly ByteArray)
 
-// ⭐ **THE CHARACTER AN OVERLOAD'S REGISTRATION NAME JOINS WITH — and the reason it is not `$`.** The lexer
-// admits only `[A-Za-z0-9_]` inside an identifier, so a `#` cannot appear in any name the source can write:
-// a minted overload name can never collide with a declared one, the same construction `__` gives the
+export typealias RefusedConformanceMemberSet = Set with ByteArray
+
+// ⭐ **THE CHARACTER A MINTED REGISTRATION NAME JOINS ITS PARTS WITH — and the reason it is not `$`.** The
+// lexer admits only `[A-Za-z0-9_]` inside an identifier, so a `#` cannot appear in any name the source can
+// write: a minted name can never collide with a declared one, the same construction `__` gives the
 // reserved generic-instance space and `.` gives the witness label (docs/internals/names-and-values.md:
 // "a symbol built by joining two names joins them with a character no name can hold").
 //
 // ⚠ It is NOT `$`, which the compiler already spends on joining a lifted closure to its enclosing function
-// (`<enclosing>$closure_<k>`, and it NESTS). A second meaning for that character would make `f$closure_0`
-// and `f$int` indistinguishable to anything reading a name — and `Parser.overloadRegistrationNameFor`
-// mints a closure's enclosing name, so the two joins genuinely meet.
+// (`<enclosing>$closure_<k>`, and it NESTS). A second meaning for that character would make two joins
+// indistinguishable to anything reading a name.
 //
-// ⚠ Every SUFFIX PART rides the same separator (`lookup#Registry#bool`), not a `_` join, because `_` IS in
-// the identifier alphabet and an `_`-join over names is not injective — the exact trap
-// `IrInterface.witnessTableLabel` documents. Uniqueness is nonetheless established by CONSTRUCTION rather
-// than by that argument: `Parser.overloadRegistrationNameFor` will not hand back a name this file has
-// already registered.
-let OverloadNameSeparator = "#"
-let OverloadNameSeparatorByte = 35
-
-let OverloadParameterListSeparator = ", "
-
-// In the reserved `__` space for `StaticMemberNameSuffix`'s reason: no type or parameter name can render
-// it, so `registrationNameDisplay` can read every part after it as a label and every part before as a type.
-let OverloadLabelsMarker = "__labels"
-
-export function labelDistinguishedSuffix(typeSuffix ByteArray, labelSuffix ByteArray) returns ByteArray
-	return overloadSuffixPart(overloadSuffixPart(String.from(typeSuffix), part: OverloadLabelsMarker), part: String.from(labelSuffix)).toByteArray()
-end 'labelDistinguishedSuffix'
-
-export function registrationNameCarriesLabels(name ByteArray) returns bool
-	for part in String.from(name).split(OverloadNameSeparator) 'eachPart'
-		if part == OverloadLabelsMarker 'labelsMarker'
-			return true
-		end 'labelsMarker'
-	end 'eachPart'
-
-	return false
-end 'registrationNameCarriesLabels'
-
-function isParameterSpelling(part String) returns bool
-	if part.isEmpty() or part == StaticMemberNameSuffix 'markerOrNothing'
-		return false
-	end 'markerOrNothing'
-
-	// A digit-led part is `Parser.unclaimedRegistrationName`'s ordinal; no type or label begins with one.
-	let first = try part.toByteArray().get(0) otherwise panic("isParameterSpelling: get(0) on a part whose emptiness was just tested")
-	return not isDigit(first)
-end 'isParameterSpelling'
-
-export function registrationNameDisplay(name ByteArray, signatures ProgramSignatures) returns String
-	let base = String.from(overloadRegistrationBaseName(name))
-	let parts = String.from(name).split(OverloadNameSeparator)
-
-	if parts.count() == 1 'notAnOverloadMember'
-		return base
-	end 'notAnOverloadMember'
-
-	var types = StringArray.create()
-	var labels = StringArray.create()
-	var readingLabels = false
-
-	for i in 1 upto parts.count() 'eachSuffixPart'
-		let part = try parts.get(i) otherwise panic("registrationNameDisplay: parts.get OOB at {i} inside its own count()")
-
-		if part == OverloadLabelsMarker 'labelsBegin'
-			readingLabels = true
-			continue
-		end 'labelsBegin'
-
-		if not isParameterSpelling(part) 'notAParameter'
-			continue
-		end 'notAParameter'
-
-		if readingLabels 'aLabel'
-			labels.push(part)
-		end 'aLabel' else 'aType'
-			types.push(signatures.aliasIdentityDisplay(part.toByteArray()))
-		end 'aType'
-	end 'eachSuffixPart'
-
-	if labels.count() == 0 'distinguishedByType'
-		return "{base}({joinedWith(types, separator: OverloadParameterListSeparator)})"
-	end 'distinguishedByType'
-
-	if labels.count() != types.count() 'unpairedLabels'
-		panic("registrationNameDisplay: '{String.from(name)}' carries {labels.count()} labels beside {types.count()} types — `labelDistinguishedSuffix` writes one of each per parameter")
-	end 'unpairedLabels'
-
-	var declared = StringArray.create()
-
-	for i in 0 upto types.count() 'eachDeclaredParameter'
-		let label = try labels.get(i) otherwise panic("registrationNameDisplay: labels.get OOB at {i} inside its own count()")
-		let typeText = try types.get(i) otherwise panic("registrationNameDisplay: types.get OOB at {i} inside its own count()")
-		declared.push("{label} {typeText}")
-	end 'eachDeclaredParameter'
-
-	return "{base}({joinedWith(declared, separator: OverloadParameterListSeparator)})"
-end 'registrationNameDisplay'
+// ⚠ Every part rides the same separator (`__paramDefault#greet#0`), not a `_` join, because `_` IS in the
+// identifier alphabet and an `_`-join over names is not injective — the exact trap
+// `IrInterface.witnessTableLabel` documents.
+module let MintedNameSeparator = String.from(ByteArray from [MintedNameSeparatorByte])
 
 // Join a bare name and one already-rendered suffix into a registration name. THE one producer; the
 // separator has no second speller.
-export function overloadRegistrationName(base ByteArray, suffix ByteArray) returns ByteArray
-	return "{String.from(base)}{OverloadNameSeparator}{String.from(suffix)}".toByteArray()
-end 'overloadRegistrationName'
+export function mintedName(base ByteArray, suffix ByteArray) returns ByteArray
+	return "{String.from(base)}{MintedNameSeparator}{String.from(suffix)}".toByteArray()
+end 'mintedName'
 
-// ⭐ **AND ITS INVERSE: THE BARE NAME A REGISTRATION NAME WAS MINTED FROM** — `Array.contains` for
-// `Array.contains#Element`. The FIRST separator is the join above; every later one is a suffix PART
-// (`lookup#Registry#bool`), and a base can hold none of them because `#` is outside the identifier alphabet.
-//
-// A name carrying no separator comes back UNCHANGED, which is the answer and not a fallback: an unmangled
-// registration name IS its own bare name. `bareMethodName` takes the same shape one join over.
-//
-// ⚠ Callers want it for opposite reasons. A DIAGNOSTIC (`registrationNameDisplay`,
-// `ParseStaging.duplicateFunctionMessage`) must say what the author wrote, the name it explains being one no
-// declaration spells;
-// `SemanticCheck.WitnessDispatchTargets.create` needs the base because an overload's registration name
-// answers no interface requirement. Kept beside the join for the reason every inverse in this file is: the
-// separator has one speller.
-export function overloadRegistrationBaseName(registered ByteArray) returns ByteArray
+let MintedNameSeparatorByte = 35
+
+export function genericTemplateName(registered ByteArray) returns ByteArray
 	var stop = registered.count()
 
 	for position in 0 upto registered.count() 'eachByte'
-		if (try registered.get(position) otherwise panic("overloadRegistrationBaseName: get OOB at {position} below count()")) == OverloadNameSeparatorByte 'atTheSeparator'
+		if (try registered.get(position) otherwise panic("genericTemplateName: get OOB at {position} below count()")) == MintedNameSeparatorByte 'atTheSeparator'
 			stop = position
 			break
 		end 'atTheSeparator'
 	end 'eachByte'
 
-	return try registered.slice(0, endIndex: stop) otherwise panic("overloadRegistrationBaseName: slice [0, {stop}) of a {registered.count()}-byte name is in range by the scan above")
-end 'overloadRegistrationBaseName'
-
-// ⭐ **THE SUFFIX THAT MARKS A CONTESTED `static` MEMBER, AND WHY IT IS IN THE RESERVED SPACE.** A suffix part
-// is otherwise a TYPE name, a PARAMETER name (`Parser.overloadTypeSuffix` / `overloadLabelSuffix`), an
-// ordinal or `OverloadLabelsMarker`, and `Parser.requireUnreservedName` refuses a declared type or
-// parameter name under the `__` prefix (E2051) — so no legal overload set can render this one and contend
-// for the key it makes. Declared ahead of its join for
-// `OverloadNameSeparator`'s reason: the constant is the fact, and a reader who finds it wants the rule here.
-let StaticMemberNameSuffix = "__static"
-
-// ⭐⭐ **THE REGISTRATION NAME A TYPE'S `static` MEMBER TAKES WHEN AN INSTANCE MEMBER OF THE SAME TYPE WEARS
-// THE SAME NAME** — `Box.getValue#__static` beside the instance's `Box.getValue`. The pair is NOT one
-// overload set: with identical user parameter lists there is nothing in the arguments to select on, and the
-// discriminator the language actually gives is SYNTACTIC — `Type.m(…)` means the static, `receiver.m(…)` the
-// instance. So the two are two names.
-//
-// ⚠ **THIS IS THE MINT AND NOT THE DECISION.** Whether a declaration or a call takes this name is
-// `ProgramSignatures.memberRegistrationKey`'s — THE one composition of the contest and this mint, and the only
-// caller that should reach here. Everything else asks that.
-//
-// ⚠ **MINTED ON CONTEST ONLY, which is what keeps every uncontested emitted symbol where it is.** A
-// static whose name no instance member shares registers under its plain bytes — and without the mint a
-// static/instance pair does not COMPILE at all (both declarations render one registration name and collide
-// as E3006), so no program built without it holds one.
-//
-// It joins through `overloadRegistrationName` because the `#` separator has one speller, and it keeps the
-// SOURCE name as its head so `overloadRegistrationBaseName` (which a duplicate diagnostic reads) still
-// recovers `Box.getValue`.
-export function staticMemberRegistrationName(sourceName ByteArray) returns ByteArray
-	return overloadRegistrationName(sourceName, suffix: StaticMemberNameSuffix.toByteArray())
-end 'staticMemberRegistrationName'
-
-export function overloadSetKeyOf(registered ByteArray) returns ByteArray
-	let base = overloadRegistrationBaseName(registered)
-	let parts = String.from(registered).split(OverloadNameSeparator)
-
-	if parts.count() > 1 and (try parts.get(1) otherwise panic("overloadSetKeyOf: parts.get(1) on a name of {parts.count()} parts")) == StaticMemberNameSuffix 'aContestedStaticsSet'
-		return staticMemberRegistrationName(base)
-	end 'aContestedStaticsSet'
-
-	return base
-end 'overloadSetKeyOf'
+	return try registered.slice(0, endIndex: stop) otherwise panic("genericTemplateName: slice [0, {stop}) of a {registered.count()}-byte name is in range by the scan above")
+end 'genericTemplateName'
 
 // ⭐⭐ **A `test` DECLARATION'S SECOND NAME, AND WHY IT NEEDS ONE.** A test is named by a quoted PROSE name
 // (`test 'adds two numbers'`), and a prose name cannot be a symbol — it reaches name mangling, the
@@ -10921,9 +10632,8 @@ end 'isTestFunctionName'
 // spelled.
 //
 // ⚠ **THE DECLARATION SWEEP PUBLISHES THE NAME** (`Parser.recordScannedParamDefaults`), whole-program, so a
-// call site in any file can emit a call to it; the other callers (`Parser.declaredParamDefaultHelperName`,
-// `ProgramSignatures.fileDefaultHelperUnder`, `SemanticCheck.repointDefaultedArgHelpers`) re-key it to a
-// registration name. The real parse, which synthesizes the helper's BODY, READS the published name back
+// call site in any file can emit a call to it; `ProgramSignatures.fileDefaultHelperUnder` re-keys it to a
+// registration name when the fold learns the function is contested. The real parse, which synthesizes the helper's BODY, READS the published name back
 // rather than minting a second time (`Parser.sweptParamDefaultHelperName`): two derivations disagree on the
 // one input that differs between them — an instance method's receiver shifts every parameter's position by
 // one — and surface as a backend `call to unknown function` with no source position at all. A name derived
@@ -10932,28 +10642,23 @@ end 'isTestFunctionName'
 // `paramIndex` is the parameter's CALL-ALIGNED position (the receiver occupies 0 on an instance method),
 // which is also the index `ParamDefaultInfo.producerFor` is asked with.
 //
-// It joins through `overloadRegistrationName` rather than re-spelling `#` — the separator has one speller —
+// It joins through `mintedName` rather than re-spelling `#` — the separator has one speller —
 // and it is unique by CONSTRUCTION: `funcName` is the name the DECLARATION registered under, which is unique
-// whole-program (a second declaration of one name is E3006, and an overload member wears its own mangled
-// registration name — `Parser.declaredParamDefaultHelperName` is what calls this with it), and the `__`
-// prefix puts the result in the reserved space no declaration may enter (E2051), so it can collide with
+// whole-program (a second declaration of one name in a directory is E3006, and a name two directories
+// declare is registered under each one's `<dir>~` mint — `ProgramSignatures.fileDefaultHelperUnder` is what
+// calls this with it), and the `__` prefix puts the result in the reserved space no declaration may enter (E2051), so it can collide with
 // nothing the author writes. `#` is not in the identifier alphabet, so the two joins are injective by
 // character class — the property docs/internals/names-and-values.md states for every symbol built by joining names.
 //
-// ⚠ An overload set defaults whatever it likes, each member under its own registration name:
-// uniqueness rests on the key being a REGISTRATION name.
+// ⚠ Uniqueness rests on the key being a REGISTRATION name: two directories' functions of one bare name
+// differ only in their mint.
 export function paramDefaultHelperName(funcName ByteArray, paramIndex ParamCount) returns ByteArray
 	return mintedHelperName(ParamDefaultHelperPrefix, head: funcName, tail: "{paramIndex}".toByteArray())
 end 'paramDefaultHelperName'
 
-// ⭐⭐ **THE SAME PARAMETER SLOT'S HELPER, ON ANOTHER MEMBER OF THE CALLEE'S OVERLOAD SET** — the
-// question the stdlib reachability walk asks, because the helper call it sees is as PROVISIONAL as the base
-// callee beside it. A short call is filled while it is parsed, from a registry keyed by the name the source
-// wrote, so the emitted helper call names the SWEPT helper; `SemanticCheck.repointDefaultedArgHelpers`
-// re-points it at the resolved member's own the moment the member is known. Between those two moments the
-// name stands for a SET, exactly as the base callee does — see `StdlibSource.markReachable`.
-// `ProgramSignatures.declarationSiteOf` asks it the other way, to map a member's helper back to the set's
-// swept one, whose declaration site the sweep recorded.
+// ⭐⭐ **THE SAME PARAMETER SLOT'S HELPER, ON ANOTHER REGISTRATION OF THE CALLEE.**
+// `ProgramSignatures.declarationSiteOf` asks it to map a generic instance's helper back to its template's,
+// whose declaration site the sweep recorded.
 //
 // ⚠ **IT TAKES THE SLOT OFF THE NAME RATHER THAN BEING HANDED ONE, and that is what makes it a re-key rather
 // than a second mint.** The slot is already spelled in the helper it is given; re-deriving it from a
@@ -10969,7 +10674,7 @@ end 'paramDefaultHelperNameOnMember'
 // re-joins what it split and must be re-joining by the SAME rule it is checking, or the check tests
 // a rule nobody uses.
 function mintedHelperName(prefix ByteArray, head ByteArray, tail ByteArray) returns ByteArray
-	return overloadRegistrationName(overloadRegistrationName(prefix, suffix: head), suffix: tail)
+	return mintedName(mintedName(prefix, suffix: head), suffix: tail)
 end 'mintedHelperName'
 
 // ⭐ **IS `callee` ONE OF THE PARAMETER MINT ABOVE?** — the gate the reachability walk asks before
@@ -10983,7 +10688,7 @@ end 'isParamDefaultHelperName'
 // ⚠⚠ **`b"…"`, NOT A `String`, AND THAT IS A COST RATHER THAN A STYLE.** Both this and the field
 // twin below are read as BYTES at every one of their uses, and a `String` asked for
 // `.toByteArray()` at each is `managed.slice` + `ByteArray.init`, an allocation per ask — one per
-// CALL EDGE inside `StdlibSource.markReachable`, the demand walk's inner loop, and one per call op
+// CALL EDGE inside `GlobalInitOrder.markNamedCallee`, the reach walk's inner loop, and one per call op
 // inside `LowerMaxonToStd.materializeLayoutArgFor`.
 //
 // ⇒ It is also the ONE spelling of the prefix. A `String` beside a `b"…"` twin would buy the same allocation
@@ -11041,7 +10746,7 @@ end 'paramDefaultCalleeSpelling'
 // `Self{…}` that omitted a field, and the compiler supplied its default. So the nearest thing to what they
 // wrote is the FIELD, named the way every other diagnostic in the compiler names a type's member. It joins
 // through `qualifiedMethodName` rather than re-spelling the `.`, for the reason the mint joins through
-// `overloadRegistrationName`.
+// `mintedName`.
 export function fieldDefaultCalleeSpelling(helperName ByteArray) returns ByteArray
 	let parts = splitMintedHelperName(helperName, prefix: FieldDefaultHelperPrefix, mint: "CalleeMint.fieldDefaultHelper")
 	return qualifiedMethodName(parts.head, methodName: parts.tail)
@@ -11078,13 +10783,11 @@ end 'paramDefaultHelperOwnerOf'
 // separator and the trailing part is one run — re-joining the pieces and comparing turns those premises
 // into a check the mint owns.
 function decodeMintedHelperName(helperName ByteArray, prefix ByteArray) returns MintedHelperNameParts throws AbsentError
-	let separator = try OverloadNameSeparator.toByteArray().get(0) otherwise panic("splitMintedHelperName: OverloadNameSeparator is a one-byte literal")
-
 	var firstSplit = helperName.count()
 	var lastSplit = helperName.count()
 
 	for i in 0 upto helperName.count() 'scan'
-		if (try helperName.get(i) otherwise panic("splitMintedHelperName: helperName.get OOB at {i} inside its own count()")) != separator 'ordinaryByte'
+		if (try helperName.get(i) otherwise panic("splitMintedHelperName: helperName.get OOB at {i} inside its own count()")) != MintedNameSeparatorByte 'ordinaryByte'
 			continue
 		end 'ordinaryByte'
 
@@ -11095,7 +10798,7 @@ function decodeMintedHelperName(helperName ByteArray, prefix ByteArray) returns 
 		lastSplit = i
 	end 'scan'
 
-	if firstSplit == lastSplit or not bytesStartWith(helperName, prefix: overloadRegistrationName(prefix, suffix: ByteArray.create())) 'notThisMint'
+	if firstSplit == lastSplit or not bytesStartWith(helperName, prefix: mintedName(prefix, suffix: ByteArray.create())) 'notThisMint'
 		throw AbsentError.absent
 	end 'notThisMint'
 
@@ -11109,12 +10812,6 @@ function decodeMintedHelperName(helperName ByteArray, prefix ByteArray) returns 
 
 	return MintedHelperNameParts.create(head, tail: tail)
 end 'decodeMintedHelperName'
-
-// Append one part to an overload suffix under construction — so a suffix's parts and the suffix's own join
-// to the base name are the same character, stated once above.
-export function overloadSuffixPart(suffix String, part String) returns String
-	return "{suffix}{OverloadNameSeparator}{part}" if not suffix.isEmpty() else part
-end 'overloadSuffixPart'
 
 // ⭐ **THE THREE REGISTRIES A FUNCTION TYPE'S SHAPE IS LOOKED UP IN, PLUS THE INTERNER THAT NAMES IT — ONE
 // CARRIER.** `TypeResolution.declaredFunctionShapeOf` answers "what shape is the function type this
@@ -11736,8 +11433,6 @@ end 'cacheReadDiscardSubjectRuntimeRead'
 
 // @generated library-cache end
 
-// A call is named by its op, not by a callee name: overload resolution rewrites the op's callee after
-// the parse, so the name the parser saw may belong to another member of the set.
 export union DiscardedProducer
 	intrinsic(let name ByteArray)
 	call(opIndex ElementIndex)
@@ -11904,7 +11599,7 @@ export union ArgSlotFailure
 	duplicateArg(argIndex ParamCount, paramName String)
 end 'ArgSlotFailure'
 
-export enum UnfilledSlots
+enum UnfilledSlots
 	refused
 	permitted
 end 'UnfilledSlots'
@@ -11927,10 +11622,6 @@ end 'argUnknownLabelMessage'
 export function argDuplicateMessage(callee String, paramName String) returns String
 	return "duplicate argument for parameter '{paramName}' of '{callee}'"
 end 'argDuplicateMessage'
-
-export function ambiguousOverloadMessage(callee String, candidates String) returns String
-	return "Ambiguous overload for '{callee}': multiple overloads match. Candidates: {candidates}"
-end 'ambiguousOverloadMessage'
 
 // ⭐ **THE LABEL→POSITION MAPPING ITSELF, allocation-free** — a positional argument at index `i` fills
 // parameter `i`; a labelled one fills the position of the parameter it names. An argument that fills no
@@ -12084,12 +11775,12 @@ end 'discardedParamPosition'
 
 // Per parameter position, the index of the argument that fills it (`argAt`) and whether one does
 // (`filled`). ⚠ `argAt` is 0 at an unfilled position, which names a real argument: read `filled` first.
-export union ArgPlacement
+union ArgPlacement
 	placed(argAt ParamCountArray, filled BoolArray)
 	refused(failure ArgSlotFailure)
 end 'ArgPlacement'
 
-export function placeCallArgs(paramNames NameRoster, argLabels NameRoster, argCount ParamCount, unfilled UnfilledSlots) returns ArgPlacement
+function placeCallArgs(paramNames NameRoster, argLabels NameRoster, argCount ParamCount, unfilled UnfilledSlots) returns ArgPlacement
 	let paramCount = paramNames.count()
 
 	if argCount > paramCount or (argCount != paramCount and unfilled == UnfilledSlots.refused) 'arity'
@@ -12269,15 +11960,11 @@ export type Project
 	export var funcSignatures as FuncSignatureMap
 	export var funcSignatureFloors as FuncSignatureFloorMap
 
-	// ⭐ Every OVERLOADED bare name in the program ⇒ its members' registration names (see OverloadSetMap for
-	// what the two names are and why this one registry is not reset with the others). Empty unless the
-	// program declares one name twice with different signatures.
-	export var overloadSets as OverloadSetMap
-
 	// ⭐ Which member `checkConformance` accepted for each witness-table slot — see WitnessSlotImplMap
 	// for why the lowering reads this instead of re-deriving the impl symbol. Empty for every program that
 	// declares no conformance.
 	export var witnessSlotImpls as WitnessSlotImplMap
+	export var refusedConformanceMembers as RefusedConformanceMemberSet
 
 	// ⭐ Recorded function-value merges awaiting whole-program signature agreement. Filled by
 	// `mergeArtifact` (each file's `pendingFnMergeChecks` appended in order); drained by
@@ -12467,7 +12154,6 @@ export type Project
 	// before the thunk exists: a callee spliced away on the strength of its one visible site would leave
 	// the thunk calling an emptied body.
 	export var functionValueTargets as NameRoster
-	export var functionValueConventions as FunctionValueConventions
 	export var uncheckedCallPaths as UncheckedCallPaths
 
 	// The calls the entry stub makes by name in THIS build (`DeadFunctionElimination.EntryStubCalls`), set
@@ -12597,21 +12283,11 @@ export type Project
 	// with the same op offset `opRanges` uses. Cold path only.
 	export var asyncSpawnSites as AsyncSpawnSiteMap
 
-	export var overloadAnswers as OverloadAnswerMap
-
 	// ⭐ Every `await` of a SERVICE REPLY in the program, by op index — the seed set of the acyclic
 	// blocking graph. Folded from the per-file artifact with the merge's op offset, exactly as
 	// `asyncSpawnSites` is. EMPTY for every program that awaits no reply, which is every program with no
 	// service in it, and the check reads that count as its own gate.
 	export var serviceAwaitSites as ServiceAwaitSiteMap
-
-	// The calls `SemanticCheck.reportAmbiguousOverload` refused (E3007), by op index — reset with the
-	// other op-keyed tables each fold round.
-	export var refusedOverloadCalls = RefusedOverloadCallSet.create()
-
-	// The calls `SemanticCheck.resolveOneOverloadedCall` left undecided because an argument is deferred, by
-	// op index; `checkCalls` skips them. Reset with the other op-keyed tables each fold round.
-	export var undecidedOverloadCalls = UndecidedOverloadCallSet.create()
 
 	// The source file an op was synthesized on behalf of, by op index (`ModuleInit.recordOpTables`) —
 	// what `authoredFileOf` answers for an op the function holding it was not written in.
@@ -12824,8 +12500,8 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			funcSignatureFloors: FuncSignatureFloorMap.create(),
-			overloadSets: OverloadSetMap.create(),
 			witnessSlotImpls: WitnessSlotImplMap.create(),
+			refusedConformanceMembers: RefusedConformanceMemberSet.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(),
 			hiddenTypeNameDiagnostics: DiagnosticArray.create(),
@@ -12864,7 +12540,6 @@ export type Project
 			rendersTargetIr: false,
 			compilesOnceAndExits: false,
 			functionValueTargets: NameRoster.create(),
-			functionValueConventions: FunctionValueConventions.none(),
 			uncheckedCallPaths: UncheckedCallPaths.none(),
 			entryStubCalls: EntryStubCalls.none(),
 			hostContext: HostContextLayout.unread(),
@@ -12886,7 +12561,6 @@ export type Project
 			shadowRoster: ShadowSpellingRoster.none(),
 			shadowRespellingMemos: ShadowRespellingMemoMap.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
-			overloadAnswers: OverloadAnswerMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			synthesizedOpFiles: SynthesizedOpFileMap.create(),
 			registryUseSites: RegistryUseSiteMap.create(),
@@ -13085,10 +12759,10 @@ function respelledForItsReaders(project Project, diagnostic Diagnostic) returns 
 		return diagnostic
 	end 'nothingIsRenamed'
 
-	return diagnostic.respelledFor(authorCodeRespellings(project.shadowRoster.spellings), respellingsOf: function(path) gives shadowRespellingsFor(project, path: path))
+	return diagnostic.respelledFor(project.shadowRoster.respellingsFor(ShadowSpellingReader.authorCode), respellingsOf: function(path) gives shadowRespellingsFor(project, path: path))
 end 'respelledForItsReaders'
 
-function shadowRespellingsFor(project Project, path FilePath) returns ShadowRespellingArray
+function shadowRespellingsFor(project Project, path FilePath) returns ShadowRespellings
 	view entry = try sourceEntryOf(project, path: path) otherwise return shadowRespellingsGiven(project, path: path, written: WrittenMintSet.create())
 
 	if let memo = try project.shadowRespellingMemos.get(path.toString()) 'memoized'
@@ -13111,8 +12785,14 @@ function shadowRespellingsFor(project Project, path FilePath) returns ShadowResp
 	return memo.respellings
 end 'shadowRespellingsFor'
 
-function shadowRespellingsGiven(project Project, path FilePath, written WrittenMintSet) returns ShadowRespellingArray
-	return shadowRespellings(project.shadowRoster.spellings, reader: shadowSpellingReaderOf(project, path: path), written: written)
+function shadowRespellingsGiven(project Project, path FilePath, written WrittenMintSet) returns ShadowRespellings
+	let reader = shadowSpellingReaderOf(project, path: path)
+
+	if written.count() == 0 'theFileSpellsNoMint'
+		return project.shadowRoster.respellingsFor(reader)
+	end 'theFileSpellsNoMint'
+
+	return shadowRespellings(project.shadowRoster.spellings, reader: reader, written: written)
 end 'shadowRespellingsGiven'
 
 module function textAsItsReaderSpellsIt(project Project, path FilePath, text String) returns String
@@ -13120,7 +12800,7 @@ module function textAsItsReaderSpellsIt(project Project, path FilePath, text Str
 		return text
 	end 'nothingIsRenamed'
 
-	return respelledText(text, respellings: shadowRespellingsFor(project, path: path))
+	return shadowRespellingsFor(project, path: path).respell(text)
 end 'textAsItsReaderSpellsIt'
 
 module function aliasSpelledForReader(project Project, alias RangedTypeAlias, readerFilePath FilePath, memo DeclarationQualifierMemo) returns String
@@ -13149,9 +12829,9 @@ end 'adoptShadowSpellings'
 
 export type ShadowRespellingMemo
 	export let contentHash as HashDigest
-	export let respellings as ShadowRespellingArray
+	export let respellings as ShadowRespellings
 
-	static function create(contentHash HashDigest, respellings ShadowRespellingArray) returns ShadowRespellingMemo
+	static function create(contentHash HashDigest, respellings ShadowRespellings) returns ShadowRespellingMemo
 		return Self{contentHash: contentHash, respellings: respellings}
 	end 'create'
 end 'ShadowRespellingMemo'

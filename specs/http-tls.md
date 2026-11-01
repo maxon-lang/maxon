@@ -172,7 +172,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -370,7 +370,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -780,7 +780,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -980,7 +980,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -1229,7 +1229,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -1497,7 +1497,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -1774,7 +1774,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -1996,7 +1996,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -2269,7 +2269,7 @@ type EchoHandler implements HttpHandler
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
-		let summary = "{request.method().name} {request.url().scheme()}://{host}{request.url().path()}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
+		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'
@@ -2455,7 +2455,7 @@ type EchoHandler implements HttpHandler
 		view url = exchange.request().url()
 		let host = try url.host() otherwise "-"
 		let authorityHost = try url.authorityHost() otherwise "-"
-		let summary = "{url.scheme()} host={host} authorityHost={authorityHost} path={url.path()}"
+		let summary = "{url.scheme} host={host} authorityHost={authorityHost} path={url.path}"
 
 		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
 	end 'handle'

@@ -3725,8 +3725,8 @@ d=68063
 ```
 
 <!-- test: a-read-only-payload-outlives-a-reassignment-through-a-by-reference-parameter -->
-A callee that assigns to its parameter is handed the caller's storage, not a value, so its store replaces whatever
-slot the argument names. `wipeThenLen` passes `h.slot` to `wipe`, which assigns it, while the arm of the `match` on
+A `mutable` parameter is handed the caller's storage, not a value, so the callee's store replaces whatever slot the
+argument names. `wipeThenLen` passes `h.slot` to `wipe`, which assigns it, while the arm of the `match` on
 that same field still holds `s`. The binding is counted across the call, so `reuse` reads the payload it bound and the
 answer is `68063`.
 ```maxon
@@ -3762,7 +3762,7 @@ function reuse(borrowed String) returns Integer
 	return (borrowed.byteLength() * 1000 + again.byteLength()) as Integer
 end 'reuse'
 
-function wipe(u LSlot)
+function wipe(u mutable LSlot)
 	u = LSlot.lempty(1)
 end 'wipe'
 

@@ -9,7 +9,7 @@ category: stdlib
 
 # Contains
 
-Two variants of `contains()` are available depending on the protocol and argument type.
+`contains(element)` answers membership, `containsSequence(sequence)` answers contiguous subsequences of an array, and `containsCharacter(character)` answers a Character search of a String.
 
 ### Single Element (Collection)
 
@@ -21,7 +21,7 @@ numbers.contains(3)    // true
 numbers.contains(99)   // false
 
 var s = "hello"
-s.contains('l')   // true (Character search)
+s.containsCharacter('l')   // true (Character search)
 ```
 
 ### Subsequence (Collection)
@@ -30,8 +30,8 @@ Checks if a collection contains another collection as a contiguous subsequence.
 
 ```text
 var arr = [1, 2, 3, 4, 5]
-arr.contains([2, 3, 4])   // true
-arr.contains([1, 3])      // false (not contiguous)
+arr.containsSequence([2, 3, 4])   // true
+arr.containsSequence([1, 3])      // false (not contiguous)
 
 var s = "hello world"
 s.contains("lo wo")                 // true (substring search)
@@ -101,7 +101,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	if s.contains('o') 'check'
+	if s.containsCharacter('o') 'check'
 		return 1
 	end 'check'
 	return 0
@@ -115,7 +115,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	if s.contains('z') 'check'
+	if s.containsCharacter('z') 'check'
 		return 1
 	end 'check'
 	return 0
@@ -196,7 +196,7 @@ found
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains([2, 3, 4]) 'check'
+	if arr.containsSequence([2, 3, 4]) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -210,7 +210,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains([1, 3]) 'check'
+	if arr.containsSequence([1, 3]) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -224,7 +224,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains([1, 2]) 'check'
+	if arr.containsSequence([1, 2]) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -238,7 +238,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains([4, 5]) 'check'
+	if arr.containsSequence([4, 5]) 'check'
 		return 1
 	end 'check'
 	return 0

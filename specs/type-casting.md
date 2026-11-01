@@ -357,8 +357,7 @@ the literal is checked against that type without the cast. So is a literal cast 
 `public`, `export` or `module` `let` keeps its cast, and so does one a closure captures.
 A literal cast stays legal where nothing declares the type — an untyped `var`, an operand, an
 array-literal element, a join of `gives`/`if`-`else`/`otherwise` arms, a generic `T` slot, a
-`let` some use of which needs the alias — and where the cast decides which overload a call
-selects.
+`let` some use of which needs the alias.
 A cast naming a DIFFERENT alias is real work whichever way the two ranges run — it
 re-declares the value's type and carries the target's range check — so it compiles.
 
@@ -840,59 +839,6 @@ end 'main'
 0
 ```
 
-<!-- test: a-literal-let-cast-that-picks-the-overload-is-not-unneeded -->
-```maxon
-typealias Small = int(0 to 9)
-typealias Integer = int(i64.min to i64.max)
-
-function pick(x Small) returns ExitCode
-	if x > 0 'positive'
-		return 1
-	end 'positive'
-	return 3
-end 'pick'
-
-function pick(x Integer) returns ExitCode
-	if x > 0 'positive'
-		return 2
-	end 'positive'
-	return 4
-end 'pick'
-
-function main() returns ExitCode
-	let choice = 3 as Small
-	return pick(choice)
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: a-literal-let-cast-read-by-a-name-with-a-generic-declaration-is-not-unneeded -->
-Without the cast the constant would bind the generic `settle`, which returns nothing, so the cast decides the declaration.
-```maxon
-typealias Count = int(0 to 1000)
-
-function settle(dest T, src T) uses T
-	dest = src
-end 'settle'
-
-function settle(dest Count, src Count) returns Count
-	return dest + src
-end 'settle'
-
-function main() returns ExitCode
-	var left = 1 as Count
-	let right = 2 as Count
-	print("{settle(left, src: right)}\n")
-	left = 3
-	return 0
-end 'main'
-```
-```stdout
-3
-```
-
 <!-- test: error.unneeded.literal-top-level-let-to-a-qualified-alias -->
 A qualified cast target names the same declaration as its bare spelling, at file scope as in a body.
 ```maxon
@@ -1046,91 +992,6 @@ end 'main'
 7
 ```
 
-<!-- test: a-literal-cast-that-picks-the-overload-is-not-unneeded -->
-The cast decides which overload the call selects, so it is not unneeded.
-```maxon
-typealias Small = int(0 to 9)
-typealias Integer = int(i64.min to i64.max)
-
-function pick(x Small) returns ExitCode
-	if x > 0 'positive'
-		return 1
-	end 'positive'
-	return 3
-end 'pick'
-
-function pick(x Integer) returns ExitCode
-	if x > 0 'positive'
-		return 2
-	end 'positive'
-	return 4
-end 'pick'
-
-function main() returns ExitCode
-	return pick(3 as Small)
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: literal-casts-that-together-pick-the-overload-are-not-unneeded -->
-Each cast alone could go, but removing both would pick the `Integer` overload, so neither is unneeded.
-```maxon
-typealias Real = float(0.0 to 100.0)
-typealias Integer = int(i64.min to i64.max)
-
-function pick(a Real, b Real) returns ExitCode
-	if a + b > 0.0 'positive'
-		return 1
-	end 'positive'
-	return 3
-end 'pick'
-
-function pick(a Integer, b Integer) returns ExitCode
-	if a + b > 0 'positive'
-		return 2
-	end 'positive'
-	return 4
-end 'pick'
-
-function main() returns ExitCode
-	return pick(1 as Real, b: 2 as Real)
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: error.unneeded.literal-cast-beside-a-cast-that-picks-nothing -->
-A cast to a different alias than its parameter selects no overload, so it does not excuse the redundant cast beside it.
-```maxon
-typealias Real = float(0.0 to 100.0)
-typealias Other = float(0.0 to 10.0)
-typealias Integer = int(i64.min to i64.max)
-
-function g(x Real, y Real) returns ExitCode
-	if x < y 'ordered'
-		return 1
-	end 'ordered'
-	return 2
-end 'g'
-
-function g(x Integer, y Integer) returns ExitCode
-	if x < y 'ordered'
-		return 3
-	end 'ordered'
-	return 4
-end 'g'
-
-function main() returns ExitCode
-	return g(1 as Real, y: 2 as Other)
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:21:9: argument type mismatch for 'y': expected 'Real', got 'Other'
-```
-
 <!-- test: error.unneeded.same-alias-name-with-a-contested-range -->
 Two files declaring one alias name with different ranges still leave each file's alias its own, so a cast to it repeats it.
 ```maxon
@@ -1152,7 +1013,7 @@ function main() returns ExitCode
 	return 0
 end 'main'
 
-// --- file: b.maxon
+// --- file: b/b.maxon
 typealias Byte = int(0 to 200)
 
 export function atLimit() returns bool

@@ -1,12 +1,9 @@
-let OkStatus = 200 as HttpAnswerStatus
-let NoContentStatus = 204 as HttpAnswerStatus
-let NotFoundStatus = 404 as HttpAnswerStatus
+let HttpSessionLifecycleNoContentStatus = 204 as HttpAnswerStatus
 let TooManyRequestsStatus = 429 as HttpAnswerStatus
 
 let SessionIdHexLength = 32
 
-let IdleTimeoutSeconds = 1
-let PastIdleMs = 1500
+let HttpSessionLifecyclePastIdleMs = 1500
 
 function lifecycleServerName(answer HttpAnswer) returns String
 	let doc = answer.bodyDoc()
@@ -65,7 +62,7 @@ test 'a DELETE ends the session and a later request on it is 404'
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus)
 	try Expect.equal(before.statusCode, expected: OkStatus, message: "the session must serve BEFORE the DELETE, or the 404 after it says nothing")
-	try Expect.equal(deleted.statusCode, expected: NoContentStatus, message: "`DELETE /mcp` must answer 204; it answered {deleted.statusCode}")
+	try Expect.equal(deleted.statusCode, expected: HttpSessionLifecycleNoContentStatus, message: "`DELETE /mcp` must answer 204; it answered {deleted.statusCode}")
 	try Expect.equal(after.statusCode, expected: NotFoundStatus, message: "a session that was deleted must be gone, not merely unmentioned")
 end 'a DELETE ends the session and a later request on it is 404'
 
@@ -74,7 +71,7 @@ test 'a session left idle past the timeout is reaped'
 	let (initialized, sessionId) = server.initializeSession()
 	let before = server.post(toolsListRequest(2), sessionId: sessionId)
 
-	sleep(PastIdleMs)
+	sleep(HttpSessionLifecyclePastIdleMs)
 
 	let after = server.post(toolsListRequest(3), sessionId: sessionId)
 	try server.stop()

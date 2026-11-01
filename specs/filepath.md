@@ -995,7 +995,7 @@ hello.txt
 function main() returns ExitCode
 	let base = FilePath from "C:\\Users"
 	let child = FilePath from "docs"
-	let full = base.join(child)
+	let full = base.joinPath(child)
 	print("{full}\n")
 	return 0
 end 'main'

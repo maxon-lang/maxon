@@ -887,8 +887,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -907,15 +906,14 @@ func @main {
     x64.storeBaseDispReg.word64 [r12 + 8], r8
     x64.movRegReg rcx, r12
     x64.callDirect Holder.create
-    x64.movRegReg r12, r8
     x64.leaRegGlobal rax, __data_theHolder
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __destruct_Holder
     x64.leaRegGlobal rax, __data_theHolder
-    x64.storeBaseDispReg.word64 [rax + 0], r12
+    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.callDirect __destruct_Holder
+    x64.leaRegFunc rdx, [rip + __clone_Holder]
     x64.leaRegGlobal rax, __data_theHolder
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.leaRegFunc rdx, [rip + __clone_Holder]
     x64.movRegReg rcx, r12
     x64.callDirect __mm_own_deep
     x64.movRegReg r13, r8
@@ -939,12 +937,11 @@ func @main {
     x64.storeBaseDispReg.word64 [r8 + 8], rax
     x64.movRegReg rcx, r8
     x64.callDirect Holder.create
-    x64.movRegReg r15, r8
     x64.leaRegGlobal rax, __data_theHolder
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __destruct_Holder
     x64.leaRegGlobal rax, __data_theHolder
-    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.callDirect __destruct_Holder
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
   __il_cont#12:
     x64.movRegReg rcx, r14
@@ -968,8 +965,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -981,8 +977,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1035,8 +1030,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -1055,15 +1049,14 @@ func @main {
     x64.storeBaseDispReg.word64 [r12 + 8], r8
     x64.movRegReg rcx, r12
     x64.callDirect Holder.create
-    x64.movRegReg r12, r8
     x64.leaRegGlobal rax, __data_theHolder
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __destruct_Holder
     x64.leaRegGlobal rax, __data_theHolder
-    x64.storeBaseDispReg.word64 [rax + 0], r12
+    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.callDirect __destruct_Holder
+    x64.leaRegFunc rdx, [rip + __clone_Holder]
     x64.leaRegGlobal rax, __data_theHolder
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.leaRegFunc rdx, [rip + __clone_Holder]
     x64.movRegReg rcx, r12
     x64.callDirect __mm_own_deep
     x64.movRegReg r13, r8
@@ -1087,12 +1080,11 @@ func @main {
     x64.storeBaseDispReg.word64 [r8 + 8], rax
     x64.movRegReg rcx, r8
     x64.callDirect Holder.create
-    x64.movRegReg r15, r8
     x64.leaRegGlobal rax, __data_theHolder
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __destruct_Holder
     x64.leaRegGlobal rax, __data_theHolder
-    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.callDirect __destruct_Holder
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
   __il_cont#12:
     x64.movRegReg rcx, r14
@@ -1115,8 +1107,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1128,8 +1119,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1171,8 +1161,7 @@ func @Holder.create {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -1195,15 +1184,15 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
     arm64.movRegReg x0, x20
     arm64.bl Holder.create
-    arm64.movRegReg x20, x0
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __data_theHolder
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.leaGlobal x2, __data_theHolder
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.movRegReg x0, x1
     arm64.bl __destruct_Holder
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.leaFuncAddr x1, __clone_Holder
     arm64.leaGlobal x0, __data_theHolder
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.leaFuncAddr x1, __clone_Holder
     arm64.movRegReg x0, x20
     arm64.bl __mm_own_deep
     arm64.movRegReg x21, x0
@@ -1226,12 +1215,12 @@ func @main {
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.bl Holder.create
-    arm64.movRegReg x23, x0
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __data_theHolder
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.leaGlobal x2, __data_theHolder
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.movRegReg x0, x1
     arm64.bl __destruct_Holder
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.storeBaseDispReg.word64 [x0 + 0], x23
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
   __il_cont#12:
     arm64.movRegReg x0, x22
@@ -1258,8 +1247,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
   matchdead:
   __rc_panic:
@@ -1270,8 +1258,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }
 ```
@@ -1311,8 +1298,7 @@ func @Holder.create {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -1335,15 +1321,15 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
     arm64.movRegReg x0, x20
     arm64.bl Holder.create
-    arm64.movRegReg x20, x0
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __data_theHolder
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.leaGlobal x2, __data_theHolder
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.movRegReg x0, x1
     arm64.bl __destruct_Holder
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.leaFuncAddr x1, __clone_Holder
     arm64.leaGlobal x0, __data_theHolder
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.leaFuncAddr x1, __clone_Holder
     arm64.movRegReg x0, x20
     arm64.bl __mm_own_deep
     arm64.movRegReg x21, x0
@@ -1366,12 +1352,12 @@ func @main {
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.bl Holder.create
-    arm64.movRegReg x23, x0
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __data_theHolder
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.leaGlobal x2, __data_theHolder
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.movRegReg x0, x1
     arm64.bl __destruct_Holder
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.storeBaseDispReg.word64 [x0 + 0], x23
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
   __il_cont#12:
     arm64.movRegReg x0, x22
@@ -1398,8 +1384,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
   matchdead:
   __rc_panic:
@@ -1410,8 +1395,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }
 ```
@@ -1479,8 +1463,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -1521,14 +1504,13 @@ func @main {
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r15, r8
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r15 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r15 + 8], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
     x64.callDirect __destruct_Slot
-    x64.storeBaseDispReg.word64 [r13 + 0], r15
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
   __il_cont#16:
     x64.movRegReg rcx, r14
@@ -1554,8 +1536,7 @@ func @main {
     x64.callDirect __managed_decref
   exitterminal:
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1567,8 +1548,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-overwrites-the-field-that-holds-it.test:33: Range check failed: value outside typealias 'ExitCod"...
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1595,8 +1575,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -1637,14 +1616,13 @@ func @main {
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r15, r8
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r15 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r15 + 8], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
     x64.callDirect __destruct_Slot
-    x64.storeBaseDispReg.word64 [r13 + 0], r15
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
   __il_cont#16:
     x64.movRegReg rcx, r14
@@ -1669,8 +1647,7 @@ func @main {
     x64.callDirect __managed_decref
   exitterminal:
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1682,8 +1659,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-overwrites-the-field-that-holds-it.test:33: Range check failed: value outside typealias 'ExitCod"...
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1702,8 +1678,7 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -1748,14 +1723,14 @@ func @main {
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x23 + 0], x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x23 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x1
     arm64.bl __destruct_Slot
-    arm64.storeBaseDispReg.word64 [x21 + 0], x23
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
   __il_cont#16:
     arm64.movRegReg x0, x22
@@ -1784,8 +1759,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
   matchdead:
   __rc_panic:
@@ -1796,8 +1770,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }
 ```
@@ -1814,8 +1787,7 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -1860,14 +1832,14 @@ func @main {
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x23 + 0], x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x23 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x1
     arm64.bl __destruct_Slot
-    arm64.storeBaseDispReg.word64 [x21 + 0], x23
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
   __il_cont#16:
     arm64.movRegReg x0, x22
@@ -1896,8 +1868,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
   matchdead:
   __rc_panic:
@@ -1908,8 +1879,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }
 ```

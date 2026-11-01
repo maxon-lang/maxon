@@ -79,7 +79,6 @@ end 'locateStdlibDir'
 export function runtimeDirBeside(stdlibDir FilePath) returns FilePath throws CompileError
 	let checkoutRoot = try stdlibDir.parent() otherwise throw CompileError.runtimeNotFound
 
-	// Interpolated so the argument is a committed `String`, for `stdlibDirAbove`'s E3007 reason.
 	return checkoutRoot.join("{RuntimeDirName}")
 end 'runtimeDirBeside'
 
@@ -153,9 +152,6 @@ export function stdlibDirAbove(start FilePath) returns FilePath throws CompileEr
 	var depth = 0 as Count
 
 	while depth < MaxStdlibSearchDepth 'search'
-		// Interpolated so the argument is a committed `String`: a bare module-`let` literal stays
-		// untyped and matches BOTH `FilePath.join` overloads (String / FilePath) — an E3007 ambiguity —
-		// whereas a String VALUE selects `join(String)` cleanly.
 		let candidate = dir.join("{StdlibDirName}")
 
 		if Directory.exists(candidate) 'found'
@@ -182,12 +178,12 @@ export typealias FunctionNameSet = Set with ByteArray
 //
 //   • **CORRECTNESS.** A per-function demand has to be asked in the parser, mid-declaration, of a name —
 //     and there are TWO spellings of a function's name there. `sourceName` is what the source wrote
-//     (`Math.exp`); `overloadRegistrationNameFor` may mangle it (`FilePath.join#FilePath`), and it is the
-//     MANGLED one that reaches `IrFunction.name` and therefore the reachability walk's answer. Asking with
-//     the wrong one skips a body the program calls, and the call then lands on the bare `retVoid`
-//     `skipUnreachedFunctionBody` left — a SILENT WRONG ANSWER, in exactly the family
-//     `deriveLibraryFacts` already warns about ("it runs BEFORE overload resolution, so a callee name here
-//     is provisional"). A per-FILE demand never asks about a name at all.
+//     (`Math.exp`); a free function whose bare name a second directory also declares is registered under
+//     a minted `<dir>~name` (`freeFunctionRegistrationName`), and it is the MINTED one that reaches
+//     `IrFunction.name` and therefore the reachability walk's answer. Asking with the wrong one skips a
+//     body the program calls, and the call then lands on the bare `retVoid`
+//     `skipUnreachedFunctionBody` left — a SILENT WRONG ANSWER. A per-FILE demand never asks about a name
+//     at all.
 //   • **COST.** The demand is discovered round by round, so a per-function demand re-parses a file once per
 //     function of it that is reached — and, because a memo key built from the whole-program demand moves
 //     for EVERY file whenever ANY name is added, it re-parses every listed file each round — a cost that
@@ -381,9 +377,6 @@ export type LibraryFacts
 		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes)
 	end 'withCompilerCalledTierUnreached'
 
-	// Asked right after `SemanticCheck.resolveOverloadedCalls` and not by `deriveLibraryFacts`: before
-	// resolution a call to an overloaded name carries the first member's name, so a forwarding
-	// overload would hide its sibling's entry.
 	export function withSubstrateEntriesOf(module MaxonModule, target Target) returns LibraryFacts
 		let entries = stdlibSubstrateEntries(module, stdlibNames: self.substrateNodes, unreachable: self.unreachable, target: target)
 		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes)
@@ -812,33 +805,6 @@ end 'classifyLibraryReach'
 // stdlib factory named only by an initializer, and the elimination walk reaches the empty function it
 // left: `var sep = FilePath.separator()` would be a `requireUnreachableLibraryStayedDead` panic on a
 // correct program (`specs/top-level-factory-globals.md`'s `stdlib-factory-reached-from-the-initializer`).
-//
-// ⚠⚠ **AND IT RUNS BEFORE OVERLOAD RESOLUTION, SO A CALLEE NAME HERE IS PROVISIONAL — WHICH IS WHY THE
-// OVERLOAD SET IS CREDITED WHOLE.** `SemanticCheck.resolveOverloadedCalls` rewrites `call FilePath.join`
-// into `call FilePath.join#FilePath` — and its own header opens *"OVERLOAD RESOLUTION RUNS FIRST, BEFORE
-// ANYTHING READS A CALLEE"* — but it runs inside `PassPipeline.run`, and `deriveLibraryFacts` runs one
-// screen ABOVE that call in `compileToCodeResult`. So this walk is the one reader that precedes it, and
-// the bare name it sees is the registration name of the FIRST member only.
-//
-// Crediting that member alone is a compiler PANIC on a correct program, not a size regression:
-// `specs/filepath.md`'s `filepath-join-filepath` writes `base.join(child)` against
-// `stdlib/FilePath.maxon`'s two `join` overloads. Crediting only `FilePath.join` (the `String` member,
-// declared first) files `FilePath.join#FilePath` as unreachable, `lowerMaxonToStd` skips its body — and
-// then dead-function elimination, which runs AFTER resolution and sees the real callee, reaches it and
-// trips `requireUnreachableLibraryStayedDead`.
-//
-// ⇒ A provisional callee names a SET, and this walk answers "might this be reached?", so every member is
-// credited. That is exact for the question asked and cannot make the assert fire: an OVER-approximation
-// only ever removes names from `unreachable`, and every consumer of that set (`lowerMaxonToStd`,
-// `insertRangeChecks`, `scanRuntimeUsage`, `checkCalls`) treats absence as "compile it normally".
-// ⚠ Moving `resolveOverloadedCalls` above this instead is wrong: it sits after `resolveTypes`, so hoisting
-// it would hand overload selection the UNRESOLVED parameter spellings
-// and could change which member a call picks — trading a loud panic for a silent misdispatch.
-//
-// The unused member is still dropped from the emitted image: dead-function elimination runs after
-// resolution, keys on the real callee, and prunes it there. What this costs is only that
-// `scanRuntimeUsage` may read an unreached sibling overload's body — and only in a program that already
-// calls that stdlib name.
 function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
@@ -847,7 +813,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	var worklist = FuncIndexArray.create()
 	var names = FunctionNameSet.create()
 
-	markReachable(project.entryFunctionName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	markOneReachable(project.entryFunctionName, byName: byName, reached: reached, worklist: worklist, names: names)
 
 	// ⭐⭐ **EVERY `test` IS A ROOT HERE TOO, AND IT HAS TO BE, BECAUSE THE TWO WALKS ARE CHECKED AGAINST EACH
 	// OTHER.** `DeadFunctionElimination.seedRoots` roots tests over the STD module; this walk roots them over
@@ -857,12 +823,12 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// that calls the library, not a lost prune.
 	for func in module.functions 'eachFunction'
 		if isTestFunctionName(func.name) or not stdlib.contains(func.name) 'aRoot'
-			markReachable(func.name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+			markOneReachable(func.name, byName: byName, reached: reached, worklist: worklist, names: names)
 		end 'aRoot'
 	end 'eachFunction'
 
 	for callee in initCallees 'eachInitializerRoot'
-		markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		markOneReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachInitializerRoot'
 
 	// ⭐⭐ **A CORPUS SLOT READ FROM A USER FUNCTION NOTHING CALLS IS STILL BUILT, SO ITS INITIALIZER'S
@@ -874,7 +840,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// root missing under it is `requireUnreachableLibraryStayedDead`, not a lost prune. Matching it exactly is
 	// what keeps the two derivations from disagreeing; the reached-code half is `markCorpusSlotInitCallees`,
 	// which covers the stdlib bodies this seed deliberately does not.
-	seedCorpusSlotInitCalleesOfUserCode(module, project: project, signatures: signatures, stdlib: stdlib, byName: byName, reached: reached, worklist: worklist, names: names)
+	seedCorpusSlotInitCalleesOfUserCode(module, signatures: signatures, stdlib: stdlib, byName: byName, reached: reached, worklist: worklist, names: names)
 
 	// ⭐⭐⭐ **A WITNESS IMPL IS CREDITED FOR A PAIR — A CONFORMER THE WALK HAS EVIDENCE OF, AND AN INTERFACE
 	// THE REACHED CODE CAN NAME.** Each half asked ALONE over-credits: the conformer key credits every
@@ -1046,7 +1012,7 @@ function drainReachableWorklist(module MaxonModule, project Project, signatures 
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
 		markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names)
-		markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
+		markMaxonCallees(module, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
 		collectWitnessPositionInterfaces(func, project: project, signatures: signatures, funcSignatures: project.funcSignatures, into: witnessInterfaces, order: witnessInterfaceOrder)
 		ownerLedger.noteOwnerOf(func.name)
 	end 'walk'
@@ -1219,8 +1185,7 @@ end 'noteInterfaceName'
 // The `where`-clause half of the collector above, kept whole because its two-branch read of the signature
 // map is `functionDeclaresAWitnessPosition`'s own — see the paragraphs above.
 function witnessConstraintsOfReachedFunction(func IrFunction, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns WhereConstraintArray
-	// ⭐ **THE EXTENSION HALF IS READ OFF THE REGISTRATION NAME'S OWN SIGNATURE**, because the
-	// declaration-sweep map is keyed by the DECLARED name and an overload member does not wear it — see
+	// ⭐ **THE EXTENSION HALF IS READ OFF THE REGISTRATION NAME'S OWN SIGNATURE** — see
 	// `FuncSignature.extensionConstraints`. A function with no recorded signature (a synthesized graph, a
 	// witness adapter) has no registration name to read one off, so it falls back to the DECLARATION-SWEEP
 	// clause, which cannot be wrong for a name no declaration wears. Over-answering here costs a walk;
@@ -1232,139 +1197,6 @@ function witnessConstraintsOfReachedFunction(func IrFunction, signatures Program
 	return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: signatures.extensionMethodConstraintsOf(func.name))
 end 'witnessConstraintsOfReachedFunction'
 
-// Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
-// or a root whose runtime this program never installs) is not found and not queued — nothing to
-// walk. Mirrors `DeadFunctionElimination.markLiveFunction`.
-module function markReachable(name ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
-
-	// ⭐⭐ **A MINTED PARAMETER-DEFAULT HELPER IS PROVISIONAL FOR THE SAME REASON THE BASE CALLEE BESIDE IT
-	// IS.** The two names are emitted by one act: filling a short call
-	// appends `f(x, m: __paramDefault#f#2())`, both spellings taken from the sweep's by-name registry, and
-	// `SemanticCheck.resolveOverloadedCalls` then re-points BOTH — the call at `commitOverloadChoice`, the
-	// helper at `repointDefaultedArgHelpers`, at the resolved member's own
-	// `__paramDefault#f#<member suffix>#2`. So a helper name standing in this walk denotes a SET exactly as
-	// its base does, and it is handled here rather than in a second reader for that reason.
-	//
-	// ⚠ The first declaration of a name keeps its source spelling
-	// (`Parser.declaredParamDefaultHelperName`), so only its helper is named by the swept name; every
-	// later member's helper carries that member's mangled registration name and is marked only by this
-	// arm.
-	//
-	// ⚠ **THE SHORT-CIRCUIT SIDE OWES NOTHING HERE, and that is an argument rather than an omission.**
-	// `nameReachesStdlib` asks whether user code crosses into stdlib at all, and a helper call is only ever
-	// emitted as an ARGUMENT of the call whose parameter it defaults — the same function, the same block. So
-	// the base callee's own op is always present for that scan to answer TRUE on, by whichever of its two
-	// clauses applies, and a helper name can never be a program's only edge into stdlib.
-	if isParamDefaultHelperName(name) 'aMintedDefaultHelper'
-		markEveryMembersOwnDefaultHelper(name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		return
-	end 'aMintedDefaultHelper'
-
-	// ⭐⭐ **THE PROVISIONAL-CALLEE RULE, AND IT HAS A SECOND READER ONE SCREEN DOWN
-	// (`nameReachesStdlib`).** A call op carries the overload SET's BASE name until
-	// `SemanticCheck.resolveOverloadedCalls` rebinds it to a member, so a base names EVERY member. This
-	// side MARKS them; the short-circuit side TESTS them against stdlib. The rule is stated once, HERE,
-	// and asked in the two shapes Maxon cannot fold into one — there is no way to hand a function the
-	// action to take per member, which is the argument `Parser.surfaceMemberNames` makes about its arms.
-	//
-	// ⛔⛔ **THE OTHER SIDE MUST WIDEN TOO, AND ITS MISS IS A PANIC.** For most
-	// sets the narrow reader is accidentally right, because the FIRST declaration KEEPS the bare spelling
-	// and the base therefore IS a function name (`String.contains`). For a CONTESTED extension method
-	// **nobody keeps the bare spelling** (`Parser.overloadRegistrationNameFor`) — `Array.contains` is
-	// declared by `stdlib/Array.maxon`'s `where Element is Equatable` extension AND published onto `Array`
-	// by `stdlib/Interfaces.maxon`'s `extension Iterable`, so its members register as
-	// `Array.contains#type parameter` / `Array.contains#struct` and NOTHING is named `Array.contains`.
-	// See `nameReachesStdlib` for what a miss costs.
-	//
-	// ⚠ **`contains` BEFORE `get` IS NOT A MEASURED COST.** This runs once per CALL EDGE and a miss is what
-	// nearly every edge is; the pair cannot be worse than a throwing `get`, and it lets a miss after the
-	// `contains` be a `panic` rather than a silent `return`. The reader below spells it the same way.
-	if not project.overloadSets.contains(name) 'notAnOverloadSet'
-		return
-	end 'notAnOverloadSet'
-
-	let members = try project.overloadSets.get(name) otherwise panic("markReachable: overloadSets lost the key '{String.from(name)}' between `contains` and `get`")
-
-	for member in members 'eachMember'
-		markOneReachable(member, byName: byName, reached: reached, worklist: worklist, names: names)
-	end 'eachMember'
-end 'markReachable'
-
-// One provisional helper name, widened over the callee's overload set — the member half of `markReachable`'s
-// helper rule, split out so the two widenings read as the two they are rather than one nested pair.
-//
-// The callee it defaults is recovered through `paramDefaultCalleeSpelling` and the member's own helper minted
-// through `paramDefaultHelperNameOnMember`, both at the mint, because a name derived a second time is what
-// that mint's header records a backend `call to unknown function` for. A name the set does not hold — every
-// helper of every unoverloaded callee, which is nearly all of them — widens to nothing and costs one map
-// miss, the accounting the base widening below is written for.
-//
-// `markOneReachable` and not `markReachable`: a member's own helper is the name a declaration published, so
-// it stands for itself and there is nothing further to widen.
-function markEveryMembersOwnDefaultHelper(helperName ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	let callee = paramDefaultCalleeSpelling(helperName)
-
-	if not project.overloadSets.contains(callee) 'theCalleeIsNotOverloaded'
-		return
-	end 'theCalleeIsNotOverloaded'
-
-	let members = try project.overloadSets.get(callee) otherwise panic("markEveryMembersOwnDefaultHelper: overloadSets lost the key '{String.from(callee)}' between `contains` and `get`")
-
-	for member in members 'eachMember'
-		markOneReachable(paramDefaultHelperNameOnMember(helperName, member: member), byName: byName, reached: reached, worklist: worklist, names: names)
-	end 'eachMember'
-end 'markEveryMembersOwnDefaultHelper'
-
-// ⭐⭐ **DOES `name` REACH A STDLIB FUNCTION? — the SHORT-CIRCUIT's half of `markReachable`'s
-// provisional-callee rule.** A name reaches stdlib either because it IS a stdlib function, or because it is
-// an overload set's BASE and a MEMBER is.
-//
-// ⛔⛔ **WITHOUT THE SECOND CLAUSE A CONTESTED EXTENSION METHOD'S CALL IS INVISIBLE, AND THAT IS A
-// PANIC RATHER THAN A SLOWDOWN.** `userCodeReachesStdlib` decides *"no op in user code names a stdlib
-// function ⇒ file every stdlib name `unreachable`"*, and `lowerMaxonToStd`, `insertRangeChecks`,
-// `scanRuntimeUsage` and `checkCalls` all skip what that set names. A program whose ONLY edge into
-// stdlib is `nums.contains([20, 30])` — whose members are `Array.contains#struct` /
-// `Array.contains#type parameter`, with nothing named `Array.contains` — therefore takes the
-// short-circuit, and `DeadFunctionElimination.requireUnreachableLibraryStayedDead` then reaches the
-// member the resolver bound and PANICS. That guard is the only thing standing between this and
-// an EMPTY function the program calls, with no diagnostic anywhere.
-//
-// ⚠ One non-overloaded stdlib call (`"a".isAscii()`) added to such a program makes it compile, because that
-// edge is visible to this scan and the precise walk's widening then covers the members — which puts the
-// fault in the SHORT-CIRCUIT rather than in the walk.
-//
-// ⛔ **THE RULE ABOVE IS ARGUED HERE AND PINNED BY NO CASE.** A program built on `Array.contains` —
-// the ONLY contested `<Conformer>.<method>` in the corpus — would prove nothing: the `Array` roster
-// serves it, so such a program never crosses into stdlib and passes without exercising this rule. ⇒
-// **whoever needs it pinned writes a case rather than looking for one.**
-//
-// ⚠ Over-answering is SAFE here and under-answering is the bug — a false TRUE costs the exact walk,
-// where a false FALSE skips a body the back end calls. `contains` before `get` for `markReachable`'s
-// reason.
-function nameReachesStdlib(name ByteArray, project Project, stdlib FunctionNameSet) returns bool
-	if stdlib.contains(name) 'aStdlibFunction'
-		return true
-	end 'aStdlibFunction'
-
-	if not project.overloadSets.contains(name) 'notAnOverloadSet'
-		return false
-	end 'notAnOverloadSet'
-
-	let members = try project.overloadSets.get(name) otherwise panic("nameReachesStdlib: overloadSets lost the key '{String.from(name)}' between `contains` and `get`")
-
-	for member in members 'eachMember'
-		if stdlib.contains(member) 'found'
-			return true
-		end 'found'
-	end 'eachMember'
-
-	return false
-end 'nameReachesStdlib'
-
-// Mark exactly ONE function name, with no overload widening — the body `markReachable` shares between the
-// name it was handed and each member of that name's overload set. Split out so the widening is written
-// once and cannot recurse into itself (a member's own registration name keys no set).
 module function markOneReachable(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	let idx = try byName.get(name) otherwise 'notAModuleFunction'
 		return
@@ -1393,15 +1225,15 @@ end 'markOneReachable'
 // COMPUTES: a walk of its own would re-derive, on every compile, a callee name this one already holds. The
 // corpus has no such callee — see `functionDeclaresAWitnessPosition`'s header for the two routes that
 // remain.
-function markMaxonCallees(module MaxonModule, project Project, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
+function markMaxonCallees(module MaxonModule, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.bodyOps() 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
-			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-			markCorpusSlotInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			markServiceLoopHandlers(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
+			markMaxonCalleeEdge(op, byName: byName, reached: reached, worklist: worklist, names: names)
+			markCorpusSlotInitCallees(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+			markServiceLoopHandlers(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
 		end 'eachOp'
 	end 'eachBlock'
 end 'markMaxonCallees'
@@ -1419,10 +1251,10 @@ end 'markMaxonCallees'
 // A `functionValue` target is credited alongside a `direct` callee: a `functionRef`'s target is reachable
 // code even though no `call` op names it. `indirectCall` calls through the code POINTER that `functionRef`
 // already credited, and `maxonOpCalleeKind` answers `noCallee` for it.
-module function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
-		functionValue then markReachable(maxonOpCalleeName(op), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		functionValue then markOneReachable(maxonOpCalleeName(op), byName: byName, reached: reached, worklist: worklist, names: names)
 		noCallee then break
 	end 'kind'
 end 'markMaxonCalleeEdge'
@@ -1435,7 +1267,7 @@ end 'markMaxonCalleeEdge'
 //
 // ⚡ Credited once per TYPE: the spawn sites and the messages of one service both grow with the program, and
 // their product would not.
-function markServiceLoopHandlers(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
+function markServiceLoopHandlers(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
 	if not maxonOpIsServiceSpawn(op) 'startsNoService'
 		return
 	end 'startsNoService'
@@ -1447,7 +1279,7 @@ function markServiceLoopHandlers(op MaxonOp, project Project, signatures Program
 	end 'alreadyCredited'
 
 	for handler in serviceLoopHandlerCallees(signatures, typeName: typeName) 'eachHandler'
-		markReachable(handler, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		markOneReachable(handler, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachHandler'
 
 	creditedServices.insert(typeName)
@@ -1490,9 +1322,8 @@ end 'markServiceLoopHandlers'
 // `conformances`/`interfaces` are merge-time stores (`Queries.resetMergeTargets` resets all three
 // together), so they answer the same in both askers, which is the property this walk's header demands.
 // ⇒ The `<Type>.<method>` join `ensureWitnessTable` is forbidden to make is correct HERE for the
-// reason it is wrong there: a name no module function carries is silently skipped by `markReachable`, so a
+// reason it is wrong there: a name no module function carries is silently skipped by `markOneReachable`, so a
 // join that names nothing costs nothing, where a RELOCATION that names nothing is a wrong code pointer.
-// Overloads are covered because `markReachable` credits the whole set.
 //
 // ⚠ **A CONTAINER'S KEY WITNESS NEEDS NOTHING EXTRA HERE.** A corpus container's key witness is an
 // ordinary dictionary parameter, so it arrives by the CONSTRAINT route like any other: a builtin key is
@@ -1576,14 +1407,9 @@ end 'markConstraintArgumentImpls'
 // `reachableMaxonFunctionNames`' fixpoint for where the two lists come from and what asking them separately
 // costs.
 //
-// ⛔⛔ **THE CONFORMANCE TEST IS NOT AN OPTIMIZATION — WITHOUT IT THE WALK MINTS NAMES NO DECLARATION COULD
-// WEAR, AND `markReachable` DOES MORE THAN LOOK ONE UP.** It also widens a callee to its minted
-// parameter-default helper, so a crossed pair like (`File`, `Hashable`) — a type that declares no `hash` —
-// reaches `splitMintedHelperName('__paramDefault#File.hash')` and **PANICS**. *"A name nothing
-// declares is simply not found"* is true of `markOneReachable` and false of its caller.
-// `typeConformsTo` is the right gate rather than a bare membership test because it walks `extends` and
-// admits an INTRINSIC conformance — the two ways a slot can exist without the type's own declaration
-// naming this interface.
+// `typeConformsTo` is the gate rather than a bare membership test because it walks `extends` and admits
+// an INTRINSIC conformance — the two ways a slot can exist without the type's own declaration naming this
+// interface.
 function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: typeName, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(typeName)) 'thisPairHasNoTable'
 		return
@@ -1600,14 +1426,14 @@ function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray
 	// case the narrower gate has to get right: a `Base`-typed place against a `T implements Derived` builds
 	// `__witness_T.Base`, whose slots are BASE's, and those are what this marks.
 	for slot in interfaceWitnessSlots(project.interfaces, iface: iface) 'eachSlot'
-		markReachable(qualifiedMethodName(typeName, methodName: slot.method.name), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		markOneReachable(qualifiedMethodName(typeName, methodName: slot.method.name), byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachSlot'
 end 'markWitnessImplsOfConformer'
 
 // Stdlib's own bodies are skipped for `userCodeReachesStdlib`'s reason and for `liveGlobalLabels`': an access
 // inside an unreachable stdlib body decides nothing, because that body reaches no back end and its slot is
 // not kept for it.
-function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, signatures ProgramSignatures, stdlib FunctionNameSet, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for func in module.functions 'eachFunc'
 		if stdlib.contains(func.name) 'skipStdlibBody'
 			continue
@@ -1618,7 +1444,7 @@ function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, project Project
 
 			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: opRef {opIdx} not in module.ops")
-				markCorpusSlotInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+				markCorpusSlotInitCallees(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1638,13 +1464,13 @@ end 'seedCorpusSlotInitCalleesOfUserCode'
 // ⚠ **OVER-CREDITING IS THE SAFE DIRECTION AND THIS DOES IT ONCE:** a read the program never executes
 // still credits the callees, whose bodies are then lowered and dropped by dead-function elimination. A
 // MISSING root is a `requireUnreachableLibraryStayedDead` panic.
-function markCorpusSlotInitCallees(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markCorpusSlotInitCallees(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
 		return
 	end 'namesNoSlot'
 
 	for callee in signatures.initCalleesOfCorpusSlot(maxonOpGlobalLabelName(op)) 'eachCallee'
-		markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		markOneReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachCallee'
 end 'markCorpusSlotInitCallees'
 
@@ -1657,13 +1483,12 @@ end 'markCorpusSlotInitCallees'
 //
 // ⚠ **IT ANSWERS OVER THE SAME LISTS THE PRECISE WALK ROOTS FROM — those shared lists are the guarantee,
 // not a matching root SET**, and the difference is worth stating because the two are easy to confuse.
-// `markReachable` widens a root over `project.overloadSets` and seeds the grapheme entries per reached op;
-// this asks only "is this bare name a stdlib name?". Those agree EXACTLY, and here is why: a USER callee's
-// own body is scanned by the loop below whatever it goes on to call, a STDLIB callee's bare name is the
-// first overload member's registration name and so is always in `stdlib`, and an undeclared one is refused
-// (E3004) before it can reach either walk. An under-answer here would file ALL of stdlib
-// unreachable for a program that reaches it — the direction that empties a body the back end then calls —
-// so a new ROOT KIND owes that argument again rather than inheriting it.
+// The precise walk credits every callee a reached op names; this asks only "is this name a stdlib name?".
+// Those agree EXACTLY, and here is why: a USER callee's own body is scanned by the loop below whatever it
+// goes on to call, a STDLIB callee's name is its registration name and so is always in `stdlib`, and an
+// undeclared one is refused (E3004) before it can reach either walk. An under-answer here would file ALL
+// of stdlib unreachable for a program that reaches it — the direction that empties a body the back end
+// then calls — so a new ROOT KIND owes that argument again rather than inheriting it.
 //
 // ⚠⚠ **THE WITNESS-IMPL SEED IS SUCH A ROOT KIND.** Rooted in the precise walk alone, a program that took
 // the short-circuit would file `String.hash` unreachable while its witness table still named it. It is a
@@ -1675,7 +1500,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	// naming it — the call belongs to `__module_init`, which does not exist yet. Missing it would answer "all
 	// of stdlib is unreachable" for a program that reaches it, the direction that skips a body the back end
 	// then calls.
-	if anyNameReachesStdlib(initCallees, project: project, stdlib: stdlib) 'rootedInStdlib'
+	if anyNameReachesStdlib(initCallees, stdlib: stdlib) 'rootedInStdlib'
 		return true
 	end 'rootedInStdlib'
 
@@ -1692,7 +1517,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	// ⭐ **AND A SERVICE LOOP IS THE THIRD: `<T>.__loop` calls every handler, and it is built after this scan.**
 	// A user handler's body is scanned below like any other, so what this answers for is a handler that IS
 	// stdlib source. See `anyServiceHandlerReachesStdlib` for why it is asked of the roster and not per `spawn`.
-	if signatures.spawnsAnyService() and anyServiceHandlerReachesStdlib(project, signatures: signatures, stdlib: stdlib) 'aHandlerIsStdlib'
+	if signatures.spawnsAnyService() and anyServiceHandlerReachesStdlib(signatures, stdlib: stdlib) 'aHandlerIsStdlib'
 		return true
 	end 'aHandlerIsStdlib'
 
@@ -1721,7 +1546,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 
 				// ⚠ This short-circuit must answer TRUE for every edge a precise-walk seed roots, or the walk it
 				// skips would have rooted a name this scan called unreachable.
-				if opNamesStdlibCallee(op, project: project, stdlib: stdlib) or opReadsACorpusSlotRootedInStdlib(op, signatures: signatures, stdlib: stdlib) 'found'
+				if opNamesStdlibCallee(op, stdlib: stdlib) or opReadsACorpusSlotRootedInStdlib(op, signatures: signatures, stdlib: stdlib) 'found'
 					return true
 				end 'found'
 			end 'eachOp'
@@ -1789,9 +1614,9 @@ end 'corpusDeclaresASeededConformance'
 
 // Does any name on a list the precise walk marks reach stdlib? One function for every such list — the
 // initializer roots and a service's handlers — so none of them can arrive with a subtly different test.
-function anyNameReachesStdlib(names NameRoster, project Project, stdlib FunctionNameSet) returns bool
+function anyNameReachesStdlib(names NameRoster, stdlib FunctionNameSet) returns bool
 	for name in names 'eachName'
-		if nameReachesStdlib(name, project: project, stdlib: stdlib) 'found'
+		if stdlib.contains(name) 'found'
 			return true
 		end 'found'
 	end 'eachName'
@@ -1802,9 +1627,9 @@ end 'anyNameReachesStdlib'
 // The short-circuit's half of `markServiceLoopHandlers`. Asked once over the ROSTER — every type any `spawn`
 // starts, so a superset of what the precise walk credits, which only ever costs that walk — rather than at
 // each `spawn`, whose handler roster would be rebuilt per site.
-function anyServiceHandlerReachesStdlib(project Project, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
+function anyServiceHandlerReachesStdlib(signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
 	for typeName in serviceTypeRoster(signatures) 'eachService'
-		if anyNameReachesStdlib(serviceLoopHandlerCallees(signatures, typeName: typeName), project: project, stdlib: stdlib) 'found'
+		if anyNameReachesStdlib(serviceLoopHandlerCallees(signatures, typeName: typeName), stdlib: stdlib) 'found'
 			return true
 		end 'found'
 	end 'eachService'
@@ -1818,10 +1643,10 @@ end 'anyServiceHandlerReachesStdlib'
 // ⚠ It runs on every compile, so it must allocate nothing — and sharing the classifier costs nothing:
 // `maxonOpCalleeKind` is a scalar enum, and the NAME is fetched only for the two kinds that carry one,
 // i.e. only where this function reads a callee anyway.
-function opNamesStdlibCallee(op MaxonOp, project Project, stdlib FunctionNameSet) returns bool
+function opNamesStdlibCallee(op MaxonOp, stdlib FunctionNameSet) returns bool
 	return match maxonOpCalleeKind(op) 'kind'
 		direct or
-		functionValue gives nameReachesStdlib(maxonOpCalleeName(op), project: project, stdlib: stdlib)
+		functionValue gives stdlib.contains(maxonOpCalleeName(op))
 		noCallee gives false
 	end 'kind'
 end 'opNamesStdlibCallee'

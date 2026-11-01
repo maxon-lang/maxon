@@ -1,8 +1,8 @@
-let CaseDirName = "cache-clear-keeps-live-debug-builds"
+let CacheClearKeepsALiveDebugSessionsBuildCaseDirName = "cache-clear-keeps-live-debug-builds"
 let DebugBuildDirName = "debug-builds"
 let PlantedStem = "planted-main-maxon"
 let PlantedBytes = "not really an image"
-let KeptReport = "a live debug session is using"
+let CacheClearKeepsALiveDebugSessionsBuildKeptReport = "a live debug session is using"
 let ProbeLabel = "cli-cache-clear-debug-build"
 
 function plantedName(owner Pid) returns String
@@ -10,7 +10,7 @@ function plantedName(owner Pid) returns String
 end 'plantedName'
 
 test 'cache clear keeps the debug build of a session that is still running, and says so'
-	let dir = freshCaseDir(CaseDirName)
+	let dir = freshCaseDir(CacheClearKeepsALiveDebugSessionsBuildCaseDirName)
 	let cacheRoot = cacheRootIn(dir)
 	let owned = cacheRoot.join(CacheVendorDirName)
 	let builds = owned.join(DebugBuildDirName)
@@ -32,5 +32,5 @@ test 'cache clear keeps the debug build of a session that is still running, and 
 	try Expect.isTrue(File.exists(live), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {live.toString()}, the image a running debug session was built into. {said}")
 	try Expect.isTrue(File.exists(liveSidecar), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {liveSidecar.toString()}, the sidecar a running debug session reads. {said}")
 	try Expect.isFalse(File.exists(ended), message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept {ended.toString()}, whose owner has ended. {said}")
-	try Expect.isTrue(cleared.stdout.contains(KeptReport), message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept files without saying so. {said}")
+	try Expect.isTrue(cleared.stdout.contains(CacheClearKeepsALiveDebugSessionsBuildKeptReport), message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept files without saying so. {said}")
 end 'cache clear keeps the debug build of a session that is still running, and says so'

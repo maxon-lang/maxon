@@ -1,11 +1,7 @@
 let CondBoolCaseLabel = "cond-bool"
 
-let AnchorName = "hit-body"
-let CountedLinePrefix = "hit "
-let LoopLocalName = "i"
 let FlagTrueIteration = "11"
-let ConditionText = "flag == true"
-let ContinuesPastEveryHit = 60
+let CondBoolConditionText = "flag == true"
 
 test 'a breakpoint conditioned on a bool local stops only where the fixture makes that local true'
 	let staged = builtFixture(CondBoolCaseLabel, fixture: ConditionFixtureName)
@@ -16,7 +12,7 @@ test 'a breakpoint conditioned on a bool local stops only where the fixture make
 	Expect.atLeast(iterations, than: 2, message: "the fixture must run the anchored line more than once, or a bool condition says nothing. It ran it {iterations} times.")
 
 	var armings = StringArray.create()
-	armings.push(conditionalBreak(lineTarget(hitLine), condition: ConditionText))
+	armings.push(conditionalBreak(lineTarget(hitLine), condition: CondBoolConditionText))
 	armings.push(RunCommand)
 	armings.push("{PrintCommand} {LoopLocalName}")
 
@@ -26,7 +22,7 @@ test 'a breakpoint conditioned on a bool local stops only where the fixture make
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let armings = eventsOfKind(events, kind: BreakpointEventName)
-	Expect.equal(armings.count(), expected: 1, message: "`{conditionalBreak(lineTarget(hitLine), condition: ConditionText)}` printed no `{BreakpointEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(armings.count(), expected: 1, message: "`{conditionalBreak(lineTarget(hitLine), condition: CondBoolConditionText)}` printed no `{BreakpointEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let armed = eventAt(armings, index: 0)
 	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "a bool local compared against a literal is a condition the driver can evaluate at the stop, so the breakpoint must be ARMED. {said}")

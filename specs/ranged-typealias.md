@@ -2615,6 +2615,75 @@ end 'main'
 5
 ```
 
+### A method declared twice is refused whichever declaration takes the opaque parameter
+
+A method name is declared once per type, so the second `put` is E3006 at its own name whether it is the
+declaration that takes `value T` or the one that does not. The call still resolves against the kept first
+declaration, and no range guard is built from the refused one.
+
+<!-- test: error.a-second-method-taking-an-opaque-parameter-is-refused -->
+```maxon
+typealias Percent = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	function put(count ExitCode) returns ExitCode
+		return count
+	end 'put'
+
+	function put(value T)
+		self.v = value
+	end 'put'
+end 'Box'
+
+typealias PB = Box with Percent
+
+function main() returns ExitCode
+	var b = PB.create(1)
+	return b.put(5)
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:15:11: Duplicate method 'put' in type 'Box'
+```
+
+<!-- test: error.a-second-method-without-an-opaque-parameter-is-refused -->
+```maxon
+typealias Percent = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	function put(value T)
+		self.v = value
+	end 'put'
+
+	function put(count ExitCode) returns ExitCode
+		return count
+	end 'put'
+end 'Box'
+
+typealias PB = Box with Percent
+
+function main() returns ExitCode
+	var b = PB.create(1)
+	b.put(5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:15:11: Duplicate method 'put' in type 'Box'
+```
+
 ### The `Array` half: an element reached through a shared body's `Element` parameter
 
 ⭐ This is `push`/`set`/`insert`'s shape with nothing struck to reach it. An `extension Array` method
@@ -2643,38 +2712,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:14:4: Value 300 is outside the range of 'Byte' (int(0 to 255))
-```
-
-### An OVERLOADED method is declined, not checked against the member the call did not resolve to
-
-⛔ The boundary, pinned by the program that fell through it. The declaration sweep keys by BARE NAME — the
-limitation `Parser.requireOverloadableName` states in full — so `stdlib/Array.maxon`'s two `contains`
-declarations, `contains(element Element)` and `contains(sequence ElementArray)`, arrive under one key.
-Answering for the set from either member checks the OTHER member's argument: **`a.contains(needle)` —
-which compiles and runs — would have its ARRAY POINTER range-checked against `0 to 255` and die
-`panic … value outside typealias 'Byte'`.** A disagreeing pair is therefore CONTESTED
-and gets no check at all, which costs a missed refusal on an overloaded generic method and can never cost
-a wrong one. This case is that program, and it must stay green.
-
-<!-- test: overloaded-generic-method-is-not-range-checked -->
-```maxon
-typealias Byte = int(0 to 255)
-typealias BA = Array with Byte
-
-function main() returns ExitCode
-	var a = BA.create()
-	a.push(3)
-	a.push(4)
-	var needle = BA.create()
-	needle.push(4)
-	if a.contains(needle) 'has'
-		return 7
-	end 'has'
-	return 9
-end 'main'
-```
-```exitcode
-7
 ```
 
 ### Error: a call argument is checked against the CALLEE's declaration of the alias

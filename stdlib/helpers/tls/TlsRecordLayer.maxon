@@ -56,7 +56,7 @@ module type TlsTls13Cipher implements TlsRecordCipher
 	var protection as Tls13RecordProtection
 
 	module static function create(suite Tls13CipherSuite, keys Tls13TrafficKeys) returns TlsTls13Cipher throws TlsHandshakeError
-		let protection = try Tls13RecordProtection.create(suite, key: keys.key(), iv: keys.iv()) otherwise (failure) 'refused'
+		let protection = try Tls13RecordProtection.create(suite, key: keys.key, iv: keys.iv) otherwise (failure) 'refused'
 			throw tlsRecordFailure(failure)
 		end 'refused'
 
@@ -269,7 +269,7 @@ public type TlsRecordInput
 	module function accept(record ByteArray) returns TlsInboundEvent throws TlsHandshakeError
 		let opened = try reader.read(record)
 
-		return match opened.contentType() 'contentType'
+		return match opened.contentType 'contentType'
 			changeCipherSpec gives try acceptChangeCipherSpec(opened.plaintext())
 			alert gives try acceptAlert(opened.plaintext())
 			handshake gives try acceptHandshake(opened.plaintext())

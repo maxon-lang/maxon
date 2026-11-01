@@ -696,7 +696,7 @@ Stack trace:
   in main
   in mrt_start
 ```
-<!-- test: a-mixed-expression-into-an-overload-is-guarded-at-the-call -->
+<!-- test: a-mixed-expression-into-a-nominal-parameter-is-guarded-at-the-call -->
 ```maxon
 typealias Small = int(0 to 10)
 typealias BlockId = int(0 to 10) implements Small
@@ -706,9 +706,9 @@ function show(b BlockId) returns String
 	return "block {b}"
 end 'show'
 
-function show(s String) returns String
+function showText(s String) returns String
 	return s
-end 'show'
+end 'showText'
 
 function main() returns ExitCode
 	let block = 8 as BlockId
@@ -721,36 +721,10 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-mixed-expression-into-an-overload-is-guarded-at-the-call.test:17: Range check failed: value outside typealias 'BlockId'
+panic at a-mixed-expression-into-a-nominal-parameter-is-guarded-at-the-call.test:17: Range check failed: value outside typealias 'BlockId'
 Stack trace:
   in main
   in mrt_start
-```
-
-<!-- test: an-overload-is-chosen-by-an-operand-of-a-mixed-expression -->
-```maxon
-typealias Small = int(0 to 10)
-typealias BlockId = int(0 to 10) implements Small
-typealias VarId = int(0 to 10) implements Small
-typealias Row = int(0 to 1000)
-
-function describe(b BlockId) returns String
-	return "block {b}"
-end 'describe'
-
-function describe(r Row) returns String
-	return "row {r}"
-end 'describe'
-
-function main() returns ExitCode
-	let block = 3 as BlockId
-	let varId = 4 as VarId
-	print(describe(block + varId))
-	return 0
-end 'main'
-```
-```stdout
-block 7
 ```
 
 <!-- test: error.a-mixed-expression-no-operand-of-which-fits-the-field -->
@@ -776,60 +750,6 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:10:15: cannot assign a value of type 'VarId' to field 'block' of 'Holder', which holds 'BlockId'
 ```
-<!-- test: error.a-mixed-expression-fits-no-overload -->
-```maxon
-typealias Small = int(0 to 10)
-typealias BlockId = int(0 to 10) implements Small
-typealias VarId = int(0 to 10) implements Small
-typealias Row = int(0 to 1000)
-typealias Col = int(0 to 1000)
-
-function describe(r Row) returns String
-	return "row {r}"
-end 'describe'
-
-function describe(c Col) returns String
-	return "col {c}"
-end 'describe'
-
-function main() returns ExitCode
-	let block = 3 as BlockId
-	let varId = 4 as VarId
-	print(describe(block + varId))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:19:8: argument type mismatch for 'r': expected 'Row', got 'Small'
-```
-
-<!-- test: error.a-mixed-expression-that-fits-two-overloads-is-ambiguous -->
-Each operand of `block + varId` satisfies one of the two overloads, so the call is ambiguous and is refused
-at the call.
-```maxon
-typealias Small = int(0 to 10)
-typealias BlockId = int(0 to 10) implements Small
-typealias VarId = int(0 to 10) implements Small
-
-function show(b BlockId) returns String
-	return "block {b}"
-end 'show'
-
-function show(v VarId) returns String
-	return "var {v}"
-end 'show'
-
-function main() returns ExitCode
-	let block = 3 as BlockId
-	let varId = 4 as VarId
-	print(show(block + varId))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3007: <fragment>:17:8: Ambiguous overload for 'show': multiple overloads match. Candidates: (b BlockId), (v VarId)
-```
-
 <!-- test: an-implements-alias-widens-to-its-parent -->
 `typealias FooId = int(0 to 1000) implements ElementIndex` keeps its own range and is a subtype of
 `ElementIndex`: it passes to an `ElementIndex` parameter and indexes an Array with no cast.
@@ -1055,7 +975,7 @@ error E2028: <fragment>:14:19: ternary expression type mismatch: true branch is 
 Two files each declare a private `Id` implementing a different parent; each file's `Id` widens to its own
 parent.
 ```maxon
-// --- file: a.maxon
+// --- file: a/a.maxon
 typealias Small = int(0 to 100)
 typealias Id = int(0 to 10) implements Small
 
@@ -1068,7 +988,7 @@ export function checkA() returns ExitCode
 	return takeSmall(i)
 end 'checkA'
 
-// --- file: b.maxon
+// --- file: b/b.maxon
 typealias Big = int(0 to 1000)
 typealias Id = int(0 to 10) implements Big
 
@@ -2052,62 +1972,6 @@ end 'main'
 ```
 ```stdout
 -5 -7
-```
-
-<!-- test: an-overload-set-called-with-a-literal-still-resolves -->
-Decay reaches overload scoring too: a literal argument fits the `Age` member, so it is neither refused nor
-ambiguous against the `String` one.
-```maxon
-typealias Age = int(0 to 150)
-
-function describe(a Age) returns Age
-	return a + 1
-end 'describe'
-
-function describe(s String) returns Age
-	return s.count() as Age
-end 'describe'
-
-function main() returns ExitCode
-	let a = 30 as Age
-	print("{describe(a)} {describe(5)} {describe("four")}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-31 6 4
-```
-
-<!-- test: an-overload-set-resolves-by-alias-name -->
-Two members over two aliases of one base are two DIFFERENT parameter types, so an `Age` argument selects
-the `Age` member and a `Year` the `Year` one.
-```maxon
-typealias Age = int(0 to 150)
-typealias Year = int(0 to 3000)
-
-function describe(a Age) returns Age
-	return a + 1
-end 'describe'
-
-function describe(y Year) returns Year
-	return y + 2
-end 'describe'
-
-function main() returns ExitCode
-	let a = 30 as Age
-	let y = 1990 as Year
-	print("{describe(a)} {describe(y)}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-31 1992
 ```
 
 <!-- test: error.same-name-and-range-across-three-files-is-three-types -->

@@ -62,11 +62,10 @@
 // WHOLE PROGRAM.**
 //
 // It runs at the tail of `semanticCheck` because that is the one pass holding BOTH halves of the
-// question: the whole-program `ParamMutationSummary` — a least fixpoint over the call graph, and itself
-// only correct once `resolveOverloadedCalls` has rewritten every overloaded callee name — and a Maxon
-// module still one tier above lowering. It is a REWRITE inside a checking pass for the reason
-// `resolveOverloadedCalls` is one: a rewrite keyed on a whole-program summary has nowhere earlier to
-// stand, and rebuilding the summary in a pass of its own would be a second fixpoint over the same graph.
+// question: the whole-program `ParamMutationSummary` — a least fixpoint over the call graph — and a
+// Maxon module still one tier above lowering. It is a REWRITE inside a checking pass because a rewrite
+// keyed on a whole-program summary has nowhere earlier to stand, and rebuilding the summary in a pass of
+// its own would be a second fixpoint over the same graph.
 //
 // ⚠ **THE OPS IT INSERTS ARE WHY `scanRuntimeUsage` MOVED BELOW THE PIPELINE** (see
 // `Compiler.compileToCodeResult`). A `__str_clone` or `__str_retain` appended after the usage scan had
@@ -132,9 +131,10 @@ function callsAWritingCallee(module MaxonModule, func IrFunction, mutationSummar
 end 'callsAWritingCallee'
 
 // The per-op arm of the gate. `collectCallParamEdgesAt`'s arm list, asked of the same two variants for the
-// same reason — its `asyncCall` exclusion included: The compiler refuses a managed `async` argument outright
-// (`requireAsyncScalarParams`), so no spawn can carry a String record at all. The non-call bands range to
-// `false`, so a newly appended op fails to compile here rather than silently dropping out of the gate.
+// same reason. An `asyncCall` answers `false` because `Parser.transferThreadArguments` promotes a borrowed
+// `.rdata` String argument to a fresh owned record, so no immortal record reaches a spawn. The non-call
+// bands range to `false`, so a newly appended op fails to compile here rather than silently dropping out
+// of the gate.
 function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary) returns bool
 	return match op 'op'
 		call(_, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoParamPositions

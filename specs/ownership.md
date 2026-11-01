@@ -1573,7 +1573,7 @@ end 'main'
 <!-- test: a-match-arm-payload-binds-for-its-line-only -->
 ⛔⛔ **AN ARM'S PAYLOAD BINDS FOR ONE LINE, NOT FOR THE `match`'s BLOCK.** `filled(p)` takes the name on
 its own line and gives it back at the newline; the SIBLING arm's `p = "replaced"` is therefore a write to
-the PARAMETER, which is what makes `p` by-reference and what the caller reads back out of `s`. A payload
+the PARAMETER, which `mutable` makes by-reference and what the caller reads back out of `s`. A payload
 carried at the match's own depth would still be shadowing that write, and the compiler refuses the program
 at it — *cannot assign to immutable variable* — rather than dropping it silently.
 ```maxon
@@ -1585,7 +1585,7 @@ end 'Slot'
 type Wrap
 	export var v as String
 
-	static function make(p String, s Slot) returns Wrap
+	static function make(p mutable String, s Slot) returns Wrap
 		match s 'choose'
 			filled(p) then return Wrap{v: p}
 			empty then p = "replaced"
@@ -1608,7 +1608,7 @@ end 'main'
 
 <!-- test: a-parameter-reassigned-then-consumed-releases-each-value-once -->
 ⛔⛔ **A PARAMETER THE CALLEE REASSIGNS IS THE CALLER'S CELL, AND A CELL IS NEVER CONSUMED.** Both facts
-hold of `p` below — the rebind makes it by-reference, the field store makes it consumed — and they decide
+hold of `p` below — `mutable` makes it by-reference, the field store makes it consumed — and they decide
 opposite things about who owns what. By-reference wins, because the cell outlives the frame: the caller
 reads what the callee wrote (`s` is `"replaced"` here, so the sum is `8 + 8`) and still drops it. So the
 callee's field store takes its OWN reference off a borrow, the caller transfers nothing at the call, and
@@ -1617,7 +1617,7 @@ callee's field store takes its OWN reference off a borrow, the caller transfers 
 type Wrap
 	export var v as String
 
-	static function make(p String) returns Wrap
+	static function make(p mutable String) returns Wrap
 		p = "replaced"
 		return Wrap{v: p}
 	end 'make'
@@ -1640,7 +1640,7 @@ caller's `t` — and each owes exactly one release. `"second"` is 6 bytes and al
 type Wrap
 	export var v as String
 
-	static function make(p String, q String) returns Wrap
+	static function make(p mutable String, q String) returns Wrap
 		p = q
 		return Wrap{v: p}
 	end 'make'
@@ -1665,7 +1665,7 @@ caller sees too.
 type Wrap
 	export var v as String
 
-	static function make(p String) returns Wrap
+	static function make(p mutable String) returns Wrap
 		for i in 0 upto 3 'grow'
 			p = "{p}{i}"
 		end 'grow'
@@ -1692,7 +1692,7 @@ end 'main'
 type Wrap
 	export var v as String
 
-	static function make(p String) returns Wrap
+	static function make(p mutable String) returns Wrap
 		p = "replaced"
 		return Wrap{v: p}
 	end 'make'

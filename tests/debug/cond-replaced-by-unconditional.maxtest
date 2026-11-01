@@ -1,9 +1,6 @@
 let CondReplacedCaseLabel = "cond-replaced-by-unconditional"
 
-let AnchorName = "hit-body"
-let CountedLinePrefix = "hit "
-let ConditionText = "i == 7"
-let ContinuesPastEveryHit = 200
+let CondReplacedByUnconditionalContinuesPastEveryHit = 200
 
 test 'a plain break over a line already carrying a condition drops the condition and stops on every hit'
 	let staged = builtFixture(CondReplacedCaseLabel, fixture: ConditionFixtureName)
@@ -12,14 +9,14 @@ test 'a plain break over a line already carrying a condition drops the condition
 	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
 
 	Expect.atLeast(iterations, than: 2, message: "the fixture must run the anchored line more than once, or `every hit` and `the one the condition names` would be the same count. It ran it {iterations} times.")
-	Expect.lessThan(iterations, than: ContinuesPastEveryHit, message: "the session issues {ContinuesPastEveryHit} continues and the line runs {iterations} times, so the count below would be capped by the script rather than by the breakpoint.")
+	Expect.lessThan(iterations, than: CondReplacedByUnconditionalContinuesPastEveryHit, message: "the session issues {CondReplacedByUnconditionalContinuesPastEveryHit} continues and the line runs {iterations} times, so the count below would be capped by the script rather than by the breakpoint.")
 
 	var armings = StringArray.create()
 	armings.push(conditionalBreak(lineTarget(hitLine), condition: ConditionText))
 	armings.push("{BreakCommand} {lineTarget(hitLine)}")
 	armings.push(RunCommand)
 
-	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryHit)))
+	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: CondReplacedByUnconditionalContinuesPastEveryHit)))
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)

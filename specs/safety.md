@@ -1511,10 +1511,22 @@ type Holder
 		return Self{maxon_force_segfault: maxon_force_segfault}
 	end 'make'
 
-	function maxon_force_segfault() returns Small
+	function held() returns Small
 		return self.maxon_force_segfault
-	end 'maxon_force_segfault'
+	end 'held'
 end 'Holder'
+
+type Echo
+	var seed as Small
+
+	static function make(seed Small) returns Echo
+		return Self{seed: seed}
+	end 'make'
+
+	function maxon_force_segfault() returns Small
+		return self.seed
+	end 'maxon_force_segfault'
+end 'Echo'
 
 enum Marker
 	other
@@ -1524,6 +1536,7 @@ end 'Marker'
 function main() returns ExitCode
 	let maxon_force_segfault = 7 as Small
 	let h = Holder.make(maxon_force_segfault)
+	let e = Echo.make(h.held())
 	var bump = 0 as Small
 
 	match Marker.maxon_force_segfault 'which'
@@ -1531,7 +1544,7 @@ function main() returns ExitCode
 		maxon_force_segfault then bump = 35
 	end 'which'
 
-	return (h.maxon_force_segfault() + bump) as ExitCode
+	return (e.maxon_force_segfault() + bump) as ExitCode
 end 'main'
 ```
 ```exitcode

@@ -129,7 +129,7 @@ function main() returns ExitCode
 	if host != "example.com" 'badHost'
 		return 2
 	end 'badHost'
-	let path = url.path()
+	let path = url.path
 	if path != "/path" 'badPath'
 		return 3
 	end 'badPath'

@@ -489,69 +489,6 @@ end 'main'
 error E2012: <fragment>:5:13: Circular dependency detected among global initializers: Loop.value reads its own slot, directly or through a function its initializer calls
 ```
 
-<!-- test: an-unused-overload-does-not-invent-a-cycle -->
-### An overload nothing calls does not invent a cycle
-
-⭐ **THE CONTROL THE CYCLE CASE ABOVE CANNOT BE: A PROGRAM THAT IS *NOT* CIRCULAR AND MUST COMPILE.**
-`A.build(seed)` and `B.build(seed)` are declared and never called, and each would read the other's static.
-A call op carries the overload SET's base name until overload resolution runs — which is after the
-initialization order is settled — so a walk that credits every member a base name might denote sees
-`A.value` and `B.value` reading each other and closes a cycle this program does not have.
-
-⛔ **AN OVER-APPROXIMATE EDGE SET IS RIGHT FOR CHOOSING AN ORDER AND WRONG FOR REFUSING ONE.** A superset of
-the true edges still yields a valid order wherever it is acyclic; it must never be what a compile error rests
-on. The order is therefore taken from every edge the walk can see, and E2012 only from edges an op itself
-names.
-
-```maxon
-typealias Count = int(0 to 1000)
-
-type A
-	export var n as Count
-	static var value = A.build()
-
-	static function build() returns A
-		return A{n: 1}
-	end 'build'
-
-	static function build(seed Count) returns A
-		return A{n: B.get() + seed}
-	end 'build'
-
-	static function get() returns Count
-		return A.value.n
-	end 'get'
-end 'A'
-
-type B
-	export var n as Count
-	static var value = B.build()
-
-	static function build() returns B
-		return B{n: 2}
-	end 'build'
-
-	static function build(seed Count) returns B
-		return B{n: A.get() + seed}
-	end 'build'
-
-	static function get() returns Count
-		return B.value.n
-	end 'get'
-end 'B'
-
-function main() returns ExitCode
-	print("{A.get()} {B.get()}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1 2
-```
-
 <!-- test: a-dependency-chain-initializes-from-the-bottom -->
 ### A dependency chain twenty deep
 

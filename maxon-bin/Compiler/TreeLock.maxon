@@ -736,7 +736,7 @@ function lockPathFor(identity FilePath) returns FilePath throws CompileError
 	let stdlibDir = try stdlibDirAbove(identity)
 	let checkoutRoot = try stdlibDir.parent() otherwise throw CompileError.stdlibNotFound
 	let name = try FilePath.from(LockFileName) otherwise panic("TreeLock: '{LockFileName}' is not a valid path component")
-	return checkoutRoot.join(name)
+	return checkoutRoot.joinPath(name)
 end 'lockPathFor'
 
 function claimPathFor(lockPath FilePath) returns FilePath
@@ -747,7 +747,7 @@ function leftoverPath(leftover LockLeftover, beside FilePath, unique String) ret
 	let directory = try beside.parent() otherwise panic("TreeLock.leftoverPath: {beside.toString()} sits beside its lock file, so it has a parent")
 	let prefix = leftover.prefix(lockNameOf(beside))
 	let name = try FilePath.from("{prefix}{unique}") otherwise panic("TreeLock.leftoverPath: '{prefix}{unique}' is not a valid path component")
-	return directory.join(name)
+	return directory.joinPath(name)
 end 'leftoverPath'
 
 function acquireUnderClaim(acquisition Acquisition, into LockHold) returns ExitCode
@@ -1476,7 +1476,7 @@ end 'lockKindOf'
 function lockNameOf(beside FilePath) returns String
 	let name = beside.filename()
 
-	return name.slice(name.startIndex(), length: name.count() - ClaimFileSuffix.count()) if name.endsWith(ClaimFileSuffix) else name
+	return name.sliceLength(name.startIndex(), length: name.count() - ClaimFileSuffix.count()) if name.endsWith(ClaimFileSuffix) else name
 end 'lockNameOf'
 
 enum LockPart

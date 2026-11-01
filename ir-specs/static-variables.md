@@ -1840,9 +1840,9 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
+    x64.movRegImm32 rdx, 0
     x64.leaRegGlobal rax, __data_Origins
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
@@ -1936,9 +1936,9 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
+    x64.movRegImm32 rdx, 0
     x64.leaRegGlobal rax, __data_Origins
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
@@ -2027,9 +2027,9 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 0
     arm64.leaGlobal x0, __data_Origins
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
     arm64.b.ls __im_slow
@@ -2118,9 +2118,9 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 0
     arm64.leaGlobal x0, __data_Origins
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
     arm64.b.ls __im_slow

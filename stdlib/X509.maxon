@@ -251,15 +251,13 @@ let x509ByteMask = 0xFF
 
 /// One AttributeTypeAndValue of a name.
 public type X509Attribute
-	var oid as String
-	var shortName as String
-	var hasShortName as bool
-	var value as String
-
 	/// The attribute type, dotted decimal, such as `2.5.4.3`.
-	public function oid() returns String
-		return oid
-	end 'oid'
+	public let oid as String
+	var storedShortName as String
+	var hasShortName as bool
+
+	/// The decoded text.
+	public let value as String
 
 	/// `CN`, `O`, `OU` or `C` for 2.5.4.3, 2.5.4.10, 2.5.4.11 and 2.5.4.6; `absent` for any other type.
 	public function shortName() returns String throws X509FieldError
@@ -267,79 +265,63 @@ public type X509Attribute
 			throw X509FieldError.absent
 		end 'unnamed'
 
-		return shortName
+		return storedShortName
 	end 'shortName'
-
-	/// The decoded text.
-	public function value() returns String
-		return value
-	end 'value'
 
 	static function create(oid ByteArray, value String) returns X509Attribute
 		if let shortName = try x509ShortName(oid) 'named'
-			return X509Attribute{oid: x509DottedOid(oid), shortName: shortName, hasShortName: true, value: value}
+			return X509Attribute{oid: x509DottedOid(oid), storedShortName: shortName, hasShortName: true, value: value}
 		end 'named'
 
-		return X509Attribute{oid: x509DottedOid(oid), shortName: "", hasShortName: false, value: value}
+		return X509Attribute{oid: x509DottedOid(oid), storedShortName: "", hasShortName: false, value: value}
 	end 'create'
 end 'X509Attribute'
 
 /// An issuer or subject name.
 public type X509Name
-	var der as ByteArray
-	var attributes as X509Attributes
+	var storedDer as ByteArray
+
+	/// Every attribute, its RDNs flattened in encoded order.
+	public let attributes as X509Attributes
 
 	/// The whole Name DER, tag and length included: what names are compared by.
 	public function der() returns ByteArray
-		return der
+		return storedDer
 	end 'der'
 
-	/// Every attribute, its RDNs flattened in encoded order.
-	public function attributes() returns X509Attributes
-		return attributes
-	end 'attributes'
-
 	static function create(der ByteArray, attributes X509Attributes) returns X509Name
-		return X509Name{der: der, attributes: attributes}
+		return X509Name{storedDer: der, attributes: attributes}
 	end 'create'
 end 'X509Name'
 
 /// A certificate's SubjectPublicKeyInfo.
 public type X509PublicKey
-	var algorithm as X509KeyAlgorithm
-	var der as ByteArray
-	var keyBytes as ByteArray
-
 	/// The key's algorithm.
-	public function algorithm() returns X509KeyAlgorithm
-		return algorithm
-	end 'algorithm'
+	public let algorithm as X509KeyAlgorithm
+	var storedDer as ByteArray
+	var storedKeyBytes as ByteArray
 
 	/// The whole SubjectPublicKeyInfo DER, the form `Rsa` takes.
 	public function der() returns ByteArray
-		return der
+		return storedDer
 	end 'der'
 
 	/// The subjectPublicKey: an uncompressed point, 32 Ed25519 bytes or an `RSAPublicKey` DER.
 	public function keyBytes() returns ByteArray
-		return keyBytes
+		return storedKeyBytes
 	end 'keyBytes'
 
 	static function create(algorithm X509KeyAlgorithm, der ByteArray, keyBytes ByteArray) returns X509PublicKey
-		return X509PublicKey{algorithm: algorithm, der: der, keyBytes: keyBytes}
+		return X509PublicKey{algorithm: algorithm, storedDer: der, storedKeyBytes: keyBytes}
 	end 'create'
 end 'X509PublicKey'
 
 /// A basicConstraints extension.
 public type X509BasicConstraints
-	var isCertificateAuthority as bool
-	var pathLength as X509PathLength
-	var hasPathLength as bool
-
 	/// Whether `cA` is true.
-	public function isCertificateAuthority() returns bool
-		return isCertificateAuthority
-	end 'isCertificateAuthority'
+	public let isCertificateAuthority as bool
+	var storedPathLength as X509PathLength
+	var hasPathLength as bool
 
 	/// The pathLenConstraint.
 	public function pathLength() returns X509PathLength throws X509FieldError
@@ -347,27 +329,27 @@ public type X509BasicConstraints
 			throw X509FieldError.absent
 		end 'unlimited'
 
-		return pathLength
+		return storedPathLength
 	end 'pathLength'
 
 	static function create(isCertificateAuthority bool, pathLength X509PathLength, hasPathLength bool) returns X509BasicConstraints
-		return X509BasicConstraints{isCertificateAuthority: isCertificateAuthority, pathLength: pathLength, hasPathLength: hasPathLength}
+		return X509BasicConstraints{isCertificateAuthority: isCertificateAuthority, storedPathLength: pathLength, hasPathLength: hasPathLength}
 	end 'create'
 end 'X509BasicConstraints'
 
 /// A subjectAltName extension's DNS names and IP addresses.
 public type X509SubjectAltName
-	var dnsNames = StringArray.create()
-	var ipAddresses = ByteArrays.create()
+	var storedDnsNames = StringArray.create()
+	var storedIpAddresses = ByteArrays.create()
 
 	/// The dNSName entries, in encoded order.
 	public function dnsNames() returns StringArray
-		return dnsNames
+		return storedDnsNames
 	end 'dnsNames'
 
 	/// The iPAddress entries, 4 or 16 bytes each, in encoded order.
 	public function ipAddresses() returns ByteArrays
-		return ipAddresses
+		return storedIpAddresses
 	end 'ipAddresses'
 
 	static function create() returns X509SubjectAltName
@@ -375,39 +357,39 @@ public type X509SubjectAltName
 	end 'create'
 
 	function addDnsName(name String)
-		dnsNames.push(name)
+		storedDnsNames.push(name)
 	end 'addDnsName'
 
 	function addIpAddress(address ByteArray)
-		ipAddresses.push(address)
+		storedIpAddresses.push(address)
 	end 'addIpAddress'
 end 'X509SubjectAltName'
 
 /// A nameConstraints extension's dNSName and iPAddress subtrees.
 public type X509NameConstraints
-	var permittedDnsNames = StringArray.create()
-	var excludedDnsNames = StringArray.create()
-	var permittedIpRanges = ByteArrays.create()
-	var excludedIpRanges = ByteArrays.create()
+	var storedPermittedDnsNames = StringArray.create()
+	var storedExcludedDnsNames = StringArray.create()
+	var storedPermittedIpRanges = ByteArrays.create()
+	var storedExcludedIpRanges = ByteArrays.create()
 
 	/// The dNSName bases of permittedSubtrees, as encoded.
 	public function permittedDnsNames() returns StringArray
-		return permittedDnsNames
+		return storedPermittedDnsNames
 	end 'permittedDnsNames'
 
 	/// The dNSName bases of excludedSubtrees, as encoded.
 	public function excludedDnsNames() returns StringArray
-		return excludedDnsNames
+		return storedExcludedDnsNames
 	end 'excludedDnsNames'
 
 	/// The iPAddress bases of permittedSubtrees: an address then a mask, 8 or 32 bytes.
 	public function permittedIpRanges() returns ByteArrays
-		return permittedIpRanges
+		return storedPermittedIpRanges
 	end 'permittedIpRanges'
 
 	/// The iPAddress bases of excludedSubtrees: an address then a mask, 8 or 32 bytes.
 	public function excludedIpRanges() returns ByteArrays
-		return excludedIpRanges
+		return storedExcludedIpRanges
 	end 'excludedIpRanges'
 
 	static function create() returns X509NameConstraints
@@ -416,26 +398,26 @@ public type X509NameConstraints
 
 	function addDnsName(name String, isPermitted bool)
 		if isPermitted 'permitted'
-			permittedDnsNames.push(name)
+			storedPermittedDnsNames.push(name)
 		end 'permitted' else 'excluded'
-			excludedDnsNames.push(name)
+			storedExcludedDnsNames.push(name)
 		end 'excluded'
 	end 'addDnsName'
 
 	function addIpRange(range ByteArray, isPermitted bool)
 		if isPermitted 'permitted'
-			permittedIpRanges.push(range)
+			storedPermittedIpRanges.push(range)
 		end 'permitted' else 'excluded'
-			excludedIpRanges.push(range)
+			storedExcludedIpRanges.push(range)
 		end 'excluded'
 	end 'addIpRange'
 
 	function constrainsDnsNames() returns bool
-		return not permittedDnsNames.isEmpty() or not excludedDnsNames.isEmpty()
+		return not storedPermittedDnsNames.isEmpty() or not storedExcludedDnsNames.isEmpty()
 	end 'constrainsDnsNames'
 
 	function constrainsIpAddresses() returns bool
-		return not permittedIpRanges.isEmpty() or not excludedIpRanges.isEmpty()
+		return not storedPermittedIpRanges.isEmpty() or not storedExcludedIpRanges.isEmpty()
 	end 'constrainsIpAddresses'
 end 'X509NameConstraints'
 
@@ -542,57 +524,42 @@ end 'X509Extensions'
 
 /// A decoded X.509 certificate.
 public type Certificate
-	var version as CertificateVersion
-	var serialNumber as ByteArray
-	var signatureAlgorithm as X509SignatureAlgorithm
-	var issuer as X509Name
-	var subject as X509Name
-	var notBefore as UnixSeconds
-	var notAfter as UnixSeconds
-	var publicKey as X509PublicKey
-	var extensions as X509Extensions
-	var tbsCertificate as ByteArray
-	var signature as ByteArray
-
 	/// 1 or 3.
-	public function version() returns CertificateVersion
-		return version
-	end 'version'
+	public let version as CertificateVersion
 
 	/// The content octets of the serialNumber INTEGER, as encoded: two's complement, of any sign and length.
-	public function serialNumber() returns ByteArray
-		return serialNumber
-	end 'serialNumber'
+	public let serialNumber as ByteArray
 
 	/// The algorithm the issuer signed with.
-	public function signatureAlgorithm() returns X509SignatureAlgorithm
-		return signatureAlgorithm
-	end 'signatureAlgorithm'
+	public let signatureAlgorithm as X509SignatureAlgorithm
 
 	/// The issuer's name.
-	public function issuer() returns X509Name
-		return issuer
-	end 'issuer'
-
-	/// The subject's name.
-	public function subject() returns X509Name
-		return subject
-	end 'subject'
+	public let issuer as X509Name
+	var storedSubject as X509Name
 
 	/// The start of the validity period.
-	public function notBefore() returns UnixSeconds
-		return notBefore
-	end 'notBefore'
+	public let notBefore as UnixSeconds
 
 	/// The end of the validity period, inclusive.
-	public function notAfter() returns UnixSeconds
-		return notAfter
-	end 'notAfter'
+	public let notAfter as UnixSeconds
+	var storedPublicKey as X509PublicKey
+	var extensions as X509Extensions
+
+	/// The whole TBSCertificate DER, tag and length included: the signed message.
+	public let tbsCertificate as ByteArray
+
+	/// The signatureValue BIT STRING's octets.
+	public let signature as ByteArray
 
 	/// The subject's public key.
 	public function publicKey() returns X509PublicKey
-		return publicKey
+		return storedPublicKey
 	end 'publicKey'
+
+	/// The subject's name.
+	public function subject() returns X509Name
+		return storedSubject
+	end 'subject'
 
 	/// The basicConstraints extension.
 	public function basicConstraints() returns X509BasicConstraints throws X509FieldError
@@ -676,29 +643,19 @@ public type Certificate
 		return extensions.nameConstraints
 	end 'nameConstraints'
 
-	/// The whole TBSCertificate DER, tag and length included: the signed message.
-	public function tbsCertificate() returns ByteArray
-		return tbsCertificate
-	end 'tbsCertificate'
-
-	/// The signatureValue BIT STRING's octets.
-	public function signature() returns ByteArray
-		return signature
-	end 'signature'
-
 	static function create(fields X509TbsFields, extensions X509Extensions, tbsCertificate ByteArray, signature ByteArray) returns Certificate
-		return Certificate{version: fields.version, serialNumber: fields.serialNumber, signatureAlgorithm: fields.signatureAlgorithm, issuer: fields.issuer, subject: fields.subject, notBefore: fields.notBefore, notAfter: fields.notAfter, publicKey: fields.publicKey, extensions: extensions, tbsCertificate: tbsCertificate, signature: signature}
+		return Certificate{version: fields.version, serialNumber: fields.serialNumber, signatureAlgorithm: fields.signatureAlgorithm, issuer: fields.issuer, storedSubject: fields.subject, notBefore: fields.notBefore, notAfter: fields.notAfter, storedPublicKey: fields.publicKey, extensions: extensions, tbsCertificate: tbsCertificate, signature: signature}
 	end 'create'
 end 'Certificate'
 
 type X509TbsFields
-	module var version as CertificateVersion
-	module var serialNumber as ByteArray
-	module var signatureAlgorithm as X509SignatureAlgorithm
-	module var issuer as X509Name
+	module let version as CertificateVersion
+	module let serialNumber as ByteArray
+	module let signatureAlgorithm as X509SignatureAlgorithm
+	module let issuer as X509Name
 	module var subject as X509Name
-	module var notBefore as UnixSeconds
-	module var notAfter as UnixSeconds
+	module let notBefore as UnixSeconds
+	module let notAfter as UnixSeconds
 	module var publicKey as X509PublicKey
 
 	static function create(version CertificateVersion, serialNumber ByteArray, signatureAlgorithm X509SignatureAlgorithm, issuer X509Name, subject X509Name, validity(UnixSeconds, UnixSeconds), publicKey X509PublicKey) returns X509TbsFields
@@ -727,7 +684,7 @@ type X509Reader
 	function element() returns ByteArray throws X509Error
 		let header = try der.peekHeader() otherwise throw X509Error.invalidEncoding
 
-		if header.tagNumber() >= x509HighTagNumber 'highTagNumber'
+		if header.tagNumber >= x509HighTagNumber 'highTagNumber'
 			throw X509Error.invalidEncoding
 		end 'highTagNumber'
 
@@ -804,7 +761,7 @@ type X509Reader
 	function readTime() returns UnixSeconds throws X509Error
 		let header = try der.peekHeader() otherwise throw X509Error.invalidEncoding
 
-		if header.tagClass() == DerTagClass.universal and header.tagNumber() == x509TagUtcTime 'utc'
+		if header.tagClass == DerTagClass.universal and header.tagNumber == x509TagUtcTime 'utc'
 			return try der.readUtcTime() otherwise throw X509Error.invalidEncoding
 		end 'utc'
 
@@ -1058,7 +1015,7 @@ public type X509
 
 		let signature = try X509Reader.over(try top.get(x509SignatureValuePart) otherwise panic("a certificate has three elements")).readBitString()
 
-		if signature.unusedBits() != 0 'partialOctet'
+		if signature.unusedBits != 0 'partialOctet'
 			throw X509Error.invalidEncoding
 		end 'partialOctet'
 
@@ -1528,7 +1485,7 @@ function x509PublicKey(element ByteArray) returns X509PublicKey throws X509Error
 	let bits = try X509Reader.over(key).readBitString()
 	let algorithm = try x509KeyAlgorithm(oid, parameters: parameters)
 
-	if bits.unusedBits() != 0 'partialOctet'
+	if bits.unusedBits != 0 'partialOctet'
 		throw X509Error.invalidEncoding
 	end 'partialOctet'
 
@@ -1999,7 +1956,7 @@ function x509Pool(ders ByteArrays, isRoot bool, excluded ByteArrays) returns X50
 end 'x509Pool'
 
 function x509IssuedBy(child Certificate, issuer Certificate) returns bool
-	if child.issuer().der() != issuer.subject().der() 'otherName'
+	if child.issuer.der() != issuer.subject().der() 'otherName'
 		return false
 	end 'otherName'
 
@@ -2019,11 +1976,11 @@ function x509Repeats(chain X509Chain, candidate X509Candidate) returns bool
 end 'x509Repeats'
 
 function x509CheckValidity(certificate Certificate, now UnixSeconds) throws X509VerifyError
-	if now < certificate.notBefore() 'early'
+	if now < certificate.notBefore 'early'
 		throw X509VerifyError.notYetValid
 	end 'early'
 
-	if now > certificate.notAfter() 'late'
+	if now > certificate.notAfter 'late'
 		throw X509VerifyError.expired
 	end 'late'
 end 'x509CheckValidity'
@@ -2033,7 +1990,7 @@ function x509CheckIssuer(issuer Certificate, below Count, leaf Certificate, host
 	let constraints = try issuer.basicConstraints() otherwise throw X509VerifyError.notAuthorizedToSign
 	let usages = try issuer.keyUsage() otherwise X509KeyUsages from [X509KeyUsage.keyCertSign]
 
-	if not constraints.isCertificateAuthority() or not usages.contains(X509KeyUsage.keyCertSign) 'notCa'
+	if not constraints.isCertificateAuthority or not usages.contains(X509KeyUsage.keyCertSign) 'notCa'
 		throw X509VerifyError.notAuthorizedToSign
 	end 'notCa'
 
@@ -2053,10 +2010,10 @@ end 'x509CheckIssuer'
 
 function x509CheckSignature(child Certificate, issuer Certificate) throws X509VerifyError
 	let key = issuer.publicKey()
-	let message = child.tbsCertificate()
-	let signature = child.signature()
+	let message = child.tbsCertificate
+	let signature = child.signature
 
-	let isValid = match child.signatureAlgorithm() 'verify'
+	let isValid = match child.signatureAlgorithm 'verify'
 		ecdsaWithSha256 gives try x509VerifyEcdsa(key, curve: EcdsaCurve.p256, message: message, signature: signature)
 		ecdsaWithSha384 gives try x509VerifyEcdsa(key, curve: EcdsaCurve.p384, message: message, signature: signature)
 		sha256WithRsaEncryption gives try x509VerifyRsa(key, hash: HashAlgorithm.sha256, isPss: false, message: message, signature: signature)
@@ -2074,7 +2031,7 @@ function x509CheckSignature(child Certificate, issuer Certificate) throws X509Ve
 end 'x509CheckSignature'
 
 function x509VerifyEcdsa(key X509PublicKey, curve EcdsaCurve, message ByteArray, signature ByteArray) returns bool throws X509VerifyError
-	let keyCurve = match key.algorithm() 'curve'
+	let keyCurve = match key.algorithm 'curve'
 		ecP256 gives EcdsaCurve.p256
 		ecP384 gives EcdsaCurve.p384
 		default throws X509VerifyError.badSignature
@@ -2088,7 +2045,7 @@ function x509VerifyEcdsa(key X509PublicKey, curve EcdsaCurve, message ByteArray,
 end 'x509VerifyEcdsa'
 
 function x509VerifyRsa(key X509PublicKey, hash HashAlgorithm, isPss bool, message ByteArray, signature ByteArray) returns bool throws X509VerifyError
-	if key.algorithm() != X509KeyAlgorithm.rsa 'family'
+	if key.algorithm != X509KeyAlgorithm.rsa 'family'
 		throw X509VerifyError.badSignature
 	end 'family'
 
@@ -2107,7 +2064,7 @@ function x509VerifyRsa(key X509PublicKey, hash HashAlgorithm, isPss bool, messag
 end 'x509VerifyRsa'
 
 function x509VerifyEd25519(key X509PublicKey, message ByteArray, signature ByteArray) returns bool throws X509VerifyError
-	if key.algorithm() != X509KeyAlgorithm.ed25519 'family'
+	if key.algorithm != X509KeyAlgorithm.ed25519 'family'
 		throw X509VerifyError.badSignature
 	end 'family'
 

@@ -75,7 +75,7 @@ public type Stdin
 
 			let lineBytes = takePrefix(nl)
 			discardOne()
-			return String.from(stripTrailingCR(lineBytes))
+			return String.from(stripTrailingCRBytes(lineBytes))
 		end 'fillLoop'
 
 		// EOF reached. Surface any trailing partial line; subsequent calls throw.
@@ -90,7 +90,7 @@ public type Stdin
 
 		let lineBytes = takePrefix(nl)
 		discardOne()
-		return String.from(stripTrailingCR(lineBytes))
+		return String.from(stripTrailingCRBytes(lineBytes))
 	end 'readLine'
 
 	/// Read up to `n` bytes. Returns fewer than `n` only when EOF is reached
@@ -177,7 +177,7 @@ end 'Stdin'
 
 // Strip a single trailing '\r' (byte value 13) so CRLF inputs come back as
 // just the line content. LF-terminated lines pass through unchanged.
-function stripTrailingCR(bytes ByteArray) returns ByteArray
+function stripTrailingCRBytes(bytes ByteArray) returns ByteArray
 	let len = bytes.count()
 
 	if len == 0 'empty'
@@ -185,7 +185,7 @@ function stripTrailingCR(bytes ByteArray) returns ByteArray
 	end 'empty'
 
 	let last = try bytes.get(len - 1) otherwise 'getErr'
-		panic("stripTrailingCR: len-1 bounds-checked by len > 0")
+		panic("stripTrailingCRBytes: len-1 bounds-checked by len > 0")
 	end 'getErr'
 
 	if last != 13 'noCR'
@@ -197,7 +197,7 @@ function stripTrailingCR(bytes ByteArray) returns ByteArray
 
 	while i < len - 1 'copy'
 		let b = try bytes.get(i) otherwise 'getErr'
-			panic("stripTrailingCR: index bounds-checked by loop guard")
+			panic("stripTrailingCRBytes: index bounds-checked by loop guard")
 		end 'getErr'
 
 		out.push(b)
@@ -205,7 +205,7 @@ function stripTrailingCR(bytes ByteArray) returns ByteArray
 	end 'copy'
 
 	return out
-end 'stripTrailingCR'
+end 'stripTrailingCRBytes'
 
 /// Convenience factory namespace. `Console.stdin()` is the typical entry point.
 public type Console

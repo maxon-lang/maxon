@@ -1147,7 +1147,7 @@ error E3005: <fragment>:7:2: cannot assign a value of type 'bool' to variable 'r
 ```maxon
 typealias Ratio = float(0.0 to 1.0)
 
-function bump(r Ratio)
+function bump(r mutable Ratio)
 	r = 0.25
 end 'bump'
 
@@ -1468,13 +1468,14 @@ error E3005: <fragment>:7:3: cannot assign a value of type 'bool' to variable 'd
 ```maxon
 typealias Ratio = float(0.0 to 1.0)
 
-function f(r Ratio) returns Ratio
+function f(r mutable Ratio) returns Ratio
 	r = true
 	return r
 end 'f'
 
 function main() returns ExitCode
-	print("{f(0.5)}")
+	var r = 0.5 as Ratio
+	print("{f(r)}")
 	return 0
 end 'main'
 ```

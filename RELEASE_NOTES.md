@@ -21,10 +21,6 @@ release's version as its heading when the release is cut.
   child only needs to block on stdin, use `InputSource.hold`.
 - A `with` list names at most 64 type arguments; a longer one is E2015.
   Fix: group the arguments into a smaller number of types, such as a record type passed as one argument.
-- A call whose argument wears an alias binds the overload declared over that alias, even where another
-  overload takes the argument's primitive type exactly: beside `f(n Small)` and `f(n Integer)`,
-  `f(x as Small)` binds `f(n Small)`.
-  Fix: cast the argument to the parameter type of the overload you want, such as `f(x as Integer)`.
 - `Vector` is renamed `FixedArray`, and its iterator typealias `Vector.VectorIter` is
   `FixedArray.FixedArrayIter`; `Vector with 3 Int` is an unknown type (E2010).
   Fix: rename `Vector` to `FixedArray` and `VectorIter` to `FixedArrayIter`.
@@ -131,18 +127,6 @@ release's version as its heading when the release is cut.
 - A `?`, `;`, `|`, `&`, `$`, `%`, `~`, `^`, backtick, control character or non-ASCII character outside a
   string literal or a comment is E1010 (`Unexpected character`); the lexer skipped it before.
   Fix: delete the character, or move it into a string literal or a comment.
-- A `spawn` of an overloaded factory and an `async` call of an overloaded function bind the overload their
-  arguments fit, as any call does: two overloads that fit equally are E3007, and the bound overload alone
-  decides which arguments move (a promise included) and which type arguments a generic factory fixes.
-  Fix: give the arguments types, or labels, that fit exactly one overload.
-- Beside a generic function of the same name, a non-generic overload binds a literal, a negated literal, a
-  loop counter or a value computed from them that lies inside its parameter's alias, and the generic binds
-  one known to leave it.
-  Fix: cast the argument to the type the generic should take (`describe(5 as Other)`).
-- A literal cast to the alias of the non-generic overload it already binds (`describe(5 as Score)` beside a
-  generic `describe`) is E3010.
-  Fix: drop the cast.
-
 - A fresh tuple or record that holds a record a `var` of the function, or a module `var`, may still write
   is E3078 when it is stored into a `let` field, a `let` payload or a `readonly` element, or passed to a
   parameter that stores it there (`Frozen.create((Box.create(1), id(p)))` with `p` a `var` written later);
@@ -150,7 +134,7 @@ release's version as its heading when the release is cut.
   or record holding a module `var`'s record that is written later is E3188 (`let t = (Box.create(1), gBox)`).
   Fix: hold a `.clone()` of the record, or a record of its own.
 - A function value fits a function type only by variance: a read-only parameter may be wider than the
-  type's, a parameter the program writes by reference must be the same type, and a result may be narrower.
+  type's, a `mutable` parameter must be the same type, and a result may be narrower.
   A function whose read-only parameter is narrower, whose written parameter differs, or whose result is
   wider than the function type it is stored or passed as — a ranged alias, or a bare `int` in the type's
   declaration, against a function over a narrower alias — is E3005, or E3009 as an `as` cast.
@@ -288,6 +272,69 @@ release's version as its heading when the release is cut.
   `FixedArray` `get` or `set` indexed by it that lands inside the size cannot throw, and neither can a `/`
   or `mod` by one that excludes 0, so a `try` on either is E3055.
   Fix: drop the `try … otherwise` and write the access or the division bare.
+- Arguments and right-hand sides run before the target or receiver path is resolved, and an assignment
+  counts the new value, stores it, then releases the old one. In `x.inner.name = x.dropInner()` and in
+  `x.inner.add(x.dropInner())`, where the call rebinds `x.inner`, the write or the call lands in the
+  `x.inner` that exists after the call runs.
+  Fix: a program that depended on the path being resolved first puts the call on its own line before the
+  statement, which makes the order explicit.
+- A parameter is a `let` binding, so reassigning one — by assignment, by storing a fresh record in it, or by
+  a method that writes its value in place such as `s.append("!")` over a `String` parameter — is E2013.
+  Nothing is inferred any more: a parameter is by reference only where it is marked `mutable` before its type.
+  Fix: write `mutable` on a value-type parameter (a number, `bool`, an enum or `String`) the function must
+  reassign, as in `function bump(n mutable Count)`, or copy the parameter into a local `var` and reassign the
+  local. A record-type parameter is never rebound; copy it into a local `var`.
+- A `mutable` parameter takes a `var`, a field or an element that is writable: a literal, an expression or a
+  `let` handed to it is E3159, where a literal or an expression was given a temporary. A function with a
+  `mutable` parameter fits only a function type that spells `mutable` at that position (E3005), and a
+  message or factory parameter cannot be `mutable` (E2076).
+  Fix: pass a `var`; write the marker in the function type, as in `typealias Step = function(mutable Count)`;
+  return the new value from a message or a factory instead of writing a parameter.
+- Maxon has no overloading. A function name is declared once per directory, a method name once per type and
+  an interface requirement name once per interface, so a second function of one name, a `static` and an
+  instance method of one name, a method of a type and one its `extension` adds, and a field and a method of
+  one type sharing a name are each E3006. E3007 and E3176 no longer exist.
+  Fix: give the second declaration its own name, or fold an optional argument into one declaration with a
+  default parameter.
+- Standard-library operations that were overloads have one name per form. `Array.contains(sequence)` is
+  `containsSequence`, `Array.sort(cmp)` is `sortBy`, `Array.sortUnstable(cmp)` is `sortUnstableBy`,
+  `FilePath.join(FilePath)` is `joinPath`, `Hasher.combine(bytes)` is `combineBytes`,
+  `Hasher.combined(state, bytes:)` is `combinedBytes`, `String.contains(Character)` is `containsCharacter`,
+  `String.slice(start, length:)` is `sliceLength`, `TlsStream.send(ByteArray)` is `sendBytes` and
+  `Iterable.contains(predicate)` is `containsWhere`. `Subprocess.run`, `TcpClient.connect`, `String.trim`,
+  `String.trimStart` and `String.trimEnd` are one declaration each with default parameters.
+  Fix: write the new name at each call; the arguments are unchanged.
+- The standard library's accessors over stored values are fields, read without parentheses, and calling one
+  is E4006 (`Type 'PemBlock' has no method named 'label'`): `DerHeader.tagClass`, `tagNumber` and `length`,
+  `DerBitString.unusedBits`, `PemBlock.label` and `bytes`, `URL.scheme` and `path`, `X509Attribute.oid` and
+  `value`, `X509Name.attributes`, `X509PublicKey.algorithm`, `X509BasicConstraints.isCertificateAuthority`,
+  the `Certificate` fields `version`, `serialNumber`, `signatureAlgorithm`, `issuer`, `notBefore`,
+  `notAfter`, `tbsCertificate` and `signature`, and the TLS handshake message and key-schedule types
+  under `stdlib/helpers/tls`.
+  Fix: drop the `()`, as in `block.label` and `certificate.issuer`.
+- A top-level name is declared once per directory, whatever its kind and visibility: a `type`, `enum`,
+  `union`, `interface`, `typealias`, top-level `let` or `var`, and `function` share one namespace, private or
+  exported and generic or not. A second declaration in a directory is E3006 (`duplicate definition of
+  'Point' — already declared as `type Point``), including two files of one directory that each declare a
+  file-private `helper` and a `type Point` beside a `function Point`. Directories are separate scopes, and
+  locals and parameters may shadow a top-level name.
+  Fix: rename one declaration, or declare the name once at `module` scope and use it from both files.
+- A bare name resolves the same way for every kind of declaration: the reading file's own directory's
+  declaration, else the project root's, else the one declaration the file may name, else it is ambiguous
+  (E3063 for a type name, E3095 for a function or a binding). A bare name that the project root declares and the
+  reader's own directory also declares now means the reader's own, a reader's own declaration no longer
+  competes with another directory's, and a program's own names shadow the standard library's and the
+  runtime tier's. E3063 no longer ends `or rename this file's own
+  declaration`.
+  Fix: write `export.name` for the project root's declaration and `dir.name` for another directory's.
+- A bare read of a name that the reader's directory declares as a function means that function, where it
+  read another directory's exported `let` of the name.
+  Fix: write `dir.name` to read the `let`; another directory's top-level `let` or `var` is read as
+  `alpha.LIMIT`.
+- A `String` or `Character` interpolated with `q` (`"{name:q}"`) prints between quotes with a literal's
+  escapes, where the specifier left it plain: `{`/`}` are `\{`/`\}` in a `String`, control characters are
+  `\uXXXX`, and a width pads the quoted text (`{name:8q}`).
+  Fix: drop `:q` where the plain text is wanted.
 
 ## 0.5.0 — 2026-10-08
 

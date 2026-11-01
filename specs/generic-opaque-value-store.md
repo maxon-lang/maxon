@@ -1377,8 +1377,8 @@ end 'main'
 1 1
 ```
 
-<!-- test: a-static-reassigning-its-parameter-from-a-borrow-takes-the-call-sites-descriptor -->
-A static that does not return `Self` reassigns its type-parameter parameter from a field of another instance. The reference it takes is read through the descriptor `StrCell.adopt` hands the shared body, and the record the field names is still live afterwards.
+<!-- test: a-static-reassigning-a-copy-of-its-parameter-from-a-borrow-takes-the-call-sites-descriptor -->
+A static that does not return `Self` copies its type-parameter parameter into a local and reassigns the local from a field of another instance. The reference it takes is read through the descriptor `StrCell.adopt` hands the shared body, and the record the field names is still live afterwards.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -1387,9 +1387,10 @@ type Cell uses T
 		return Self{v: v}
 	end 'make'
 
-	static function adopt(v T, other Self) returns bool
-		v = other.v
-		return true
+	static function adopt(v T, other Self) returns T
+		var held = v
+		held = other.v
+		return held
 	end 'adopt'
 end 'Cell'
 
@@ -1398,7 +1399,7 @@ typealias StrCell = Cell with String
 function main() returns ExitCode
 	let src = StrCell.make("source {40 + 2} value long enough for a heap record")
 	let adopted = StrCell.adopt("dropped {40 + 2} value long enough for a heap record", other: src)
-	print("{src.v} {adopted}\n")
+	print("{src.v} {adopted == src.v}\n")
 	return 0
 end 'main'
 ```
@@ -1410,7 +1411,7 @@ source 42 value long enough for a heap record true
 ```
 
 <!-- test: a-static-handing-a-local-to-a-by-reference-parameter-takes-the-call-sites-descriptor -->
-A static that does not return `Self` hands a local holding a type-parameter value to an instance method of another instance that takes it by reference. The static takes the descriptor from its call site and hands it on to that method.
+A static that does not return `Self` rebinds a local holding a type-parameter value to what an instance method of another instance returns. The static takes the descriptor from its call site and hands it on to that method.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -1419,13 +1420,13 @@ type Cell uses T
 		return Self{v: v}
 	end 'make'
 
-	function setOnce(dest T)
-		dest = self.v
-	end 'setOnce'
+	function fetch() returns T
+		return self.v
+	end 'fetch'
 
 	static function viaLocal(other Self) returns T
 		var x = other.v
-		other.setOnce(x)
+		x = other.fetch()
 		return x
 	end 'viaLocal'
 end 'Cell'
@@ -1446,7 +1447,7 @@ payload 42 value long enough for a heap record payload 42 value long enough for 
 ```
 
 <!-- test: a-static-handing-a-field-to-a-by-reference-parameter-takes-the-call-sites-descriptor -->
-A static that does not return `Self` hands a field of another instance to an instance method that takes it by reference. The static takes the descriptor from its call site and hands it on to that method.
+A static that does not return `Self` stores what an instance method of one instance returns into a field of another instance. The static takes the descriptor from its call site and hands it on to that method.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -1455,12 +1456,12 @@ type Cell uses T
 		return Self{v: v}
 	end 'make'
 
-	function setOnce(dest T)
-		dest = self.v
-	end 'setOnce'
+	function fetch() returns T
+		return self.v
+	end 'fetch'
 
 	static function poke(into Self, donor Self)
-		into.setOnce(donor.v)
+		donor.v = into.fetch()
 	end 'poke'
 end 'Cell'
 
@@ -1468,7 +1469,7 @@ typealias StrCell = Cell with String
 
 function main() returns ExitCode
 	var src = StrCell.make("source {40 + 2} value long enough for a heap record")
-	var dst = StrCell.make("target {40 + 2} value long enough for a heap record")
+	let dst = StrCell.make("target {40 + 2} value long enough for a heap record")
 	StrCell.poke(dst, donor: src)
 	print("{src.v} {dst.v}\n")
 	return 0
@@ -1502,13 +1503,13 @@ type Cell uses T
 		return Self{v: v}
 	end 'make'
 
-	function setOnce(dest T)
-		dest = self.v
-	end 'setOnce'
+	function fetch() returns T
+		return self.v
+	end 'fetch'
 
 	static function viaLocal(other Self) returns T
 		var x = other.v
-		other.setOnce(x)
+		x = other.fetch()
 		return x
 	end 'viaLocal'
 end 'Cell'
@@ -1534,7 +1535,7 @@ A static that does not return `Self` reads `sizeof` of the type parameter and al
 ```maxon
 typealias Count = int(0 to 1000)
 
-function bump(n Count)
+function bump(n mutable Count)
 	n = n + 1
 end 'bump'
 
@@ -1566,59 +1567,24 @@ end 'main'
 true 2
 ```
 
-<!-- test: a-call-reaching-a-generic-and-a-concrete-declaration-binds-each-by-its-own-convention -->
-A name reaches both a generic function that reassigns its parameter and a concrete function of the same name; each call binds the declaration its arguments select and passes each argument by that declaration's convention.
+<!-- test: a-concrete-function-that-reassigns-and-a-generic-one-that-does-not -->
+A concrete function that reassigns its parameter and a generic function that does not; the concrete call is handed the caller's storage and the generic call its argument's value.
 ```maxon
 typealias Count = int(0 to 1000)
 
-function settle(dest T, src T) uses T
-	dest = src
-end 'settle'
-
-function settle(dest Count, src Count) returns Count
-	return dest + src
-end 'settle'
-
-function seed() returns Count
-	return 2
-end 'seed'
-
-function main() returns ExitCode
-	var target = "target"
-	let source = "source"
-	settle(target, src: source)
-	var left = 1 as Count
-	let right = seed()
-	print("{target} {settle(left, src: right)}\n")
-	left = 3
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-source 3
-```
-
-<!-- test: a-call-reaching-a-concrete-declaration-that-reassigns-and-a-generic-one-that-does-not -->
-A name reaches both a concrete function that reassigns its parameter and a generic function of the same name that does not; the concrete call is handed the caller's storage and the generic call its argument's value.
-```maxon
-typealias Count = int(0 to 1000)
-
-function bump(dest Count)
+function bump(dest mutable Count)
 	dest = dest + 1
 end 'bump'
 
-function bump(dest T) uses T returns T
+function bumpAny(dest T) uses T returns T
 	return dest
-end 'bump'
+end 'bumpAny'
 
 function main() returns ExitCode
 	var n = 5 as Count
 	bump(n)
 	var s = "word"
-	print("{bump(s)} {n}\n")
+	print("{bumpAny(s)} {n}\n")
 	s = "done"
 	return 0
 end 'main'
@@ -2192,8 +2158,8 @@ end 'main'
 first payload long enough to allocate
 ```
 
-<!-- test: a-self-returning-static-built-from-a-reassigned-parameter-is-served -->
-The same record built from a parameter that the body reassigns from a field of another instance.
+<!-- test: a-self-returning-static-built-from-a-reassigned-copy-of-a-parameter-is-served -->
+The same record built from a copy of the parameter that the body reassigns from a field of another instance.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -2203,8 +2169,9 @@ type Cell uses T
 	end 'make'
 
 	static function adopt(v T, other Self) returns Self
-		v = other.v
-		return Self{v: v}
+		var held = v
+		held = other.v
+		return Self{v: held}
 	end 'adopt'
 end 'Cell'
 
@@ -2299,121 +2266,49 @@ fourth value long enough to allocate / fallback label long enough to allocate
 overwrite payload long enough to allocate xxxxxxxx
 ```
 
-<!-- test: a-generic-functions-by-reference-parameter-takes-the-callers-cell -->
-A generic function that reassigns its type-parameter parameter is handed the caller's storage, whether the argument is a local, a value computed at the call, or a ranged integer.
-```maxon
-typealias Count = int(0 to 1000)
-
-function overwrite(dest T, with T) uses T
-	dest = with
-end 'overwrite'
-
-function swapIn(x T, y T) uses T returns T
-	var held = x
-	overwrite(held, with: y)
-	return held
-end 'swapIn'
-
-function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
-	sb.append(a)
-	sb.append(b)
-	return sb.build()
-end 'heapString'
-
-function main() returns ExitCode
-	let first = heapString("first payload ", b: "long enough to allocate")
-	let second = heapString("second payload ", b: "long enough to allocate")
-	print("{swapIn(first, y: second)}\n")
-	print("{swapIn(3 as Count, y: 7 as Count)}\n")
-	var s = heapString("literal target ", b: "long enough to allocate")
-	overwrite(s, with: heapString("rvalue payload ", b: "long enough to allocate"))
-	print("{s}\n")
-	print("{first} {second}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-second payload long enough to allocate
-7
-rvalue payload long enough to allocate
-first payload long enough to allocate second payload long enough to allocate
-```
-
-<!-- test: error.a-let-handed-to-a-reassigned-parameter-inside-a-generic-function-is-reported-once-under-its-own-name -->
-A generic function instantiated twice hands a `let` to a generic function that reassigns its parameter, and the refusal is reported once, naming the generic function.
-```maxon
-typealias Count = int(0 to 1000)
-
-function overwrite(dest T, with T) uses T
-	dest = with
-end 'overwrite'
-
-function swapIn(v T) uses T returns T
-	let x = v
-	overwrite(x, with: v)
-	return x
-end 'swapIn'
-
-function main() returns ExitCode
-	let t = "text"
-	print("{swapIn(t)} {swapIn(4 as Count)}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:10:2: cannot pass 'x', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in swapIn); pass a clone()
-```
-
-<!-- test: two-files-private-generic-functions-of-one-name-each-keep-their-own-by-reference-parameter -->
-Two files each declare a private generic function of the same name, and each reassigns a different parameter; each call hands over the parameter its own file's function reassigns.
+<!-- test: error.two-files-of-one-directory-private-generic-functions-of-one-name-collide -->
+Two files of one directory each declare a private generic function of the same name, and each returns a different parameter; the directory is the scope, so the second declaration is a duplicate.
 ```maxon
 // --- file: a.maxon
-function settle(dest T, src T) uses T
-	dest = src
+function settle(src T) uses T returns T
+	return src
 end 'settle'
 
 export function fromA() returns String
 	var s = "a before"
-	var w = "a after"
-	settle(s, src: w)
+	let w = "a after"
+	s = settle(w)
 	return s
 end 'fromA'
 
 // --- file: main.maxon
-function settle(dest T, src T) uses T
-	src = dest
+function settle(dest T) uses T returns T
+	return dest
 end 'settle'
 
 function main() returns ExitCode
-	var s = "b dest"
+	let s = "b dest"
 	var w = "b src"
-	settle(s, src: w)
+	w = settle(s)
 	print("{w} / {fromA()}\n")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-b dest / a after
+```maxoncstderr
+error E3006: <fragment>:15:10: duplicate definition of 'settle' — already declared as `function settle`
 ```
 
-<!-- test: a-private-generic-function-and-another-files-private-concrete-one-of-one-name-each-bind-their-own-calls -->
-One file declares a private generic function that reassigns a parameter, and another file declares a private non-generic function of the same name; each call reaches only the declaration its own file can see.
+<!-- test: error.a-private-generic-function-and-a-later-files-private-concrete-one-of-one-directory-and-name-collide -->
+One file declares a private generic function that returns a parameter, and a later file of the same directory declares a private non-generic function of the same name; the directory is the scope, so the second declaration is a duplicate.
 ```maxon
 // --- file: b.maxon
-function swap(a T, b T) uses T
-	a = b
+function swap(b T) uses T returns T
+	return b
 end 'swap'
 
 export function fromB() returns String
 	var s = "b1"
-	swap(s, b: "b2")
+	s = swap("b2")
 	return s
 end 'fromB'
 
@@ -2430,15 +2325,112 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```maxoncstderr
+error E3006: <fragment>:16:10: duplicate definition of 'swap' — already declared as `function swap`
+```
+
+<!-- test: error.a-private-generic-function-and-the-next-files-private-concrete-one-of-one-name-collide -->
+A private generic function in `a.maxon` and a private non-generic function of the same name in `b.maxon`, one directory: the second declaration is a duplicate.
+```maxon
+// --- file: a.maxon
+function twice(a T) uses T returns T
+	return a
+end 'twice'
+
+export function fromA() returns String
+	return twice("a")
+end 'fromA'
+
+// --- file: b.maxon
+typealias Reps = int(0 to 100)
+
+function twice(b Reps) returns Reps
+	return b + b
+end 'twice'
+
+export function fromB() returns String
+	return "{twice(4)}"
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{fromA()} {fromB()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:14:10: duplicate definition of 'twice' — already declared as `function twice`
+```
+
+<!-- test: error.a-private-concrete-function-and-the-next-files-private-generic-one-of-one-name-collide -->
+A private non-generic function in `a.maxon` and a private generic function of the same name in `b.maxon`, one directory: the second declaration is a duplicate.
+```maxon
+// --- file: a.maxon
+typealias Reps = int(0 to 100)
+
+function twice(a Reps) returns Reps
+	return a + a
+end 'twice'
+
+export function fromA() returns String
+	return "{twice(4)}"
+end 'fromA'
+
+// --- file: b.maxon
+function twice(b T) uses T returns T
+	return b
+end 'twice'
+
+export function fromB() returns String
+	return twice("b")
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{fromA()} {fromB()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:14:10: duplicate definition of 'twice' — already declared as `function twice`
+```
+
+<!-- test: two-directories-each-keep-their-own-private-generic-function-of-one-name -->
+Two directories each declare a private generic function `twice`; each directory is its own scope, so each call reaches its own directory's function.
+```maxon
+// --- file: left/left.maxon
+function twice(a T) uses T returns T
+	return a
+end 'twice'
+
+export function fromLeft() returns String
+	return twice("left")
+end 'fromLeft'
+
+// --- file: right/right.maxon
+function twice(b T) uses T returns T
+	return b
+end 'twice'
+
+export function fromRight() returns String
+	return twice("right")
+end 'fromRight'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{fromLeft()} {fromRight()}\n")
+	return 0
+end 'main'
+```
 ```exitcode
 0
 ```
 ```stdout
-6 b2
+left right
 ```
 
-<!-- test: a-reassigned-parameter-stored-by-a-static-that-also-stores-a-field-is-released -->
-A static that reassigns its parameter from a field of another instance, on a path that does not return the other field, releases what it dropped.
+<!-- test: a-reassigned-copy-of-a-parameter-stored-by-a-static-that-also-stores-a-field-is-released -->
+A static that reassigns a copy of its parameter from a field of another instance, on a path that does not return the other field, releases what it dropped.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -2448,13 +2440,14 @@ type Cell uses T
 	end 'make'
 
 	static function adopt(v T, other Self, flag bool) returns Self
-		v = other.v
+		var held = v
+		held = other.v
 
 		if flag 'direct'
 			return Self{v: other.v}
 		end 'direct'
 
-		return Self{v: v}
+		return Self{v: held}
 	end 'adopt'
 end 'Cell'
 
@@ -2590,57 +2583,6 @@ source payload long enough to allocate
 overwrite payload long enough to allocate xxxxxxxx
 ```
 
-<!-- test: a-local-rebound-through-a-by-reference-argument-is-stored-as-rebound -->
-A local passed to a method whose parameter is reassigned holds the reassigned value when the static stores it.
-```maxon
-type Cell uses T
-	export var v as T
-
-	static function make(v T) returns Self
-		return Self{v: v}
-	end 'make'
-
-	function overwrite(dest T)
-		dest = self.v
-	end 'overwrite'
-
-	static function adopt(v T, other Self) returns Self
-		var x = v
-		other.overwrite(x)
-		return Self{v: x}
-	end 'adopt'
-end 'Cell'
-
-typealias StrCell = Cell with String
-
-function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
-	sb.append(a)
-	sb.append(b)
-	return sb.build()
-end 'heapString'
-
-function build() returns StrCell
-	let src = StrCell.make(heapString("source payload ", b: "long enough to allocate"))
-	return StrCell.adopt(heapString("dropped payload ", b: "long enough to allocate"), other: src)
-end 'build'
-
-function main() returns ExitCode
-	let c = build()
-	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
-	print("{c.v}\n")
-	print("{noise}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-source payload long enough to allocate
-overwrite payload long enough to allocate xxxxxxxx
-```
-
 <!-- test: a-long-chain-of-reassigned-locals-compiles-in-linear-time -->
 Deciding what a record literal's field holds costs one visit per local, however each local is rebound.
 ```maxon
@@ -2715,93 +2657,6 @@ end 'main'
 ```
 ```stdout
 payload
-```
-
-<!-- test: a-by-reference-parameter-at-a-ranged-int-instantiation-takes-a-local-and-a-literal -->
-A method that reassigns its type-parameter parameter, instantiated at a ranged `int`, is handed a local and a literal: the local receives the reassigned value and the literal's temporary is range-checked as a value.
-```maxon
-typealias Count = int(0 to 1000)
-
-type Box uses T
-	export var v as T
-
-	static function make(v T) returns Self
-		return Self{v: v}
-	end 'make'
-
-	function setOnce(dest T)
-		dest = self.v
-	end 'setOnce'
-end 'Box'
-
-typealias CountBox = Box with Count
-
-function main() returns ExitCode
-	let b = CountBox.make(10)
-	var s = 20 as Count
-	b.setOnce(s)
-	b.setOnce(160)
-	print("once {s}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-once 10
-```
-
-<!-- test: error.an-out-of-range-literal-at-a-generic-byref-param-is-a-compile-error -->
-A method that reassigns its type-parameter parameter, instantiated at a ranged `int`, is handed a literal outside that range, and the literal is refused where it is written, as at a by-value parameter.
-```maxon
-typealias Count = int(0 to 1000)
-
-type Box uses T
-	export var v as T
-
-	static function make(v T) returns Self
-		return Self{v: v}
-	end 'make'
-
-	function setOnce(dest T)
-		dest = self.v
-	end 'setOnce'
-end 'Box'
-
-typealias CountBox = Box with Count
-
-function main() returns ExitCode
-	let b = CountBox.make(10)
-	b.setOnce(2000)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:20:4: Value 2000 is outside the range of 'Count' (int(0 to 1000))
-```
-
-<!-- test: a-generic-type-that-is-never-instantiated-may-reassign-its-parameter -->
-A generic type the program never instantiates declares a method that reassigns its type-parameter parameter; the program still compiles and runs.
-```maxon
-type Lonely uses T
-	export var v as T
-
-	function setOnce(dest T)
-		dest = self.v
-	end 'setOnce'
-end 'Lonely'
-
-function main() returns ExitCode
-	print("ok\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-ok
 ```
 
 <!-- test: a-local-named-like-the-generic-type-is-not-the-type -->
@@ -5627,8 +5482,8 @@ first 42 value long enough for a heap record second 43 value long enough for a h
 first 42 value long enough for a heap record
 ```
 
-<!-- test: an-overloaded-bare-static-infers-its-instance-from-the-declaration-the-call-binds -->
-Two statics of one name, and the call binds the one whose parameters its arguments fit: the instance is inferred from that declaration, so the result is an `Integer` in a closure and outside it.
+<!-- test: a-bare-static-infers-its-instance-from-its-declaration -->
+The instance is inferred from the declaration of the static the call names, so the result is an `Integer` in a closure and outside it.
 ```maxon
 type Holder uses T where T is Equatable
 	var v as T
@@ -5645,9 +5500,9 @@ type Holder uses T where T is Equatable
 		return a
 	end 'pick'
 
-	static function pick(a T) returns T
+	static function pickOne(a T) returns T
 		return a
-	end 'pick'
+	end 'pickOne'
 end 'Holder'
 
 function main() returns ExitCode
@@ -5664,47 +5519,6 @@ end 'main'
 ```stdout
 1 2
 1 2
-```
-
-<!-- test: an-overloaded-static-through-an-alias-whose-overloads-return-different-types-is-typed-by-the-bound-one -->
-The two overloads disagree about what they return, and the call binds one of them: its result is typed by that declaration read through the alias.
-```maxon
-type Holder uses T where T is Equatable
-	export var v as T
-
-	static function create(v T) returns Self
-		return Self{v: v}
-	end 'create'
-
-	static function pick(a T, b T) returns T
-		if a == b 'same'
-			return b
-		end 'same'
-
-		return a
-	end 'pick'
-
-	static function pick(c Integer) returns Integer
-		return c
-	end 'pick'
-end 'Holder'
-
-typealias Integer = int(i64.min to i64.max)
-typealias IntHolder = Holder with Integer
-
-function main() returns ExitCode
-	let xs = [1, 2]
-	let ys = xs.map(function(n) gives IntHolder.pick(n, b: 1))
-	let h = IntHolder.pick(9)
-	print("{try ys.get(0) otherwise 0} {try ys.get(1) otherwise 0} {h}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1 2 9
 ```
 
 <!-- test: a-static-returning-a-bare-generic-type-is-read-in-the-callees-scope-through-the-alias -->
@@ -5997,42 +5811,6 @@ end 'main'
 ```
 ```stdout
 noted 5
-```
-
-<!-- test: method-overloads-that-disagree-about-their-return-type-are-typed-by-the-bound-one -->
-Two `get` methods differ in arity and in what they return. Each call is typed, and its heap result released, by the declaration it binds and not by the by-name return type.
-```maxon
-type Box uses T
-	export var v as T
-
-	static function create(v T) returns Self
-		return Self{v: v}
-	end 'create'
-
-	function get(_ Count) returns T
-		return self.v
-	end 'get'
-
-	function get(index Count, by Count) returns Count
-		return index + by
-	end 'get'
-end 'Box'
-
-typealias StrBox = Box with String
-
-function main() returns ExitCode
-	let b = StrBox.create("held {40 + 2} long enough for a heap record")
-	let s = b.get(0)
-	let n = b.get(1, by: 2)
-	print("{s} {n}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-held 42 long enough for a heap record 3
 ```
 
 <!-- test: error.an-instance-method-named-statically-without-its-receiver-is-refused -->

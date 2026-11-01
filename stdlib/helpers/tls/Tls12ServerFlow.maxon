@@ -127,7 +127,7 @@ module type Tls12ServerFlow implements TlsMessageHandler
 
 	function acceptClientCertificateVerify(raw ByteArray, key X509PublicKey, secrets Tls12Secrets) throws TlsHandshakeError
 		let (code, signature) = try tlsDecodeCertificateVerify(raw, protocol: TlsProtocol.tls12)
-		let scheme = try tlsRequireOfferedScheme(code, offered: config.clientSignatureAlgorithms, algorithm: key.algorithm(), protocol: TlsProtocol.tls12)
+		let scheme = try tlsRequireOfferedScheme(code, offered: config.clientSignatureAlgorithms, algorithm: key.algorithm, protocol: TlsProtocol.tls12)
 
 		try peer.verifySignature(scheme, key: key, message: session.transcript.content(), signature: signature)
 		session.transcript.append(raw)
@@ -154,7 +154,7 @@ module type Tls12ServerFlow implements TlsMessageHandler
 end 'Tls12ServerFlow'
 
 function tls12Negotiate(config TlsServerConfig, hello TlsClientHello, scan TlsExtensionScan) returns Tls12ServerChoice throws TlsHandshakeError
-	if not hello.compressionMethods().contains(tlsNullCompression) 'compression'
+	if not hello.compressionMethods.contains(tlsNullCompression) 'compression'
 		throw TlsHandshakeError.handshakeFailure
 	end 'compression'
 

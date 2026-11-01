@@ -55,7 +55,7 @@ let CoffSizeOfOptionalHeaderOffset = 16
 let CoffHeaderSize = 20
 
 // One IMAGE_SECTION_HEADER is 40 bytes; its fields sit at these offsets within it.
-let SectionHeaderSize = 40
+let PeSectionHeaderSize = 40
 let SectionNameBytes = 8
 let SectionVirtualSizeOffset = 8
 let SectionRawSizeOffset = 16
@@ -160,7 +160,7 @@ export function readPeSectionData(path FilePath, sectionName String) returns Byt
 	let firstSectionHeader = coffStart + CoffHeaderSize + optionalHeaderSize
 
 	for i in 0 upto sectionCount 'eachSection'
-		let header = firstSectionHeader + i * SectionHeaderSize
+		let header = firstSectionHeader + i * PeSectionHeaderSize
 
 		if not imageNameIs(image, at: header as ByteOffset, maxBytes: SectionNameBytes, name: sectionName) 'notThisOne'
 			continue
@@ -332,7 +332,7 @@ function arrayElementTypeName(typeName String) returns String
 		return typeName
 	end 'aScalar'
 
-	return typeName.slice(typeName.startIndex(), length: typeName.count() - TypedValueArraySuffix.count())
+	return typeName.sliceLength(typeName.startIndex(), length: typeName.count() - TypedValueArraySuffix.count())
 end 'arrayElementTypeName'
 
 // The type name whose value is a FLOAT literal rather than an integer one. Named because two

@@ -418,7 +418,7 @@ let ShimElsewhereLabel = 3
 // `encodeModRmBaseDisp`, which emits the zero-`disp8` form for exactly those two bases, so either
 // register may be anything.
 module function emitLoadCurrentGtOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, mDest X64Register, gtDest X64Register, bail BlockId, os Os)
-	emitLoadCurrentMOrBail(code, rdataRelocs: rdataRelocs, fixups: fixups, dest: mDest, bail: bail, os: os)
+	x64EmitLoadCurrentMOrBail(code, rdataRelocs: rdataRelocs, fixups: fixups, dest: mDest, bail: bail, os: os)
 	encodeLoadRegBaseDisp(code, destReg: gtDest, base: mDest, disp: MOffCurrentGt as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: gtDest, src: gtDest, wide: true)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
@@ -426,7 +426,7 @@ end 'emitLoadCurrentGtOrBail'
 
 // The M alone with both of ITS nulls tested — split out because the shim wants the M AFTER it has the GT and
 // the two answers cannot share a register.
-function emitLoadCurrentMOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, dest X64Register, bail BlockId, os Os)
+function x64EmitLoadCurrentMOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, dest X64Register, bail BlockId, os Os)
 	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: dest, label: SchedTlsTebOffsetLabel)
 	encodeLoadRegBaseDisp(code, destReg: dest, base: dest, disp: 0, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: dest, src: dest, wide: true)
@@ -434,7 +434,7 @@ function emitLoadCurrentMOrBail(code ByteArray, rdataRelocs RdataRelocationArray
 	encodeMovRegSegBase(code, dest: dest, base: dest, segment: x64ThreadPointerSegment(os))
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: dest, src: dest, wide: true)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
-end 'emitLoadCurrentMOrBail'
+end 'x64EmitLoadCurrentMOrBail'
 
 // ⭐⭐ **THE arm64-LINUX TWIN HAS A FOURTH NULL TEST HERE AND THIS LANE DELIBERATELY HAS NONE — the
 // difference is that x86-64 CANNOT READ ITS THREAD POINTER AS A VALUE.** `TPIDR_EL0` is an ordinary system
@@ -2379,7 +2379,7 @@ function buildLinuxPreemptHandlerChunk() returns FunctionCodeChunk
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotUcontext), srcReg: X64Register.rdx, wide: true)
 
-	emitLoadCurrentMOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, dest: X64Register.rax, bail: PreemptNoMachineLabel, os: Os.linux)
+	x64EmitLoadCurrentMOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, dest: X64Register.rax, bail: PreemptNoMachineLabel, os: Os.linux)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rax, wide: true)
 
 	// `__gt_preempt_safe(m, pc, sp)` over the register file the kernel saved. The third argument rides RAX,

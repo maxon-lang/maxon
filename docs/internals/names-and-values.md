@@ -66,7 +66,8 @@ that starts with it is refused with E2051.
 | `__` prefix | a compiler-internal symbol, kept out of the author's namespace | `__mm_alloc`, `__destruct_T` |
 | `.` | a type and a method, the spelling the author writes | `Type.method` |
 | `.` | a type and an interface, in a witness-table label | `__witness_<Type>.<Iface>` |
-| `#` | an overload's base name and its signature parts; a default's helper and its function and position | `lookup#Registry#bool`, `__paramDefault#f#0` |
+| `~` | a top-level name two directories declare and its directory, rendered `dir.Name` in every diagnostic, backtrace and debug name | `alpha~Box`, `alpha~helper` |
+| `#` | a default's helper and its function and position | `__paramDefault#f#0` |
 | `$` | a lifted closure and its enclosing function, nesting | `<enclosing>$closure_<k>` |
 | `_` | a generic and its type arguments | `Box_Int` |
 

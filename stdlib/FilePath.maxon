@@ -159,13 +159,13 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		let url = try URL.parse(input) otherwise throw FilePathError.malformedURL
 
 		// Check scheme is "file"
-		if url.scheme() != "file" 'notFile'
+		if url.scheme != "file" 'notFile'
 			throw FilePathError.notFileURL
 		end 'notFile'
 
 		#if os(Windows)
 			// file:///C:/path produces path "/C:/path" — strip leading slash before drive letter
-			let filePath = percentDecodedPath(url.path())
+			let filePath = percentDecodedPath(url.path)
 
 			if filePath.byteLength() == 0 or filePath.byteAtOrPanic(0) != otherSeparatorByte 'noLeadingSlash'
 				return filePath
@@ -176,7 +176,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 			return unslashed if hasDrivePrefix(unslashed) else filePath
 		#else
-			return percentDecodedPath(url.path())
+			return percentDecodedPath(url.path)
 		#endif
 	end 'resolveFileURL'
 
@@ -467,9 +467,9 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'join'
 
 	/// Join with another FilePath component.
-	public function join(component FilePath) returns FilePath
+	public function joinPath(component FilePath) returns FilePath
 		return join(component.path)
-	end 'join'
+	end 'joinPath'
 
 	/// Replace the file extension. newExt should include the dot (e.g. ".exe").
 	/// If no extension exists, the new extension is appended.

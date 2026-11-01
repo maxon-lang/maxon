@@ -954,35 +954,6 @@ typealias Integer = int(i64.min to i64.max)
 13
 ```
 
-<!-- test: error.overloaded-message-refused -->
-A message becomes ONE variant of the request union, and one variant carries one payload shape.
-```maxon
-type Calc
-	var count as Integer
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function add(n Integer)
-		self.count = self.count + n
-	end 'add'
-
-	export function add(a Integer, b Integer)
-		self.count = self.count + a + b
-	end 'add'
-end 'Calc'
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	return 0
-end 'main'
-public typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E2015: <fragment>:19:10: Unsupported: `Calc.add` is a message of the service `Calc` and is declared 2 times. A message becomes ONE variant of the synthesized `Calc.request` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names
-```
-
 <!-- test: error.message-param-type-parameter-not-transferable -->
 A generic service is spawnable, and a message PARAMETER typed at the type parameter is still refused: a send
 MOVES its argument, and the send site cannot know from an opaque `T` whether what it is moving is managed at
@@ -1205,21 +1176,27 @@ declarations in this tree depend on it (`specs/associated-types.md` declares
 type Job
 	var spawn as Integer
 
-	static function spawn(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{spawn: n}
-	end 'spawn'
+	end 'create'
 
 	function tally() returns Integer
 		return self.spawn
 	end 'tally'
 end 'Job'
 
+type Launcher
+	static function spawn(n Integer) returns Job
+		return Job.create(n)
+	end 'spawn'
+end 'Launcher'
+
 function run(spawn Integer) returns Integer
 	return spawn + 1
 end 'run'
 
 function main() returns ExitCode
-	let j = Job.spawn(3)
+	let j = Launcher.spawn(3)
 	let spawn = 4
 	return (j.tally() + run(spawn) + spawn) as ExitCode
 end 'main'
@@ -5569,7 +5546,7 @@ main payload 42! after the service kept 10 bytes
 ```
 
 <!-- test: deepmove.a-slice-written-at-the-send-crosses-while-the-sender-keeps-its-source -->
-A slice is a temporary too: each `slice` overload hands back the fresh record `sliceBytes` builds, a view onto
+A slice is a temporary too: each `slice` form hands back the fresh record `sliceBytes` builds, a view onto
 the source's bytes that nothing but the send can name. It moves, the walk detaches the view onto bytes of its
 own, and `main` goes on reading and writing the source.
 ```maxon
@@ -5590,7 +5567,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	var src = "payload {42}"
-	let n = try await h.keep(src.slice(src.startIndex(), length: 7)) otherwise 0
+	let n = try await h.keep(src.sliceLength(src.startIndex(), length: 7)) otherwise 0
 	src.append("!")
 	let m = try await h.keep(src.slice(src.startIndex(), endIndex: src.endIndex())) otherwise 0
 	src.append("?")
@@ -11213,193 +11190,8 @@ end 'main'
 3
 ```
 
-<!-- test: a-spawn-of-an-overloaded-generic-factory-binds-the-overload-its-arguments-pick -->
-A `spawn` reads its type arguments off the argument list of the factory declaration the call binds, like any
-other call: `create(7, x: 9 as Whole)` binds the second `create`, so `T` is the type of `x`, not of the first
-declaration's lone parameter.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-type Box uses T
-	export var v as T
-	export var n as Whole
-
-	static function create(x T) returns Self
-		return Self{v: x, n: 1}
-	end 'create'
-
-	static function create(a Whole, x T) returns Self
-		return Self{v: x, n: a}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Box'
-
-function main() returns ExitCode
-	let h = spawn Box.create(7, x: 9 as Whole)
-	let total = try await h.peek() otherwise 0
-	return total as ExitCode
-end 'main'
-```
-```exitcode
-7
-```
-
-<!-- test: a-spawn-binds-the-factory-overload-that-returns-the-type -->
-The two `create` overloads disagree about what they return, and only the second returns the service type. The call binds the one its arguments fit, so the spawn starts a service from it.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-type Other
-	export var m as Whole
-
-	static function make(m Whole) returns Self
-		return Self{m: m}
-	end 'make'
-end 'Other'
-
-type Counter
-	export var n as Whole
-
-	static function create(seed Whole) returns Other
-		return Other.make(seed)
-	end 'create'
-
-	static function create(seed Whole, step Whole) returns Self
-		return Self{n: seed + step}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Counter'
-
-function main() returns ExitCode
-	let h = spawn Counter.create(40, step: 2)
-	let total = try await h.peek() otherwise 0
-	return total as ExitCode
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: error.a-spawn-whose-bound-factory-overload-returns-another-type-is-refused -->
-The same pair, and the call binds the first `create`, which returns an `Other`: that declaration does not start a service, and the spawn is refused at the call.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-type Other
-	export var m as Whole
-
-	static function make(m Whole) returns Self
-		return Self{m: m}
-	end 'make'
-end 'Other'
-
-type Counter
-	export var n as Whole
-
-	static function create(seed Whole) returns Other
-		return Other.make(seed)
-	end 'create'
-
-	static function create(seed Whole, step Whole) returns Self
-		return Self{n: seed + step}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Counter'
-
-function main() returns ExitCode
-	let h = spawn Counter.create(40)
-	let total = try await h.peek() otherwise 0
-	return total as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3134: <fragment>:29:10: `spawn Counter.create(…)` does not start a service: `Counter.create` does not hand back a `Counter` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
-```
-
-<!-- test: error.a-spawn-whose-arguments-tie-two-factory-overloads-is-ambiguous -->
-Two `create` overloads fit the argument equally, so the spawn is ambiguous like any other call, whichever type each of them returns.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-type Other
-	export var m as Whole
-
-	static function make(m Whole) returns Self
-		return Self{m: m}
-	end 'make'
-end 'Other'
-
-type Counter
-	export var n as Whole
-
-	static function create(seed Whole) returns Other
-		return Other.make(seed)
-	end 'create'
-
-	static function create(start Whole) returns Self
-		return Self{n: start}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Counter'
-
-function main() returns ExitCode
-	let h = spawn Counter.create(40)
-	let total = try await h.peek() otherwise 0
-	return total as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3007: <fragment>:29:10: Ambiguous overload for 'create': multiple overloads match. Candidates: (seed Whole), (start Whole)
-```
-
-<!-- test: error.a-spawn-of-a-generic-factory-whose-arguments-tie-two-overloads-is-ambiguous -->
-Every `create` returns `Self`, so each starts a service, but two of them fit the arguments equally. The spawn is ambiguous at the callee, as an ordinary call of the same overloads is.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-typealias Wide = int(i64.min to i64.max)
-
-type Box uses T
-	export var n as Whole
-
-	static function create(x T, n Whole) returns Self
-		_ = x
-		return Self{n: n}
-	end 'create'
-
-	static function create(x T, n Wide) returns Self
-		_ = x
-		return Self{n: n as Whole}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Box'
-
-function main() returns ExitCode
-	let h = spawn Box.create(1, n: 5)
-	let total = try await h.peek() otherwise 0
-	return total as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3007: <fragment>:24:10: Ambiguous overload for 'create': multiple overloads match. Candidates: (x T, n Whole), (x T, n Wide)
-```
-
-<!-- test: error.a-spawn-whose-bound-factory-starts-no-service-is-refused-ahead-of-a-message-roster-diagnostic -->
-The call binds the first `create`, which returns an `Other`, and the service also declares an overloaded message. The factory is judged first, so the spawn is refused as not starting a service and not for the roster.
+<!-- test: error.a-spawn-whose-factory-returns-another-type-is-refused -->
+`create` returns an `Other`: it does not start a service, and the spawn is refused at the call.
 ```maxon
 public typealias Whole = int(i64.min to i64.max)
 
@@ -11418,16 +11210,12 @@ type Counter
 		return Other.make(seed)
 	end 'create'
 
-	static function create(seed Whole, step Whole) returns Self
+	static function createStepped(seed Whole, step Whole) returns Self
 		return Self{n: seed + step}
-	end 'create'
+	end 'createStepped'
 
 	export function peek() returns Whole
 		return self.n
-	end 'peek'
-
-	export function peek(extra Whole) returns Whole
-		return self.n + extra
 	end 'peek'
 end 'Counter'
 
@@ -11438,247 +11226,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3134: <fragment>:33:10: `spawn Counter.create(…)` does not start a service: `Counter.create` does not hand back a `Counter` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
-```
-
-<!-- test: a-spawn-of-an-overloaded-generic-factory-whose-overloads-fix-one-instance-starts-it -->
-When every overload fixes `T` to the same type, the instance is known whichever one the call binds, so the spawn starts a `Box with Whole`.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-type Box uses T
-	export var n as Whole
-
-	static function create(x T) returns Self
-		_ = x
-		return Self{n: 1}
-	end 'create'
-
-	static function create(a Whole, x T) returns Self
-		_ = x
-		return Self{n: a}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Box'
-
-function start(a Whole, x Whole) returns ExitCode
-	let h = spawn Box.create(a, x: x)
-	let n = try await h.peek() otherwise panic("peek")
-	return n as ExitCode
-end 'start'
-
-function main() returns ExitCode
-	return start(7, x: 9)
-end 'main'
-```
-```exitcode
-7
-```
-
-<!-- test: a-spawn-of-an-overloaded-generic-factory-binds-only-the-overloads-the-call-can-slot -->
-`create()` takes no argument, so the call `Box.create(a)` can only bind `create(x T)`, and that one overload fixes `T`.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-type Box uses T
-	export var n as Whole
-
-	static function create(x T) returns Self
-		_ = x
-		return Self{n: 5}
-	end 'create'
-
-	static function create() returns Self
-		return Self{n: 6}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Box'
-
-function start(a Whole) returns ExitCode
-	let h = spawn Box.create(a)
-	let n = try await h.peek() otherwise panic("peek")
-	return n as ExitCode
-end 'start'
-
-function main() returns ExitCode
-	return start(9)
-end 'main'
-```
-```exitcode
-5
-```
-
-<!-- test: a-spawn-of-factories-that-keep-an-argument-differently-moves-into-the-bound-one -->
-A `spawn` moves every argument to the service, whichever overload binds. One `create` keeps its argument and the other only reads it, and the argument's type binds the first, so `shelf` is moved into the service.
-```maxon
-type Shelf
-	export let count as Integer
-
-	static function create(count Integer) returns Self
-		return Self{count: count}
-	end 'create'
-end 'Shelf'
-
-type Label
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Label'
-
-type Keeper
-	let shelf as Shelf
-
-	static function create(shelf Shelf) returns Self
-		return Self{shelf: shelf}
-	end 'create'
-
-	static function create(shelf Label) returns Self
-		return Self{shelf: Shelf.create(shelf.text.byteLength() as Integer)}
-	end 'create'
-
-	export function count() returns Integer
-		return self.shelf.count
-	end 'count'
-end 'Keeper'
-
-function main() returns ExitCode
-	let shelf = Shelf.create(4)
-	let k = spawn Keeper.create(shelf)
-	return (try await k.count() otherwise 0) as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-4
-```
-
-<!-- test: a-spawn-of-factories-that-keep-an-argument-differently-moves-it-either-way -->
-The same factories with an argument that binds the `create` which only reads it: the `spawn` moves the `Label` to the service's thread all the same, so the caller hands over a `.clone()` to keep reading its own.
-```maxon
-type Shelf
-	export let count as Integer
-
-	static function create(count Integer) returns Self
-		return Self{count: count}
-	end 'create'
-end 'Shelf'
-
-type Label
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Label'
-
-type Keeper
-	let shelf as Shelf
-
-	static function create(shelf Shelf) returns Self
-		return Self{shelf: shelf}
-	end 'create'
-
-	static function create(shelf Label) returns Self
-		return Self{shelf: Shelf.create(shelf.text.byteLength() as Integer)}
-	end 'create'
-
-	export function count() returns Integer
-		return self.shelf.count
-	end 'count'
-end 'Keeper'
-
-function main() returns ExitCode
-	let label = Label.create("abcdef")
-	let k = spawn Keeper.create(label.clone())
-	let kept = try await k.count() otherwise 0
-	return (kept + (label.text.byteLength() as Integer)) as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-12
-```
-
-<!-- test: error.a-spawn-of-factories-that-keep-an-argument-differently-and-tie-is-ambiguous -->
-Two `create` overloads fit the argument equally and disagree about keeping it. The tie is the diagnostic: no declaration is bound, so there is no move to make until the arguments pick one.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-type Shelf
-	export let count as Whole
-
-	static function create(count Whole) returns Self
-		return Self{count: count}
-	end 'create'
-end 'Shelf'
-
-type Keeper
-	let shelf as Shelf
-	let size as Whole
-
-	static function create(shelf Shelf) returns Self
-		return Self{shelf: shelf, size: 0}
-	end 'create'
-
-	static function create(other Shelf) returns Self
-		return Self{shelf: Shelf.create(other.count), size: 1}
-	end 'create'
-
-	export function count() returns Whole
-		return self.shelf.count + self.size
-	end 'count'
-end 'Keeper'
-
-function main() returns ExitCode
-	let shelf = Shelf.create(4)
-	let k = spawn Keeper.create(shelf)
-	return (try await k.count() otherwise 0) as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3007: <fragment>:31:10: Ambiguous overload for 'create': multiple overloads match. Candidates: (shelf Shelf), (other Shelf)
-```
-
-<!-- test: a-spawn-of-factories-that-keep-an-argument-differently-binds-by-an-alias-valued-argument -->
-The argument is a value of the `Names` alias, which fits only the `create` that keeps an array, so the array is moved into the service and the other `create`, which takes a count, is not the one bound.
-```maxon
-typealias Names = Array with String
-
-type Keeper
-	let names as Names
-	let size as Count
-
-	static function create(names Names) returns Self
-		return Self{names: names, size: 0}
-	end 'create'
-
-	static function create(size Count) returns Self
-		return Self{names: Names.create(), size: size}
-	end 'create'
-
-	export function total() returns Count
-		return self.names.count() + self.size
-	end 'total'
-end 'Keeper'
-
-function main() returns ExitCode
-	var names = Names.create()
-	names.push("alpha {40 + 2} long enough for a heap record")
-	let k = spawn Keeper.create(names)
-	let n = try await k.total() otherwise 0
-	return n as ExitCode
-end 'main'
-```
-```exitcode
-1
+error E3134: <fragment>:29:10: `spawn Counter.create(…)` does not start a service: `Counter.create` does not hand back a `Counter` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
 ```
 
 <!-- test: error.a-value-popped-from-a-field-container-is-moved-out-not-solely-owned -->
@@ -13416,16 +12964,16 @@ end 'main'
 
 <!-- test: error.reply-forwarded-through-a-local-named-like-a-type-refused -->
 Inside `build`, `Report` is a local holding the service's own record, so `Report.echo(1)` calls the INSTANCE
-`echo` on it — which returns that record — and not the static `echo` that builds one.
+`echo` on it — which returns that record — and not the static `make` that builds one.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
 type Report
 	export var total as Tally
 
-	static function echo(amount Tally) returns Self
+	static function make(amount Tally) returns Self
 		return Self{total: amount}
-	end 'echo'
+	end 'make'
 
 	function echo(amount Tally) returns Report
 		self.total = self.total + amount
@@ -13437,7 +12985,7 @@ type Worker
 	var report as Report
 
 	static function create() returns Self
-		return Self{report: Report.echo(41)}
+		return Self{report: Report.make(41)}
 	end 'create'
 
 	export function measure() returns Report
@@ -15468,207 +15016,6 @@ end 'main'
 error E3102: <fragment>:22:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-<!-- test: services.a-send-to-an-overloaded-message-is-refused-at-the-spawn -->
-The send is parsed before the `spawn` that refuses the overloaded message; the send reads every argument by value, so it reaches that refusal.
-```maxon
-// --- file: calc.maxon
-export typealias Integer = int(i64.min to i64.max)
-
-module type Calc
-	var count as Integer
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function put(a Integer, b Integer)
-		b = b + a
-		self.count = self.count + b
-	end 'put'
-
-	export function put(a String, b Integer)
-		self.count = self.count + b + (a.count() as Integer)
-	end 'put'
-end 'Calc'
-module function poke(h Calc.handle)
-	var k = 5 as Integer
-	try h.put(1, b: k) otherwise panic("a running service with room takes the send")
-	print("{k}\n")
-end 'poke'
-
-// --- file: main.maxon
-
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	poke(h)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:29:10: Unsupported: `Calc.put` is a message of the service `Calc` and is declared 2 times. A message becomes ONE variant of the synthesized `Calc.request` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names
-```
-
-<!-- test: services.a-message-that-reassigns-its-parameter-does-not-write-the-senders-variable -->
-The handler's reassignment writes storage the service owns.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Calc
-	var count as Integer
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function put(a Integer, b Integer) returns Integer
-		b = b + a
-		self.count = self.count + b
-		return self.count
-	end 'put'
-end 'Calc'
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	var k = 5 as Integer
-	let r = try await h.put(1, b: k) otherwise 0
-	print("{r} {k}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-6 5
-```
-
-<!-- test: services.an-unlabelled-argument-a-message-reassigns-is-passed-by-value -->
-A single-parameter message that reassigns its parameter.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Calc
-	var count as Integer
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function add(n Integer) returns Integer
-		n = n + 1
-		self.count = self.count + n
-		return self.count
-	end 'add'
-end 'Calc'
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	var k = 5 as Integer
-	let r = try await h.add(k) otherwise 0
-	print("{r} {k}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-6 5
-```
-
-<!-- test: services.a-fire-and-forget-message-that-reassigns-its-parameter-after-the-sender-returned -->
-The sender returns before the handler runs, and the handler never touches the sender's frame.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Calc
-	var count as Integer
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function put(a Integer, b Integer)
-		Scheduler.yield()
-		b = b + a
-		self.count = self.count + b
-		print("handler b={b} count={self.count}\n")
-	end 'put'
-
-	export function total() returns Integer
-		return self.count
-	end 'total'
-end 'Calc'
-
-function poke(h Calc.handle)
-	var k = 5 as Integer
-	try h.put(1, b: k) otherwise panic("a running service with room takes the send")
-end 'poke'
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	poke(h)
-	let t = try await h.total() otherwise 0
-	print("total {t}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-handler b=6 count=6
-total 6
-```
-
-<!-- test: services.a-message-that-reassigns-a-string-parameter-releases-both-values -->
-A managed parameter reassigned in the handler, with and without a reply: both values are released once.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Echo
-	var count as Integer
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function shout(text String) returns String
-		text = "{text}! number {self.count} padded out long enough to heap allocate"
-		self.count = self.count + 1
-		return text.clone()
-	end 'shout'
-
-	export function note(text String)
-		text = "{text} noted padded out long enough to heap allocate"
-		self.count = self.count + (text.byteLength() as Integer)
-	end 'note'
-
-	export function total() returns Integer
-		return self.count
-	end 'total'
-end 'Echo'
-
-function main() returns ExitCode
-	let h = spawn Echo.create()
-
-	let loud = try await h.shout("hello padded out long enough to heap allocate {1}") otherwise "stopped"
-	print("{loud}\n")
-	try h.note("quiet padded out long enough to heap allocate {2}") otherwise panic("a running service with room takes the send")
-	let n = try await h.total() otherwise 0
-	print("{n}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-hello padded out long enough to heap allocate 1! number 0 padded out long enough to heap allocate
-94
-```
-
 <!-- test: services.a-cell-resident-var-sent-to-a-service-is-moved -->
 `word` lives in a cell because `fill` reassigns its parameter; the send takes the cell's contents.
 ```maxon
@@ -15687,7 +15034,7 @@ type Echo
 	end 'shout'
 end 'Echo'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -15725,7 +15072,7 @@ type Echo
 	end 'shout'
 end 'Echo'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -15799,7 +15146,7 @@ function opening() returns (String, Integer)
 	return ("hello padded out long enough to heap allocate {1}", 1)
 end 'opening'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -15966,263 +15313,6 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3102: <fragment>:31:23: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
-```
-
-<!-- test: services.error.a-cell-holding-a-co-owned-record-cannot-be-sent -->
-`s` lives in a cell because `bump` reassigns its parameter, and the cell's record is co-owned with the array
-`held`; the send on the other branch is refused exactly as it is when `s` is not a cell.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Boxes = Array with Box
-
-type Box
-	export var v as Integer
-
-	static function create(v Integer) returns Self
-		return Self{v: v}
-	end 'create'
-end 'Box'
-
-type Keeper
-	var total as Integer
-
-	static function create() returns Self
-		return Self{total: 0}
-	end 'create'
-
-	export function put(b Box) returns Integer
-		self.total = self.total + b.v
-		return self.total
-	end 'put'
-end 'Keeper'
-
-function bump(b Box)
-	b = Box.create(b.v + 10)
-end 'bump'
-
-function main() returns ExitCode
-	let h = spawn Keeper.create()
-	var held = Boxes.create()
-	held.push(Box.create(1))
-	var s = try held.get(0) otherwise panic("pushed")
-
-	if held.count() > 100 'big'
-		bump(s)
-	end 'big' else 'small'
-		let r = try await h.put(s) otherwise 0
-		print("{r}\n")
-	end 'small'
-
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3138: <fragment>:39:27: argument `b` of the message `Keeper.put` cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
-```
-
-<!-- test: services.error.a-cell-a-loop-refills-with-a-co-owned-record-cannot-be-sent-in-the-loop -->
-The first iteration sends the cell's own record; the loop then stores a record the array `held` still holds, which the
-next iteration would send.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Boxes = Array with Box
-
-type Box
-	export var v as Integer
-
-	static function create(v Integer) returns Self
-		return Self{v: v}
-	end 'create'
-end 'Box'
-
-type Keeper
-	var total as Integer
-
-	static function create() returns Self
-		return Self{total: 0}
-	end 'create'
-
-	export function put(b Box) returns Integer
-		self.total = self.total + b.v
-		return self.total
-	end 'put'
-end 'Keeper'
-
-function bump(b Box)
-	b = Box.create(b.v + 10)
-end 'bump'
-
-function main() returns ExitCode
-	let h = spawn Keeper.create()
-	var held = Boxes.create()
-	held.push(Box.create(5))
-	var s = Box.create(1)
-	bump(s)
-
-	for _ in 0 upto 2 'each'
-		let r = try await h.put(s) otherwise 0
-		print("{r}\n")
-		s = try held.get(0) otherwise panic("pushed")
-	end 'each'
-
-	print("{held.count()}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3138: <fragment>:38:27: argument `b` of the message `Keeper.put` cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
-```
-
-<!-- test: services.a-cell-record-a-callee-replaced-is-sent -->
-`bump` stores a record it built into `s`'s cell; the send moves that record to the service.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Box
-	export var v as Integer
-
-	static function create(v Integer) returns Self
-		return Self{v: v}
-	end 'create'
-end 'Box'
-
-type Keeper
-	var total as Integer
-
-	static function create() returns Self
-		return Self{total: 0}
-	end 'create'
-
-	export function put(b Box) returns Integer
-		self.total = self.total + b.v
-		return self.total
-	end 'put'
-end 'Keeper'
-
-function bump(b Box)
-	b = Box.create(b.v + 10)
-end 'bump'
-
-function main() returns ExitCode
-	let h = spawn Keeper.create()
-	var s = Box.create(1)
-	bump(s)
-	let r = try await h.put(s) otherwise 0
-	print("{r}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-11
-```
-
-<!-- test: services.a-cell-record-a-callee-shared-aborts-the-send -->
-`adopt` stores a record `t` still names into `s`'s cell, which the compiler cannot see from `main`; the send
-proves the record has one owner when it runs, and it has two.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Box
-	export var v as Integer
-
-	static function create(v Integer) returns Self
-		return Self{v: v}
-	end 'create'
-end 'Box'
-
-type Keeper
-	var total as Integer
-
-	static function create() returns Self
-		return Self{total: 0}
-	end 'create'
-
-	export function put(b Box) returns Integer
-		self.total = self.total + b.v
-		return self.total
-	end 'put'
-end 'Keeper'
-
-function adopt(b Box, from Box)
-	b = from
-end 'adopt'
-
-function main() returns ExitCode
-	let h = spawn Keeper.create()
-	var t = Box.create(5)
-	var s = Box.create(1)
-	adopt(s, from: t)
-	let r = try await h.put(s) otherwise 0
-	print("{r} {t.v}\n")
-	return 0
-end 'main'
-```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
-```
-
-<!-- test: services.a-message-that-reassigns-an-interface-parameter -->
-The handler reassigns a parameter held at an interface type, which lives in a cell the service owns.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-interface Shape
-	function area() returns Integer
-end 'Shape'
-
-type Square implements Shape
-	var side as Integer
-
-	static function create(side Integer) returns Self
-		return Self{side: side}
-	end 'create'
-
-	function area() returns Integer
-		return self.side * self.side
-	end 'area'
-end 'Square'
-
-function squareShape(side Integer) returns Shape
-	return Square.create(side)
-end 'squareShape'
-
-type Calc
-	var count as Integer
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function measure(s Shape) returns Integer
-		if s.area() < 5 'small'
-			s = squareShape(4)
-		end 'small'
-
-		self.count = self.count + s.area()
-		return self.count
-	end 'measure'
-end 'Calc'
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	let first = try await h.measure(Square.create(1)) otherwise 0
-	let second = try await h.measure(Square.create(3)) otherwise 0
-	print("{first} {second}\n")
-	h.shutdown()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-16 25
 ```
 
 <!-- test: error.a-var-the-loop-iterates-is-not-sent-inside-the-loop -->
@@ -17521,72 +16611,6 @@ end 'Box'
 error E3008: <fragment>:4:10: function 'Box.create' is not exported
 ```
 
-<!-- test: error.a-spawn-of-an-overloaded-generic-factory-whose-arguments-fit-no-overload-reports-the-mismatch -->
-No `create` takes a `String` for `n`, so the spawn is refused as an argument mismatch against the first overload and not as a factory whose type argument cannot be read.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-typealias Wide = int(i64.min to i64.max)
-
-type Box uses T
-	export var n as Whole
-
-	static function create(x T, n Whole) returns Self
-		_ = x
-		return Self{n: n}
-	end 'create'
-
-	static function create(x T, n Wide) returns Self
-		_ = x
-		return Self{n: n as Whole}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Box'
-
-function main() returns ExitCode
-	let h = spawn Box.create(1, n: "s")
-	let total = try await h.peek() otherwise 0
-	return total as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:24:10: argument type mismatch for 'n': expected 'Whole', got 'String'
-```
-
-<!-- test: error.a-spawn-of-an-overloaded-factory-whose-arguments-fit-no-overload-reports-the-mismatch -->
-The same for a service that is not generic: nothing takes a `String`, and the mismatch is what the author reads.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-typealias Wide = int(i64.min to i64.max)
-
-type Counter
-	export var n as Whole
-
-	static function create(seed Whole) returns Self
-		return Self{n: seed}
-	end 'create'
-
-	static function create(start Wide) returns Self
-		return Self{n: start as Whole}
-	end 'create'
-
-	export function peek() returns Whole
-		return self.n
-	end 'peek'
-end 'Counter'
-
-function main() returns ExitCode
-	let h = spawn Counter.create("s")
-	let total = try await h.peek() otherwise 0
-	return total as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:22:10: argument type mismatch for 'seed': expected 'Whole', got 'String'
-```
-
 <!-- test: a-message-parameter-spelled-through-its-directory-keeps-its-brand -->
 <!-- process: own -->
 A message parameter spelled `lib.Names`, an alias of `Array with String` declared in `lib/`, carries the same brand as the value the sender builds from `lib.Names`, so the request's payload accepts it and the reply comes back.
@@ -18165,8 +17189,8 @@ accepted
 
 <!-- test: services.a-service-replies-with-a-connection-it-dialled -->
 <!-- procs: 4 -->
-`TcpClient.connect` has two overloads and the first forwards to the second, which builds the client. A reply of the
-forwarding overload's result is fresh, so the dialled connection has no other owner and crosses back to the caller.
+`TcpClient.connect` builds the client. A reply of its result is fresh, so the dialled connection has no other
+owner and crosses back to the caller.
 ```maxon
 typealias Tally = int(0 to 1000000)
 
@@ -18208,9 +17232,9 @@ dialled
 0
 ```
 
-<!-- test: services.a-reply-an-overload-forwarded-to-its-sibling-crosses -->
-An overload that forwards to a sibling overload of its own name is fresh when the sibling is: `Box.make(n)` hands back
-the record `Box.make(n, extra:)` builds, so the handler may return it.
+<!-- test: services.a-reply-forwarded-to-a-sibling-crosses -->
+A static that forwards to a sibling static is fresh when the sibling is: `Box.make(n)` hands back
+the record `Box.makeExtra(n, extra:)` builds, so the handler may return it.
 ```maxon
 typealias Tally = int(0 to 1000000)
 
@@ -18218,12 +17242,12 @@ type Box
 	export var n as Tally
 
 	static function make(n Tally) returns Self
-		return make(n, extra: 0)
+		return makeExtra(n, extra: 0)
 	end 'make'
 
-	static function make(n Tally, extra Tally) returns Self
+	static function makeExtra(n Tally, extra Tally) returns Self
 		return Self{n: n + extra}
-	end 'make'
+	end 'makeExtra'
 end 'Box'
 
 type Maker
@@ -18256,8 +17280,8 @@ end 'main'
 0
 ```
 
-<!-- test: services.a-send-of-an-overload-forwarded-to-its-sibling-moves-in -->
-An overload that forwards to a sibling overload of its own name is fresh when the sibling is, so the record it hands
+<!-- test: services.a-send-of-a-record-forwarded-to-a-sibling-moves-in -->
+A static that forwards to a sibling static is fresh when the sibling is, so the record it hands
 back is the sole owner's to move into a service in a send.
 ```maxon
 typealias Tally = int(0 to 1000000)
@@ -18266,12 +17290,12 @@ type Box
 	export var n as Tally
 
 	static function make(n Tally) returns Self
-		return make(n, extra: 0)
+		return makeExtra(n, extra: 0)
 	end 'make'
 
-	static function make(n Tally, extra Tally) returns Self
+	static function makeExtra(n Tally, extra Tally) returns Self
 		return Self{n: n + extra}
-	end 'make'
+	end 'makeExtra'
 end 'Box'
 
 type Shelf
@@ -18307,56 +17331,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: error.a-reply-an-overload-forwarded-beside-a-sibling-that-returns-its-parameter-is-refused -->
-Forwarding to a sibling overload does not make the name fresh by itself: `Box.make(copyOf:)` hands back a record its
-caller still owns, and a call to `Box.make` cannot know which overload it reaches, so the reply is refused.
-```maxon
-typealias Tally = int(0 to 1000000)
-
-type Box
-	export var n as Tally
-
-	static function make(n Tally) returns Self
-		return make(n, extra: 0)
-	end 'make'
-
-	static function make(n Tally, extra Tally) returns Self
-		return Self{n: n + extra}
-	end 'make'
-
-	static function make(copyOf Box) returns Self
-		return copyOf
-	end 'make'
-end 'Box'
-
-type Maker
-	var made as Tally
-
-	static function create() returns Self
-		return Self{made: 0}
-	end 'create'
-
-	export function next() returns Box
-		self.made = self.made + 1
-
-		return Box.make(self.made)
-	end 'next'
-end 'Maker'
-
-function main() returns ExitCode
-	let maker = spawn Maker.create()
-	let box = try await maker.next() otherwise return 1
-
-	print("{box.n}\n")
-
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3137: <fragment>:30:3: `Maker.next` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Maker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:35:14: the `spawn` that makes `Maker` a service
 ```
 
 <!-- test: services.a-promise-the-factory-starts-belongs-to-the-services-strand -->
@@ -18519,8 +17493,8 @@ end 'main'
 0
 ```
 
-<!-- test: services.an-overloaded-factory-binds-by-its-arguments-and-starts-on-the-service -->
-The `spawn` binds the `create` overload its arguments fit, and the bound one is what the service's thread runs.
+<!-- test: services.a-spawn-starts-the-factory-it-names-on-the-service -->
+The `spawn` of `create` and of `createCounted` runs the factory it names on the service's thread.
 ```maxon
 typealias Whole = int(i64.min to i64.max)
 
@@ -18535,9 +17509,9 @@ type Sink
 		return Self{seen: 1}
 	end 'create'
 
-	static function create(count Whole) returns Self
+	static function createCounted(count Whole) returns Self
 		return Self{seen: count}
-	end 'create'
+	end 'createCounted'
 
 	export function total() returns Whole
 		return self.seen
@@ -18546,7 +17520,7 @@ end 'Sink'
 
 function main() returns ExitCode
 	let a = spawn Sink.create("a label long enough to be a heap string")
-	let b = spawn Sink.create(5)
+	let b = spawn Sink.createCounted(5)
 	let first = try await a.total() otherwise return 1
 	let second = try await b.total() otherwise return 2
 	print("{first} {second}\n")
@@ -19259,285 +18233,6 @@ end 'main'
 error E3055: <fragment>:17:10: try requires a throwing function: 'Gate.create' does not throw'
 ```
 
-<!-- test: services.a-factory-that-reassigns-its-parameters-runs-on-the-service -->
-A factory that reassigns a parameter takes it by reference: the spawn hands the service's thread a parameter cell of its
-own, the factory writes through it, and whatever the cell holds when the factory returns is released with the cell.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-type Tag
-	var label as String
-	var bonus as Whole
-
-	static function create(label String, bonus Whole) returns Self
-		label = "{label}!"
-		bonus = bonus + 1
-
-		return Self{label: label, bonus: bonus}
-	end 'create'
-
-	export function size() returns Whole
-		return (self.label.byteLength() as Whole) + self.bonus
-	end 'size'
-end 'Tag'
-
-function main() returns ExitCode
-	let tag = spawn Tag.create("a label long enough to be a heap string", bonus: 4)
-	let n = try await tag.size() otherwise return 1
-	print("{n}\n")
-	tag.shutdown()
-	return 0
-end 'main'
-```
-```stdout
-45
-```
-```exitcode
-0
-```
-
-<!-- test: services.a-parameter-reassigned-elsewhere-in-the-program-leaves-a-var-sent-or-stored-as-it-was -->
-A function that reassigns a parameter takes it by reference, which the whole program learns; a `var` handed to another
-function by the same name is no less the record's only owner, so the send still moves it and a `let` field still
-takes it.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-typealias Words = Array with String
-
-type Tag
-	var label as String
-
-	static function create(label String) returns Self
-		label = "{label}!"
-
-		return Self{label: label}
-	end 'create'
-
-	export function size() returns Whole
-		return self.label.byteLength() as Whole
-	end 'size'
-end 'Tag'
-
-type Shelf
-	export let words as Words
-
-	static function create(words Words) returns Self
-		return Self{words: words}
-	end 'create'
-
-	function count() returns Whole
-		return self.words.count() as Whole
-	end 'count'
-end 'Shelf'
-
-type Summer
-	var total as Whole
-
-	static function create() returns Self
-		return Self{total: 0}
-	end 'create'
-
-	export function add(words Words) returns Whole
-		for word in words 'each'
-			self.total = self.total + (word.byteLength() as Whole)
-		end 'each'
-
-		return self.total
-	end 'add'
-end 'Summer'
-
-function main() returns ExitCode
-	let tag = spawn Tag.create("a label long enough to be a heap string")
-	let size = try await tag.size() otherwise return 1
-	tag.shutdown()
-
-	var stored = Words.create()
-	stored.push("first padded out long enough to heap allocate {1}")
-	let shelf = Shelf.create(stored)
-
-	let h = spawn Summer.create()
-	var items = Words.create()
-	items.push("second padded out long enough to heap allocate {2}")
-	var seen = 0 as Whole
-
-	for x in items 'each'
-		seen = seen + (x.byteLength() as Whole)
-	end 'each'
-
-	let r = try await h.add(items) otherwise 0
-	h.shutdown()
-	print("{size} {shelf.count()} {seen} {r}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-40 1 48 48
-```
-
-<!-- test: services.a-cell-resident-var-pushed-to-before-the-send-is-moved -->
-`items` lives in a cell because `refill` reassigns its parameter. A later statement that reads the cell without naming
-it again in the same statement leaves its occupant the record's only owner, so the send still moves it.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-typealias Words = Array with String
-
-type Summer
-	var total as Whole
-
-	static function create() returns Self
-		return Self{total: 0}
-	end 'create'
-
-	export function add(words Words) returns Whole
-		for word in words 'each'
-			self.total = self.total + (word.byteLength() as Whole)
-		end 'each'
-
-		return self.total
-	end 'add'
-end 'Summer'
-
-function refill(dest Words, first String)
-	dest = Words.create()
-	dest.push(first)
-end 'refill'
-
-function main() returns ExitCode
-	let h = spawn Summer.create()
-	var items = Words.create()
-	refill(items, first: "first padded out long enough to heap allocate {1}")
-	items.push("second padded out long enough to heap allocate {2}")
-
-	let r = try await h.add(items) otherwise 0
-	h.shutdown()
-	print("{r}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-95
-```
-
-<!-- test: error.an-overloaded-factory-must-agree-on-its-throws-clause-for-a-spawn-to-pick-its-reply -->
-Whether a `spawn` waits for its factory's verdict is decided from the one `throws` clause kept for the factory's name when
-the `spawn` is parsed, so the overloads of a factory must agree on it: a set whose members differ is refused where it is
-declared, and no `spawn` of it can wait on a cell the start does not fill.
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-enum StartError implements Error
-	refused
-end 'StartError'
-
-type Sink
-	var seen as Whole
-
-	static function create(count Whole) returns Self
-		return Self{seen: count}
-	end 'create'
-
-	static function create(label String) returns Self throws StartError
-		if label.isEmpty() 'unlabelled'
-			throw StartError.refused
-		end 'unlabelled'
-
-		return Self{seen: 1}
-	end 'create'
-
-	export function total() returns Whole
-		return self.seen
-	end 'total'
-end 'Sink'
-
-function main() returns ExitCode
-	let a = try spawn Sink.create("a label long enough to be a heap string") otherwise return 1
-	let b = spawn Sink.create(5)
-	let first = try await a.total() otherwise return 2
-	let second = try await b.total() otherwise return 3
-	print("{first} {second}\n")
-	a.shutdown()
-	b.shutdown()
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:15:18: Unsupported: overloading 'Sink.create' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
-```
-
-<!-- test: error.a-throwing-spawn-without-try-beside-a-refused-overload-set-is-still-reported -->
-```maxon
-typealias Whole = int(i64.min to i64.max)
-
-enum StartError implements Error
-	refused
-end 'StartError'
-
-type Sink
-	var seen as Whole
-
-	static function create(count Whole) returns Self
-		return Self{seen: count}
-	end 'create'
-
-	static function create(label String) returns Self throws StartError
-		if label.isEmpty() 'unlabelled'
-			throw StartError.refused
-		end 'unlabelled'
-
-		return Self{seen: 1}
-	end 'create'
-
-	export function total() returns Whole
-		return self.seen
-	end 'total'
-end 'Sink'
-
-type Gate
-	var seen as Whole
-
-	static function create(label String) returns Self throws StartError
-		if label.isEmpty() 'unlabelled'
-			throw StartError.refused
-		end 'unlabelled'
-
-		return Self{seen: 1}
-	end 'create'
-
-	export function total() returns Whole
-		return self.seen
-	end 'total'
-end 'Gate'
-
-function startSink() returns Whole
-	let sink = spawn Sink.create(5)
-	let total = try await sink.total() otherwise return 0
-	sink.shutdown()
-	return total
-end 'startSink'
-
-function startGate() returns Whole
-	let gate = spawn Gate.create("a label long enough to be a heap string")
-	let total = try await gate.total() otherwise return 0
-	gate.shutdown()
-	return total
-end 'startGate'
-
-function main() returns ExitCode
-	print("{startSink()} {startGate()}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:15:18: Unsupported: overloading 'Sink.create' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
-error E3057: <fragment>:52:13: throwing function requires try: 'Gate.create'
-```
-
 <!-- test: services.a-generic-body-spawns-a-generic-service-over-a-concrete-type-from-every-instantiation -->
 Spawn sites that share one service and differ in what their spawner knows each start it from the layout of the instance
 the arguments fix: two instantiations of a generic body and a concrete function all start `Worker with String`, and
@@ -19608,4 +18303,63 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: spawn-of-a-type-two-directories-export-starts-each-directorys-own-service -->
+`a/` and `b/` each export a `type Calc` and each spawns the bare `Calc` of its own directory. The whole-program
+spawn probe reads raw tokens, so it records the written name and must resolve it against the spawning file's
+directory: each `Calc` is a service, and each handle's `bump` runs in its own directory's service.
+```maxon
+// --- file: a/calc.maxon
+export type Calc
+	var count as ExitCode
+
+	export static function create() returns Self
+		return Self{count: 1}
+	end 'create'
+
+	export function bump(by ExitCode) returns ExitCode
+		self.count = self.count + by
+
+		return self.count
+	end 'bump'
+end 'Calc'
+
+export function runA() returns ExitCode
+	let h = spawn Calc.create()
+
+	return try await h.bump(2) otherwise 99
+end 'runA'
+
+// --- file: b/calc.maxon
+export type Calc
+	var count as ExitCode
+
+	export static function create() returns Self
+		return Self{count: 10}
+	end 'create'
+
+	export function bump(by ExitCode) returns ExitCode
+		self.count = self.count + by
+
+		return self.count
+	end 'bump'
+end 'Calc'
+
+export function runB() returns ExitCode
+	let h = spawn Calc.create()
+
+	return try await h.bump(30) otherwise 99
+end 'runB'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	var direct = a.Calc.create()
+	var other = b.Calc.create()
+
+	return runA() + runB() + direct.bump(1) + other.bump(2)
+end 'main'
+```
+```exitcode
+57
 ```

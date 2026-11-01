@@ -1,21 +1,19 @@
-let StagedDirName = "temp/mcp-rebuild-sweeps-retired-images"
+let RebuildSweepsRetiredImagesStagedDirName = "temp/mcp-rebuild-sweeps-retired-images"
 let ProbeLabel = "mcp-rebuild-sweeps-retired-images"
-let CompilerStem = "maxon"
 let RetiredBase = "maxon.retired"
 let NumberedRetiredBase = "maxon.retired-"
-let ProgramFileName = "program.maxon"
-let KnownLine = "built beside retired images"
+let RebuildSweepsRetiredImagesKnownLine = "built beside retired images"
 let PlantedSerial = 7
-let PlantedText = "left by an earlier build"
+let RebuildSweepsRetiredImagesPlantedText = "left by an earlier build"
 
 test 'a self-rebuild deletes the retired images and sidecars of both spellings, and keeps every other file that shares the stem'
-	let dir = stagingDir(StagedDirName)
+	let dir = stagingDir(RebuildSweepsRetiredImagesStagedDirName)
 	clearStagedFiles(dir)
 
 	let imageName = "{CompilerStem}{executableSuffix()}"
 	let compiler = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
 	let program = dir.join(ProgramFileName)
-	writeStagedFile(program, content: printingProgramSource(KnownLine))
+	writeStagedFile(program, content: printingProgramSource(RebuildSweepsRetiredImagesKnownLine))
 
 	let mintedName = mintedScratchName(ProbeLabel, base: RetiredBase, namespace: OwnHostNamespace, pid: endedProcessId(), serial: PlantedSerial)
 	let mintedByAnotherHost = mintedScratchName(ProbeLabel, base: RetiredBase, namespace: "another-os/another-host/another-namespace", pid: endedProcessId(), serial: PlantedSerial + 1)
@@ -35,11 +33,11 @@ test 'a self-rebuild deletes the retired images and sidecars of both spellings, 
 	]
 
 	for name in retired 'eachRetired'
-		writeStagedFile(dir.join(name), content: PlantedText)
+		writeStagedFile(dir.join(name), content: RebuildSweepsRetiredImagesPlantedText)
 	end 'eachRetired'
 
 	for name in kept 'eachKept'
-		writeStagedFile(dir.join(name), content: PlantedText)
+		writeStagedFile(dir.join(name), content: RebuildSweepsRetiredImagesPlantedText)
 	end 'eachKept'
 
 	let rebuilt = rebuildOwnImage(dir, compiler: compiler, program: program)

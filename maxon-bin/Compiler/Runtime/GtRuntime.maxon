@@ -1323,10 +1323,10 @@ export let GtTryAwaitName = b"__gt_try_await"
 // `TargetPrinter.isRuntimeFunction` keeps it out of the rendered Target IR.
 export let GtPromiseDropName = b"__gt_promise_drop"
 
-// `__gt_promise_field_release(box, offset)` — drop whatever thread a promise FIELD still holds, before a
-// store puts another one there. The load is NULL-GUARDED because `__gt_promise_drop` is not: a field a
-// previous consume emptied holds 0, which is the re-armed case and must drop nothing.
-export let GtPromiseFieldReleaseName = b"__gt_promise_field_release"
+// `__gt_promise_release(held)` — drop the thread a promise FIELD or cell held before a store replaced it.
+// NULL-GUARDED because `__gt_promise_drop` is not: a slot a previous consume emptied held 0, which is the
+// re-armed case and must drop nothing.
+export let GtPromiseReleaseName = b"__gt_promise_release"
 
 // `__gt_promise_field_vacate(box, offset, read)` — the struct-field twin of `__managed_vacate`, sharing its
 // occupant check (`ManagedMemoryRuntime.emitPromiseSlotVacateTail`) so a field consumed twice aborts exactly
@@ -2728,7 +2728,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwait(module, name: GtTryAwaitHoldingName, throwing: true, arrival: GtAwaitArrival.inReplyWitness, tracing: tracing)
 	buildGtReplyWitness(module)
 	buildGtPromiseDrop(module)
-	buildGtPromiseFieldRelease(module)
+	buildGtPromiseRelease(module)
 	buildGtPromiseFieldVacate(module)
 
 	// The three halves of the teardown rendezvous, beside the drop and the two awaits that step it.
@@ -5826,19 +5826,16 @@ function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, pr
 	panic("assertCompletedPublicationIsOrdered: '{String.from(func.name)}' tests a green thread's status word against `completed` after reading it with a PLAIN load. Without the acquire, `gt.result`/`gt.threw` may still be unwritten on this M when the flag reads as set. Read it through `emitGtLoadPublishedStatus`, which is the acquire load")
 end 'requireOrderedObservation'
 
-function buildGtPromiseFieldRelease(module StdModule)
-	var func = IrFunction.createFromStd(GtPromiseFieldReleaseName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+function buildGtPromiseRelease(module StdModule)
+	var func = IrFunction.createFromStd(GtPromiseReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var dropIt = module.addBlock(func, label: b"dropheld", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"released", heat: BlockHeat.normal)
-	emitParams(module, block: entry, count: 2)
-	let box = 0
-	let offset = 1
+	emitParams(module, block: entry, count: 1)
+	let held = 0
 
-	let slot = emitBin(module, block: entry, a: box, b: offset, opcode: StdBinOpcode.add, ids: ids)
-	let held = emitLoadField(module, block: entry, record: slot, offset: 0, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: held, pred: StdCmpPred.ne, against: 0, whenTrue: dropIt, whenFalse: done, ids: ids)
 
 	module.appendOp(dropIt, op: StdOp.call(ids.mint(), callee: GtPromiseDropName, args: argsOf(held)))
@@ -5847,7 +5844,7 @@ function buildGtPromiseFieldRelease(module StdModule)
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildGtPromiseFieldRelease'
+end 'buildGtPromiseRelease'
 
 // See `GtPromiseFieldVacateName` for the contract, and `emitPromiseSlotVacateTail` for the check it shares
 // with `__managed_vacate`.

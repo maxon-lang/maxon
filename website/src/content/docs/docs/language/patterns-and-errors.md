@@ -229,10 +229,10 @@ let a = Point.create(1)
 var c = a                     // E3078: cannot assign the read-only 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
 ```
 
-**Handing a by-reference parameter storage another argument reaches**
+**Handing a `mutable` parameter storage another argument reaches**
 
 ```maxon
-rebindThenRead(h, inner: h.inner)   // E3186: argument 'h.inner' overlaps argument 'h', which 'rebindThenRead' reassigns (parameter 'h') — …
+bump(h.n, h: h)   // E3186: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — …
 ```
 
 **Reaching raw memory from a program**

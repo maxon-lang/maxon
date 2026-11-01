@@ -37,14 +37,14 @@ registry holds — an `extension float` block declaring its `__self` as a *named
 float primitive breaks `"{self}"` interpolation. `Self` here is the primitive's
 own type, in parameter and return position alike.
 
-### ⭐ A DECLARED body BEATS the compiler's own
+### ⭐ An extension adds members and never redeclares one
 
-the compiler synthesizes a conformance surface for the primitives — `hash`, `equals`, `compare` come from a
-generated impl, and `toString` and `clone` are lowered **inline**, calling no symbol at all.
+The compiler synthesizes a conformance surface for the primitives — `hash`, `equals`, `compare` come from a
+generated impl, and `toString` and `clone` are lowered **inline**, calling no symbol at all. An `extension int`
+that declares one of those names redeclares a member `int` already has, and is refused with E3006.
 
-A declaration in an `extension` wins over that surface. This is the rule that matters, and it is the one a test
-where the two AGREE cannot check: the cases below deliberately declare bodies that return something
-the synthesized surface never would, so a passing test can only mean the declared body ran.
+A primitive that lacks a member takes the declaration as a new one: `bool` has no `hash`, so an `extension bool`
+may declare it, and the direct call and the witness reach the same body.
 
 ## Tests
 
@@ -149,140 +149,14 @@ end 'main'
 42
 ```
 
-<!-- test: a-declared-hash-beats-the-synthesized-impl -->
-⭐⭐ **THE DIFFERING-DECLARATIONS CONTROL for the conformance half.** the compiler's synthesized `int.hash`
-answers a value inside `-2^32 to 2^32` as its low 32 bits — for a receiver of `5` it answers `5`. This body answers `77`
-for every receiver, so `77` can only come from the declaration.
-```maxon
-extension int implements Hashable
-	function hash() returns HashValue
-		return 77
-	end 'hash'
-end 'int'
-
-function main() returns ExitCode
-	let n = 5
-	return n.hash()
-end 'main'
-```
-```exitcode
-77
-```
-
-<!-- test: a-declared-hash-agrees-through-a-witness -->
-⭐⭐ **THE TWO ROADS TO ONE DECLARED BODY, PINNED AGAINST EACH OTHER.** The case above
-proves the DIRECT call reaches the declaration; it says nothing about the WITNESS. Those are two
-separate mechanisms — the direct call is `Parser.dispatchBuiltinConformanceMethod`'s `declaresCallee`
-peek, while the witness road is a table `BuiltinConformanceRuntime` fills by declining to synthesize an
-impl for a symbol the module already DEFINES. Nothing structural makes the two agree, and if they ever
-came apart the failure would be silent: `n.hash()` answering `77` beside a `where T is Hashable` body
-answering `5`, both compiling, both linking. So the two are compared **in one program**, where a split
-is a differing line rather than two green runs nobody put side by side.
-```maxon
-typealias Integer = int(0 to u32.max)
-
-extension int implements Hashable
-	function hash() returns HashValue
-		return 77
-	end 'hash'
-end 'int'
-
-type Box uses T where T is Hashable
-	export var a as T
-	static function create(a T) returns Self
-		return Self{ a: a }
-	end 'create'
-	function digest() returns HashValue
-		return self.a.hash()
-	end 'digest'
-end 'Box'
-
-typealias IntBox = Box with Integer
-
-function main() returns ExitCode
-	let n = 5
-	let b = IntBox.create(n)
-	print("direct={n.hash()} witness={b.digest()}")
-	return 0
-end 'main'
-```
-```stdout
-direct=77 witness=77
-```
-
-<!-- test: a-declared-element-hash-is-what-an-array-hashes-with -->
-An array's `hash` folds each element's own `hash`, so a declared `int.hash` reaches it on the direct call
-and inside a `where T is Hashable` body alike: `5381 * 33 + 77` is `177650`.
-```maxon
-extension int implements Hashable
-	function hash() returns HashValue
-		return 77
-	end 'hash'
-end 'int'
-
-typealias Val = int(i64.min to i64.max)
-
-type Holder uses T where T is Hashable and Equatable
-	export typealias Items = Array with T
-	var tag as Val
-	static function create(tag Val) returns Self
-		return Self{tag: tag}
-	end 'create'
-	function digest(items Items) returns HashValue
-		return items.hash()
-	end 'digest'
-end 'Holder'
-
-typealias H = Holder with Val
-typealias ValArray = Array with Val
-
-function main() returns ExitCode
-	var xs = ValArray.create()
-	xs.push(5)
-	let holder = H.create(0)
-	print("direct={xs.hash()} generic={holder.digest(xs)}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-direct=177650 generic=177650
-```
-
-<!-- test: a-declared-element-equals-is-what-arrays-compare-with -->
-An array's `equals` compares each element pair through the element's own `equals`, so a declared
-`int.equals` that answers `true` for every pair makes `[1]` equal `[2]`, through the method and the operator.
-```maxon
-extension int implements Equatable
-	function equals(other Self) returns bool
-		return other < 0 or other >= 0
-	end 'equals'
-end 'int'
-
-function main() returns ExitCode
-	print("{[1] == [2]}\n")
-	print("{[1].equals([2])}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-true
-true
-```
-
 <!-- test: a-declared-conformance-supplies-a-protocol-the-primitive-lacks -->
-⭐⭐ **A DECLARATION DOES NOT MERELY *BEAT* THE SYNTHESIZED SURFACE — IT CAN EXTEND IT.**
+⭐⭐ **A DECLARATION CAN EXTEND THE SYNTHESIZED SURFACE.**
 `bool` has no intrinsic `Hashable` at all: `IrInterface.isIntrinsicBuiltinConformance` grants it
 `Comparable` and nothing else, so a bare `t.hash()` is **`E2015 'bool' has no method named 'hash' — a
 builtin-typed receiver supplies `compare`, `toString`, `clone``**. That makes
 this the case where the declared body is not competing with a compiler answer but is the *only* one,
 and it is the sharper test of the witness road: the table cannot be inherited from a synthesized impl,
-because there is none to inherit. Both roads are compared in one program for the case above's reason.
+because there is none to inherit. Both roads are compared in one program, so a split is a differing line rather than two green runs nobody put side by side.
 ```maxon
 extension bool implements Hashable
 	function hash() returns HashValue
@@ -313,45 +187,23 @@ end 'main'
 direct=9 witness=9
 ```
 
-<!-- test: a-declared-tostring-beats-the-inline-lowering -->
-⭐⭐ **THE DIFFERING-DECLARATIONS CONTROL for the INLINE half, and it is the one that can fail
-silently.** `toString` on a primitive receiver is lowered inline and calls no symbol, so a declared body
-for it can be published, type-checked, and never run — a wrong answer rather than a refusal. The
-synthesized lowering would print `5`; this body prints `five`.
+<!-- test: error.an-extension-may-not-redeclare-a-member-the-primitive-already-has -->
+`int` already has the synthesized `hash`, so the extension's declaration is a duplicate and is refused at the
+redeclared name.
 ```maxon
-extension int implements Stringable
-	function toString() returns String
-		return "five"
-	end 'toString'
+extension int implements Hashable
+	function hash() returns HashValue
+		return 77
+	end 'hash'
 end 'int'
 
 function main() returns ExitCode
 	let n = 5
-	print(n.toString())
-	return 0
+	return n.hash()
 end 'main'
 ```
-```stdout
-five
-```
-
-<!-- test: a-declared-clone-beats-the-inline-lowering -->
-⭐⭐ The same control for `clone`, the other inline-lowered arm. A synthesized `clone` returns the
-receiver unchanged; this one does not.
-```maxon
-extension int implements Cloneable
-	function clone() returns Self
-		return self + 100
-	end 'clone'
-end 'int'
-
-function main() returns ExitCode
-	let n = 5
-	return n.clone() as ExitCode
-end 'main'
-```
-```exitcode
-105
+```maxoncstderr
+error E3006: <fragment>:3:11: Duplicate method 'hash' in type 'int'
 ```
 
 <!-- test: an-extension-on-a-primitive-may-not-declare-storage -->

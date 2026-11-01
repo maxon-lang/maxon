@@ -1,6 +1,5 @@
-let CaseDirName = "library-cache-per-target"
-let ProgramDirName = "app"
-let HostOutputName = "host-program"
+let LibraryCacheIsPerTargetCaseDirName = "library-cache-per-target"
+let LibraryCacheIsPerTargetHostOutputName = "host-program"
 let ForeignOutputName = "foreign-program"
 
 #if os(Windows)
@@ -10,7 +9,7 @@ let ForeignOutputName = "foreign-program"
 #endif
 
 test 'a build for another target does not load the library baseline another target wrote'
-	requireHeldOutsideCheckout(CaseDirName, check: LibraryCacheIsPerTarget.create())
+	requireHeldOutsideCheckout(LibraryCacheIsPerTargetCaseDirName, check: LibraryCacheIsPerTarget.create())
 end 'a build for another target does not load the library baseline another target wrote'
 
 type LibraryCacheIsPerTarget implements OutsideCheckoutCase
@@ -21,7 +20,7 @@ type LibraryCacheIsPerTarget implements OutsideCheckoutCase
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
 
-		let host = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: HostOutputName, options: StringArray.create()), which: "the host build")
+		let host = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: LibraryCacheIsPerTargetHostOutputName, options: StringArray.create()), which: "the host build")
 		try Expect.greaterThan(host.written, than: 0, message: "the host build wrote nothing to the library cache, so a {ForeignTarget} build has nothing it could wrongly load. It wrote: {host.line}")
 
 		let foreignOption = "{TargetOptionPrefix}{ForeignTarget}"

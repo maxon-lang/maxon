@@ -535,7 +535,7 @@ against its own `int(0 to 100)`. Both declarations are file-private, so each fil
 A whole-program fold over both declarations — or a check that read the declaring file of whichever `Byte`
 was recorded last — gets one of the two wrong.
 ```maxon
-// --- file: wide.maxon
+// --- file: wide/wide.maxon
 typealias Byte = int(0 to u8.max)
 
 export function anyByte(b Integer) returns Integer
@@ -564,7 +564,7 @@ end 'main'
 ### …and the identical literal moved into the NARROW file meets its own declaration's wall
 The half that proves the case above is not simply a lost refusal. One program, two files, two answers.
 ```maxon
-// --- file: wide.maxon
+// --- file: wide/wide.maxon
 typealias Byte = int(0 to u8.max)
 
 export function anyByte(b Integer) returns Integer
@@ -885,7 +885,7 @@ error E3005: app/<fragment>:25:9: argument type mismatch for 'b': expected 'app.
 ### Claimants in ONE module: the refusal still names the field and the alias as written
 The same contest with both declarations in `pkg/`. Both declarations are file-private, which is what lets
 two files of one directory hold one name, and `Holder.items` would be the only way a `pkg/lib.maxon`
-value could reach `pkg/main.maxon`. E3167 refuses the field at its declaration, and the two `Bytes` meet in
+value could reach `app/main.maxon`. E3167 refuses the field at its declaration, and the two `Bytes` meet in
 an argument check that E3005 refuses.
 ```maxon
 // --- file: pkg/lib.maxon
@@ -902,7 +902,7 @@ export type Holder
 	end 'make'
 end 'Holder'
 
-// --- file: pkg/main.maxon
+// --- file: app/main.maxon
 typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
@@ -916,7 +916,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bytes' in its type
-error E3005: pkg/<fragment>:25:9: argument type mismatch for 'b': expected 'Bytes' (declared in pkg/main.maxon), got 'Bytes' (declared in pkg/lib.maxon)
+error E3005: app/<fragment>:25:9: argument type mismatch for 'b': expected 'app.Bytes', got 'pkg.Bytes'
 ```
 
 <!-- test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller -->
@@ -1177,7 +1177,7 @@ Stack trace:
 
 `byteBufferBoundaryAdmits` is the whole of *"the two byte element types stay DISTINCT and convert at the
 BOUNDARY"*, and every coercion site asks it: the CALL ARGUMENT, `return`, reassignment, `otherwise`, a
-match arm's merge, a struct-literal / union-payload store, overload candidate scoring, and a generic
+match arm's merge, a struct-literal / union-payload store, and a generic
 call's type-parameter argument. A site that compared the aggregate NAMES alone would refuse a value the
 call accepts the moment it crossed that site. What each door would say if it compared names alone
 (`Array___ManagedByte` is the element every compiler-synthesized byte buffer wears; `Array_Byte` is what
@@ -1194,10 +1194,7 @@ call accepts the moment it crossed that site. What each door would say if it com
 declaration, and a compiler-synthesized buffer, which has no declaration of its own, by its parts.
 
 The door is asked ONCE — `aggregatesConflict` takes the (tag, nameId) pair beside each side's aggregate name and folds the byte boundary in, so a site cannot
-ask the identity question without asking the boundary one. Overload SCORING is the eighth site, it carries
-the door for its own stated promise (*"a candidate this function accepts cannot then be rejected
-downstream"*), and it too has a distinguishing case —
-`overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`, at the end of this file.
+ask the identity question without asking the boundary one.
 
 <!-- test: a-synthesized-buffer-crosses-every-declared-byte-buffer-door -->
 <!-- tier: stdlib -->
@@ -1308,45 +1305,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Bytes', got 'Array with stdlib.Byte'
-```
-
-### ⛔ THE EIGHTH SITE — OVERLOAD SCORING — DOES HAVE A DISTINGUISHING CASE
-
-`overloadArgTypeFit`'s answer might look UNOBSERVABLE — *"a candidate it wrongly refuses is refused a second
-time by every sibling candidate and the call resolves anyway"*. **The second half is false. When NO candidate
-fits, the call does not resolve anyway — it resolves to the FIRST declared overload and reports the refusal
-against that one's parameter.**
-
-⚠ With the bare `namedAggregatesConflict` in `overloadArgTypeFit`, the program below would stop compiling
-with an `E3005 argument type mismatch for 'x'` quoting `x`, the parameter of the `Ints` overload the call
-was never written against. With the shared door it compiles and picks the `__ManagedMemory` candidate. So
-the eighth site is load-bearing exactly like the other seven.
-
-<!-- test: overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate -->
-<!-- tier: stdlib -->
-### Overload scoring picks the byte-buffer candidate for a compiler-synthesized buffer
-The `Ints` candidate is declared FIRST, so a resolver that scores the `__ManagedMemory` one
-`incompatible` reports against `x` rather than selecting it. It carries no lane restriction, for
-`a-wide-byte-still-reads-a-compiler-synthesized-buffer`'s reason.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Ints = Array with Integer
-
-function which(x Ints) returns Integer
-	return 11 if x.count() >= 0 else 12
-end 'which'
-
-function which(m __ManagedMemory) returns Integer
-	return 37 if m.length() > 0 else 12
-end 'which'
-
-function main() returns ExitCode
-	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
-	return which(cwd) as ExitCode
-end 'main'
-```
-```exitcode
-37
 ```
 
 ### ⛔ A `Byte` THAT CANNOT HOLD EVERY BYTE MAY NOT RECEIVE A RAW-BYTE FILL

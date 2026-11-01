@@ -3244,32 +3244,6 @@ end 'main'
 42
 ```
 
-<!-- test: a-module-scope-factory-beside-a-same-named-instance-method-takes-the-static -->
-```maxon
-typealias Num = int(0 to 100)
-
-type Pair
-	export var a as Num
-
-	static function make() returns Self
-		return Self{a: 7}
-	end 'make'
-
-	function make() returns Num
-		return self.a
-	end 'make'
-end 'Pair'
-
-let p = Pair.make()
-
-function main() returns ExitCode
-	return p.make() as ExitCode
-end 'main'
-```
-```exitcode
-7
-```
-
 <!-- test: error.a-directory-qualified-shared-value-alias-static-it-lacks-is-refused-as-a-call -->
 ```maxon
 // --- file: lib/flag.maxon
@@ -3580,7 +3554,7 @@ end 'main'
 5
 ```
 
-<!-- test: error.a-type-call-through-a-type-parameter-picks-the-static-requirement-beside-an-instance-of-the-same-name -->
+<!-- test: error.a-type-call-through-a-type-parameter-reaches-the-static-requirement -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3589,7 +3563,7 @@ interface Maker
 end 'Maker'
 
 interface Namer
-	function make() returns Integer
+	function name() returns Integer
 end 'Namer'
 
 type Widget implements Maker, Namer
@@ -3603,13 +3577,13 @@ type Widget implements Maker, Namer
 		return 7
 	end 'make'
 
-	function make() returns Integer
+	function name() returns Integer
 		return self.n
-	end 'make'
+	end 'name'
 end 'Widget'
 
 function build(x T) uses T returns Integer where T is Maker and Namer
-	return T.make() + x.make()
+	return T.make() + x.name()
 end 'build'
 
 function main() returns ExitCode
@@ -3871,60 +3845,39 @@ ping
 ```
 
 
-<!-- test: error.a-directory-let-read-in-a-body-through-a-directory-named-like-a-primitive-names-the-directory -->
+<!-- test: a-directory-let-and-var-are-read-in-a-body-through-a-directory-named-like-a-primitive -->
 ```maxon
 // --- file: byte/m.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export let LIMIT = 7
 
-export var counter = 1 as Integer
-
-export function ping()
-	print("ping\n")
-end 'ping'
-
-export function twice(n Integer) returns Integer
-	return n * 2
-end 'twice'
+export var counter = 1 as Count
 
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = byte.LIMIT
-	return 0
+	return byte.LIMIT + (byte.counter as ExitCode)
 end 'main'
 ```
-```maxoncstderr
-error E2073: <fragment>:19:15: 'byte' is a directory and has no member 'LIMIT'
+```exitcode
+8
 ```
 
 
-<!-- test: error.a-directory-let-read-at-module-scope-through-a-directory-named-like-a-primitive-names-the-directory -->
+<!-- test: a-directory-let-and-var-are-read-at-module-scope-through-a-directory-named-like-a-primitive -->
 ```maxon
 // --- file: byte/m.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export let LIMIT = 7
 
-export var counter = 1 as Integer
-
-export function ping()
-	print("ping\n")
-end 'ping'
-
-export function twice(n Integer) returns Integer
-	return n * 2
-end 'twice'
+export var counter = 1 as Count
 
 // --- file: main.maxon
 let a = byte.LIMIT
 
 function main() returns ExitCode
-	return 0
+	return a + (byte.counter as ExitCode)
 end 'main'
 ```
-```maxoncstderr
-error E2073: <fragment>:18:14: 'byte' is a directory and has no member 'LIMIT'
+```exitcode
+8
 ```
 
 
@@ -4040,60 +3993,39 @@ ping
 ```
 
 
-<!-- test: error.a-directory-let-read-in-a-body-through-an-ordinary-directory-names-the-directory -->
+<!-- test: a-directory-let-and-var-are-read-in-a-body-through-an-ordinary-directory -->
 ```maxon
 // --- file: lib/m.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export let LIMIT = 7
 
-export var counter = 1 as Integer
-
-export function ping()
-	print("ping\n")
-end 'ping'
-
-export function twice(n Integer) returns Integer
-	return n * 2
-end 'twice'
+export var counter = 1 as Count
 
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = lib.LIMIT
-	return 0
+	return lib.LIMIT + (lib.counter as ExitCode)
 end 'main'
 ```
-```maxoncstderr
-error E2073: <fragment>:19:14: 'lib' is a directory and has no member 'LIMIT'
+```exitcode
+8
 ```
 
 
-<!-- test: error.a-directory-let-read-at-module-scope-through-an-ordinary-directory-names-the-directory -->
+<!-- test: a-directory-let-and-var-are-read-at-module-scope-through-an-ordinary-directory -->
 ```maxon
 // --- file: lib/m.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export let LIMIT = 7
 
-export var counter = 1 as Integer
-
-export function ping()
-	print("ping\n")
-end 'ping'
-
-export function twice(n Integer) returns Integer
-	return n * 2
-end 'twice'
+export var counter = 1 as Count
 
 // --- file: main.maxon
 let a = lib.LIMIT
 
 function main() returns ExitCode
-	return 0
+	return a + (lib.counter as ExitCode)
 end 'main'
 ```
-```maxoncstderr
-error E2073: <fragment>:18:13: 'lib' is a directory and has no member 'LIMIT'
+```exitcode
+8
 ```
 
 
@@ -7324,97 +7256,6 @@ end 'main'
 ```
 ```stdout
 8 7
-```
-
-<!-- test: error.a-call-through-a-reassigned-function-typed-parameter-reports-only-the-refused-assignment -->
-A function-typed parameter is a variable of its declared function type too, so a call after a refused reassignment is typed by that declared type.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Thunk = function() returns Integer
-
-function seven() returns Integer
-	return 7
-end 'seven'
-
-function add(a Integer) returns Integer
-	return a + 1
-end 'add'
-
-function run(f Thunk) returns Integer
-	f = add
-	return f()
-end 'run'
-
-function main() returns ExitCode
-	return run(seven) as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:14:2: function type mismatch assigning to variable 'f': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
-```
-
-<!-- test: a-call-through-a-function-typed-variable-reassigned-to-another-function-calls-the-function-it-holds -->
-A function-typed variable, a parameter and a closure-holding variable reassigned in a straight line or on one branch each call the function they hold when called, whether the function was a named one, a closure or another variable's value.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Thunk = function() returns Integer
-
-function seven() returns Integer
-	return 7
-end 'seven'
-
-function eight() returns Integer
-	return 8
-end 'eight'
-
-function nine() returns Integer
-	return 9
-end 'nine'
-
-function viaParam(f Thunk, c bool) returns Integer
-	if c 'b'
-		f = eight
-	end 'b'
-
-	return f()
-end 'viaParam'
-
-function straight() returns Integer
-	var f = seven as Thunk
-	f = nine
-	return f()
-end 'straight'
-
-function pick(c bool) returns Integer
-	var f = seven as Thunk
-	var g = nine as Thunk
-	let h = eight
-
-	if c 'b'
-		f = g
-		g = h
-	end 'b'
-
-	let captured = 100 as Integer
-	var k = seven
-
-	if c 'cl'
-		k = function() gives captured + 1
-	end 'cl'
-
-	return f() * 1000 + g() * 100 + k()
-end 'pick'
-
-function main() returns ExitCode
-	print("{viaParam(seven, c: true)} {viaParam(seven, c: false)} {straight()} {pick(true)} {pick(false)}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-8 7 9 9901 7907
 ```
 
 <!-- test: error.a-call-through-a-cast-result-is-checked-against-the-cast-type -->

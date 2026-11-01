@@ -820,7 +820,7 @@ module function reachableBlockPositions(module StdModule, func IrFunction) retur
 		collectStdBlockSuccessorIds(module, block: block, out: successors)
 
 		for successorId in successors 'eachSucc'
-			markReachable(reachable, stack: stack, position: try byId.get(successorId) otherwise panic("reachableBlockPositions: block {successorId} is a branch target of this function but is not in its blockRefs"))
+			markPositionReachable(reachable, stack: stack, position: try byId.get(successorId) otherwise panic("reachableBlockPositions: block {successorId} is a branch target of this function but is not in its blockRefs"))
 		end 'eachSucc'
 	end 'walk'
 
@@ -831,13 +831,13 @@ end 'reachableBlockPositions'
 typealias BlockRefIndexArray = Array with ElementIndex
 
 // Mark a block position reachable and queue it, once. Both columns are the caller's.
-function markReachable(reachable BoolArray, stack BlockRefIndexArray, position ElementIndex)
-	let seenBefore = try reachable.get(position) otherwise panic("markReachable: reachable.get OOB at {position}")
+function markPositionReachable(reachable BoolArray, stack BlockRefIndexArray, position ElementIndex)
+	let seenBefore = try reachable.get(position) otherwise panic("markPositionReachable: reachable.get OOB at {position}")
 
 	if seenBefore 'alreadySeen'
 		return
 	end 'alreadySeen'
 
-	try reachable.set(position, value: true) otherwise panic("markReachable: reachable.set OOB at {position}")
+	try reachable.set(position, value: true) otherwise panic("markPositionReachable: reachable.set OOB at {position}")
 	stack.push(position)
-end 'markReachable'
+end 'markPositionReachable'

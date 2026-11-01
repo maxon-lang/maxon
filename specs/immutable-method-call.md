@@ -54,7 +54,7 @@ record it denotes is the caller's and may be written, exactly as an array parame
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function grow(s String) returns Integer
+function grow(s mutable String) returns Integer
 	s.append("XY")
 	return s.byteLength()
 end 'grow'
@@ -66,64 +66,6 @@ end 'main'
 ```
 ```exitcode
 4
-```
-
-<!-- test: pass-let-string-through-inline-if-error -->
-### Passing a `let` String Through an Inline `if`
-
-⭐ **A LAUNDER IS NOT A LOOPHOLE.** `grow(g)` on a `let` is refused, so `grow(g if flag else g)` — the SAME
-binding, reached through a merge that copies nothing — must be refused too. The blame name is keyed on the
-argument being a single bare token, and an inline `if` is three, so the argument's own name says nothing;
-the MERGE carries its arms' blame onto the result phi instead.
-
-⚠ **THIS IS A MEMORY-SAFETY RULE, NOT A MESSAGE ONE**, which is why it is pinned here rather than left as a
-nicety: accepted, the program writes into the literal's read-only `.rdata` record and takes an ACCESS
-VIOLATION on x64, and on wasm32-wasi the same write succeeds into a record shared by every use of that
-literal.
-
-⚠ **The compiler NAMES THE BINDING** (⚖ user ruling): the merge does not lose the name, and every other
-E3159 in the canonical corpus names the read-only root, this file's own `push-on-let-array-error` and
-`append-on-let-string-error` included.
-```maxon
-function grow(s String)
-	s.append("XY")
-end 'grow'
-
-function main() returns ExitCode
-	let flag = true
-	let g = "hello"
-	grow(g if flag else g)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: specs/immutable-method-call/pass-let-string-through-inline-if-error.maxon:9:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
-```
-
-<!-- test: pass-let-string-through-try-otherwise-error -->
-### Passing a `let` String Through `try … otherwise`
-
-The merge doors are shared, so `try … otherwise` must refuse exactly where the inline `if` does. ⚠ Reaching
-the borrowed merge takes care: `emitOwnedValueReturn` promotes at a `return`, so a String-returning throwing
-function gives an OWNED try edge and `promoteBorrowedMergeEdge` then promotes the fallback to match — a
-shape that is safe. It takes a try edge that is itself a borrow, like the `Array with String`
-element `get` hands back without copying, for the merge to stay borrowed all the way to the callee.
-```maxon
-typealias StringArray = Array with String
-
-function grow(s String)
-	s.append("XY")
-end 'grow'
-
-function main() returns ExitCode
-	let g = "hello"
-	var arr = StringArray.create()
-	grow(try arr.get(0) otherwise g)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: specs/immutable-method-call/pass-let-string-through-try-otherwise-error.maxon:11:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
 ```
 
 <!-- test: push-on-let-alias-of-parameter-error -->
@@ -526,32 +468,6 @@ end 'main'
 1
 ```
 
-<!-- test: returned-alias-to-a-mutating-parameter -->
-### Passing a `let` String Through a Call That Returns It
-
-A call is a launder too when it may hand back its argument: `pass(g)` may be `g`'s own record, so `grow`
-would write it while `g` is still read.
-```maxon
-function grow(s String)
-	s.append("XY")
-end 'grow'
-
-function pass(s String) returns String
-	return s
-end 'pass'
-
-function main() returns ExitCode
-	let n = 7
-	let g = "hello{n}"
-	grow(pass(g))
-	print("{g}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: specs/immutable-method-call/returned-alias-to-a-mutating-parameter.maxon:13:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
-```
-
 <!-- test: let-record-written-through-a-returned-container -->
 ### Writing a `let` Array Through a Call That Returns It
 
@@ -572,39 +488,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: specs/immutable-method-call/let-record-written-through-a-returned-container.maxon:11:10: cannot write through 'pass(a)': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
-```
-
-<!-- test: let-record-alias-of-a-parameter-passed-through-a-call -->
-### A `let` Alias of a Parameter, Through a Call
-
-The alias is blamed through a call exactly as `push-on-let-alias-of-parameter-error` blames it by name;
-`q` is read after the call.
-```maxon
-function grow(s String)
-	s.append("XY")
-end 'grow'
-
-function pass(s String) returns String
-	return s
-end 'pass'
-
-function tagIt(p String)
-	let q = p
-	grow(pass(q))
-	print("{q}\n")
-end 'tagIt'
-
-function main() returns ExitCode
-	let n = 7
-	var a = "lit{n}"
-	tagIt(a)
-	a.append("?")
-	print("{a}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: specs/immutable-method-call/let-record-alias-of-a-parameter-passed-through-a-call.maxon:12:2: cannot pass 'q', which is read-only (a `let` binding), to a function that writes parameter 's' (in tagIt); pass a clone()
 ```
 
 <!-- test: error.append-to-a-string-field-off-a-local-let -->

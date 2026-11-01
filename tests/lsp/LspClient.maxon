@@ -187,12 +187,12 @@ public union ServerIdentity
 	absent
 	reported(name String, version String)
 
-	public function name() returns String throws LspClientError
+	public function serverName() returns String throws LspClientError
 		match self 'identity'
 			reported(name, _) then return name
 			absent then throw LspClientError.malformedResponse(AbsentServerInfoDetail)
 		end 'identity'
-	end 'name'
+	end 'serverName'
 
 	public function version() returns String throws LspClientError
 		match self 'identity'
@@ -2125,3 +2125,9 @@ export function expectBreakingChangeNotices(items PublishedDiagnosticArray) thro
 
 	try Expect.equal(terminatedLines(notices), expected: terminatedLines(expected), message: "the `.maxproj` of a project last built by maxon {OlderRelease} did not carry exactly one Information-severity notice per breaking change RELEASE_NOTES.md names since that release, newest first.")
 end 'expectBreakingChangeNotices'
+
+module let MaxprojFileName = "app.maxproj"
+module let MaxprojSource = "export function app() returns ExitCode\n\treturn projectHelper()\nend 'app'\n"
+module let MaxprojMainFileName = "main.maxon"
+module let MaxprojMainSource = "function main() returns ExitCode\n\treturn projectHelper()\nend 'main'\n\nexport function projectHelper() returns ExitCode\n\treturn 0\nend 'projectHelper'\n"
+module let RuntimeTierDirName = "runtime"

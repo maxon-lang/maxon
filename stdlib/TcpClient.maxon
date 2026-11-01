@@ -45,14 +45,9 @@ public type TcpClient
 
 	/// Connect to a TCP server by hostname and port.
 	/// Resolves the hostname, creates a TCP socket, and connects.
+	/// Throws `NetworkError.timedOut` when the connection is not established within `deadlineMs`.
 	/// The returned TcpClient auto-closes when it goes out of scope.
-	public static function connect(host String, port NetworkPort) returns TcpClient throws NetworkError
-		return try connect(host, port: port, deadlineMs: NoDeadlineMs)
-	end 'connect'
-
-	/// Connect as `connect(host, port:)` does, throwing `NetworkError.timedOut` when the connection is
-	/// not established within `deadlineMs`.
-	public static function connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs) returns TcpClient throws NetworkError
+	public static function connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs = NoDeadlineMs) returns TcpClient throws NetworkError
 		let sock = try __ManagedSocket.tcpConnect(host.addressableBytes(), port: port, milliseconds: deadlineMs) otherwise (e) 'connErr'
 			match e 'matchConn'
 				resolveFailed then throw NetworkError.resolveFailed

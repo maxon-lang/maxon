@@ -245,41 +245,21 @@ end 'main'
 42
 ```
 
-<!-- test: async-scheduler.an-integer-argument-is-widened-into-a-float-cell -->
-The same conversion at a parameter the callee reassigns, whose cell holds a double.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Real = float(f64.min to f64.max)
-
-function half(x Real) returns Integer
-	Scheduler.yield()
-	x = x / 2.0
-	return trunc(x)
-end 'half'
-
-function main() returns ExitCode
-	let p = async half(84)
-	return (await p) as ExitCode
-end 'main'
-```
-```exitcode
-42
-```
-
 <!-- test: async-scheduler.a-float-argument-beside-a-reassigned-float-uses-both-files -->
 `x` is read and travels in float slot 0; `y` is reassigned, so its cell address travels in integer slot 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
 
-function blend(x Real, y Real) returns Integer
+function blend(x Real, y mutable Real) returns Integer
 	Scheduler.yield()
 	y = y + x
 	return trunc(y)
 end 'blend'
 
 function main() returns ExitCode
-	let p = async blend(1.5, y: 40.5)
+	var y = 40.5 as Real
+	let p = async blend(1.5, y: y)
 	return (await p) as ExitCode
 end 'main'
 ```
@@ -294,14 +274,15 @@ the cell is one integer word whatever it holds.
 typealias Integer = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
 
-function half(x Real) returns Integer
+function half(x mutable Real) returns Integer
 	Scheduler.yield()
 	x = x / 2.0
 	return trunc(x)
 end 'half'
 
 function main() returns ExitCode
-	let p = async half(84.0)
+	var x = 84.0 as Real
+	let p = async half(x)
 	return (await p) as ExitCode
 end 'main'
 ```
@@ -704,7 +685,7 @@ targets, and the coroutine owns the cells.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function bump(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer, j Integer) returns Integer
+function bump(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i mutable Integer, j mutable Integer) returns Integer
 	Scheduler.yield()
 	i = i + 100
 	j = j + 200
@@ -712,7 +693,9 @@ function bump(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, 
 end 'bump'
 
 function main() returns ExitCode
-	let p = async bump(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10)
+	var i = 9 as Integer
+	var j = 10 as Integer
+	let p = async bump(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: i, j: j)
 	print("{await p}\n")
 	return 0
 end 'main'

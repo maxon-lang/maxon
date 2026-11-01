@@ -469,9 +469,9 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return needleOccursIn(self, len: byteLength(), needle: needle)
 	end 'contains'
 
-	public function contains(character Character) returns bool
+	public function containsCharacter(character Character) returns bool
 		return needleOccursIn(self, len: byteLength(), needle: character.toString())
-	end 'contains'
+	end 'containsCharacter'
 
 	/// The `StringIndex` naming the grapheme that STARTS at `byteIdx` — the one thing both searches
 	/// have to do with the byte offset they find, and the one both would otherwise shortcut
@@ -497,15 +497,15 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'findLast'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
-	// Use endIndex for end position, or length for character count
+	// `slice` takes an end index, `sliceLength` a grapheme count
 	public function slice(start StringIndex, endIndex StringIndex) returns String
 		return sliceBytes(start.bytePos(), endPos: endIndex.bytePos(), singleByteGraphemes: singleByteGraphemesFlag)
 	end 'slice'
 
-	public function slice(start StringIndex, length GraphemeIndex) returns String
+	public function sliceLength(start StringIndex, length GraphemeIndex) returns String
 		let endBytePos = graphemeOffsetToBytePos(self, startBytePos: start.bytePos(), count: length)
 		return sliceBytes(start.bytePos(), endPos: endBytePos, singleByteGraphemes: singleByteGraphemesFlag)
-	end 'slice'
+	end 'sliceLength'
 
 	// View methods - returns lazy Iterable views over bytes/codepoints/UTF-16
 	// code units. View construction is cheap; iterating an empty view yields zero elements.
@@ -771,7 +771,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'scanTrimEnd'
 
 	/// Trim characters in the given set from both ends of the string.
-	public function trim(chars CharacterSet) returns String
+	public function trim(chars CharacterSet = CharacterSet.whitespacesAndNewlines()) returns String
 		let len = byteLength()
 
 		if len == 0 'empty'
@@ -789,7 +789,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'trim'
 
 	/// Trim characters in the given set from the start of the string.
-	public function trimStart(chars CharacterSet) returns String
+	public function trimStart(chars CharacterSet = CharacterSet.whitespacesAndNewlines()) returns String
 		let len = byteLength()
 
 		if len == 0 'empty'
@@ -806,7 +806,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'trimStart'
 
 	/// Trim characters in the given set from the end of the string.
-	public function trimEnd(chars CharacterSet) returns String
+	public function trimEnd(chars CharacterSet = CharacterSet.whitespacesAndNewlines()) returns String
 		let len = byteLength()
 
 		if len == 0 'empty'
@@ -820,21 +820,6 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'allMatch'
 
 		return sliceBytes(0, endPos: endPos, singleByteGraphemes: singleByteGraphemesFlag)
-	end 'trimEnd'
-
-	/// Trim Unicode whitespace from both ends.
-	public function trim() returns String
-		return trim(CharacterSet.whitespacesAndNewlines())
-	end 'trim'
-
-	/// Trim Unicode whitespace from the start.
-	public function trimStart() returns String
-		return trimStart(CharacterSet.whitespacesAndNewlines())
-	end 'trimStart'
-
-	/// Trim Unicode whitespace from the end.
-	public function trimEnd() returns String
-		return trimEnd(CharacterSet.whitespacesAndNewlines())
 	end 'trimEnd'
 end 'String'
 
@@ -1060,8 +1045,9 @@ function findIn(haystack String, offset BytePos, len BytePos, needle String) ret
 	throw StringError.notFound
 end 'findIn'
 
-/// The scan asked as `contains` asks it, and the ONE place that translation is made — both overloads
-/// ask exactly this, and a second copy is a second place the two answers could be swapped.
+/// The scan asked as `contains` asks it, and the ONE place that translation is made — `contains` and
+/// `containsCharacter` ask exactly this, and a second copy is a second place the two answers could be
+/// swapped.
 ///
 /// ⚠ **`try … otherwise`, NOT `if try …`.** A bare `if try findIn(…)` is E3124: it DROPS the byte
 /// position while reading as though the position were what the `if` tested. `if let _ = try findIn(…)`

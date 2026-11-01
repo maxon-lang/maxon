@@ -48,9 +48,7 @@ let DumpBuildIdKey = "build-id:"
 
 // A function row's code range, `[START, END)`. The bracket is also what tells a function row apart from
 // the local-variable rows nested under it (`total  [rbp-0x10]  : i64`), which carry no `)`.
-let RangeOpen = "["
-let RangeClose = ")"
-let RangeSeparator = ","
+let SidecarDumpRangeOpen = "["
 
 // How a declaration's CLOSE is recognized in the staged fixture source. Its opening line and the name in
 // it are the shared half's, because every case here reads the same roster out of the same source.
@@ -197,7 +195,7 @@ end 'functionRowNamed'
 
 // Whether a row spells a `[START, END)` code range.
 function carriesCodeRange(row String) returns bool
-	let open = try row.findFirst(RangeOpen) otherwise return false
+	let open = try row.findFirst(SidecarDumpRangeOpen) otherwise return false
 	let rest = row.slice(open, endIndex: row.endIndex())
 
 	return rest.contains(RangeClose) and rest.contains(RangeSeparator)
@@ -210,7 +208,7 @@ function codeRangeBound(row String, upper bool) returns PrintedNumber
 		return 0
 	end 'noRange'
 
-	let open = try row.findFirst(RangeOpen) otherwise return 0
+	let open = try row.findFirst(SidecarDumpRangeOpen) otherwise return 0
 	let afterOpen = try row.indexAfter(open) otherwise return 0
 	let rest = row.slice(afterOpen, endIndex: row.endIndex())
 	let close = try rest.findFirst(RangeClose) otherwise return 0

@@ -558,7 +558,7 @@ unused in exactly the sense E3062 names, and a spelling that never reached it ma
 Two declarations coexist here (`specs/export-keyword.md`'s duplicate rule refuses only one FILE
 declaring a name twice), so no collision diagnostic explains it either.
 ```maxon
-// --- file: probe.maxon
+// --- file: probe/probe.maxon
 export union Thing
 	made(detail String)
 end 'Thing'
@@ -575,7 +575,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
+error E3062: probe/<fragment>:7:11: unused typealias: 'ThingArray'
 ```
 
 ### String Array Literals

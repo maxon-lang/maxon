@@ -12,9 +12,9 @@ category: collections
 `Array<T>` exposes four sort entry points:
 
 - `sort()` — stable sort using the element's `Comparable.compare` ordering. Requires `Element is Comparable`.
-- `sort(cmp)` — stable sort using a caller-supplied comparator `function(Element, Element) returns Ordering`.
+- `sortBy(cmp)` — stable sort using a caller-supplied comparator `function(Element, Element) returns Ordering`.
 - `sortUnstable()` — unstable sort via the element's `Comparable.compare` ordering. Requires `Element is Comparable`.
-- `sortUnstable(cmp)` — unstable sort using a caller-supplied comparator.
+- `sortUnstableBy(cmp)` — unstable sort using a caller-supplied comparator.
 
 Stage 1: every entry routes to insertion sort. Stage 2 layers in sorting networks for small slices, Stage 3 routes the unstable entries to pdqsort, and Stages 4 onward build up driftsort (an adaptive stable powersort-merge sort, from the same family as Rust's standard-library `slice::sort`) for the stable entries.
 
@@ -198,7 +198,7 @@ function main() returns ExitCode
 	a.push("apple")
 	a.push("kiwi")
 	a.push("a")
-	a.sort(byLength)
+	a.sortBy(byLength)
 	for s in a 'p'
 		print("{s}\n")
 	end 'p'
@@ -234,7 +234,7 @@ function main() returns ExitCode
 	a.push(8)
 	a.push(2)
 	a.push(8)
-	a.sort(descending)
+	a.sortBy(descending)
 	for x in a 'p'
 		print("{x} ")
 	end 'p'
@@ -250,7 +250,7 @@ end 'main'
 ```
 
 <!-- test: sortUnstable-comparator -->
-`sortUnstable(cmp)` returns a sorted result; ordering of equal elements is not promised.
+`sortUnstableBy(cmp)` returns a sorted result; ordering of equal elements is not promised.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -267,7 +267,7 @@ function main() returns ExitCode
 	a.push(2)
 	a.push(1)
 	a.push(3)
-	a.sortUnstable(ascending)
+	a.sortUnstableBy(ascending)
 	for x in a 'p'
 		print("{x} ")
 	end 'p'
@@ -355,7 +355,7 @@ end 'main'
 
 ## Stage 3: pdqsort (unstable path)
 
-Stage 3 routes the comparator-overload `sortUnstable(cmp)` through pdqsort
+Stage 3 routes the comparator form `sortUnstableBy(cmp)` through pdqsort
 for inputs larger than the small-sort threshold (n > 32). The no-arg
 `sortUnstable()` (Comparable) shares the `comparableInsertionSort` helper
 with `sort()` until self-hosted gains interface-method dispatch on
@@ -376,7 +376,7 @@ function main() returns ExitCode
 	for v in [50, 40, 30, 20, 10, 45, 35, 25, 15, 5, 48, 38, 28, 18, 8, 46, 36, 26, 16, 6, 44, 34, 24, 14, 4, 42, 32, 22, 12, 2, 49, 39, 29, 19, 9, 47, 37, 27, 17, 7, 43, 33, 23, 13, 3, 41, 31, 21, 11, 1] 'fill'
 		a.push(v)
 	end 'fill'
-	a.sortUnstable(ascending)
+	a.sortUnstableBy(ascending)
 	for x in a 'p'
 		print("{x} ")
 	end 'p'
@@ -415,7 +415,7 @@ function main() returns ExitCode
 	for i in 0 upto 100 'fill'
 		a.push((i * 31) + 7)
 	end 'fill'
-	a.sortUnstable(ascending)
+	a.sortUnstableBy(ascending)
 	for x in a 'p'
 		print("{x} ")
 	end 'p'
@@ -445,7 +445,7 @@ function main() returns ExitCode
 	for i in 0 upto 35 'fill'
 		a.push(i + 1)
 	end 'fill'
-	a.sortUnstable(ascending)
+	a.sortUnstableBy(ascending)
 	for x in a 'p'
 		print("{x} ")
 	end 'p'
@@ -515,7 +515,7 @@ function main() returns ExitCode
 	var failed = 0 as Count
 	while k < 24 'eachPerm'
 		var perm = nthPerm4(k)
-		perm.sort(ascending)
+		perm.sortBy(ascending)
 		if not isSorted(perm) 'bad'
 			failed = failed + 1
 		end 'bad'
@@ -534,7 +534,7 @@ end 'main'
 
 ## Stage 4: the stable path above the small-sort cutoff
 
-`sort(cmp)` for n > 32 routes through driftsort (Stage 5 and later). The library holds one stable sort
+`sortBy(cmp)` for n > 32 routes through driftsort (Stage 5 and later). The library holds one stable sort
 and no second implementation to compare it against: the cross-checks below verify the result against
 the definition of a sort instead.
 
@@ -600,7 +600,7 @@ function main() returns ExitCode
 	a.push(21)
 	a.push(11)
 	a.push(1)
-	a.sort(ascending)
+	a.sortBy(ascending)
 	for x in a 'p'
 		print("{x} ")
 	end 'p'
@@ -678,7 +678,7 @@ function main() returns ExitCode
 	a.push(KeyTag.init(2, tag: 32))
 	a.push(KeyTag.init(1, tag: 33))
 	a.push(KeyTag.init(2, tag: 34))
-	a.sort(byKey)
+	a.sortBy(byKey)
 	// Walk the sorted output: within each equal-key run the tag sequence
 	// must be non-decreasing for stability. Print the first violator if any.
 	var ok = true
@@ -709,7 +709,7 @@ stable
 
 ## Stage 5: Driftsort run creation + powersort merge policy
 
-Stage 5 makes `Array.sort()` and `Array.sort(cmp)` route through driftsort
+Stage 5 makes `Array.sort()` and `Array.sortBy(cmp)` route through driftsort
 instead of bottom-up merge sort. Driftsort is the "drift" hybrid of bottom-up
 merging and top-down partitioning (the same family as Rust's stdlib
 `slice::sort`): a stable quicksort manufactures large runs, which a powersort
@@ -798,7 +798,7 @@ function main() returns ExitCode
 		squares = squares + x * x
 	end 'tally'
 
-	a.sort(ascending)
+	a.sortBy(ascending)
 
 	var ordered = a.count() == n
 	var sumAfter = 0 as Integer
@@ -968,7 +968,7 @@ function main() returns ExitCode
 		squares = squares + x * x
 	end 'tally'
 
-	a.sort(ascending)
+	a.sortBy(ascending)
 
 	var ordered = a.count() == n
 	var sumAfter = 0 as Integer
@@ -1067,7 +1067,7 @@ function main() returns ExitCode
 		squares = squares + x * x
 	end 'tally'
 
-	a.sort(ascending)
+	a.sortBy(ascending)
 
 	var ordered = a.count() == n
 	var sumAfter = 0 as Integer
@@ -1135,7 +1135,7 @@ function main() returns ExitCode
 		squares = squares + x * x
 	end 'tally'
 
-	a.sort(ascending)
+	a.sortBy(ascending)
 
 	var ordered = a.count() == n
 	var sumAfter = 0 as Integer
@@ -1193,7 +1193,7 @@ function counted(x Integer, y Integer, tally CompareTally) returns Ordering
 end 'counted'
 
 function sortCounting(a IntArray, tally CompareTally)
-	a.sort(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
+	a.sortBy(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
 end 'sortCounting'
 
 function main() returns ExitCode
@@ -1302,7 +1302,7 @@ function adversarial(x Integer, y Integer, adversary Adversary) returns Ordering
 end 'adversarial'
 
 function sortAgainst(items IntArray, adversary Adversary)
-	items.sort(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
+	items.sortBy(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
 end 'sortAgainst'
 
 function main() returns ExitCode
@@ -1413,7 +1413,7 @@ function adversarial(x Integer, y Integer, adversary Adversary) returns Ordering
 end 'adversarial'
 
 function sortAgainst(items IntArray, adversary Adversary)
-	items.sort(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
+	items.sortBy(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
 end 'sortAgainst'
 
 function main() returns ExitCode
@@ -1528,7 +1528,7 @@ unsorted arrays: 0
 ```
 
 <!-- test: sort-duplicate-heavy-arrays-keep-equal-keys-in-arrival-order -->
-The same duplicate-heavy shapes as records sorted by key with `sort(cmp)`. Each
+The same duplicate-heavy shapes as records sorted by key with `sortBy(cmp)`. Each
 record carries its arrival position, so a stable sort leaves every run of equal
 keys in ascending arrival order; the arrivals must also all survive the sort.
 ```maxon
@@ -1580,7 +1580,7 @@ function main() returns ExitCode
 				entries.push(Ticket.create(key as SortKey, arrival: arrival))
 			end 'fill'
 
-			entries.sort(byKey)
+			entries.sortBy(byKey)
 
 			var ordered = entries.count() == n
 			var stable = true
@@ -1671,7 +1671,7 @@ function main() returns ExitCode
 				entries.push(Ticket.create(((seed shr 16) mod KeySpread) as SortKey, arrival: arrival))
 			end 'fill'
 
-			entries.sort(byKey)
+			entries.sortBy(byKey)
 
 			var stable = entries.count() == n
 			var previousKey = 0 as SortKey

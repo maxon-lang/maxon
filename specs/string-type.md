@@ -36,7 +36,7 @@ var s = "hello world"
 s.startsWith("hello")      // true
 s.endsWith("world")        // true
 s.contains("lo wo")        // true (substring search)
-s.contains('o')            // true (character search)
+s.containsCharacter('o')            // true (character search)
 s.findFirst("world")            // 6 (index, or -1 if not found)
 ```
 
@@ -409,24 +409,23 @@ end 'main'
 1
 ```
 
-<!-- test: contains-both-overloads -->
-### BOTH members of the corpus `contains` pair, from one program
-`contains` is an OVERLOAD PAIR in the corpus — `contains(needle String)` (`stdlib/String.maxon:456`) and
-`contains(character Character)` (`:464`) — and neither is synthesized by the compiler, so both reach
-`SemanticCheck.resolveOverloadedCalls`.
+<!-- test: contains-and-containsCharacter -->
+### BOTH `contains` and `containsCharacter`, from one program
+`contains(needle String)` (`stdlib/String.maxon:456`) and
+`containsCharacter(character Character)` (`:464`) are two declarations, and neither is synthesized by the compiler.
 
-⚠ **THE CHARACTER MEMBER IS PINNED HERE**, with the non-ASCII case that distinguishes a GRAPHEME search from a byte one: the `Character` member's body
+⚠ **THE CHARACTER MEMBER IS PINNED HERE**, with the non-ASCII case that distinguishes a GRAPHEME search from a byte one: `containsCharacter`'s body
 converts to a String and searches, so a multi-byte cluster must match itself and not its first byte.
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
 	let a = s.contains("lo wo")
 	let b = s.contains("xyz")
-	let c = s.contains('o')
-	let d = s.contains('z')
+	let c = s.containsCharacter('o')
+	let d = s.containsCharacter('z')
 	let e = "café naïve"
-	let f = e.contains('é')
-	let g = e.contains('ü')
+	let f = e.containsCharacter('é')
+	let g = e.containsCharacter('ü')
 	print("{a} {b} {c} {d} {f} {g}")
 	return 0
 end 'main'
@@ -448,7 +447,7 @@ function main() returns ExitCode
 	var hits = 0 as FullRangeInt
 	for i in 0 upto 200 'each'
 		let s = "hello world {i}"
-		if s.contains('o') 'ch'
+		if s.containsCharacter('o') 'ch'
 			hits = hits + 1
 		end 'ch'
 		if s.contains("wor") 'st'

@@ -3757,7 +3757,7 @@ function serveBulk(listener TlsListener) returns String
 		return "recv upload: {describe(error)}"
 	end 'unheard'
 
-	_ = try stream.send(pattern(downloadBytes, seed: 7)) otherwise (error) 'unsent'
+	_ = try stream.sendBytes(pattern(downloadBytes, seed: 7)) otherwise (error) 'unsent'
 		return "send download: {describe(error)}"
 	end 'unsent'
 
@@ -3775,7 +3775,7 @@ function clientBulk(options TlsClientOptions, port NetworkPort) returns String
 		return "connect: {describe(error)}"
 	end 'refused'
 
-	_ = try stream.send(pattern(uploadBytes, seed: 3)) otherwise (error) 'unsent'
+	_ = try stream.sendBytes(pattern(uploadBytes, seed: 3)) otherwise (error) 'unsent'
 		return "send upload: {describe(error)}"
 	end 'unsent'
 
@@ -3788,7 +3788,7 @@ function clientBulk(options TlsClientOptions, port NetworkPort) returns String
 	for index in 0 upto smallWrites 'eachWrite'
 		let slice = try small.slice(index * smallWriteBytes, endIndex: (index + 1) * smallWriteBytes) otherwise panic("clientBulk: the slice lies inside the pattern")
 
-		_ = try stream.send(slice) otherwise (error) 'unsentSmall'
+		_ = try stream.sendBytes(slice) otherwise (error) 'unsentSmall'
 			return "send small: {describe(error)}"
 		end 'unsentSmall'
 	end 'eachWrite'
@@ -4444,7 +4444,7 @@ function line(label String, certificates String, key String) returns String
 	var roots = RootCertificates.create()
 
 	for block in blocks 'eachBlock'
-		roots.push(block.bytes().clone())
+		roots.push(block.bytes.clone())
 	end 'eachBlock'
 
 	var client = TlsClientOptions.create()
@@ -6358,7 +6358,7 @@ function sendUntilStalled(stream TlsStream) returns String
 	let block = chunk()
 
 	for _ in 0 upto MostChunks 'eachChunk'
-		_ = try stream.send(block) otherwise (error) 'stalled'
+		_ = try stream.sendBytes(block) otherwise (error) 'stalled'
 			return describe(error)
 		end 'stalled'
 	end 'eachChunk'

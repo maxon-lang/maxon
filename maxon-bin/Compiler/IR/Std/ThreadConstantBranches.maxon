@@ -247,15 +247,15 @@ end 'FunctionAnalysis'
 // other block args, which `refuseEscapingReads` checks for every admitted candidate in one walk.
 function admit(module StdModule, func IrFunction, analysis FunctionAnalysis, candidate ThreadCandidate) returns bool
 	if not analysis.tree.canReach(candidate.position) 'unreachable'
-		return refuse(ThreadRefusal.unreachable, analysis: analysis)
+		return refuseThreading(ThreadRefusal.unreachable, analysis: analysis)
 	end 'unreachable'
 
 	if analysis.valueUses.containsRepeat(candidate.condId) 'conditionReadElsewhere'
-		return refuse(ThreadRefusal.conditionReadElsewhere, analysis: analysis)
+		return refuseThreading(ThreadRefusal.conditionReadElsewhere, analysis: analysis)
 	end 'conditionReadElsewhere'
 
 	if analysis.valueUses.containsRepeat(candidate.testedArg) 'testedArgReadElsewhere'
-		return refuse(ThreadRefusal.testedArgReadElsewhere, analysis: analysis)
+		return refuseThreading(ThreadRefusal.testedArgReadElsewhere, analysis: analysis)
 	end 'testedArgReadElsewhere'
 
 	if not decideTargetFromPredecessors(module, func: func, analysis: analysis, candidate: candidate) 'predecessorsRefuse'
@@ -267,18 +267,18 @@ function admit(module StdModule, func IrFunction, analysis FunctionAnalysis, can
 	candidate.keptPosition = analysis.positionOf(candidate.keptTarget)
 
 	if candidate.keptPosition == StdEntryBlockPosition or analysis.tree.pred.degree(candidate.keptPosition as CsrIndex) != 1 'keptTargetHasAnotherWayIn'
-		return refuse(ThreadRefusal.keptTargetHasAnotherWayIn, analysis: analysis)
+		return refuseThreading(ThreadRefusal.keptTargetHasAnotherWayIn, analysis: analysis)
 	end 'keptTargetHasAnotherWayIn'
 
 	return true
 end 'admit'
 
-// Count one refusal. Answers `false` so a clause can `return refuse(…)`.
-function refuse(reason ThreadRefusal, analysis FunctionAnalysis) returns bool
+// Count one refusal. Answers `false` so a clause can `return refuseThreading(…)`.
+function refuseThreading(reason ThreadRefusal, analysis FunctionAnalysis) returns bool
 	analysis.refusals.add(reason.ordinal, count: 1)
 
 	return false
-end 'refuse'
+end 'refuseThreading'
 
 // Walk C's predecessors: each must reach C through `branch(C)` with that one edge; each that passes a
 // constant in the tested slot must decide the same target. Writes `keptTarget`/`droppedTarget` and
@@ -292,7 +292,7 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 		let pred = module.blockAtPosition(func, position: predPosition)
 
 		if not predecessorBranchesOnlyTo(module, pred: pred, targetId: candidate.blockId, branch: analysis.branch) 'notABranchPredecessor'
-			return refuse(ThreadRefusal.predecessorNotALoneBranch, analysis: analysis)
+			return refuseThreading(ThreadRefusal.predecessorNotALoneBranch, analysis: analysis)
 		end 'notABranchPredecessor'
 
 		let incoming = incomingArgAt(soleEdge(pred), k: candidate.testedSlot as ValueId, pred: pred, target: join)
@@ -305,11 +305,11 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 
 		match evaluateIntCompare(candidate.pred, lhs: analysis.constMap.constantOf(incoming), rhs: candidate.imm as FullRangeInt, operandType: candidate.operandType) 'verdict'
 			folded(payload) then target = candidate.thenBlockId if payload != ConditionIsFalse else candidate.elseBlockId
-			notFoldable then return refuse(ThreadRefusal.unsignedCompare, analysis: analysis)
+			notFoldable then return refuseThreading(ThreadRefusal.unsignedCompare, analysis: analysis)
 		end 'verdict'
 
 		if decided and target != candidate.keptTarget 'twoAnswers'
-			return refuse(ThreadRefusal.targetsDisagree, analysis: analysis)
+			return refuseThreading(ThreadRefusal.targetsDisagree, analysis: analysis)
 		end 'twoAnswers'
 
 		decided = true
@@ -318,7 +318,7 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 	end 'eachPred'
 
 	if not decided 'noConstantPredecessor'
-		return refuse(ThreadRefusal.noConstantPredecessor, analysis: analysis)
+		return refuseThreading(ThreadRefusal.noConstantPredecessor, analysis: analysis)
 	end 'noConstantPredecessor'
 
 	return true
@@ -444,7 +444,7 @@ function refuseIfOwnedReadEscapes(candidate ThreadCandidate, valueId ValueId, po
 	end 'readInTheJoinItself'
 
 	if not analysis.tree.canReach(position) or not analysis.stamps.dominates(candidate.keptPosition, b: position) 'escapes'
-		candidate.admitted = refuse(ThreadRefusal.valueArgReadOutsideKeptTarget, analysis: analysis)
+		candidate.admitted = refuseThreading(ThreadRefusal.valueArgReadOutsideKeptTarget, analysis: analysis)
 	end 'escapes'
 end 'refuseIfOwnedReadEscapes'
 

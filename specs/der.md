@@ -12,7 +12,7 @@ category: stdlib
 | Call | Meaning |
 |---|---|
 | `DerReader.create(bytes)` | a reader over `bytes`, positioned at its first element |
-| `reader.peekHeader()` | the next element's `DerHeader`: `tagClass()`, `isConstructed()`, `tagNumber()` and `length()`, without consuming it |
+| `reader.peekHeader()` | the next element's `DerHeader`: `tagClass`, `isConstructed()`, `tagNumber` and `length`, without consuming it |
 | `reader.isAtEnd()` | whether no element remains |
 | `reader.finish()` | `trailingData` unless no element remains |
 | `reader.enterSequence()`, `enterSet()`, `enterExplicit(n)` | a reader over a SEQUENCE's, a SET's or an explicit context-specific `[n]` element's content |
@@ -113,7 +113,7 @@ function readKey(id String, hex String) throws DerError
 
 	let key = try info.readBitString()
 	try info.finish()
-	print("{id} key {key.unusedBits()} [{toHex(key.bytes())}]\n")
+	print("{id} key {key.unusedBits} [{toHex(key.bytes())}]\n")
 
 	var inner = DerReader.create(key.bytes())
 	var numbers = try inner.enterSequence()
@@ -220,7 +220,7 @@ function errorName(failure DerError) returns String
 end 'errorName'
 
 function describe(header DerHeader) returns String
-	return "{header.tagClass().name} {header.isConstructed()} {header.tagNumber()} {header.length()}"
+	return "{header.tagClass.name} {header.isConstructed()} {header.tagNumber} {header.length}"
 end 'describe'
 
 function report(id String, hex String)
@@ -485,7 +485,7 @@ function readBits(id String, hex String)
 	var reader = DerReader.create(fromHex(hex))
 
 	if let bits = try reader.readBitString() 'read'
-		print("{id} {bits.unusedBits()} [{toHex(bits.bytes())}]\n")
+		print("{id} {bits.unusedBits} [{toHex(bits.bytes())}]\n")
 	end 'read' else (failure) 'refused'
 		print("{id} {errorName(failure)}\n")
 	end 'refused'
@@ -927,7 +927,7 @@ function readImplicitBits(id String, tagNumber DerTagNumber, hex String)
 	var reader = DerReader.create(fromHex(hex))
 
 	if let bits = try reader.readImplicitBitString(tagNumber) 'read'
-		print("{id} {bits.unusedBits()} [{toHex(bits.bytes())}]\n")
+		print("{id} {bits.unusedBits} [{toHex(bits.bytes())}]\n")
 	end 'read' else (failure) 'refused'
 		print("{id} {errorName(failure)}\n")
 	end 'refused'

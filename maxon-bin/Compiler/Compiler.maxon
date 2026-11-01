@@ -1052,6 +1052,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// every per-type symbol the backend emits is derived from it. Any E3006 it records is caught by the
 	// pipeline's error gate, exactly as an E3017 is.
 	checkTypeSymbolNamespace(project, signatures: signatures)
+	checkTopLevelNameScopes(project, signatures: signatures)
 
 	recordPhase(project, phase: CompilePhase.checkDeclarations, probe: declCheckProbe)
 
@@ -1190,7 +1191,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	end 'initOrderRefused'
 
 	// A `let` no share walk can mark, a `spawn` an initializer reaches, and a `let` initializer reaching a managed
-	// `var` are refused by `semanticCheck`, over the call graph overload resolution settles.
+	// `var` are refused by `semanticCheck`.
 	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, signatures: signatures, defaults: signatures.defaultSlots()) otherwise (failure) 'defaultOrderRefused'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'defaultOrderRefused'
@@ -1358,7 +1359,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// thunk targets are collected from the MAXON module — which the pipeline leaves intact — and the
 	// thunks are installed already-lowered below, like the destructor cascades. Held on the project because
 	// the inliner's called-once census reads it mid-pipeline.
-	project.functionValueTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures, conventions: project.functionValueConventions)
+	project.functionValueTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
 	project.uncheckedCallPaths = UncheckedCallPaths.collect(module, project: project, signatures: signatures)
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: scanProbe)
 
@@ -2388,9 +2389,6 @@ end 'nestedProjectFileDiagnostic'
 // Shared with `Formatter`'s own walk: a second answer to "which directories are the project's" is how
 // two walks come to disagree about what a build contains.
 export function holdsIgnoreMarker(dir FilePath) returns bool
-	// Interpolated so the argument is a committed `String` — a bare module-`let` constant is ambiguous
-	// between `join`'s two overloads, the same reason `StagedTierDirs.beneath` spells its
-	// directory name this way.
 	return File.exists(dir.join("{IgnoreMarkerName}"))
 end 'holdsIgnoreMarker'
 

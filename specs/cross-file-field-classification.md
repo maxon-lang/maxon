@@ -292,7 +292,7 @@ Two file-private `typealias`es of one name coexist in one directory, so two file
 `Num`. `Gate.n` is typed by the STRUCT's own file's `Num`, and an exported field cannot be typed by a
 file-private alias, so the field is refused where it is declared.
 ```maxon
-// --- file: gate.maxon
+// --- file: gate/gate.maxon
 typealias Num = int(0 to 1000)
 
 export type Gate
@@ -315,7 +315,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:6:18: exported field 'Gate.n' names file-private typealias 'Num' in its type
+error E3167: gate/<fragment>:6:18: exported field 'gate.Gate.n' names file-private typealias 'Num' in its type
 ```
 
 <!-- test: crossfile-float-alias-field-off-a-temporary -->

@@ -20,7 +20,7 @@ leaves the loop walking the array it started on.
 
 An argument read out of storage is counted like any other read, so a call may hand a function storage
 it writes together with another view of that storage, and the view still names what it was read as. Only
-a parameter the callee REASSIGNS, which is passed by reference, may not overlap another argument; that
+a parameter the callee takes as `mutable` may not overlap another argument; that
 is E3186, pinned in `specs/argument-overlap.md`.
 
 ⚠ **A RUNTIME-BUILT STRING IS WHAT MAKES THESE CASES EVIDENCE.** A literal is an immortal record that no
@@ -3617,10 +3617,11 @@ end 'main'
 [third 44 padded out long enough for the heap] [replacement 9 padded out long enough for the heap] [filler 3 padded out long enough for the heap]
 ```
 
-<!-- test: a-field-write-target-survives-its-right-hand-side-rebinding-the-chain -->
-### A field write's target survives a right-hand side that rebinds the record it writes into
-`x.inner` is read as the write's target before `x.dropInner()` runs; the store lands in the `Inner` it
-read, which `dropInner` has already replaced, so the new `x.inner` keeps its own name.
+<!-- test: a-field-write-resolves-its-target-after-the-right-hand-side-rebinds-the-chain -->
+### A field write resolves its target after the right-hand side, which may rebind the record it writes into
+The right-hand side runs first and the target path is resolved afterwards: `x.dropInner()` replaces
+`x.inner`, then `x.inner` names the new `Inner` and the store lands in it, so the new `x.inner` holds the
+stored text.
 ```maxon
 type Inner
 	export var name as String
@@ -3656,11 +3657,13 @@ end 'main'
 0
 ```
 ```stdout
-[replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
 ```
 
-<!-- test: a-two-hop-field-write-target-survives-its-right-hand-side-rebinding-the-middle-hop -->
+<!-- test: a-two-hop-field-write-resolves-its-target-after-the-right-hand-side-rebinds-the-middle-hop -->
 ### … and through two hops, when the right-hand side rebinds the middle one
+`x.dropLeaf()` replaces `x.middle.leaf` first; `x.middle.leaf.name` is resolved afterwards, so the store
+lands in the new `Leaf`.
 ```maxon
 type Leaf
 	export var name as String
@@ -3704,11 +3707,13 @@ end 'main'
 0
 ```
 ```stdout
-[replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
 ```
 
-<!-- test: a-field-write-rooted-at-a-module-var-survives-its-right-hand-side-rebinding-the-var -->
+<!-- test: a-field-write-rooted-at-a-module-var-resolves-its-target-after-the-right-hand-side-rebinds-the-var -->
 ### … and from a module-level `var`, when the right-hand side rebinds the `var`
+`rebindCurrent()` assigns a new `Outer` to `current` first; `current.inner.name` is resolved afterwards,
+so the store lands in the new `Outer`'s `Inner`.
 ```maxon
 type Inner
 	export var name as String
@@ -3746,7 +3751,7 @@ end 'main'
 0
 ```
 ```stdout
-[replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
 ```
 
 <!-- test: a-union-payload-read-survives-a-later-payload-reassigning-the-field -->
@@ -4144,8 +4149,10 @@ end 'main'
 [second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
 ```
 
-<!-- test: an-array-push-receiver-read-survives-its-argument-reassigning-the-field -->
-### A field read as the receiver of `push` survives an argument that reassigns the field
+<!-- test: an-array-push-resolves-its-receiver-after-its-argument-reassigns-the-field -->
+### A call resolves its receiver path after its arguments, so `push` goes to the array an argument installed
+`x.reset()` runs first and installs a fresh array in `x.items`; `x.items` is resolved afterwards, so the
+pushed text lands in the new array beside the one `reset` put there.
 ```maxon
 typealias StringArray = Array with String
 
@@ -4180,7 +4187,794 @@ end 'main'
 0
 ```
 ```stdout
-1 [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+2 [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: a-user-method-called-on-a-field-path-resolves-its-receiver-after-its-argument-replaces-the-field -->
+### … and a method the program declares, called on a field path, goes to the record an argument installed
+`x.dropInner()` runs first and replaces `x.inner`; `x.inner` is resolved afterwards, so `rename` is called
+on the new `Inner` and the new `x.inner` holds the text it was given.
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	function rename(text String)
+		self.name = text
+	end 'rename'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+
+	function dropInner() returns String
+		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return "stored {5} padded out long enough for the heap"
+	end 'dropInner'
+end 'Outer'
+
+function main() returns ExitCode
+	var x = Outer.create("original {40 + 2} padded out long enough for the heap")
+	x.inner.rename(x.dropInner())
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{x.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-field-write-resolves-its-target-after-an-interpolated-user-type-runs-its-to-string -->
+### A field write resolves its target after an interpolation, whose `toString` may rebind the record it writes into
+`"{probe}"` holds no parenthesis, yet it runs `Probe.toString`, which replaces `current.inner`. The
+right-hand side runs first, so `current.inner` names the new `Inner` and the store lands in it.
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+type Probe
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function toString() returns String
+		current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return self.label
+	end 'toString'
+end 'Probe'
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let probe = Probe.create("stored {5} padded out long enough for the heap")
+	current.inner.name = "{probe}"
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-method-call-resolves-its-receiver-after-an-interpolated-user-type-runs-its-to-string -->
+### … and a call resolves its receiver path after an interpolated argument, whose `toString` may rebind a record on it
+`"{probe}"` runs `Probe.toString` first and it replaces `current.inner`; `current.inner` is resolved
+afterwards, so `rename` is called on the new `Inner`.
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	function rename(text String)
+		self.name = text
+	end 'rename'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+type Probe
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function toString() returns String
+		current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return self.label
+	end 'toString'
+end 'Probe'
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let probe = Probe.create("stored {5} padded out long enough for the heap")
+	current.inner.rename("{probe}")
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-field-write-resolves-its-target-after-an-equality-test-runs-the-types-equals -->
+### A field write resolves its target after an `==` on a user type, whose `equals` may rebind the record it writes into
+`probe == twin` holds no parenthesis, yet it runs `Probe.equals`, which replaces `current.inner`. The
+store of the verdict lands in the new `Inner`.
+```maxon
+type Inner
+	export var name as String
+	export var matched as bool
+
+	static function create(name String) returns Self
+		return Self{name: name, matched: false}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+type Probe
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function equals(other Probe) returns bool
+		current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return self.label == other.label
+	end 'equals'
+end 'Probe'
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let probe = Probe.create("same")
+	let twin = Probe.create("same")
+	current.inner.matched = probe == twin
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.matched}] [{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[true] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-method-call-resolves-its-receiver-after-an-equality-test-runs-the-types-equals -->
+### … and a call resolves its receiver path after an `==` argument, whose `equals` may rebind a record on it
+`probe == twin` runs `Probe.equals` first and it replaces `current.inner`; `mark` is then called on the
+new `Inner`.
+```maxon
+type Inner
+	export var name as String
+	export var matched as bool
+
+	static function create(name String) returns Self
+		return Self{name: name, matched: false}
+	end 'create'
+
+	function mark(verdict bool)
+		self.matched = verdict
+	end 'mark'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+type Probe
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function equals(other Probe) returns bool
+		current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return self.label == other.label
+	end 'equals'
+end 'Probe'
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let probe = Probe.create("same")
+	let twin = Probe.create("same")
+	current.inner.mark(probe == twin)
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.matched}] [{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[true] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-field-write-resolves-its-target-after-an-ordering-test-runs-the-types-compare -->
+### A field write resolves its target after a `<` on a user type, whose `compare` may rebind the record it writes into
+`first < second` holds no parenthesis, yet it runs `Probe.compare`, which replaces `current.inner`. The
+store of the verdict lands in the new `Inner`.
+```maxon
+typealias Rank = int(0 to 100)
+
+type Inner
+	export var name as String
+	export var ordered as bool
+
+	static function create(name String) returns Self
+		return Self{name: name, ordered: false}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+type Probe implements Comparable
+	export var rank as Rank
+
+	static function create(rank Rank) returns Self
+		return Self{rank: rank}
+	end 'create'
+
+	function compare(other Probe) returns Ordering
+		current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+
+		if self.rank < other.rank 'lower'
+			return Ordering.lessThan
+		end 'lower'
+
+		if self.rank > other.rank 'higher'
+			return Ordering.greaterThan
+		end 'higher'
+
+		return Ordering.equalTo
+	end 'compare'
+end 'Probe'
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let first = Probe.create(1)
+	let second = Probe.create(2)
+	current.inner.ordered = first < second
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.ordered}] [{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[true] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-method-call-resolves-its-receiver-after-an-ordering-test-runs-the-types-compare -->
+### … and a call resolves its receiver path after a `<` argument, whose `compare` may rebind a record on it
+`first < second` runs `Probe.compare` first and it replaces `current.inner`; `mark` is then called on the
+new `Inner`.
+```maxon
+typealias Rank = int(0 to 100)
+
+type Inner
+	export var name as String
+	export var ordered as bool
+
+	static function create(name String) returns Self
+		return Self{name: name, ordered: false}
+	end 'create'
+
+	function mark(verdict bool)
+		self.ordered = verdict
+	end 'mark'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+type Probe implements Comparable
+	export var rank as Rank
+
+	static function create(rank Rank) returns Self
+		return Self{rank: rank}
+	end 'create'
+
+	function compare(other Probe) returns Ordering
+		current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+
+		if self.rank < other.rank 'lower'
+			return Ordering.lessThan
+		end 'lower'
+
+		if self.rank > other.rank 'higher'
+			return Ordering.greaterThan
+		end 'higher'
+
+		return Ordering.equalTo
+	end 'compare'
+end 'Probe'
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let first = Probe.create(1)
+	let second = Probe.create(2)
+	current.inner.mark(first < second)
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.ordered}] [{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[true] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-field-write-resolves-its-target-after-a-map-literal-runs-its-keys-hash -->
+### A field write resolves its target after a map literal, whose key's `hash` may rebind the record it writes into
+`[key: 7]` holds no parenthesis, yet building the map runs `Key.hash`, which replaces `current.inner`. The
+new `Inner` receives the map.
+```maxon
+typealias Rank = int(0 to 100)
+typealias KeyMap = Map with (Key, Rank)
+
+type Key implements Hashable, Equatable
+	export let n as Rank
+
+	static function create(n Rank) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function hash() returns HashValue
+		current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return self.n as HashValue
+	end 'hash'
+
+	function equals(other Key) returns bool
+		return self.n == other.n
+	end 'equals'
+end 'Key'
+
+type Inner
+	export var name as String
+	export var table as KeyMap
+
+	static function create(name String) returns Self
+		return Self{name: name, table: KeyMap.create()}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let key = Key.create(3)
+	current.inner.table = [key: 7 as Rank]
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("{current.inner.table.count()} [{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-method-call-resolves-its-receiver-after-a-default-argument-rebinds-a-record-on-it -->
+### … and a call resolves its receiver path after the default argument it fills, which may rebind a record on it
+`rename()` writes no argument, so its default `swapCurrent()` fills `text`. The default runs before
+`current.inner` is resolved: it replaces `current.inner`, and `rename` is called on the new `Inner`.
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	function rename(text String = swapCurrent())
+		self.name = text
+	end 'rename'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+function swapCurrent() returns String
+	current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+	return "stored {5} padded out long enough for the heap"
+end 'swapCurrent'
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	current.inner.rename()
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-field-write-resolves-its-target-after-a-struct-literal-default-rebinds-a-record-on-it -->
+### A field write resolves its target after a struct literal whose field default may rebind the record it writes into
+`Self{}` holds no parenthesis, yet it fills `tag` from its default `Tag.fresh()`, which replaces
+`current.inner`. The literal is built first, so the store lands in the new `Inner`.
+```maxon
+type Tag
+	export var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	static function fresh() returns Self
+		current.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return Tag.create("stored {5} padded out long enough for the heap")
+	end 'fresh'
+end 'Tag'
+
+type Note
+	export var tag = Tag.fresh()
+
+	static function plain(text String) returns Self
+		return Self{tag: Tag.create(text)}
+	end 'plain'
+
+	static function install() returns Self
+		current.inner.note = Self{}
+		return current.inner.note
+	end 'install'
+end 'Note'
+
+type Inner
+	export var name as String
+	export var note as Note
+
+	static function create(name String) returns Self
+		return Self{name: name, note: Note.plain("none")}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let installed = Note.install()
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.note.tag.text}] [{installed.tag.text}] [{current.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[stored 5 padded out long enough for the heap] [stored 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-call-on-a-module-var-array-field-resolves-its-receiver-after-an-interpolated-argument-rebinds-the-field -->
+### A call on a path rooted at a module-level `var` resolves its receiver after an interpolated argument
+`"{probe}"` runs `Probe.toString`, which installs a fresh array in `g.items`; `g.items` is resolved
+afterwards, so the pushed text lands in the new array beside the one `toString` put there.
+```maxon
+typealias StringArray = Array with String
+
+type Holder
+	export var items as StringArray
+
+	static function create(label String) returns Self
+		var items = StringArray.create()
+		items.push(label)
+		return Self{items: items}
+	end 'create'
+end 'Holder'
+
+var g = Holder.create("placeholder")
+
+type Probe
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function toString() returns String
+		g = Holder.create("replacement {7} padded out long enough for the heap")
+		return self.label
+	end 'toString'
+end 'Probe'
+
+function main() returns ExitCode
+	g = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let probe = Probe.create("pushed {5} padded out long enough for the heap")
+	g.items.push("{probe}")
+	var filler = StringArray.create()
+	filler.push("filler {1} padded out long enough for the heap")
+	filler.push("filler {2} padded out long enough for the heap")
+	print("{g.items.count()} [{try g.items.get(0) otherwise "none"}] [{try g.items.get(1) otherwise "none"}] [{try filler.get(0) otherwise "none"}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 [replacement 7 padded out long enough for the heap] [pushed 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: a-user-method-on-a-module-var-path-resolves-its-receiver-after-an-interpolated-argument-replaces-the-field -->
+### … and a method the program declares, called on a module-level `var`'s field path, goes to the record an interpolated argument installed
+`"{probe}"` runs `Probe.toString`, which replaces `g.inner`; `g.inner` is resolved afterwards, so `rename`
+is called on the new `Inner`.
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	function rename(text String)
+		self.name = text
+	end 'rename'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var g = Outer.create("placeholder")
+
+type Probe
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function toString() returns String
+		g.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return self.label
+	end 'toString'
+end 'Probe'
+
+function main() returns ExitCode
+	g = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let probe = Probe.create("stored {5} padded out long enough for the heap")
+	g.inner.rename("{probe}")
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{g.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-field-write-rooted-at-a-static-var-resolves-its-target-after-an-interpolation-replaces-the-static -->
+### A field write rooted at a `static var` resolves its target after an interpolation
+`"{probe}"` runs `Probe.toString`, which replaces `Registry.current`; `Registry.current.label` is
+resolved afterwards, so the store lands in the new `Registry`.
+```maxon
+type Registry
+	export var label as String
+
+	static var current = Registry.create("placeholder")
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Registry'
+
+type Probe
+	export var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function toString() returns String
+		Registry.current = Registry.create("replacement {7} padded out long enough for the heap")
+		return self.text
+	end 'toString'
+end 'Probe'
+
+function main() returns ExitCode
+	Registry.current = Registry.create("original {40 + 2} padded out long enough for the heap")
+	let probe = Probe.create("stored {5} padded out long enough for the heap")
+	Registry.current.label = "{probe}"
+	let filler = Registry.create("filler {1} padded out long enough for the heap")
+	let filler2 = Registry.create("filler {2} padded out long enough for the heap")
+	print("[{Registry.current.label}] [{filler.label}] [{filler2.label}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[stored 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-method-called-on-a-static-var-resolves-its-receiver-after-an-interpolated-argument-replaces-the-static -->
+### … and a method called on a `static var` resolves its receiver after an interpolated argument
+`"{probe}"` runs `Probe.toString`, which replaces `Registry.current`; `Registry.current` is resolved
+afterwards, so `add` is called on the new `Registry`, beside the element it was created with.
+```maxon
+typealias StringArray = Array with String
+
+type Registry
+	export var items as StringArray
+
+	static var current = Registry.create("placeholder")
+
+	static function create(label String) returns Self
+		var items = StringArray.create()
+		items.push(label)
+		return Self{items: items}
+	end 'create'
+
+	function add(text String)
+		self.items.push(text)
+	end 'add'
+end 'Registry'
+
+type Probe
+	export var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function toString() returns String
+		Registry.current = Registry.create("replacement {7} padded out long enough for the heap")
+		return self.text
+	end 'toString'
+end 'Probe'
+
+function main() returns ExitCode
+	Registry.current = Registry.create("original {40 + 2} padded out long enough for the heap")
+	let probe = Probe.create("pushed {5} padded out long enough for the heap")
+	Registry.current.add("{probe}")
+	var filler = StringArray.create()
+	filler.push("filler {1} padded out long enough for the heap")
+	filler.push("filler {2} padded out long enough for the heap")
+	print("{Registry.current.items.count()} [{try Registry.current.items.get(0) otherwise "none"}] [{try Registry.current.items.get(1) otherwise "none"}] [{try filler.get(0) otherwise "none"}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 [replacement 7 padded out long enough for the heap] [pushed 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
 ```
 
 <!-- test: an-interface-field-read-as-a-struct-literal-field-survives-a-later-field-reassigning-it -->
@@ -4937,7 +5731,7 @@ type Holder
 	end 'create'
 end 'Holder'
 
-function replace(s String)
+function replace(s mutable String)
 	s = "{s}+"
 end 'replace'
 
@@ -4972,7 +5766,7 @@ end 'Holder'
 
 let Shared = Holder.create("original 42")
 
-function replace(s String)
+function replace(s mutable String)
 	s = "{s}+"
 end 'replace'
 
@@ -4991,123 +5785,6 @@ end 'main'
 ```
 ```stdout
 original 42!+ original 42
-```
-
-<!-- test: let-field-immutable-record-rebound-into-a-by-reference-var-may-be-rebound -->
-### a `let` field's immutable record rebound into a by-reference `var` may be rebound by the callee
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export let n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Outer
-	export let inner as Point
-
-	static function create() returns Self
-		return Self{inner: Point.create(1)}
-	end 'create'
-end 'Outer'
-
-function bump(p Point)
-	p = Point.create(p.n + 1)
-end 'bump'
-
-function main() returns ExitCode
-	let h = Outer.create()
-	var q = Point.create(0)
-	bump(q)
-	q = h.inner
-	bump(q)
-	print("{q.n} {h.inner.n}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-2 1
-```
-
-<!-- test: module-let-immutable-record-rebound-into-a-by-reference-var-may-be-rebound -->
-### a module `let`'s immutable record rebound into a by-reference `var` may be rebound by the callee
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export let n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origin = Point.create(1)
-
-function bump(p Point)
-	p = Point.create(p.n + 1)
-end 'bump'
-
-function main() returns ExitCode
-	var q = Point.create(0)
-	bump(q)
-	q = Origin
-	bump(q)
-	print("{q.n} {Origin.n}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-2 1
-```
-
-<!-- test: a-var-cannot-take-a-let-fields-writable-record-so-no-by-reference-callee-writes-through-it -->
-### A `var` is refused a `let` field's writable record at the rebind, before any by-reference callee could write through it
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Outer
-	export let inner as Point
-
-	static function create() returns Self
-		return Self{inner: Point.create(1)}
-	end 'create'
-end 'Outer'
-
-function overwrite(p Point)
-	p.n = 9
-	p = Point.create(p.n + 1)
-end 'overwrite'
-
-function main() returns ExitCode
-	let h = Outer.create()
-	var q = Point.create(0)
-	overwrite(q)
-	q = h.inner
-	overwrite(q)
-	print("{q.n} {h.inner.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:29:2: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: module-let-merged-into-a-var-then-a-field-bound-survives-the-var-rebinding -->
@@ -5147,105 +5824,6 @@ end 'main'
 fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
 ```
 
-<!-- test: by-reference-var-whose-later-arm-stores-a-module-let-then-a-field-bound-survives-the-rebind -->
-### a by-reference `var` whose LATER arm stores a module `let`'s record keeps a bound field alive across a rebind
-```maxon
-type Item
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Item'
-
-type Wrap
-	export let item as Item
-
-	static function create(text String) returns Self
-		return Self{item: Item.create(text)}
-	end 'create'
-end 'Wrap'
-
-let Origin = Wrap.create("origin")
-
-function rebind(w Wrap)
-	w = Wrap.create("rebound {3} padded out long enough for the heap")
-end 'rebind'
-
-function main() returns ExitCode
-	let c = Origin.item.text.byteLength() == 6
-	var w = Wrap.create("start {0} padded out long enough for the heap")
-	rebind(w)
-
-	if c 'fresh'
-		w = Wrap.create("fresh {7} padded out long enough for the heap")
-	end 'fresh' else 'shared'
-		w = Origin
-	end 'shared'
-
-	let e = w.item
-	w = Wrap.create("replacement {8} padded out long enough for the heap")
-	print("{e.text} {w.item.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
-```
-
-<!-- test: by-reference-var-whose-later-arm-stores-a-module-let-in-a-loop-then-a-field-bound-survives-the-rebind -->
-### … and when the stores sit in a loop body
-```maxon
-type Item
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Item'
-
-type Wrap
-	export let item as Item
-
-	static function create(text String) returns Self
-		return Self{item: Item.create(text)}
-	end 'create'
-end 'Wrap'
-
-let Origin = Wrap.create("origin")
-
-function rebind(w Wrap)
-	w = Wrap.create("rebound {3} padded out long enough for the heap")
-end 'rebind'
-
-function main() returns ExitCode
-	var w = Wrap.create("start {0} padded out long enough for the heap")
-	rebind(w)
-
-	for i in 0 upto 2 'each'
-		if i == 1 'last'
-			w = Wrap.create("fresh {7} padded out long enough for the heap")
-		end 'last' else 'first'
-			w = Origin
-		end 'first'
-	end 'each'
-
-	let e = w.item
-	w = Wrap.create("replacement {8} padded out long enough for the heap")
-	print("{e.text} {w.item.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
-```
-
 <!-- test: let-field-string-in-one-arm-of-a-by-reference-var-grown-by-a-callee -->
 ### a `let` field's `String` stored into a by-reference `var` on the LATER arm is a copy a callee may grow
 ```maxon
@@ -5257,7 +5835,7 @@ type Holder
 	end 'create'
 end 'Holder'
 
-function grow(s String)
+function grow(s mutable String)
 	s.append("+")
 end 'grow'
 
@@ -5296,7 +5874,7 @@ type Holder
 	end 'create'
 end 'Holder'
 
-function grow(s String)
+function grow(s mutable String)
 	s.append("+")
 end 'grow'
 
@@ -5337,7 +5915,7 @@ end 'Holder'
 
 let Shared = Holder.create("original 42 padded out long enough for the heap")
 
-function grow(s String)
+function grow(s mutable String)
 	s.append("+")
 end 'grow'
 
@@ -5442,156 +6020,6 @@ end 'main'
 fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
 ```
 
-<!-- test: module-let-writable-record-on-one-arm-of-a-by-reference-var-is-refused -->
-### a module `let`'s writable record stored into a by-reference `var` on the EARLIER arm is refused at the store
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origin = Point.create(1)
-
-function overwrite(p Point)
-	p.n = 9
-	p = Point.create(p.n + 1)
-end 'overwrite'
-
-function main() returns ExitCode
-	let c = Origin.n == 1
-	var q = Point.create(0)
-	overwrite(q)
-
-	if c 'shared'
-		q = Origin
-	end 'shared' else 'fresh'
-		q = Point.create(2)
-	end 'fresh'
-
-	overwrite(q)
-	print("{q.n} {Origin.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:25:3: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: let-payload-record-on-one-arm-of-a-by-reference-var-is-refused -->
-### a `let` union payload's writable record stored into a by-reference `var` on the EARLIER arm is refused at the store
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-union Slot
-	full(point Point)
-	empty
-end 'Slot'
-
-type Holder
-	export let slot as Slot
-
-	static function create() returns Self
-		return Self{slot: Slot.full(Point.create(1))}
-	end 'create'
-end 'Holder'
-
-function overwrite(p Point)
-	p.n = 9
-	p = Point.create(p.n + 1)
-end 'overwrite'
-
-function main() returns ExitCode
-	let h = Holder.create()
-	var q = Point.create(0)
-	overwrite(q)
-
-	match h.slot 'slot'
-		full(point) then q = point
-		empty then q = Point.create(2)
-	end 'slot'
-
-	overwrite(q)
-
-	match h.slot 'after'
-		full(point) then print("{q.n} {point.n}\n")
-		empty then print("empty\n")
-	end 'after'
-
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:36:20: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: let-payload-record-on-the-later-arm-of-a-by-reference-var-is-refused -->
-### … and on the LATER arm, with the clean store before it
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-union Slot
-	full(point Point)
-	empty
-end 'Slot'
-
-type Holder
-	export let slot as Slot
-
-	static function create() returns Self
-		return Self{slot: Slot.full(Point.create(1))}
-	end 'create'
-end 'Holder'
-
-function overwrite(p Point)
-	p.n = 9
-	p = Point.create(p.n + 1)
-end 'overwrite'
-
-function main() returns ExitCode
-	let h = Holder.create()
-	var q = Point.create(0)
-	overwrite(q)
-
-	match h.slot 'slot'
-		empty then q = Point.create(2)
-		full(point) then q = point
-	end 'slot'
-
-	overwrite(q)
-
-	match h.slot 'after'
-		full(point) then print("{q.n} {point.n}\n")
-		empty then print("empty\n")
-	end 'after'
-
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:37:20: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
 <!-- test: let-payload-record-into-a-plain-var-then-written -->
 ### a `let` field's union payload record assigned to a plain `var` in a `match` arm, then written through the `var`
 ```maxon
@@ -5639,96 +6067,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3078: <fragment>:30:20: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: let-field-array-element-into-a-by-reference-var-written-by-a-callee -->
-### an element of a `let` field's array assigned to a by-reference `var` in a loop, then written by a callee
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-typealias Points = Array with Point
-
-type Holder
-	export let points as Points
-
-	static function create() returns Self
-		var points = Points.create()
-		points.push(Point.create(1))
-		return Self{points: points}
-	end 'create'
-end 'Holder'
-
-function overwrite(p Point)
-	p.n = 9
-	p = Point.create(p.n + 1)
-end 'overwrite'
-
-function main() returns ExitCode
-	let h = Holder.create()
-	var q = Point.create(0)
-	overwrite(q)
-
-	for point in h.points 'each'
-		q = point
-	end 'each'
-
-	overwrite(q)
-	let first = try h.points.get(0) otherwise panic("one point")
-	print("{q.n} {first.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:35:3: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: view-of-a-let-field-into-a-by-reference-var-written-by-a-callee -->
-### a `view` of a `let` field's record assigned to a by-reference `var`, then written by a callee
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Holder
-	export let inner as Point
-
-	static function create() returns Self
-		return Self{inner: Point.create(1)}
-	end 'create'
-end 'Holder'
-
-function overwrite(p Point)
-	p.n = 9
-	p = Point.create(p.n + 1)
-end 'overwrite'
-
-function main() returns ExitCode
-	let h = Holder.create()
-	var q = Point.create(0)
-	overwrite(q)
-	view v = h.inner
-	q = v
-	overwrite(q)
-	print("{q.n} {h.inner.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:30:2: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: match-merge-of-a-module-let-and-a-fresh-record-field-survives-the-rebind -->

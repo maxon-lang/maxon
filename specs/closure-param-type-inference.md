@@ -1,7 +1,7 @@
 ---
 feature: closure-param-type-inference
 status: experimental
-keywords: [closure, map, sort, overload, parameters, inference, arity, diagnostics, E2003, E2015, E3005]
+keywords: [closure, map, sort, parameters, inference, arity, diagnostics, E2003, E2015, E3005]
 category: diagnostics
 ---
 
@@ -11,7 +11,7 @@ category: diagnostics
 
 The compiler's parser does not INFER an omitted closure parameter type; the call argument the closure is
 written at hands it down. Any argument whose parameter is declared with a function type offers one type per
-parameter of that function type, in order: `Array.sort(cmp SortComparator)` offers
+parameter of that function type, in order: `Array.sortBy(cmp SortComparator)` offers
 `function(Element, Element) returns Ordering`, a container's `map` offers `function(Element) returns
 Element`, and a user function's `step Combine` offers whatever `Combine` declares. The types are in hand
 before the argument is parsed, because the callee's declaration names them.
@@ -25,13 +25,6 @@ exactly as `function(a, b)` is.
 **Only a closure literal written AT the argument takes the offer.** A closure nested inside another
 argument's expression, or inside the closure's own body, sits at a different position and is offered
 nothing there.
-
-**An overloaded callee offers only what every member that could take a closure agrees on.** Which member a
-call means is decided a pass later, and it may depend on the closure's own types, so no member is preferred
-while the argument is parsed. A member with no parameter at this argument, or whose parameter there is a
-concrete type no closure is, cannot be the one a closure resolves to and is set aside — `sort()` beside
-`sort(cmp)`. Two members declaring two different function types there withhold the offer, and the untyped
-parameter is refused as if nothing offered a type.
 
 A position that offers nothing — including every NAMED function's own parameter list — keeps the E2015
 refusal, which names the construct that does infer.
@@ -255,7 +248,7 @@ end 'main'
 ```
 
 <!-- test: the-comparator-parameters-take-the-container-element -->
-`sort`'s comparator is a function-typed parameter of two elements, so a closure passed there takes both
+`sortBy`'s comparator is a function-typed parameter of two elements, so a closure passed there takes both
 parameter types from it — every position whose declared type is a function type offers one type per
 parameter, and a comparator has two.
 ```maxon
@@ -267,7 +260,7 @@ function main() returns ExitCode
 	scores.push(3)
 	scores.push(1)
 	scores.push(2)
-	scores.sort(function(left, right) gives right.compare(left))
+	scores.sortBy(function(left, right) gives right.compare(left))
 
 	for score in scores 'each'
 		print("{score}\n")
@@ -293,7 +286,7 @@ function main() returns ExitCode
 	rows.push(b"ccc")
 	rows.push(b"a")
 	rows.push(b"bb")
-	rows.sort(function(left ByteArray, right ByteArray) gives left.count().compare(right.count()))
+	rows.sortBy(function(left ByteArray, right ByteArray) gives left.count().compare(right.count()))
 
 	for row in rows 'each'
 		print("{row.count()}\n")
@@ -318,7 +311,7 @@ function main() returns ExitCode
 	rows.push(b"ccc")
 	rows.push(b"a")
 	rows.push(b"bb")
-	rows.sort(function(left, right) gives right.count().compare(left.count()))
+	rows.sortBy(function(left, right) gives right.count().compare(left.count()))
 
 	for row in rows 'each'
 		print("{row.count()}\n")
@@ -358,33 +351,6 @@ end 'main'
 ```
 ```stdout
 13
-```
-
-<!-- test: error-overloads-declaring-two-function-types-offer-neither -->
-The fail-closed half of the overload rule. Both members of `apply` take a closure at the argument, and they
-declare two DIFFERENT function types there — so which one the call means turns on the closure's own
-parameter type, which is exactly what is missing. Neither member's types are offered, and the untyped `n`
-is refused as though nothing offered a type, rather than typed from a member the call may not resolve to.
-```maxon
-typealias Tally = int(0 to 1000)
-typealias Grow = function(Tally) returns Tally
-typealias Judge = function(bool) returns Tally
-
-function apply(step Grow) returns Tally
-	return step(3)
-end 'apply'
-
-function apply(step Judge) returns Tally
-	return step(true)
-end 'apply'
-
-function main() returns ExitCode
-	print("{apply(function(n) gives n)}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:15:25: Unsupported: parameter 'n' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
 ```
 
 <!-- test: error-a-type-parameter-no-receiver-fixes-is-not-offered-even-as-a-type-argument -->

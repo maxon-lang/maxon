@@ -62,8 +62,7 @@ is named statically (`Box.create(…)`) or is the type of the receiver (`self.ta
 
 - a call that hands a slot written over one of the base's own type parameters — `Element` itself, or an
   instance such as `Array with Element` — a value typed at the enclosing type's parameters: `Box.create(first)`
-  with `first as T`. The value would be stored where no type argument describes it, so nothing releases it.
-  An overloaded callee is judged by the member its arguments pick;
+  with `first as T`. The value would be stored where no type argument describes it, so nothing releases it;
 - a call whose callee needs a layout descriptor — `Holder.create()` whose body sizes an `Element`. The base
   has no descriptor of its own, and the enclosing frame's describes `Outer`'s parameters, not `Holder`'s.
 
@@ -934,11 +933,10 @@ end 'main'
 error E3162: <fragment>:18:11: 'Tag' is named without type arguments and nothing binds its parameter 'Element', so 'Tag.width' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
 ```
 
-<!-- test: error.a-bare-generic-base-overload-is-judged-by-the-member-the-arguments-fit -->
-### An overloaded factory is judged by the member its arguments fit
-`items` is an `Array with T`, which the `IntArray` overload cannot take, so the call resolves to `create(_ Element)`
-and hands the bare base's `Element` slot a value typed at `Outer`'s parameter. The `IntArray` member takes no such
-value, and it is not the member the call resolves to.
+<!-- test: error.a-bare-generic-base-call-is-judged-by-the-member-it-names -->
+### A factory is judged by the member the call names
+`items` is an `Array with T`, so the call `Box.create(items)` hands the bare base's `Element` slot a value typed at
+`Outer`'s parameter. `createFrom` takes no such value, and it is not the member the call names.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -950,9 +948,9 @@ type Box uses Element
 		return Self{n: 1}
 	end 'create'
 
-	static function create(first IntArray) returns Self
+	static function createFrom(first IntArray) returns Self
 		return Self{n: first.count() as Int}
-	end 'create'
+	end 'createFrom'
 end 'Box'
 
 type Outer uses T

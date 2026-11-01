@@ -969,37 +969,6 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: a-mixed-overload-set-guards-at-the-call-against-the-resolved-member -->
-### An overload set whose members disagree at the slot is checked against the member the call resolves to
-```maxon
-typealias Count = int(0 to u64.max)
-
-function show(c Count) returns Count
-	return c
-end 'show'
-
-function show(s String) returns Count
-	print(s)
-	return 0
-end 'show'
-
-function main() returns ExitCode
-	for i in -2 upto 1 'each'
-		print("{show(i)}\n")
-	end 'each'
-	return 0
-end 'main'
-```
-```exitcode
-1
-```
-```stderr
-panic at a-mixed-overload-set-guards-at-the-call-against-the-resolved-member.test:15: Range check failed: value outside typealias 'Count'
-Stack trace:
-  in main
-  in mrt_start
-```
-
 <!-- test: a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-is-refused -->
 ### …and at a call through an INTERFACE, where the call site checks it
 ```maxon

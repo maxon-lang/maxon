@@ -373,7 +373,7 @@ end 'InlineFrameTables'
 // first range starting past their offset, so an out-of-order range is a frame that silently loses its
 // inline lines. Concat folds chunks in layout order and each chunk's builder walks its blocks in layout
 // order, so the order is a fact of the layout — asserted rather than re-established by a sort.
-export function buildInlineFrameTableBytes(tables InlineFrameTables, spellings StdlibShadowSpellingArray) returns ByteArray
+export function buildInlineFrameTableBytes(tables InlineFrameTables, roster ShadowSpellingRoster) returns ByteArray
 	assertInlineTableStrides()
 	var table = ByteArray.create()
 	var names = ByteArray.create()
@@ -384,7 +384,7 @@ export function buildInlineFrameTableBytes(tables InlineFrameTables, spellings S
 	for site in tables.sites 'eachSite'
 		writeDword(table, value: (namesStart + names.count() as FullRangeInt) as MachineWord)
 		writeDword(table, value: inlineParentWord(site.parent))
-		names.append(authorSpelledName(site.calleeName, spellings: spellings))
+		names.append(roster.authorSpelledName(site.calleeName))
 		names.push(0)
 	end 'eachSite'
 
@@ -626,7 +626,7 @@ end 'symbolFlagsByte'
 // is the greatest such entry ONLY if the table ascends. Concat lays chunks out in order,
 // so the order is a fact of the layout — asserted here rather than re-established by a
 // sort, because a sort would silently paper over a layout that had stopped ascending.
-export function buildSymbolTableBytes(symbols DebugSymbolArray, target Target, spellings StdlibShadowSpellingArray) returns ByteArray
+export function buildSymbolTableBytes(symbols DebugSymbolArray, target Target, roster ShadowSpellingRoster) returns ByteArray
 	let granule = safePointGranuleOf(target)
 	let headerSize = SymbolTableHeaderBytes + SymbolTableEntryBytes * symbols.count()
 	var names = ByteArray.create()
@@ -663,7 +663,7 @@ export function buildSymbolTableBytes(symbols DebugSymbolArray, target Target, s
 			panic("buildSymbolTableBytes: wrote {table.count() - entryStart} bytes for '{String.from(sym.name)}' but SymbolTableEntryBytes declares {SymbolTableEntryBytes} — the emitted columns and the width the walker strides by have drifted")
 		end 'entryWidth'
 
-		names.append(authorSpelledName(sym.name, spellings: spellings))
+		names.append(roster.authorSpelledName(sym.name))
 		names.push(0)
 		flags.push(symbolFlagsByte(sym, granule: granule))
 	end 'entries'

@@ -94,9 +94,9 @@ function report(id String, suite Tls13CipherSuite, keyHex String, ivHex String, 
 		let plaintext = opened.plaintext()
 
 		if plaintext.count() > 4000 'long'
-			print("{id} {opened.contentType().rawValue} {plaintext.count()} {toHex(sha256(plaintext))}\n")
+			print("{id} {opened.contentType.rawValue} {plaintext.count()} {toHex(sha256(plaintext))}\n")
 		end 'long' else 'short'
-			print("{id} {opened.contentType().rawValue} {toHex(plaintext)}\n")
+			print("{id} {opened.contentType.rawValue} {toHex(plaintext)}\n")
 		end 'short'
 	end 'opened' else (failure) 'refused'
 		print("{id} {failure}\n")
@@ -328,9 +328,9 @@ function report(id String, suite Tls13CipherSuite, keyHex String, ivHex String, 
 		let plaintext = opened.plaintext()
 
 		if plaintext.count() > 4000 'long'
-			print("{id} {opened.contentType().rawValue} {plaintext.count()} {toHex(sha256(plaintext))}\n")
+			print("{id} {opened.contentType.rawValue} {plaintext.count()} {toHex(sha256(plaintext))}\n")
 		end 'long' else 'short'
-			print("{id} {opened.contentType().rawValue} {toHex(plaintext)}\n")
+			print("{id} {opened.contentType.rawValue} {toHex(plaintext)}\n")
 		end 'short'
 	end 'opened' else (failure) 'refused'
 		print("{id} {failure}\n")
@@ -545,9 +545,9 @@ function report(id String, suite Tls12CipherSuite, keyHex String, ivHex String, 
 		let plaintext = opened.plaintext()
 
 		if plaintext.count() > 4000 'long'
-			print("{id} {opened.contentType().rawValue} {plaintext.count()} {toHex(sha256(plaintext))}\n")
+			print("{id} {opened.contentType.rawValue} {plaintext.count()} {toHex(sha256(plaintext))}\n")
 		end 'long' else 'short'
-			print("{id} {opened.contentType().rawValue} {toHex(plaintext)}\n")
+			print("{id} {opened.contentType.rawValue} {toHex(plaintext)}\n")
 		end 'short'
 	end 'opened' else (failure) 'refused'
 		print("{id} {failure}\n")
@@ -857,7 +857,7 @@ end 'toHex'
 
 function opened(label String, protection Tls13RecordProtection, record ByteArray)
 	if let result = try protection.open(record) 'opened'
-		print("{label} {result.contentType().rawValue} {toHex(result.plaintext())}\n")
+		print("{label} {result.contentType.rawValue} {toHex(result.plaintext())}\n")
 	end 'opened' else (failure) 'refused'
 		print("{label} {failure}\n")
 	end 'refused'
@@ -949,7 +949,7 @@ end 'toHex'
 
 function opened(label String, protection Tls12RecordProtection, record ByteArray)
 	if let result = try protection.open(record) 'opened'
-		print("{label} {result.contentType().rawValue} {toHex(result.plaintext())}\n")
+		print("{label} {result.contentType.rawValue} {toHex(result.plaintext())}\n")
 	end 'opened' else (failure) 'refused'
 		print("{label} {failure}\n")
 	end 'refused'

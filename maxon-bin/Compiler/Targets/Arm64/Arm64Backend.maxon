@@ -1771,8 +1771,8 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		popReg then panic("emitArm64TargetOp: an x64 call/idiv/push/pop op reached the arm64 encoder")
 
 		// --- shared: spill / reload ---
-		storeSlotReg(slot, srcReg) then arm64EmitStoreSlot(code, slot: slot, srcReg: srcReg)
-		loadRegSlot(destReg, slot) then arm64EmitLoadSlot(code, destReg: destReg, slot: slot)
+		storeSlotReg(slot, srcReg) then arm64EmitSpillStore(code, slot: slot, srcReg: srcReg)
+		loadRegSlot(destReg, slot) then arm64EmitSpillLoad(code, destReg: destReg, slot: slot)
 
 		// --- x64-only word ALU / shift / setcc / lea-global band ---
 		andRegReg or
@@ -2145,7 +2145,7 @@ end 'arm64EmitMemFill'
 
 // storeSlotReg / loadRegSlot are CLASS-AGNOSTIC (an 8-byte slot holds a GPR or an f64); the
 // instruction is chosen from the resolved register's file.
-function arm64EmitStoreSlot(code ByteArray, slot SpillSlot, srcReg TargetVReg)
+function arm64EmitSpillStore(code ByteArray, slot SpillSlot, srcReg TargetVReg)
 	let disp = arm64SlotDisplacement(slot)
 
 	if arm64VRegIsGpr(srcReg) 'gpr'
@@ -2153,7 +2153,7 @@ function arm64EmitStoreSlot(code ByteArray, slot SpillSlot, srcReg TargetVReg)
 	end 'gpr' else 'fp'
 		arm64EmitFrameSlot(code, rt: arm64FpField(srcReg), byteOffset: disp, unscaledOp: Arm64OpSturD, scaledOp: Arm64OpStrD)
 	end 'fp'
-end 'arm64EmitStoreSlot'
+end 'arm64EmitSpillStore'
 
 // `add destReg, x29, #slotDisp` — the ADDRESS of frame slot `slot`, the address twin of
 // `arm64EmitStoreSlot`/`arm64EmitLoadSlot` above. It reads the SAME `arm64SlotDisplacement`, so the
@@ -2446,7 +2446,7 @@ export function arm64EmitSetThreadPointer(code ByteArray, src MachineWord)
 	emitArm64Insn(code, insn: Arm64OpMsrTpidr or src)
 end 'arm64EmitSetThreadPointer'
 
-function arm64EmitLoadSlot(code ByteArray, destReg TargetVReg, slot SpillSlot)
+function arm64EmitSpillLoad(code ByteArray, destReg TargetVReg, slot SpillSlot)
 	let disp = arm64SlotDisplacement(slot)
 
 	if arm64VRegIsGpr(destReg) 'gpr'
@@ -2454,7 +2454,7 @@ function arm64EmitLoadSlot(code ByteArray, destReg TargetVReg, slot SpillSlot)
 	end 'gpr' else 'fp'
 		arm64EmitFrameSlot(code, rt: arm64FpField(destReg), byteOffset: disp, unscaledOp: Arm64OpLdurD, scaledOp: Arm64OpLdrD)
 	end 'fp'
-end 'arm64EmitLoadSlot'
+end 'arm64EmitSpillLoad'
 
 // MSUB Xd, Xn, Xm, Xa => Xd = Xa − Xn*Xm (the remainder builder — `rem = dividend − quotient*divisor`).
 export function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
@@ -3090,14 +3090,14 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, spellings: project.shadowRoster.spellings))
+	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, roster: project.shadowRoster))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in; x64's
 	// concat lays them out the same way.
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
-	code.append(buildInlineFrameTableBytes(inlineFrames, spellings: project.shadowRoster.spellings))
+	code.append(buildInlineFrameTableBytes(inlineFrames, roster: project.shadowRoster))
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 	arm64ResolveFuncAdrpRelocs(funcAdrpRelocs, labelOffsets: labelOffsets)

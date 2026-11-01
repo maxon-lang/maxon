@@ -1768,8 +1768,6 @@ end 'emitBackwardCopy'
 function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, start ValueId, stop ValueId, elementSize ValueId, destroy ValueId, ids ValueMinter) returns IrBlock
 	var header = module.addBlock(func, label: b"dtorh", heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: b"dtorb", heat: BlockHeat.normal)
-	var doDrop = module.addBlock(func, label: b"dtordo", heat: BlockHeat.normal)
-	var step = module.addBlock(func, label: b"dtorstep", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"dtordone", heat: BlockHeat.normal)
 
 	let i = ids.mint()
@@ -1782,10 +1780,7 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	let slot = emitSlotAddr(module, block: body, buffer: buffer, index: i, elementSize: elementSize, ids: ids)
 	let elem = ids.mint()
 	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: slot, offset: 0, valueType: StdType.i64))
-	emitBranchOnCompare(module, block: body, value: elem, pred: StdCmpPred.ne, against: 0, whenTrue: doDrop, whenFalse: step, ids: ids)
-
-	emitElementDestructorCall(module, block: doDrop, destroy: destroy, elem: elem, ids: ids)
-	module.setTerminator(doDrop, op: StdOp.branch(step.id))
+	var step = emitDestroyOccupant(module, func: func, cur: body, destroy: destroy, occupant: elem, ids: ids)
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
@@ -1793,6 +1788,34 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 
 	return done
 end 'emitElementDestroyRange'
+
+function emitOccupantRead(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, elementSize ValueId, destroy ValueId, ids ValueMinter) returns (IrBlock, ValueId)
+	var readIt = module.addBlock(func, label: b"occread", heat: BlockHeat.normal)
+	var none = module.addBlock(func, label: b"occnone", heat: BlockHeat.normal)
+	var joined = module.addBlock(func, label: b"occjoin", heat: BlockHeat.normal)
+
+	let occupant = ids.mint()
+	joined.blockArgs.push(IrBlockArg.create(occupant, argType: StdType.i64))
+	let isManaged = emitElementIsManaged(module, block: cur, destroy: destroy, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isManaged, thenBlockId: readIt.id, elseBlockId: none.id))
+
+	let slot = emitSlotAddr(module, block: readIt, buffer: buffer, index: index, elementSize: elementSize, ids: ids)
+	emitBranchCarrying(module, from: readIt, to: joined, values: argsOf(emitLoadField(module, block: readIt, record: slot, offset: 0, ids: ids)))
+	emitBranchCarrying(module, from: none, to: joined, values: argsOf(emitConst(module, block: none, value: 0, ids: ids)))
+
+	return (joined, occupant)
+end 'emitOccupantRead'
+
+function emitDestroyOccupant(module StdModule, func IrFunction, cur IrBlock, destroy ValueId, occupant ValueId, ids ValueMinter) returns IrBlock
+	var doDrop = module.addBlock(func, label: b"dtordo", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"dtorstep", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: cur, value: occupant, pred: StdCmpPred.ne, against: 0, whenTrue: doDrop, whenFalse: done, ids: ids)
+	emitElementDestructorCall(module, block: doDrop, destroy: destroy, elem: occupant, ids: ids)
+	module.setTerminator(doDrop, op: StdOp.branch(done.id))
+
+	return done
+end 'emitDestroyOccupant'
 
 // ⭐ **CALL AN ELEMENT/KEY DESTRUCTOR on `elem` through the `destroy` function pointer.** THE one
 // home of the element-destructor register-file ABI: an element destructor is `(i64) -> void`, so its result slot
@@ -3986,10 +4009,10 @@ end 'emitElementStoreAndOkReturn'
 function emitElementStore(module StdModule, func IrFunction, store IrBlock, arr ValueId, index ValueId, value ValueId, ids ValueMinter) returns IrBlock
 	let buffer = emitLoadField(module, block: store, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: store, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let one = emitConst(module, block: store, value: 1, ids: ids)
-	let indexPlusOne = emitBin(module, block: store, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
-	var doStore = emitDestroyRangeIfManaged(module, func: func, cur: store, record: arr, buffer: buffer, start: index, stop: indexPlusOne, elementSize: es, ids: ids)
-	return emitStoreElemAt(module, func: func, cur: doStore, buffer: buffer, index: index, value: value, es: es, ids: ids)
+	let destroy = emitLoadField(module, block: store, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	var (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: store, buffer: buffer, index: index, elementSize: es, destroy: destroy, ids: ids)
+	var stored = emitStoreElemAt(module, func: func, cur: occupantRead, buffer: buffer, index: index, value: value, es: es, ids: ids)
+	return emitDestroyOccupant(module, func: func, cur: stored, destroy: destroy, occupant: occupant, ids: ids)
 end 'emitElementStore'
 
 // ⭐⭐ **DESTROY AN ELEMENT THE SETTER REFUSED TO STORE — THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT.**
@@ -5209,10 +5232,11 @@ function buildManagedMemShiftRight(module StdModule)
 	let one = emitConst(module, block: move, value: 1, ids: ids)
 	let openedAt = emitBin(module, block: move, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let overwrittenAt = emitBin(module, block: move, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
-	let overwrittenEnd = emitBin(module, block: move, a: overwrittenAt, b: one, opcode: StdBinOpcode.add, ids: ids)
-	var released = emitDestroyRangeIfManaged(module, func: func, cur: move, record: arr, buffer: buffer, start: overwrittenAt, stop: overwrittenEnd, elementSize: es, ids: ids)
-	emitMoveElems(module, block: released, destBuffer: buffer, destIndex: openedAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
-	emitZeroElems(module, block: released, buffer: buffer, start: index, count: one, es: es, ids: ids)
+	let destroy = emitLoadField(module, block: move, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	var (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: move, buffer: buffer, index: overwrittenAt, elementSize: es, destroy: destroy, ids: ids)
+	emitMoveElems(module, block: occupantRead, destBuffer: buffer, destIndex: openedAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
+	emitZeroElems(module, block: occupantRead, buffer: buffer, start: index, count: one, es: es, ids: ids)
+	var released = emitDestroyOccupant(module, func: func, cur: occupantRead, destroy: destroy, occupant: occupant, ids: ids)
 	emitVoidOkReturn(module, block: released, ids: ids)
 
 	module.functions.push(func)
@@ -5262,11 +5286,13 @@ function buildManagedMemShiftLeft(module StdModule)
 	let buffer = emitLoadField(module, block: move, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let one = emitConst(module, block: move, value: 1, ids: ids)
 	let landsAt = emitBin(module, block: move, a: index, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	var released = emitDestroyRangeIfManaged(module, func: func, cur: move, record: arr, buffer: buffer, start: landsAt, stop: index, elementSize: es, ids: ids)
-	emitMoveElems(module, block: released, destBuffer: buffer, destIndex: landsAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
-	let rangeEnd = emitBin(module, block: released, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
-	let vacatedAt = emitBin(module, block: released, a: rangeEnd, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	emitZeroElems(module, block: released, buffer: buffer, start: vacatedAt, count: one, es: es, ids: ids)
+	let destroy = emitLoadField(module, block: move, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	var (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: move, buffer: buffer, index: landsAt, elementSize: es, destroy: destroy, ids: ids)
+	emitMoveElems(module, block: occupantRead, destBuffer: buffer, destIndex: landsAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
+	let rangeEnd = emitBin(module, block: occupantRead, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
+	let vacatedAt = emitBin(module, block: occupantRead, a: rangeEnd, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	emitZeroElems(module, block: occupantRead, buffer: buffer, start: vacatedAt, count: one, es: es, ids: ids)
+	var released = emitDestroyOccupant(module, func: func, cur: occupantRead, destroy: destroy, occupant: occupant, ids: ids)
 	emitVoidOkReturn(module, block: released, ids: ids)
 
 	module.functions.push(func)

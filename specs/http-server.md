@@ -53,7 +53,7 @@ end 'main'
 function serveOne(server HttpServer) returns ExitCode throws HttpServerError
 	var exchange = try server.accept()
 	let request = exchange.request()
-	try exchange.respondWith(StatusCode.ok, body: request.url().path(), contentType: "text/plain")
+	try exchange.respondWith(StatusCode.ok, body: request.url().path, contentType: "text/plain")
 
 	return 0
 end 'serveOne'
@@ -103,7 +103,7 @@ function serveOne(server HttpServer) returns Served
 	var exchange = try server.accept() otherwise return 1
 	view request = exchange.request()
 	let query = try request.url().query() otherwise "none"
-	let described = "{request.method().name} {request.url().path()} {query}"
+	let described = "{request.method().name} {request.url().path} {query}"
 
 	try exchange.respondWith(StatusCode.ok, body: described, contentType: "text/plain") otherwise return 2
 
@@ -151,7 +151,7 @@ function serveOne(server HttpServer) returns Served
 	view url = exchange.request().url()
 	let host = try url.host() otherwise "no-host"
 	let authorityHost = try url.authorityHost() otherwise "no-host"
-	let described = "host={host} authorityHost={authorityHost} path={url.path()}"
+	let described = "host={host} authorityHost={authorityHost} path={url.path}"
 
 	try exchange.respondWith(StatusCode.ok, body: described, contentType: "text/plain") otherwise return 2
 
@@ -313,7 +313,7 @@ type PickyHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange HttpExchange) throws HttpServerError
-		if exchange.request().url().path() == BoomPath 'refuses'
+		if exchange.request().url().path == BoomPath 'refuses'
 			throw HttpServerError.sendFailed
 		end 'refuses'
 
@@ -375,7 +375,7 @@ type LateThrowingHandler implements HttpHandler
 	function handle(exchange HttpExchange) throws HttpServerError
 		try exchange.respondWith(StatusCode.ok, body: label, contentType: "text/plain")
 
-		if exchange.request().url().path() == LatePath 'thenFails'
+		if exchange.request().url().path == LatePath 'thenFails'
 			throw HttpServerError.sendFailed
 		end 'thenFails'
 	end 'handle'
@@ -467,7 +467,7 @@ type EchoPathHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange HttpExchange) throws HttpServerError
-		try exchange.respondWith(StatusCode.ok, body: "{label}{exchange.request().url().path()}", contentType: "text/plain")
+		try exchange.respondWith(StatusCode.ok, body: "{label}{exchange.request().url().path}", contentType: "text/plain")
 	end 'handle'
 
 	function faulted(fault HttpHandlerFault)
@@ -1004,7 +1004,7 @@ function serveOne(server HttpServer) returns Served
 
 	view request = exchange.request()
 	let note = try request.headers().get("x-note") otherwise "absent"
-	print("path={request.url().path()} note={note}\n")
+	print("path={request.url().path} note={note}\n")
 
 	try exchange.respondWith(StatusCode.ok, body: "served", contentType: "text/plain") otherwise return 2
 
@@ -1255,7 +1255,7 @@ function acceptedAs(server HttpServer) returns String
 	view url = exchange.request().url()
 	let host = try url.host() otherwise "no-host"
 	let query = try url.query() otherwise "no-query"
-	let seen = "{host} {url.path()} {query}"
+	let seen = "{host} {url.path} {query}"
 
 	try exchange.respondWith(StatusCode.ok, body: seen, contentType: "text/plain") otherwise return "respond-failed"
 
@@ -1440,7 +1440,7 @@ function acceptedAs(server HttpServer) returns String
 	end 'refused'
 
 	view request = exchange.request()
-	let seen = "{request.method().name} {request.url().path()} [{request.body()}]"
+	let seen = "{request.method().name} {request.url().path} [{request.body()}]"
 
 	try exchange.respondWith(StatusCode.ok, body: seen, contentType: "text/plain") otherwise return "respond-failed"
 
@@ -1590,7 +1590,7 @@ type ForgetfulHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange HttpExchange) throws HttpServerError
-		if exchange.request().url().path() == SilentPath 'forgets'
+		if exchange.request().url().path == SilentPath 'forgets'
 			return
 		end 'forgets'
 
@@ -2163,7 +2163,7 @@ function acceptedAs(server HttpServer) returns String
 	let host = try url.host() otherwise "no-host"
 	let port = try url.port() otherwise 0
 	let query = try url.query() otherwise "no-query"
-	let seen = "{host} {port} {url.path()} {query}"
+	let seen = "{host} {port} {url.path} {query}"
 
 	try exchange.respondWith(StatusCode.ok, body: seen, contentType: "text/plain") otherwise return "respond-failed"
 
@@ -2250,7 +2250,7 @@ function acceptedAs(server HttpServer) returns String
 
 	view url = exchange.request().url()
 	let host = try url.host() otherwise "no-host"
-	let seen = "{host} {url.path()}"
+	let seen = "{host} {url.path}"
 
 	try exchange.respondWith(StatusCode.ok, body: seen, contentType: "text/plain") otherwise return "respond-failed"
 
@@ -2431,7 +2431,7 @@ function acceptedAs(server HttpServer) returns String
 
 	try exchange.respondWith(StatusCode.ok, body: "first answered", contentType: "text/plain") otherwise return "respond-failed"
 
-	return "served {exchange.request().url().path()}"
+	return "served {exchange.request().url().path}"
 end 'acceptedAs'
 
 function exchangeOver(server HttpServer) returns ExitCode
@@ -2568,7 +2568,7 @@ type SpinHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange HttpExchange) throws HttpServerError
-		if exchange.request().url().path() == "/spin" 'spin'
+		if exchange.request().url().path == "/spin" 'spin'
 			try gate.enter() otherwise panic("the gate is open")
 
 			var turns = 0 as Turns

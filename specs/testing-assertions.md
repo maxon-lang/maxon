@@ -286,9 +286,9 @@ FAIL helper.maxon:2: Expect.equal
   received: 1
 ```
 
-<!-- test: equal-resolves-across-its-overloads -->
-One overloaded name, selected by argument type — including from a method call, which is the shape
-that makes `equalInt`/`equalText` unnecessary. The rendering proves which overload ran: integers
+<!-- test: equal-accepts-each-argument-type -->
+One name, accepting each argument type — including from a method call, which is the shape
+that makes `equalInt`/`equalText` unnecessary. The rendering proves which type was compared: integers
 and bools are bare, `String`s are quoted.
 ```maxon
 // --- file: main.maxon
@@ -563,9 +563,9 @@ end 'main'
 error E3057: specs/testing-assertions/error.forgotten-try.maxon:4:9: throwing function requires try: 'stdlib.Expect.equal'
 ```
 
-<!-- test: error.forgotten-try-names-an-overload-by-its-source-name -->
-The same refusal on the `String` overload of `Expect.equal` names the callee exactly as the `int`
-overload does. An overload's internal signature key is not something the author wrote.
+<!-- test: error.forgotten-try-names-the-callee-by-its-source-name -->
+The same refusal on a `String` argument of `Expect.equal` names the callee exactly as an `int`
+argument does. A callee's internal signature key is not something the author wrote.
 ```maxon
 // --- file: main.maxon
 function check() throws TestFailure
@@ -580,5 +580,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/testing-assertions/error.forgotten-try-names-an-overload-by-its-source-name.maxon:4:9: throwing function requires try: 'stdlib.Expect.equal'
+error E3057: specs/testing-assertions/error.forgotten-try-names-the-callee-by-its-source-name.maxon:4:9: throwing function requires try: 'stdlib.Expect.equal'
 ```

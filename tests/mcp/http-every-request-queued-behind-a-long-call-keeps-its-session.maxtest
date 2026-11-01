@@ -1,6 +1,4 @@
-let OkStatus = 200 as HttpAnswerStatus
-let IdleTimeoutSeconds = 1
-let QueuedStagingDir = "temp/mcp-http-every-queued-request"
+let HttpEveryRequestQueuedBehindALongCallKeepsItsSessionQueuedStagingDir = "temp/mcp-http-every-queued-request"
 let FirstQueueLeadMs = 400
 let SecondQueueLeadMs = 300
 
@@ -25,7 +23,7 @@ function everyQueuedBehindALongCall(listening StreamingHttpMcpServer, program Fi
 end 'everyQueuedBehindALongCall'
 
 test 'every request that waits behind another session s long call keeps its own session, not only the first one served'
-	let program = stagedProgram(QueuedStagingDir, fileName: "main.maxon", source: sleepingProgramSource(EveryQueuedSleepMs))
+	let program = stagedProgram(HttpEveryRequestQueuedBehindALongCallKeepsItsSessionQueuedStagingDir, fileName: "main.maxon", source: sleepingProgramSource(EveryQueuedSleepMs))
 
 	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
 	let (_, longSession) = server.initializeSession()

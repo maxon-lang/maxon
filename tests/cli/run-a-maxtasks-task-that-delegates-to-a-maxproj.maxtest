@@ -1,17 +1,14 @@
-let CaseDirName = "run-a-maxtasks-task-that-delegates-to-a-maxproj"
-let TaskFileName = "repo.maxtasks"
-let RunCommandWord = "run"
-let AskedFor = "build"
-let ProjectDirName = "app"
+let RunAMaxtasksTaskThatDelegatesToAMaxprojCaseDirName = "run-a-maxtasks-task-that-delegates-to-a-maxproj"
+let RunAMaxtasksTaskThatDelegatesToAMaxprojTaskFileName = "repo.maxtasks"
+let RunAMaxtasksTaskThatDelegatesToAMaxprojAskedFor = "build"
+let RunAMaxtasksTaskThatDelegatesToAMaxprojProjectDirName = "app"
 let ProjectFileName = "app.maxproj"
-let ProductsDirName = ".maxon"
 
-let TasksSource = "export function build() returns ExitCode\n\tBuild.delegate(\"app\")\n\treturn 0\nend 'build'\n"
+let RunAMaxtasksTaskThatDelegatesToAMaxprojTasksSource = "export function build() returns ExitCode\n\tBuild.delegate(\"app\")\n\treturn 0\nend 'build'\n"
 let ProjectSource = "export function app() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'app'\n"
-let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 test 'a .maxtasks task that delegates hands the build to the directory holding a .maxproj'
-	requireHeldOutsideCheckout(CaseDirName, check: DelegatedToTheProject.create())
+	requireHeldOutsideCheckout(RunAMaxtasksTaskThatDelegatesToAMaxprojCaseDirName, check: DelegatedToTheProject.create())
 end 'a .maxtasks task that delegates hands the build to the directory holding a .maxproj'
 
 type DelegatedToTheProject implements OutsideCheckoutCase
@@ -20,18 +17,18 @@ type DelegatedToTheProject implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		writeStagedFile(dir.join(TaskFileName), content: TasksSource)
+		writeStagedFile(dir.join(RunAMaxtasksTaskThatDelegatesToAMaxprojTaskFileName), content: RunAMaxtasksTaskThatDelegatesToAMaxprojTasksSource)
 
-		let project = stagingDir(dir.join(ProjectDirName).toString())
+		let project = stagingDir(dir.join(RunAMaxtasksTaskThatDelegatesToAMaxprojProjectDirName).toString())
 		writeStagedFile(project.join(ProjectFileName), content: ProjectSource)
 		writeStagedFile(project.join(StagedProgramFileName), content: MainSource)
 
-		let ran = spawnCompiler([RunCommandWord, AskedFor], staged: dir)
+		let ran = spawnCompiler([RunCommandWord, RunAMaxtasksTaskThatDelegatesToAMaxprojAskedFor], staged: dir)
 		let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
 
-		try Expect.equal(ran.exitCode(), expected: 0, message: "`maxon {RunCommandWord} {AskedFor}`, whose task delegates to `{ProjectDirName}/`, did not succeed. {said}")
+		try Expect.equal(ran.exitCode(), expected: 0, message: "`maxon {RunCommandWord} {RunAMaxtasksTaskThatDelegatesToAMaxprojAskedFor}`, whose task delegates to `{RunAMaxtasksTaskThatDelegatesToAMaxprojProjectDirName}/`, did not succeed. {said}")
 
-		let product = project.join(ProductsDirName).join("{ProjectDirName}{executableSuffix()}")
+		let product = project.join(ProductsDirName).join("{RunAMaxtasksTaskThatDelegatesToAMaxprojProjectDirName}{executableSuffix()}")
 		try Expect.isTrue(File.exists(product), message: "the delegated build wrote no {product.toString()}: `{ProjectFileName}`'s one target states no output, so it builds `{ProductsDirName}/<project name>` in its own directory. {said}")
 	end 'requireHeldIn'
 end 'DelegatedToTheProject'

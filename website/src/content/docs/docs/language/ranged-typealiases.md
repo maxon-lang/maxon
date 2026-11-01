@@ -86,7 +86,7 @@ end 'main'
   aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
   and array elements — and a `float` alias value at an `int` alias place is **E3005**, as `Age` at a `Year`
   place is.
-- Two declarations of one alias name, in two files, are two types too, even over the same range. An
+- Two declarations of one alias name, in two directories, are two types too, even over the same range. An
   operator, an argument, a store or a join that mixes them is **E3005** (**E2028** for a join) until one side
   is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds
   for every alias form — ranged, function, generic-instance and tuple — and for the elements of a container
@@ -169,8 +169,8 @@ A cast of that literal to the alias the destination declares converts nothing an
 (`unneeded cast: the literal 8080 already fits in 'Port'`). The destinations are a call argument (direct or
 through an interface), a `return` (a parameter default included), a struct-literal field and a store to a
 declared field — `open(8080 as Port)`, `return 0 as ExitCode` from `main`, `Config{port: 8080 as Port}`.
-A cast to a different alias of the same name converts and is legal: this file's `Item = int(0 to 200)` at a
-parameter declared with another file's `Item = int(0 to 255)`, or an alias nested in a type or extension
+A cast to a different alias of the same name converts and is legal: this directory's `Item = int(0 to 200)` at a
+parameter declared with another directory's `Item = int(0 to 255)`, or an alias nested in a type or extension
 body at a place declared with a file-scope one.
 
 A literal cast in an unannotated `let` (`let p = 8080 as Port`) is **E3010** when every use of the `let`
@@ -180,9 +180,7 @@ takes the plain constant the same way (`unneeded cast: the literal 8080 already 
 A literal cast is how a type is fixed where nothing declares one, and there it is legal: an unannotated
 `var` (`var p = 8080 as Port`), a `let` some use of which needs the alias, a field default whose type the
 cast gives (`var port = 8080 as Port`), an array-literal element, an argument or field of a generic type parameter, an operator operand, and a value
-joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
-call, the unneeded literal casts of one call are reported together, and only when removing all of them
-still selects the same overload — a cast that decides which overload runs is needed.
+joined by `if`/`else`, `gives` or `otherwise`.
 
 Write `value as Alias` to convert a value of another alias.
 
@@ -197,9 +195,7 @@ refuses the same pairs. A shift takes the alias of its left operand.
 Two subtypes of one parent make a *mixed* expression. It lands in any destination one of its operands'
 aliases satisfies — a parameter, a field, an `otherwise` or `match` merge — computed into a temporary of the
 destination's alias, so the result is range-checked there. Anywhere else its type is the operands' nearest
-common ancestor, and a diagnostic names that ancestor. At an overloaded call each operand's alias counts:
-`show(block + varId)` against `show(b BlockId)` and `show(v VarId)` is **E3007**, and the candidate list
-names the aliases (`Candidates: (b BlockId), (v VarId)`).
+common ancestor, and a diagnostic names that ancestor.
 Unary `-`, `not`, `or` and `xor` keep the operand's alias only where its range is closed under the operator: a full-width unsigned alias (`int(0 to u64.max)`, `bits(64)`) wraps modulo 2^64 and keeps it, and a range symmetric about zero keeps it under `-`. Over any other alias the result is an unnamed signed value carrying the range it computes (`-b` over `int(0 to 100)` is `[-100, 0]`), and it needs `as` to reach an alias slot. `and` always keeps the alias.
 
 ```maxon
@@ -314,11 +310,10 @@ distinct from the library's. A program's declaration of a library name is
 what the bare name means in every author file — the library's stays reachable as `stdlib.Name` — so the two
 are two types and every value crossing between them needs a cast.
 
-A non-exported ranged alias is private to its file: two files may declare one name over different ranges,
-or one over `int` and the other over `float`, and each file's uses mean its own declaration. Exported
-declarations of one name live in different directories, whatever their ranges, and a bare name that reaches
-more than one of them is ambiguous in every file, the declaring files included (see
-[Bare Names and Ambiguity](/docs/language/namespaces/#bare-names-and-ambiguity)).
+A directory declares a ranged alias once, exported or not: two directories may each declare one name over
+different ranges, or one over `int` and the other over `float`, and a bare name means the reading file's own
+directory's declaration. A bare name that reaches several directories' declarations, none nearer, is
+ambiguous (see [Bare Names and Ambiguity](/docs/language/namespaces/#bare-names-and-ambiguity)).
 
 ## Generic-Instance and Function-Type Aliases Are Brands
 
@@ -346,17 +341,17 @@ no cost, and `return` re-brands implicitly.
 - Two **file-scope** function aliases of one shape still refuse each other — including two
   directory-qualified ones, `api.Score` and `legacy.Score`, which are file-scope declarations wearing
   their directory and can be written in a type position.
-- A non-exported function alias is **private to its file**, so two files declaring one name have two
-  brands and two types, whatever their shapes: each file's declarations mean its own, and a value of one
-  reaches a door declared with the other only through `as`. Two declarations of one generic-instance alias over the
+- A function alias is declared once per directory, so two directories declaring one name have two
+  brands and two types, whatever their shapes: each directory's declarations mean its own, and a value of
+  one reaches a door declared with the other only through `as`. Two declarations of one generic-instance alias over the
   same instance are two brands in the same way.
 - A call's result wears the alias its callee's `returns` clause names, bare or directory-qualified, as the
   file that declares the callee resolves it: a caller's own declaration of that name is another brand.
 - A field read, a read of a module-level `var` and a `match` payload binding wear the alias the field,
   variable or payload was declared with, as its declaring file resolves it: with `held(v Xs)`, the
   binding `v` in `held(v) then …` is an `Xs`.
-- A bare reference that reaches two `export`ed declarations is ambiguous in every file, a declaring file
-  included: **E3063**, resolved by qualifying with the directory namespace or by renaming.
+- A bare reference that reaches two `export`ed declarations, with none in the reading file's directory or
+  the root, is ambiguous: **E3063**, resolved by qualifying with the directory namespace.
 - A diagnostic names each type as source would qualify it: the standard library's as `stdlib.Name`,
   another directory's as `dir.Name`, the root's bare. Where the two sides would still print alike, it adds
   a parenthesised note — the shape where two function shapes differ, otherwise `(declared in <file>)`. A
@@ -446,6 +441,6 @@ a visibility modifier is spelled from its own file only: another file's extensio
 [E3008](/docs/cli/error-codes/#e3008--symbolnotexported).
 
 A per-instance **function** alias is unbranded: it spells the shared body's signature over the type's own
-parameters. `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
-function(Row, Row) returns Ordering` passes straight through: `rows.sort(self.compare)` compiles with no
+parameters. `Array.sortBy` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
+function(Row, Row) returns Ordering` passes straight through: `rows.sortBy(self.compare)` compiles with no
 cast and no wrapping closure.

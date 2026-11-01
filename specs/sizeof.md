@@ -628,7 +628,7 @@ end 'main'
 56008 56 57
 ```
 
-### `sizeof` read by a call chained on a method's result and on an overloaded method's result
+### `sizeof` read by a call chained on a method's result
 
 <!-- test: sizeof-read-through-a-call-chained-on-a-result -->
 ```maxon
@@ -680,7 +680,7 @@ end 'main'
 8 1
 ```
 
-<!-- test: sizeof-read-through-an-overloaded-methods-result -->
+<!-- test: sizeof-read-through-a-methods-result -->
 ```maxon
 type Left uses A
 	var n as Count
@@ -715,13 +715,13 @@ type Inner uses T
 		return Self{n: 0}
 	end 'create'
 
-	function pick(_ Count) returns L
+	function pickLeft(_ Count) returns L
 		return L.create()
-	end 'pick'
+	end 'pickLeft'
 
-	function pick(_ bool) returns R
+	function pickRight(_ bool) returns R
 		return R.create()
-	end 'pick'
+	end 'pickRight'
 end 'Inner'
 
 type Outer uses T
@@ -733,12 +733,12 @@ type Outer uses T
 	end 'create'
 
 	function probe() returns Count
-		let c = self.inner.pick(1)
+		let c = self.inner.pickLeft(1)
 		return c.size()
 	end 'probe'
 
 	function probeOther() returns Count
-		let c = self.inner.pick(true)
+		let c = self.inner.pickRight(true)
 		return c.size()
 	end 'probeOther'
 end 'Outer'

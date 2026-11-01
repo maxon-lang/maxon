@@ -2703,7 +2703,7 @@ type OptionalExtendedMasterSecret implements TlsClientHelloSource
 			end 'other'
 		end 'eachExtension'
 
-		let hello = TlsClientHello.create(message.legacyVersion(), random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods(), extensions: TlsExtensionBlock.listed(kept))
+		let hello = TlsClientHello.create(message.legacyVersion, random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods, extensions: TlsExtensionBlock.listed(kept))
 
 		return try TlsHandshakeCodec.encode(TlsHandshakeMessage.clientHello(hello)) otherwise panic("a ClientHello without an extension encodes")
 	end 'first'
@@ -2780,7 +2780,7 @@ function signatureSchemeOf(raw ByteArray) returns String
 	let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls12) otherwise panic("a plaintext TLS 1.2 flight holds whole messages")
 
 	return match message 'message'
-		serverKeyExchange(exchange) gives "{exchange.signatureScheme()}"
+		serverKeyExchange(exchange) gives "{exchange.signatureScheme}"
 		certificateVerify(scheme, _) gives "{scheme}"
 		default panic("only signed messages are asked for")
 	end 'message'
@@ -3018,7 +3018,7 @@ type OptionalExtendedMasterSecret implements TlsClientHelloSource
 			end 'other'
 		end 'eachExtension'
 
-		let hello = TlsClientHello.create(message.legacyVersion(), random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods(), extensions: TlsExtensionBlock.listed(kept))
+		let hello = TlsClientHello.create(message.legacyVersion, random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods, extensions: TlsExtensionBlock.listed(kept))
 
 		return try TlsHandshakeCodec.encode(TlsHandshakeMessage.clientHello(hello)) otherwise panic("a ClientHello without an extension encodes")
 	end 'first'
@@ -3095,7 +3095,7 @@ function signatureSchemeOf(raw ByteArray) returns String
 	let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls12) otherwise panic("a plaintext TLS 1.2 flight holds whole messages")
 
 	return match message 'message'
-		serverKeyExchange(exchange) gives "{exchange.signatureScheme()}"
+		serverKeyExchange(exchange) gives "{exchange.signatureScheme}"
 		certificateVerify(scheme, _) gives "{scheme}"
 		default panic("only signed messages are asked for")
 	end 'message'
@@ -3321,7 +3321,7 @@ type OptionalExtendedMasterSecret implements TlsClientHelloSource
 			end 'other'
 		end 'eachExtension'
 
-		let hello = TlsClientHello.create(message.legacyVersion(), random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods(), extensions: TlsExtensionBlock.listed(kept))
+		let hello = TlsClientHello.create(message.legacyVersion, random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods, extensions: TlsExtensionBlock.listed(kept))
 
 		return try TlsHandshakeCodec.encode(TlsHandshakeMessage.clientHello(hello)) otherwise panic("a ClientHello without an extension encodes")
 	end 'first'
@@ -3398,7 +3398,7 @@ function signatureSchemeOf(raw ByteArray) returns String
 	let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls12) otherwise panic("a plaintext TLS 1.2 flight holds whole messages")
 
 	return match message 'message'
-		serverKeyExchange(exchange) gives "{exchange.signatureScheme()}"
+		serverKeyExchange(exchange) gives "{exchange.signatureScheme}"
 		certificateVerify(scheme, _) gives "{scheme}"
 		default panic("only signed messages are asked for")
 	end 'message'

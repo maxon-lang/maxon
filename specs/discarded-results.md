@@ -412,7 +412,7 @@ computing
 
 typealias Integer = int(i64.min to i64.max)
 
-function doubleInPlace(x Integer) returns Integer
+function doubleInPlace(x mutable Integer) returns Integer
 	x = x * 2
 	return x
 end 'doubleInPlace'
@@ -721,8 +721,7 @@ end 'main'
 error E3064: specs/discarded-results/set-contains-underscore-discard.maxon:8:2: result of pure function 'Set.contains' must be used
 ```
 
-⚠ The compiler reports the member's registration name, which for an un-overloaded member is the bare
-`Set.contains` — never an overload key such as `Set.contains$element`.
+⚠ The compiler reports the member's registration name, the bare `Set.contains`.
 
 The control is the read that CHANGES the table: `remove` tombstones a slot, so the call has a reason to run
 and its `bool` answer may be discarded.
@@ -822,81 +821,6 @@ function main() returns ExitCode
 	arr.push(7)
 	_ = arr.clone()
 	return arr.count() - 1
-end 'main'
-```
-```exitcode
-0
-```
-
-### A conformer reached through an overload set is still a candidate
-
-An interface requirement is implemented by whichever member matches it, and that member need not be the
-FIRST declaration of its name: a second `digest` registers as `Loud.digest#`, a name no requirement is
-spelled with. The candidate scan has to undo BOTH joins, or the conformer drops out of the set and a
-dispatch that can land on its module-global write reads pure.
-
-The control is the identical program with the extra overload deleted -- it compiles either way, so the
-refusal this case forbids would turn on nothing but an unrelated declaration.
-
-<!-- test: overloaded-conformer-is-a-candidate -->
-```maxon
-typealias Code = int(0 to u32.max)
-
-var noise = 0 as Code
-
-interface Digest
-	function digest() returns Code
-end 'Digest'
-
-type Quiet implements Digest
-	export var x as Code
-
-	static function create(x Code) returns Self
-		return Self{ x: x }
-	end 'create'
-
-	function digest() returns Code
-		return self.x
-	end 'digest'
-end 'Quiet'
-
-type Loud implements Digest
-	export var x as Code
-
-	static function create(x Code) returns Self
-		return Self{ x: x }
-	end 'create'
-
-	function digest(salt Code) returns Code
-		return self.x + salt
-	end 'digest'
-
-	function digest() returns Code
-		noise = noise + 1
-		return self.x
-	end 'digest'
-end 'Loud'
-
-type Box uses T where T is Digest
-	export var item as T
-
-	static function create(item T) returns Self
-		return Self{ item: item }
-	end 'create'
-
-	function itemDigest() returns Code
-		return self.item.digest()
-	end 'itemDigest'
-end 'Box'
-
-typealias LoudBox = Box with Loud
-typealias QuietBox = Box with Quiet
-
-function main() returns ExitCode
-	let loud = LoudBox.create(Loud.create(3))
-	_ = loud.itemDigest()
-	let quiet = QuietBox.create(Quiet.create(3))
-	return quiet.itemDigest() + noise - 4
 end 'main'
 ```
 ```exitcode
@@ -3492,157 +3416,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: an-overload-the-call-reached-keeps-its-result-droppable -->
-A discard is judged by the overload the call reaches, not by the first one declared: the zero-argument digest bumps a counter.
-```maxon
-typealias Code = int(0 to u32.max)
-
-var noise = 0 as Code
-
-type Loud
-	export var x as Code
-
-	static function create(x Code) returns Self
-		return Self{x: x}
-	end 'create'
-
-	function digest(salt Code) returns Code
-		return self.x + salt
-	end 'digest'
-
-	function digest() returns Code
-		noise = noise + 1
-		return self.x
-	end 'digest'
-end 'Loud'
-
-function main() returns ExitCode
-	let loud = Loud.create(3)
-	_ = loud.digest()
-	return noise - 1
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: a-free-overload-the-call-reached-keeps-its-result-droppable -->
-The same for free functions: the String member prints, the number member before it is pure.
-```maxon
-typealias Number = int(0 to u32.max)
-
-function describe(x Number) returns Number
-	return x + 1
-end 'describe'
-
-function describe(s String) returns Number
-	print("{s}\n")
-	return 0
-end 'describe'
-
-function main() returns ExitCode
-	_ = describe("hi")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-hi
-```
-
-<!-- test: error.a-pure-overload-the-call-reached-is-refused-though-the-first-one-prints -->
-The converse: the member the call reaches is pure, so its discarded result is refused whatever the first member does.
-```maxon
-typealias Number = int(0 to u32.max)
-
-function describe(x Number) returns Number
-	print("{x}\n")
-	return x
-end 'describe'
-
-function describe(s String) returns Number
-	return s.count() as Number
-end 'describe'
-
-function main() returns ExitCode
-	_ = describe("hi")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3064: specs/discarded-results/error.a-pure-overload-the-call-reached-is-refused-though-the-first-one-prints.maxon:14:2: result of pure function 'describe' must be used
-```
-
-<!-- test: error.a-pure-method-overload-is-reported-under-its-bare-name -->
-The diagnostic names the member the author wrote, never the registration name an overload carries.
-```maxon
-typealias Code = int(0 to u32.max)
-
-var noise = 0 as Code
-
-type Loud
-	export var x as Code
-
-	static function create(x Code) returns Self
-		return Self{x: x}
-	end 'create'
-
-	function digest(salt Code) returns Code
-		noise = noise + salt
-		return self.x
-	end 'digest'
-
-	function digest() returns Code
-		return self.x
-	end 'digest'
-end 'Loud'
-
-function main() returns ExitCode
-	let loud = Loud.create(3)
-	_ = loud.digest()
-	return noise
-end 'main'
-```
-```maxoncstderr
-error E3064: specs/discarded-results/error.a-pure-method-overload-is-reported-under-its-bare-name.maxon:25:2: result of pure function 'Loud.digest' must be used
-```
-
-<!-- test: error.a-bare-call-of-the-impure-overload-the-call-reached-earns-e3065 -->
-A bare statement of the member that bumps a counter earns the impure code, not the pure one the first member would.
-```maxon
-typealias Code = int(0 to u32.max)
-
-var noise = 0 as Code
-
-type Loud
-	export var x as Code
-
-	static function create(x Code) returns Self
-		return Self{x: x}
-	end 'create'
-
-	function digest(salt Code) returns Code
-		return self.x + salt
-	end 'digest'
-
-	function digest() returns Code
-		noise = noise + 1
-		return self.x
-	end 'digest'
-end 'Loud'
-
-function main() returns ExitCode
-	let loud = Loud.create(3)
-	loud.digest()
-	return noise - 1
-end 'main'
-```
-```maxoncstderr
-error E3065: specs/discarded-results/error.a-bare-call-of-the-impure-overload-the-call-reached-earns-e3065.maxon:25:7: result of 'Loud.digest' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: an-allocation-counter-read-keeps-its-result-droppable -->

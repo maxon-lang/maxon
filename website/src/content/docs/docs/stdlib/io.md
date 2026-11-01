@@ -125,7 +125,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `join(component String)` | `FilePath` | Append a component with the host separator. |
-| `join(component FilePath)` | `FilePath` | Append another path. |
+| `joinPath(component FilePath)` | `FilePath` | Append another path. |
 | `changeExtension(newExt String)` | `FilePath` | Replace or add an extension; include the dot (`".exe"`). |
 | `anchoredAt(base FilePath)` | `FilePath` | A relative path joined onto `base`, or an absolute path kept. Only what cannot change the file named is folded — `.` components, repeated separators and a trailing one — and every `..` is left for the filesystem, so through a symbolic link it names the file the spelling names. On Windows a drive-relative path (`C:foo`) is joined onto a `base` rooted on the same drive; against any other `base` it stays drive-relative, because it names that drive's current directory. |
 | `resolve(base FilePath)` | `FilePath` | `anchoredAt(base)`, then folded as `normalize()` folds it — lexically, so a `..` after a symbolic link cancels the link's name. |
@@ -591,9 +591,7 @@ With `git` on `PATH`, it prints `true 0 true`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `Subprocess.run(executable Executable, arguments StringArray)` | `CollectedOutput` | Inherit the working directory and environment, no stdin, collect stdout and stderr up to 16 MiB each, no timeout. |
-| `Subprocess.run(executable, arguments:, workingDirectory FilePath)` | `CollectedOutput` | With a working directory. |
-| `Subprocess.run(executable, arguments:, workingDirectory:, timeoutMs DurationMs)` | `CollectedOutput` | With a deadline after which the child's whole process tree is killed; `0` waits forever. |
+| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each. An empty `workingDirectory` inherits the parent's. A `timeoutMs` deadline kills the child's whole process tree; `0` waits forever. |
 | `Subprocess.runConfiguration(config Configuration)` | `CollectedOutput` | Run a configuration; `config.run()` calls this. |
 | `Subprocess.runDetachedConfiguration(config Configuration)` | `Pid` | Start detached; `config.runDetached()` calls this. |
 

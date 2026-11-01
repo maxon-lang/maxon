@@ -21,7 +21,7 @@ let SecondDocumentVersion = 2
 
 // JSON-RPC's reserved code for a method the server does not implement, and the wording it answers with.
 // A client displays the sentence, so the prefix is pinned alongside the code.
-let MethodNotFoundCode = -32601 as JsonRpcErrorCode
+let LspClientSmokeMethodNotFoundCode = -32601 as JsonRpcErrorCode
 let MethodNotFoundMessagePrefix = "Method not found"
 
 // LSP's own rule: the process exits 0 only when the client asked for a shutdown before the session ended.
@@ -43,7 +43,7 @@ function assertSession(syncAdvertised bool, refusalCode JsonRpcErrorCode, refusa
 	try Expect.isTrue(syncAdvertised, message: "the server's `initialize` reply did not advertise `textDocumentSync`. The client declared support for it, and a server that does not offer it cannot be sent a document at all — so every one of the ten language methods is unreachable behind this one capability.")
 
 	let observedRefusal = refusalCode
-	let expectedRefusal = MethodNotFoundCode
+	let expectedRefusal = LspClientSmokeMethodNotFoundCode
 	try Expect.equal(observedRefusal, expected: expectedRefusal, message: "an unserved method did not answer JSON-RPC's `method not found`. A server that answers a method it never advertised is answering something it does not implement, and a client has no way to tell. It said: {refusalMessage}")
 
 	try Expect.startsWith(refusalMessage, needle: MethodNotFoundMessagePrefix, message: "the refusal carried the right code with the wrong sentence. A client displays this text.")

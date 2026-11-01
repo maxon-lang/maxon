@@ -217,11 +217,11 @@ end 'main'
 | `let b = e`, `e` state something may still write | **E3188**; `view b = e` reads it, `var b = e` writes it |
 | `view b = e` | `b` names the record read-only; other names may still write it |
 | `var b = a`, `a` read-only (a `let` included) | **E3078**; `a.clone()` is the mutable copy |
-| an ordinary call argument | shared with the callee for the call, counted where needed; a parameter the callee reassigns gets its own storage |
+| an ordinary call argument | shared with the callee for the call, counted where needed; a `mutable` parameter is the caller's own storage, so the callee's writes reach it |
 | an argument the callee keeps where something may write it | a fresh `let` at its last use moves; any other read-only value is **E3078** |
 | an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
 | an argument to a [`sole`](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly) parameter | moves: a fresh value, or a `let` or `var` at its last use |
-| an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
+| an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a `mutable` parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
 | a [closure](/docs/language/functions/#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](/docs/language/async/#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
 | a `spawn` factory argument | moves to the service's green thread; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
@@ -231,7 +231,7 @@ end 'main'
 
 Reads are counted, so two arguments that reach the same storage are safe in most calls: `s.append(s)` is
 legal. The one refused overlap is a **by-reference parameter** whose storage another argument of the same call
-also reaches. A by-reference parameter is one the callee reassigns. The refusal is **E3186**; pass a `clone()` as
+also reaches. A by-reference parameter is one marked `mutable`. The refusal is **E3186**; pass a `clone()` as
 one of the two. A promise, or a value of an opaque type parameter, passed at two arguments whose parameters
 take it moves at the first, so the second is **E3102**.
 
@@ -465,7 +465,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](/docs/language/a
 | [E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) | a shared value whose graph holds an OS handle, a function value or a promise |
 | [E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned) | a published value that is not solely owned |
 | [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) | raw memory or a raw handle used outside the library tier |
-| [E3186](/docs/cli/error-codes/#e3186--argumentoverlapswrittenparameter) | a by-reference parameter that overlaps another argument |
+| [E3186](/docs/cli/error-codes/#e3186--argumentoverlapswrittenparameter) | a `mutable` parameter that overlaps another argument |
 | [E5004](/docs/cli/error-codes/#e5004--unguardedstackchain) | a chain of unchecked runtime functions that can exceed the stack margin |
 | exit 96 | a mutable value sent to another thread while not solely owned |
 | exit 101 | memory still allocated when `main` returns |

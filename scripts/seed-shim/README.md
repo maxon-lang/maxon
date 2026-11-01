@@ -42,6 +42,9 @@ only reach beyond its file was a crossing the patch turned into a cast is withdr
 qualifier on a container's element type (`Array with readonly T`, `Map with (K, readonly V)`) and a `let` on a
 union case's payload (`case(let name T)`) are parse errors to a seed that predates them, and the patch
 withdraws the qualifier at every declaration, which leaves the container and union types the seed always held.
+A `mutable` marker before a parameter's type (`count mutable ElementIndex`, `function(mutable Count)`) is withdrawn
+at every declaration and function type, always and without a flag: the seed then infers by reference from the
+function's own write to the parameter, a reassignment or an in-place `String` write, which is what the marker states.
 A `view` binding is written `let`, which the seed reads as a read-only binding of the same value, and a capability
 qualifier — `keep` or `sole` on a parameter of a function-type alias or an interface requirement, `returns sole`,
 `returns readonly` — is withdrawn. The script withdraws those two only with

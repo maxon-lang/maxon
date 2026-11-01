@@ -19,13 +19,13 @@ Use `URL.parse()` to decompose a URI string into its components:
 let url = try URL.parse("https://example.com:8080/path?q=1#top") otherwise 'err'
   // handle error
 end 'err'
-print(url.scheme())    // "https"
-print(url.path())      // "/path"
+print(url.scheme)    // "https"
+print(url.path)      // "/path"
 ```
 
 ### URL Components
 
-- `scheme()` and `path()` are always available
+- `scheme` and `path` are fields, always available
 - `host()`, `port()`, `userinfo()`, `query()`, `fragment()` throw `URLError.fieldNotPresent` if not set in the URL
 - Use `try ... otherwise` to handle missing components:
 
@@ -77,8 +77,8 @@ function main() returns ExitCode
 	let url = try URL.parse("https://example.com") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
-	print("{url.path()}\n")
+	print("{url.scheme}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -96,12 +96,12 @@ function main() returns ExitCode
 	let url = try URL.parse("https://example.com/path/to/resource") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
+	print("{url.scheme}\n")
 	let host = try url.host() otherwise 'nohost'
 		return 2
 	end 'nohost'
 	print("{host}\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -120,7 +120,7 @@ function main() returns ExitCode
 	let url = try URL.parse("https://example.com:8080/path?query=value#frag") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
+	print("{url.scheme}\n")
 	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
@@ -129,7 +129,7 @@ function main() returns ExitCode
 		return 3
 	end 'np'
 	print("{port}\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	let query = try url.query() otherwise 'nq'
 		return 4
 	end 'nq'
@@ -159,7 +159,7 @@ function main() returns ExitCode
 	let url = try URL.parse("ftp://user:pass@ftp.example.com/files") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
+	print("{url.scheme}\n")
 	let ui = try url.userinfo() otherwise 'nui'
 		return 2
 	end 'nui'
@@ -168,7 +168,7 @@ function main() returns ExitCode
 		return 3
 	end 'nh'
 	print("{host}\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -196,7 +196,7 @@ function main() returns ExitCode
 		return 3
 	end 'np'
 	print("{port}\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -265,8 +265,8 @@ function main() returns ExitCode
 	let url = try URL.parse("mailto:user@example.com") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
-	print("{url.path()}\n")
+	print("{url.scheme}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -284,8 +284,8 @@ function main() returns ExitCode
 	let url = try URL.parse("urn:isbn:0451450523") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
-	print("{url.path()}\n")
+	print("{url.scheme}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -303,12 +303,12 @@ function main() returns ExitCode
 	let url = try URL.parse("HTTP://Example.COM/Path") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
+	print("{url.scheme}\n")
 	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("{host}\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -331,7 +331,7 @@ function main() returns ExitCode
 		return 2
 	end 'nq'
 	print("query='{query}'\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -353,7 +353,7 @@ function main() returns ExitCode
 		return 2
 	end 'nf'
 	print("fragment='{frag}'\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -371,7 +371,7 @@ function main() returns ExitCode
 	let url = try URL.parse("https://example.com/a%20b") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -392,7 +392,7 @@ function main() returns ExitCode
 		return 2
 	end 'np'
 	print("{port}\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -410,12 +410,12 @@ function main() returns ExitCode
 	let url = try URL.parse("file:///home/user/file.txt") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
+	print("{url.scheme}\n")
 	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("host='{host}'\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -434,7 +434,7 @@ function main() returns ExitCode
 	let url = try URL.parse("custom+scheme.v2://host/path") otherwise 'err'
 		return 1
 	end 'err'
-	print("{url.scheme()}\n")
+	print("{url.scheme}\n")
 	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
@@ -456,8 +456,8 @@ function main() returns ExitCode
 	let url = try URL.parse("/relative/path?q=1#f") otherwise 'err'
 		return 1
 	end 'err'
-	print("scheme='{url.scheme()}'\n")
-	print("{url.path()}\n")
+	print("scheme='{url.scheme}'\n")
+	print("{url.path}\n")
 	let query = try url.query() otherwise 'nq'
 		return 2
 	end 'nq'
@@ -485,12 +485,12 @@ function main() returns ExitCode
 	let url = try URL.parse("//example.com/path") otherwise 'err'
 		return 1
 	end 'err'
-	print("scheme='{url.scheme()}'\n")
+	print("scheme='{url.scheme}'\n")
 	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("{host}\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```
@@ -517,7 +517,7 @@ function main() returns ExitCode
 		return 3
 	end 'np'
 	print("{port}\n")
-	print("{url.path()}\n")
+	print("{url.path}\n")
 	return 0
 end 'main'
 ```

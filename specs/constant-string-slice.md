@@ -36,11 +36,11 @@ The fold fires only when every one of these holds, and declines to the ordinary 
   cannot be made statically). Only a value the compiler MINTED as a literal is known here — the same
   criterion `LiteralArgPromotion.isImmortal` already applies for the same reason.
 - **Both bounds are compile-time known byte positions** — `startIndex()` and `endIndex()` of a
-  known-bytes receiver, and, for the `length:` overload, an integer constant.
+  known-bytes receiver, and, for `sliceLength`, an integer constant.
 - **The range is valid** — `0 <= start <= end <= byteLength`. An out-of-range constant range is left to
   the runtime call so its existing panic still fires with the trace `string-index.md` pins.
 
-⚠ **The `length:` overload folds only for a SINGLE-BYTE-GRAPHEME literal**, where a grapheme count and
+⚠ **`sliceLength` folds only for a SINGLE-BYTE-GRAPHEME literal**, where a grapheme count and
 a byte count are the same number. For a literal carrying multi-byte clusters the conversion is UAX#29
 grapheme segmentation, which is the emitted runtime's job and not the compiler's; those slices keep
 the runtime call. `slice-by-length-counts-clusters` in `string-index.md` is that shape and stays exact.
@@ -59,7 +59,7 @@ parameter, a `var` String is promoted at its declaration, and `__str_retain` / `
 provenance value, which is what `BufferOwnership`'s header requires of anything that would.
 
 That matters most where it is least obvious: `registerRdataConstant` dedupes by BYTES, so folding
-`"hello world".slice(…, length: 5)` yields the *identical record* as an unrelated `"hello"` written
+`"hello world".sliceLength(…, length: 5)` yields the *identical record* as an unrelated `"hello"` written
 elsewhere in the same program. A write through one must never be visible through the other —
 `a-folded-slice-does-not-corrupt-a-deduped-literal` below is what says so, and on `wasm32-wasi` it is
 the case that matters most: linear memory has no read-only segment, so a write that FAULTS on x64
@@ -102,7 +102,7 @@ can cut for itself. `"hello world"` is single-byte-grapheme, so `length: 5` is f
 function main() returns ExitCode
 	let s = "hello world"
 	let before = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
-	let sub = s.slice(s.startIndex(), length: 5)
+	let sub = s.sliceLength(s.startIndex(), length: 5)
 	let after = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	print("{after - before} {sub}\n")
 	return 0
@@ -123,7 +123,7 @@ holds its parent alive.
 function main() returns ExitCode
 	let s = "hello"
 	let before = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
-	let sub = s.slice(s.startIndex(), length: 0)
+	let sub = s.sliceLength(s.startIndex(), length: 0)
 	let after = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	print("{after - before} [{sub}] {sub.count()}\n")
 	return 0
@@ -148,7 +148,7 @@ function main() returns ExitCode
 	var total = 0 as BytePos
 	var trips = 0 as Count
 	while trips < 500 'loop'
-		let sub = s.slice(s.startIndex(), length: 5)
+		let sub = s.sliceLength(s.startIndex(), length: 5)
 		total = total + sub.byteLength()
 		trips = trips + 1
 	end 'loop'
@@ -173,7 +173,7 @@ left untouched.
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	var sub = s.slice(s.startIndex(), length: 5)
+	var sub = s.sliceLength(s.startIndex(), length: 5)
 	sub.append("!")
 	print("{sub} {s}\n")
 	return 0
@@ -195,7 +195,7 @@ two values had nothing to do with each other, so no existing case can catch this
 function main() returns ExitCode
 	let s = "hello world"
 	let other = "hello"
-	var sub = s.slice(s.startIndex(), length: 5)
+	var sub = s.sliceLength(s.startIndex(), length: 5)
 	sub.append("!")
 	print("{sub} {other}\n")
 	return 0

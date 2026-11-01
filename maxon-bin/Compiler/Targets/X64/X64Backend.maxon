@@ -3214,13 +3214,13 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, spellings: project.shadowRoster.spellings))
+	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, roster: project.shadowRoster))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in.
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
-	code.append(buildInlineFrameTableBytes(inlineFrames, spellings: project.shadowRoster.spellings))
+	code.append(buildInlineFrameTableBytes(inlineFrames, roster: project.shadowRoster))
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 

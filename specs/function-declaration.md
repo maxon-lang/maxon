@@ -20,21 +20,21 @@ Functions in Maxon are declared using the `function` keyword. Each function has:
 
 ```maxon
 // Function with return value
-function name(param1 type1, param2 type2) returns returnType
+function compute(param1 type1, param2 type2) returns returnType
 	// statements
 	return value
-end 'name'
+end 'compute'
 
 // Function with no return value (implicit void)
-function name(param1 type1, param2 type2)
+function perform(param1 type1, param2 type2)
 	// statements
-end 'name'
+end 'perform'
 
 // Function with discard parameter (unused parameter)
-function name(_ type1, param2 type2) returns returnType
+function ignoreFirst(_ type1, param2 type2) returns returnType
 	// param2 is usable, _ is discarded
 	return value
-end 'name'
+end 'ignoreFirst'
 ```
 
 ### Discard Parameters

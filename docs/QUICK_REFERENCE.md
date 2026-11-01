@@ -89,6 +89,7 @@ Standard library aliases: `ExitCode`, `HashValue`, `Codepoint`, `NetworkPort`, `
 "Hello, {name}!"    // interpolation with {}
 "{n:04}"            // format specifier: zero-pad to width 4
 "{f:.2}"            // format specifier: 2 decimal places
+"{s:q}"             // quoted and escaped as a Maxon literal (String or Character); "{s:8q}" pads the quoted text
 "Line1\nLine2"      // escape sequences: \n \t \r \0 \\ \" \{ \} \xNN \uXXXX
 
 // Byte strings (ByteArray, one byte per char)
@@ -276,11 +277,11 @@ end 'check'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference -- mutations propagate back to the caller's storage: a local `var`, a module-level `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a read-only value to a parameter the callee writes is a compile error (E3159). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
+**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a module-level `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a read-only value, a literal or an expression to a `mutable` parameter is a compile error (E3159). A record parameter is never rebound; copy it into a local `var`.
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
-**Function overloads:** Multiple functions can share the same name if they differ by parameter types or parameter names. The compiler auto-selects by argument types when unambiguous. When signatures are identical, named arguments are required (E3007).
+**One declaration per name:** A function name is declared once per directory, a method name once per type, and a requirement name once per interface; a second declaration is E3006. Give each function its own name, or use a default parameter for an optional argument.
 
 **Discarding parameters:** Use `_` as a parameter name to suppress the unused-variable error (E3012): `function onClick(_ MouseEvent)`.
 
@@ -311,7 +312,7 @@ A closure owns what it captures. A captured scalar is copied when the closure is
 Closure parameters are checked for unused (E3012). Use `_` to discard: `function(_ Integer) gives 42`
 
 A closure passed where the parameter is declared with a function type may omit its parameter types, which
-come from that function type in order: `scores.sort(function(a, b) gives b.compare(a))`. An extra untyped
+come from that function type in order: `scores.sortBy(function(a, b) gives b.compare(a))`. An extra untyped
 parameter is E2003; an omitted type anywhere else is E2015.
 
 Inside an instance method, a closure may reference `self` (and `self.field`, `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
@@ -387,7 +388,7 @@ export var sharedCounter = 0                    // visible everywhere
 module var featureState = 0                     // visible to this directory subtree
 ```
 
-When two directories both expose the same bare name, an unqualified reference is ambiguous: **E3095** for functions, **E3063** for a type name of any kind (typealias, type, enum, union, interface) — in every file, a file declaring one of them included, where the fix is to rename its own. A project declaration of a name the standard library also declares is what the bare name means, and the library's is `stdlib.Score`. Qualify to disambiguate: `api.format(...)`, `lib.fmt.Score`, `export.Score` for the project root. Two nameable type declarations of one name in one directory are refused at the declaration (**E3061** for two typealiases, **E3006** otherwise). A directory that cannot be written as a qualifier is **E3182**. A type that is not visible hides its members too: reaching a field or method through a value of it is **E3008**.
+When two directories both expose the same bare name, an unqualified reference is ambiguous: **E3095** for functions and top-level bindings, **E3063** for a type name of any kind (typealias, type, enum, union, interface) — where neither the reading file's directory nor the project root declares the name (a bare name means the reader's own directory's declaration, then the root's). A project declaration of a name the standard library also declares is what the bare name means, and the library's is `stdlib.Score`. Qualify to disambiguate: `api.format(...)`, `lib.fmt.Score`, `export.Score` for the project root. Two nameable type declarations of one name in one directory are refused at the declaration (**E3061** for two typealiases, **E3006** otherwise). A directory that cannot be written as a qualifier is **E3182**. A type that is not visible hides its members too: reaching a field or method through a value of it is **E3008**.
 
 ## Conditional Compilation
 ```maxon
@@ -999,7 +1000,7 @@ end 'each'
 - Growable stacks, `main` included: a thread starts on 2 KiB, or 8 KiB on x64-Windows, whose fault frames land on the faulting stack. Each time at least 64 more threads have finished, the starting size becomes the smallest power of two from that floor up to 64 KiB that holds the average stack those threads needed. A stack doubles until the frame fits, up to 1 GiB
 - Throwing async functions require `try await` (not plain `await`), except inside a `try` block or a `test` body
 - `async` target must yield (contain I/O or `await` points)
-- `async` arguments are SHARED with the coroutine, as with an ordinary call: the coroutine runs on the caller's green thread, so a local `let` or `var` passed to `async` stays readable by the caller, and a parameter the coroutine reassigns gets storage the coroutine owns. A service send is the call that moves a mutable value
+- `async` arguments are SHARED with the coroutine, as with an ordinary call: the coroutine runs on the caller's green thread, so a local `let` or `var` passed to `async` stays readable by the caller, and a `mutable` parameter the coroutine reassigns gets storage the coroutine owns. A service send is the call that moves a mutable value
 - An unawaited promise is DROPPED at scope exit — an unstarted coroutine never runs and a parked one's wait is cancelled
 
 ## Arrays
@@ -1025,8 +1026,8 @@ try arr.first() otherwise 0            // first element (throws)
 try arr.last() otherwise 0             // last element (throws)
 arr.sort()                             // in-place stable sort (Element is Comparable)
 arr.sortUnstable()                     // in-place unstable sort (Element is Comparable)
-arr.sort(cmp)                          // sort with comparator: function(Element, Element) returns Ordering
-arr.sortUnstable(cmp)                  // unstable sort with comparator
+arr.sortBy(cmp)                        // sort with comparator: function(Element, Element) returns Ordering
+arr.sortUnstableBy(cmp)                // unstable sort with comparator
 ```
 
 ## Strings
@@ -1041,7 +1042,7 @@ s.isEmpty()                            // check empty
 s.startsWith("prefix")
 s.endsWith("suffix")
 s.contains("text")
-s.contains('x')
+s.containsCharacter('x')
 try s.find("needle") otherwise -1      // find index
 
 s.toLower()

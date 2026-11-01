@@ -148,5 +148,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:3:10: Duplicate function 'main'
+error E3006: <fragment>:3:10: duplicate definition of 'main' — already declared as `function main`
 ```

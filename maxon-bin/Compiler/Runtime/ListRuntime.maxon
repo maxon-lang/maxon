@@ -1149,9 +1149,9 @@ end 'buildListReinsertLast'
 // the canonical spec's own program as its reproduction — `/specs/managed-list.md:node.set-value-old-survives`
 // reads the old String AFTER the replacement. The two halves ship together or neither ships.
 //
-// ⚠ **THE DROP RUNS BEFORE THE STORE, and it has to**: the old pointer lives in the very slot the store
-// overwrites, so a store-then-drop would drop whatever was just written. `emitDropNodeElement` reads
-// `value@16` itself, so the ordering is not a rule to remember — the helper cannot see the new value at all.
+// ⚠ **THE DISPLACED ELEMENT IS READ BEFORE THE STORE AND RELEASED AFTER IT**: the old pointer lives in the
+// very slot the store overwrites, so reading it afterwards would release whatever was just written.
+// `emitDropElementWord` is handed only the displaced words, so it cannot see the new value at all.
 function buildListNodeSetValue(module StdModule)
 	var func = IrFunction.createFromStd(ListNodeSetValueName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
@@ -1161,9 +1161,11 @@ function buildListNodeSetValue(module StdModule)
 	let node = 0
 	let value = 1
 
-	var stored = emitDropNodeElement(module, func: func, cur: entry, node: node, ids: ids)
-	emitStoreField(module, block: stored, record: node, offset: ListValueOffset, value: value)
-	module.setTerminator(stored, op: StdOp.retVoid)
+	let drop = emitLoadField(module, block: entry, record: node, offset: ListElementDropSlotOffset, ids: ids)
+	let displaced = emitLoadField(module, block: entry, record: node, offset: ListValueOffset, ids: ids)
+	emitStoreField(module, block: entry, record: node, offset: ListValueOffset, value: value)
+	var released = emitDropElementWord(module, func: func, cur: entry, drop: drop, value: displaced, ids: ids)
+	module.setTerminator(released, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildListNodeSetValue'
@@ -1500,7 +1502,7 @@ end 'buildListHead'
 //
 // ⛔⛔ **THE GUARD EXISTS BECAUSE `remove` LEAVES A STATE ONLY `__list_node_decref` IS BUILT FOR.**
 // `__list_remove_node`/`__list_remove_first` hand the element to the caller and NULL `value@16` so nobody
-// drops it twice; the drop path tests for exactly that and skips (`emitDropNodeElement`). Every other
+// drops it twice; the drop path tests for exactly that and skips (`emitDropElementWord`). Every other
 // reader of `value@16` was written as though the slot always holds an element — so a MANAGED element read
 // back as `0` is dereferenced by the first thing that touches it. MEASURED at **exit 139** on eight lines:
 // `let h = try chain.head() …` beside `chain.remove(a)`, then `h.value()`.
@@ -1514,7 +1516,7 @@ end 'buildListHead'
 //
 // ⚠ **`element_drop@24` IS WHAT MAKES THE TEST HONEST, AND THE ORDER OF THE TWO TESTS IS THE HOT PATH'S.**
 // A TRIVIAL element legitimately holds `0` (`chain.insertLast(0)`), so an empty slot means nothing on its
-// own — it is the same pair `emitDropNodeElement` makes. `value@16` is read FIRST because it is the test
+// own — it is the same pair `emitDropElementWord` makes. `value@16` is read FIRST because it is the test
 // that answers on every element read of every list loop, and the drop slot is never loaded on the path
 // where it already holds something.
 function buildListNodeValue(module StdModule)
@@ -1559,7 +1561,7 @@ end 'buildListNodeNext'
 // has let go still carries its element until its last handle dies. A double drop is therefore not
 // prevented by a rule to remember; it is unrepresentable, because the walk has no element code in it.
 //
-// ⚠ **THE ELEMENT DROP ITSELF IS `emitDropNodeElement`'s**, because `setValue` releases an element by the
+// ⚠ **THE ELEMENT DROP ITSELF IS `emitDropElementWord`'s**, because `setValue` releases an element by the
 // same rule and through the same stamp — see that helper.
 function buildListNodeDecref(module StdModule)
 	var func = IrFunction.createFromStd(ListNodeDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
@@ -1574,41 +1576,39 @@ function buildListNodeDecref(module StdModule)
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: node, lastOwner: release, ids: ids)
 
-	var freeNode = emitDropNodeElement(module, func: func, cur: release, node: node, ids: ids)
+	let drop = emitLoadField(module, block: release, record: node, offset: ListElementDropSlotOffset, ids: ids)
+	let value = emitLoadField(module, block: release, record: node, offset: ListValueOffset, ids: ids)
+	var freeNode = emitDropElementWord(module, func: func, cur: release, drop: drop, value: value, ids: ids)
 	module.appendOp(freeNode, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(node)))
 	module.setTerminator(freeNode, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildListNodeDecref'
 
-// ⭐⭐ **RELEASE THE ELEMENT A NODE HOLDS, IF IT STILL HOLDS ONE** — the node's own stamped
-// `element_drop@24`, called on `value@16`. TWO callers and exactly two, which is the whole of "a node's
-// element is released here and nowhere else": the last owner going away (`__list_node_decref`) and a
-// `setValue` overwriting it. Returns the block control continues in.
+// ⭐⭐ **RELEASE THE ELEMENT A NODE HELD, IF IT HELD ONE** — the node's stamped `element_drop@24` word,
+// called on the `value@16` word, both read by the caller before it changes the node. TWO callers and
+// exactly two, which is the whole of "a node's element is released here and nowhere else": the last owner
+// going away (`__list_node_decref`) and a `setValue` overwriting it. Returns the block control continues in.
 //
-// Two tests and not one `bitAnd` of two flags: the language's Std dialect has no logical `and`, and the
-// second load must not be issued on the trivial-element path that the first test already settled.
+// Two tests and not one `bitAnd` of two flags: the language's Std dialect has no logical `and`.
 //
 // ⚠ **THE NULL GUARD IS NOT DEFENSIVE — IT IS `remove`'s MOVE-OUT, ARRIVING HERE.** `__list_remove_node`
 // and `__list_remove_first` hand the element to the caller and NULL `value@16` precisely so that this
 // drop finds nothing left to own. It is `__list_from`'s moved-out slot clear, one structure over. A
 // trivial-element list stamps `element_drop@24` at 0 and takes the same skip.
-function emitDropNodeElement(module StdModule, func IrFunction, cur IrBlock, node ValueId, ids ValueMinter) returns IrBlock
+function emitDropElementWord(module StdModule, func IrFunction, cur IrBlock, drop ValueId, value ValueId, ids ValueMinter) returns IrBlock
 	var stillHeld = module.addBlock(func, label: b"stillheld", heat: BlockHeat.normal)
 	var dropElem = module.addBlock(func, label: b"dropelem", heat: BlockHeat.normal)
 	var released = module.addBlock(func, label: b"released", heat: BlockHeat.normal)
 
-	let drop = emitLoadField(module, block: cur, record: node, offset: ListElementDropSlotOffset, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: drop, pred: StdCmpPred.ne, against: 0, whenTrue: stillHeld, whenFalse: released, ids: ids)
-
-	let value = emitLoadField(module, block: stillHeld, record: node, offset: ListValueOffset, ids: ids)
 	emitBranchOnCompare(module, block: stillHeld, value: value, pred: StdCmpPred.ne, against: 0, whenTrue: dropElem, whenFalse: released, ids: ids)
 
 	emitElementDestructorCall(module, block: dropElem, destroy: drop, elem: value, ids: ids)
 	module.setTerminator(dropElem, op: StdOp.branch(released.id))
 
 	return released
-end 'emitDropNodeElement'
+end 'emitDropElementWord'
 
 // `__list_from(arr) -> listPtr` — the `List from [a, b, c]` construction. Create an
 // empty list STAMPED with the source array's own `element_destroy@40` (the array and the list share an
@@ -1734,7 +1734,7 @@ end 'buildListClone'
 // `(box) -> newBox`, because appending the source's pointer would give two chains one element and
 // `__list_node_decref` would drop it twice.
 //
-// ⚠ **A MOVED-OUT (NULL) SLOT IS APPENDED AS THE NULL IT IS**, never cloned: `emitDropNodeElement` reads that
+// ⚠ **A MOVED-OUT (NULL) SLOT IS APPENDED AS THE NULL IT IS**, never cloned: `emitDropElementWord` reads that
 // same 0 as *"this node owes no drop"* (it is what `__list_remove_node` leaves behind), so calling the element
 // cloner on it would invent an element the source does not have — and `callIndirect` on a null box is a fault.
 // It is `emitElementCloneRange`'s null-slot skip, one structure over; the position is kept because a chain's

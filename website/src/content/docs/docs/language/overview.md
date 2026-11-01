@@ -317,13 +317,17 @@ Numbers, `bool`, `Character` and `String` interpolate directly. A type interpola
 `toString()` method (`Stringable`). A `{` that does not open an interpolation must be escaped as `\{`
 (**E1006**).
 
-**Format specifiers.** `{expression:spec}` formats a number:
+**Format specifiers.** `{expression:spec}` formats a number, or quotes a `String` or `Character`:
 
 - Integers: `[0][width][base]` — `0` pads with zeros, `width` is the minimum width (right-aligned), and
   `base` is `x`, `X`, `o` or `b` (decimal otherwise). Hexadecimal, octal and binary print the bit pattern,
   never a sign.
 - Floats: `[0][width][.precision]` — `precision` is the number of decimal places, rounded half to even;
   without it the float keeps its shortest round-trip spelling. A width never changes the digits.
+- `String` and `Character`: `[width]q` — the value prints as a valid Maxon literal, between double quotes
+  for a `String` and single quotes for a `Character`, with the escapes a literal spells: `\"` and `\\`, `\{`
+  and `\}` in a `String`, `\'` in a `Character`, `\n`, `\t` and `\r`, and every other control character as
+  `\uXXXX`. `width` pads the quoted text on the left with spaces. Every other type prints plain under `q`.
 
 ```maxon
 function main() returns ExitCode
@@ -336,7 +340,7 @@ function main() returns ExitCode
 end 'main'
 ```
 
-A specifier has no effect on a `String` or `bool`. A type that implements `FormattedStringable` receives the
+Any other specifier leaves a `String` or `bool` as it is. A type that implements `FormattedStringable` receives the
 specifier text in `toString(format String)`, so `{value:verbose}` calls `value.toString("verbose")`.
 
 ### Byte String Literals

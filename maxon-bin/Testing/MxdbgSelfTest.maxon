@@ -118,9 +118,9 @@ end 'requireMxdbgRoundTrip'
 // The build-id is the plain FNV-1a fold of the code section and nothing else — deterministic over equal
 // bytes, and different over bytes that differ by one character.
 function checkBuildIdIsAFunctionOfTheBytes(broken StringArray)
-	let hello = Hasher.combined(Hasher.empty(), bytes: b"hello")
-	let again = Hasher.combined(Hasher.empty(), bytes: b"hello")
-	let hellp = Hasher.combined(Hasher.empty(), bytes: b"hellp")
+	let hello = Hasher.combinedBytes(Hasher.empty(), bytes: b"hello")
+	let again = Hasher.combinedBytes(Hasher.empty(), bytes: b"hello")
+	let hellp = Hasher.combinedBytes(Hasher.empty(), bytes: b"hellp")
 
 	if hello != again 'notDeterministic'
 		broken.push("the build-id of one byte sequence differs between two folds")
@@ -132,7 +132,7 @@ function checkBuildIdIsAFunctionOfTheBytes(broken StringArray)
 end 'checkBuildIdIsAFunctionOfTheBytes'
 
 function checkTablesRoundTrip(broken StringArray)
-	let buildId = Hasher.combined(Hasher.empty(), bytes: b"the text of a program")
+	let buildId = Hasher.combinedBytes(Hasher.empty(), bytes: b"the text of a program")
 	let reader = try MxdbgReader.parse(selfTestImage(buildId)) otherwise (e) 'unreadable'
 		broken.push("the writer's own image does not parse: {e.displayReason()}")
 		return

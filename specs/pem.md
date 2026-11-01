@@ -13,8 +13,8 @@ category: stdlib
 |---|---|
 | `Pem.decode(text)` | every `-----BEGIN <label>-----` … `-----END <label>-----` block in `text`, in order, as an `Array with PemBlock` |
 | `Pem.encode(label, data: data)` | one block in the strict RFC 7468 form: the BEGIN line, base64 lines of exactly 64 characters but the last, the END line, each ending in one LF |
-| `block.label()` | the text between `-----BEGIN ` and `-----` |
-| `block.bytes()` | the block's decoded body |
+| `block.label` | the text between `-----BEGIN ` and `-----` |
+| `block.bytes` | the block's decoded body |
 
 `decode` ignores text outside blocks, accepts LF and CRLF line endings and a last line without a line break,
 ignores trailing blanks on a boundary line and whitespace anywhere in a body, and decodes the body with the
@@ -60,7 +60,7 @@ function report(id String, text String)
 		print("{id} {blocks.count()}\n")
 
 		for block in blocks 'eachBlock'
-			print("{id} \"{block.label()}\" [{toHex(block.bytes())}]\n")
+			print("{id} \"{block.label}\" [{toHex(block.bytes)}]\n")
 		end 'eachBlock'
 	end 'decoded' else (failure) 'refused'
 		print("{id} {errorName(failure)}\n")
@@ -150,7 +150,7 @@ function report(id String, text String)
 		print("{id} {blocks.count()}\n")
 
 		for block in blocks 'eachBlock'
-			print("{id} \"{block.label()}\" [{toHex(block.bytes())}]\n")
+			print("{id} \"{block.label}\" [{toHex(block.bytes)}]\n")
 		end 'eachBlock'
 	end 'decoded' else (failure) 'refused'
 		print("{id} {errorName(failure)}\n")
@@ -435,7 +435,7 @@ function report(id String, label String, dataHex String)
 			print("{id} {blocks.count()}\n")
 
 			for block in blocks 'eachBlock'
-				print("{id} \"{block.label()}\" [{toHex(block.bytes())}]\n")
+				print("{id} \"{block.label}\" [{toHex(block.bytes)}]\n")
 			end 'eachBlock'
 		end 'decoded' else (failure) 'decodeRefused'
 			print("{id} decode {errorName(failure)}\n")

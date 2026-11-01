@@ -24,7 +24,7 @@ function main() returns ExitCode
 
 	let comma = try s.findFirst(",") otherwise s.endIndex()
 	let head = s.slice(s.startIndex(), endIndex: comma)
-	let five = s.slice(s.startIndex(), length: 5)
+	let five = s.sliceLength(s.startIndex(), length: 5)
 	print("{comma.charIndex()} {head} {five}\n")
 
 	for c in "héllo" 'each'
@@ -64,7 +64,7 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `contains(needle String)` | `bool` | Substring test. |
-| `contains(character Character)` | `bool` | Character test. |
+| `containsCharacter(character Character)` | `bool` | Character test. |
 | `startsWith(prefix String)` | `bool` | Prefix test. |
 | `endsWith(suffix String)` | `bool` | Suffix test. |
 | `findFirst(needle String)` | `StringIndex` | First occurrence. Throws `StringError.notFound`. |
@@ -80,7 +80,7 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | `indexBefore(idx StringIndex)` | `StringIndex` | Previous grapheme boundary. Throws `StringError` at `startIndex()`. |
 | `charAt(idx StringIndex)` | `Character` | The grapheme at `idx`. |
 | `slice(start StringIndex, endIndex StringIndex)` | `String` | The graphemes in `[start, endIndex)`. |
-| `slice(start StringIndex, length GraphemeIndex)` | `String` | `length` graphemes starting at `start`. |
+| `sliceLength(start StringIndex, length GraphemeIndex)` | `String` | `length` graphemes starting at `start`. |
 
 `StringIndex` implements `Equatable` and `Comparable`:
 
@@ -124,14 +124,11 @@ Output: `olléh`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `trim()` | `String` | Remove Unicode whitespace and newlines from both ends. |
-| `trimStart()` | `String` | From the start only. |
-| `trimEnd()` | `String` | From the end only. |
-| `trim(chars CharacterSet)` | `String` | Remove characters in `chars` from both ends. |
-| `trimStart(chars CharacterSet)` | `String` | From the start only. |
-| `trimEnd(chars CharacterSet)` | `String` | From the end only. |
+| `trim(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | Remove characters in `chars` from both ends; by default Unicode whitespace and newlines. |
+| `trimStart(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | From the start only. |
+| `trimEnd(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | From the end only. |
 
-The no-argument forms use `CharacterSet.whitespacesAndNewlines()`. Trimming walks grapheme clusters, so
+Trimming walks grapheme clusters, so
 `"\r\n"` is one unit: a set holding `'\r'` but not `"\r\n"` trims neither.
 
 ### Views

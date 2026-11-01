@@ -1,24 +1,23 @@
 ---
 feature: witness-by-reference
-keywords: [witness, interface, dispatch, byref, param, reassign, cell, adapter, existential, where]
+keywords: [witness, interface, dispatch, mutable, param, cell, existential, where]
 category: memory-safety
 ---
-
-# Witness Dispatch Passes a Parameter by Reference Where Any Conformer Writes It
+# Witness Dispatch Passes a `mutable` Parameter by Reference
 
 ## Documentation
 
-A parameter a function REASSIGNS is passed as the address of a cell rather than as a value
-(`pass-by-reference.md`), and a call through a function value follows the same rule position by position
-(`byref-param-widening-and-guard.md`). A call through an interface follows it too. The callee is not known
+A parameter declared `mutable` is passed as the address of a cell rather than as a value
+(`pass-by-reference.md`), and a function type spells the marker position by position
+(`function(mutable Wide)`). A call through an interface follows the same rule. The callee is not known
 at the call — the shared body of a type constrained with `where T is Bumper`, or a value held at the
 interface `Bumper`, reaches its method through a witness table — so the convention belongs to the
-REQUIREMENT: a position of `Bumper.bump` is passed as the argument's own storage when any conformer's
-`bump` writes that position, and every conformer's table entry takes the position the same way.
+REQUIREMENT: a position of `Bumper.bump` is passed as the argument's own storage when the requirement
+declares it `mutable`, and every conformer's `bump` declares the position `mutable` too. A conformer whose
+marker differs from the requirement's does not conform.
 
-A conformer that only reads such a position is reached through an adapter that loads the value out of the
-cell and calls the conformer with it, as a function value's thunk does. A direct call to a conformer, which
-names its callee, keeps passing exactly what that callee takes.
+A conformer that declares such a position and only reads it leaves the caller's variable unchanged. A direct
+call to a conformer, which names its callee, passes exactly what that callee declares.
 
 The caller's `var` is updated by the call. A `let` handed to such a position is refused with the same
 diagnostic a direct call earns, and a narrow variable handed to a position whose declared alias is wider is
@@ -33,7 +32,7 @@ shared body of `Holder.run` hands over `x`'s cell and the write reaches `x`.
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -43,7 +42,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -79,13 +78,13 @@ end 'main'
 
 <!-- test: witness-by-reference.a-reading-conformer-is-reached-through-an-adapter -->
 One requirement, two conformers: `Doubler.bump` writes its parameter and `Reader.bump` only reads it. The
-position is passed as a cell for both, so the reader's table entry loads the value before it runs, and the
-caller's variable is unchanged by it.
+requirement declares the position `mutable`, so both conformers declare it `mutable` and receive the
+caller's storage, and the caller's variable is unchanged by the reader.
 ```maxon
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -95,7 +94,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -107,7 +106,7 @@ type Reader implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		print("read {n}\n")
 	end 'bump'
 end 'Reader'
@@ -152,7 +151,7 @@ The same conformers called by name, beside the dispatch through the witness.
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -162,7 +161,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -174,7 +173,7 @@ type Reader implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		print("read {n}\n")
 	end 'bump'
 end 'Reader'
@@ -217,15 +216,15 @@ read 4
 ```
 
 <!-- test: witness-by-reference.a-position-forwarded-to-a-writer-is-a-cell -->
-A conformer that only hands its parameter on to a function that reassigns it writes the position too.
+A conformer that hands its `mutable` parameter on to a function that reassigns it writes the position too.
 ```maxon
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
-function reset(n Wide)
+function reset(n mutable Wide)
 	n = 7
 end 'reset'
 
@@ -236,7 +235,7 @@ type Forwarder implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		reset(n)
 	end 'bump'
 end 'Forwarder'
@@ -279,7 +278,7 @@ enum BumpError implements Error
 end 'BumpError'
 
 interface Bumper
-	function bump(n Wide) throws BumpError
+	function bump(n mutable Wide) throws BumpError
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -289,7 +288,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide) throws BumpError
+	function bump(n mutable Wide) throws BumpError
 		n = 50
 
 		if n > 60 'never'
@@ -333,7 +332,7 @@ A value held at the interface dispatches through the witness its fat pointer car
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -343,7 +342,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -372,7 +371,7 @@ A field of the shared body's own receiver is storage with an address, and the di
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -382,7 +381,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -424,7 +423,7 @@ typealias Wide = int(0 to 100)
 typealias Narrow = int(0 to 10) implements Wide
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -434,7 +433,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -479,7 +478,7 @@ typealias Wide = int(0 to 100)
 typealias Narrow = int(0 to 10) implements Wide
 
 interface Bumper
-	function bump(n Narrow)
+	function bump(n mutable Narrow)
 end 'Bumper'
 
 type Settler implements Bumper
@@ -489,7 +488,7 @@ type Settler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Narrow)
+	function bump(n mutable Narrow)
 		n = 7
 	end 'bump'
 end 'Settler'
@@ -529,7 +528,7 @@ A `let` handed to a position some conformer writes is refused, as it is at a dir
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -539,7 +538,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -576,7 +575,7 @@ The same refusal through a value held at the interface.
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -586,7 +585,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -657,13 +656,13 @@ read 3
 ```
 
 <!-- test: witness-by-reference.a-parameter-handed-on-through-a-witness-is-written-in-the-caller -->
-A parameter the shared body hands to the dispatch is by reference itself, so the write reaches the variable
-the body's own caller passed.
+A parameter the shared body hands to the dispatch is declared `mutable` itself, so the write reaches the
+variable the body's own caller passed.
 ```maxon
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -673,7 +672,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -685,7 +684,7 @@ type Holder uses T where T is Bumper
 		return Self{item: item}
 	end 'create'
 
-	function run(n Wide)
+	function run(n mutable Wide)
 		self.item.bump(n)
 	end 'run'
 end 'Holder'
@@ -713,7 +712,7 @@ A module-level `var` is storage with an address, and the dispatch writes it.
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -723,7 +722,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -765,7 +764,7 @@ requirement, not to the interface the constraint names.
 typealias Wide = int(0 to 100)
 
 interface Base
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Base'
 
 interface Derived extends Base
@@ -779,7 +778,7 @@ type Doubler implements Derived
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 
@@ -817,123 +816,13 @@ end 'main'
 0
 ```
 
-<!-- test: witness-by-reference.error.a-witness-hand-over-adopts-the-requirements-brand -->
-An unbranded `var` handed to a position whose requirement declares a brand adopts it, so a later use at another brand is refused.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Ws = Array with Integer
-typealias Vs = Array with Integer
-
-interface Filler
-	function bump(n Ws)
-end 'Filler'
-
-type Pusher implements Filler
-	export let seed as Integer
-
-	static function create(seed Integer) returns Self
-		return Self{seed: seed}
-	end 'create'
-
-	function bump(n Ws)
-		n = Ws.create()
-		n.push(self.seed)
-	end 'bump'
-end 'Pusher'
-
-function takeVs(vs Vs)
-	print("{vs.count()}\n")
-end 'takeVs'
-
-type Holder uses T where T is Filler
-	export var item as T
-
-	static function create(item T) returns Self
-		return Self{item: item}
-	end 'create'
-
-	function run()
-		var a = [1 as Integer]
-		self.item.bump(a)
-		takeVs(a)
-	end 'run'
-end 'Holder'
-
-typealias PusherHolder = Holder with Pusher
-
-function main() returns ExitCode
-	let h = PusherHolder.create(Pusher.create(7))
-	h.run()
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:37:3: argument type mismatch for 'vs': expected 'Vs', got 'Ws'
-```
-
-<!-- test: witness-by-reference.a-witness-hand-over-adopts-without-a-conflict -->
-Control: the later use is at the brand the requirement declared.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Ws = Array with Integer
-
-interface Filler
-	function bump(n Ws)
-end 'Filler'
-
-type Pusher implements Filler
-	export let seed as Integer
-
-	static function create(seed Integer) returns Self
-		return Self{seed: seed}
-	end 'create'
-
-	function bump(n Ws)
-		n = Ws.create()
-		n.push(self.seed)
-	end 'bump'
-end 'Pusher'
-
-function takeWs(ws Ws)
-	print("{ws.count()}\n")
-end 'takeWs'
-
-type Holder uses T where T is Filler
-	export var item as T
-
-	static function create(item T) returns Self
-		return Self{item: item}
-	end 'create'
-
-	function run()
-		var a = [1 as Integer]
-		self.item.bump(a)
-		takeWs(a)
-	end 'run'
-end 'Holder'
-
-typealias PusherHolder = Holder with Pusher
-
-function main() returns ExitCode
-	let h = PusherHolder.create(Pusher.create(7))
-	h.run()
-	return 0
-end 'main'
-```
-```stdout
-1
-```
-```exitcode
-0
-```
-
 <!-- test: witness-by-reference.error.each-writer-of-a-requirement-is-named-with-its-own-parameter -->
 Two conformers write the position under different parameter names, so the refusal names each of them.
 ```maxon
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Doubler implements Bumper
@@ -943,7 +832,7 @@ type Doubler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Doubler'
@@ -955,7 +844,7 @@ type Tripler implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(amount Wide)
+	function bump(amount mutable Wide)
 		amount = 75
 	end 'bump'
 end 'Tripler'
@@ -996,7 +885,7 @@ typealias Wide = int(0 to 10000)
 typealias Narrow = int(0 to 10) implements Wide
 
 interface Sink uses Item
-	function put(n Item)
+	function put(n mutable Item)
 end 'Sink'
 
 type WideSink implements Sink with Wide
@@ -1006,7 +895,7 @@ type WideSink implements Sink with Wide
 		return Self{last: last}
 	end 'create'
 
-	function put(n Wide)
+	function put(n mutable Wide)
 		n = 5000
 	end 'put'
 end 'WideSink'
@@ -1051,7 +940,7 @@ typealias Wide = int(0 to 10000)
 typealias Narrow = int(0 to 10) implements Wide
 
 interface Bumper
-	function bump(n Narrow)
+	function bump(n mutable Narrow)
 end 'Bumper'
 
 type Impl implements Bumper
@@ -1061,7 +950,7 @@ type Impl implements Bumper
 		return Self{last: last}
 	end 'create'
 
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 5000
 	end 'bump'
 end 'Impl'
@@ -1090,7 +979,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: <fragment>:9:6: Partial interface implementation: type 'Impl' has 1 method(s) with wrong signature:
-  - bump(n Wide) returns void (expected bump(n Narrow) returns void)
+  - bump(n mutable Wide) returns void (expected bump(n mutable Narrow) returns void)
 ```
 
 <!-- test: witness-by-reference.a-conformance-declared-by-an-extension-of-a-generic-base-passes-the-cell -->
@@ -1099,7 +988,7 @@ A conformance an `extension` of a generic base declares is read for the cell con
 typealias Wide = int(0 to 100)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Box uses T
@@ -1111,7 +1000,7 @@ type Box uses T
 end 'Box'
 
 extension Box implements Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 50
 	end 'bump'
 end 'Box'
@@ -1154,7 +1043,7 @@ typealias Wide = int(0 to 10000)
 typealias Narrow = int(0 to 10) implements Wide
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Box uses T
@@ -1168,7 +1057,7 @@ end 'Box'
 typealias WideBox = Box with Wide
 
 extension WideBox implements Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 		n = 5000
 	end 'bump'
 end 'WideBox'
@@ -1205,7 +1094,7 @@ typealias Count = int(0 to 100)
 typealias Real = float(0.0 to 100.0)
 
 interface Bumper
-	function bump(k Count)
+	function bump(k mutable Count)
 end 'Bumper'
 
 type Impl implements Bumper
@@ -1215,7 +1104,7 @@ type Impl implements Bumper
 		return Self{seed: seed}
 	end 'create'
 
-	function bump(k Count)
+	function bump(k mutable Count)
 		k = 7
 	end 'bump'
 end 'Impl'
@@ -1252,7 +1141,7 @@ typealias Count = int(0 to 100)
 typealias Real = float(0.0 to 100.0)
 
 interface Scaler
-	function scale(k Real)
+	function scale(k mutable Real)
 end 'Scaler'
 
 type Doubler implements Scaler
@@ -1262,7 +1151,7 @@ type Doubler implements Scaler
 		return Self{seed: seed}
 	end 'create'
 
-	function scale(k Real)
+	function scale(k mutable Real)
 		k = 2.5
 	end 'scale'
 end 'Doubler'
@@ -1299,7 +1188,7 @@ Only an instance method, whose receiver is its first parameter, can satisfy a re
 typealias Wide = int(0 to 10000)
 
 interface Bumper
-	function bump(n Wide)
+	function bump(n mutable Wide)
 end 'Bumper'
 
 type Impl implements Bumper
@@ -1309,7 +1198,7 @@ type Impl implements Bumper
 		return Self{last: last}
 	end 'create'
 
-	static function bump(n Wide)
+	static function bump(n mutable Wide)
 		n = 5000
 	end 'bump'
 end 'Impl'
@@ -1321,5 +1210,5 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: <fragment>:8:6: Partial interface implementation: type 'Impl' has 1 method(s) with wrong signature:
-  - static bump(n Wide) returns void (expected bump(n Wide) returns void)
+  - static bump(n mutable Wide) returns void (expected bump(n mutable Wide) returns void)
 ```

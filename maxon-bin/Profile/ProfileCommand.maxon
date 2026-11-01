@@ -277,7 +277,7 @@
 		// Asked before the sidecar, so a target that is simply not there is reported as that rather than as
 		// whatever a sidecar loader makes of a file it cannot open.
 		if not File.exists(binary) 'noSuchExecutable'
-			return ProfileSubject.refused("no such executable: {reportPathDisplay(exePath)}")
+			return ProfileSubject.refused("no such executable: {reportSpelledPathDisplay(exePath)}")
 		end 'noSuchExecutable'
 
 		return match binaryCodeSection(binary) 'code'
@@ -330,7 +330,7 @@
 
 	function launchAndSampleCalibrated(request ProfileRequest, target FilePath, sidecar MxdbgReader, textBytes DebugAddress, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
 		let image = try attachableImageOf(target) otherwise (e) 'unattachable'
-			return refuseProfile("{reportPathDisplay(request.exePath())}: {e.displayReason()}")
+			return refuseProfile("{reportSpelledPathDisplay(request.exePath())}: {e.displayReason()}")
 		end 'unattachable'
 
 		return launchAndSampleImage(request, image: image, sidecar: sidecar, textBytes: textBytes, cyclesPerTick: cyclesPerTick)
@@ -343,7 +343,7 @@
 		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(image.launchPath.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
 			image.release()
 
-			return refuseProfile("could not run {reportPathDisplay(request.exePath())}: {e.displayReason()}")
+			return refuseProfile("could not run {reportSpelledPathDisplay(request.exePath())}: {e.displayReason()}")
 		end 'didNotStart'
 
 		let outcome = sampleUntilItEnds(request, sidecar: sidecar, textBytes: textBytes, child: child, cyclesPerTick: cyclesPerTick)
@@ -385,9 +385,9 @@
 
 		let process = try SampledProcess.open(pid) otherwise (e) 'cannotOpen'
 			match e 'why'
-				noSuchProcess then return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath())} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
+				noSuchProcess then return refuseProfileAfterKilling(child, reason: "{reportSpelledPathDisplay(request.exePath())} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
 				noScratch then return refuseProfileAfterKilling(child, reason: ProfileNoSamplerReason)
-				accessDenied then return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath())} could not be sampled: {profileAccessDeniedHint(detectHostTarget().os)}")
+				accessDenied then return refuseProfileAfterKilling(child, reason: "{reportSpelledPathDisplay(request.exePath())} could not be sampled: {profileAccessDeniedHint(detectHostTarget().os)}")
 				threadNotPinned then return refuseProfileAfterKilling(child, reason: ProfileNotPinnedReason)
 				unknownThread or
 				outOfWindow or
@@ -464,7 +464,7 @@
 
 		_ = forwardChildTail(child, routing: ChildOutputRouting.allToStandardError)
 
-		return emitProfileReport(request, report: accumulator.finish(reportPathDisplay(request.exePath()), targetStatus: status, runCompleted: completed, requestedRateHz: request.rateHz, ticks: session.ticks, durationSeconds: seconds, minPercent: request.minPercent))
+		return emitProfileReport(request, report: accumulator.finish(reportSpelledPathDisplay(request.exePath()), targetStatus: status, runCompleted: completed, requestedRateHz: request.rateHz, ticks: session.ticks, durationSeconds: seconds, minPercent: request.minPercent))
 	end 'runProfileTicks'
 
 	// What `pollExit` found, in the report's own vocabulary. A child still running has no status to report,

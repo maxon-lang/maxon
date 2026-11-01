@@ -164,7 +164,7 @@ function renderVersions(codes TlsVersionCodeArray) returns String
 end 'renderVersions'
 
 function renderShare(share TlsKeyShare) returns String
-	return "\{\"group\":{share.group()},\"key_exchange_hex\":\"{toHex(share.keyExchange())}\"\}"
+	return "\{\"group\":{share.group},\"key_exchange_hex\":\"{toHex(share.keyExchange())}\"\}"
 end 'renderShare'
 
 function renderShares(shares TlsKeyShareArray) returns String
@@ -218,7 +218,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 	var texts = TextArray.create()
 
 	for entry in entries 'eachEntry'
-		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions())}\}")
+		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions)}\}")
 	end 'eachEntry'
 
 	return joined(texts)
@@ -235,25 +235,25 @@ function renderCertificates(certificates ByteArrays) returns String
 end 'renderCertificates'
 
 function renderServerHello(hello TlsServerHello) returns String
-	return "\{\"msg_type\":2,\"legacy_version\":{hello.legacyVersion()},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_echo_hex\":\"{toHex(hello.legacySessionIdEcho())}\",\"cipher_suite\":{hello.cipherSuite()},\"legacy_compression_method\":{hello.compressionMethod()},\"extensions\":{renderBlock(hello.extensions())}\}"
+	return "\{\"msg_type\":2,\"legacy_version\":{hello.legacyVersion},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_echo_hex\":\"{toHex(hello.legacySessionIdEcho())}\",\"cipher_suite\":{hello.cipherSuite},\"legacy_compression_method\":{hello.compressionMethod},\"extensions\":{renderBlock(hello.extensions())}\}"
 end 'renderServerHello'
 
 function render(message TlsHandshakeMessage) returns String
 	return match message 'message'
 		helloRequest gives "\{\"msg_type\":0\}"
-		clientHello(hello) gives "\{\"msg_type\":1,\"legacy_version\":{hello.legacyVersion()},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_hex\":\"{toHex(hello.legacySessionId())}\",\"cipher_suites\":{renderSuites(hello.cipherSuites())},\"legacy_compression_methods_hex\":\"{toHex(hello.compressionMethods())}\",\"extensions\":{renderBlock(hello.extensions())}\}"
+		clientHello(hello) gives "\{\"msg_type\":1,\"legacy_version\":{hello.legacyVersion},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_hex\":\"{toHex(hello.legacySessionId())}\",\"cipher_suites\":{renderSuites(hello.cipherSuites())},\"legacy_compression_methods_hex\":\"{toHex(hello.compressionMethods)}\",\"extensions\":{renderBlock(hello.extensions())}\}"
 		serverHello(hello) gives renderServerHello(hello)
 		helloRetryRequest(hello) gives renderServerHello(hello)
-		newSessionTicket(ticket) gives "\{\"msg_type\":4,\"ticket_lifetime\":{ticket.lifetime()},\"ticket_age_add\":{ticket.ageAdd()},\"ticket_nonce_hex\":\"{toHex(ticket.nonce())}\",\"ticket_hex\":\"{toHex(ticket.ticket())}\",\"extensions\":{renderExtensions(ticket.extensions())}\}"
+		newSessionTicket(ticket) gives "\{\"msg_type\":4,\"ticket_lifetime\":{ticket.lifetime},\"ticket_age_add\":{ticket.ageAdd},\"ticket_nonce_hex\":\"{toHex(ticket.nonce)}\",\"ticket_hex\":\"{toHex(ticket.ticket)}\",\"extensions\":{renderExtensions(ticket.extensions)}\}"
 		encryptedExtensions(items) gives "\{\"msg_type\":8,\"extensions\":{renderExtensions(items)}\}"
 		tls13Certificate(requestContext, entries) gives "\{\"msg_type\":11,\"certificate_request_context_hex\":\"{toHex(requestContext)}\",\"certificate_list\":{renderEntries(entries)}\}"
 		tls12Certificate(certificates) gives "\{\"msg_type\":11,\"certificate_list\":{renderCertificates(certificates)}\}"
 		tls13CertificateRequest(requestContext, items) gives "\{\"msg_type\":13,\"certificate_request_context_hex\":\"{toHex(requestContext)}\",\"extensions\":{renderExtensions(items)}\}"
-		tls12CertificateRequest(request) gives "\{\"msg_type\":13,\"certificate_types_hex\":\"{toHex(request.certificateTypes())}\",\"supported_signature_algorithms\":{renderSchemes(request.signatureSchemes())},\"certificate_authorities_hex\":{renderAuthorities(request.authorities())}\}"
+		tls12CertificateRequest(request) gives "\{\"msg_type\":13,\"certificate_types_hex\":\"{toHex(request.certificateTypes)}\",\"supported_signature_algorithms\":{renderSchemes(request.signatureSchemes())},\"certificate_authorities_hex\":{renderAuthorities(request.authorities)}\}"
 		certificateVerify(scheme, signature) gives "\{\"msg_type\":15,\"algorithm\":{scheme},\"signature_hex\":\"{toHex(signature)}\"\}"
 		finished(verifyData) gives "\{\"msg_type\":20,\"verify_data_hex\":\"{toHex(verifyData)}\"\}"
 		keyUpdate(request) gives "\{\"msg_type\":24,\"request_update\":{request.rawValue}\}"
-		serverKeyExchange(exchange) gives "\{\"msg_type\":12,\"curve_type\":3,\"named_group\":{exchange.namedGroup()},\"public_hex\":\"{toHex(exchange.publicKey())}\",\"algorithm\":{exchange.signatureScheme()},\"signature_hex\":\"{toHex(exchange.signature())}\"\}"
+		serverKeyExchange(exchange) gives "\{\"msg_type\":12,\"curve_type\":3,\"named_group\":{exchange.namedGroup},\"public_hex\":\"{toHex(exchange.publicKey())}\",\"algorithm\":{exchange.signatureScheme},\"signature_hex\":\"{toHex(exchange.signature)}\"\}"
 		clientKeyExchange(publicKey) gives "\{\"msg_type\":16,\"public_hex\":\"{toHex(publicKey)}\"\}"
 		serverHelloDone gives "\{\"msg_type\":14\}"
 	end 'message'
@@ -441,7 +441,7 @@ function renderVersions(codes TlsVersionCodeArray) returns String
 end 'renderVersions'
 
 function renderShare(share TlsKeyShare) returns String
-	return "\{\"group\":{share.group()},\"key_exchange_hex\":\"{toHex(share.keyExchange())}\"\}"
+	return "\{\"group\":{share.group},\"key_exchange_hex\":\"{toHex(share.keyExchange())}\"\}"
 end 'renderShare'
 
 function renderShares(shares TlsKeyShareArray) returns String
@@ -495,7 +495,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 	var texts = TextArray.create()
 
 	for entry in entries 'eachEntry'
-		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions())}\}")
+		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions)}\}")
 	end 'eachEntry'
 
 	return joined(texts)
@@ -512,25 +512,25 @@ function renderCertificates(certificates ByteArrays) returns String
 end 'renderCertificates'
 
 function renderServerHello(hello TlsServerHello) returns String
-	return "\{\"msg_type\":2,\"legacy_version\":{hello.legacyVersion()},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_echo_hex\":\"{toHex(hello.legacySessionIdEcho())}\",\"cipher_suite\":{hello.cipherSuite()},\"legacy_compression_method\":{hello.compressionMethod()},\"extensions\":{renderBlock(hello.extensions())}\}"
+	return "\{\"msg_type\":2,\"legacy_version\":{hello.legacyVersion},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_echo_hex\":\"{toHex(hello.legacySessionIdEcho())}\",\"cipher_suite\":{hello.cipherSuite},\"legacy_compression_method\":{hello.compressionMethod},\"extensions\":{renderBlock(hello.extensions())}\}"
 end 'renderServerHello'
 
 function render(message TlsHandshakeMessage) returns String
 	return match message 'message'
 		helloRequest gives "\{\"msg_type\":0\}"
-		clientHello(hello) gives "\{\"msg_type\":1,\"legacy_version\":{hello.legacyVersion()},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_hex\":\"{toHex(hello.legacySessionId())}\",\"cipher_suites\":{renderSuites(hello.cipherSuites())},\"legacy_compression_methods_hex\":\"{toHex(hello.compressionMethods())}\",\"extensions\":{renderBlock(hello.extensions())}\}"
+		clientHello(hello) gives "\{\"msg_type\":1,\"legacy_version\":{hello.legacyVersion},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_hex\":\"{toHex(hello.legacySessionId())}\",\"cipher_suites\":{renderSuites(hello.cipherSuites())},\"legacy_compression_methods_hex\":\"{toHex(hello.compressionMethods)}\",\"extensions\":{renderBlock(hello.extensions())}\}"
 		serverHello(hello) gives renderServerHello(hello)
 		helloRetryRequest(hello) gives renderServerHello(hello)
-		newSessionTicket(ticket) gives "\{\"msg_type\":4,\"ticket_lifetime\":{ticket.lifetime()},\"ticket_age_add\":{ticket.ageAdd()},\"ticket_nonce_hex\":\"{toHex(ticket.nonce())}\",\"ticket_hex\":\"{toHex(ticket.ticket())}\",\"extensions\":{renderExtensions(ticket.extensions())}\}"
+		newSessionTicket(ticket) gives "\{\"msg_type\":4,\"ticket_lifetime\":{ticket.lifetime},\"ticket_age_add\":{ticket.ageAdd},\"ticket_nonce_hex\":\"{toHex(ticket.nonce)}\",\"ticket_hex\":\"{toHex(ticket.ticket)}\",\"extensions\":{renderExtensions(ticket.extensions)}\}"
 		encryptedExtensions(items) gives "\{\"msg_type\":8,\"extensions\":{renderExtensions(items)}\}"
 		tls13Certificate(requestContext, entries) gives "\{\"msg_type\":11,\"certificate_request_context_hex\":\"{toHex(requestContext)}\",\"certificate_list\":{renderEntries(entries)}\}"
 		tls12Certificate(certificates) gives "\{\"msg_type\":11,\"certificate_list\":{renderCertificates(certificates)}\}"
 		tls13CertificateRequest(requestContext, items) gives "\{\"msg_type\":13,\"certificate_request_context_hex\":\"{toHex(requestContext)}\",\"extensions\":{renderExtensions(items)}\}"
-		tls12CertificateRequest(request) gives "\{\"msg_type\":13,\"certificate_types_hex\":\"{toHex(request.certificateTypes())}\",\"supported_signature_algorithms\":{renderSchemes(request.signatureSchemes())},\"certificate_authorities_hex\":{renderAuthorities(request.authorities())}\}"
+		tls12CertificateRequest(request) gives "\{\"msg_type\":13,\"certificate_types_hex\":\"{toHex(request.certificateTypes)}\",\"supported_signature_algorithms\":{renderSchemes(request.signatureSchemes())},\"certificate_authorities_hex\":{renderAuthorities(request.authorities)}\}"
 		certificateVerify(scheme, signature) gives "\{\"msg_type\":15,\"algorithm\":{scheme},\"signature_hex\":\"{toHex(signature)}\"\}"
 		finished(verifyData) gives "\{\"msg_type\":20,\"verify_data_hex\":\"{toHex(verifyData)}\"\}"
 		keyUpdate(request) gives "\{\"msg_type\":24,\"request_update\":{request.rawValue}\}"
-		serverKeyExchange(exchange) gives "\{\"msg_type\":12,\"curve_type\":3,\"named_group\":{exchange.namedGroup()},\"public_hex\":\"{toHex(exchange.publicKey())}\",\"algorithm\":{exchange.signatureScheme()},\"signature_hex\":\"{toHex(exchange.signature())}\"\}"
+		serverKeyExchange(exchange) gives "\{\"msg_type\":12,\"curve_type\":3,\"named_group\":{exchange.namedGroup},\"public_hex\":\"{toHex(exchange.publicKey())}\",\"algorithm\":{exchange.signatureScheme},\"signature_hex\":\"{toHex(exchange.signature)}\"\}"
 		clientKeyExchange(publicKey) gives "\{\"msg_type\":16,\"public_hex\":\"{toHex(publicKey)}\"\}"
 		serverHelloDone gives "\{\"msg_type\":14\}"
 	end 'message'
@@ -736,7 +736,7 @@ function renderVersions(codes TlsVersionCodeArray) returns String
 end 'renderVersions'
 
 function renderShare(share TlsKeyShare) returns String
-	return "\{\"group\":{share.group()},\"key_exchange_hex\":\"{toHex(share.keyExchange())}\"\}"
+	return "\{\"group\":{share.group},\"key_exchange_hex\":\"{toHex(share.keyExchange())}\"\}"
 end 'renderShare'
 
 function renderShares(shares TlsKeyShareArray) returns String
@@ -790,7 +790,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 	var texts = TextArray.create()
 
 	for entry in entries 'eachEntry'
-		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions())}\}")
+		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions)}\}")
 	end 'eachEntry'
 
 	return joined(texts)
@@ -807,25 +807,25 @@ function renderCertificates(certificates ByteArrays) returns String
 end 'renderCertificates'
 
 function renderServerHello(hello TlsServerHello) returns String
-	return "\{\"msg_type\":2,\"legacy_version\":{hello.legacyVersion()},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_echo_hex\":\"{toHex(hello.legacySessionIdEcho())}\",\"cipher_suite\":{hello.cipherSuite()},\"legacy_compression_method\":{hello.compressionMethod()},\"extensions\":{renderBlock(hello.extensions())}\}"
+	return "\{\"msg_type\":2,\"legacy_version\":{hello.legacyVersion},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_echo_hex\":\"{toHex(hello.legacySessionIdEcho())}\",\"cipher_suite\":{hello.cipherSuite},\"legacy_compression_method\":{hello.compressionMethod},\"extensions\":{renderBlock(hello.extensions())}\}"
 end 'renderServerHello'
 
 function render(message TlsHandshakeMessage) returns String
 	return match message 'message'
 		helloRequest gives "\{\"msg_type\":0\}"
-		clientHello(hello) gives "\{\"msg_type\":1,\"legacy_version\":{hello.legacyVersion()},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_hex\":\"{toHex(hello.legacySessionId())}\",\"cipher_suites\":{renderSuites(hello.cipherSuites())},\"legacy_compression_methods_hex\":\"{toHex(hello.compressionMethods())}\",\"extensions\":{renderBlock(hello.extensions())}\}"
+		clientHello(hello) gives "\{\"msg_type\":1,\"legacy_version\":{hello.legacyVersion},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_hex\":\"{toHex(hello.legacySessionId())}\",\"cipher_suites\":{renderSuites(hello.cipherSuites())},\"legacy_compression_methods_hex\":\"{toHex(hello.compressionMethods)}\",\"extensions\":{renderBlock(hello.extensions())}\}"
 		serverHello(hello) gives renderServerHello(hello)
 		helloRetryRequest(hello) gives renderServerHello(hello)
-		newSessionTicket(ticket) gives "\{\"msg_type\":4,\"ticket_lifetime\":{ticket.lifetime()},\"ticket_age_add\":{ticket.ageAdd()},\"ticket_nonce_hex\":\"{toHex(ticket.nonce())}\",\"ticket_hex\":\"{toHex(ticket.ticket())}\",\"extensions\":{renderExtensions(ticket.extensions())}\}"
+		newSessionTicket(ticket) gives "\{\"msg_type\":4,\"ticket_lifetime\":{ticket.lifetime},\"ticket_age_add\":{ticket.ageAdd},\"ticket_nonce_hex\":\"{toHex(ticket.nonce)}\",\"ticket_hex\":\"{toHex(ticket.ticket)}\",\"extensions\":{renderExtensions(ticket.extensions)}\}"
 		encryptedExtensions(items) gives "\{\"msg_type\":8,\"extensions\":{renderExtensions(items)}\}"
 		tls13Certificate(requestContext, entries) gives "\{\"msg_type\":11,\"certificate_request_context_hex\":\"{toHex(requestContext)}\",\"certificate_list\":{renderEntries(entries)}\}"
 		tls12Certificate(certificates) gives "\{\"msg_type\":11,\"certificate_list\":{renderCertificates(certificates)}\}"
 		tls13CertificateRequest(requestContext, items) gives "\{\"msg_type\":13,\"certificate_request_context_hex\":\"{toHex(requestContext)}\",\"extensions\":{renderExtensions(items)}\}"
-		tls12CertificateRequest(request) gives "\{\"msg_type\":13,\"certificate_types_hex\":\"{toHex(request.certificateTypes())}\",\"supported_signature_algorithms\":{renderSchemes(request.signatureSchemes())},\"certificate_authorities_hex\":{renderAuthorities(request.authorities())}\}"
+		tls12CertificateRequest(request) gives "\{\"msg_type\":13,\"certificate_types_hex\":\"{toHex(request.certificateTypes)}\",\"supported_signature_algorithms\":{renderSchemes(request.signatureSchemes())},\"certificate_authorities_hex\":{renderAuthorities(request.authorities)}\}"
 		certificateVerify(scheme, signature) gives "\{\"msg_type\":15,\"algorithm\":{scheme},\"signature_hex\":\"{toHex(signature)}\"\}"
 		finished(verifyData) gives "\{\"msg_type\":20,\"verify_data_hex\":\"{toHex(verifyData)}\"\}"
 		keyUpdate(request) gives "\{\"msg_type\":24,\"request_update\":{request.rawValue}\}"
-		serverKeyExchange(exchange) gives "\{\"msg_type\":12,\"curve_type\":3,\"named_group\":{exchange.namedGroup()},\"public_hex\":\"{toHex(exchange.publicKey())}\",\"algorithm\":{exchange.signatureScheme()},\"signature_hex\":\"{toHex(exchange.signature())}\"\}"
+		serverKeyExchange(exchange) gives "\{\"msg_type\":12,\"curve_type\":3,\"named_group\":{exchange.namedGroup},\"public_hex\":\"{toHex(exchange.publicKey())}\",\"algorithm\":{exchange.signatureScheme},\"signature_hex\":\"{toHex(exchange.signature)}\"\}"
 		clientKeyExchange(publicKey) gives "\{\"msg_type\":16,\"public_hex\":\"{toHex(publicKey)}\"\}"
 		serverHelloDone gives "\{\"msg_type\":14\}"
 	end 'message'
@@ -1023,7 +1023,7 @@ function renderVersions(codes TlsVersionCodeArray) returns String
 end 'renderVersions'
 
 function renderShare(share TlsKeyShare) returns String
-	return "\{\"group\":{share.group()},\"key_exchange_hex\":\"{toHex(share.keyExchange())}\"\}"
+	return "\{\"group\":{share.group},\"key_exchange_hex\":\"{toHex(share.keyExchange())}\"\}"
 end 'renderShare'
 
 function renderShares(shares TlsKeyShareArray) returns String
@@ -1077,7 +1077,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 	var texts = TextArray.create()
 
 	for entry in entries 'eachEntry'
-		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions())}\}")
+		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions)}\}")
 	end 'eachEntry'
 
 	return joined(texts)
@@ -1094,25 +1094,25 @@ function renderCertificates(certificates ByteArrays) returns String
 end 'renderCertificates'
 
 function renderServerHello(hello TlsServerHello) returns String
-	return "\{\"msg_type\":2,\"legacy_version\":{hello.legacyVersion()},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_echo_hex\":\"{toHex(hello.legacySessionIdEcho())}\",\"cipher_suite\":{hello.cipherSuite()},\"legacy_compression_method\":{hello.compressionMethod()},\"extensions\":{renderBlock(hello.extensions())}\}"
+	return "\{\"msg_type\":2,\"legacy_version\":{hello.legacyVersion},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_echo_hex\":\"{toHex(hello.legacySessionIdEcho())}\",\"cipher_suite\":{hello.cipherSuite},\"legacy_compression_method\":{hello.compressionMethod},\"extensions\":{renderBlock(hello.extensions())}\}"
 end 'renderServerHello'
 
 function render(message TlsHandshakeMessage) returns String
 	return match message 'message'
 		helloRequest gives "\{\"msg_type\":0\}"
-		clientHello(hello) gives "\{\"msg_type\":1,\"legacy_version\":{hello.legacyVersion()},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_hex\":\"{toHex(hello.legacySessionId())}\",\"cipher_suites\":{renderSuites(hello.cipherSuites())},\"legacy_compression_methods_hex\":\"{toHex(hello.compressionMethods())}\",\"extensions\":{renderBlock(hello.extensions())}\}"
+		clientHello(hello) gives "\{\"msg_type\":1,\"legacy_version\":{hello.legacyVersion},\"random_hex\":\"{toHex(hello.random())}\",\"legacy_session_id_hex\":\"{toHex(hello.legacySessionId())}\",\"cipher_suites\":{renderSuites(hello.cipherSuites())},\"legacy_compression_methods_hex\":\"{toHex(hello.compressionMethods)}\",\"extensions\":{renderBlock(hello.extensions())}\}"
 		serverHello(hello) gives renderServerHello(hello)
 		helloRetryRequest(hello) gives renderServerHello(hello)
-		newSessionTicket(ticket) gives "\{\"msg_type\":4,\"ticket_lifetime\":{ticket.lifetime()},\"ticket_age_add\":{ticket.ageAdd()},\"ticket_nonce_hex\":\"{toHex(ticket.nonce())}\",\"ticket_hex\":\"{toHex(ticket.ticket())}\",\"extensions\":{renderExtensions(ticket.extensions())}\}"
+		newSessionTicket(ticket) gives "\{\"msg_type\":4,\"ticket_lifetime\":{ticket.lifetime},\"ticket_age_add\":{ticket.ageAdd},\"ticket_nonce_hex\":\"{toHex(ticket.nonce)}\",\"ticket_hex\":\"{toHex(ticket.ticket)}\",\"extensions\":{renderExtensions(ticket.extensions)}\}"
 		encryptedExtensions(items) gives "\{\"msg_type\":8,\"extensions\":{renderExtensions(items)}\}"
 		tls13Certificate(requestContext, entries) gives "\{\"msg_type\":11,\"certificate_request_context_hex\":\"{toHex(requestContext)}\",\"certificate_list\":{renderEntries(entries)}\}"
 		tls12Certificate(certificates) gives "\{\"msg_type\":11,\"certificate_list\":{renderCertificates(certificates)}\}"
 		tls13CertificateRequest(requestContext, items) gives "\{\"msg_type\":13,\"certificate_request_context_hex\":\"{toHex(requestContext)}\",\"extensions\":{renderExtensions(items)}\}"
-		tls12CertificateRequest(request) gives "\{\"msg_type\":13,\"certificate_types_hex\":\"{toHex(request.certificateTypes())}\",\"supported_signature_algorithms\":{renderSchemes(request.signatureSchemes())},\"certificate_authorities_hex\":{renderAuthorities(request.authorities())}\}"
+		tls12CertificateRequest(request) gives "\{\"msg_type\":13,\"certificate_types_hex\":\"{toHex(request.certificateTypes)}\",\"supported_signature_algorithms\":{renderSchemes(request.signatureSchemes())},\"certificate_authorities_hex\":{renderAuthorities(request.authorities)}\}"
 		certificateVerify(scheme, signature) gives "\{\"msg_type\":15,\"algorithm\":{scheme},\"signature_hex\":\"{toHex(signature)}\"\}"
 		finished(verifyData) gives "\{\"msg_type\":20,\"verify_data_hex\":\"{toHex(verifyData)}\"\}"
 		keyUpdate(request) gives "\{\"msg_type\":24,\"request_update\":{request.rawValue}\}"
-		serverKeyExchange(exchange) gives "\{\"msg_type\":12,\"curve_type\":3,\"named_group\":{exchange.namedGroup()},\"public_hex\":\"{toHex(exchange.publicKey())}\",\"algorithm\":{exchange.signatureScheme()},\"signature_hex\":\"{toHex(exchange.signature())}\"\}"
+		serverKeyExchange(exchange) gives "\{\"msg_type\":12,\"curve_type\":3,\"named_group\":{exchange.namedGroup},\"public_hex\":\"{toHex(exchange.publicKey())}\",\"algorithm\":{exchange.signatureScheme},\"signature_hex\":\"{toHex(exchange.signature)}\"\}"
 		clientKeyExchange(publicKey) gives "\{\"msg_type\":16,\"public_hex\":\"{toHex(publicKey)}\"\}"
 		serverHelloDone gives "\{\"msg_type\":14\}"
 	end 'message'

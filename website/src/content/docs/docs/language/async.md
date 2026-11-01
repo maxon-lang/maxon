@@ -68,11 +68,10 @@ not 80.
   is copied. Passing a handle is how a socket or a server is shared with a coroutine.
 - **A promise argument moves.** A coroutine can still be running after the frame that started it has ended,
   so an `async` call hands a promise, or a value whose type holds one, only to a parameter the callee takes
-  — one it awaits, cancels, stores or returns; for an overloaded callee, the overload the call's arguments
-  bind. The coroutine then owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
+  — one it awaits, cancels, stores or returns. The coroutine then owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
   promise to one that takes it, or await it and pass the result. One promise at two arguments of one call is
   **E3102**.
-- A parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
+- A `mutable` parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
   caller. A coroutine that writes a parameter is refused a [read-only](/docs/language/memory-model/#read-only-values) argument
   (**E3159**), as an ordinary call is.
 - A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
@@ -146,7 +145,7 @@ handed to a parameter, or to a container's method such as `Map.upsert`, is held 
 through a function value hands a promise over exactly where the function type says the callee takes it (see
 [Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)).
 
-A promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
+A `mutable` promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
 callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
 other promise name. The same holds through a function that only hands the parameter on, and at a position a
 function type passes by reference. The argument is a `var` the caller owns: a `let`, a `let` field, a name a
@@ -209,9 +208,8 @@ a promise parameter it awaits, cancels, stores or returns, or hands on to a call
 passed to a parameter the callee only reads stays with the caller. A call of `push`, `set`, `insert`,
 `upsert`, `append` or `prepend` stores its bare arguments whatever the receiver is, so a function that
 hands its promise parameter to such a method takes the promise even where the receiver's own method only
-reads it. Where the overloads a call may bind differ about taking it, the overload the
-call binds decides. An `async` call is stricter (see [Starting a Coroutine](#starting-a-coroutine)): the
-overload it binds must take the promise. A store into a promise field also releases the thread that field was
+reads it. An `async` call is stricter (see [Starting a Coroutine](#starting-a-coroutine)): the
+callee must take the promise. A store into a promise field also releases the thread that field was
 holding, exactly once. Three refusals follow:
 
 - **E3141** — the slot a read came out of has already been spent, at any of those doors. Two reads of one slot
@@ -349,9 +347,6 @@ end 'main'
   arguments off the factory's arguments; a factory that fixes no type is **E2015**. A factory argument held
   at an opaque type parameter — a `T` value inside a generic function — is **E2015**; spawn from a function
   of a concrete type.
-- **Overloaded factories.** A `spawn` binds the factory overload its arguments fit, as any call does, and
-  that overload must start the service (**E3134** when it returns another type). Two overloads that fit
-  equally are **E3007**, and arguments that bind no single overload of a generic factory are **E2015**.
 - A refusal of a `spawn`'s target or factory (**E3134**, **E3008**, **E2015**) points at the `spawn`
   keyword.
 - Services that `await` each other in a cycle are **E3139**; a factory's `await` counts as its service's.
@@ -555,10 +550,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A `T.handle` converts to `I.handle` wherever an `I.handle` is expected: a binding, an argument (an
-  overloaded callee's included), a return, a field, an array element, a message argument, a
+- A `T.handle` converts to `I.handle` wherever an `I.handle` is expected: a binding, an argument, a return, a field, an array element, a message argument, a
   `Key.register` and a call through a function value or a closure. `as I.handle` converts explicitly.
-  A value that converts equally well to two overloads' interface handles is ambiguous (**E3007**).
 - Every requirement must be sendable: its parameters must cross a message (**E3135**) and its reply must be
   carriable (**E3140**). One send serves every implementer, so the services a program sends to through
   `I.handle` declare each requirement with the same parameter, return and `throws` types

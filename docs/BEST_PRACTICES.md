@@ -381,7 +381,7 @@ createUser("alice", role: "admin", active: true)
 
 ### Use Default Parameters for Optional Configuration
 
-Default parameters avoid the need for multiple overloads and make the common case simple.
+Default parameters make the common case simple.
 
 ```maxon
 function connect(host String, port Port = 8080, timeout Milliseconds = 5000)
@@ -397,7 +397,7 @@ connect("example.com", port: 443, timeout: 10000)  // override both
 Closures work well for sort comparators, map transforms, and filter predicates. Keep them short.
 
 ```maxon
-items.sort(function(a, b) gives a.priority.compare(b.priority))
+items.sortBy(function(a, b) gives a.priority.compare(b.priority))
 let active = users.filter(function(u) gives u.isActive)
 ```
 

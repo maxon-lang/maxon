@@ -891,7 +891,7 @@ typealias StrBag = Bag with (Int, String)
 
 function main() returns ExitCode
 	let b = StrBag.create()
-	return 3 if b.contains(function(x Int) gives x == 2) else 4
+	return 3 if b.containsWhere(function(x Int) gives x == 2) else 4
 end 'main'
 ```
 ```exitcode
@@ -1018,4 +1018,44 @@ end 'main'
 ```maxoncstderr
 error E3008: <fragment>:54:54: type 'BagIter' is not exported
 error E3008: <fragment>:53:10: type 'BagIter' is not exported
+```
+
+<!-- test: interface-extensions.a-conformers-own-declaration-still-shadows-an-extensions -->
+The boundary of the rule above. `Bag` declares its own `has`, so `extension Holder`'s `has` is never
+published onto it — it is not a member of any set and it does not contest one. The conformer's answer
+is the only one, which is what "an extension supplies a DEFAULT implementation" means.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Holder
+	function only() returns Integer
+end 'Holder'
+
+extension Holder
+	function has() returns Integer
+		return 1
+	end 'has'
+end 'Holder'
+
+type Bag implements Holder
+	static function make() returns Self
+		return Self{}
+	end 'make'
+
+	function only() returns Integer
+		return 3
+	end 'only'
+
+	function has() returns Integer
+		return 40
+	end 'has'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.make()
+	return b.has() + b.only()
+end 'main'
+```
+```exitcode
+43
 ```

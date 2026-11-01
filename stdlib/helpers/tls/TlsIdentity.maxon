@@ -36,7 +36,7 @@ public type TlsIdentity
 		let leaf = try X509.parse(leafDer) otherwise throw TlsError.invalidCertificate
 		let parsed = try tlsParsePrivateKey(key.clone())
 
-		if leaf.publicKey().algorithm() != parsed.algorithm() or not (try tlsPairsWith(parsed, certificateKey: leaf.publicKey())) 'foreignKey'
+		if leaf.publicKey().algorithm != parsed.algorithm() or not (try tlsPairsWith(parsed, certificateKey: leaf.publicKey())) 'foreignKey'
 			throw TlsError.invalidPrivateKey
 		end 'foreignKey'
 
@@ -50,14 +50,14 @@ public type TlsIdentity
 		let keyBlocks = try Pem.decode(key) otherwise throw TlsError.invalidPem
 
 		for block in certificateBlocks 'eachCertificate'
-			if block.label() == tlsPemCertificateLabel 'isCertificate'
-				chain.push(block.bytes().clone())
+			if block.label == tlsPemCertificateLabel 'isCertificate'
+				chain.push(block.bytes.clone())
 			end 'isCertificate'
 		end 'eachCertificate'
 
 		for block in keyBlocks 'eachKey'
-			if tlsPemKeyLabels().contains(block.label()) 'isKey'
-				return try fromDer(chain, key: block.bytes().clone())
+			if tlsPemKeyLabels().contains(block.label) 'isKey'
+				return try fromDer(chain, key: block.bytes.clone())
 			end 'isKey'
 		end 'eachKey'
 
@@ -102,15 +102,15 @@ function tlsParsePrivateKey(der ByteArray) returns TlsPrivateKey throws TlsError
 	let version = try info.readInteger() otherwise throw TlsError.invalidPrivateKey
 	let next = try info.peekHeader() otherwise throw TlsError.invalidPrivateKey
 
-	if next.tagNumber() == tlsDerSequenceTag 'pkcs8'
+	if next.tagNumber == tlsDerSequenceTag 'pkcs8'
 		try requireKeyVersion(version, expected: tlsKeyVersionZero)
 
 		return try tlsPkcs8Key(der, info: info)
-	end 'pkcs8' else if next.tagNumber() == tlsDerOctetStringTag 'sec1'
+	end 'pkcs8' else if next.tagNumber == tlsDerOctetStringTag 'sec1'
 		try requireKeyVersion(version, expected: tlsKeyVersionOne)
 
 		return try tlsEcKey(info, outer: TlsEcCurveName.unspecified)
-	end 'sec1' else if next.tagNumber() == tlsDerIntegerTag 'pkcs1'
+	end 'sec1' else if next.tagNumber == tlsDerIntegerTag 'pkcs1'
 		return try tlsRsaKey(tlsPkcs8OfPkcs1(der))
 	end 'pkcs1'
 
@@ -184,7 +184,7 @@ function tlsEcKey(key DerReader, outer TlsEcCurveName) returns TlsPrivateKey thr
 	let scalar = try key.readOctetString() otherwise throw TlsError.invalidPrivateKey
 	var inner = TlsEcCurveName.unspecified
 
-	if not key.isAtEnd() and (try key.peekHeader() otherwise throw TlsError.invalidPrivateKey).tagNumber() == tlsEcParametersTag 'explicitParameters'
+	if not key.isAtEnd() and (try key.peekHeader() otherwise throw TlsError.invalidPrivateKey).tagNumber == tlsEcParametersTag 'explicitParameters'
 		var explicit = try key.enterExplicit(tlsEcParametersTag) otherwise throw TlsError.invalidPrivateKey
 
 		inner = TlsEcCurveName.named(try explicit.readElement() otherwise throw TlsError.invalidPrivateKey)

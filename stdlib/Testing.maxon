@@ -79,6 +79,7 @@ public type Expect
 	// interpolating a `bool` produces, so `equal` over two `bool`s and these agree.
 	static let trueRendering = "true"
 	static let falseRendering = "false"
+	static let emptyRendering = "\"\""
 
 	static let equalName = "equal"
 	static let notEqualName = "notEqual"
@@ -133,25 +134,17 @@ public type Expect
 		try Expect.raise(matcher, detail: detail, note: note, file: file, line: line)
 	end 'raiseMismatch'
 
-	// Quoted, so an empty value, or one differing from the expectation only in trailing space, is
-	// still visible in the report.
-	static function rendered(text String) returns String
-		return "\"{text}\""
-	end 'rendered'
-
-	static function rendered(value T) uses T returns String
-		return "{value}"
-	end 'rendered'
-
+	// The matchers render values with `:q`, so an empty `String`, or one differing from the expectation
+	// only in trailing space, is still visible in the report.
 	public static function equal(actual T, expected T, message String = "", file String = __file__, line SourceLineNumber = __line__) uses T throws TestFailure where T is Equatable
 		if actual != expected 'mismatch'
-			try Expect.raiseMismatch(Expect.equalName, expected: Expect.rendered(expected), received: Expect.rendered(actual), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.equalName, expected: "{expected:q}", received: "{actual:q}", note: message, file: file, line: line)
 		end 'mismatch'
 	end 'equal'
 
 	public static function notEqual(actual T, expected T, message String = "", file String = __file__, line SourceLineNumber = __line__) uses T throws TestFailure where T is Equatable
 		if actual == expected 'matched'
-			try Expect.raiseMismatch(Expect.notEqualName, expected: "{Expect.negatedPrefix}{Expect.rendered(expected)}", received: Expect.rendered(actual), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.notEqualName, expected: "{Expect.negatedPrefix}{expected:q}", received: "{actual:q}", note: message, file: file, line: line)
 		end 'matched'
 	end 'notEqual'
 
@@ -159,25 +152,25 @@ public type Expect
 	// does: NaN satisfies no comparison, so the negated form would pass a float that is not a number.
 	public static function greaterThan(actual T, than T, message String = "", file String = __file__, line SourceLineNumber = __line__) uses T throws TestFailure where T is Comparable
 		if not (actual > than) 'notGreater'
-			try Expect.raiseMismatch(Expect.greaterThanName, expected: "{Expect.greaterPrefix}{Expect.rendered(than)}", received: Expect.rendered(actual), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.greaterThanName, expected: "{Expect.greaterPrefix}{than:q}", received: "{actual:q}", note: message, file: file, line: line)
 		end 'notGreater'
 	end 'greaterThan'
 
 	public static function lessThan(actual T, than T, message String = "", file String = __file__, line SourceLineNumber = __line__) uses T throws TestFailure where T is Comparable
 		if not (actual < than) 'notLess'
-			try Expect.raiseMismatch(Expect.lessThanName, expected: "{Expect.lessPrefix}{Expect.rendered(than)}", received: Expect.rendered(actual), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.lessThanName, expected: "{Expect.lessPrefix}{than:q}", received: "{actual:q}", note: message, file: file, line: line)
 		end 'notLess'
 	end 'lessThan'
 
 	public static function atLeast(actual T, than T, message String = "", file String = __file__, line SourceLineNumber = __line__) uses T throws TestFailure where T is Comparable
 		if not (actual >= than) 'below'
-			try Expect.raiseMismatch(Expect.atLeastName, expected: "{Expect.atLeastPrefix}{Expect.rendered(than)}", received: Expect.rendered(actual), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.atLeastName, expected: "{Expect.atLeastPrefix}{than:q}", received: "{actual:q}", note: message, file: file, line: line)
 		end 'below'
 	end 'atLeast'
 
 	public static function atMost(actual T, than T, message String = "", file String = __file__, line SourceLineNumber = __line__) uses T throws TestFailure where T is Comparable
 		if not (actual <= than) 'above'
-			try Expect.raiseMismatch(Expect.atMostName, expected: "{Expect.atMostPrefix}{Expect.rendered(than)}", received: Expect.rendered(actual), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.atMostName, expected: "{Expect.atMostPrefix}{than:q}", received: "{actual:q}", note: message, file: file, line: line)
 		end 'above'
 	end 'atMost'
 
@@ -209,25 +202,25 @@ public type Expect
 
 	public static function contains(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not haystack.contains(needle) 'absent'
-			try Expect.raiseMismatch(Expect.containsName, expected: "{Expect.containsPrefix}{Expect.rendered(needle)}", received: Expect.rendered(haystack), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.containsName, expected: "{Expect.containsPrefix}{needle:q}", received: "{haystack:q}", note: message, file: file, line: line)
 		end 'absent'
 	end 'contains'
 
 	public static function startsWith(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not haystack.startsWith(needle) 'absent'
-			try Expect.raiseMismatch(Expect.startsWithName, expected: "{Expect.startsWithPrefix}{Expect.rendered(needle)}", received: Expect.rendered(haystack), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.startsWithName, expected: "{Expect.startsWithPrefix}{needle:q}", received: "{haystack:q}", note: message, file: file, line: line)
 		end 'absent'
 	end 'startsWith'
 
 	public static function endsWith(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not haystack.endsWith(needle) 'absent'
-			try Expect.raiseMismatch(Expect.endsWithName, expected: "{Expect.endsWithPrefix}{Expect.rendered(needle)}", received: Expect.rendered(haystack), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.endsWithName, expected: "{Expect.endsWithPrefix}{needle:q}", received: "{haystack:q}", note: message, file: file, line: line)
 		end 'absent'
 	end 'endsWith'
 
 	public static function isEmpty(haystack String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not haystack.isEmpty() 'notEmpty'
-			try Expect.raiseMismatch(Expect.isEmptyName, expected: Expect.rendered(""), received: Expect.rendered(haystack), note: message, file: file, line: line)
+			try Expect.raiseMismatch(Expect.isEmptyName, expected: Expect.emptyRendering, received: "{haystack:q}", note: message, file: file, line: line)
 		end 'notEmpty'
 	end 'isEmpty'
 

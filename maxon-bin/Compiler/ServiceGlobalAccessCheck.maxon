@@ -381,8 +381,8 @@ end 'initializerReaching'
 // ⭐ **E3165: A `let` WHOSE INITIALIZER REACHES A MANAGED `var`.** A record read out of a `var` is still the
 // `var`'s to write, so a `let` holding it would not be fixed, and `__module_init` could not mark it shared with an
 // owner no `let` holds. What the initializer keeps is not followed, so a scalar read out of the `var` is refused
-// too. Closed over the call graph overload resolution settles, so a member of an overload set the initializer does
-// not call reaches nothing; a run-time dispatch widens the way E3143's closure does.
+// too. Closed over the call graph, so a function the initializer does not call reaches nothing; a run-time
+// dispatch widens the way E3143's closure does.
 //
 // ⚡ One closure over every `let` initializer at once, which is all a program that compiles pays. The closure is
 // distributive over its seeds, so some `let` alone reaches the use the joint closure found.
@@ -437,7 +437,7 @@ function reportLetInitializerReachingAVar(project Project, funcNames FunctionNam
 end 'reportLetInitializerReachingAVar'
 
 // ⭐ **THE DECLARED FUNCTIONS EACH MANAGED GLOBAL'S INITIALIZER CALLS**, one row per `project.managedGlobals`
-// entry, read off `__module_init`, whose calls overload resolution has settled. It emits each global's calls
+// entry, read off `__module_init`. It emits each global's calls
 // before the `globalAddr` its store opens with, in that list's order, and marks the `let`s only after the last
 // store. The walk stops at that store, so the `default`s built after the marks belong to no initializer.
 module function initializerCallees(project Project, module MaxonModule, funcNames FunctionNameIndex) returns FuncIndexRows

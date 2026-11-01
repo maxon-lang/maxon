@@ -138,8 +138,8 @@ certificates and keys, each a label and a base64 body.
 | `Pem.decode(text String)` | `PemBlocks` | `PemError` | Every block in `text`, in order, duplicate labels kept. A text with no blocks gives an empty list. |
 | `Pem.encode(label String, data ByteArray)` | `String` | `PemError` | One block: the BEGIN line, the base64 of `data` in lines of 64 characters, and the END line, each ending in LF. |
 
-A `PemBlock` has `label()`, the text between `-----BEGIN ` and `-----` (such as `CERTIFICATE`), and
-`bytes()`, the decoded body. `PemBlocks` is `Array with PemBlock`.
+A `PemBlock` has `label`, the text between `-----BEGIN ` and `-----` (such as `CERTIFICATE`), and
+`bytes`, the decoded body. `PemBlocks` is `Array with PemBlock`.
 
 `decode` accepts LF and CRLF line endings and a last line with no line break. Text before, between and
 after blocks is skipped, including a stray END line and a malformed BEGIN line. Trailing spaces and tabs
@@ -161,7 +161,7 @@ function main() returns ExitCode
 	let blocks = try Pem.decode("a comment line\n{text}") otherwise return 1
 
 	for block in blocks 'each'
-		print("{block.label()}: {String.from(block.bytes())}\n")
+		print("{block.label}: {String.from(block.bytes)}\n")
 	end 'each'
 
 	return 0
@@ -207,9 +207,9 @@ the DER rules; a constructed element is entered as a new reader over its content
 | `readImplicitBitString(tagNumber DerTagNumber)` | `DerBitString` | `DerError` | A primitive context-specific `[tagNumber]` holding an implicitly tagged BIT STRING. |
 | `readImplicitSignedInteger(tagNumber DerTagNumber)` | `ByteArray` | `DerError` | A primitive context-specific `[tagNumber]` holding an implicitly tagged INTEGER, as `readSignedInteger` answers it. |
 
-A `DerHeader` has `tagClass()`, a `DerTagClass` (`universal`, `application`, `contextSpecific` or
-`private`), `isConstructed()`, `tagNumber()` and `length()`, the number of content octets. A `DerBitString`
-has `bytes()`, the octets after the unused-bits octet, and `unusedBits()`, how many low bits of the last
+A `DerHeader` has `tagClass`, a `DerTagClass` (`universal`, `application`, `contextSpecific` or
+`private`), `isConstructed()`, `tagNumber` and `length`, the number of content octets. A `DerBitString`
+has `bytes()`, the octets after the unused-bits octet, and `unusedBits`, how many low bits of the last
 octet are not part of the string.
 
 | Name | Definition |
@@ -695,24 +695,24 @@ parameters), `rsassaPssSha256`, `rsassaPssSha384`, `rsassaPssSha512` and `ed2551
 `X509KeyAlgorithm` cases: `rsa`, `ecP256` and `ecP384` (an uncompressed point) and `ed25519`. Key sizes and
 whether a point is on its curve are not checked by `parse`.
 
-A `Certificate` answers each field:
+A `Certificate` answers each field. `version`, `serialNumber`, `signatureAlgorithm`, `issuer`, `notBefore`, `notAfter`, `tbsCertificate` and `signature` are fields, read without parentheses; the rest are functions:
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `version()` | `CertificateVersion` | — | 1 or 3. |
-| `serialNumber()` | `ByteArray` | — | The serial's content octets as encoded: two's complement, of any sign and length. |
-| `signatureAlgorithm()` | `X509SignatureAlgorithm` | — | The algorithm the issuer signed with. |
-| `issuer()`, `subject()` | `X509Name` | — | `der()`, the whole Name DER names are compared by, and `attributes()`, an `X509Attributes` in encoded order, each with `oid()` (dotted decimal), `value()` (the decoded text) and `shortName()` (`CN`, `O`, `OU` or `C`, throwing `X509FieldError.absent` for other types). |
-| `notBefore()`, `notAfter()` | `UnixSeconds` | — | The validity period, both ends inclusive. |
-| `publicKey()` | `X509PublicKey` | — | `algorithm()`, `der()` (the SubjectPublicKeyInfo, the form `Rsa` takes) and `keyBytes()` (the point, the Ed25519 key or the `RSAPublicKey` DER). |
-| `basicConstraints()` | `X509BasicConstraints` | `X509FieldError` | `isCertificateAuthority()` and `pathLength()`, an `X509PathLength` that throws `absent` when there is none. |
+| `version` | `CertificateVersion` | — | 1 or 3. |
+| `serialNumber` | `ByteArray` | — | The serial's content octets as encoded: two's complement, of any sign and length. |
+| `signatureAlgorithm` | `X509SignatureAlgorithm` | — | The algorithm the issuer signed with. |
+| `issuer`, `subject()` | `X509Name` | — | `der()`, the whole Name DER names are compared by, and `attributes`, an `X509Attributes` in encoded order, each with `oid` (dotted decimal), `value` (the decoded text) and `shortName()` (`CN`, `O`, `OU` or `C`, throwing `X509FieldError.absent` for other types). |
+| `notBefore`, `notAfter` | `UnixSeconds` | — | The validity period, both ends inclusive. |
+| `publicKey()` | `X509PublicKey` | — | `algorithm`, `der()` (the SubjectPublicKeyInfo, the form `Rsa` takes) and `keyBytes()` (the point, the Ed25519 key or the `RSAPublicKey` DER). |
+| `basicConstraints()` | `X509BasicConstraints` | `X509FieldError` | `isCertificateAuthority` and `pathLength()`, an `X509PathLength` that throws `absent` when there is none. |
 | `keyUsage()` | `X509KeyUsages` | `X509FieldError` | The `X509KeyUsage` bits that are set, in bit order: `digitalSignature`, `contentCommitment`, `keyEncipherment`, `dataEncipherment`, `keyAgreement`, `keyCertSign`, `crlSign`, `encipherOnly`, `decipherOnly`. |
 | `extendedKeyUsage()` | `StringArray` | `X509FieldError` | The purposes, dotted decimal, in encoded order. |
 | `subjectAltName()` | `X509SubjectAltName` | `X509FieldError` | `dnsNames()`, a `StringArray`, and `ipAddresses()`, 4- or 16-byte `ByteArrays`. Other name forms are skipped. |
 | `authorityKeyId()`, `subjectKeyId()` | `ByteArray` | `X509FieldError` | The key identifiers. |
 | `nameConstraints()` | `X509NameConstraints` | `X509FieldError` | `permittedDnsNames()` and `excludedDnsNames()`, the dNSName subtrees as encoded, and `permittedIpRanges()` and `excludedIpRanges()`, each an address followed by its mask. |
-| `tbsCertificate()` | `ByteArray` | — | The whole TBSCertificate DER: the signed message. |
-| `signature()` | `ByteArray` | — | The signature octets. |
+| `tbsCertificate` | `ByteArray` | — | The whole TBSCertificate DER: the signed message. |
+| `signature` | `ByteArray` | — | The signature octets. |
 
 An extension-backed member throws `X509FieldError.absent` when the certificate does not carry the
 extension.
@@ -791,11 +791,11 @@ Its result is a `HashDigest`, `bits(64)`.
 | `Hasher.create()` | `Hasher` | A hasher at the FNV-1a offset basis. |
 | `Hasher.resume(state HashDigest)` | `Hasher` | Continue from a value `finalize()` returned. |
 | `combine(value HashDigest)` | — | Fold in one value. |
-| `combine(bytes ByteArray)` | — | Fold in each byte. |
+| `combineBytes(bytes ByteArray)` | — | Fold in each byte. |
 | `finalize()` | `HashDigest` | The running state, not post-processed, so `resume(finalize())` continues exactly. |
 | `Hasher.empty()` | `HashDigest` | The state of an empty fold. |
 | `Hasher.combined(state HashDigest, value HashDigest)` | `HashDigest` | One step, as an expression. |
-| `Hasher.combined(state HashDigest, bytes ByteArray)` | `HashDigest` | Each byte, as an expression. |
+| `Hasher.combinedBytes(state HashDigest, bytes ByteArray)` | `HashDigest` | Each byte, as an expression. |
 
 FNV-1a folds a flat byte sequence and records no lengths, so `"ab"` then `"c"` hashes the same as `"a"`
 then `"bc"`. When hashing a sequence of parts, combine each part's length too.
@@ -803,10 +803,10 @@ then `"bc"`. When hashing a sequence of parts, combine each part's length too.
 ```maxon
 function main() returns ExitCode
 	var hasher = Hasher.create()
-	hasher.combine("ab".toByteArray())
+	hasher.combineBytes("ab".toByteArray())
 	hasher.combine(7)
 
-	let direct = Hasher.combined(Hasher.combined(Hasher.empty(), bytes: "ab".toByteArray()), value: 7)
+	let direct = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: "ab".toByteArray()), value: 7)
 	print("{hasher.finalize() == direct}\n")
 	return 0
 end 'main'

@@ -11,7 +11,7 @@
 // lands is a path the MCP server spells, which this corpus may respell like every other driver constant it
 // names.
 
-let CaseDirName = "cache-does-not-count-a-staged-snippet"
+let CacheDoesNotCountAStagedSnippetCaseDirName = "cache-does-not-count-a-staged-snippet"
 
 // What the MCP server calls the directory it stages into and the file it stages there, respelled here
 // because this corpus is a separate program and cannot read the driver's own constants.
@@ -22,11 +22,9 @@ let SnippetSource = "// an inline snippet a tool call staged\n"
 // A second program under a second NAME, because a slot is keyed on the program's path: the same file cached
 // twice is one build superseding another. Two rather than one, because a count that is really the file
 // count, or a constant, passes a one-build case perfectly.
-let SecondProgramFileName = "second.maxon"
-let PublishedBuilds = 2
 
 test 'a snippet staged under the cache root is not counted as a build'
-	let dir = freshCaseDir(CaseDirName)
+	let dir = freshCaseDir(CacheDoesNotCountAStagedSnippetCaseDirName)
 	let cacheRoot = cacheRootIn(dir)
 
 	publishCachedBuild(dir, cacheRoot: cacheRoot)
@@ -46,9 +44,9 @@ test 'a snippet staged under the cache root is not counted as a build'
 	Expect.equal(reported.exitCode(), expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over a root holding {PublishedBuilds} builds and a staged snippet. A file that is not a build is not a fault. {said}")
 	Expect.isEmpty(reported.stderr.trim(), message: "`maxon {CacheCommandWord}` wrote to stderr while answering over a root holding a staged snippet. {said}")
 
-	let state = try reportedStateOf(reported.stdout, directory: owned) otherwise panic("{CaseDirName}: `maxon {CacheCommandWord}` named no line for {owned.toString()}, the root it was pointed at through {CacheRootVariable}. {said}")
+	let state = try reportedStateOf(reported.stdout, directory: owned) otherwise panic("{CacheDoesNotCountAStagedSnippetCaseDirName}: `maxon {CacheCommandWord}` named no line for {owned.toString()}, the root it was pointed at through {CacheRootVariable}. {said}")
 
-	let counted = try reportedTally(state) otherwise panic("{CaseDirName}: `maxon {CacheCommandWord}` stated no count for {owned.toString()}, so there is no number to compare. It said of it: {state}")
+	let counted = try reportedTally(state) otherwise panic("{CacheDoesNotCountAStagedSnippetCaseDirName}: `maxon {CacheCommandWord}` stated no count for {owned.toString()}, so there is no number to compare. It said of it: {state}")
 	Expect.equal(counted, expected: PublishedBuilds, message: "`maxon {CacheCommandWord}` reported {counted} builds for {owned.toString()} where {PublishedBuilds} were published and one snippet source was staged. A staged snippet is not a build. {said}")
 end 'a snippet staged under the cache root is not counted as a build'
 

@@ -277,9 +277,9 @@ end 'main'
 111
 ```
 
-<!-- test: not-over-bool-or-with-overloaded-callees -->
+<!-- test: not-over-bool-or-with-same-named-callees -->
 When a bool `or`'s operands are calls whose return type can't be pinned at
-parse time (here `contains` is an overloaded method name shared by two types),
+parse time (here `contains` is a method name shared by two types),
 the `or` lowers as a non-short-circuit bitwise op. The enclosing `not` must
 still treat the result as a bool (bit-flip), NOT an integer (bitwise
 complement) — otherwise `not (true or false)` would be `-2` and read as

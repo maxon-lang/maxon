@@ -87,7 +87,7 @@ module type TlsReader
 		return try readBytes(remaining()) otherwise panic("TlsReader.readRemaining: the remaining bytes are available")
 	end 'readRemaining'
 
-	module function readVector(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns TlsReader throws TlsCodecError
+	module function readBoundedVector(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns TlsReader throws TlsCodecError
 		let length = (try readWord(prefix.width())) as TlsVectorBytes
 
 		if length < minimum or length > maximum or length > remaining() 'length'
@@ -98,24 +98,24 @@ module type TlsReader
 		position = position + length
 
 		return Self{bytes: bytes, position: start, limit: start + length}
-	end 'readVector'
+	end 'readBoundedVector'
 
 	module function readVector(prefix TlsLengthPrefix, minimum TlsVectorBytes) returns TlsReader throws TlsCodecError
-		return try readVector(prefix, minimum: minimum, maximum: prefix.maximum())
+		return try readBoundedVector(prefix, minimum: minimum, maximum: prefix.maximum())
 	end 'readVector'
 
-	module function readVectorBytes(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns ByteArray throws TlsCodecError
-		var window = try readVector(prefix, minimum: minimum, maximum: maximum)
+	module function readBoundedVectorBytes(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns ByteArray throws TlsCodecError
+		var window = try readBoundedVector(prefix, minimum: minimum, maximum: maximum)
 
 		return window.readRemaining()
-	end 'readVectorBytes'
+	end 'readBoundedVectorBytes'
 
 	module function readVectorBytes(prefix TlsLengthPrefix, minimum TlsVectorBytes) returns ByteArray throws TlsCodecError
-		return try readVectorBytes(prefix, minimum: minimum, maximum: prefix.maximum())
+		return try readBoundedVectorBytes(prefix, minimum: minimum, maximum: prefix.maximum())
 	end 'readVectorBytes'
 
 	module function readCodePointList(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns TlsReader throws TlsCodecError
-		var window = try readVector(prefix, minimum: (minimum * tlsCodePointBytes) as TlsVectorBytes, maximum: (maximum * tlsCodePointBytes) as TlsVectorBytes)
+		var window = try readBoundedVector(prefix, minimum: (minimum * tlsCodePointBytes) as TlsVectorBytes, maximum: (maximum * tlsCodePointBytes) as TlsVectorBytes)
 
 		if window.remaining() mod tlsCodePointBytes != 0 'odd'
 			throw TlsCodecError.decodeError

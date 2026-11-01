@@ -827,12 +827,12 @@ function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePat
 
 	// The metadata slab hands slots out of ONE chunk at a time, so a slot larger than a chunk could never be
 	// served and the bump would loop forever asking for fresh chunks.
-	if MspanSlotBytes > SlabPageBytes 'slotOverflowsChunk'
-		panic("slab runtime: an mspan slot is {MspanSlotBytes} bytes and a metadata chunk is {SlabPageBytes}")
+	if MspanSlotBytes > SlabChunkBytes 'slotOverflowsChunk'
+		panic("slab runtime: an mspan slot is {MspanSlotBytes} bytes and a metadata chunk is {SlabChunkBytes}")
 	end 'slotOverflowsChunk'
 
 	// The packed geometry word must actually hold both fields. `SlabMaxSmallSize` is the widest slot size
-	// and `SlabPageBytes / SlabSmallSizeDiv` bounds the object count (the smallest class in a one-page span).
+	// and `SlabChunkBytes / SlabSmallSizeDiv` bounds the object count (the smallest class in a one-page span).
 	if SlabMaxSmallSize > SlabClassGeomSlotMask 'slotSizeOverflowsField'
 		panic("slab runtime: a slot size of {SlabMaxSmallSize} does not fit the packed geometry's low field (mask {SlabClassGeomSlotMask})")
 	end 'slotSizeOverflowsField'
@@ -843,8 +843,8 @@ function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePat
 		panic("slab runtime: the mcache starts at {slabStateMcacheOffset()}, not past the mcentral heads at {SlabStateMcentralOffset}")
 	end 'arraysOverlap'
 
-	if slabStateBytes() > slabStateChunks() * SlabPageBytes 'stateOverflowsChunks'
-		panic("slab runtime: {slabStateBytes()} bytes of allocator state do not fit {slabStateChunks()} chunk(s) of {SlabPageBytes}")
+	if slabStateBytes() > slabStateChunks() * SlabChunkBytes 'stateOverflowsChunks'
+		panic("slab runtime: {slabStateBytes()} bytes of allocator state do not fit {slabStateChunks()} chunk(s) of {SlabChunkBytes}")
 	end 'stateOverflowsChunks'
 
 	let widestSpanChunks = slabWidestSpanChunks()
@@ -863,7 +863,7 @@ function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePat
 	requireArenaCanServe("the allocator's state region", chunks: slabStateChunks())
 
 	// The other request is a SPAN's chunk run, whose largest is the widest class's page count — Go's table
-	// tops out at 10. `__slab_refill` computes it as `ceil(slotSize · totalSlots / SlabPageBytes)` at run
+	// tops out at 10. `__slab_refill` computes it as `ceil(slotSize · totalSlots / SlabChunkBytes)` at run
 	// time; the bound is what says every value that formula can produce is one the arena will serve.
 	requireArenaCanServe("the widest class's span", chunks: widestSpanChunks)
 end 'checkSlabRuntimeGeometry'
@@ -873,7 +873,7 @@ function requireMarkTableCoversTheWidestSpan(widestSpanChunks FullRangeInt)
 		panic("slab runtime: 1 shl {SlabCensusSlotAlignShift} is {1 shl SlabCensusSlotAlignShift}, not the slot alignment {SlabCensusSlotAlignBytes}")
 	end 'alignShiftDisagrees'
 
-	let widestSpanBytes = widestSpanChunks * SlabPageBytes
+	let widestSpanBytes = widestSpanChunks * SlabChunkBytes
 	let needed = widestSpanBytes / SlabCensusSlotAlignBytes
 
 	if needed > SlabCensusSpanMarkBytes 'markTableTooNarrow'
@@ -884,7 +884,7 @@ end 'requireMarkTableCoversTheWidestSpan'
 function slabTierPins() returns TierGeometryPinArray
 	var out = TierGeometryPinArray.create()
 
-	out.push(TierGeometryPin.create("the chunk granularity", here: SlabPageBytes, named: "SlabPageBytes"))
+	out.push(TierGeometryPin.create("the chunk granularity", here: SlabChunkBytes, named: "SlabPageBytes"))
 	out.push(TierGeometryPin.create("an OS-direct mapping's prefix", here: OsDirectPrefixBytes, named: "OsDirectPrefixBytes"))
 	out.push(TierGeometryPin.create("the exit code for a pointer the OS-direct road never handed out", here: RuntimeAbort.slabOsDirectPointerNotOurs.rawValue, named: "SlabOsDirectPointerNotOursExit"))
 	out.push(TierGeometryPin.create("the exit code for a slab-state read before the first allocation committed it", here: RuntimeAbort.slabStateReadBeforeCommit.rawValue, named: "SlabStateReadBeforeCommitExit"))
@@ -1030,7 +1030,7 @@ function slabStateBytes() returns FullRangeInt
 end 'slabStateBytes'
 
 function slabStateChunks() returns FullRangeInt
-	return (slabStateBytes() + SlabPageBytes - 1) / SlabPageBytes
+	return (slabStateBytes() + SlabChunkBytes - 1) / SlabChunkBytes
 end 'slabStateChunks'
 
 // --- Shared emitters ---
@@ -1041,7 +1041,7 @@ end 'slabStateChunks'
 // cannot disagree about where the boundary is.
 //
 // ⛔ **THE PAGE ROUNDING ON THE OS-DIRECT ARM IS THE OTHER HALF OF THE SAME AGREEMENT AND IT IS NO LONGER
-// ONE SPELLING.** `__slab_rounded_size` reaches `MmRuntime.emitAlignUp` naming `SlabPageBytes`;
+// ONE SPELLING.** `__slab_rounded_size` reaches `MmRuntime.emitAlignUp` naming `SlabChunkBytes`;
 // `__slab_os_direct_alloc` is tier source and rounds with `runtime/SlabRuntime.maxon`'s own restated pair.
 // A drift between them reports a usable byte count larger than the mapping reserved.
 function emitSlabSizeRouting(module StdModule, block IrBlock, size ValueId, osDirect IrBlock, small IrBlock, ids ValueMinter)
@@ -1081,7 +1081,7 @@ function emitStateSlotAddr(module StdModule, block IrBlock, state ValueId, array
 	return emitWordSlotAddr(module, block: block, base: fromBase, index: index, ids: ids)
 end 'emitStateSlotAddr'
 
-// `ceil(slotSize * totalSlots / SlabPageBytes)` — the chunks a span's slot region occupies.
+// `ceil(slotSize * totalSlots / SlabChunkBytes)` — the chunks a span's slot region occupies.
 //
 // ⭐ **ONE SPELLING, BECAUSE THE CUT AND THE DESTRUCTION MUST AGREE TO THE CHUNK.** `__slab_refill` computes
 // it to ask the arena for a run and to register that many pages in the reverse map; `__slab_span_destroy`
@@ -1090,7 +1090,7 @@ end 'emitStateSlotAddr'
 // belongs to its neighbour.
 function emitSpanChunkCount(module StdModule, block IrBlock, slotSize ValueId, totalSlots ValueId, ids ValueMinter) returns ValueId
 	let dataBytes = emitBin(module, block: block, a: slotSize, b: totalSlots, opcode: StdBinOpcode.mul, ids: ids)
-	let pageBump = emitConst(module, block: block, value: SlabPageBytes - 1, ids: ids)
+	let pageBump = emitConst(module, block: block, value: SlabChunkBytes - 1, ids: ids)
 	let raised = emitBin(module, block: block, a: dataBytes, b: pageBump, opcode: StdBinOpcode.add, ids: ids)
 	let pageShift = emitConst(module, block: block, value: SlabPageShift, ids: ids)
 	return emitBin(module, block: block, a: raised, b: pageShift, opcode: StdBinOpcode.shr, ids: ids)
@@ -1944,7 +1944,7 @@ function buildSlabRoundedSize(module StdModule)
 	// less the prefix again — the bytes a caller may actually use.
 	let prefix = emitConst(module, block: osDirect, value: OsDirectPrefixBytes, ids: ids)
 	let withPrefix = emitBin(module, block: osDirect, a: size, b: prefix, opcode: StdBinOpcode.add, ids: ids)
-	let mapped = emitAlignUp(module, block: osDirect, value: withPrefix, width: SlabPageBytes, ids: ids)
+	let mapped = emitAlignUp(module, block: osDirect, value: withPrefix, width: SlabChunkBytes, ids: ids)
 	let usable = emitBin(module, block: osDirect, a: mapped, b: prefix, opcode: StdBinOpcode.sub, ids: ids)
 	module.setTerminator(osDirect, op: StdOp.ret(usable))
 

@@ -386,14 +386,14 @@ end 'main'
 92
 ```
 
-<!-- test: file-private-same-name-same-directory-every-kind -->
-Three files of ONE directory each declare file-private `let`s of the same names, of every kind a `let`
+<!-- test: file-private-same-name-three-directories-every-kind -->
+Three files of THREE directories each declare file-private `let`s of the same names, of every kind a `let`
 can be: a number, a constant derived from it, a `String`, a byte string, an array and a record built by a
 factory. Each file's reads, in its own functions, resolve to its OWN declaration; the file that
 declares nothing but `main` reads the third pair of declarations. The order the files arrive in does not
 change an answer.
 ```maxon
-// --- file: a.maxon
+// --- file: a/a.maxon
 let base = 5
 let derived = base * 2
 let name = "first"
@@ -417,7 +417,7 @@ export function describeA() returns String
 	return "{name} {String.from(label)} {derived} {table.count()} {anchor.value()}"
 end 'describeA'
 
-// --- file: b.maxon
+// --- file: b/b.maxon
 let base = 7
 let derived = base * 3
 let name = "second"
@@ -2121,7 +2121,7 @@ function main() returns ExitCode
 	return 1
 end 'main'
 
-// --- file: other.maxon
+// --- file: other/other.maxon
 export typealias Zero = int(0 to 0)
 
 let make = 0

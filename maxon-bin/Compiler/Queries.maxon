@@ -342,7 +342,7 @@ function extensionMethodKeysWritten(project Project, signatures ProgramSignature
 		end 'eachWrittenKey'
 	end 'eachExtensionSite'
 
-	keys.sort(function(left String, right String) gives left.compare(right))
+	keys.sortBy(function(left String, right String) gives left.compare(right))
 	return keys
 end 'extensionMethodKeysWritten'
 
@@ -413,7 +413,7 @@ function libraryExtensionMethodsOnConformers(project Project, signatures Program
 		end 'eachParent'
 	end 'eachPending'
 
-	methods.sort(function(left String, right String) gives left.compare(right))
+	methods.sortBy(function(left String, right String) gives left.compare(right))
 	return methods
 end 'libraryExtensionMethodsOnConformers'
 
@@ -562,6 +562,7 @@ module function foldDeclarationsOf(project Project, signatures ProgramSignatures
 	// so the answer cannot come from the fold — the same ordering argument the contest below makes.
 	var extents = BlockExtentsByPath.create()
 	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: leadingPaths, stdlibPaths: stdlibPaths, extents: extents, handedOver: handedOver)
+	signatures.settleAuthorMints()
 	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
 	signatures.settleNominalNameCollisions(project.db.sourcePaths)
 
@@ -600,6 +601,8 @@ function closeDeclarationFold(signatures ProgramSignatures)
 	// companion as the ordinary layout it is.
 	synthesizeServiceCompanions(signatures)
 	signatures.settleAliasImplementsClauses()
+
+	signatures.settleContestedGenericTemplates()
 
 	// Before anything can read an enum case's function: the contest that decides the name is complete only now.
 	signatures.settleFunctionBackedEnumCases()
@@ -786,6 +789,8 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 		return declinedBaseline(project, diagnosticsBefore: diagnosticsBefore, discovered: discovered)
 	end 'theAuthorContestsTheLibrary'
 
+	signatures.settleAuthorMints()
+
 	// With no contested name this settles only the alias-family spellings, which
 	// `closeTokenFactDiscovery` has just settled again with the user's claims in.
 	signatures.settleStdlibShadowSpellings(NameRoster.create(), declaringFiles: FilePathArray.create())
@@ -833,6 +838,8 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	project.db.signatureMisses = project.db.signatureMisses + 1
 
 	var signatures = try foldedProgramDeclarations(project)
+	signatures.settleContestedFunctionSpellings()
+	adoptShadowSpellings(project, roster: signatures.shadowRoster())
 
 	// Every file is folded in; now the top-level constants can be evaluated, and not one moment
 	// earlier — a constant's initializer may name a constant declared later in its own file or in a
@@ -1218,18 +1225,21 @@ union FileDeclarationHeaders
 
 	function noteInto(signatures ProgramSignatures, path FilePath, moduleDirectory String, isStdlibSource bool, extents BlockExtentsByPath)
 		match self 'tier'
-			runtimeTier(headers) then noteRuntimeTierDeclarations(signatures, headers: headers)
+			runtimeTier(headers) then noteRuntimeTierDeclarations(signatures, headers: headers, path: path)
 			otherTiers(headers, built) then noteOtherTierDeclarations(signatures, headers: headers, path: path, moduleDirectory: moduleDirectory, isStdlibSource: isStdlibSource, built: built, extents: extents)
 		end 'tier'
 	end 'noteInto'
 end 'FileDeclarationHeaders'
 
-function noteRuntimeTierDeclarations(signatures ProgramSignatures, headers TopLevelDeclarationHeaders)
+function noteRuntimeTierDeclarations(signatures ProgramSignatures, headers TopLevelDeclarationHeaders, path FilePath)
 	for header in headers.types 'eachRuntimeHeader'
 		signatures.noteDeclaredName(header.name)
 	end 'eachRuntimeHeader'
 
 	for binding in headers.bindings 'eachRuntimeBinding'
+		// The site is recorded so a contest between a runtime-tier binding and an author's export of the
+		// same name is seen.
+		signatures.noteTopLevelBinding(binding.name, site: TopLevelBindingSite.create(binding.visibility, declFilePath: path))
 		signatures.noteDeclaredName(binding.name)
 	end 'eachRuntimeBinding'
 end 'noteRuntimeTierDeclarations'
@@ -1429,7 +1439,7 @@ end 'tokenKindBelongsInATypeHeader'
 // ⚠ The four nominal kinds only; `typealias` is deliberately absent. Those four are what a user
 // declaration collides with (E3006); a library alias and a user one of one name coexist
 // (`Project.typeNamePairMayCoexist`) and each reader resolves to one by rank
-// (`Project.scopedAliasTier`), so a user's own `typealias DurationMs` already coexists with
+// (`Project.scopeTierOf`), so a user's own `typealias DurationMs` already coexists with
 // `stdlib/Clock.maxon`'s. Contesting an alias would move a name that already works, for nothing.
 //
 // ⚠ Collected whole, then contested — not a style choice. Minting a reserved name has to avoid
@@ -1625,7 +1635,7 @@ function namespaceDirectoryFault(namespace String, keywords KeywordTable, reserv
 	return NamespaceDirectoryFault.nameable
 end 'namespaceDirectoryFault'
 
-function declaresANominalTypeName(kind TokenKind) returns bool
+module function declaresANominalTypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface
 end 'declaresANominalTypeName'
 
@@ -2271,9 +2281,10 @@ function refuseUnnameableNamespaceDirectories(project Project, pool FrontEndPool
 	end 'aDirectoryCannotBeNamed'
 end 'refuseUnnameableNamespaceDirectories'
 
-// Refused before any file is parsed: a nominal name is one identity in one interner, so once one
-// file's declaration is filed another file's own `Self{…}` can never bind its declaration. A
-// collision therefore reports E3006 alone.
+// Refused before any file is parsed: declarations the pair rule cannot split, such as two nominals of
+// one module directory, share one identity in one interner, so once one file's declaration is filed
+// another file's own `Self{…}` can never bind its declaration. A collision therefore reports E3006
+// alone.
 function refuseCollidingNominalDeclarations(project Project, pool FrontEndPool) throws CompileError
 	try pool.lexEveryFile(project)
 	view collisions = (try queryProgramSignatures(project)).collidingNominalDeclarations()
@@ -2523,7 +2534,7 @@ function sourceFilesInEmissionOrder(project Project) returns EmissionSlotArray
 		slots.push(EmissionSlot.create(tier, components: emissionComponentsOf(project, path: path, tier: tier, cwd: cwd), position: iter.index()))
 	end 'eachSourcePath'
 
-	slots.sort(function(left EmissionSlot, right EmissionSlot) gives left.compare(right))
+	slots.sortBy(function(left EmissionSlot, right EmissionSlot) gives left.compare(right))
 
 	for i in 1 upto slots.count() 'eachAdjacentPair'
 		let earlier = try slots.get(i - 1) otherwise panic("sourceFilesInEmissionOrder: slots.get OOB at {i - 1}")
@@ -2994,10 +3005,11 @@ end 'armFnTypeResolvable'
 // A declared function/closure's display is built from its parameter signature + return type; a
 // function-alias arm's from the alias's stored parameter and return slots, through the same formatter.
 // Both build the same canonical string, so `f UnaryOp` and a `triple` that fits it compare EQUAL.
+
 function armFnTypeDisplay(project Project, name ByteArray) returns String
 	if let sig = try project.funcSignatures.get(name) 'declaredFn'
 		let returnType = try project.funcReturnTypes.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function")
-		return formatFnTypeDisplay(sig.paramTypes, returnType: returnType, typeNames: project.typeNames, signatures: programSignaturesIn(project, asker: "armFnTypeDisplay"))
+		return formatFnTypeDisplay(sig.paramTypes, returnType: returnType, byRefParams: sig.byRefParams, typeNames: project.typeNames, signatures: programSignaturesIn(project, asker: "armFnTypeDisplay"))
 	end 'declaredFn'
 
 	let alias = try project.functionTypeAliases.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is armFnTypeResolvable but in neither registry — this and armFnTypeResolvable disagree")
@@ -3008,7 +3020,7 @@ function armFnTypeDisplay(project Project, name ByteArray) returns String
 		paramTypes.push(maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames))
 	end 'eachParam'
 
-	return formatFnTypeDisplay(paramTypes, returnType: maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames), typeNames: project.typeNames, signatures: programSignaturesIn(project, asker: "armFnTypeDisplay"))
+	return formatFnTypeDisplay(paramTypes, returnType: maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames), byRefParams: alias.byRefParamMask(), typeNames: project.typeNames, signatures: programSignaturesIn(project, asker: "armFnTypeDisplay"))
 end 'armFnTypeDisplay'
 
 // The compiler carries no full function type on a value, so a function-typed parameter/field/call-result
@@ -3259,9 +3271,6 @@ function declaresReservedNamesAs(project Project, path FilePath, relative String
 		return false
 	end 'notEvenTheName'
 
-	// Interpolated so the argument is a committed `String`: a bare module-`let` literal stays untyped
-	// and matches BOTH `FilePath.join` overloads (String / FilePath) — an E3007 ambiguity — exactly as
-	// `StdlibSource.locateStdlibDir` records for `StdlibDirName`.
 	return path.resolve(Directory.currentPath()).equals(project.stdlibDir.join("{relative}"))
 end 'declaresReservedNamesAs'
 
@@ -3348,9 +3357,6 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.funcSignatures = FuncSignatureMap.create()
 	project.funcSignatureFloors = FuncSignatureFloorMap.create()
 
-	// `commitOverloadSets` ACCUMULATES members across files, so a set carried over a warm rebuild
-	// would keep a member the edited sources no longer declare.
-	project.overloadSets = OverloadSetMap.create()
 	project.pendingFnMergeChecks = PendingFnMergeCheckArray.create()
 	project.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 	project.pendingBrandRecords = PendingBrandRecordArray.create()
@@ -3391,6 +3397,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// two routes to one slot must agree. Carried across a re-merge, a previous fold's selection would
 	// beat the new one.
 	project.witnessSlotImpls = WitnessSlotImplMap.create()
+	project.refusedConformanceMembers = RefusedConformanceMemberSet.create()
 
 	// Re-aimed at the SAME target the project was created with — a reset must not be a second chance
 	// to pick a platform for the builtin `ExitCode`'s range.
@@ -3433,13 +3440,10 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.registryUseSites = RegistryUseSiteMap.create()
 	project.serviceAwaitSites = ServiceAwaitSiteMap.create()
 	project.asyncSpawnSites = AsyncSpawnSiteMap.create()
-	project.overloadAnswers = OverloadAnswerMap.create()
 	project.allocTagSites = AllocTagSiteMap.create()
 	project.debugStreamNameSites = DebugStreamNameSiteMap.create()
 	project.immortalConstArraySites = ImmortalConstArraySiteMap.create()
 	project.provenFixedArrayAccesses = ProvenFixedArrayAccessMap.create()
-	project.refusedOverloadCalls = RefusedOverloadCallSet.create()
-	project.undecidedOverloadCalls = UndecidedOverloadCallSet.create()
 end 'resetMergeTargets'
 
 module function lexerErrorDiagnostic(error LexerError, path FilePath) returns Diagnostic
@@ -3617,7 +3621,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		declarationTheSweepMissed(name, line, column) gives Diagnostic.create(ErrorCode.internalDeclarationTheSweepMissed, message: "'{name}' is declared here, but the whole-program declaration index carries no function of that name — so a call to it would be compiled as a call to a function nobody declared. This is a compiler bug: the declaration sweep and the parse read this declaration differently", line: line, column: column, filePath: path)
 		duplicateParameter(name, line, column) gives Diagnostic.create(ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
 		undefinedVariable(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
-		ambiguousBareFunctionName(name, candidates, use, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareFunctionNameMessage(name, candidates: candidates, use: use), line: line, column: column, filePath: path)
+		ambiguousBareName(name, candidates, use, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareNameMessage(name, candidates: candidates, use: use), line: line, column: column, filePath: path)
 
 		// E3008 / E3088 by tier, through the same producer `SemanticCheck.reportCalleeNotVisible` reports
 		// a BODY's hidden call with, applied to the refusals a parse-time door has to decide for itself:
@@ -3716,7 +3720,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		invalidDigitEscape(message, line, column) gives Diagnostic.create(ErrorCode.lexerInvalidEscape, message: message, line: line, column: column, filePath: path)
 		notOnUnknownType(line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known (it is a call to a function no file in the program declares)", line: line, column: column, filePath: path)
 		voidCallResultUsed(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
-		duplicateTopLevelDeclaration(name, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: "duplicate definition of '{name}'", line: line, column: column, filePath: path)
+		duplicateTopLevelDeclaration(name, incumbentKeyword, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: duplicateDefinitionMessage(name, incumbentKeyword: incumbentKeyword), line: line, column: column, filePath: path)
 
 		// The cycle arm is pinned byte-for-byte by `specs/top-level-let.md`,
 		// and both suites compare this stderr exactly.
@@ -4017,7 +4021,6 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		genericTypeParameterNotInferable(paramName, functionName, line, column) gives Diagnostic.create(ErrorCode.genericTypeParameterNotInferable, message: "type parameter '{paramName}' of '{functionName}' cannot be inferred: no parameter is declared '{paramName}'", line: line, column: column, filePath: path)
 		genericArgumentsHaveNoCommonType(functionName, paramName, first, firstNote, second, secondNote, line, column) gives Diagnostic.create(ErrorCode.genericArgumentsHaveNoCommonType, message: "the arguments of '{functionName}' give type parameter '{paramName}' no one type: '{first}'{firstNote} and '{second}'{secondNote} share no alias they both implement", line: line, column: column, filePath: path)
 		genericConstraintNotSatisfied(typeName, interfaceName, paramName, functionName, line, column) gives Diagnostic.create(ErrorCode.semanticWhereConstraintViolation, message: "Type '{typeName}' does not satisfy constraint '{interfaceName}' required by type parameter '{paramName}' of '{functionName}'", line: line, column: column, filePath: path)
-		genericCallAmbiguous(functionName, candidates, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{functionName}': {candidates} generic declarations infer a type for this call", line: line, column: column, filePath: path)
 		genericArgumentKindUnsupported(functionName, paramName, typeName, line, column) gives Diagnostic.create(ErrorCode.genericArgumentKindUnsupported, message: "type parameter '{paramName}' of '{functionName}' cannot be '{typeName}': a generic function's type parameter is inferred as a number, `String`, `bool`, `Character`, a typealias, a record or an enum", line: line, column: column, filePath: path)
 		genericTypeGrowsWithoutBound(ownerName, fieldName, typeName, line, column) gives Diagnostic.create(ErrorCode.genericTypeGrowsWithoutBound, message: "field '{fieldName}' of generic type '{ownerName}' is declared '{typeName}', which holds '{ownerName}' again over a type built from its own type parameters: instantiating it would nest without end. Declare the field over the type's own parameters, or remove the recursion", line: line, column: column, filePath: path)
 		illegalBitWidth(width, line, column) gives Diagnostic.create(ErrorCode.semanticIllegalBitWidth, message: "'bits({width})' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold", line: line, column: column, filePath: path)
@@ -4047,7 +4050,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		serviceReplyInstanceUnknown(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyInstanceUnknown, message: explanation, line: line, column: column, filePath: path)
 		spawnStartRequiresTry(explanation, _, line, column) gives Diagnostic.create(ErrorCode.throwingFunctionRequiresTry, message: explanation, line: line, column: column, filePath: path)
 		registryRefused(code, explanation, line, column, note) gives Diagnostic.create(code, message: explanation, line: line, column: column, filePath: path).withNote(note)
-		extensionMemberHidesOwnMember(explanation, line, column, note) gives Diagnostic.create(ErrorCode.extensionMemberHidesOwnMember, message: explanation, line: line, column: column, filePath: path).withNote(note)
+		duplicateDeclaration(explanation, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: explanation, line: line, column: column, filePath: path)
 	end 'kind'
 end 'parseErrorDiagnostic'
 

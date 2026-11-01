@@ -3,21 +3,14 @@ let ClassifierCaseLabel = "x64-classifies-each-instruction-class"
 let ClassifyOptionPrefix = "--classify="
 let ClassifySeparator = ","
 
-let PlainClass = 1
 let PcRelativeDataClass = 2
-let DirectCallClass = 3
-let DirectJumpClass = 4
-let ConditionalJumpClass = 5
-let ReturnClass = 6
-let IndirectCallClass = 7
-let IndirectJumpClass = 8
 
 let MemoryCallForm = 2
 let PcRelativeCallForm = 3
 
 let UnclassifiedAnswer = "unclassified"
 
-let LessThanCondition = 12
+let X64ClassifiesEachInstructionClassLessThanCondition = 12
 
 test 'the x64 classifier answers a length and a class for every instruction class the step planner and the stack unwinder read'
 	let staged = builtFixture(ClassifierCaseLabel, fixture: HeaplessFixtureName)
@@ -34,8 +27,8 @@ test 'the x64 classifier answers a length and a class for every instruction clas
 	probes.push(Probe.create("e8fbfeffff", expected: "len=5 class={DirectCallClass} cond=0 disp=0 target=0xf00", what: "`call rel32` — a backward call, whose absolute target the splice scan records as a callee, and whose length is what places the return address a step over it waits at"))
 	probes.push(Probe.create("e9ebffffff", expected: "len=5 class={DirectJumpClass} cond=0 disp=0 target=0xff0", what: "`jmp rel32`"))
 	probes.push(Probe.create("eb05", expected: "len=2 class={DirectJumpClass} cond=0 disp=0 target=0x1007", what: "`jmp rel8` — a two-byte jump, whose one-byte displacement is still signed"))
-	probes.push(Probe.create("0f8cebffffff", expected: "len=6 class={ConditionalJumpClass} cond={LessThanCondition} disp=0 target=0xff1", what: "`jl rel32` — a conditional jump, whose answer carries the condition NIBBLE beside the class and the target the branch takes when it holds"))
-	probes.push(Probe.create("7c05", expected: "len=2 class={ConditionalJumpClass} cond={LessThanCondition} disp=0 target=0x1007", what: "`jl rel8` — the same condition through the short encoding"))
+	probes.push(Probe.create("0f8cebffffff", expected: "len=6 class={ConditionalJumpClass} cond={X64ClassifiesEachInstructionClassLessThanCondition} disp=0 target=0xff1", what: "`jl rel32` — a conditional jump, whose answer carries the condition NIBBLE beside the class and the target the branch takes when it holds"))
+	probes.push(Probe.create("7c05", expected: "len=2 class={ConditionalJumpClass} cond={X64ClassifiesEachInstructionClassLessThanCondition} disp=0 target=0x1007", what: "`jl rel8` — the same condition through the short encoding"))
 	probes.push(Probe.create("c3", expected: "len=1 class={ReturnClass} cond=0 disp=0 target=0x0 rel=0", what: "`ret` — the class that ends a function, which the splice scan reads as an exit rather than a branch it can follow"))
 	probes.push(Probe.create("c21000", expected: "len=3 class={ReturnClass} cond=0 disp=0 target=0x0 rel=1", what: "`ret 0x10` — a return that also releases arguments, whose two-byte immediate the answer locates by its own RELEASE POSITION rather than by the instruction's length"))
 	probes.push(Probe.create("f3c21000", expected: "len=4 class={ReturnClass} cond=0 disp=0 target=0x0 rel=2", what: "`rep ret 0x10` — a prefix moves the release immediate one byte on, so a release position read off the length would name the wrong two bytes"))

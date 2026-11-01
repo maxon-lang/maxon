@@ -1926,8 +1926,8 @@ end 'main'
 error E3102: <fragment>:20:19: use of moved value 'p': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
 ```
 
-<!-- test: async-await.error.an-overloaded-function-that-awaits-its-promise-does-not-convert-to-an-unqualified-type -->
-Two files may each declare a private function of one name; the one a file means is read by its own declaration, so the conversion door judges the function the shape judges.
+<!-- test: async-await.error.a-function-that-awaits-its-promise-does-not-convert-to-an-unqualified-type -->
+A function that awaits its promise is judged against the shape it converts to even when a second file of the directory declares a private function of its own, so the conversion door reads `take`'s own declaration.
 ```maxon
 // --- file: awaiting.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1954,9 +1954,9 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: other.maxon
-function take(name String) returns String
+function describe(name String) returns String
 	return name
-end 'take'
+end 'describe'
 ```
 ```maxoncstderr
 error E3189: <fragment>:22:16: function value for 'Plain' keeps its parameter 'p', but 'Plain' does not declare it `keep`
@@ -2115,50 +2115,6 @@ function main() returns ExitCode
 	end 'drain'
 
 	print("{sum}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-7
-```
-
-<!-- test: async-await.a-promise-parameter-forwarded-to-an-overloaded-callee-is-handed-on -->
-A call that could bind either of two overloads is judged by what they do with the position: the one that stores the promise makes the forwarder take it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-type Cell
-	public var p as IntPromise
-
-	static function of(p IntPromise) returns Self
-		return Self{p: p}
-	end 'of'
-end 'Cell'
-
-function build(p IntPromise) returns Cell
-	return Cell.of(p)
-end 'build'
-
-function build(n Integer) returns Integer
-	return n
-end 'build'
-
-function relay(p IntPromise) returns Cell
-	return build(p)
-end 'relay'
-
-function main() returns ExitCode
-	let cell = relay(async work())
-	print("{await cell.p}\n")
 	return 0
 end 'main'
 ```
@@ -2355,699 +2311,6 @@ end 'main'
 ```
 ```stdout
 1
-7
-```
-
-<!-- test: async-await.a-promise-forwarded-beside-a-reassigned-parameter-is-handed-on -->
-A parameter another function reassigns is passed by reference, and the program-wide widening that carries a reassigned parameter through its forwarders leaves a promise parameter alone: a promise has no cell, so the forwarder still owns it and hands it on.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function stash(dest String, pending IntPromiseArray, p IntPromise)
-	dest = "changed {1 + 1}"
-	pending.push(p)
-end 'stash'
-
-function relay(dest String, pending IntPromiseArray, p IntPromise)
-	stash(dest, pending: pending, p: p)
-end 'relay'
-
-function main() returns ExitCode
-	var pending = IntPromiseArray.create()
-	var word = "hello {2 + 2}"
-	relay(word, pending: pending, p: async work())
-	print("{word}\n")
-
-	var sum = 0 as Integer
-
-	for q in pending 'drain'
-		sum = sum + await q
-	end 'drain'
-
-	print("{sum}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-changed 2
-7
-```
-
-<!-- test: async-await.a-promise-handed-to-a-function-typed-parameter-beside-a-reassigned-parameter-is-handed-on -->
-The same widening reaches a call through a function type, whose by-reference positions are those of every function of its arity; the promise position keeps its ownership.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
-
-function keep(pending IntPromiseArray, p IntPromise)
-	pending.push(p)
-end 'keep'
-
-function relay(sink Sink, pending IntPromiseArray, p IntPromise)
-	sink(pending, p)
-end 'relay'
-
-function zap(dest String, n Integer)
-	dest = "filled {n}"
-end 'zap'
-
-function main() returns ExitCode
-	var pending = IntPromiseArray.create()
-	relay(keep, pending: pending, p: async work())
-
-	var sum = 0 as Integer
-
-	for q in pending 'drain'
-		sum = sum + await q
-	end 'drain'
-
-	var word = "x {1 + 1}"
-	zap(word, n: 2)
-	print("{sum} {word}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-7 filled 2
-```
-
-<!-- test: async-await.a-promise-parameter-the-callee-reassigns-is-seen-by-its-caller -->
-A promise parameter the callee reassigns is the caller's own storage: the callee drops the thread the cell held and the cell takes the new one, so the caller awaits the new thread and no thread is left over.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function main() returns ExitCode
-	var x = async work()
-	reset(x)
-	print("{await x}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-7
-```
-
-<!-- test: async-await.a-write-through-a-forwarded-promise-parameter-reaches-the-callers-variable -->
-A function that only hands its promise parameter on to one that reassigns it passes the caller's storage through, so the write lands in the variable the outermost caller named.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function inner(q IntPromise)
-	q = async work()
-end 'inner'
-
-function relay(p IntPromise)
-	inner(p)
-end 'relay'
-
-function main() returns ExitCode
-	var x = async work()
-	relay(x)
-	print("{await x}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-7
-```
-
-<!-- test: async-await.a-promise-at-a-by-reference-function-type-position-is-handed-on -->
-A call through a function type passes by reference the positions some function of that arity reassigns, and a promise at one of them is held in the caller's storage and still handed on to the callee that keeps it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
-
-function keep(pending IntPromiseArray, p IntPromise)
-	pending.push(p)
-end 'keep'
-
-function relay(sink Sink, pending IntPromiseArray, p IntPromise)
-	sink(pending, p)
-end 'relay'
-
-function zap(n Integer, dest String)
-	dest = "filled {n}"
-end 'zap'
-
-function main() returns ExitCode
-	var pending = IntPromiseArray.create()
-	relay(keep, pending: pending, p: async work())
-
-	var sum = 0 as Integer
-
-	for q in pending 'drain'
-		sum = sum + await q
-	end 'drain'
-
-	var word = "x {1 + 1}"
-	zap(2, dest: word)
-	print("{sum} {word}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-7 filled 2
-```
-
-<!-- test: async-await.a-cell-resident-promise-its-owner-rebinds-drops-the-thread-it-held -->
-A promise variable handed to a parameter the callee reassigns lives in a cell, and the owner's own rebind of it is the same three steps a field rebind is: the old thread is dropped, the new one is taken, and the cell owns it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function main() returns ExitCode
-	var x = async work()
-	reset(x)
-	x = async work()
-	print("{await x}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-7
-```
-
-<!-- test: async-await.a-cell-resident-promise-nobody-awaits-is-dropped-with-its-cell -->
-The cell owns the promise it holds, so a variable whose callee re-armed it and that is never awaited releases the thread at the end of its scope.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function main() returns ExitCode
-	var x = async work()
-	reset(x)
-	print("done\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-done
-```
-
-<!-- test: async-await.error.a-cell-resident-promise-awaited-twice-is-refused -->
-Awaiting a cell-resident promise empties its cell and spends the variable, so a second await names a moved value.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function main() returns ExitCode
-	var x = async work()
-	reset(x)
-	print("{await x}\n")
-	print("{await x}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3102: <fragment>:18:16: use of moved value 'x': its ownership moved to another binding at an earlier bind or assignment
-```
-
-<!-- test: async-await.error.an-alias-of-a-cell-resident-promise-is-refused-once-the-cell-is-rebound -->
-A second name for the thread a cell holds does not own it, and rebinding the cell drops that thread, so the alias is refused rather than left naming a dropped thread.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function main() returns ExitCode
-	var x = async work()
-	reset(x)
-	let y = x
-	x = async work()
-	print("{await y}\n")
-	print("{await x}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3141: <fragment>:19:10: a promise cannot be borrowed through 'await': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
-```
-
-<!-- test: async-await.an-overload-set-that-disagrees-about-passing-a-promise-by-reference-hands-a-spawn-to-the-member-that-takes-it -->
-Two overloads differ in whether they write the promise parameter, so the argument is held in a cell until the call is resolved; when the chosen member takes the promise by value the cell gives the thread up and only the member owns it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function put(q IntPromise, n Integer) returns Integer
-	q = async work()
-	return n
-end 'put'
-
-function put(q IntPromise, n String) returns Integer
-	let size = n.byteLength() as Integer
-	return size + (await q)
-end 'put'
-
-function main() returns ExitCode
-	print("{put(async work(), n: "x")}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-8
-```
-
-<!-- test: async-await.an-overload-set-that-disagrees-about-passing-a-promise-by-reference-keeps-a-spawn-in-the-cell-of-the-member-that-writes-it -->
-The same two overloads with the writing member chosen: the cell owns the spawn, the member drops it when it reassigns the parameter, and the cell releases the new thread at the end of the call.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function put(q IntPromise, n Integer) returns Integer
-	q = async work()
-	return n
-end 'put'
-
-function put(q IntPromise, n String) returns Integer
-	let size = n.byteLength() as Integer
-	return size + (await q)
-end 'put'
-
-function main() returns ExitCode
-	print("{put(async work(), n: 5)}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-5
-```
-
-<!-- test: async-await.error.a-let-promise-called-through-a-function-value-that-reassigns-it-is-refused -->
-A promise held by a `let` is lent to a by-reference position, and a callee that writes the parameter would drop the thread the `let` still names, so the write is refused at the call whichever way the function is reached.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function main() returns ExitCode
-	let x = async work()
-	let r = reset
-	r(x)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:17:3: cannot pass 'x', which is read-only (a `let` binding), to a function that writes parameter 'q' (in main); pass a clone()
-```
-
-<!-- test: async-await.error.a-let-promise-handed-to-a-function-typed-parameter-bound-to-a-reassigning-function-is-refused -->
-The function that reaches the writer is a parameter of function type, so only the type says the position is passed by reference; the `let` is refused all the same.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-typealias Resetter = function(q IntPromise)
-
-function apply(r Resetter, x IntPromise)
-	r(x)
-end 'apply'
-
-function main() returns ExitCode
-	let x = async work()
-	apply(reset, x: x)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:22:2: cannot pass 'x', which is read-only (a `let` binding), to a function that writes parameter 'x' (in main); pass a clone()
-```
-
-<!-- test: async-await.error.a-promise-in-a-let-field-passed-to-a-function-that-reassigns-it-is-refused -->
-A `let` field has no other writer, so a callee that reassigns the parameter cannot be handed the promise it holds.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-type Holder
-	export let p as IntPromise
-
-	static function of(p IntPromise) returns Self
-		return Self{p: p}
-	end 'of'
-end 'Holder'
-
-function main() returns ExitCode
-	let h = Holder.of(async work())
-	reset(h.p)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:24:2: cannot pass a `let` field of 'h', which is read-only, to a function that writes parameter 'q' (in main); pass a clone()
-```
-
-<!-- test: async-await.error.a-for-loop-promise-passed-to-a-function-that-reassigns-it-is-refused -->
-The loop variable names a thread the array still owns, so a callee that reassigns its parameter is refused.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function main() returns ExitCode
-	var a = IntPromiseArray.create()
-	a.push(async work())
-
-	for q in a 'each'
-		reset(q)
-	end 'each'
-
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:20:3: cannot pass a value read out of a container that still owns the promise, which is read-only, to a function that writes parameter 'q' (in main); pass a clone()
-```
-
-<!-- test: async-await.error.a-let-promise-captured-by-a-closure-that-reassigns-it-is-refused -->
-A closure holds its own copy of what it captures, so a write through the closure's call cannot reach the original and is refused.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function reset2(q IntPromise) returns Integer
-	q = async work()
-	return 1
-end 'reset2'
-
-function main() returns ExitCode
-	let x = async work()
-	let f = function() gives reset2(x)
-	print("{f()}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:21:27: cannot pass 'x' to a function that writes parameter 'q' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'q' cannot reach the original; pass a clone()
-```
-
-<!-- test: async-await.error.a-promise-still-held-by-an-array-passed-to-a-function-that-reassigns-it-is-refused -->
-An element read out of an array is neither a `let` nor a variable of this frame, so the promise it names is blamed as one the array still owns, and a callee that reassigns its parameter is refused.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function main() returns ExitCode
-	var a = IntPromiseArray.create()
-	a.push(async work())
-	reset(try a.get(0) otherwise panic("empty"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:18:2: cannot pass a value read out of a container that still owns the promise, which is read-only, to a function that writes parameter 'q' (in main); pass a clone()
-```
-
-<!-- test: async-await.a-spawn-handed-to-a-function-typed-parameter-bound-to-a-reassigning-function-is-owned-by-the-cell -->
-A spawn has no other name, so the cell the by-reference position needs owns it: the callee drops it when it reassigns the parameter and the cell releases the replacement.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-typealias Resetter = function(q IntPromise)
-
-function apply(r Resetter, x IntPromise)
-	r(x)
-end 'apply'
-
-function main() returns ExitCode
-	apply(reset, x: async work())
-	print("done\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-done
-```
-
-<!-- test: async-await.a-var-promise-handed-to-an-overload-set-that-disagrees-about-writing-it-follows-the-member-chosen -->
-A variable is already a cell, so an overload set that disagrees about passing the promise by reference hands the cell itself to the writing member and the thread to the member that takes it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function put(q IntPromise, n Integer) returns Integer
-	q = async work()
-	return n
-end 'put'
-
-function put(q IntPromise, n String) returns Integer
-	let size = n.byteLength() as Integer
-	return size + (await q)
-end 'put'
-
-function main() returns ExitCode
-	var x = async work()
-	print("{put(x, n: "x")}\n")
-	var y = async work()
-	print("{put(y, n: 5)}\n")
-	print("{await y}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-8
-5
-7
-```
-
-<!-- test: async-await.a-promise-an-array-still-owns-is-lent-to-a-function-type-position-the-callee-only-reads -->
-When some function of an arity reassigns its parameter, a call through a function type of that arity passes the position by reference; a callee that only reads the promise sees the array's own thread, leaves it with the array, and the array still hands it out afterwards.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-function reset(q IntPromise)
-	q = async work()
-end 'reset'
-
-function look(q IntPromise) returns bool
-	return q.isComplete() or true
-end 'look'
-
-function main() returns ExitCode
-	var pending = IntPromiseArray.create()
-	pending.push(async work())
-	var x = async work()
-	reset(x)
-	print("{await x}\n")
-	let f = look
-
-	for q in pending 'each'
-		print("{f(q)}\n")
-	end 'each'
-
-	var sum = 0 as Integer
-
-	for q in pending 'drain'
-		sum = sum + await q
-	end 'drain'
-
-	print("{sum}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-7
-true
 7
 ```
 
@@ -4455,7 +3718,7 @@ A cell-resident `var` assigned a call nothing declares reports the call and noth
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -4516,35 +3779,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:8:10: call to undefined function 'nosuch'
-```
-
-<!-- test: async-await.error.a-captured-struct-var-assigned-a-call-nothing-declares-is-undefined -->
-A cell-resident struct `var` assigned a call nothing declares reports the call, and nothing at the
-assignment or at the closure's read through it.
-```maxon
-type Box
-	export var name as String
-
-	static function create() returns Self
-		return Self{name: "a string padded out long enough to heap allocate"}
-	end 'create'
-end 'Box'
-
-function refill(dest Box)
-	dest = Box.create()
-end 'refill'
-
-function main() returns ExitCode
-	var box = Box.create()
-	refill(box)
-	let peek = function() gives box.name.byteLength()
-	box = nosuch(1)
-	print("{peek()}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3004: <fragment>:18:8: call to undefined function 'nosuch'
 ```
 
 <!-- test: async-await.qualified-spawn-of-a-directory-types-static -->
@@ -4962,7 +4196,7 @@ function shout(text String) returns Integer
 	return text.byteLength() as Integer
 end 'shout'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -4993,7 +4227,7 @@ function shout(text String) returns Integer
 	return text.byteLength() as Integer
 end 'shout'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -5057,7 +4291,7 @@ function opening() returns (String, Integer)
 	return ("hello padded out long enough to heap allocate {1}", 1)
 end 'opening'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -5095,7 +4329,7 @@ function opening() returns (String, Integer)
 	return ("hello padded out long enough to heap allocate {1}", 1)
 end 'opening'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -5133,7 +4367,7 @@ function opening() returns (String, Integer)
 	return ("hello padded out long enough to heap allocate {1}", 1)
 end 'opening'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -5517,49 +4751,6 @@ end 'main'
 error E3159: <fragment>:25:22: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
-<!-- test: async-await.error.a-let-naming-an-immutable-global-is-handed-to-neither-a-reassigning-function-nor-a-coroutine -->
-`b` is a `let` naming the record the module-level `let G` holds, so it is read-only: neither `bump`,
-which reassigns its parameter, nor a coroutine that writes its parameter may be handed it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-end 'Box'
-
-let G = Box.create()
-
-function bump(p Box) returns Integer
-	if p.n > 100 'tooBig'
-		p = Box.create()
-	end 'tooBig'
-
-	return p.n
-end 'bump'
-
-function poke(p Box) returns Integer
-	Scheduler.yield()
-	p.n = 99
-	return p.n
-end 'poke'
-
-function main() returns ExitCode
-	let b = G
-	_ = bump(b)
-	print("{await async poke(b)}\n")
-	print("{G.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:30:6: cannot pass a value, which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
-error E3159: <fragment>:31:22: cannot pass 'b', which is read-only (a module-level `let`), to a function that writes parameter 'p' (in main); pass a clone()
-```
-
 <!-- test: async-await.error.an-immutable-global-in-a-let-cannot-be-written-by-a-coroutine -->
 `b` is a `let` naming the record the module-level `let G` holds, so a coroutine that writes its parameter may
 not be handed it.
@@ -5626,58 +4817,6 @@ end 'main'
 error E3078: <fragment>:21:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
-<!-- test: async-await.a-cell-resident-co-owner-is-shared-with-a-reading-coroutine -->
-A cell-resident `b` holding its own reference to an element `items` still holds is shared with a coroutine that
-only reads it, and the array keeps its own.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Boxes = Array with Box
-
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-end 'Box'
-
-function first(items Boxes) returns Box
-	return try items.get(0) otherwise panic("no box")
-end 'first'
-
-function bump(p Box) returns Integer
-	if p.n > 100 'tooBig'
-		p = Box.create()
-	end 'tooBig'
-
-	return p.n
-end 'bump'
-
-function show(p Box) returns Integer
-	Scheduler.yield()
-	return p.n
-end 'show'
-
-function main() returns ExitCode
-	var items = Boxes.create()
-	items.push(Box.create())
-	var b = Box.create()
-	print("{bump(b)}\n")
-	b = first(items)
-	print("{await async show(b)}\n")
-	print("{items.count()} {first(items).n}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-7
-7
-1 7
-```
-
 <!-- test: async-await.error.a-closure-body-spanning-lines-takes-a-cell-resident-string -->
 The closure's body continues onto a second line inside an array literal, and still captures `word`, so handing
 `word` to the coroutine afterwards is a use after move.
@@ -5701,7 +4840,7 @@ function total(values Integers) returns Integer
 	return sum
 end 'total'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -5717,55 +4856,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:30:22: use of moved value 'word': its ownership moved to the closure that captures it
-```
-
-<!-- test: async-await.error.a-closure-body-spanning-lines-takes-a-cell-resident-box -->
-The same multi-line closure body over a cell-resident `Box`.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Integers = Array with Integer
-
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-end 'Box'
-
-function total(values Integers) returns Integer
-	var sum = 0 as Integer
-
-	for v in values 'each'
-		sum = sum + v
-	end 'each'
-
-	return sum
-end 'total'
-
-function touch(b Box)
-	if b.n > 100 'big'
-		b = Box.create()
-	end 'big'
-end 'touch'
-
-function readIt(b Box) returns Integer
-	Scheduler.yield()
-	return b.n
-end 'readIt'
-
-function main() returns ExitCode
-	var b = Box.create()
-	touch(b)
-	let peek = function() gives total([1,
-		b.n])
-	let p = async readIt(b)
-	print("{await p} {peek()}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3102: <fragment>:39:23: use of moved value 'b': its ownership moved to the closure that captures it
 ```
 
 <!-- test: async-await.a-var-the-loop-iterates-is-shared-with-async-inside-the-loop -->
@@ -5890,54 +4980,6 @@ end 'main'
 7 7 inner padded out long enough to heap allocate 7
 ```
 
-<!-- test: async-await.a-coroutine-that-reassigns-an-interface-parameter -->
-The coroutine reassigns a parameter held at an interface type, which lives in a cell the coroutine owns.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-interface Shape
-	function area() returns Integer
-end 'Shape'
-
-type Square implements Shape
-	var side as Integer
-
-	static function create(side Integer) returns Self
-		return Self{side: side}
-	end 'create'
-
-	function area() returns Integer
-		return self.side * self.side
-	end 'area'
-end 'Square'
-
-function squareShape(side Integer) returns Shape
-	return Square.create(side)
-end 'squareShape'
-
-function grow(s Shape) returns Integer
-	Scheduler.yield()
-
-	if s.area() < 5 'small'
-		s = squareShape(4)
-	end 'small'
-
-	return s.area()
-end 'grow'
-
-function main() returns ExitCode
-	let p = async grow(Square.create(1))
-	print("{await p}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-16
-```
-
 <!-- test: async-await.a-callee-that-keeps-its-argument-is-spawned-and-awaited -->
 `Holder.create` moves its `String` parameter into the record it returns. The spawn hands the coroutine the
 argument, the callee takes it when it runs, and the awaited record owns it from then on.
@@ -6034,7 +5076,7 @@ function shout(text String, n Integer) returns Integer
 	return n
 end 'shout'
 
-function fill(dest String) returns Integer
+function fill(dest mutable String) returns Integer
 	dest = "refilled padded out long enough to heap allocate"
 	return 7
 end 'fill'

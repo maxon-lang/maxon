@@ -4254,8 +4254,8 @@ func @main {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#41:
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
@@ -4533,8 +4533,8 @@ func @main {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#41:
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
@@ -4813,8 +4813,8 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
   __il_body#41:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
@@ -5099,8 +5099,8 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
   __il_body#41:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
@@ -5418,8 +5418,8 @@ func @xorKeyStream {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#63:
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
@@ -5963,8 +5963,8 @@ func @xorKeyStream {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#63:
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:497: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
@@ -6506,8 +6506,8 @@ func @xorKeyStream {
     arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
   __il_body#63:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x4, [x3 + 8]
@@ -7047,8 +7047,8 @@ func @xorKeyStream {
     arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
   __il_body#63:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:497: "
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x4, [x3 + 8]

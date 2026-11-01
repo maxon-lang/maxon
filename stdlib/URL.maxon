@@ -12,13 +12,13 @@ public enum URLError implements Error
 end 'URLError'
 
 public type URL implements Equatable, Stringable
-	var scheme as String
-	var path as String
-	var userinfo as String
-	var host as String
-	var port as NetworkPort
-	var query as String
-	var fragment as String
+	public let scheme as String
+	public let path as String
+	var storedUserinfo as String
+	var storedHost as String
+	var storedPort as NetworkPort
+	var storedQuery as String
+	var storedFragment as String
 	var hasHost as bool
 	var hasUserinfo as bool
 	var hasPort as bool
@@ -26,14 +26,6 @@ public type URL implements Equatable, Stringable
 	var hasFragment as bool
 
 	// --- Always-available accessors ---
-
-	public function scheme() returns String
-		return scheme
-	end 'scheme'
-
-	public function path() returns String
-		return path
-	end 'path'
 
 	// --- Throwing accessors for optional fields ---
 
@@ -44,7 +36,7 @@ public type URL implements Equatable, Stringable
 			throw URLError.fieldNotPresent
 		end 'absent'
 
-		return urlBareHost(host)
+		return urlBareHost(storedHost)
 	end 'host'
 
 	/// The host as the authority spells it, an IP literal keeping its brackets: the form a `Host` header
@@ -54,7 +46,7 @@ public type URL implements Equatable, Stringable
 			throw URLError.fieldNotPresent
 		end 'absent'
 
-		return host
+		return storedHost
 	end 'authorityHost'
 
 	public function port() returns NetworkPort throws URLError
@@ -62,7 +54,7 @@ public type URL implements Equatable, Stringable
 			throw URLError.fieldNotPresent
 		end 'absent'
 
-		return port
+		return storedPort
 	end 'port'
 
 	public function userinfo() returns String throws URLError
@@ -70,7 +62,7 @@ public type URL implements Equatable, Stringable
 			throw URLError.fieldNotPresent
 		end 'absent'
 
-		return userinfo
+		return storedUserinfo
 	end 'userinfo'
 
 	public function query() returns String throws URLError
@@ -78,7 +70,7 @@ public type URL implements Equatable, Stringable
 			throw URLError.fieldNotPresent
 		end 'absent'
 
-		return query
+		return storedQuery
 	end 'query'
 
 	public function fragment() returns String throws URLError
@@ -86,7 +78,7 @@ public type URL implements Equatable, Stringable
 			throw URLError.fieldNotPresent
 		end 'absent'
 
-		return fragment
+		return storedFragment
 	end 'fragment'
 
 	// --- Parsing ---
@@ -232,11 +224,11 @@ public type URL implements Equatable, Stringable
 		return URL{
 			scheme: scheme,
 			path: path,
-			userinfo: userinfo,
-			host: host,
-			port: portNum,
-			query: query,
-			fragment: fragment,
+			storedUserinfo: userinfo,
+			storedHost: host,
+			storedPort: portNum,
+			storedQuery: query,
+			storedFragment: fragment,
 			hasHost: hasHost,
 			hasUserinfo: hasUserinfo,
 			hasPort: hasPort,
@@ -278,11 +270,11 @@ public type URL implements Equatable, Stringable
 		return URL{
 			scheme: scheme,
 			path: path.path,
-			userinfo: "",
-			host: host,
-			port: port,
-			query: path.query,
-			fragment: "",
+			storedUserinfo: "",
+			storedHost: host,
+			storedPort: port,
+			storedQuery: path.query,
+			storedFragment: "",
 			hasHost: hasHost,
 			hasUserinfo: false,
 			hasPort: hasPort,
@@ -304,24 +296,24 @@ public type URL implements Equatable, Stringable
 			result = "{result}//"
 
 			if hasUserinfo 'hasUser'
-				result = "{result}{userinfo}@"
+				result = "{result}{storedUserinfo}@"
 			end 'hasUser'
 
-			result = "{result}{host}"
+			result = "{result}{storedHost}"
 
 			if hasPort 'hasPort'
-				result = "{result}:{port}"
+				result = "{result}:{storedPort}"
 			end 'hasPort'
 		end 'hasAuthority'
 
 		result = "{result}{path}"
 
 		if hasQuery 'hasQ'
-			result = "{result}?{query}"
+			result = "{result}?{storedQuery}"
 		end 'hasQ'
 
 		if hasFragment 'hasFrag'
-			result = "{result}#{fragment}"
+			result = "{result}#{storedFragment}"
 		end 'hasFrag'
 
 		return result
@@ -340,11 +332,11 @@ public type URL implements Equatable, Stringable
 			return URL{
 				scheme: base.scheme,
 				path: base.path,
-				userinfo: base.userinfo,
-				host: base.host,
-				port: base.port,
-				query: base.query,
-				fragment: "",
+				storedUserinfo: base.storedUserinfo,
+				storedHost: base.storedHost,
+				storedPort: base.storedPort,
+				storedQuery: base.storedQuery,
+				storedFragment: "",
 				hasHost: base.hasHost,
 				hasUserinfo: base.hasUserinfo,
 				hasPort: base.hasPort,
@@ -362,7 +354,7 @@ public type URL implements Equatable, Stringable
 		var tHost = ""
 		var tPort = 0 as NetworkPort
 		var tQuery = ""
-		let tFragment = r.fragment
+		let tFragment = r.storedFragment
 		var tHasHost = false
 		var tHasUserinfo = false
 		var tHasPort = false
@@ -372,35 +364,35 @@ public type URL implements Equatable, Stringable
 		if not r.scheme.isEmpty() 'refHasScheme'
 			// Reference is a URI (not relative)
 			tScheme = r.scheme
-			tHost = r.host
+			tHost = r.storedHost
 			tHasHost = r.hasHost
-			tUserinfo = r.userinfo
+			tUserinfo = r.storedUserinfo
 			tHasUserinfo = r.hasUserinfo
-			tPort = r.port
+			tPort = r.storedPort
 			tHasPort = r.hasPort
 			tPath = urlRemoveDotSegments(r.path)
-			tQuery = r.query
+			tQuery = r.storedQuery
 			tHasQuery = r.hasQuery
 		end 'refHasScheme' else 'refRelative'
 			if r.hasHost 'refHasAuthority'
-				tHost = r.host
+				tHost = r.storedHost
 				tHasHost = r.hasHost
-				tUserinfo = r.userinfo
+				tUserinfo = r.storedUserinfo
 				tHasUserinfo = r.hasUserinfo
-				tPort = r.port
+				tPort = r.storedPort
 				tHasPort = r.hasPort
 				tPath = urlRemoveDotSegments(r.path)
-				tQuery = r.query
+				tQuery = r.storedQuery
 				tHasQuery = r.hasQuery
 			end 'refHasAuthority' else 'refNoAuthority'
 				if r.path.isEmpty() 'emptyPath'
 					tPath = base.path
 
 					if r.hasQuery 'refHasQuery'
-						tQuery = r.query
+						tQuery = r.storedQuery
 						tHasQuery = true
 					end 'refHasQuery' else 'noRefQuery'
-						tQuery = base.query
+						tQuery = base.storedQuery
 						tHasQuery = base.hasQuery
 					end 'noRefQuery'
 				end 'emptyPath' else 'hasRefPath'
@@ -413,16 +405,16 @@ public type URL implements Equatable, Stringable
 						end 'relativePath'
 					end 'checkAbsolute'
 
-					tQuery = r.query
+					tQuery = r.storedQuery
 					tHasQuery = r.hasQuery
 				end 'hasRefPath'
 
 				// Authority comes from base
-				tHost = base.host
+				tHost = base.storedHost
 				tHasHost = base.hasHost
-				tUserinfo = base.userinfo
+				tUserinfo = base.storedUserinfo
 				tHasUserinfo = base.hasUserinfo
-				tPort = base.port
+				tPort = base.storedPort
 				tHasPort = base.hasPort
 			end 'refNoAuthority'
 
@@ -433,11 +425,11 @@ public type URL implements Equatable, Stringable
 		return URL{
 			scheme: tScheme,
 			path: tPath,
-			userinfo: tUserinfo,
-			host: tHost,
-			port: tPort,
-			query: tQuery,
-			fragment: tFragment,
+			storedUserinfo: tUserinfo,
+			storedHost: tHost,
+			storedPort: tPort,
+			storedQuery: tQuery,
+			storedFragment: tFragment,
 			hasHost: tHasHost,
 			hasUserinfo: tHasUserinfo,
 			hasPort: tHasPort,
@@ -462,7 +454,7 @@ public type URL implements Equatable, Stringable
 		end 'hasHostDiff'
 
 		if hasHost 'compareHost'
-			if host != other.host 'hostDiff'
+			if storedHost != other.storedHost 'hostDiff'
 				return false
 			end 'hostDiff'
 		end 'compareHost'
@@ -472,7 +464,7 @@ public type URL implements Equatable, Stringable
 		end 'hasPortDiff'
 
 		if hasPort 'comparePort'
-			if port != other.port 'portDiff'
+			if storedPort != other.storedPort 'portDiff'
 				return false
 			end 'portDiff'
 		end 'comparePort'
@@ -482,7 +474,7 @@ public type URL implements Equatable, Stringable
 		end 'hasUIDiff'
 
 		if hasUserinfo 'compareUI'
-			if userinfo != other.userinfo 'uiDiff'
+			if storedUserinfo != other.storedUserinfo 'uiDiff'
 				return false
 			end 'uiDiff'
 		end 'compareUI'
@@ -492,7 +484,7 @@ public type URL implements Equatable, Stringable
 		end 'hasQDiff'
 
 		if hasQuery 'compareQ'
-			if query != other.query 'qDiff'
+			if storedQuery != other.storedQuery 'qDiff'
 				return false
 			end 'qDiff'
 		end 'compareQ'
@@ -502,7 +494,7 @@ public type URL implements Equatable, Stringable
 		end 'hasFragDiff'
 
 		if hasFragment 'compareFrag'
-			if fragment != other.fragment 'fragDiff'
+			if storedFragment != other.storedFragment 'fragDiff'
 				return false
 			end 'fragDiff'
 		end 'compareFrag'

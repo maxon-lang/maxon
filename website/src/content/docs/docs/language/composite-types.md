@@ -147,15 +147,13 @@ An instance method called with no receiver is [E3193](/docs/cli/error-codes/#e31
 a bare call to it from a static method, a file-scope initializer or a `static var` initializer, or
 `Type.name()` with no arguments. `Type.name(value, …)` calls it on `value`.
 
-A type may declare a static and an instance method with the same name, in its body or in an `extension` of
-it; `Type.name()` calls the static one and `value.name()` the instance one. A bare `name()` calls the
-instance one where `self` is reachable, in an instance method and its closures, and the static one
-everywhere else in the type: in a static method and its closures, and in an initializer. This holds
-whichever of the two is declared first. An `extension` member with the
-name and kind of a member the type's own body declares is
-[E3176](/docs/cli/error-codes/#e3176--extensionmemberhidesownmember), in any file and for a standard-library type
-too. An [interface extension](#interface-extensions)'s method is a default: a conforming type may declare its
-own method of that name, and its values call that one.
+A type declares each method name once. A static and an instance method of one name, a method in the type's
+body and one an `extension` of it adds, and a field and a method are each two declarations of one name, and
+the second is [E3006](/docs/cli/error-codes/#e3006--duplicatedefinition), in any file and for a
+standard-library type too (`Duplicate method 'add' in type 'Counter'`, `'total' names both a field and a
+method of type 'Counter'`). Give the second its own name. An [interface extension](#interface-extensions)'s
+method is a default: a conforming type may declare its own method of that name, and its values call that
+one.
 
 ### Static Fields
 
@@ -350,7 +348,8 @@ on the terms [Explicit Cloning](/docs/language/memory-model/#explicit-cloning) s
 | `Parsable` | `static function fromString(input String) returns Self throws Error` |
 
 A type used in string interpolation needs a `toString()` method; one used with a format specifier
-(`{value:spec}`) needs `toString(format String)`.
+(`{value:spec}`) needs `toString(format String)`. A type declares `toString` once, so it implements
+`Stringable` or `FormattedStringable`.
 
 ### Hashable and Hasher
 
@@ -396,14 +395,14 @@ returns a `HashDigest` (`bits(64)`):
 ```maxon
 function main() returns ExitCode
 	var hasher = Hasher.create()
-	hasher.combine("abc".toByteArray())
+	hasher.combineBytes("abc".toByteArray())
 	print("{hasher.finalize():016x}\n")     // e71fa2190541574b
 	return 0
 end 'main'
 ```
 
 The fold carries no length tag — combining `"ab"` then `"c"` equals combining `"abc"` — so combine each
-part's length yourself when the boundaries matter. `Hasher.empty()` and `Hasher.combined(state, bytes:)`
+part's length yourself when the boundaries matter. `Hasher.empty()` and `Hasher.combinedBytes(state, bytes:)`
 are the same fold as pure functions.
 
 ### Parsable
@@ -543,8 +542,7 @@ end 'main'
 
 - Several parameters: `type Pair uses A, B`, instantiated `Pair with (Integer, String)`.
 - A static called on the bare generic name infers the arguments from its parameters: a parameter written
-  at a type parameter, or at an instance over one (`Array with T`, or the generic itself). An overloaded
-  static infers them from the overload its arguments bind. A call whose result is
+  at a type parameter, or at an instance over one (`Array with T`, or the generic itself). A call whose result is
   written over a parameter that no argument fixes (`Holder.make()` declared `returns T`) has no type and is
   **E3162**; inside the generic's own body the enclosing instance types it.
 - One compiled body serves every instantiation. A method learns how its type arguments are laid out and
@@ -571,7 +569,7 @@ Inside `type Outer uses T`, another generic type written without `with` argument
 binds nothing and stays the bare base, and a call on it — static (`Box.create(first)`) or through a receiver
 of that type — may neither hand a slot written over one of its type parameters (`Element`, or
 `Array with Element`) a value typed at `Outer`'s parameters nor call a method that needs a layout descriptor
-(**E3162**); an overloaded callee is judged by the member its arguments pick. Name the instance with a
+(**E3162**). Name the instance with a
 `typealias` instead: `typealias Inner = Box with T`. Outside a generic type body, a layout-needing call on a
 bare generic base is **E3162** as well unless the calling function carries a layout descriptor of its own — a
 static whose arguments do not fix every one of the base's parameters (`Holder.create()` in `main`), or a
@@ -654,21 +652,15 @@ because the caller granted the conformance by passing the type. The grant reache
 the copy too. Every other member of the type needs ordinary visibility from the declaring file. A generic
 function is itself visible like any function: a private one called from another file is **E3008**.
 
-A non-generic declaration of the same name is chosen when every argument fits its parameter exactly: a
-value of the parameter's own type, or a value with no alias — a literal, a negated literal, a loop counter or
-a value computed from them — that lies inside the parameter's range. A value known to leave the range is
-taken by the generic, and a parameter whose alias admits every value of its type takes any of them. Since a
-literal already binds the non-generic declaration, casting it to that parameter's alias is **E3010**
-(`describe(5 as Score)`); a cast to another alias fixes `T` to that alias, and the generic binds. Two generic
-declarations that both infer a type for one call are **E3007**.
+A generic function and a non-generic one of the same name in one directory are two declarations of one name
+(**E3006**); name each its own.
 
 A generic function's result may declare `returns sole T` or `returns readonly T` (see
 [Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)); a body that breaks it is **E3189**.
 
-A generic function may reassign a parameter declared `T`, and the argument is then passed by reference, as
-for any function (see [Parameter Passing](/docs/language/functions/#parameter-passing)). When a call's name reaches more than one
-declaration — generic or not — and they disagree about which parameters they reassign, each call passes
-its arguments the way the declaration it resolves to takes them.
+A generic body is checked against the bound of `T` only, so it never reassigns a parameter declared `T`,
+marked `mutable` or not (**E2013**, `'item' is a generic parameter and cannot be reassigned; return the new
+value`); see [Parameter Passing](/docs/language/functions/#parameter-passing).
 
 ### Associated Types
 

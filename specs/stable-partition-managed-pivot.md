@@ -337,7 +337,7 @@ function main() returns ExitCode
 	var lens = ""
 	for j in 0 upto 6 'show'
 		let v = try a.get(j) otherwise ""
-		tags.append("{v.slice(v.startIndex(), length: 1)}")
+		tags.append("{v.sliceLength(v.startIndex(), length: 1)}")
 		lens.append(" {v.byteLength()}")
 	end 'show'
 	print("p={p} tags={tags} lens={lens}\n")

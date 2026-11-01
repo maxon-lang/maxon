@@ -233,8 +233,8 @@ does that are reads at a call site: `arr.get(0)` and a value a corpus body RETUR
 third, which neither of those stands in front of: **a corpus body reads a slot and passes the raw word INTO
 user code as an ARGUMENT.**
 
-`stdlib/Array.maxon`'s `sort(cmp)` and `map(transform)` are the two cheapest reaches — `sort`'s comparator
-overload carries no conformance constraint at all — and `stdlib/helpers/sort/*` reads the slot at five sites
+`stdlib/Array.maxon`'s `sortBy(cmp)` and `map(transform)` are the two cheapest reaches — `sortBy`
+carries no conformance constraint at all — and `stdlib/helpers/sort/*` reads the slot at five sites
 (`driftQuicksort.maxon:69-70`, `driftsort.maxon:143-160`, `mergeSort.maxon:52`, `pdqsort.maxon:36-128`).
 Each body is compiled ONCE against an opaque `Element` and cannot know what the instance fixed, so the
 extension has to happen at the CALLEE's entry — the one place every such arrival passes through.
@@ -276,7 +276,7 @@ function main() returns ExitCode
 	a.push(Signal.plus)
 	a.push(Signal.zero)
 	a.push(Signal.minus)
-	a.sort(bySignal)
+	a.sortBy(bySignal)
 
 	let first = try a.first() otherwise Signal.zero
 	let last = try a.last() otherwise Signal.zero

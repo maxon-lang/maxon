@@ -79,7 +79,7 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 		end 'aNamedRecord'
 	end 'eachOp'
 
-	writes.sort(function(left FoldedFieldWrite, right FoldedFieldWrite) gives compareFoldedFieldWrites(left, right: right))
+	writes.sortBy(function(left FoldedFieldWrite, right FoldedFieldWrite) gives compareFoldedFieldWrites(left, right: right))
 	publishFoldedRecords(func, writes: writes, refused: refused)
 end 'noteFoldedRecordsInFunc'
 
@@ -153,23 +153,23 @@ end 'opAt'
 
 function noteFieldWrite(writes FoldedFieldWriteArray, refused BoolArray, owner FoldedOwnerSlot, recordValue ValueId, offset ByteOffset, valueId ValueId, valueType StdType, constMap ConstValueMap)
 	if valueType.rawValue.isFloat or not constMap.contains(valueId) 'notAFoldedField'
-		refuse(refused, owner: owner)
+		refuseFoldedOwner(refused, owner: owner)
 		return
 	end 'notAFoldedField'
 
 	let word = constMap.constantOf(valueId)
 
 	if word < SmallestFoldedRecordWord or word > LargestFoldedRecordWord 'notRepresentable'
-		refuse(refused, owner: owner)
+		refuseFoldedOwner(refused, owner: owner)
 		return
 	end 'notRepresentable'
 
 	writes.push(FoldedFieldWrite.create(owner, recordValue: recordValue, offset: offset, word: word))
 end 'noteFieldWrite'
 
-function refuse(refused BoolArray, owner FoldedOwnerSlot)
+function refuseFoldedOwner(refused BoolArray, owner FoldedOwnerSlot)
 	try refused.set(owner, value: true) otherwise panic("noteFoldedRecords: refused.set OOB at binding {owner} of {refused.count()}")
-end 'refuse'
+end 'refuseFoldedOwner'
 
 function hasOwner(ownerOfValue FoldedOwnerColumn, value ValueId) returns bool
 	return value < ownerOfValue.count() and ownerOfValue.holds(value)

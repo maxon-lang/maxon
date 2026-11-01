@@ -121,7 +121,7 @@ let CachedProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'ma
 
 // A case that must stage outside the checkout goes under the host's temp area. The variable naming
 // that area is `HostTempVariable`, which the driver's cache reads too.
-let VendorDirName = "vendor"
+module let VendorDirName = "vendor"
 
 // How the reference is laid out, and the whole of what these cases read it by. A COMMAND SECTION sits at
 // the left margin of `maxon help`; a LABEL — a command under `Commands:`, an option under its section — is
@@ -977,7 +977,7 @@ export let CompilerDebugLogFlag = "--log=compiler:debug"
 export let TargetOptionPrefix = "--target="
 export let LibraryCacheDirName = "library"
 export let TrivialProgramSource = "function main() returns ExitCode\n\treturn 42\nend 'main'\n"
-let ColdImageName = "cold-image"
+module let ColdImageName = "cold-image"
 let ColdSidecarName = "cold-sidecar"
 
 let LibraryCacheLinePrefix = "[CMP] DEBUG: library cache — "
@@ -1421,7 +1421,7 @@ end 'entryWithEveryProducerMaskForged'
 
 export function entryWithChecksumOfItsPayload(image ByteArray) returns ByteArray
 	let payload = try image.slice(EntryPayloadOffset, endIndex: image.count()) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
-	let checksum = Hasher.combined(Hasher.combined(Hasher.empty(), bytes: payload), value: payload.count() as HashDigest)
+	let checksum = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: payload), value: payload.count() as HashDigest)
 	var sealed = image.clone()
 
 	for position in 0 upto EntryWordByteCount 'eachByte'
@@ -1455,10 +1455,10 @@ let MetricsKindField = 0
 let MetricsNameField = 1
 
 export let MetricsAllocsField = 3 as MetricsField
-let MetricsBytesField = 5
+module let MetricsBytesField = 5
 export let MetricsRegAllocKind = "regalloc"
-let MetricsCodeKind = "code"
-let MetricsUnnamedRow = "-"
+module let MetricsCodeKind = "code"
+module let MetricsUnnamedRow = "-"
 
 export function stagedProgramMetrics(dir FilePath, name String, source String, described String) returns String throws TestFailure
 	stageProgram(dir, name: name, source: source)
@@ -1619,13 +1619,13 @@ function errorPathExitDescription(fixture ErrorPathFixture) returns String
 	end 'which'
 end 'errorPathExitDescription'
 
-function appendLets(out String, bindings BindingTally, indent String)
+function appendLets(out mutable String, bindings BindingTally, indent String)
 	for index in 0 upto bindings 'eachBinding'
 		out.append("{indent}let s{index} = make(seed, index: {index})\n")
 	end 'eachBinding'
 end 'appendLets'
 
-function appendUses(out String, bindings BindingTally, indent String)
+function appendUses(out mutable String, bindings BindingTally, indent String)
 	for index in 0 upto bindings 'eachUse'
 		out.append("{indent}total = (total + (s{index}.byteLength() as Word)) and 0xFFFF\n")
 	end 'eachUse'
@@ -1810,3 +1810,41 @@ export function requireScratchNameCheckPasses(check String) throws TestFailure
 	try Expect.equal(ran.exitCode(), expected: 0, message: "the `{check}` check of maxon-bin/Run/ScratchName.maxon failed: {ran.stdout}{ran.stderr}")
 	try Expect.equal(ran.stdout.trim(), expected: "ok", message: "the `{check}` check did not report ok: {ran.stdout}{ran.stderr}")
 end 'requireScratchNameCheckPasses'
+
+module let VersionCommand = "version"
+module let RefusedExitCode = 1
+module let ProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+module let OutputName = "program"
+module let ProjectDirName = "project"
+module let OutputStem = "program"
+module let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+module let ProgramDirName = "app"
+module let AppDirName = "app"
+module let MainSourceStem = "main"
+module let DebugLogFlag = "--log=compiler:debug"
+module let AllocationsByTagFlag = "--allocations-by-tag"
+module let PanicMarker = "panic"
+module let EmitIrFlag = "--emit-ir"
+module let LogFlag = "--log=codegen:debug"
+module let CensusByTagFlag = "--census-by-tag"
+module let OldManifestFileName = "project.maxon"
+module let OldTaskFileName = "tasks.maxon"
+module let RebuildReason = "--rebuild was requested"
+module let HomeDirName = "home"
+module let SecondProgramFileName = "second.maxon"
+module let PublishedBuilds = 2
+module let InUseWords = "in use"
+module let Succeeded = 0
+module let FailedCheckExitCode = 1
+module let InitCommandWord = "init"
+module let ProductsDirName = ".maxon"
+module typealias BlockRepetition = int(0 to 4096)
+module typealias StatementTally = int(0 to u32.max)
+module let SmallAppDirName = "small"
+module let LargeAppDirName = "large"
+module let SmallRepetitions = 8
+module let TaskFileName = "dev.maxtasks"
+module let RunCommandWord = "run"
+module let TaskExitCode = 7
+module let TasksFileExtension = ".maxtasks"
+module let CommandLabel = "command: "

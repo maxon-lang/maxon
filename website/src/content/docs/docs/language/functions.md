@@ -146,82 +146,53 @@ end 'main'
 - `__file__` is always relative, so the same source builds the same binary on any machine.
 - Anywhere else — an ordinary expression, a struct field default — is **E2060**.
 
-## Function Overloads
+## One Declaration per Name
 
-Several functions may share a name when their parameters differ.
+Maxon has no overloading. A function name is declared once per directory, a method name once per type, and
+an interface requirement name once per interface. A second declaration is
+[E3006](/docs/cli/error-codes/#e3006--duplicatedefinition), reported at its name:
 
-**By parameter type** — the argument types choose the overload:
+```text
+error E3006: main.maxon:5:10: duplicate definition of 'measure' — already declared as `function measure`
+```
+
+Give each function its own name, or make the differing argument optional with a default parameter:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-function measure(value Tally) returns Tally
+function measureNumber(value Tally) returns Tally
 	return value * 2
-end 'measure'
+end 'measureNumber'
 
-function measure(value String) returns Tally
+function measureText(value String) returns Tally
 	return value.count()
-end 'measure'
+end 'measureText'
 
 function main() returns ExitCode
-	print("{measure(21)} {measure("hello")}\n")    // 42 5
+	print("{measureNumber(21)} {measureText("hello")}\n")    // 42 5
 	return 0
 end 'main'
 ```
 
-**By parameter name** — overloads whose later parameters have different names are chosen by the labels
-at the call:
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-function slice(start Integer, endIndex Integer) returns Integer
-	return endIndex - start
-end 'slice'
-
-function slice(start Integer, length Integer) returns Integer
-	return start + length
-end 'slice'
-
-function main() returns ExitCode
-	print("{slice(10, endIndex: 32)} {slice(10, length: 32)}\n")    // 22 42
-	return 0
-end 'main'
-```
-
-- Each argument ranks the overloads it fits: a parameter declared with the argument's own alias ranks
-  first, a parameter whose type is exactly the argument's next, and a parameter the argument widens to
-  (an int at a `float`) last. The call binds the overload whose arguments rank highest in total, so
-  beside `create(n Count)` and `create(n Integer)`, `create(7 as Count)` binds `Count`.
-- A call that more than one overload matches equally is **E3007** (`Ambiguous overload`) — two
-  overloads each preferred at a different argument, for one — and so is a `spawn` or an `async` call
-  that does. The message lists each tied overload's parameters as its declaration writes
-  them (`Candidates: (b BlockId), (v VarId)`). A first argument
-  is labelled only at a defaulted parameter, and overloads of one name that declare defaults must agree
-  on their parameters, so two single-parameter overloads of the same type cannot be told apart.
-- A literal, a negated literal, a loop counter or a value computed from them fits a ranged-alias
-  parameter when it lies inside the alias's range, so beside `pick(n Small)` (`int(0 to 10)`) and
-  `pick(n Wide)` (`int(0 to 1000)`), `pick(50)` binds `Wide`.
-- Declaring the same overload twice, with the same parameter names and types, is a duplicate
-  definition (**E3006**). Overloads with the same parameter types but different parameter names are
-  separate declarations; a call whose labels cannot tell them apart is **E3007**.
-- Where a diagnostic tells overloads of one name apart, it names each by its parameter types,
-  `pick(String)`, adding the parameter names where only those differ:
-  `slice(start Integer, length Integer)`.
-- A type may declare a `static` method and an instance method with the same name and parameters:
-  `Type.name()` calls the static one and `value.name()` the instance one, and a bare `name()` calls the one
-  [Static Methods](/docs/language/composite-types/#static-methods) names.
+- A method of a type and a method an `extension` of it adds share the type's one namespace, so they are one
+  declaration of one name. A `static` and an instance method of one name are two declarations of it, and a
+  field and a method of a type never share a name.
+- A standard-library operation that varies by argument type has one name per form: `Array.containsSequence`,
+  `Array.sortBy`, `String.containsCharacter`, `String.sliceLength` and the like. See
+  [STDLIB_REFERENCE.md](/docs/stdlib/).
 
 ## Parameter Passing
 
-A parameter the function only reads is passed by value. A parameter the function **assigns to** — directly,
-or through one of its fields or elements — is passed by reference, so the write reaches the caller's
-variable:
+A parameter is a `let` binding passed by value: reassigning it is **E2013** (`'n' is a parameter and cannot be
+reassigned; mark it mutable or copy it into a local var`). A parameter of a value type — a number, `bool`, an
+enum or `String` — that the function reassigns is marked `mutable` before its type. A `mutable` parameter is
+passed by reference, so the write reaches the caller's variable:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-function increment(n Tally)
+function increment(n mutable Tally)
 	n = n + 1
 end 'increment'
 
@@ -233,43 +204,38 @@ function main() returns ExitCode
 end 'main'
 ```
 
+- A record-type parameter is never rebound, marked or not: reassigning one is **E2013** (`'r' is a record
+  parameter and cannot be reassigned; copy it into a local var`). Writing through it — a field store
+  (`p.x = 99`) or a mutating call on a field (`p.items.push(x)`) — is not a reassignment and reaches the
+  caller's record. A generic body is checked against the bound of its type parameter only, so a parameter
+  whose type is a type parameter is never reassigned either: the function returns the new value.
+- A message parameter and a factory parameter cannot be marked `mutable` (**E2076**): a message hands its
+  arguments to another green thread and a `spawn` hands the factory's arguments to the service, which owns
+  them and writes nothing back.
 - Passing a `var` lets the callee's writes propagate. Any storage you could assign to at that point may be
   passed and is written in place: a local `var`, a module-level `var`, a field of a binding (`p.x`), a field
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
   assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
   the call site would be accepted.
-- Passing a [read-only](/docs/language/memory-model/#read-only-values) value to a parameter the callee writes is **E3159** (`cannot pass
-  'y', which is read-only (a `let` binding), to a function that writes parameter 'n'`). The receiver of a
-  method counts as a parameter, so `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add`
-  writes a field of `acc`, is refused too. A `let` field, or anything reached through a read-only value, is
-  refused for the same reason the equivalent assignment is.
-- A call through a function value passes its arguments as a direct call does. A function value of arity n
-  passes the argument's own storage at position i exactly when some free function of arity n writes its
-  parameter i, whichever body the call reaches: a body that writes the parameter updates the variable, and
-  one that only reads it reads the value held there. After `let f = bump` with `bump` assigning its
-  parameter, `f(v)` updates `v` exactly as `bump(v)` does. The argument is held to the rules above. When the
-  value is the function or closure a reference names, the callee is that body; a value read out of storage
-  (a variable, a field, an element, a capture) or arriving through a parameter or a merge may hold any
-  function used as a value whose shape agrees with its function type. A read-only value handed to a position
-  the callee may write is **E3159**, reported for every such argument and once for each body that writes it,
-  naming that body's parameter, also when a closure captured it; a callback that only reads accepts it. An
-  expression that is not storage gives the callee a temporary. A function that forwards a parameter to such a
-  callback writes that parameter when any candidate does.
-- A callback parameter typed over a type parameter (`f function(T) returns T` in a generic body) holds the
-  functions handed in for it, so a read-only value passed to it is refused only where a writing function is
-  handed in, and the refusal names that call (`'isBig' writes its parameter 'n', but 'Array.filter' passes it
-  the immutable 'item'`).
-- A call through an interface follows the same rule as a call through a function value: a requirement's
-  position is passed as the argument's storage when any conformer writes it, the caller's `var` is updated,
-  and a read-only value there is **E3159**, once for each conformer that writes it (`'Doubler.bump' writes
-  its parameter 'n', but 'bump' passes it the immutable 'x'`).
+- Passing a [read-only](/docs/language/memory-model/#read-only-values) value to a `mutable` parameter is **E3159** (`cannot pass
+  'y', which is read-only (a `let` binding), to a function that writes parameter 'n'`). A literal or another
+  expression is no storage for the write to reach, so it is **E3159** too (`cannot pass a literal to a
+  function that writes parameter 'n'; pass a `var``). The receiver of a method counts as a parameter, so
+  `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add` writes a field of `acc`, is refused.
+  A `let` field, or anything reached through a read-only value, is refused for the same reason the
+  equivalent assignment is.
+- A function type spells the marker: `typealias Step = function(mutable Tally)`. A function, closure or
+  interface conformer fits a function type or requirement only when every parameter's marker is the same as
+  the type's, so a function that reassigns its parameter does not convert to `function(Tally)` (**E3005**),
+  and one that declares `mutable` but only reads does not either. A call through a function value or an
+  interface passes the argument's storage at each `mutable` position, and a read-only value handed to such
+  a position is **E3159**, as at a direct call; a literal or another expression is **E3159** too. Through
+  a function value or an interface requirement the message names the position (`to a function that writes
+  argument 1`).
 - A variable passed by reference to a parameter whose alias is wider than its own, or that names no alias,
   is range-checked when the call returns.
 - Passing storage to a parameter the callee **reassigns**, while another argument of the same call reaches
   that storage, is **E3186** (see [Aliasing Between Arguments](/docs/language/memory-model/#aliasing-between-arguments)).
-- Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
-- A parameter declared at a type parameter — in a method of a generic type or in a generic function — is
-  passed by reference on the same terms.
 
 ## Function Types and Function Values
 
@@ -301,8 +267,8 @@ end 'main'
 ```
 
 A function value fits a function type only by variance. A read-only parameter
-may be wider than the type's (the function accepts every value the type's callers pass), a parameter the
-function writes by reference must be the same type, and the result may be narrower (everything the function
+may be wider than the type's (the function accepts every value the type's callers pass), a `mutable`
+parameter must be the same type and carry the same marker, and the result may be narrower (everything the function
 returns is something the type promises). A bare `int` in the type's declaration is an unranged integer, so
 a function over a narrower alias does not fit it. That is checked wherever the value meets the type: a
 variable, a global, a field, a tuple or container element, a union payload, an argument and a `return`
@@ -425,9 +391,8 @@ it. Two names for one record that only exist at run time are beyond what the com
 
 - A parameter's type may be omitted when the closure is written directly as a call argument whose parameter
   is declared with a function type: the closure's parameters take that type's parameter types, in order —
-  `scores.sort(function(a, b) gives b.compare(a))`. A parameter past that function type's arity is **E2003**,
-  and an omitted type anywhere else is **E2015**. When overloads of the callee declare different function
-  types at that argument, the closure writes its parameter types. A member called on an undefined
+  `scores.sortBy(function(a, b) gives b.compare(a))`. A parameter past that function type's arity is **E2003**,
+  and an omitted type anywhere else is **E2015**. A member called on an undefined
   function's result accepts an untyped closure argument, and the call's
   [E3004](/docs/cli/error-codes/#e3004--callunknownfunction) is the error reported.
 - Closure parameters must be used (**E3012**); write `_` for an unused one.
@@ -472,7 +437,7 @@ closure is judged by the closure's own body when the closure is known where the 
 literal, or a named function, handed to a helper that only calls it. A closure the call cannot identify (one
 read out of a field, say) makes the caller impure. Releasing a value that can own a green thread, a mailbox or an
 operating-system handle (a promise, a file, a socket, a type parameter's value) is an effect of the function that
-releases it. A call to an overloaded name is judged by the overload its arguments select.
+releases it.
 
 A function that returns nothing has no result to discard. Destructuring a pure function's tuple result must
 keep at least one element (`(_, _) = pure()` is **E3064**). A throwing call is judged the same way: a pure

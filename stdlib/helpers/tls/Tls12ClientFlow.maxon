@@ -120,7 +120,7 @@ module type Tls12ClientFlow implements TlsMessageHandler
 		let leaf = try tlsAuthenticateChain(certificates, host: config.peerName, peer: peer, session: session)
 		let key = leaf.publicKey()
 
-		if not tlsSuiteFitsKey(parameters.suite, algorithm: key.algorithm()) 'unfit'
+		if not tlsSuiteFitsKey(parameters.suite, algorithm: key.algorithm) 'unfit'
 			throw TlsHandshakeError.unsupportedCertificate
 		end 'unfit'
 
@@ -140,7 +140,7 @@ module type Tls12ClientFlow implements TlsMessageHandler
 	end 'onServerKeyExchange'
 
 	function acceptServerKeyExchange(raw ByteArray, parameters Tls12Parameters, exchange Tls12ServerKeyExchange, key X509PublicKey) throws TlsHandshakeError
-		let group = exchange.namedGroup()
+		let group = exchange.namedGroup
 
 		if not offer.scan.supportedGroups.contains(group) 'unoffered'
 			throw TlsHandshakeError.illegalParameter
@@ -148,9 +148,9 @@ module type Tls12ClientFlow implements TlsMessageHandler
 
 		let named = try TlsNamedGroup.fromRawValue(group) otherwise throw TlsHandshakeError.illegalParameter
 		var secret = try entropy.secret(group) otherwise throw TlsHandshakeError.illegalParameter
-		let scheme = try tlsRequireOfferedScheme(exchange.signatureScheme(), offered: offer.scan.signatureSchemes, algorithm: key.algorithm(), protocol: TlsProtocol.tls12)
+		let scheme = try tlsRequireOfferedScheme(exchange.signatureScheme, offered: offer.scan.signatureSchemes, algorithm: key.algorithm, protocol: TlsProtocol.tls12)
 
-		try peer.verifySignature(scheme, key: key, message: try parameters.signedParameters(group, publicKey: exchange.publicKey()), signature: exchange.signature())
+		try peer.verifySignature(scheme, key: key, message: try parameters.signedParameters(group, publicKey: exchange.publicKey()), signature: exchange.signature)
 
 		let shared = try named.sharedSecret(secret.privateKey, peerShare: exchange.publicKey())
 
@@ -172,7 +172,7 @@ module type Tls12ClientFlow implements TlsMessageHandler
 
 	function acceptCertificateRequest(raw ByteArray, parameters Tls12Parameters, request Tls12CertificateRequest, exchange Tls12ClientExchange)
 		session.transcript.append(raw)
-		phase = Tls12ClientPhase.awaitingServerHelloDone(parameters, exchange: exchange, request: Tls12ClientRequest.requested(request.certificateTypes(), schemes: request.signatureSchemes()))
+		phase = Tls12ClientPhase.awaitingServerHelloDone(parameters, exchange: exchange, request: Tls12ClientRequest.requested(request.certificateTypes, schemes: request.signatureSchemes()))
 	end 'acceptCertificateRequest'
 
 	function onServerHelloDone(raw ByteArray, parameters Tls12Parameters, exchange Tls12ClientExchange, request Tls12ClientRequest) throws TlsHandshakeError

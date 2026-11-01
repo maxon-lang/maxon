@@ -10,7 +10,7 @@ category: type-system
 ## Documentation
 
 `stdlib/Interfaces.maxon`'s `extension Iterable` is re-parsed once per CONFORMER, so a
-`type Bag uses Element implements Iterable with (Element, BagIter)` gets a `Bag.contains` whose body is
+`type Bag uses Element implements Iterable with (Element, BagIter)` gets a `Bag.containsWhere` whose body is
 `for item in self`. The loop's element is `current()`'s result, and a `returns <type parameter>` impl
 hands its caller a `+1` (`generic-opaque-owned-return` owns that convention) — so the trip OWNS its
 element and releases it before the next one begins.
@@ -23,7 +23,7 @@ the descriptor-need pre-scan reads, and the self-call edges it follows are token
 reservation is taken from the loop itself; without it the body would emit a drop with nothing to drop
 through and be refused with `E2015` — at `stdlib/Interfaces.maxon`, a line the user never wrote.
 
-**`contains` is the one traversal in the library that drops rather than moves**: `map` and `filter` `push` their element into an
+**`containsWhere` is the one traversal in the library that drops rather than moves**: `map` and `filter` `push` their element into an
 `Array with Element` and that store already reserves the descriptor. And every listed conformer escapes
 for a different accidental reason — `Set` and `Array` declare their own `contains`, `Map`'s element is a
 tuple rather than a bare parameter, `Range` and `String` have concrete elements — so a user's own generic
@@ -60,7 +60,7 @@ that spells its cursor bare.
 
 ## Tests
 
-### `contains` on a generic conformer
+### `containsWhere` on a generic conformer
 
 The program the reservation serves. `isBig(30)` is true, so the loop takes the early-exit path out
 of the middle of the body — the trip's release has to happen on that exit as well as on the fall-through.
@@ -105,7 +105,7 @@ end 'isBig'
 
 function main() returns ExitCode
 	var b = IntBag.create(30)
-	if b.contains(isBig) 'yes'
+	if b.containsWhere(isBig) 'yes'
 		return 1
 	end 'yes'
 	return 0
@@ -115,7 +115,7 @@ end 'main'
 1
 ```
 
-### The same `contains`, with the cursor named through an alias
+### The same `containsWhere`, with the cursor named through an alias
 
 The program above with ONE thing changed: the cursor is reached through
 `typealias BagIter = BagIterator with Element` instead of by its own name. Nothing about what the loop OWNS
@@ -164,7 +164,7 @@ end 'isBig'
 
 function main() returns ExitCode
 	var b = IntBag.create(30)
-	if b.contains(isBig) 'yes'
+	if b.containsWhere(isBig) 'yes'
 		return 1
 	end 'yes'
 	return 0
@@ -226,7 +226,7 @@ end 'isEmpty'
 
 function main() returns ExitCode
 	var b = StrBag.create("a string long enough to be heap allocated", repeats: 5)
-	if b.contains(isEmpty) 'found'
+	if b.containsWhere(isEmpty) 'found'
 		return 1
 	end 'found'
 	print("none of 5\n")
@@ -284,7 +284,7 @@ end 'isLong'
 
 function main() returns ExitCode
 	var b = StrBag.create("a string long enough to be heap allocated")
-	if b.contains(isLong) 'long'
+	if b.containsWhere(isLong) 'long'
 		print("long\n")
 		return 1
 	end 'long'
@@ -350,7 +350,7 @@ end 'isEmpty'
 
 function main() returns ExitCode
 	var b = StrBag.create("a string long enough to be heap allocated", repeats: 5)
-	if b.contains(isEmpty) 'found'
+	if b.containsWhere(isEmpty) 'found'
 		return 1
 	end 'found'
 	print("none of 5\n")

@@ -128,10 +128,8 @@ inserted immediately before the missing-argument error.
 already parses the signature and only then skips the body. The clause is parsed right after the throws
 clause, before the body is skipped. Order matters:
 
-1. Parse the `using` clause (after throws, before overload-registration-name resolution).
-2. Compute `registrationName` from **declared params only** — synthetics must not participate in overload
-   mangling, or two functions differing only in requirements would mangle differently yet be callable
-   identically.
+1. Parse the `using` clause (after throws, before registration-name resolution).
+2. Compute `registrationName` from the declared name — synthetics take no part in it.
 3. Append synthetics to the `paramNames`/`paramTypes` used to build `IrFunction`.
 4. Record the synthetic index range in `_functionContextParams[registrationName]`.
 
@@ -260,15 +258,11 @@ Add the interface-conformance clause check where method signature conformance is
 as contextual bindings too. Hook `PushScope`/`PopScope` to truncate, and clear in `SetupFunctionParsing`.
 
 **Slice 4 — Call-site injection.** One branch in `FillDefaultArgs`, between the defaults case and the
-missing-argument throw; all four call paths funnel through it. Three companion fixes, all consequences of
+missing-argument throw; all four call paths funnel through it. Two companion fixes, both consequences of
 synthetics being real entries in `ParamNames`:
 - `ParseArgList` "too many arguments" must count **declared** params only.
 - `ParseNamedArg` does `ParamNames.IndexOf(name)` and **must exclude synthetics**, or a caller could pass
   one by name and leak the lowering.
-- **`SelectOverloadByNamedArgs`** computes
-  `requiredParams = c.ParamNames.Count(n => n != "self")` and **must also exclude synthetics**, or any
-  requirement-bearing overload is silently filtered out of every call site. *Verified against source — the
-  subtlest breakage in the feature.*
 
 Model the shape on the division desugar: one private emit method documented as THE single place the
 policy lives. Copy its *shape*, not its new-IR-op strategy.
@@ -334,7 +328,6 @@ Each case is added in the slice that makes it pass.
 | `interface-method-clause-inherited` | Interface declares a requirement; an implementation is called through **witness dispatch** — proves uniform ABI. |
 | `interface-method-clause-mismatch-error` | Implementation's clause differs from the interface's → conformance error. |
 | `synthetic-param-not-passable` | Caller attempting to pass a requirement by name → `unknown parameter name`. |
-| `overload-arity-with-using` | Overload set where one member declares a requirement — guards the `SelectOverloadByNamedArgs` fix. |
 | `ownership-borrow-not-consumed` | Provider used by two calls then read again — proves borrow-by-default (no E3102, no double-free). |
 | `async-callee-with-requirement-error` | `async worker()` where `worker` carries a `using` clause → `SemanticContextAcrossAsyncBoundary` (**ruling 7**). |
 | `async-callee-self-provided` | A spawned function that `provide`s its own dependency compiles and runs — the sanctioned pattern. |

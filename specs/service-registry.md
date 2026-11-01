@@ -1116,9 +1116,9 @@ put 2 (2)
 put 3 (3)
 ```
 
-<!-- test: a-handle-converts-at-an-overloaded-callees-argument -->
-The argument door holds for an overload set too: `probe(spawn Counter.create())` selects the `Tally.handle`
-overload and converts the `Counter.handle` to it.
+<!-- test: a-handle-converts-at-a-callees-argument -->
+`probe(spawn Counter.create())` converts the `Counter.handle` to the `Tally.handle` that `probe` declares,
+and `probeNumber` takes a plain number.
 ```maxon
 interface Tally
 	function total() returns Integer
@@ -1141,13 +1141,13 @@ function probe(t Tally.handle) returns Integer
 	return try await t.total() otherwise 0
 end 'probe'
 
-function probe(n Integer) returns Integer
+function probeNumber(n Integer) returns Integer
 	return n * 100
-end 'probe'
+end 'probeNumber'
 
 function main() returns ExitCode
 	let fromHandle = probe(spawn Counter.create())
-	let fromInteger = probe(1)
+	let fromInteger = probeNumber(1)
 	return (fromHandle + fromInteger) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1407,51 +1407,6 @@ typealias Integer = int(i64.min to i64.max)
 2150
 ```
 
-<!-- test: error.an-argument-that-could-convert-to-two-interface-handles -->
-`Counter` implements both interfaces, so its handle converts to either overload's parameter equally well; the
-call is ambiguous rather than resolved by declaration order.
-```maxon
-interface Tally
-	function total() returns Integer
-end 'Tally'
-
-interface Gauge
-	function level() returns Integer
-end 'Gauge'
-
-type Counter implements Tally, Gauge
-	var n as Integer
-
-	static function create() returns Self
-		return Self{n: 6}
-	end 'create'
-
-	export function total() returns Integer
-		return self.n
-	end 'total'
-
-	export function level() returns Integer
-		return self.n * 2
-	end 'level'
-end 'Counter'
-
-function probe(t Tally.handle) returns Integer
-	return try await t.total() otherwise 0
-end 'probe'
-
-function probe(g Gauge.handle) returns Integer
-	return try await g.level() otherwise 0
-end 'probe'
-
-function main() returns ExitCode
-	return probe(spawn Counter.create()) as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3007: <fragment>:35:9: Ambiguous overload for 'probe': multiple overloads match. Candidates: (t Tally.handle), (g Gauge.handle)
-```
-
 <!-- test: error.implementers-of-one-interface-that-disagree-on-a-reply -->
 A send through `Worker.handle` builds one request and awaits one reply for whichever implementer the handle
 holds. `Left` and `Right` both satisfy the abstract `throws Error`, but each throws its own enum, so their
@@ -1516,51 +1471,6 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3177: <fragment>:51:21: `Worker.work` cannot be sent through `Worker.handle`: `Right` and `Left` declare it with different parameter, return or `throws` types, so one request and one reply cannot serve both — send it through each service's own handle
-```
-
-<!-- test: a-handle-converts-at-an-overload-resolved-by-a-later-argument -->
-`Counter.handle` could convert to either overload's first parameter; the second argument picks the `Tally`
-overload, and the handle converts to `Tally.handle` there.
-```maxon
-interface Tally
-	function total() returns Integer
-end 'Tally'
-
-interface Gauge
-	function level() returns Integer
-end 'Gauge'
-
-type Counter implements Tally, Gauge
-	var n as Integer
-
-	static function create() returns Self
-		return Self{n: 6}
-	end 'create'
-
-	export function total() returns Integer
-		return self.n
-	end 'total'
-
-	export function level() returns Integer
-		return self.n * 2
-	end 'level'
-end 'Counter'
-
-function probe(t Tally.handle, extra Integer) returns Integer
-	return (try await t.total() otherwise 0) + extra
-end 'probe'
-
-function probe(g Gauge.handle, extra String) returns Integer
-	return (try await g.level() otherwise 0) + (extra.byteLength() as Integer)
-end 'probe'
-
-function main() returns ExitCode
-	return probe(spawn Counter.create(), extra: 1) as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-7
 ```
 
 <!-- test: a-handle-converts-at-a-function-value-call -->
@@ -2719,66 +2629,6 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3171: <fragment>:12:24: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
-```
-
-<!-- test: a-cell-resident-var-is-published -->
-`next` lives in a cell because `refresh` reassigns its parameter; the publish takes the cell's record.
-```maxon
-type Config
-	export let n as Integer
-
-	static function create(n Integer) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Config'
-
-typealias ConfigCell = SharedValue with Config
-
-function refresh(c Config)
-	c = Config.create(c.n + 1)
-end 'refresh'
-
-function main() returns ExitCode
-	let cell = ConfigCell.create(Config.create(1))
-	var next = Config.create(4)
-	refresh(next)
-	cell.publish(next)
-	return cell.current().n as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-5
-```
-
-<!-- test: error.a-cell-resident-var-read-after-a-publish-is-use-after-move -->
-The same cell-resident `var`, read after the publish.
-```maxon
-type Config
-	export let n as Integer
-
-	static function create(n Integer) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Config'
-
-typealias ConfigCell = SharedValue with Config
-
-function refresh(c Config)
-	c = Config.create(c.n + 1)
-end 'refresh'
-
-function main() returns ExitCode
-	let cell = ConfigCell.create(Config.create(1))
-	var next = Config.create(4)
-	refresh(next)
-	cell.publish(next)
-	return next.n as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3102: <fragment>:21:9: use of moved value 'next': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: error.a-field-store-through-a-shared-value-read -->

@@ -101,7 +101,7 @@ function main() returns ExitCode
 	rows.push(Row.create(1))
 	rows.push(Row.create(2))
 	let sorter = Sorter.create()
-	rows.sort(sorter.compare)
+	rows.sortBy(sorter.compare)
 
 	for row in rows 'each'
 		print("{row.key}")
@@ -617,7 +617,7 @@ error E3005: <fragment>:20:10: argument type mismatch for 'o': expected 'fn(Hand
 ```
 
 <!-- test: error.a-function-value-over-a-contested-shape-is-named-in-source-form -->
-`pkg/lib.maxon` and `pkg/main.maxon` each declare a file-private `Score` and a file-private `Grader` over
+`pkg/lib.maxon` and `app/main.maxon` each declare a file-private `Score` and a file-private `Grader` over
 it, so the two `Grader`s are two types. A `lib` `Grader` could reach `main` only through an exported field, and the
 field is refused where it is declared, naming the alias as `lib` wrote it; the value read from it is refused
 at `main`'s own `Grader` parameter, which E3005 names with each declaration's file.
@@ -638,7 +638,7 @@ export type Holder
 	end 'make'
 end 'Holder'
 
-// --- file: pkg/main.maxon
+// --- file: app/main.maxon
 typealias Score = int(0 to 1000)
 typealias Grader = function(n Score) returns Score
 
@@ -652,7 +652,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: pkg/<fragment>:11:22: exported field 'pkg.Holder.grade' names file-private typealias 'Grader' in its type
-error E3005: pkg/<fragment>:27:9: argument type mismatch for 'g': expected 'Grader' (declared in pkg/main.maxon), got 'Grader' (declared in pkg/lib.maxon)
+error E3005: app/<fragment>:27:9: argument type mismatch for 'g': expected 'app.Grader', got 'pkg.Grader'
 ```
 
 <!-- test: a-closure-literal-decays-into-any-function-alias -->

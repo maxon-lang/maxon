@@ -42,22 +42,18 @@ let tlsServerProtocolCount = 1
 
 /// One key_share entry: a group and its public key.
 public type TlsKeyShare
-	var group as TlsGroupCode
-	var keyExchange as ByteArray
-
 	/// The share's named group.
-	public function group() returns TlsGroupCode
-		return group
-	end 'group'
+	public let group as TlsGroupCode
+	var storedKeyExchange as ByteArray
 
 	/// The share's public key, as encoded for its group.
 	public function keyExchange() returns ByteArray
-		return keyExchange
+		return storedKeyExchange
 	end 'keyExchange'
 
 	/// A key share of `keyExchange` for `group`.
 	public static function create(group TlsGroupCode, keyExchange ByteArray) returns TlsKeyShare
-		return Self{group: group, keyExchange: keyExchange}
+		return Self{group: group, storedKeyExchange: keyExchange}
 	end 'create'
 end 'TlsKeyShare'
 
@@ -176,19 +172,15 @@ module enum TlsExtensionContext
 end 'TlsExtensionContext'
 
 module type TlsRawExtension
-	var extensionType as TlsExtensionType
-	var data as ByteArray
-
-	function extensionType() returns TlsExtensionType
-		return extensionType
-	end 'extensionType'
+	module let extensionType as TlsExtensionType
+	var storedData as ByteArray
 
 	function data() returns ByteArray
-		return data
+		return storedData
 	end 'data'
 
 	static function create(extensionType TlsExtensionType, data ByteArray) returns TlsRawExtension
-		return Self{extensionType: extensionType, data: data}
+		return Self{extensionType: extensionType, storedData: data}
 	end 'create'
 end 'TlsRawExtension'
 
@@ -214,11 +206,11 @@ module function tlsDecodeExtensions(raws TlsRawExtensionArray, context TlsExtens
 	var decoded = TlsExtensionArray.create()
 
 	for raw in raws 'eachExtension'
-		if seen.contains(raw.extensionType()) 'duplicate'
+		if seen.contains(raw.extensionType) 'duplicate'
 			throw TlsCodecError.illegalParameter
 		end 'duplicate'
 
-		seen.insert(raw.extensionType())
+		seen.insert(raw.extensionType)
 		decoded.push(try decodeExtension(raw, context: context))
 	end 'eachExtension'
 
@@ -226,14 +218,14 @@ module function tlsDecodeExtensions(raws TlsRawExtensionArray, context TlsExtens
 end 'tlsDecodeExtensions'
 
 function decodeExtension(raw TlsRawExtension, context TlsExtensionContext) returns TlsExtension throws TlsCodecError
-	let kind = try TlsExtensionKind.fromRawValue(raw.extensionType()) otherwise return TlsExtension.opaque(raw.extensionType(), data: raw.data())
+	let kind = try TlsExtensionKind.fromRawValue(raw.extensionType) otherwise return TlsExtension.opaque(raw.extensionType, data: raw.data())
 
 	if not context.allows(kind) 'placement'
 		throw TlsCodecError.illegalParameter
 	end 'placement'
 
 	if context == TlsExtensionContext.serverHello12 and not kind.isDecodedInTls12ServerHello() 'undecoded'
-		return TlsExtension.opaque(raw.extensionType(), data: raw.data())
+		return TlsExtension.opaque(raw.extensionType, data: raw.data())
 	end 'undecoded'
 
 	var data = TlsReader.over(raw.data())
@@ -264,7 +256,7 @@ function decodeExtension(raw TlsRawExtension, context TlsExtensionContext) retur
 		certificateAuthorities or
 		oidFilters or
 		postHandshakeAuth or
-		signatureAlgorithmsCert gives TlsExtension.opaque(raw.extensionType(), data: raw.data())
+		signatureAlgorithmsCert gives TlsExtension.opaque(raw.extensionType, data: raw.data())
 	end 'kind'
 end 'decodeExtension'
 
@@ -401,11 +393,11 @@ function decodeClientKeyShares(data TlsReader) returns TlsExtension throws TlsCo
 	while not list.isAtEnd() 'eachShare'
 		let share = try readKeyShare(list)
 
-		if seen.contains(share.group()) 'duplicate'
+		if seen.contains(share.group) 'duplicate'
 			throw TlsCodecError.illegalParameter
 		end 'duplicate'
 
-		seen.insert(share.group())
+		seen.insert(share.group)
 		shares.push(share)
 	end 'eachShare'
 
@@ -445,7 +437,7 @@ end 'tlsReadSignatureSchemes'
 
 module function tlsHasSupportedVersions(raws TlsRawExtensionArray) returns bool
 	for raw in raws 'eachExtension'
-		if raw.extensionType() == TlsExtensionKind.supportedVersions.code() 'found'
+		if raw.extensionType == TlsExtensionKind.supportedVersions.code() 'found'
 			return true
 		end 'found'
 	end 'eachExtension'
@@ -587,6 +579,6 @@ function appendClientKeyShares(output ByteArray, shares TlsKeyShareArray) throws
 end 'appendClientKeyShares'
 
 function appendKeyShare(output ByteArray, share TlsKeyShare) throws TlsEncodeError
-	appendUnsigned(output, value: share.group(), width: TlsWireWidth.uint16)
+	appendUnsigned(output, value: share.group, width: TlsWireWidth.uint16)
 	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: share.keyExchange())
 end 'appendKeyShare'

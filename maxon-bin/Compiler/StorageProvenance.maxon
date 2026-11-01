@@ -1603,8 +1603,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function callsALibraryMoveOutDoor(op MaxonOp) returns bool throws AbsentError
 		match op 'op'
-			call(_, callee, _, argLabels, _, _, _, _) then return self.signatures.declaresALibraryMoveOutDoor(callee, argLabels: argLabels)
-			tryCall(_, _, callee, _, argLabels, _, _, _, _) then return self.signatures.declaresALibraryMoveOutDoor(callee, argLabels: argLabels)
+			call(_, callee, _, _, _, _, _, _) then return self.signatures.declaresALibraryMoveOutDoor(callee)
+			tryCall(_, _, callee, _, _, _, _, _, _) then return self.signatures.declaresALibraryMoveOutDoor(callee)
 			default throws AbsentError.absent
 		end 'op'
 	end 'callsALibraryMoveOutDoor'
@@ -1876,7 +1876,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			order.push(VarDeath.create(rank, until: try self.varDeadFrom.get(rank) otherwise panic("ProvenanceTracer.settleVarLiveness: varDeadFrom.get OOB at {rank}")))
 		end 'eachVar'
 
-		order.sort(function(left VarDeath, right VarDeath) gives right.until.compare(left.until))
+		order.sortBy(function(left VarDeath, right VarDeath) gives right.until.compare(left.until))
 
 		var settled = BoolArray.create()
 		settled.refill(self.writableRank, value: false)
@@ -7350,13 +7350,45 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	module function blamedSubject(func IrFunction, value ValueId, blamed WriteBlame, call SourceRange) returns String
 		let root = blamed.rootName()
 		let kind = blamed.rootKind()
+		let handed = self.scratchCellFillOf(func, cell: value)
 
-		if self.derivesFromAModuleLet(func, value: value, root: root, kind: kind) 'sharesAModuleLetsStorage'
-			return self.sharedStorageSubject(func, ir: self.module, value: value, token: self.callTokenAtPosition(func, line: call.line, column: call.column))
+		if self.derivesFromAModuleLet(func, value: handed, root: root, kind: kind) 'sharesAModuleLetsStorage'
+			return self.sharedStorageSubject(func, ir: self.module, value: handed, token: self.callTokenAtPosition(func, line: call.line, column: call.column))
 		end 'sharesAModuleLetsStorage'
 
 		return readOnlyRootSubject(root, kind: kind)
 	end 'blamedSubject'
+
+	// A by-reference argument that is a local cell stands for the value stored into the cell, so the
+	// module-let question is asked of that value rather than of the cell. Any other value answers itself.
+	function scratchCellFillOf(func IrFunction, cell ValueId) returns ValueId
+		view ir = self.module
+		self.indexDefinitions(func, ir: ir)
+
+		if not self.valueIsALocalCell(cell) 'notACell'
+			return cell
+		end 'notACell'
+
+		for blockRef in func.blockRefs 'eachBlock'
+			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.scratchCellFillOf: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.bodyOps() 'eachOp'
+				let filled = match slotReadOfOp(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.scratchCellFillOf: opIdx {opIdx} not in module.ops"), opIndex: opIdx) 'read'
+					store(addr, offset, stored) gives stored if addr == cell and offset == ParameterCellValueOffset else cell
+
+					none or
+					load or
+					retainOf gives cell
+				end 'read'
+
+				if filled != cell 'theFill'
+					return filled
+				end 'theFill'
+			end 'eachOp'
+		end 'eachBlock'
+
+		return cell
+	end 'scratchCellFillOf'
 
 	function writeThroughBlameMessage(func IrFunction, target ValueId, place ByteArray, blamed WriteBlame, token ElementIndex) returns String
 		let root = blamed.rootName()
@@ -7455,7 +7487,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'aFilledDefault'
 
 		if self.calls.resolution.declaresFunction(callee) 'declared'
-			return CallProducer.written("the result of '{String.from(unqualifiedMemberOf(overloadRegistrationBaseName(callDiagnosticNoun(callee, mint: mint))))}'")
+			return CallProducer.written("the result of '{String.from(unqualifiedMemberOf(genericTemplateName(callDiagnosticNoun(callee, mint: mint))))}'")
 		end 'declared'
 
 		return match runtimeCalleeSourceMethod(callee) 'written'
@@ -10795,7 +10827,7 @@ end 'keptArgumentMessage'
 
 module function keptWordingOf(func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, position ParamCount) returns KeptWording
 	if sig.takesReceiver() and not args.isEmpty() and maxonTypeTag(try sig.paramTypes.get(position) otherwise panic("keptWordingOf: paramTypes.get OOB at {position}")) == ValueTypeTag.typeParameter and valueTagOf(func, value: try args.get(0) otherwise panic("keptWordingOf: args.get(0) on a non-empty list")) == ValueTypeTag.genericInstance 'anElementOfAContainer'
-		let member = match splitQualifiedName(overloadRegistrationBaseName(callee)) 'qualified'
+		let member = match splitQualifiedName(genericTemplateName(callee)) 'qualified'
 			parts(_, member) gives member
 			notQualified gives callee
 		end 'qualified'
@@ -10808,7 +10840,7 @@ end 'keptWordingOf'
 
 module function writtenArgumentMessage(subject String, parameter ArgumentParameter, functionName String) returns String
 	return match parameter 'parameter'
-		named(name) gives deepLetCallMessage(subject, paramName: displayParamName(name), functionName: functionName)
+		named(name) gives deepLetCallMessage(subject, parameter: WrittenParameter.named(name), functionName: functionName)
 		unnamed gives "cannot pass {subject} to a call that may write that argument (in {functionName})"
 	end 'parameter'
 end 'writtenArgumentMessage'

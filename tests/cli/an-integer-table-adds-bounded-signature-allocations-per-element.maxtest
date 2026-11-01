@@ -6,7 +6,7 @@
 // the slope across two tables of the same shape is the property itself.
 typealias TableElements = int(0 to 65536)
 
-let CaseDirName = "integer-table-allocations"
+let AnIntegerTableAddsBoundedSignatureAllocationsPerElementCaseDirName = "integer-table-allocations"
 let WarmUpAppDirName = "warm"
 
 let WarmUpElements = 4
@@ -41,7 +41,7 @@ function tableShapes() returns TableShapes
 	return [TableShape.create("alias", preamble: "{AliasPreamble}{MainDeclaration}", opening: AliasOpening), TableShape.create("plain", preamble: MainDeclaration, opening: PlainOpening)]
 end 'tableShapes'
 
-function fixtureSource(shape TableShape, elements TableElements) returns String
+function tableFixtureSource(shape TableShape, elements TableElements) returns String
 	var out = "{shape.preamble}{shape.opening}"
 	var value = 0 as ReportedTally
 
@@ -56,15 +56,15 @@ function fixtureSource(shape TableShape, elements TableElements) returns String
 
 	out.append(FixtureFooter)
 	return out
-end 'fixtureSource'
+end 'tableFixtureSource'
 
 function signaturesAllocationsFor(dir FilePath, appDirName String, shape TableShape, elements TableElements) returns ReportedTally throws TestFailure
-	let table = try stagedProgramMetrics(dir, name: appDirName, source: fixtureSource(shape, elements: elements), described: "the {elements}-element {shape.name} fixture")
+	let table = try stagedProgramMetrics(dir, name: appDirName, source: tableFixtureSource(shape, elements: elements), described: "the {elements}-element {shape.name} fixture")
 	return metricsCell(table, kind: MetricsPhaseKind, name: SignaturesPhaseName, field: MetricsAllocsField)
 end 'signaturesAllocationsFor'
 
 test 'a table of integer literals nothing reads adds a bounded number of signature allocations per element'
-	requireHeldOutsideCheckout(CaseDirName, check: IntegerTableAllocatesBoundedlyPerElement.create())
+	requireHeldOutsideCheckout(AnIntegerTableAddsBoundedSignatureAllocationsPerElementCaseDirName, check: IntegerTableAllocatesBoundedlyPerElement.create())
 end 'a table of integer literals nothing reads adds a bounded number of signature allocations per element'
 
 type IntegerTableAllocatesBoundedlyPerElement implements OutsideCheckoutCase

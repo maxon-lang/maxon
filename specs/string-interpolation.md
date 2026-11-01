@@ -756,76 +756,13 @@ end 'main'
 
 ### Stringable with Format Specifier
 
-⭐ **TWO CASES, ONE PER FACT.** Selecting the zero-argument overload for a plain `{c}` and honouring a format
-specifier are separate facts, so neither case's failure can hide the other's.
-
-<!-- test: stringable-and-formatted-interp-selects-the-zero-arg-overload -->
-Plain `{c}` on a type implementing **both** protocols must select `toString()`, not `toString(format)`.
-
-⚠ **THE FORMATTED OVERLOAD IS DECLARED FIRST, AND THAT ORDER IS THE ASSERTION.** The first
-declaration of a name keeps the BARE registration key (`Parser.overloadRegistrationNameFor`), and a call
-whose overload resolution finds nothing is left holding that bare key — `SemanticCheck.selectOverload`'s
-`noMatch` arm says so in as many words. So with `toString()` written first this program prints `42` whether
-the resolver selected it or never ran at all, and the case could not tell a SELECTION from an ABSENCE of one.
-With `toString(format String)` holding the bare key, only an actual retarget by
-`SemanticCheck.resolveOverloadedCalls` reaches the zero-argument body, and the two-argument fallback returns
-a different string so a mis-selection is visible rather than coincidentally correct.
-
-⚠ **The behaviour itself is pinned a second time, deliberately and NOT redundantly**, by
-`specs/interface-conformance.md`'s `overloaded-tostring-satisfies-stringable-and-formatted` (R10) —
-that case asks it of the CONFORMANCE checker with a constant-returning fixture, this one asks it of the
-INTERPOLATION materializer with a body that itself interpolates a field. Two cases, one fact: **move one and
-the other must move with it.**
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-type Counter implements Stringable, FormattedStringable
-	var value as Integer
-
-	function toString(format String) returns String
-		if format == "verbose" 'verbose'
-			return "Counter(value={value})"
-		end 'verbose'
-
-		return "two-arg:{value}"
-	end 'toString'
-
-	function toString() returns String
-		return "{value}"
-	end 'toString'
-
-	static function create(value Integer) returns Self
-		return Self{value: value}
-	end 'create'
-end 'Counter'
-
-function main() returns ExitCode
-	let c = Counter.create(42)
-
-	print("{c}\n")
-
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-42
-```
-
 <!-- test: stringable-format-spec -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
 
-type Counter implements Stringable, FormattedStringable
+type Counter implements FormattedStringable
 	var value as Integer
-
-	function toString() returns String
-		return "{value}"
-	end 'toString'
 
 	function toString(format String) returns String
 		if format == "verbose" 'verbose'
@@ -1625,6 +1562,317 @@ end 'main'
 ```stdout
 E0404
 E0000
+```
+
+### Quoting Format Specifier - A String
+
+`{value:q}` is the quoting specifier. A `String` prints between double quotes with the escapes a string literal
+spells: `\"` and `\\`, `\{` and `\}`, `\n`, `\t` and `\r`, and every other control character as `\uXXXX`, so the
+output is always a valid string literal. The text is otherwise unchanged, so a printable character, `'` and any
+non-ASCII text pass through.
+
+<!-- test: quote-format-string-plain -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let empty = ""
+	print("[{s:q}]\n")
+	print("[{s}]\n")
+	print("[{empty:q}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+["hello world"]
+[hello world]
+[""]
+```
+
+<!-- test: quote-format-string-escapes -->
+```maxon
+function main() returns ExitCode
+	let quote = "say \"hi\""
+	let slash = "a\\b"
+	let newline = "one\ntwo"
+	let tab = "a\tb"
+	let carriage = "a\rb"
+	let control = "a\u0001b"
+	print("{quote:q}\n")
+	print("{slash:q}\n")
+	print("{newline:q}\n")
+	print("{tab:q}\n")
+	print("{carriage:q}\n")
+	print("{control:q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+"say \"hi\""
+"a\\b"
+"one\ntwo"
+"a\tb"
+"a\rb"
+"a\u0001b"
+```
+
+<!-- test: quote-format-string-passes-printable-text-through -->
+```maxon
+function main() returns ExitCode
+	let s = "it's café"
+	print("{s:q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+"it's café"
+```
+
+<!-- test: quote-format-string-escapes-braces -->
+```maxon
+function main() returns ExitCode
+	let braced = "a\{b\}c"
+	print("{braced:q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+"a\{b\}c"
+```
+
+### Quoting Format Specifier - A Character
+
+A `Character` prints between single quotes with the same escapes, and `'` is the one quote it escapes: `'\''`, while `"` stays as it is.
+A brace stays bare, because `'{'` is already a valid character literal and `\{` is spelled in string literals only.
+
+<!-- test: quote-format-character -->
+```maxon
+function main() returns ExitCode
+	let letter = 'a'
+	let single = '\''
+	let double = '"'
+	let slash = '\\'
+	let newline = '\n'
+	let accent = 'é'
+	print("{letter:q} {single:q} {double:q} {slash:q} {newline:q} {accent:q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+'a' '\'' '"' '\\' '\n' 'é'
+```
+
+<!-- test: quote-format-character-braces -->
+```maxon
+function main() returns ExitCode
+	let open = '{'
+	let close = '}'
+	print("{open:q} {close:q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+'{' '}'
+```
+
+### Quoting Format Specifier - Width
+
+A width pads the QUOTED text on the left with spaces, as `%8q` does in Go: the quotes and escapes count toward it, a
+width the text already fills changes nothing, and a leading `0` is no fill for text, so `08q` pads with spaces too.
+
+<!-- test: quote-format-width-pads-the-quoted-text -->
+```maxon
+function main() returns ExitCode
+	let s = "ab"
+	let c = 'x'
+	print("[{s:8q}] [{c:5q}] [{s:2q}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[    "ab"] [  'x'] ["ab"]
+```
+
+<!-- test: quote-format-zero-flag-pads-text-with-spaces -->
+```maxon
+function main() returns ExitCode
+	let s = "ab"
+	let c = 'x'
+	print("[{s:08q}] [{c:05q}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[    "ab"] [  'x']
+```
+
+### Quoting Format Specifier - Every other type is unchanged
+
+⭐ **`q` QUOTES TEXT, AND ONLY TEXT.** An integer, a `bool` or a `float` renders exactly as the plain interpolation does. A
+`Stringable` type prints its `toString()`, and a `FormattedStringable` type receives `q` as its specifier text, as it
+receives any other.
+
+<!-- test: quote-format-leaves-a-float-as-plain-interpolation -->
+```maxon
+function main() returns ExitCode
+	let f = 3.5
+	let neg = -0.25
+	print("{f:q} {neg:q}\n")
+	print("{f} {neg}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3.5 -0.25
+3.5 -0.25
+```
+
+<!-- test: quote-format-leaves-a-stringable-type-as-plain-interpolation -->
+```maxon
+typealias Score = int(i64.min to i64.max)
+
+type Point implements Stringable
+	var x as Score
+	var y as Score
+
+	function toString() returns String
+		return "({self.x}, {self.y})"
+	end 'toString'
+
+	static function create(x Score, y Score) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(1, y: 2)
+	print("{p:q} {p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+(1, 2) (1, 2)
+```
+
+<!-- test: quote-format-passes-q-to-a-formatted-stringable-type-as-its-specifier -->
+```maxon
+type Tagged implements FormattedStringable
+	var label as String
+
+	function toString(format String) returns String
+		return "{self.label}/{format}"
+	end 'toString'
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Tagged'
+
+function main() returns ExitCode
+	let t = Tagged.create("item")
+	print("{t:q} {t:verbose}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+item/q item/verbose
+```
+
+<!-- test: quote-format-leaves-an-int-and-a-bool-as-plain-interpolation -->
+```maxon
+function main() returns ExitCode
+	let n = 42
+	let neg = -7
+	let flag = true
+	print("{n:q} {neg:q} {flag:q}\n")
+	print("{n} {neg} {flag}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42 -7 true
+42 -7 true
+```
+
+### Quoting Format Specifier - Resolved per instantiation
+
+⭐ **A GENERIC BODY CHOOSES BY THE TYPE IT IS INSTANTIATED AT.** `{value:q}` in `quoted` quotes where `T` is `String` or
+`Character` and renders plainly where `T` is an integer.
+
+<!-- test: quote-format-in-a-generic-body-is-resolved-per-instantiation -->
+```maxon
+function quoted(value T) uses T returns String
+	return "{value:q}"
+end 'quoted'
+
+function main() returns ExitCode
+	let text = "say \"hi\""
+	let a = quoted(text)
+	let b = quoted(42)
+	let c = quoted('x')
+	print("{a} {b} {c}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+"say \"hi\"" 42 'x'
+```
+
+### Quoting Format Specifier - No other letter quotes
+
+⚠ A letter that names no base is read as decimal, so it has no effect on a `String`; `q` is the lowercase letter alone.
+
+<!-- test: quote-format-only-the-lowercase-q-quotes -->
+```maxon
+function main() returns ExitCode
+	let s = "plain"
+	print("[{s:z}] [{s:Q}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[plain] [plain]
 ```
 
 ### Multiple control-flow-opening interpolations in one string

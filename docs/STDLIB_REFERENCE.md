@@ -81,8 +81,7 @@ A program may declare one of these names itself. Its declaration is then what th
 file of the program, and the library's is reached as `stdlib.ByteArray` (see
 [Qualified Names](LANGUAGE_REFERENCE.md#qualified-names)); the two are two types, and a value crossing
 between them needs a cast. Prefer the library's alias where it fits, and otherwise give your own a
-different name. Two project declarations of one name a file can both see are **E3063** in every file,
-the declaring ones included.
+different name. A file reads its own directory's declaration of a name bare; two project declarations of one name a file can both see, in directories other than its own and the root, are **E3063**.
 
 ### Names a library signature asks for
 
@@ -314,7 +313,8 @@ end 'main'
 Output: `42 3.25 true 255 -1` and `5.5 -4.0 2.0 -3 3.0` on stdout, `done` on stderr.
 
 Interpolation also takes format specifiers — `"{255:x}"` is `ff`, `"{7:04}"` is `0007`, `"{3.14159:.2}"`
-is `3.14`. See string interpolation in [LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
+is `3.14`, and `"{name:q}"` prints a `String` or `Character` between quotes with the escapes of a literal. See string
+interpolation in [LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
 
 ## String
 
@@ -335,7 +335,7 @@ function main() returns ExitCode
 
 	let comma = try s.findFirst(",") otherwise s.endIndex()
 	let head = s.slice(s.startIndex(), endIndex: comma)
-	let five = s.slice(s.startIndex(), length: 5)
+	let five = s.sliceLength(s.startIndex(), length: 5)
 	print("{comma.charIndex()} {head} {five}\n")
 
 	for c in "héllo" 'each'
@@ -375,7 +375,7 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `contains(needle String)` | `bool` | Substring test. |
-| `contains(character Character)` | `bool` | Character test. |
+| `containsCharacter(character Character)` | `bool` | Character test. |
 | `startsWith(prefix String)` | `bool` | Prefix test. |
 | `endsWith(suffix String)` | `bool` | Suffix test. |
 | `findFirst(needle String)` | `StringIndex` | First occurrence. Throws `StringError.notFound`. |
@@ -391,7 +391,7 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | `indexBefore(idx StringIndex)` | `StringIndex` | Previous grapheme boundary. Throws `StringError` at `startIndex()`. |
 | `charAt(idx StringIndex)` | `Character` | The grapheme at `idx`. |
 | `slice(start StringIndex, endIndex StringIndex)` | `String` | The graphemes in `[start, endIndex)`. |
-| `slice(start StringIndex, length GraphemeIndex)` | `String` | `length` graphemes starting at `start`. |
+| `sliceLength(start StringIndex, length GraphemeIndex)` | `String` | `length` graphemes starting at `start`. |
 
 `StringIndex` implements `Equatable` and `Comparable`:
 
@@ -435,14 +435,11 @@ Output: `olléh`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `trim()` | `String` | Remove Unicode whitespace and newlines from both ends. |
-| `trimStart()` | `String` | From the start only. |
-| `trimEnd()` | `String` | From the end only. |
-| `trim(chars CharacterSet)` | `String` | Remove characters in `chars` from both ends. |
-| `trimStart(chars CharacterSet)` | `String` | From the start only. |
-| `trimEnd(chars CharacterSet)` | `String` | From the end only. |
+| `trim(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | Remove characters in `chars` from both ends; by default Unicode whitespace and newlines. |
+| `trimStart(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | From the start only. |
+| `trimEnd(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | From the end only. |
 
-The no-argument forms use `CharacterSet.whitespacesAndNewlines()`. Trimming walks grapheme clusters, so
+Trimming walks grapheme clusters, so
 `"\r\n"` is one unit: a set holding `'\r'` but not `"\r\n"` trims neither.
 
 ### Views
@@ -644,7 +641,7 @@ function main() returns ExitCode
 		print("{x} ")
 	end 'each'
 
-	a.sort(function(x Score, y Score) gives y.compare(x))
+	a.sortBy(function(x Score, y Score) gives y.compare(x))
 	let first = try a.first() otherwise 0
 	let missing = try a.get(50) otherwise -1
 	print("\n{last} {first} {missing} {a.contains(9)}\n")
@@ -677,7 +674,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | `last()` | `Element` | Throws `indexOutOfBounds` when empty. |
 | `slice(start, endIndex)` | `Array` | Elements `[start, endIndex)`. Throws `indexOutOfBounds` for a reversed or out-of-range pair; nothing is clamped. |
 | `contains(element Element)` | `bool` | Element test. Requires `Element is Equatable`. |
-| `contains(sequence Array)` | `bool` | True when `sequence` occurs contiguously. An empty sequence is always contained. Requires `Element is Equatable`. |
+| `containsSequence(sequence Array)` | `bool` | True when `sequence` occurs contiguously. An empty sequence is always contained. Requires `Element is Equatable`. |
 
 ### Writing
 
@@ -710,8 +707,8 @@ An array grows by doubling while small and eases toward 1.25x once it is large.
 |--------|-------------|
 | `sort()` | Stable sort by `Comparable.compare`. Requires `Element is Comparable`. |
 | `sortUnstable()` | Unstable sort (pattern-defeating quicksort). Requires `Element is Comparable`. |
-| `sort(cmp function(Element, Element) returns Ordering)` | Stable sort by a comparator; any element type. |
-| `sortUnstable(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
+| `sortBy(cmp function(Element, Element) returns Ordering)` | Stable sort by a comparator; any element type. |
+| `sortUnstableBy(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
 
 A sort reads and writes no module-level state, so it may run inside a service message handler without
 tripping [E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143).
@@ -723,7 +720,7 @@ tripping [E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143).
 | `createIterator()` | `ArrayIterator` | Positioned at the first element. Throws `IterationError.exhausted` when empty. |
 | `cursor()` | `ArrayIterator` | The same as `createIterator()`. |
 
-`map`, `filter`, `contains(predicate)` and `withIterator` come from [Iterable](#interfaces).
+`map`, `filter`, `containsWhere(predicate)` and `withIterator` come from [Iterable](#interfaces).
 
 ### ArrayError
 
@@ -1114,7 +1111,7 @@ end 'Ordering'
 | `BidirectionalIterator` | `retreatBy(n IterStep)` | — | Call `retreat()` `n` times. |
 | `Iterable` | `map(transform function(Element) returns Element)` | `Array with Element` | Each element transformed. |
 | `Iterable` | `filter(keep function(Element) returns bool)` | `Array with Element` | The elements `keep` accepts. |
-| `Iterable` | `contains(predicate function(Element) returns bool)` | `bool` | True when any element matches. |
+| `Iterable` | `containsWhere(predicate function(Element) returns bool)` | `bool` | True when any element matches. |
 | `Iterable` | `withIterator()` | iterator pairs | Iterate as `for (iter, element) in collection.withIterator()`, with the iterator in hand. |
 
 ```maxon
@@ -1286,7 +1283,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `join(component String)` | `FilePath` | Append a component with the host separator. |
-| `join(component FilePath)` | `FilePath` | Append another path. |
+| `joinPath(component FilePath)` | `FilePath` | Append another path. |
 | `changeExtension(newExt String)` | `FilePath` | Replace or add an extension; include the dot (`".exe"`). |
 | `anchoredAt(base FilePath)` | `FilePath` | A relative path joined onto `base`, or an absolute path kept. Only what cannot change the file named is folded — `.` components, repeated separators and a trailing one — and every `..` is left for the filesystem, so through a symbolic link it names the file the spelling names. On Windows a drive-relative path (`C:foo`) is joined onto a `base` rooted on the same drive; against any other `base` it stays drive-relative, because it names that drive's current directory. |
 | `resolve(base FilePath)` | `FilePath` | `anchoredAt(base)`, then folded as `normalize()` folds it — lexically, so a `..` after a symbolic link cancels the link's name. |
@@ -1752,9 +1749,7 @@ With `git` on `PATH`, it prints `true 0 true`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `Subprocess.run(executable Executable, arguments StringArray)` | `CollectedOutput` | Inherit the working directory and environment, no stdin, collect stdout and stderr up to 16 MiB each, no timeout. |
-| `Subprocess.run(executable, arguments:, workingDirectory FilePath)` | `CollectedOutput` | With a working directory. |
-| `Subprocess.run(executable, arguments:, workingDirectory:, timeoutMs DurationMs)` | `CollectedOutput` | With a deadline after which the child's whole process tree is killed; `0` waits forever. |
+| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each. An empty `workingDirectory` inherits the parent's. A `timeoutMs` deadline kills the child's whole process tree; `0` waits forever. |
 | `Subprocess.runConfiguration(config Configuration)` | `CollectedOutput` | Run a configuration; `config.run()` calls this. |
 | `Subprocess.runDetachedConfiguration(config Configuration)` | `Pid` | Start detached; `config.runDetached()` calls this. |
 
@@ -2325,8 +2320,7 @@ lines, asks that one nameserver only, and waits on it for as long as it takes to
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Resolve `host` and connect. `resolveFailed` or `connectFailed`. |
-| `TcpClient.connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs)` | `TcpClient` | `NetworkError` | The same, throwing `timedOut` when the connection is not made within `deadlineMs`; `0` waits with no deadline. |
+| `TcpClient.connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs = 0)` | `TcpClient` | `NetworkError` | Resolve `host` and connect. `resolveFailed` or `connectFailed`, or `timedOut` when the connection is not made within `deadlineMs`; `0` waits with no deadline. |
 | `TcpClient.adopt(socket)` | `TcpClient` | — | Wrap an already-connected socket; how `TcpListener.accept()` returns its connections. |
 | `send(data String)` | `int(0 to u64.max)` | `NetworkError` | Send every byte, looping over partial sends; returns the byte count. |
 | `recv(bufferSize RecvCapacity)` | `String` | `NetworkError` | Between one and `bufferSize` bytes. Throws `connectionClosed` when the peer has closed. |
@@ -2547,7 +2541,7 @@ bytes are the application data, and a write is split into records of at most 16 
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `send(data String)`, `send(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. A send that fails part-way, at its write deadline or on a transport error, fails the write side for good: this call throws the failure and every later `send` and `shutdownWrite` throws the same one, because the peer may hold part of a record. |
+| `send(data String)`, `sendBytes(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. A send that fails part-way, at its write deadline or on a transport error, fails the write side for good: this call throws the failure and every later `send` and `shutdownWrite` throws the same one, because the peer may hold part of a record. |
 | `handshake()` | — | `TlsError` | Run the handshake if it has not run; a stream whose handshake has completed returns at once. `send`, `recv` and `shutdownWrite` run it first. A failure is thrown here, closes the connection, and every later call throws `closed`. |
 | `recv(bufferSize RecvCapacity)` | `String` | `TlsError` | Between one and `bufferSize` bytes of application data. |
 | `recvBytes(bufferSize RecvCapacity)` | `ByteArray` | `TlsError` | The same bytes, unconverted. After the peer's close_notify and the data before it, `connectionClosed`; a TCP connection that ends without one, `truncated`. |
@@ -3045,7 +3039,7 @@ lines ahead of the request line are skipped. Header lines follow [Header parsing
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `security()` | `HttpConnectionSecurity` | — | Whether the request arrived over TLS, and what the handshake settled. See [HTTPS server](#https-server). |
-| `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>` (`https://` on a TLS server), so `path()` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
+| `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>` (`https://` on a TLS server), so `path` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
 | `respond(response HttpResponse)` | — | `HttpServerError` | Write the response and close the connection. Throws `alreadyResponded` on a second answer, `invalidResponse` for a response the rules below refuse, and `sendFailed` when the write fails or outlasts `writeDeadlineMs`. |
 | `respondWith(code StatusCode, body String, contentType String)` | — | `HttpServerError` | Answer a status, a body and its content type, as `respond` does. |
 
@@ -3161,8 +3155,8 @@ end 'main'
 |--------|---------|--------|-------------|
 | `URL.parse(input String)` | `URL` | `URLError` | Parse an absolute URL or a relative reference. |
 | `URL.resolve(base URL, reference String)` | `URL` | `URLError` | Resolve `reference` against `base` (RFC 3986 section 5). |
-| `scheme()` | `String` | — | `""` for a relative reference. |
-| `path()` | `String` | — | Always present, possibly empty. |
+| `scheme` | `String` | — | A field: `""` for a relative reference. |
+| `path` | `String` | — | A field: always present, possibly empty. |
 | `host()` | `String` | `URLError.fieldNotPresent` | The host with an IP literal's brackets removed: `::1` for `http://[::1]/`, the address a socket connects to. |
 | `authorityHost()` | `String` | `URLError.fieldNotPresent` | The host as the authority spells it, an IP literal keeping its brackets: `[::1]`. It is what `toString()` writes and what a `Host` header carries. |
 | `port()` | `int(0 to 65535)` | `URLError.fieldNotPresent` | |
@@ -3189,7 +3183,7 @@ function main() returns ExitCode
 	let host = try url.host() otherwise ""
 	let port = try url.port() otherwise 0
 	let query = try url.query() otherwise ""
-	print("{url.scheme()} {host} {port} {url.path()} {query} {url}\n")
+	print("{url.scheme} {host} {port} {url.path} {query} {url}\n")
 
 	let base = try URL.parse("http://a/b/c/d?q") otherwise return 1
 	let resolved = try URL.resolve(base, reference: "../g") otherwise return 1
@@ -3335,8 +3329,8 @@ certificates and keys, each a label and a base64 body.
 | `Pem.decode(text String)` | `PemBlocks` | `PemError` | Every block in `text`, in order, duplicate labels kept. A text with no blocks gives an empty list. |
 | `Pem.encode(label String, data ByteArray)` | `String` | `PemError` | One block: the BEGIN line, the base64 of `data` in lines of 64 characters, and the END line, each ending in LF. |
 
-A `PemBlock` has `label()`, the text between `-----BEGIN ` and `-----` (such as `CERTIFICATE`), and
-`bytes()`, the decoded body. `PemBlocks` is `Array with PemBlock`.
+A `PemBlock` has `label`, the text between `-----BEGIN ` and `-----` (such as `CERTIFICATE`), and
+`bytes`, the decoded body. `PemBlocks` is `Array with PemBlock`.
 
 `decode` accepts LF and CRLF line endings and a last line with no line break. Text before, between and
 after blocks is skipped, including a stray END line and a malformed BEGIN line. Trailing spaces and tabs
@@ -3358,7 +3352,7 @@ function main() returns ExitCode
 	let blocks = try Pem.decode("a comment line\n{text}") otherwise return 1
 
 	for block in blocks 'each'
-		print("{block.label()}: {String.from(block.bytes())}\n")
+		print("{block.label}: {String.from(block.bytes)}\n")
 	end 'each'
 
 	return 0
@@ -3404,9 +3398,9 @@ the DER rules; a constructed element is entered as a new reader over its content
 | `readImplicitBitString(tagNumber DerTagNumber)` | `DerBitString` | `DerError` | A primitive context-specific `[tagNumber]` holding an implicitly tagged BIT STRING. |
 | `readImplicitSignedInteger(tagNumber DerTagNumber)` | `ByteArray` | `DerError` | A primitive context-specific `[tagNumber]` holding an implicitly tagged INTEGER, as `readSignedInteger` answers it. |
 
-A `DerHeader` has `tagClass()`, a `DerTagClass` (`universal`, `application`, `contextSpecific` or
-`private`), `isConstructed()`, `tagNumber()` and `length()`, the number of content octets. A `DerBitString`
-has `bytes()`, the octets after the unused-bits octet, and `unusedBits()`, how many low bits of the last
+A `DerHeader` has `tagClass`, a `DerTagClass` (`universal`, `application`, `contextSpecific` or
+`private`), `isConstructed()`, `tagNumber` and `length`, the number of content octets. A `DerBitString`
+has `bytes()`, the octets after the unused-bits octet, and `unusedBits`, how many low bits of the last
 octet are not part of the string.
 
 | Name | Definition |
@@ -3892,24 +3886,24 @@ parameters), `rsassaPssSha256`, `rsassaPssSha384`, `rsassaPssSha512` and `ed2551
 `X509KeyAlgorithm` cases: `rsa`, `ecP256` and `ecP384` (an uncompressed point) and `ed25519`. Key sizes and
 whether a point is on its curve are not checked by `parse`.
 
-A `Certificate` answers each field:
+A `Certificate` answers each field. `version`, `serialNumber`, `signatureAlgorithm`, `issuer`, `notBefore`, `notAfter`, `tbsCertificate` and `signature` are fields, read without parentheses; the rest are functions:
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `version()` | `CertificateVersion` | — | 1 or 3. |
-| `serialNumber()` | `ByteArray` | — | The serial's content octets as encoded: two's complement, of any sign and length. |
-| `signatureAlgorithm()` | `X509SignatureAlgorithm` | — | The algorithm the issuer signed with. |
-| `issuer()`, `subject()` | `X509Name` | — | `der()`, the whole Name DER names are compared by, and `attributes()`, an `X509Attributes` in encoded order, each with `oid()` (dotted decimal), `value()` (the decoded text) and `shortName()` (`CN`, `O`, `OU` or `C`, throwing `X509FieldError.absent` for other types). |
-| `notBefore()`, `notAfter()` | `UnixSeconds` | — | The validity period, both ends inclusive. |
-| `publicKey()` | `X509PublicKey` | — | `algorithm()`, `der()` (the SubjectPublicKeyInfo, the form `Rsa` takes) and `keyBytes()` (the point, the Ed25519 key or the `RSAPublicKey` DER). |
-| `basicConstraints()` | `X509BasicConstraints` | `X509FieldError` | `isCertificateAuthority()` and `pathLength()`, an `X509PathLength` that throws `absent` when there is none. |
+| `version` | `CertificateVersion` | — | 1 or 3. |
+| `serialNumber` | `ByteArray` | — | The serial's content octets as encoded: two's complement, of any sign and length. |
+| `signatureAlgorithm` | `X509SignatureAlgorithm` | — | The algorithm the issuer signed with. |
+| `issuer`, `subject()` | `X509Name` | — | `der()`, the whole Name DER names are compared by, and `attributes`, an `X509Attributes` in encoded order, each with `oid` (dotted decimal), `value` (the decoded text) and `shortName()` (`CN`, `O`, `OU` or `C`, throwing `X509FieldError.absent` for other types). |
+| `notBefore`, `notAfter` | `UnixSeconds` | — | The validity period, both ends inclusive. |
+| `publicKey()` | `X509PublicKey` | — | `algorithm`, `der()` (the SubjectPublicKeyInfo, the form `Rsa` takes) and `keyBytes()` (the point, the Ed25519 key or the `RSAPublicKey` DER). |
+| `basicConstraints()` | `X509BasicConstraints` | `X509FieldError` | `isCertificateAuthority` and `pathLength()`, an `X509PathLength` that throws `absent` when there is none. |
 | `keyUsage()` | `X509KeyUsages` | `X509FieldError` | The `X509KeyUsage` bits that are set, in bit order: `digitalSignature`, `contentCommitment`, `keyEncipherment`, `dataEncipherment`, `keyAgreement`, `keyCertSign`, `crlSign`, `encipherOnly`, `decipherOnly`. |
 | `extendedKeyUsage()` | `StringArray` | `X509FieldError` | The purposes, dotted decimal, in encoded order. |
 | `subjectAltName()` | `X509SubjectAltName` | `X509FieldError` | `dnsNames()`, a `StringArray`, and `ipAddresses()`, 4- or 16-byte `ByteArrays`. Other name forms are skipped. |
 | `authorityKeyId()`, `subjectKeyId()` | `ByteArray` | `X509FieldError` | The key identifiers. |
 | `nameConstraints()` | `X509NameConstraints` | `X509FieldError` | `permittedDnsNames()` and `excludedDnsNames()`, the dNSName subtrees as encoded, and `permittedIpRanges()` and `excludedIpRanges()`, each an address followed by its mask. |
-| `tbsCertificate()` | `ByteArray` | — | The whole TBSCertificate DER: the signed message. |
-| `signature()` | `ByteArray` | — | The signature octets. |
+| `tbsCertificate` | `ByteArray` | — | The whole TBSCertificate DER: the signed message. |
+| `signature` | `ByteArray` | — | The signature octets. |
 
 An extension-backed member throws `X509FieldError.absent` when the certificate does not carry the
 extension.
@@ -3988,11 +3982,11 @@ Its result is a `HashDigest`, `bits(64)`.
 | `Hasher.create()` | `Hasher` | A hasher at the FNV-1a offset basis. |
 | `Hasher.resume(state HashDigest)` | `Hasher` | Continue from a value `finalize()` returned. |
 | `combine(value HashDigest)` | — | Fold in one value. |
-| `combine(bytes ByteArray)` | — | Fold in each byte. |
+| `combineBytes(bytes ByteArray)` | — | Fold in each byte. |
 | `finalize()` | `HashDigest` | The running state, not post-processed, so `resume(finalize())` continues exactly. |
 | `Hasher.empty()` | `HashDigest` | The state of an empty fold. |
 | `Hasher.combined(state HashDigest, value HashDigest)` | `HashDigest` | One step, as an expression. |
-| `Hasher.combined(state HashDigest, bytes ByteArray)` | `HashDigest` | Each byte, as an expression. |
+| `Hasher.combinedBytes(state HashDigest, bytes ByteArray)` | `HashDigest` | Each byte, as an expression. |
 
 FNV-1a folds a flat byte sequence and records no lengths, so `"ab"` then `"c"` hashes the same as `"a"`
 then `"bc"`. When hashing a sequence of parts, combine each part's length too.
@@ -4000,10 +3994,10 @@ then `"bc"`. When hashing a sequence of parts, combine each part's length too.
 ```maxon
 function main() returns ExitCode
 	var hasher = Hasher.create()
-	hasher.combine("ab".toByteArray())
+	hasher.combineBytes("ab".toByteArray())
 	hasher.combine(7)
 
-	let direct = Hasher.combined(Hasher.combined(Hasher.empty(), bytes: "ab".toByteArray()), value: 7)
+	let direct = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: "ab".toByteArray()), value: 7)
 	print("{hasher.finalize() == direct}\n")
 	return 0
 end 'main'

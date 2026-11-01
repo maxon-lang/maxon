@@ -118,11 +118,9 @@ export function binarySourceRootOf(binary FilePath) returns BinarySourceRoot
 
 	let sourceRoot = try outputDir.parent() otherwise return BinarySourceRoot.elsewhere("{outputDir.toString()} has no parent directory")
 
-	// Bound to a local first: `join` is overloaded on String and FilePath, and a CALL in the argument
-	// position does not disambiguate them any more than an inline `try` expression does (E3007).
 	let marker = pathComponent(SourceRootMarkerDirName)
 
-	if not Directory.exists(sourceRoot.join(marker)) 'notACheckout'
+	if not Directory.exists(sourceRoot.joinPath(marker)) 'notACheckout'
 		return BinarySourceRoot.elsewhere("{sourceRoot.toString()} is not a development checkout — it holds no {SourceRootMarkerDirName}/ directory, so this binary's sources are not here")
 	end 'notACheckout'
 
@@ -210,9 +208,6 @@ function isUnderCompilerOutputDirectory(source FilePath, sourceRoot FilePath) re
 	return false
 end 'isUnderCompilerOutputDirectory'
 
-// A constant path COMPONENT as a FilePath. `join` is overloaded on String and FilePath and a bare
-// String constant matches both (E3007), so every component joined in this file is bound to a
-// FilePath first.
 function pathComponent(name String) returns FilePath
 	return try FilePath.from(name) otherwise panic("CompilerFreshness: '{name}' is not a valid path component")
 end 'pathComponent'

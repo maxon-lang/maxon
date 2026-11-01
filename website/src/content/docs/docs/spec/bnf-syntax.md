@@ -61,8 +61,8 @@ before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`
 type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `readonly` (before a type
 argument after `with`, `(` or `,`, and as a `result_capability`), `view` (a `view_decl`: at the start of a
 statement or after `if` or `then`, followed by an IDENTIFIER, or by a parenthesized list whose `)` is followed by
-`=`; and before a name in a `tuple_assign_stmt` target), and `keep` and `sole` (a `param_capability` or
-`result_capability`). `__line__` and `__file__`
+`=`; and before a name in a `tuple_assign_stmt` target), `keep` and `sole` (a `param_capability` or
+`result_capability`), and `mutable` (a parameter marker, directly before the parameter's type). `__line__` and `__file__`
 are identifiers in the reserved `__` space, legal only as a parameter default (§3.1).
 
 ### 1.4 Literals
@@ -258,7 +258,9 @@ function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 'end' LABEL
 
 param_list    = param { ',' param }
-param         = IDENTIFIER type_ref [ '=' default_value ]    (* IDENTIFIER '_' discards the parameter *)
+param         = IDENTIFIER [ 'mutable' ] type_ref [ '=' default_value ]
+                                                             (* IDENTIFIER '_' discards the parameter; a parameter is a `let`
+                                                                unless `mutable`, which makes a value-type parameter by reference *)
 
 default_value = expression                                   (* evaluated at each call that omits the argument *)
               | caller_location                              (* caller-location default, see below *)
@@ -390,7 +392,7 @@ interface_method
               = [ 'static' ] 'function' IDENTIFIER
                 '(' [ req_param { ',' req_param } ] ')' [ 'returns' [ result_capability ] type_ref ]
                 [ throws_clause ]
-req_param     = IDENTIFIER [ param_capability ] type_ref [ '=' default_value ]
+req_param     = IDENTIFIER [ param_capability | 'mutable' ] type_ref [ '=' default_value ]
 
 param_capability
               = 'keep' | 'sole'                              (* contextual; E2076 outside a function type or requirement *)
@@ -409,8 +411,8 @@ extension_block
 type_base     = IDENTIFIER { '.' IDENTIFIER } | 'int' | 'float' | 'bool'   (* the type may be qualified *)
 
                 (* an extension body declares no stored members: a `var` or `let`, static or not,
-                   is E2015; a type extension's member with the name and kind (static or
-                   instance) of the type's own member is E3176 *)
+                   is E2015; a type extension's member with the name of a member of the
+                   type's own, static or instance, is E3006 *)
 ```
 
 ### 3.7 Type Alias Declaration
@@ -523,7 +525,7 @@ type_ref      = 'bool'
 
 function_type = 'function' '(' [ fn_type_param { ',' fn_type_param } ] ')'
                 [ 'returns' [ result_capability ] type_ref ]
-fn_type_param = [ IDENTIFIER ] [ param_capability ] type_ref
+fn_type_param = [ IDENTIFIER ] [ param_capability | 'mutable' ] type_ref
               (* `returns` is optional; without it, the function type
                  returns void. A function type cannot declare `throws`.
                  `function(...)` is legal only as a `typealias` right-hand
@@ -930,7 +932,7 @@ from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'   (*
 closure       = 'function' '(' [ closure_params ] ')' 'gives' expression
 closure_params
               = closure_param { ',' closure_param }
-closure_param = IDENTIFIER [ type_ref ]                          (* '_' discards the parameter *)
+closure_param = IDENTIFIER [ [ 'mutable' ] type_ref ]              (* '_' discards the parameter *)
 ```
 
 ### 6.4 Match Expression

@@ -79,11 +79,11 @@ public type TlsStream
 
 	/// Send every byte of `data`; returns the byte count.
 	public function send(data String) returns BytePos throws TlsError
-		return try send(data.toByteArray())
+		return try sendBytes(data.toByteArray())
 	end 'send'
 
 	/// Send every byte of `data`, split into records of at most 16 KiB; returns the byte count.
-	public function send(data ByteArray) returns BytePos throws TlsError
+	public function sendBytes(data ByteArray) returns BytePos throws TlsError
 		try requireWritable()
 		try handshake()
 
@@ -98,7 +98,7 @@ public type TlsStream
 		try flush()
 
 		return data.count() as BytePos
-	end 'send'
+	end 'sendBytes'
 
 	/// Receive between one and `bufferSize` bytes of application data.
 	public function recv(bufferSize RecvCapacity) returns String throws TlsError

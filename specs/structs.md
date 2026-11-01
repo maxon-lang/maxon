@@ -301,9 +301,9 @@ type Counter
 		return Self{}
 	end 'create'
 
-	static function create(value CounterValue, step CounterStep) returns Self
+	static function createWith(value CounterValue, step CounterStep) returns Self
 		return Self{value: value, step: step}
-	end 'create'
+	end 'createWith'
 end 'Counter'
 
 typealias CounterValue = int(0 to u64.max)
@@ -311,8 +311,8 @@ typealias CounterStep = int(0 to u64.max)
 
 function main() returns ExitCode
 	let c1 = Counter.create()
-	let c2 = Counter.create(40, step: 1)
-	let c3 = Counter.create(10, step: 2)
+	let c2 = Counter.createWith(40, step: 1)
+	let c3 = Counter.createWith(10, step: 2)
 	return c1.value + c2.value + (c3.step as CounterValue)
 end 'main'
 ```

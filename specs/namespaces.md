@@ -18,6 +18,9 @@ The namespace of a file is determined by its path:
 - `utils/helpers.maxon` → namespace `utils`
 - `stdlib/fmt/integer.maxon` → namespace `stdlib.fmt`
 
+A namespace declares each top-level name once, whatever the name's kind or visibility, and a bare name
+resolves to the reading file's own namespace before any other (`top-level-name-scope.md`).
+
 ### Export Keyword
 
 Use `export` to make functions visible outside the file:
@@ -621,34 +624,3 @@ module let TheLetRec = Rec.create()
 ```
 
 
-<!-- test: contested-subdirectory-overloads-in-two-files-agree-about-their-defaults -->
-`beta/` declares two overloads of a contested `pick` in two files, and they agree about their defaults.
-Both are filed under `beta.pick`, and they must still be read as agreeing.
-```maxon
-// --- file: alpha/a.maxon
-export function pick() returns String
-	return "alpha"
-end 'pick'
-
-// --- file: beta/b1.maxon
-export function pick(a bool, word String = "abc") returns String
-	return "{a}{word}"
-end 'pick'
-
-// --- file: beta/b2.maxon
-export function pick(a String, word String = "abc") returns String
-	return "{a}{word}"
-end 'pick'
-
-// --- file: main.maxon
-function main() returns ExitCode
-	print("{alpha.pick()} {beta.pick(true)} {beta.pick("x")}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-alpha trueabc xabc
-```

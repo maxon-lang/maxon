@@ -62,7 +62,7 @@ sole `let` moves it.
 
 ⚠ **A second NAME is not a sink.** `let u = t` from a `var`, or `s = t` into a `var`, gives the new name
 no drop of its own — it inherits the one `t` owed — so it MOVES. The one rebind that IS a durable store
-is a write to a by-reference parameter, whose cell is the CALLER's storage and outlives this frame.
+is a write to a `mutable` parameter, whose cell is the CALLER's storage and outlives this frame.
 
 A WRITE to a moved-from `var` REVIVES it: the binding owns the new value and is usable again. A value
 moved on some-but-not-all paths of an `if`/`else`/`match` is DROPPED path-sensitively — its drop is

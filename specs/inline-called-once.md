@@ -19,7 +19,7 @@ A called-once function is refused when:
 - it is **recursive**, or has any other call site (a self-call is a second site);
 - its exits leave through a **different return convention** than its site reads (a `ret` read by a
   `tryCall`, an `errorReturn` read by a `call`, or both kinds of exit in one body);
-- it takes a **by-reference** (reassigned) parameter;
+- it takes a **`mutable`** (by-reference) parameter;
 - it carries the **green-thread stack guard** — it runs user code on its caller's stack;
 - the splice would exceed the caller's **register-pressure budget**.
 
@@ -542,7 +542,7 @@ by-reference one: the returned 14 plus `main`'s own `bumps`, which is 14 too.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-function bumpAll(a IntArray, n Integer, bumps Integer) returns Integer
+function bumpAll(a IntArray, n Integer, bumps mutable Integer) returns Integer
 	for i in 0 upto n 'each'
 		let v = try a.get(i as ElementIndex) otherwise panic("bumpAll: i < n = a.count()")
 		try a.set(i as ElementIndex, value: v + 1) otherwise panic("bumpAll: i < n = a.count()")

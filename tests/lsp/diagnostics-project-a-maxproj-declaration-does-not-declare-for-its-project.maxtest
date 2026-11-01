@@ -1,14 +1,12 @@
 let MaxprojDeclaresDirName = "diagnostics-maxproj-declares-nothing-for-its-project"
-let MaxprojFileName = "app.maxproj"
-let MaxprojSource = "export function app() returns ExitCode\n\treturn 0\nend 'app'\n"
-let MaxprojMainFileName = "main.maxon"
-let MaxprojMainSource = "function main() returns ExitCode\n\treturn app()\nend 'main'\n"
+let DiagnosticsProjectAMaxprojDeclarationDoesNotDeclareForItsProjectMaxprojSource = "export function app() returns ExitCode\n\treturn 0\nend 'app'\n"
+let DiagnosticsProjectAMaxprojDeclarationDoesNotDeclareForItsProjectMaxprojMainSource = "function main() returns ExitCode\n\treturn app()\nend 'main'\n"
 let MaxprojMainPublished = "E3004@1"
 
 test 'project diagnostics: a function a .maxproj declares is not declared for the project it marks'
 	let root = freshOutsideCheckoutDir(MaxprojDeclaresDirName)
-	writeCorpusFile(root, fileName: MaxprojFileName, content: MaxprojSource)
-	writeCorpusFile(root, fileName: MaxprojMainFileName, content: MaxprojMainSource)
+	writeCorpusFile(root, fileName: MaxprojFileName, content: DiagnosticsProjectAMaxprojDeclarationDoesNotDeclareForItsProjectMaxprojSource)
+	writeCorpusFile(root, fileName: MaxprojMainFileName, content: DiagnosticsProjectAMaxprojDeclarationDoesNotDeclareForItsProjectMaxprojMainSource)
 
 	var client = LspClient.start()
 	let probe = collectMainAfterTheProjectFile(client, root: root)
@@ -34,10 +32,10 @@ function mainDiagnosticsAfterTheProjectFile(client LspClient, root FilePath) ret
 	_ = try client.initializeAtRootUri(fileUriOf(root))
 	try client.initialized()
 
-	try client.openDocument(projectFileUri, content: MaxprojSource)
+	try client.openDocument(projectFileUri, content: DiagnosticsProjectAMaxprojDeclarationDoesNotDeclareForItsProjectMaxprojSource)
 	_ = try client.awaitPublishedDiagnostics(projectFileUri)
 
-	try client.openDocument(mainUri, content: MaxprojMainSource)
+	try client.openDocument(mainUri, content: DiagnosticsProjectAMaxprojDeclarationDoesNotDeclareForItsProjectMaxprojMainSource)
 
 	let published = try client.awaitPublishedDiagnostics(mainUri)
 

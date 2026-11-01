@@ -3600,7 +3600,7 @@ function main() returns ExitCode
 	return 0
 end 'main'
 
-// --- file: z.maxon
+// --- file: z/z.maxon
 typealias Msg = int(0 to 3)
 
 export function bothWays() returns bool

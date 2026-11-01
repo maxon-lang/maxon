@@ -31,7 +31,7 @@ function slabObjectsPerSpanIn(class SlabClassIndex, sizes SlabClassSizeArray, pa
 
 	// The guard above proves `size != 0`, but `SlabClassSize` includes 0 so the type cannot know it.
 	// `otherwise panic` is the project's form for a `try` that must not fail (E3057 demands one of the two).
-	let spanBytes = (np as FullRangeInt) * SlabPageBytes
+	let spanBytes = (np as FullRangeInt) * SlabChunkBytes
 	return try (spanBytes / (size as FullRangeInt)) otherwise panic("slabObjectsPerSpan: class {class} divided by zero past its own sentinel guard")
 end 'slabObjectsPerSpanIn'
 
@@ -63,7 +63,7 @@ typealias SlabObjectCount = int(0 to 1024)
 
 // ⭐ **THE LARGEST CHUNK RUN THE LADDER CAN MAKE `__slab_refill` ASK FOR.** Derived here rather than read off
 // `SlabSpanPages`' upper bound for this file's stated split — data in the generated table, reasoning in this
-// one — and derived through the SAME `ceil(slotSize · objects / SlabPageBytes)` the refill emits, so it is a
+// one — and derived through the SAME `ceil(slotSize · objects / SlabChunkBytes)` the refill emits, so it is a
 // bound on the request the allocator actually makes rather than on the page count Go's table happens to
 // name. `SlabRuntime.checkSlabRuntimeGeometry` checks it against what an arena can serve on each lane.
 export function slabWidestSpanChunks() returns FullRangeInt
@@ -75,7 +75,7 @@ export function slabWidestSpanChunks() returns FullRangeInt
 		let idx = row.index
 		let size = row.size
 		let objects = slabObjectsPerSpanIn(idx, sizes: sizes, pages: pages)
-		let chunks = ((size as FullRangeInt) * (objects as FullRangeInt) + SlabPageBytes - 1) / SlabPageBytes
+		let chunks = ((size as FullRangeInt) * (objects as FullRangeInt) + SlabChunkBytes - 1) / SlabChunkBytes
 
 		if chunks > widest 'newWidest'
 			widest = chunks
@@ -103,8 +103,8 @@ export function checkSlabClassTable()
 	// ONE FACT WRITTEN TWICE, by necessity: a shift and the value it produces. Asserted rather than
 	// trusted, because a page-size change would otherwise leave the two disagreeing silently and every
 	// span geometry downstream would be computed from whichever one that caller happened to read.
-	if (1 shl SlabPageShift) != SlabPageBytes 'pageShiftDisagrees'
-		panic("slab class table: 1 shl {SlabPageShift} is {1 shl SlabPageShift}, not {SlabPageBytes}")
+	if (1 shl SlabPageShift) != SlabChunkBytes 'pageShiftDisagrees'
+		panic("slab class table: 1 shl {SlabPageShift} is {1 shl SlabPageShift}, not {SlabChunkBytes}")
 	end 'pageShiftDisagrees'
 
 	let first = try sizes.get(0) otherwise panic("slab class table: no class 0")

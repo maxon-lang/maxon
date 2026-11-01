@@ -68,7 +68,6 @@ the seed's older rule would clone, and a moved `var` it cannot write `let`.
 """
 import argparse
 import filecmp
-import hashlib
 import json
 import os
 import re
@@ -135,6 +134,9 @@ HEADER = """# A form is withdrawn only against a seed that predates it: `--withd
 # is a cast, so it is withdrawn too.
 # The seed cannot parse a `Compiler.`-qualified name, so each is written bare; the seed resolves that to the same
 # declaration.
+# The seed cannot parse a `mutable` marker before a parameter's type (`candidateCount mutable ElementIndex`,
+# `function(mutable Count)`), so each is withdrawn; the seed then infers by reference from the function's own
+# reassignment of the parameter, which is the one reassignment the marked parameter existed for.
 # The declarations, their ranges and every table stay, so `C1` knows every withdrawn form and compiles the unshimmed
 # tree into `C2`.
 # The tree also no longer has rules the seed enforces, so each site the seed refuses is written the way its older
@@ -204,11 +206,12 @@ INTERFACE_OPEN = re.compile(r"^(?P<indent>[ \t]*)(?:[a-z]+ )*interface (?P<name>
 INTERFACE_METHOD = re.compile(r"^[ \t]+(?:[a-z]+ )*function [A-Za-z_][A-Za-z0-9_]*(?=\()")
 UNNAMED_QUALIFIED_PARAMETER = re.compile(r"^(?P<lead>\s*)(?:keep|sole) (?=[A-Za-z_(])")
 NAMED_QUALIFIED_PARAMETER = re.compile(r"^(?P<head>\s*[A-Za-z_][A-Za-z0-9_]* )(?:keep|sole) (?=[A-Za-z_(])")
+MUTABLE_WORD = "mutable"
+FUNCTION_PARAMETER_LIST = re.compile(r"\bfunction(?:[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*))?[ \t]*\(")
+UNNAMED_MUTABLE_PARAMETER = re.compile(r"\s*(?P<marker>mutable[ \t]+)(?=[A-Za-z_(])")
+NAMED_MUTABLE_PARAMETER = re.compile(r"\s*[A-Za-z_][A-Za-z0-9_]*[ \t]+(?P<marker>mutable[ \t]+)(?=[A-Za-z_(])")
 CLONE_CALL = ".clone()"
 HELD_PREFIX = "seedHeld"
-PROVEN_LOOP_HOISTS = {
-	("maxon-bin/Compiler/Parser.maxon", "'eachCandidate'", "self.signatures.overloadedDeclsOf(callee)", "signatures", "slotTypeThroughCallReceiver"): "44f273abe7bed010dabdfb1805f7ab19f3b34d24066d5312fcdf4b5159bd2c89",
-}
 FIELD = re.compile(r"^cannot assign a value of type '(?P<got>[A-Za-z0-9_]+)' to (?:field|variable) '(?P<field>[A-Za-z0-9_]+)'(?: of '[A-Za-z0-9_]+')?, which holds '(?P<expected>[A-Za-z0-9_]+)'")
 
 AUTHOR_SOURCE_DIR = "maxon-bin"
@@ -532,6 +535,28 @@ class PayloadLets(LineRewrite):
 	def finish(self):
 		if self.end is not None:
 			raise Unhandled("a union is never closed")
+
+
+class MutableMarkers(LineRewrite):
+	def edits(self, line, masked):
+		edits = []
+
+		for m in FUNCTION_PARAMETER_LIST.finditer(masked):
+			open_index = m.end() - 1
+			close = match_forward(masked, open_index)
+			anonymous = m.group("name") is None
+
+			for begin, end in top_level_parts(masked, open_index + 1, close):
+				marked = (UNNAMED_MUTABLE_PARAMETER.match(masked, begin, end) if anonymous else None) or NAMED_MUTABLE_PARAMETER.match(masked, begin, end)
+
+				if marked is not None:
+					edits.append((marked.start("marker"), marked.end("marker"), ""))
+
+		return edits
+
+
+def strip_mutable_markers(work):
+	return rewrite_code(work, lambda text: MUTABLE_WORD in text, lambda rel: MutableMarkers())
 
 
 def strip_readonly_arguments(work):
@@ -1681,7 +1706,7 @@ def clone_borrowing_let(lines, borrow_index, element):
 	lines[borrow_index] = bound.group("head") + value + CLONE_CALL + bound.group("eol")
 
 
-def hoist_loop_borrow(lines, line_number, borrow, members, rel):
+def hoist_loop_borrow(lines, line_number, borrow, members):
 	borrow_index = int(borrow.group("line")) - 1
 
 	if not borrow_index < line_number - 1:
@@ -1704,20 +1729,11 @@ def hoist_loop_borrow(lines, line_number, borrow, members, rel):
 	if is_member_chain(iterated) and iterated.endswith(CLONE_CALL):
 		snapshot = iterated
 	else:
-		proven = PROVEN_LOOP_HOISTS.get((rel, label, iterated, borrow.group("owner"), borrow.group("via")))
 		close = loop_end(lines, borrow_index, indent, label)
 		regions = CodeRegions(lines)
-
-		if proven is None:
-			require_read_only_via(borrow, iterated, members)
-			body = [(lines[i], regions.view(i, lines[i])) for i in range(borrow_index + 1, close)]
-			require_unmutated(body, collection_spellings(iterated), members)
-		else:
-			digest = loop_digest(lines, regions, borrow_index, close)
-
-			if digest != proven:
-				raise Unhandled(f"the loop {label} in {rel} is a proven hoist only while its text digests to {proven}, and it now digests to {digest}; prove again that nothing its body reaches mutates `{iterated}`, then record the new digest in PROVEN_LOOP_HOISTS")
-
+		require_read_only_via(borrow, iterated, members)
+		body = [(lines[i], regions.view(i, lines[i])) for i in range(borrow_index + 1, close)]
+		require_unmutated(body, collection_spellings(iterated), members)
 		snapshot = f"({iterated}){CLONE_CALL}"
 
 	held = HELD_PREFIX + element[0].upper() + element[1:]
@@ -1726,11 +1742,6 @@ def hoist_loop_borrow(lines, line_number, borrow, members, rel):
 	lines.insert(borrow_index, f"{indent}let {held} = {snapshot}{eol}")
 
 	return borrow_index
-
-
-def loop_digest(lines, regions, loop_index, close):
-	normalized = (" ".join(regions.uncommented(i, lines[i]).split()) for i in range(loop_index, close + 1))
-	return hashlib.sha256("\n".join(line for line in normalized if line).encode("utf-8")).hexdigest()
 
 
 def is_member_chain(expression):
@@ -2566,7 +2577,7 @@ class Rewriter:
 					elif LET_BINDING.match(lines[borrow_index]):
 						clones.setdefault(borrow_index, (borrow, d, []))[2].append(key)
 					else:
-						hoists.append((borrow_index + 1, d, lambda borrow=borrow, line_number=line_number, rel=rel: hoist_loop_borrow(lines, line_number, borrow, self.members, rel), key))
+						hoists.append((borrow_index + 1, d, lambda borrow=borrow, line_number=line_number: hoist_loop_borrow(lines, line_number, borrow, self.members), key))
 
 					continue
 
@@ -2845,6 +2856,7 @@ def main():
 	if not args.resume:
 		os.makedirs(work, exist_ok=True)
 		stage_work(tree, work, seed, output)
+		print(f"withdrew {strip_mutable_markers(work)} `mutable` parameter markers", flush=True)
 
 		if args.older_seed and withdraw_older_seed_forms(work) != 0:
 			return 1

@@ -49,8 +49,8 @@ visible from the declaring file, because a type hidden from a file hides its mem
 function follows the visibility rules of any function, so a private one called from another file is
 **E3008**.
 
-A non-generic declaration of the same name whose parameter types are exactly the argument types is
-chosen over a generic one. Two generic declarations that both infer are ambiguous (**E3007**).
+A generic function and a non-generic one of the same name in one directory are two declarations of one name
+(**E3006**), and so are two generic ones.
 
 ## Tests
 
@@ -211,11 +211,11 @@ error E3180: <fragment>:16:10: the arguments of 'larger' give type parameter 'T'
 ```
 
 <!-- test: error.two-files-same-range-limits-give-no-one-type -->
-Three files of one directory each declare a file-private `Limit`: `pkg/a.maxon` and `pkg/b.maxon` over one
-range, `pkg/c.maxon` over another. The first two are still two declarations, so a value of each gives `T`
+Three files in three directories each declare a file-private `Limit`: `a/a.maxon` and `b/b.maxon` over one
+range, `c/c.maxon` over another. The first two are still two declarations, so a value of each gives `T`
 two types. The exported fields that carry those values name a file-private alias, which E3167 refuses too.
 ```maxon
-// --- file: pkg/a.maxon
+// --- file: a/a.maxon
 typealias Limit = int(0 to 9)
 
 export type Ha
@@ -226,7 +226,7 @@ export type Ha
 	end 'make'
 end 'Ha'
 
-// --- file: pkg/b.maxon
+// --- file: b/b.maxon
 typealias Limit = int(0 to 9)
 
 export type Hb
@@ -237,7 +237,7 @@ export type Hb
 	end 'make'
 end 'Hb'
 
-// --- file: pkg/c.maxon
+// --- file: c/c.maxon
 typealias Limit = int(0 to 5)
 
 export function smallOk() returns bool
@@ -245,7 +245,7 @@ export function smallOk() returns bool
 	return low == 1
 end 'smallOk'
 
-// --- file: pkg/main.maxon
+// --- file: main.maxon
 function larger(a T, b T) uses T returns T
 	if a > b 'first'
 		return a
@@ -263,9 +263,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3180: pkg/<fragment>:43:11: the arguments of 'larger' give type parameter 'T' no one type: 'Limit' (declared in pkg/a.maxon) and 'Limit' (declared in pkg/b.maxon) share no alias they both implement
-error E3167: pkg/<fragment>:6:18: exported field 'pkg.Ha.v' names file-private typealias 'Limit' in its type
-error E3167: pkg/<fragment>:17:18: exported field 'pkg.Hb.v' names file-private typealias 'Limit' in its type
+error E3180: <fragment>:43:11: the arguments of 'larger' give type parameter 'T' no one type: 'a.Limit' and 'b.Limit' share no alias they both implement
+error E3167: a/<fragment>:6:18: exported field 'a.Ha.v' names file-private typealias 'Limit' in its type
+error E3167: b/<fragment>:17:18: exported field 'b.Hb.v' names file-private typealias 'Limit' in its type
 ```
 
 <!-- test: error.a-record-that-is-not-equatable -->
@@ -513,44 +513,6 @@ end 'main'
 8 fig
 ```
 
-<!-- test: an-exact-non-generic-overload-wins -->
-```maxon
-function show(v String) returns String
-	return "text {v}"
-end 'show'
-
-function show(v T) uses T returns String
-	return "generic {v}"
-end 'show'
-
-function main() returns ExitCode
-	print("{show("a")} / {show(5)}\n")
-	return 0
-end 'main'
-```
-```stdout
-text a / generic 5
-```
-
-<!-- test: error.two-generic-overloads-are-ambiguous -->
-```maxon
-function show(v T) uses T returns String where T is Equatable
-	return "equatable {v}"
-end 'show'
-
-function show(v U) uses U returns String where U is Comparable
-	return "comparable {v}"
-end 'show'
-
-function main() returns ExitCode
-	print("{show(5)}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3007: <fragment>:11:10: Ambiguous overload for 'show': 2 generic declarations infer a type for this call
-```
-
 <!-- test: interpolation-in-a-generic-body -->
 ```maxon
 typealias Score = int(0 to 100)
@@ -589,7 +551,7 @@ end 'main'
 
 <!-- test: a-record-argument-is-its-callers-own-type -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 typealias Point = int(0 to 10)
 
 export function smaller(a T, b T) uses T returns T where T is Comparable
@@ -945,7 +907,7 @@ error E3008: specs/generic-functions/error.an-instance-cannot-read-a-field-named
 
 <!-- test: an-enum-argument-is-its-callers-own-type -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 typealias Shade = int(0 to 10)
 
 export function same(a T, b T) uses T returns bool where T is Equatable
@@ -972,7 +934,8 @@ end 'main'
 false true lib7
 ```
 
-<!-- test: two-files-each-call-their-own-private-generic -->
+<!-- test: error.two-files-of-one-directory-each-declare-a-private-generic-of-one-name -->
+Free functions are scoped by directory, so two files of one directory declare `pick` twice whether each is file-private or not.
 ```maxon
 // --- file: a.maxon
 function pick(a T) uses T returns T
@@ -993,8 +956,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-a1 b2
+```maxoncstderr
+error E3006: <fragment>:12:10: duplicate definition of 'pick' — already declared as `function pick`
 ```
 
 <!-- test: error.a-private-generic-is-not-callable-from-another-file -->
@@ -1159,6 +1122,7 @@ module function larger(a T, b T) uses T returns T where T is Comparable
 	return b
 end 'larger'
 
+// --- file: a/run.maxon
 export function runA()
 	print("a {larger(3, b: 7)}\n")
 end 'runA'
@@ -1172,6 +1136,7 @@ module function larger(a T, b T) uses T returns T where T is Comparable
 	return b
 end 'larger'
 
+// --- file: b/run.maxon
 export function runB()
 	print("b {larger(larger(3, b: 9), b: 5)}\n")
 end 'runB'
@@ -1189,6 +1154,272 @@ end 'main'
 ```stdout
 a 7
 b 9
+```
+
+
+<!-- test: two-directories-each-export-a-generic-of-one-name-and-each-qualifier-reaches-its-own -->
+Free functions are scoped by directory, so two directories may each export a generic `larger`. `alpha/`'s returns the greater argument and `beta/`'s the lesser, so a qualifier that reached the other directory's function shows in the output.
+```maxon
+// --- file: alpha/a.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+// --- file: beta/b.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return b
+	end 'first'
+
+	return a
+end 'larger'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{alpha.larger(3, b: 7)} {beta.larger(3, b: 7)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 3
+```
+
+
+<!-- test: error.a-bare-call-to-a-generic-two-directories-export-is-ambiguous -->
+Two directories export a generic `larger` and a third file calls it bare, which is the ambiguity two exported non-generic functions of one name make.
+```maxon
+// --- file: alpha/a.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+// --- file: beta/b.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return b
+	end 'first'
+
+	return a
+end 'larger'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{larger(3, b: 7)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3095: <fragment>:22:10: Ambiguous bare-name call to 'larger': more than one visible declaration matches it. Qualify it as one of: alpha.larger, beta.larger
+```
+
+
+<!-- test: a-bare-generic-call-in-each-declaring-directory-reaches-that-directorys-own -->
+Two directories each declare a `public` generic `larger` and each calls it bare, so each call means its own directory's function.
+```maxon
+// --- file: alpha/a.maxon
+public function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+export function runA()
+	print("a {larger(3, b: 7)}\n")
+end 'runA'
+
+// --- file: beta/b.maxon
+public function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return b
+	end 'first'
+
+	return a
+end 'larger'
+
+export function runB()
+	print("b {larger(3, b: 7)}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	alpha.runA()
+	beta.runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 7
+b 3
+```
+
+
+<!-- test: an-exported-generic-and-another-directorys-exported-non-generic-of-one-name-both-stand -->
+`alpha/` exports a generic `pick` and `beta/` a non-generic one, and each qualifier reaches its own.
+```maxon
+// --- file: alpha/a.maxon
+export function pick(a T) uses T returns T
+	return a
+end 'pick'
+
+// --- file: beta/b.maxon
+export typealias Reps = int(0 to 100)
+
+export function pick(n Reps) returns Reps
+	return n + n
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{alpha.pick("x")} {beta.pick(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+x 8
+```
+
+
+<!-- test: an-exported-non-generic-and-another-directorys-exported-generic-of-one-name-both-stand -->
+The pair of the case above in the other declaration order: the non-generic `pick` is in `alpha/` and the generic one in `beta/`.
+```maxon
+// --- file: alpha/a.maxon
+export typealias Reps = int(0 to 100)
+
+export function pick(n Reps) returns Reps
+	return n + n
+end 'pick'
+
+// --- file: beta/b.maxon
+export function pick(a T) uses T returns T
+	return a
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{alpha.pick(4)} {beta.pick("x")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 x
+```
+
+
+<!-- test: a-root-generic-owns-the-bare-name-beside-a-subdirectorys-exported-generic-of-one-name -->
+A root generic `larger` keeps the bare name, so the bare call reaches it, and the subdirectory's is reached through its qualifier.
+```maxon
+// --- file: sub/s.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return b
+	end 'first'
+
+	return a
+end 'larger'
+
+// --- file: main.maxon
+function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+function main() returns ExitCode
+	print("{larger(3, b: 7)} {sub.larger(3, b: 7)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 3
+```
+
+
+<!-- test: an-exported-generic-no-other-directory-declares-is-called-through-its-directory -->
+```maxon
+// --- file: lib/l.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{lib.larger(3, b: 7)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+
+<!-- test: error.two-files-of-one-directory-declare-a-generic-beside-another-directorys-generic-of-one-name -->
+Another directory declaring the name does not make room for a second declaration in `alpha/`.
+```maxon
+// --- file: alpha/a.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+// --- file: alpha/b.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return b
+	end 'first'
+
+	return a
+end 'larger'
+
+// --- file: beta/c.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	return a
+end 'larger'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{alpha.larger(3, b: 7)} {beta.larger(3, b: 7)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: alpha/<fragment>:12:17: duplicate definition of 'larger' — already declared as `function larger`
 ```
 
 

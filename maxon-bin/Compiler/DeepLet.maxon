@@ -153,8 +153,22 @@ export function deepLetConsumeMessage(door ByteArray, kind ReadOnlyRootKind) ret
 	return "cannot consume with '{String.from(door)}' a promise held in {readOnlyRootDescription(kind)}: consuming a promise empties the slot it was read from, and nothing reachable through a read-only value may be written; hold it in a `var` field"
 end 'deepLetConsumeMessage'
 
-export function deepLetCallMessage(subject String, paramName String, functionName String) returns String
-	return "cannot pass {subject} to a function that writes parameter '{paramName}' (in {functionName}); pass a clone()"
+// A function type names no parameter, so the witness and function-value routes name the position.
+export union WrittenParameter
+	named(let name ByteArray)
+	positional(position ParamCount)
+
+	export function display() returns String
+		return match self 'parameter'
+			named(name) gives "parameter '{displayParamName(name)}'"
+			positional(position) gives "argument {position + 1}"
+		end 'parameter'
+	end 'display'
+end 'WrittenParameter'
+
+// Pinned byte-for-byte by the `maxoncstderr` blocks across `specs/`; changing this wording fails the suite.
+export function deepLetCallMessage(subject String, parameter WrittenParameter, functionName String) returns String
+	return "cannot pass {subject} to a function that writes {parameter.display()} (in {functionName}); pass a clone()"
 end 'deepLetCallMessage'
 
 export function deepLetConversionMessage(calleeText String, interfaceName String) returns String

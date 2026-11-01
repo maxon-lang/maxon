@@ -290,14 +290,14 @@ end 'cacheReadServiceSpawnCandidateKeySet'
 
 // @generated library-cache end
 
-module function spawnCandidateKey(typeName ByteArray, member ByteArray, gate SpawnGate) returns ByteArray
+module function spawnCandidateKey(typeName ByteArray, member ByteArray, gate SpawnGate, directory String) returns ByteArray
 	let gateKey = match gate 'gate'
 		always gives SpawnCandidateAlwaysTag
 		libraryBody gives SpawnCandidateLibraryBodyTag
 		defaultOf(declaration) gives "{SpawnCandidateDefaultTag}{SpawnCandidateKeySeparator}{declaration.keyLine}{SpawnCandidateKeySeparator}{declaration.keyColumn}{SpawnCandidateKeySeparator}{declaration.declFilePath.comparisonSpelling()}"
 	end 'gate'
 
-	return "{String.from(typeName)}{SpawnCandidateKeySeparator}{String.from(member)}{SpawnCandidateKeySeparator}{gateKey}".toByteArray()
+	return "{String.from(typeName)}{SpawnCandidateKeySeparator}{String.from(member)}{SpawnCandidateKeySeparator}{gateKey}{SpawnCandidateKeySeparator}{directory}".toByteArray()
 end 'spawnCandidateKey'
 
 export type LiveReach
@@ -551,10 +551,6 @@ module union ServiceRosterVerdict
 	// Every message can become one variant of the request union.
 	rosterIsDispatchable
 
-	// A message declared more than once. One variant carries one payload shape, so an overloaded message has
-	// no single shape to become — and the dispatch `match` would have no arm to pick between them. E2015.
-	messageIsOverloaded(let methodName ByteArray, declarationCount ElementIndex)
-
 	// A message parameter of a type that cannot cross to another green thread. `noun` is what it IS, so the
 	// sentence reads as the reason rather than as a spelling (see `untransferableParameterNoun`).
 	messageParameterIsNotTransferable(let methodName ByteArray, let paramName ByteArray, noun String)
@@ -585,7 +581,7 @@ end 'ServiceRosterVerdict'
 
 module let ServiceSendTimeoutLabel = b"sendTimeout"
 
-function declaresTheSendTimeoutLabel(decl OverloadedDecl) returns bool
+function declaresTheSendTimeoutLabel(decl SweptDeclaration) returns bool
 	for p in 0 upto decl.paramNames.count() 'eachParamName'
 		if serviceParamName(decl, index: p as ParamCount).equals(ServiceSendTimeoutLabel) 'reserved'
 			return true
@@ -618,30 +614,18 @@ module function classifyServiceTarget(signatures ProgramSignatures, typeName Byt
 	end 'constrainedGeneric'
 
 	let factoryKey = qualifiedMethodName(typeName, methodName: member)
-	view decls = signatures.overloadedDeclsOf(factoryKey)
+	let decl = try signatures.sweptDeclarationOf(factoryKey) otherwise return ServiceTargetVerdict.memberIsNotDeclared
 
-	if decls.count() == 0 'noSuchMember'
-		return ServiceTargetVerdict.memberIsNotDeclared
-	end 'noSuchMember'
-
-	// ⚠ ANY member that starts a service makes the type a spawn target, because this sweep runs before a
-	// call picks its overload: the spawn then requires that the declaration its arguments bind starts one
-	// (`Parser.requireBoundFactoryStartsAService`, E3134). With no member starting one, the first
-	// declaration's verdict is the refusal.
-	if factoryDeclarationsStartingAService(signatures, typeName: typeName, decls: decls) > 0 'aMemberStartsOne'
-		return ServiceTargetVerdict.startsAService
-	end 'aMemberStartsOne'
-
-	return serviceTargetVerdictOf(classifyFactoryDeclaration(signatures, typeName: typeName, decl: serviceFirstDeclOf(decls, key: factoryKey)))
+	return serviceTargetVerdictOf(classifyFactoryDeclaration(signatures, typeName: typeName, decl: decl))
 end 'classifyServiceTarget'
 
-module enum FactoryVerdict
+enum FactoryVerdict
 	startsAService
 	memberTakesAReceiver
 	memberDoesNotReturnTheType
 end 'FactoryVerdict'
 
-module function classifyFactoryDeclaration(signatures ProgramSignatures, typeName ByteArray, decl OverloadedDecl) returns FactoryVerdict
+function classifyFactoryDeclaration(signatures ProgramSignatures, typeName ByteArray, decl SweptDeclaration) returns FactoryVerdict
 	if decl.takesReceiver 'anInstanceMethod'
 		return FactoryVerdict.memberTakesAReceiver
 	end 'anInstanceMethod'
@@ -653,19 +637,7 @@ module function classifyFactoryDeclaration(signatures ProgramSignatures, typeNam
 	return FactoryVerdict.startsAService
 end 'classifyFactoryDeclaration'
 
-function factoryDeclarationsStartingAService(signatures ProgramSignatures, typeName ByteArray, decls OverloadedDeclArray) returns ElementIndex
-	var serviceStarters = 0 as ElementIndex
-
-	for decl in decls 'eachDeclaration'
-		if classifyFactoryDeclaration(signatures, typeName: typeName, decl: decl) == FactoryVerdict.startsAService 'startsOne'
-			serviceStarters = serviceStarters + 1
-		end 'startsOne'
-	end 'eachDeclaration'
-
-	return serviceStarters
-end 'factoryDeclarationsStartingAService'
-
-module function serviceTargetVerdictOf(verdict FactoryVerdict) returns ServiceTargetVerdict
+function serviceTargetVerdictOf(verdict FactoryVerdict) returns ServiceTargetVerdict
 	return match verdict 'verdict'
 		startsAService gives ServiceTargetVerdict.startsAService
 		memberTakesAReceiver gives ServiceTargetVerdict.memberTakesAReceiver
@@ -740,13 +712,7 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
 		view methodName = layout.messageMethodAt(i)
 		let messageKey = qualifiedMethodName(typeName, methodName: methodName)
-		view decls = signatures.overloadedDeclsOf(messageKey)
-
-		if decls.count() > 1 'overloaded'
-			return ServiceRosterVerdict.messageIsOverloaded(methodName, declarationCount: decls.count())
-		end 'overloaded'
-
-		let decl = serviceFirstDeclOf(decls, key: messageKey)
+		let decl = serviceDeclarationOf(signatures, key: messageKey)
 
 		if declaresTheSendTimeoutLabel(decl) 'reservedLabel'
 			return ServiceRosterVerdict.messageDeclaresTheSendTimeoutLabel(methodName)
@@ -791,7 +757,7 @@ end 'classifyServiceRoster'
 // ⚠ **A MESSAGE WITH NO REPLY IS ASKED NOTHING**, which is what keeps a fire-and-forget roster unchanged: a
 // message that returns nothing and throws nothing has no reply slot, mints no cell, and reaches none of the
 // machinery below.
-function uncarriableReplyNoun(signatures ProgramSignatures, messageKey ByteArray, decl OverloadedDecl, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
+function uncarriableReplyNoun(signatures ProgramSignatures, messageKey ByteArray, decl SweptDeclaration, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
 	if not serviceMessageHasAReply(signatures, key: messageKey, decl: decl) 'fireAndForget'
 		return ServiceCrossing.acceptable
 	end 'fireAndForget'
@@ -1085,7 +1051,7 @@ end 'serviceUntransferableValueMessage'
 
 // ⭐⭐ **A MESSAGE PARAMETER'S DECLARED TYPE, RESOLVED — the one door the roster's rule and the request
 // payload both read.** `ProgramSignatures.normalizeSweptInterfaceTypes` re-tags a swept `named` that denotes an
-// interface in a struct's FIELD column and in the RETURN column, never in `OverloadedDecl.paramTypes`, and
+// interface in a struct's FIELD column and in the RETURN column, never in `SweptDeclaration.paramTypes`, and
 // `declaredSlotType`'s `interfaceType` arm deliberately THROWS (see `denotedSlotType`) — so a parameter written
 // `s Shape` arrives as a bare `named` and is re-tagged here through that normalization's own test.
 function serviceParamSlotType(signatures ProgramSignatures, declared MaxonType, into TypeNameInterner, declFilePath FilePath) returns MaxonType
@@ -1174,24 +1140,18 @@ module function serviceParamIndexOfPayload(payloads PayloadFieldArray, slot Elem
 	return seen
 end 'serviceParamIndexOfPayload'
 
-// ⭐⭐ **THE FIRST DECLARATION WEARING A SERVICE KEY — the ONE statement of the invariant that makes every
-// `.get(0)` on this path safe.** `classifyServiceTarget`, `classifyServiceRoster`, `serviceRequestPayloads`
-// and `ServiceLoop.buildMessageArm` all rest on it, so the day a message can reach any of them without a
-// declaration, the answer changes in one place.
-//
-// ⚠ **IT TAKES THE ARRAY, NOT THE KEY, AND THAT IS DELIBERATE.** Two of the callers have already asked
-// `overloadedDeclsOf` — one to refuse an EMPTY set, one to refuse an OVERLOADED one — and a door that
-// re-fetched would hash the key a second time to re-find a record the caller is holding, which is the
-// measured cost this file's `serviceLayoutOf` header records for exactly this shape. The key rides along
-// for the sentence only.
-module function serviceFirstDeclOf(decls OverloadedDeclArray, key ByteArray) returns OverloadedDecl
-	return try decls.get(0) otherwise panic("serviceFirstDeclOf: '{String.from(key)}' names no declaration — every caller reached here through a roster the declaration sweep built FROM those declarations, so `overloadedDeclsOf` cannot be empty")
-end 'serviceFirstDeclOf'
+// ⭐⭐ **THE DECLARATION WEARING A SERVICE KEY — the ONE statement of the invariant that makes every lookup on
+// this path safe.** `classifyServiceRoster`, `serviceRequestPayloads` and `ServiceLoop.buildMessageArm` all
+// rest on it, so the day a message can reach any of them without a declaration, the answer changes in one
+// place.
+module function serviceDeclarationOf(signatures ProgramSignatures, key ByteArray) returns SweptDeclaration
+	return try signatures.sweptDeclarationOf(key) otherwise panic("serviceDeclarationOf: '{String.from(key)}' names no declaration — every caller reached here through a roster the declaration sweep built FROM those declarations, so `sweptDeclarationOf` cannot miss")
+end 'serviceDeclarationOf'
 
-// A declaration's parameter name at `index`. `OverloadedDecl`'s two columns are source-aligned with the
+// A declaration's parameter name at `index`. `SweptDeclaration`'s two columns are source-aligned with the
 // receiver excluded, so this index is the one `paramTypes` was read at.
-function serviceParamName(decl OverloadedDecl, index ParamCount) returns ByteArray
-	return try decl.paramNames.get(index) otherwise panic("serviceParamName: index {index} is out of range for a declaration carrying {decl.paramNames.count()} parameter name(s) against {decl.paramTypes.count()} type(s) — the two columns of an `OverloadedDecl` are written by one act and are source-aligned")
+function serviceParamName(decl SweptDeclaration, index ParamCount) returns ByteArray
+	return try decl.paramNames.get(index) otherwise panic("serviceParamName: index {index} is out of range for a declaration carrying {decl.paramNames.count()} parameter name(s) against {decl.paramTypes.count()} type(s) — the two columns of an `SweptDeclaration` are written by one act and are source-aligned")
 end 'serviceParamName'
 
 // ⭐⭐ **THE ONE SENTENCE THAT TEACHES THE FORM — written once and quoted by every refusal that needs it.**
@@ -1238,13 +1198,6 @@ module function serviceReplyInstanceUnknownRefusal(typeName ByteArray, methodNam
 	return "`{String.from(typeName)}.{String.from(methodName)}` replies at `{String.from(typeName)}`'s own type parameter `{String.from(paramName)}`, and this handle stands at the bare `{String.from(serviceHandleCompanionName(typeName))}` — the ONE handle companion every instantiation of `{String.from(typeName)}` shares — so it names no instantiation and the reply has no type. SPELL the instantiation: `{String.from(serviceHandleCompanionName(typeName))} with <the type argument>` is a generic instance like any other, and a `typealias` over it carries the reply's type through a parameter, a struct field or an array element. Or send `{String.from(methodName)}` where the `spawn {String.from(typeName)}.{String.from(member)}(…)` binding is, which carries the instantiation already"
 end 'serviceReplyInstanceUnknownRefusal'
 
-// ⭐⭐ **THE WORDS FOR A `spawn` WHOSE ARGUMENTS BIND NO SINGLE DECLARATION OF AN OVERLOADED FACTORY.** The
-// type arguments are read off the declaration the call binds, and reading them off any other matches the
-// arguments against the wrong parameter list and binds a type argument from the wrong position.
-module function spawnUnboundFactoryRefusal(typeName ByteArray, member ByteArray, declarationCount ElementIndex) returns String
-	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` — `{String.from(member)}` is declared {declarationCount} times and the arguments pick no single one of them, so which factory the spawn starts a service from cannot be told. Give the arguments types that fit exactly one `{String.from(member)}`"
-end 'spawnUnboundFactoryRefusal'
-
 // ⭐⭐ **THE WORDS FOR A `spawn` WHOSE TYPE ARGUMENT IS STILL OPAQUE.** Written inside another generic
 // body, `spawn Box.create(item)` fixes `T` to the ENCLOSING declaration's parameter — a type the loop would
 // have to be handed a dictionary for, and a synthesized body carries none.
@@ -1279,7 +1232,6 @@ end 'serviceSendTimeoutNotLastRefusal'
 module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeName ByteArray) returns String
 	match verdict 'why'
 		rosterIsDispatchable then panic("serviceRosterRefusalMessage: asked for the words of a DISPATCHABLE roster on `type {String.from(typeName)}` — the caller refuses only the other arms")
-		messageIsOverloaded(methodName, declarationCount) then return "`{String.from(typeName)}.{String.from(methodName)}` is a message of the service `{String.from(typeName)}` and is declared {declarationCount} times. A message becomes ONE variant of the synthesized `{String.from(serviceRequestCompanionName(typeName))}` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names"
 		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
 		messageReplyHoldsAPromise(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` returns {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply is handed to the green thread that awaits it. `await` the promise in the handler and return the result it yields, or drop the `returns` clause"
 		messageReplyGraphIsNotWalkable(methodName, noun) then return serviceUnclosedRecordTransferMessage(serviceReplyBlame(typeName, methodName: methodName), sourceClause: NoTransferSourceClause, noun: noun)
@@ -1477,8 +1429,7 @@ end 'buildServiceRequestUnion'
 // fire-and-forget — nothing waits on it, so there is no cell to carry and no slot to make one for.
 function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray, methodName ByteArray, declFilePath FilePath, into TypeNameInterner) returns PayloadFieldArray
 	let key = qualifiedMethodName(typeName, methodName: methodName)
-	view decls = signatures.overloadedDeclsOf(key)
-	let decl = serviceFirstDeclOf(decls, key: key)
+	let decl = serviceDeclarationOf(signatures, key: key)
 
 	var payloads = PayloadFieldArray.create()
 
@@ -1500,7 +1451,7 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 	return payloads
 end 'serviceRequestPayloads'
 
-function serviceParamBrand(signatures ProgramSignatures, decl OverloadedDecl, index ElementIndex, slotType MaxonType, declFilePath FilePath) returns ByteArray
+function serviceParamBrand(signatures ProgramSignatures, decl SweptDeclaration, index ElementIndex, slotType MaxonType, declFilePath FilePath) returns ByteArray
 	if maxonTypeTag(slotType) != ValueTypeTag.genericInstance 'noBrandToCarry'
 		return EmptySourceText
 	end 'noBrandToCarry'
@@ -1515,7 +1466,7 @@ end 'serviceParamBrand'
 // ⚠ **IT IS THE BUILDER'S QUESTION AND NOT THE AUTHORITY EVERY OTHER SITE READS.** What decides
 // whether a SEND mints a cell and whether the loop completes one is `serviceReplySlotIndex`, asked
 // of the VARIANT this answer built.
-function serviceMessageHasAReply(signatures ProgramSignatures, key ByteArray, decl OverloadedDecl) returns bool
+function serviceMessageHasAReply(signatures ProgramSignatures, key ByteArray, decl SweptDeclaration) returns bool
 	if not maxonReturnTypeIsVoid(decl.returnType) 'returnsAValue'
 		return true
 	end 'returnsAValue'

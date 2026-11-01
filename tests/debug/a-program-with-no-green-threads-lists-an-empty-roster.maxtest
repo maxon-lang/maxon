@@ -1,9 +1,8 @@
 let NoGreenThreadsRosterCaseLabel = "a-program-with-no-green-threads-lists-an-empty-roster"
 
-let HotAnchorName = "hot"
 let StoppedFrameOffsetField = "GtOffSp"
 let ThreadsUnavailableKey = "threadsUnavailable"
-let ContinuesPastEveryHit = 20
+let AProgramWithNoGreenThreadsListsAnEmptyRosterContinuesPastEveryHit = 20
 
 test 'a program that carves no green thread publishes no roster word and answers threads with an empty list'
 	let staged = builtFixture(NoGreenThreadsRosterCaseLabel, fixture: HeaplessFixtureName)
@@ -24,7 +23,7 @@ test 'a program that carves no green thread publishes no roster word and answers
 	Expect.isTrue(sidecarTableRowsName(layout, name: StoppedFrameOffsetField), message: "⛔ THE ABSENCE ABOVE IS ONLY READABLE BESIDE THIS PRESENCE. The `{DumpLayoutSectionHeading}…)` section does not name `{StoppedFrameOffsetField}`, so this sidecar publishes no runtime contract at all — and a reader could not tell *this program has no green threads* from *this compiler publishes no rosters*. The section held: {listedLines(layout)}")
 
 	let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: HotAnchorName)
-	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, ThreadsCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryHit)))
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, ThreadsCommand], rest: repeatedCommand(ContinueCommand, times: AProgramWithNoGreenThreadsListsAnEmptyRosterContinuesPastEveryHit)))
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)

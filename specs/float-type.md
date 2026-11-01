@@ -494,7 +494,7 @@ function show(w Weight)
 	print("{w}\n")
 end 'show'
 
-function settle(r Ratio)
+function settle(r mutable Ratio)
 	r = 0.25
 	show(r)
 end 'settle'

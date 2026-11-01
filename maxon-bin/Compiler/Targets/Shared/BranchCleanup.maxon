@@ -425,11 +425,11 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 
 		// The edges as they stand AFTER the threading above: every branch target goes through `resolved`.
 		for k in 0 upto topo.succ.degree(u as CsrIndex) 'eachSucc'
-			markReachable(reachable, stack: stack, local: try resolved.get(topo.succ.neighbour(u as CsrIndex, k: k)) otherwise panic("dropUnreachableBlocks: resolved.get OOB"))
+			markLocalReachable(reachable, stack: stack, local: try resolved.get(topo.succ.neighbour(u as CsrIndex, k: k)) otherwise panic("dropUnreachableBlocks: resolved.get OOB"))
 		end 'eachSucc'
 
 		if (not blockAt(module, topo: topo, local: u).hasTerminatorOp()) and u + 1 < topo.numBlocks 'fallsThroughPhysically'
-			markReachable(reachable, stack: stack, local: u + 1)
+			markLocalReachable(reachable, stack: stack, local: u + 1)
 		end 'fallsThroughPhysically'
 	end 'walk'
 
@@ -448,16 +448,16 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 end 'dropUnreachableBlocks'
 
 // Mark a block reachable and queue it, once. Both columns are the caller's.
-function markReachable(reachable BoolArray, stack CfgIndexArray, local ElementIndex)
-	let seenBefore = try reachable.get(local) otherwise panic("markReachable: reachable.get OOB at {local}")
+function markLocalReachable(reachable BoolArray, stack CfgIndexArray, local ElementIndex)
+	let seenBefore = try reachable.get(local) otherwise panic("markLocalReachable: reachable.get OOB at {local}")
 
 	if seenBefore 'alreadySeen'
 		return
 	end 'alreadySeen'
 
-	try reachable.set(local, value: true) otherwise panic("markReachable: reachable.set OOB at {local}")
+	try reachable.set(local, value: true) otherwise panic("markLocalReachable: reachable.set OOB at {local}")
 	stack.push(local)
-end 'markReachable'
+end 'markLocalReachable'
 
 // ==========================================================================
 // Transform 5 — cold-block sinking

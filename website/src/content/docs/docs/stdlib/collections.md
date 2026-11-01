@@ -30,7 +30,7 @@ function main() returns ExitCode
 		print("{x} ")
 	end 'each'
 
-	a.sort(function(x Score, y Score) gives y.compare(x))
+	a.sortBy(function(x Score, y Score) gives y.compare(x))
 	let first = try a.first() otherwise 0
 	let missing = try a.get(50) otherwise -1
 	print("\n{last} {first} {missing} {a.contains(9)}\n")
@@ -63,7 +63,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | `last()` | `Element` | Throws `indexOutOfBounds` when empty. |
 | `slice(start, endIndex)` | `Array` | Elements `[start, endIndex)`. Throws `indexOutOfBounds` for a reversed or out-of-range pair; nothing is clamped. |
 | `contains(element Element)` | `bool` | Element test. Requires `Element is Equatable`. |
-| `contains(sequence Array)` | `bool` | True when `sequence` occurs contiguously. An empty sequence is always contained. Requires `Element is Equatable`. |
+| `containsSequence(sequence Array)` | `bool` | True when `sequence` occurs contiguously. An empty sequence is always contained. Requires `Element is Equatable`. |
 
 ### Writing
 
@@ -96,8 +96,8 @@ An array grows by doubling while small and eases toward 1.25x once it is large.
 |--------|-------------|
 | `sort()` | Stable sort by `Comparable.compare`. Requires `Element is Comparable`. |
 | `sortUnstable()` | Unstable sort (pattern-defeating quicksort). Requires `Element is Comparable`. |
-| `sort(cmp function(Element, Element) returns Ordering)` | Stable sort by a comparator; any element type. |
-| `sortUnstable(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
+| `sortBy(cmp function(Element, Element) returns Ordering)` | Stable sort by a comparator; any element type. |
+| `sortUnstableBy(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
 
 A sort reads and writes no module-level state, so it may run inside a service message handler without
 tripping [E3143](/docs/cli/error-codes/#e3143--semanticmodulevarinserviceprogram).
@@ -109,7 +109,7 @@ tripping [E3143](/docs/cli/error-codes/#e3143--semanticmodulevarinserviceprogram
 | `createIterator()` | `ArrayIterator` | Positioned at the first element. Throws `IterationError.exhausted` when empty. |
 | `cursor()` | `ArrayIterator` | The same as `createIterator()`. |
 
-`map`, `filter`, `contains(predicate)` and `withIterator` come from [Iterable](#interfaces).
+`map`, `filter`, `containsWhere(predicate)` and `withIterator` come from [Iterable](#interfaces).
 
 ### ArrayError
 
@@ -500,7 +500,7 @@ end 'Ordering'
 | `BidirectionalIterator` | `retreatBy(n IterStep)` | — | Call `retreat()` `n` times. |
 | `Iterable` | `map(transform function(Element) returns Element)` | `Array with Element` | Each element transformed. |
 | `Iterable` | `filter(keep function(Element) returns bool)` | `Array with Element` | The elements `keep` accepts. |
-| `Iterable` | `contains(predicate function(Element) returns bool)` | `bool` | True when any element matches. |
+| `Iterable` | `containsWhere(predicate function(Element) returns bool)` | `bool` | True when any element matches. |
 | `Iterable` | `withIterator()` | iterator pairs | Iterate as `for (iter, element) in collection.withIterator()`, with the iterator in hand. |
 
 ```maxon

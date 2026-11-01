@@ -293,9 +293,9 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 
 	// The declaration this variant was built from. Its `paramTypes` count is how many of the variant's
 	// payloads are ARGUMENTS (the rest is the reply slot), which is what the loop below is bounded by; the
-	// "it cannot miss" invariant is `ServiceCompanions.serviceFirstDeclOf`'s, stated once for all four
+	// "it cannot miss" invariant is `ServiceCompanions.serviceDeclarationOf`'s, stated once for all the
 	// places that rest on it.
-	let decl = serviceFirstDeclOf(signatures.overloadedDeclsOf(callee), key: callee)
+	let decl = serviceDeclarationOf(signatures, key: callee)
 
 	// ⚠ **ONLY THE DECLARED PARAMETERS ARE LOADED, AND THE `__reply` SLOT IS NOT ONE.** A message with a
 	// reply carries its cell in a trailing slot; loading it would hand the handler an argument its declaration
@@ -319,7 +319,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// ⭐ **THE HANDLER'S RETURN TYPE IS DERIVED ONCE AND THREADED.** The call and the completion must agree
 	// about a type this instantiation SUBSTITUTED, and two derivations of one substitution are two chances
 	// to disagree about which register the reply's value word came back in.
-	let returned = try serviceHandlerReturnType(signatures, callee: callee, instance: instance, typeNames: signatures.indexTypeNames()) otherwise panic("buildMessageArm: '{String.from(callee)}' has a declaration (`serviceFirstDeclOf` just answered) yet records no return type — both read the one declaration sweep")
+	let returned = try serviceHandlerReturnType(signatures, callee: callee, instance: instance, typeNames: signatures.indexTypeNames()) otherwise panic("buildMessageArm: '{String.from(callee)}' has a declaration (`serviceDeclarationOf` just answered) yet records no return type — both read the one declaration sweep")
 	let reply = serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, site: site)
 	view cells = spillReassignedPayloads(fn, byReference: funcNames.byReferenceParamsOf(callee), classes: payloadClasses, types: payloadTypes, args: args, site: site)
 	let outcome = emitServiceHandlerCall(fn, callee: callee, returned: returned, signatures: signatures, args: handlerArgsOf(args, cells: cells), site: site)

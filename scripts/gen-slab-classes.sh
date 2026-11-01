@@ -115,10 +115,10 @@ export let SlabMaxSmallSize = 32768
 export let SlabSmallSizeMax = 1024
 export let SlabSmallSizeDiv = 8
 export let SlabLargeSizeDiv = 128
-// One page. `SlabPageShift` and `SlabPageBytes` are ONE fact written twice by necessity (a shift and
+// One page. `SlabPageShift` and `SlabChunkBytes` are ONE fact written twice by necessity (a shift and
 // its value); `checkSlabClassTable` asserts they agree rather than trusting the pair.
 export let SlabPageShift = 13
-export let SlabPageBytes = 8192
+export let SlabChunkBytes = 8192
 
 DECL
 # ⚠ The table is emitted as `.create()` + `.push()` and NOT as an array literal. A literal infers

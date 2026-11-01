@@ -101,8 +101,8 @@
 // **FOLLOW-UP, NAMED: an address-hint operand on `osReservePages`** is what makes Go's routine expressible;
 // until something needs the mask, a straddling arena costs one extra 64 KiB table.
 //
-// ⚠ **THE CHUNK IS `SlabPageBytes` — GO'S 8 KiB PAGE — AND IT IS NOT SPELLED HERE.** `SlabClasses.maxon`
-// declares `SlabPageShift`/`SlabPageBytes` and `SlabClassTable.checkSlabClassTable` already asserts the two
+// ⚠ **THE CHUNK IS `SlabChunkBytes` — GO'S 8 KiB PAGE — AND IT IS NOT SPELLED HERE.** `SlabClasses.maxon`
+// declares `SlabPageShift`/`SlabChunkBytes` and `SlabClassTable.checkSlabClassTable` already asserts the two
 // agree; this file reads them. Spelling the arena-map index math's own page masks as literals would be
 // 8192 written twice, which is how a page-size change silently leaves the map indexing one geometry and
 // the class table another.
@@ -252,7 +252,7 @@ type SlabArenaGeometry
 		let commitBitmapWords = (granuleCount + BitmapBitsPerWordMask) shr BitmapBitsPerWordShift
 		let commitBitmapOffset = ArenaBitmapOffset + ((bitmapWords * ArenaWordBytes) as ByteOffset)
 		let seenFreeBitmapOffset = commitBitmapOffset + ((commitBitmapWords * ArenaWordBytes) as ByteOffset)
-		let bytes = chunks * SlabPageBytes
+		let bytes = chunks * SlabChunkBytes
 		return Self{chunkCount: chunkCount, bitmapWords: bitmapWords, granuleCount: granuleCount, commitBitmapWords: commitBitmapWords, commitBitmapOffset: commitBitmapOffset, seenFreeBitmapOffset: seenFreeBitmapOffset, bytes: bytes, reservationBytes: bytes + arenaAlignSlackBytes(hasPageReservation), hasPageReservation: hasPageReservation}
 	end 'fromChunkCount'
 end 'SlabArenaGeometry'
@@ -297,7 +297,7 @@ let ArenaWordBytes = 8
 
 // ⭐⭐ **THE UNIT AN ARENA COMMITS IN, AND EVERY REASON FOR THE NUMBER IS A PLATFORM'S.** 64 KiB is Windows'
 // ALLOCATION GRANULARITY, it is a whole multiple of every page size the four lanes use — including
-// arm64-macOS's **16 KiB**, which is TWICE `SlabPageBytes` and is the constraint that decides this — and it is
+// arm64-macOS's **16 KiB**, which is TWICE `SlabChunkBytes` and is the constraint that decides this — and it is
 // exactly what `MmRuntime`'s arena commits today, so routing the allocator through this layer changes a
 // program's resident set by nothing.
 //
@@ -476,8 +476,8 @@ export function checkSlabArenaGeometry(signatures ProgramSignatures, tierPath Fi
 
 	// The commit granule is a whole number of chunks (so the shift that derives its chunk count loses
 	// nothing). A fact about the granule alone, so it is asked once rather than once per arena geometry.
-	if SlabArenaCommitGranuleChunks * SlabPageBytes != SlabArenaCommitGranuleBytes 'granuleNotWholeChunks'
-		panic("slab arena: a commit granule of {SlabArenaCommitGranuleBytes} bytes is not a whole number of {SlabPageBytes}-byte chunks")
+	if SlabArenaCommitGranuleChunks * SlabChunkBytes != SlabArenaCommitGranuleBytes 'granuleNotWholeChunks'
+		panic("slab arena: a commit granule of {SlabArenaCommitGranuleBytes} bytes is not a whole number of {SlabChunkBytes}-byte chunks")
 	end 'granuleNotWholeChunks'
 
 	// The two shifts a granule is reached by. The tier's `slabArenaCommitGranulesFor` divides a CHUNK
@@ -554,7 +554,7 @@ function arenaTierPins(target Target) returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("this lane's align-up slack", here: arenaAlignSlackBytes(targetHasPageReservation(target)), named: "ArenaAlignSlackBytes"))
 
 	out.push(TierGeometryPin.create("the chunk shift", here: SlabPageShift, named: "SlabPageShift"))
-	out.push(TierGeometryPin.create("the chunk granularity", here: SlabPageBytes, named: "SlabPageBytes"))
+	out.push(TierGeometryPin.create("the chunk granularity", here: SlabChunkBytes, named: "SlabPageBytes"))
 
 	out.push(TierGeometryPin.create("a bitmap word's bits", here: BitmapBitsPerWord, named: "BitmapBitsPerWord"))
 	out.push(TierGeometryPin.create("a bitmap word's shift", here: BitmapBitsPerWordShift, named: "BitmapBitsPerWordShift"))
@@ -632,8 +632,8 @@ function checkArenaGeometryForLane(geometry SlabArenaGeometry)
 	// any of them widens.
 	let metadataBytes = (geometry.seenFreeBitmapOffset as FullRangeInt) + geometry.commitBitmapWords * ArenaWordBytes
 
-	if metadataBytes > ArenaMetadataChunks * SlabPageBytes 'metadataOverflowsChunk'
-		panic("slab arena ({lane}): {metadataBytes} bytes of metadata do not fit in {ArenaMetadataChunks} chunk(s) of {SlabPageBytes}")
+	if metadataBytes > ArenaMetadataChunks * SlabChunkBytes 'metadataOverflowsChunk'
+		panic("slab arena ({lane}): {metadataBytes} bytes of metadata do not fit in {ArenaMetadataChunks} chunk(s) of {SlabChunkBytes}")
 	end 'metadataOverflowsChunk'
 
 	checkArenaReservationSlack(geometry, lane: lane)
@@ -706,7 +706,7 @@ end 'arenaLaneName'
 
 // A width and the shift that divides by it are ONE fact written twice, by necessity — this file has four
 // such pairs, and the emitted code reaches each pair through whichever half its own expression happened to
-// name. `checkSlabClassTable` asserts exactly this about `SlabPageShift`/`SlabPageBytes` and states the
+// name. `checkSlabClassTable` asserts exactly this about `SlabPageShift`/`SlabChunkBytes` and states the
 // reason in full: a change to one half leaves the other silently describing a different geometry.
 function requireShiftMatchesWidth(what String, shift FullRangeInt, width FullRangeInt)
 	let produced = (1 shl shift) as FullRangeInt
@@ -719,7 +719,7 @@ end 'requireShiftMatchesWidth'
 // Chunks a byte count occupies, rounded up. The reverse map's three table sizes are the only caller, and
 // they are compile-time constants — this runs in the COMPILER, so the runtime pays a `const` and no divide.
 function arenaChunksFor(bytes FullRangeInt) returns FullRangeInt
-	return (bytes + SlabPageBytes - 1) / SlabPageBytes
+	return (bytes + SlabChunkBytes - 1) / SlabChunkBytes
 end 'arenaChunksFor'
 
 // ⭐ **THE LARGEST RUN `__slab_arena_alloc_chunks` CAN EVER SATISFY ON A LANE.** Exported because the OBJECT

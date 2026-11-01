@@ -243,6 +243,10 @@ export type GenericFunctionTemplate
 		return declarationSiteKey(self.declFilePath, line: self.line, column: self.column)
 	end 'siteKey'
 
+	export function keyedAs(registeredKey ByteArray) returns GenericFunctionTemplate
+		return GenericFunctionTemplate.create(registeredKey, declFilePath: self.declFilePath, line: self.line, column: self.column, typeParamNames: self.typeParamNames, paramNames: self.paramNames, paramSlots: self.paramSlots, paramTypeParams: self.paramTypeParams, constraints: self.constraints, takesReceiver: self.takesReceiver, visibility: self.visibility, enclosingTypeName: self.enclosingTypeName)
+	end 'keyedAs'
+
 	// A template below the program-wide tiers shares its key with every file declaring that name, and two
 	// files can hold it at one line and column, so its instances also carry a hash of `declaringFile`:
 	// the project-relative path (`ProgramSignatures.projectRelativeFileDisplay`), because two directories
@@ -259,7 +263,7 @@ export type GenericFunctionTemplate
 			suffix = "{suffix}#{String.from(argument.spelling())}"
 		end 'eachArgument'
 
-		return overloadRegistrationName(self.key, suffix: suffix.toByteArray())
+		return mintedName(self.key, suffix: suffix.toByteArray())
 	end 'instanceName'
 
 	// @generated library-cache begin
@@ -362,7 +366,7 @@ export function declarationSiteKey(declFilePath FilePath, line LineNumber, colum
 end 'declarationSiteKey'
 
 export function genericInstanceNameMarker() returns ByteArray
-	return overloadRegistrationName(b"", suffix: GenericInstanceSuffixHead.toByteArray())
+	return mintedName(b"", suffix: GenericInstanceSuffixHead.toByteArray())
 end 'genericInstanceNameMarker'
 
 export union GenericInstanceOrigin

@@ -981,11 +981,11 @@ end 'main'
 8
 ```
 
-### A local bound to a call on an overloaded method's result
+### A local bound to a call on a method's result
 
-`dup` has two overloads that both answer `Self`, so the result is the receiver's own instance whichever is bound, and `c.size()` reads `bool`'s size.
+`dup` and `dupTimes` both answer `Self`, so the result is the receiver's own instance, and `c.size()` reads `bool`'s size.
 
-<!-- test: a-local-bound-to-an-overloaded-methods-result-is-the-receiver-instance -->
+<!-- test: a-local-bound-to-a-methods-result-is-the-receiver-instance -->
 ```maxon
 type Slot uses V
 	var n as Count
@@ -998,9 +998,9 @@ type Slot uses V
 		return Self{n: n}
 	end 'dup'
 
-	function dup(times Count) returns Self
+	function dupTimes(times Count) returns Self
 		return Self{n: times}
-	end 'dup'
+	end 'dupTimes'
 
 	function size() returns Count
 		return sizeof(V)

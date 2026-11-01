@@ -1,0 +1,12 @@
+let DuplicatesCase = "duplicate-private-functions-refused"
+
+test 'duplicate-private-functions-refused is a compile error, not a crash'
+	checkFixture(DuplicatesCase)
+end 'duplicate-private-functions-refused is a compile error, not a crash'
+
+test 'a duplicate private function is reported at each later declaration, in the author file'
+	let run = runFixture(DuplicatesCase)
+	Expect.contains(run.stderr, needle: "{DuplicatesCase}{FilePath.separator()}beta.maxtest:", message: "the second declaration of a free function in one directory is reported under `{TestCommandName}` naming the author's file. It said: {run.stderr}")
+	Expect.contains(run.stderr, needle: "{DuplicatesCase}{FilePath.separator()}gamma.maxtest:", message: "the third declaration is reported too. It said: {run.stderr}")
+	Expect.contains(run.stderr, needle: "duplicate definition of 'fixtureSource'", message: "the diagnostic names the function. It said: {run.stderr}")
+end 'a duplicate private function is reported at each later declaration, in the author file'

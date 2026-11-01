@@ -363,7 +363,7 @@ type RangeCheckEmitter
 
 		for index in 0 upto self.functionChecks.argSites.count() 'eachArgSite'
 			view argSite = try self.functionChecks.argSites.get(index) otherwise panic("run: argSites.get OOB at {index}")
-			self.processArgSite(argSite, index: index, filePath: self.functionChecks.filePath)
+			self.processArgSite(argSite, filePath: self.functionChecks.filePath)
 		end 'eachArgSite'
 
 		self.processReturnSites()
@@ -831,8 +831,8 @@ type RangeCheckEmitter
 	// ⚠ The alias is the CALLEE's declaration, never one this function's file resolves: the range a
 	// parameter was declared with is the one visible where the FUNCTION was written. The diagnostic's
 	// file stays this function's — see `guardVerdict`.
-	function processArgSite(site RangeCheckArgSite, index ElementIndex, filePath FilePath)
-		var alias = try self.paramAliasOf(site, index: index) otherwise return
+	function processArgSite(site RangeCheckArgSite, filePath FilePath)
+		var alias = try self.aliasOfParameter(site.parameter) otherwise return
 		self.checkArgAgainstParamRange(site, alias: alias, filePath: filePath)
 	end 'processArgSite'
 
@@ -847,17 +847,9 @@ type RangeCheckEmitter
 		end 'verdict'
 	end 'checkArgAgainstParamRange'
 
-	function paramAliasOf(site RangeCheckArgSite, index ElementIndex) returns RangedTypeAlias throws MapError
-		let retargeted = try self.project.rangeSiteFacts.retargetedParameter(self.func.name, index: index) otherwise 'notRetargeted'
-			return try self.aliasOfParameter(site.parameter)
-		end 'notRetargeted'
-
-		return try self.aliasOfParameter(retargeted)
-	end 'paramAliasOf'
-
 	function aliasOfParameter(parameter ArgSiteParameter) returns RangedTypeAlias throws MapError
 		match parameter 'parameter'
-			ofCallee(_, callee, argIndex, label) then return try self.calleeParamAliasOf(callee, argIndex: argIndex, label: label)
+			ofCallee(callee, argIndex, label) then return try self.calleeParamAliasOf(callee, argIndex: argIndex, label: label)
 			slotAlias(alias) then return alias
 		end 'parameter'
 	end 'aliasOfParameter'

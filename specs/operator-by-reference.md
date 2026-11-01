@@ -15,68 +15,10 @@ handing it to a function that does: that is refused at the method's declaration 
 whether or not it satisfies one. Operator operands are always read, so a `let`, a `var`, a field or an expression is an equally
 good operand.
 
-Any other requirement keeps the direct-call rule, and a position some conformer writes is passed by reference
-(`witness-by-reference.md`).
+Any other requirement keeps the direct-call rule, and a position the requirement marks `mutable` is passed by
+reference (`witness-by-reference.md`).
 
 ## Tests
-
-<!-- test: operator-by-reference.error.equals-may-not-assign-its-parameter -->
-```maxon
-typealias Count = int(i64.min to i64.max)
-
-type Tagged implements Equatable
-	export var tag as Count
-
-	static function create(tag Count) returns Self
-		return Self{tag: tag}
-	end 'create'
-
-	function equals(other Self) returns bool
-		let same = self.tag == other.tag
-		other = Tagged.create(0)
-		return same
-	end 'equals'
-end 'Tagged'
-
-function main() returns ExitCode
-	let a = Tagged.create(2)
-	let b = Tagged.create(2)
-	print("{a == b}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3187: <fragment>:11:11: 'Tagged.equals' writes its parameter 'other', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
-```
-
-<!-- test: operator-by-reference.error.compare-may-not-assign-its-parameter -->
-```maxon
-typealias Count = int(i64.min to i64.max)
-
-type Ranked implements Comparable
-	export var rank as Count
-
-	static function create(rank Count) returns Self
-		return Self{rank: rank}
-	end 'create'
-
-	function compare(other Self) returns Ordering
-		let verdict = Ordering.lessThan if self.rank < other.rank else Ordering.equalTo
-		other = Ranked.create(0)
-		return verdict
-	end 'compare'
-end 'Ranked'
-
-function main() returns ExitCode
-	let a = Ranked.create(1)
-	let b = Ranked.create(2)
-	print("{a < b}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3187: <fragment>:11:11: 'Ranked.compare' writes its parameter 'other', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
-```
 
 <!-- test: operator-by-reference.error.a-write-through-a-helper-is-refused -->
 ```maxon
@@ -97,7 +39,7 @@ type Tagged implements Equatable
 end 'Tagged'
 
 function clear(target Tagged)
-	target = Tagged.create(0)
+	target.tag = 0
 end 'clear'
 
 function main() returns ExitCode
@@ -111,7 +53,8 @@ end 'main'
 error E3187: <fragment>:11:11: 'Tagged.equals' writes its parameter 'other', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
 ```
 
-<!-- test: operator-by-reference.error.an-enum-conformer-may-not-write-its-operand -->
+<!-- test: operator-by-reference.error.an-enum-conformer-may-not-reassign-its-operand -->
+An operand is a `let` like every unmarked parameter, so reassigning it is refused as any parameter reassignment is.
 ```maxon
 enum Shade implements Equatable
 	light
@@ -130,7 +73,31 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3187: <fragment>:6:11: 'Shade.equals' writes its parameter 'other', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
+error E2013: <fragment>:8:3: 'other' is a parameter and cannot be reassigned; mark it mutable or copy it into a local var
+```
+
+<!-- test: operator-by-reference.error.an-enum-conformer-marking-its-operand-mutable-does-not-conform -->
+A `mutable` marker is part of the requirement's signature, and `equals(other Self)` is unmarked, so a conformer that marks its operand does not implement it.
+```maxon
+enum Shade implements Equatable
+	light
+	dark
+
+	function equals(other mutable Self) returns bool
+		let same = self == other
+		other = Shade.light
+		return same
+	end 'equals'
+end 'Shade'
+
+function main() returns ExitCode
+	print("{Shade.light == Shade.dark}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:2:6: Partial interface implementation: type 'Shade' has 1 method(s) with wrong signature:
+  - equals(other mutable Shade) returns bool (expected equals(other Self) returns bool)
 ```
 
 <!-- test: operator-by-reference.error.a-conformer-through-an-extending-interface-may-not-write-its-operand -->
@@ -154,7 +121,7 @@ type Tagged implements Keyed
 
 	function equals(other Self) returns bool
 		let same = self.tag == other.tag
-		other = Tagged.create(0)
+		other.tag = 0
 		return same
 	end 'equals'
 end 'Tagged'
@@ -181,7 +148,7 @@ type Plain
 	end 'create'
 
 	function equals(other Self) returns bool
-		other = Plain.create(0)
+		other.tag = 0
 		return true
 	end 'equals'
 end 'Plain'
@@ -377,7 +344,7 @@ type Tagged
 		return Self{tag: tag}
 	end 'create'
 
-	function equals(other Self, tolerance Count) returns bool
+	function equals(other Self, tolerance mutable Count) returns bool
 		tolerance = tolerance + 1
 		return self.tag == other.tag
 	end 'equals'

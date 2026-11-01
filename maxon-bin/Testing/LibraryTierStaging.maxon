@@ -22,8 +22,6 @@ module type StagedTierDirs
 	end 'create'
 
 	module static function beneath(tierRoot FilePath) returns StagedTierDirs throws TierStagingError
-		// Interpolated so the argument is a committed `String` — see `specTempRootDir` for why a bare
-		// module-`let` constant is ambiguous between `join`'s two overloads.
 		let stagedStdlib = tierRoot.join("{StdlibDirName}")
 		let stagedRuntime = try runtimeDirBeside(stagedStdlib) otherwise throw TierStagingError.refused("could not derive the staged runtime tier beside {stagedStdlib.toString()}")
 
@@ -68,7 +66,7 @@ function copySourceTier(from FilePath, into FilePath, written FilePathArray) thr
 	for source in sources 'eachSource'
 		let relative = try source.relativeTo(from) otherwise throw TierStagingError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
 
-		let destination = into.join(relative)
+		let destination = into.joinPath(relative)
 		let parent = try destination.parent() otherwise throw TierStagingError.refused("could not derive a directory for {destination.toString()}")
 
 		if not Directory.create(parent) 'noSubdir'

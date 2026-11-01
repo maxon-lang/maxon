@@ -538,7 +538,7 @@ public extension Array where Element is Equatable
 		return false
 	end 'contains'
 
-	public function contains(sequence ElementArray) returns bool
+	public function containsSequence(sequence ElementArray) returns bool
 		let selfLen = count()
 		let elemLen = sequence.count()
 
@@ -570,7 +570,7 @@ public extension Array where Element is Equatable
 		end 'scan'
 
 		return false
-	end 'contains'
+	end 'containsSequence'
 end 'Array'
 
 // The sort entry points. The bodies here dispatch; the algorithms are in stdlib/helpers/sort/.
@@ -580,7 +580,7 @@ end 'Array'
 // stops every handler that sorts from compiling, blaming a file its author does not own —
 // specs/green-thread-globals.md's `a-handler-may-sort-its-own-field` is the case that turns red.
 //
-// The Comparable overloads pass an inline closure whose `x.compare(y)` dispatches through the
+// `sort` and `sortUnstable` pass an inline closure whose `x.compare(y)` dispatches through the
 // enclosing extension's `where Element is Comparable` witness slot by closure-env inheritance.
 public extension Array where Element is Comparable
 	/// Sort in place using the element's `Comparable.compare` ordering.
@@ -602,18 +602,18 @@ end 'Array'
 
 public extension Array
 	/// Sort in place using the supplied comparator. Stable.
-	public function sort(cmp SortComparator)
+	public function sortBy(cmp SortComparator)
 		let lo = 0
 		let hi = managed.length()
 		self.driftsortRange(lo, hi: hi, cmp: cmp)
-	end 'sort'
+	end 'sortBy'
 
 	/// Sort in place using the supplied comparator. Unstable.
-	public function sortUnstable(cmp SortComparator)
+	public function sortUnstableBy(cmp SortComparator)
 		let lo = 0
 		let hi = managed.length()
 		self.pdqsortRange(lo, hi: hi, cmp: cmp)
-	end 'sortUnstable'
+	end 'sortUnstableBy'
 end 'Array'
 
 // The compiler's native `__managed_hash` (`ManagedMemoryRuntime.buildArrayHash`) computes this same

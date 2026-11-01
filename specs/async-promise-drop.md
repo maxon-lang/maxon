@@ -58,8 +58,7 @@ child out (the program lives as long as the child does), so it exercises another
 pin.
 
 A promise handed to a call moves into a parameter the callee takes (one it awaits, cancels, stores or returns,
-or hands on to a callee that takes it) and stays with the caller at a parameter that only reads it; where the overloads a call may bind differ, the
-overload it binds decides. An `async` call moves a promise only into a parameter every overload takes: the
+or hands on to a callee that takes it) and stays with the caller at a parameter that only reads it. An `async` call moves a promise only into a parameter the callee takes: the
 coroutine can outlive the frame that started it, so a promise, or a value whose type holds one, at a parameter
 that only reads it is E3141. A coroutine dropped before it runs reclaims the promise it was handed. One promise
 at two arguments of one call where a parameter takes it is E3102, reported at the second argument and naming
@@ -2049,8 +2048,8 @@ end 'main'
 7
 ```
 
-<!-- test: async-promise-drop.error.a-user-extension-cannot-overload-a-library-move-out-door -->
-A library move-out door cannot be overloaded from an `extension`: the name belongs to the container's own member, so which declaration a call to it binds is never in question.
+<!-- test: async-promise-drop.error.a-user-extension-cannot-redeclare-a-library-move-out-door -->
+A library move-out door cannot be redeclared from an `extension`: the name belongs to the container's own member, so the extension's declaration is a duplicate.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2074,8 +2073,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3176: <fragment>:6:11: the extension member `Array.remove` has the name of `Array`'s own instance member, which would hide it — rename one
-note: stdlib/Array.maxon:289:18: `Array`'s own `remove`
+error E3006: <fragment>:6:11: Duplicate method 'remove' in type 'Array'
 ```
 
 <!-- test: async-promise-drop.a-cursor-over-a-container-of-promises-names-its-slot -->
@@ -3926,111 +3924,6 @@ end 'main'
 error E3141: <fragment>:29:22: a promise cannot be borrowed through 'watch': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A coroutine can still be running after the frame that started it has ended, and by then that frame has reclaimed the thread, so a coroutine that only reads this promise would read a reclaimed thread. Pass the promise to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
 ```
 
-<!-- test: async-promise-drop.a-promise-handed-to-overloads-that-disagree-about-taking-it-is-moved-into-the-one-the-arguments-pick -->
-The arguments of an `async` call pick the overload it binds, and the promise is handed to that declaration alone: the
-`Integer` overload takes it, the `bool` one only reads it, and `n: 1` picks the first.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work(n Integer) returns Integer
-	Scheduler.yield()
-	return n + 1
-end 'work'
-
-function relay(p IntPromise, n Integer) returns Integer
-	return (await p) + n
-end 'relay'
-
-function relay(p IntPromise, n bool) returns Integer
-	if n and p.isComplete() 'done'
-		Scheduler.yield()
-	end 'done'
-
-	return 7
-end 'relay'
-
-function main() returns ExitCode
-	let p = async work(1)
-	let r = async relay(p, n: 1)
-	print("{await r}\n")
-	return 0
-end 'main'
-```
-```stdout
-3
-```
-
-<!-- test: async-promise-drop.error.an-async-call-whose-arguments-tie-two-overloads-is-ambiguous -->
-The two `relay` overloads fit the arguments equally, so the `async` call is ambiguous like any other call; which of them takes the promise is not asked until the arguments pick one.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Wide = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work(n Integer) returns Integer
-	Scheduler.yield()
-	return n + 1
-end 'work'
-
-function relay(p IntPromise, n Integer) returns Integer
-	return (await p) + n
-end 'relay'
-
-function relay(p IntPromise, n Wide) returns Integer
-	if p.isComplete() 'done'
-		Scheduler.yield()
-	end 'done'
-
-	return 7
-end 'relay'
-
-function main() returns ExitCode
-	let p = async work(1)
-	let r = async relay(p, n: 1)
-	print("{await r}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3007: <fragment>:25:16: Ambiguous overload for 'relay': multiple overloads match. Candidates: (p IntPromise, n Integer), (p IntPromise, n Wide)
-```
-
-<!-- test: async-promise-drop.error.one-promise-handed-to-overloads-that-disagree-about-taking-it-twice -->
-Overloads that disagree about taking a promise settle the hand-over after the call is parsed; the one promise
-at two arguments is still refused at the second.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work(n Integer) returns Integer
-	Scheduler.yield()
-	return n + 1
-end 'work'
-
-function both(p IntPromise, q IntPromise, n Integer) returns Integer
-	return (await q) + (await p) + n
-end 'both'
-
-function both(p IntPromise, q IntPromise, n bool) returns Integer
-	if n and p.isComplete() and q.isComplete() 'done'
-		Scheduler.yield()
-	end 'done'
-
-	return 7
-end 'both'
-
-function main() returns ExitCode
-	let p = async work(1)
-	let r = both(p, q: p, n: 1)
-	print("{r}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3102: <fragment>:24:18: use of moved value 'p': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
-```
-
 <!-- test: async-promise-drop.a-peek-of-an-emptied-slot-aborts-instead-of-reading-null -->
 Another read consumed the slot, so this read names no thread. A peek is not a consume, so it never reaches the
 vacate that aborts a consume of such a read: it aborts with **118** itself rather than loading through a null
@@ -4257,8 +4150,8 @@ end 'main'
 error E3102: <fragment>:20:24: use of moved value 'x': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
 ```
 
-<!-- test: async-promise-drop.an-async-call-moves-a-promise-into-overloads-that-all-take-it -->
-Every overload the call may bind awaits the promise, so the coroutine owns it whichever one is chosen.
+<!-- test: async-promise-drop.an-async-call-moves-a-promise-into-the-coroutine-that-awaits-it -->
+`relay` awaits the promise, so the coroutine owns it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -4272,13 +4165,13 @@ function relay(p IntPromise, n Integer) returns Integer
 	return (await p) + n
 end 'relay'
 
-function relay(p IntPromise, n bool) returns Integer
+function relayFlag(p IntPromise, n bool) returns Integer
 	if n 'done'
 		Scheduler.yield()
 	end 'done'
 
 	return await p
-end 'relay'
+end 'relayFlag'
 
 function main() returns ExitCode
 	let p = async work(1)
@@ -4516,4 +4409,206 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: async-promise-drop.a-promise-handed-over-on-one-branch-is-released-on-the-other -->
+One branch hands the promise to the function that takes it and the other leaves it; each path releases it exactly once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function peekBack(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'peekBack'
+
+function peekText(_ IntPromise, v String) returns Integer
+	return v.count() as Integer
+end 'peekText'
+
+function decide(x Integer) returns bool
+	return x > 3
+end 'decide'
+
+function run(x Integer)
+	let p = async work(x)
+
+	if decide(x) 'taken'
+		let r = peekBack(p, v: x)
+		print("taken {await r}\n")
+	end 'taken'
+end 'run'
+
+function borrow(x Integer)
+	let p = async work(x)
+
+	if decide(x) 'read'
+		let n = peekText(p, v: "abc")
+		print("read {n}\n")
+	end 'read'
+
+	print("awaited {await p}\n")
+end 'borrow'
+
+function main() returns ExitCode
+	run(5)
+	run(1)
+	borrow(5)
+	borrow(1)
+	return 0
+end 'main'
+```
+```stdout
+5
+taken 6
+read 3
+awaited 6
+awaited 2
+```
+
+<!-- test: async-promise-drop.a-promise-reassigned-on-one-branch-and-read-by-the-other-is-awaited-after-the-join -->
+A promise reassigned on one branch and handed to the function that only reads it on the other is owned by the caller after the join and awaited once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function peekBack(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'peekBack'
+
+function peekText(_ IntPromise, v String) returns Integer
+	return v.count() as Integer
+end 'peekText'
+
+function decide(x Integer) returns bool
+	return x > 3
+end 'decide'
+
+function joinReassignedAndHandedOver(x Integer) returns Integer
+	var p = async work(x)
+
+	if decide(x) 'rearm'
+		p = async work(x * 10)
+	end 'rearm' else 'read'
+		print("read {peekText(p, v: "ab")}\n")
+	end 'read'
+
+	return await p
+end 'joinReassignedAndHandedOver'
+
+function main() returns ExitCode
+	print("{joinReassignedAndHandedOver(5)} {joinReassignedAndHandedOver(1)}\n")
+	return 0
+end 'main'
+```
+```stdout
+read 2
+51 2
+```
+
+<!-- test: async-promise-drop.error.a-promise-given-away-in-every-iteration-of-a-loop-is-used-after-its-move -->
+Handing a promise declared outside a loop to a callee that takes it, on every iteration, reads it again after the first iteration moved it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function keep(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'keep'
+
+function main() returns ExitCode
+	let p = async work(1)
+	var i = 0 as Integer
+
+	while i < 2 'loop'
+		let q = keep(p, v: i)
+		print("{await q}\n")
+		i = i + 1
+	end 'loop'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:16: use of moved value 'p': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: async-promise-drop.a-promise-given-away-inside-a-loop-that-then-breaks-is-moved-once -->
+A promise declared outside a loop and handed to a callee that takes it, followed by `break`, is moved exactly once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function keep(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'keep'
+
+function main() returns ExitCode
+	let p = async work(1)
+	var i = 0 as Integer
+
+	while i < 2 'loop'
+		let q = keep(p, v: i)
+		print("{await q}\n")
+		break
+	end 'loop'
+
+	return 0
+end 'main'
+```
+```stdout
+0
+2
+```
+
+<!-- test: async-promise-drop.error.an-alias-of-a-promise-given-away-cannot-be-awaited -->
+After a promise is handed to a callee that takes it, an alias bound before the call no longer owns it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function keep(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'keep'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let q = p
+	let r = keep(p, v: 5)
+	print("{await q}\n")
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:16: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment
 ```

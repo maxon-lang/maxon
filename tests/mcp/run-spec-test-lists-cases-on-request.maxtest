@@ -1,15 +1,15 @@
-let StagingCaseDirName = "run-spec-test-lists-cases-on-request"
-let StagedSpec = "listed"
+let RunSpecTestListsCasesOnRequestStagingCaseDirName = "run-spec-test-lists-cases-on-request"
+let RunSpecTestListsCasesOnRequestStagedSpec = "listed"
 
 test 'run_spec_test lists every case it ran, with its status, when cases is true'
-	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	let dir = freshOutsideCheckoutDir(RunSpecTestListsCasesOnRequestStagingCaseDirName)
 	let cases = [passingSpecCase("kept"), failingSpecCase("broken"), passingSpecCase("also-kept")]
-	stageSpecFile(dir, specName: StagedSpec, cases: cases)
+	stageSpecFile(dir, specName: RunSpecTestListsCasesOnRequestStagedSpec, cases: cases)
 
 	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"cases\":true,\"maxFailures\":0\}", devMode: true)
 	discardOutsideCheckoutDir(dir)
 
-	Expect.equal(joined(payloadArrayFields(answer, key: "cases", field: "spec"), separator: Space), expected: joined([StagedSpec, StagedSpec, StagedSpec], separator: Space), message: "`cases` names the spec of every case it ran. It answered: {toolCallText(answer)}")
+	Expect.equal(joined(payloadArrayFields(answer, key: "cases", field: "spec"), separator: Space), expected: joined([RunSpecTestListsCasesOnRequestStagedSpec, RunSpecTestListsCasesOnRequestStagedSpec, RunSpecTestListsCasesOnRequestStagedSpec], separator: Space), message: "`cases` names the spec of every case it ran. It answered: {toolCallText(answer)}")
 	Expect.equal(joined(payloadArrayFields(answer, key: "cases", field: "test"), separator: Space), expected: joined(["kept", "broken", "also-kept"], separator: Space), message: "`cases` lists every case in run order, whatever `maxFailures` caps. It answered: {toolCallText(answer)}")
 	Expect.equal(joined(payloadArrayFields(answer, key: "cases", field: "status"), separator: Space), expected: joined(["PASS", "FAIL", "PASS"], separator: Space), message: "`cases` carries each case's verdict. It answered: {toolCallText(answer)}")
 end 'run_spec_test lists every case it ran, with its status, when cases is true'

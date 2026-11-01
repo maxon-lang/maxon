@@ -587,12 +587,8 @@ The boundary of the relaxation above, from the inside: two files in ONE director
 namespace, so their `pick` declarations are one name declared twice and stay a hard duplicate. The
 reader qualifies with `dir.` and there is still only one thing that could mean.
 
-⚠ **THE REFUSAL'S SENTENCE NAMES A MINTED KEY.** Two files of one directory declaring one
-free-function name are an OVERLOAD SET (`cross-file-overload-set.md`), so every one of these
-declarations is registered under its parameter-type spelling — and these two spell the same
-parameters (none), claim the same registration, and collide there. E3006 names the member in source
-form, `'pick()'`, and `ParseStaging.duplicateFunctionMessage` adds the sentence that explains where the
-collision comes from.
+⚠ **THE REFUSAL IS E3006**, the duplicate-definition diagnostic of a free function declared twice in one
+directory.
 ```maxon
 // --- file: dir/a.maxon
 export typealias Integer = int(0 to 125)
@@ -612,7 +608,47 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: dir/specs/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.maxon:10:17: duplicate definition of function 'pick()' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: dir/specs/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.maxon:10:17: duplicate definition of 'pick' — already declared as `function pick`
+```
+
+
+<!-- test: error.free-function-pair-in-one-directory-beside-another-directorys-declaration-still-collides -->
+The same pair when a second directory declares `pick` too. `alpha/`'s two files still declare one name twice, so
+the refusal is the plain duplicate at the later declaration; a collision with a method's mangled name is not what
+it says, because no method is involved.
+```maxon
+// --- file: alpha/a.maxon
+export function pick() returns ExitCode
+	return 1
+end 'pick'
+
+// --- file: alpha/b.maxon
+export function pick() returns ExitCode
+	return 2
+end 'pick'
+
+// --- file: alpha/use.maxon
+export function readA() returns ExitCode
+	return pick()
+end 'readA'
+
+// --- file: beta/b.maxon
+export function pick() returns ExitCode
+	return 3
+end 'pick'
+
+// --- file: beta/use.maxon
+export function readB() returns ExitCode
+	return pick()
+end 'readB'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return readA() + readB() + alpha.pick()
+end 'main'
+```
+```maxoncstderr
+error E3006: alpha/<fragment>:8:17: duplicate definition of 'pick' — already declared as `function pick`
 ```
 
 
@@ -623,8 +659,8 @@ this suite stands on: ROOT is a directory — the global namespace — so two ro
 on "different FILE" rather than "different DIRECTORY" would un-collide the whole of
 `type-name-collision.md` and `stdlib-user-shadows.md`, whose fixtures are all flat and root-level.
 
-⚠ The sentence names a minted key for the case above's reason: two declarations that
-spell one parameter list claim one registration name whichever directory they sit in.
+⚠ The refusal is E3006 for the case above's reason: two declarations of one free-function name
+collide whichever directory they sit in.
 ```maxon
 // --- file: a.maxon
 export typealias Integer = int(0 to 125)
@@ -644,7 +680,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.maxon:10:17: duplicate definition of function 'pick()' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: specs/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.maxon:10:17: duplicate definition of 'pick' — already declared as `function pick`
 ```
 
 
@@ -665,7 +701,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: beta/specs/namespace-qualified-resolution/error.two-main-declarations-in-different-directories-still-collide.maxon:8:10: Duplicate function 'main'
+error E3006: beta/specs/namespace-qualified-resolution/error.two-main-declarations-in-different-directories-still-collide.maxon:8:10: duplicate definition of 'main' — already declared as `function main`
 ```
 
 
@@ -1820,33 +1856,17 @@ error E3095: app/<fragment>:25:10: Ambiguous bare-name call to 'pick': more than
 ```
 
 
-<!-- test: error.contested-free-function-in-a-directory-named-after-a-type -->
-**A CONTESTED SPELLING AND A `Type.method` KEY ARE THE SAME BYTES, AND THE PROGRAM IS REFUSED FOR IT.**
-A contested free function is registered as `<directory>.<name>` — deliberately the same construction,
-in the same flat key space, a method is filed under. That is also a collision waiting to happen: a
-directory called `Point/` holding a contested `create` claims the exact key `type Point`'s static
-factory is declared under. Neither declaration is wrong on its own, and no rename of the *bare* name
-fixes it, so the refusal has to say which two things met and what to do — the quoted name is one the
-author wrote no part of.
-
-⛔ **THE REFUSAL'S OWN CAUSE MUST NOT PRE-EMPT IT.** The parse reads the method's signature entry long
-before merge reports the duplicate, so a refile that OVERWROTE the method's return type with the free
-function's would type `p` in `let p = Point.create()` as `int` and blame a correct line with an E2015
-field-access refusal. The refile declines a key another declaration owns
-(`ProgramSignatures.refileContestedFreeFunction`), so the call types correctly and this is the only
-diagnostic any variant produces.
-
-⚠ **THE REFUSAL NAMES THE CONTESTED FREE FUNCTION, WHATEVER THE FILE ORDER.** Its advice — rename the
-directory or the function — is about that declaration, and blaming the METHOD would tell its author to
-rename a directory the method knows nothing about. So this collision is blamed by role, never by which
-file is compiled first or sorts first: `Point/` precedes `app/` in path byte order, and the method in
-`app/main.maxon` is still not the one named.
+<!-- test: contested-free-function-in-a-directory-named-after-a-type-leaves-the-types-method-alone -->
+A directory called `Point/` holding a contested `create` registers it as `Point~create`, and a
+registration name built with `~` can never equal a method's mangled name, which is built with `.`. So the
+type's own `Point.create` and the directory's `create` coexist, and `Point.create()` reaches the type's
+method: 9, never 3 or 5.
 ```maxon
 // --- file: app/main.maxon
-export type Point
-	export var x as Integer
+public type Point
+	public var x as Integer
 
-	export static function create() returns Self
+	public static function create() returns Self
 		return Self{x: 9}
 	end 'create'
 end 'Point'
@@ -1857,39 +1877,37 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: Point/p.maxon
-export typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
-export function create() returns Integer
+public function create() returns Integer
 	return 3
 end 'create'
 
 // --- file: other/o.maxon
-export function create() returns Integer
+public function create() returns Integer
 	return 5
 end 'create'
 ```
-```maxoncstderr
-error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.maxon:19:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+```exitcode
+9
 ```
 
-
-<!-- test: error.contested-free-function-is-named-when-its-file-is-compiled-first -->
-The case above with the files in the other order: the contested free function's file is compiled first,
-so the method is the second declaration to claim `Point.create`. The refusal still names the free
-function.
+<!-- test: contested-free-function-in-a-type-named-directory-coexists-whichever-file-is-compiled-first -->
+The case above with the files in the other order: the contested free function's file is compiled first.
+The type's method is still the one `Point.create()` reaches.
 ```maxon
 // --- file: Point/p.maxon
-export typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
-export function create() returns Integer
+public function create() returns Integer
 	return 3
 end 'create'
 
 // --- file: app/main.maxon
-export type Point
-	export var x as Integer
+public type Point
+	public var x as Integer
 
-	export static function create() returns Self
+	public static function create() returns Self
 		return Self{x: 9}
 	end 'create'
 end 'Point'
@@ -1900,33 +1918,25 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: other/o.maxon
-export function create() returns Integer
+public function create() returns Integer
 	return 5
 end 'create'
 ```
-```maxoncstderr
-error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-is-named-when-its-file-is-compiled-first.maxon:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+```exitcode
+9
 ```
 
-
-<!-- test: error.contested-free-function-collides-with-a-fieldless-method -->
-**THE VARIANT WITH NO WITNESS.** The case above produces a visible symptom only because the
-caller touches a FIELD. Here the method returns a plain `Integer`, so nothing downstream would ever
-notice which of the two `Point.create`s it reached — this is the shape that would have to be a
-silent wrong answer if the duplicate check were the thing at fault. It is not: `commitFuncSignatures`
-sees both declarations claim one key whatever they return, and refuses. Pinned so that the claim
-"nothing downstream notices" is tested rather than assumed.
-
-⚠ **THE REFUSAL NAMES THE CONTESTED FREE FUNCTION, WHATEVER THE FILE ORDER**, for the reason the case
-above gives.
+<!-- test: contested-free-function-in-a-type-named-directory-coexists-with-a-method-that-returns-a-plain-integer -->
+The variant with no field to witness the answer: the method returns a plain `Integer`, so only the exit
+code tells which of the three `create`s was reached. It is the type's: 9.
 ```maxon
 // --- file: app/main.maxon
-export typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
-export type Point
-	export var x as Integer
+public type Point
+	public var x as Integer
 
-	export static function create() returns Integer
+	public static function create() returns Integer
 		return 9
 	end 'create'
 end 'Point'
@@ -1936,19 +1946,18 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: Point/p.maxon
-export function create() returns Integer
+public function create() returns Integer
 	return 3
 end 'create'
 
 // --- file: other/o.maxon
-export function create() returns Integer
+public function create() returns Integer
 	return 5
 end 'create'
 ```
-```maxoncstderr
-error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-collides-with-a-fieldless-method.maxon:18:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+```exitcode
+9
 ```
-
 
 <!-- test: contested-free-function-in-a-type-named-directory-that-collides-with-nothing -->
 **THE REFUSAL ABOVE MUST NOT BE A RULE ABOUT DIRECTORY NAMES.** `Point/` is still named after a type
@@ -2369,8 +2378,8 @@ end 'main'
 ```
 
 <!-- test: error.a-module-and-an-exported-alias-in-one-directory-are-a-duplicate -->
-Two NAMEABLE declarations of one name in one directory share one qualified spelling, so no reader could name
-either: the pair is a duplicate at the second declaration, whatever tiers it was written at.
+Two declarations of one name in one directory are a duplicate at the second declaration, whatever tiers
+they were written at.
 ```maxon
 // --- file: api/a.maxon
 module typealias Score = int(0 to 100)
@@ -2387,10 +2396,9 @@ end 'main'
 error E3061: api/<fragment>:6:18: Duplicate typealias 'Score'
 ```
 
-<!-- test: error.a-file-private-alias-beside-its-directorys-exported-one-is-ambiguous-in-its-own-file -->
-A file-private alias is reachable from its own file alone, so it is no second meaning for any other file — but
-its own file sees both declarations, and its bare `Score` is ambiguous there. The remedy is to rename the
-file-private alias.
+<!-- test: error.a-file-private-alias-beside-its-directorys-exported-one-is-a-duplicate -->
+A directory declares a name once, whatever the visibility of its declarations: the file-private alias beside
+the directory's exported one is a duplicate at the second declaration. The remedy is to rename it.
 ```maxon
 // --- file: api/a.maxon
 typealias Score = int(0 to 10)
@@ -2408,7 +2416,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: api/<fragment>:6:14: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, or rename this file's own declaration
+error E3061: api/<fragment>:10:18: Duplicate typealias 'Score'
 ```
 
 <!-- test: a-root-export-beside-the-librarys-alias-is-what-the-bare-name-means -->
@@ -2545,10 +2553,10 @@ error E3182: Directory 'runtime' cannot be a namespace: 'runtime' already names 
 ```
 
 
-<!-- test: error.a-files-own-alias-beside-another-directorys-type-is-ambiguous-bare -->
-A file's own declaration does not win its bare name: the file also sees `a.Foo`, so `Foo` written bare is
-ambiguous there even though the file declares one of the two. The qualified spellings stay legal; the remedy in
-the declaring file is to rename its alias.
+<!-- test: a-files-own-alias-beside-another-directorys-type-is-its-bare-name -->
+A file's own declaration wins its bare name: the file also sees `a.Foo`, yet `Foo` written bare means the
+file's own ranged alias, so `3 as Foo` is an integer, while the qualified spelling reaches the other
+directory's struct.
 ```maxon
 // --- file: a/foo.maxon
 export type Foo
@@ -2566,13 +2574,17 @@ function take(f a.Foo) returns ExitCode
 	return f.v
 end 'take'
 
+function seed() returns Foo
+	return 3
+end 'seed'
+
 function main() returns ExitCode
-	let local = 3 as Foo
+	let local = seed()
 	return take(a.Foo.make()) + (local as ExitCode)
 end 'main'
 ```
-```maxoncstderr
-error E3063: app/<fragment>:19:19: Ambiguous type name 'Foo': more than one visible declaration matches it. Qualify it as one of: a.Foo, or rename this file's own declaration
+```exitcode
+45
 ```
 
 <!-- test: a-qualified-type-reaches-its-declaration-past-the-readers-own-alias -->
@@ -3185,4 +3197,35 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: namespace-qualified-resolution.a-parameter-type-qualified-through-several-segments-binds-the-call -->
+A parameter type may be qualified through any number of namespace segments, and the call is bound against
+it like any other: `pick(7)` fits `lib.fmt.Score` and not the tuple, so it calls the void member, which has
+no result to type. It prints `n7`.
+```maxon
+// --- file: lib/fmt/score.maxon
+public typealias Score = int(0 to 100)
+
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pickScore(n lib.fmt.Score)
+	print("n{n}\n")
+end 'pickScore'
+
+function pickPair(pair (Integer, Integer)) returns String
+	return "p{pair.0}"
+end 'pickPair'
+
+function main() returns ExitCode
+	pickScore(7)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n7
 ```

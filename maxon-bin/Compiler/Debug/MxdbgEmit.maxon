@@ -64,7 +64,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		end 'itsIr'
 	end 'eachFunctionsTypes'
 
-	types.writeInto(writer, spellings: project.shadowRoster.spellings)
+	types.writeInto(writer, roster: project.shadowRoster)
 
 	let provenance = SidecarProvenance.of(signatures)
 
@@ -267,7 +267,7 @@ function writeCoveragePoints(project Project, writer MxdbgWriter, emitted CovPoi
 			code = MxdbgCoverageCode.at(at)
 		end 'itsCodeSurvived'
 
-		writer.addCoveragePoint(code, fileId: coveragePointFileId(fileIds, point: point, id: id), line: point.line as MxdbgIndex, column: point.col as MxdbgIndex, branchLine: point.branchLine as MxdbgIndex, branchColumn: point.branchCol as MxdbgIndex, funcName: point.funcName, flags: point.flags as MxdbgIndex)
+		writer.addCoveragePoint(code, fileId: coveragePointFileId(fileIds, point: point, id: id), line: point.line as MxdbgIndex, column: point.col as MxdbgIndex, branchLine: point.branchLine as MxdbgIndex, branchColumn: point.branchCol as MxdbgIndex, funcName: project.shadowRoster.authorSpelledText(point.funcName), flags: point.flags as MxdbgIndex)
 		id = id + 1
 	end 'eachPoint'
 end 'writeCoveragePoints'
@@ -331,7 +331,7 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 			rows.push(unplacedRow(local, writer: writer, types: types, typeName: typeName, range: range))
 		end 'nothingPlaced'
 
-		rows.sort(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeStart.compare(right.codeStart))
+		rows.sortBy(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeStart.compare(right.codeStart))
 		records.push(MxdbgLocalDraft.create(local.name, typeId: typeId, indirect: types.holdsAPointer(typeName), rows: rows, site: sidecarSiteOf(local.inlineSite, siteBase: range.inlineSiteBase)))
 		at = past
 	end 'eachBinding'
@@ -341,7 +341,7 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 	end 'locationsOutOfStep'
 
 	// Sorted stably, so two bindings a nested scope gave the same name keep their declaration order.
-	records.sort(function(left MxdbgLocalDraft, right MxdbgLocalDraft) gives compareBytesOrdinally(left.name, right: right.name))
+	records.sortBy(function(left MxdbgLocalDraft, right MxdbgLocalDraft) gives compareBytesOrdinally(left.name, right: right.name))
 
 	for record in records 'eachRecord'
 		for row in record.rows 'eachRow'
@@ -503,7 +503,7 @@ function mergedLiveRanges(range DebugFunctionRange, runs DebugRunsByOrdinal, ord
 		mine.push(DebugLocalCodeRange.create(ordinal, codeStart: codeStart, codeEnd: codeEnd))
 	end 'eachRange'
 
-	mine.sort(function(left DebugLocalCodeRange, right DebugLocalCodeRange) gives left.codeStart.compare(right.codeStart))
+	mine.sortBy(function(left DebugLocalCodeRange, right DebugLocalCodeRange) gives left.codeStart.compare(right.codeStart))
 
 	var merged = DebugLocalCodeRangeArray.create()
 	var openStart = 0 as CodeOffset
@@ -714,7 +714,7 @@ type SidecarProvenance
 	end 'originOf'
 
 	function displayNameOf(name ByteArray) returns String
-		return try self.tests.get(name) otherwise String.from(authorSpelledName(name, spellings: self.roster.spellings))
+		return try self.tests.get(name) otherwise String.from(self.roster.authorSpelledName(name))
 	end 'displayNameOf'
 
 	function originOfChunk(project Project, lookup MxdbgIrLookup, name ByteArray) returns MxdbgOrigin
@@ -746,7 +746,7 @@ end 'sidecarFileIdOf'
 // header the reserved `.data` run is stamped with, and a report REFUSES a pair whose ids differ — so the
 // two must come from one spelling rather than from two that agree today.
 export function codeBuildId(code ByteArray) returns HashDigest
-	return Hasher.combined(Hasher.empty(), bytes: code)
+	return Hasher.combinedBytes(Hasher.empty(), bytes: code)
 end 'codeBuildId'
 
 // The sidecar beside `outputPath`: the WHOLE output name with the suffix appended, extension and all

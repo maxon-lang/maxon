@@ -1,157 +1,21 @@
 ---
 feature: byref-param-widening-and-guard
-keywords: [byref, param, reassign, overload, forwarding, range, typealias, guard, cell]
+keywords: [mutable, byref, param, range, typealias, guard, cell]
 category: memory-safety
 ---
 
-# By-Reference Parameters: How Far the Widening Reaches, and What the Entry Guard Reads
+# `mutable` Parameters: What the Entry Guard Reads
 
 ## Documentation
 
-A parameter a function REASSIGNS is passed as the address of a cell rather than as a value, and both
-ends of the call have to agree about that before either is parsed (`pass-by-reference.md` is the
-feature). Deciding *which* functions take a parameter that way is a whole-program closure over
-forwarding edges, and the closure runs against a declaration sweep that has resolved nothing: it
-matches a call to a declaration by the BARE NAME the source wrote before the `(`.
-
-That match has to be widened — a name may be worn by more than one declaration — but the widening
-must not cross a boundary the SOURCE SYNTAX already draws, and there is exactly one such boundary a
-token sweep can read: whether a receiver was written in front of the name.
-
-- **`f(…)`** may name a free `f`, or — through implicit `self` — a sibling METHOD `f`. It widens
-  over both.
-- **`x.f(…)`, `Type.f(…)`** can name a METHOD `f`, or a free `f` reached by its directory route
-  (`utils.f(…)`). It can never name a plain root-level free function, which has no qualified
-  spelling to be written after a dot.
-- **`self.f(…)`, `Self.f(…)`** narrows once more: the receiver's type IS the enclosing type, so the
-  call names that one type's `f` and no other's.
-
-Without the second half, any user program declaring a free function whose name a `stdlib` method
-also wears — and reassigning one of its parameters — would make that method by-reference, and the
-by-reference-ness would then travel up every caller of it. Where it reached an OVERLOADED name it would
-be not a wasted cell but a hard refusal: `Array.swap` would inherit a user `swap`, carry it through
-`compareAndSwap` and `smallSortRange`, and E2015 would refuse *"overloading 'Array.sort'"* in a program
-that never mentions sorting.
-
-The narrowing is not total, and the boundary is exactly the receiver a call writes. A user METHOD
-whose name a `stdlib` method reaches through a NON-`self` dotted call still shares its node — the
-receiver is a value whose type a token sweep cannot read — and is still refused. `Array.swap`'s own
-`managed.swap(i, j: j)` is the one such carrier in the sort helpers, which is why a user method named
-`swap` is refused while one named `compareAndSwap` is not.
-
-Independently, a by-reference parameter's own ENTRY RANGE GUARD reads one dereference away from the
-parameter slot. The slot holds the cell's ADDRESS, so guarding it compares a heap address against
-the declared bounds; the value the caller actually passed is what the range describes. A full-range
-alias hides this completely — it is not guarded at all — so the symptom is a NARROW alias panicking on
-every call while the identical program with a wide one runs.
+A `mutable` parameter is passed as the address of a cell rather than as a value (`pass-by-reference.md` is
+the feature). Its own ENTRY RANGE GUARD reads one dereference away from the parameter slot. The slot holds
+the cell's ADDRESS, so guarding it compares a heap address against the declared bounds; the value the caller
+actually passed is what the range describes. A full-range alias hides this completely — it is not guarded at
+all — so the symptom is a NARROW alias panicking on every call while the identical program with a wide one
+runs.
 
 ## Tests
-
-<!-- test: free-function-may-share-a-stdlib-methods-name -->
-A free `swap` that reassigns its parameter does not make `stdlib`'s `Array.swap` by-reference, so
-the overloaded `Array.sort` above it stays declarable and sorting still works. Exits with the
-reassigned tag (99) plus the sorted array's first element (1).
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Node
-	export var tag as Integer
-
-	static function create(t Integer) returns Self
-		return Self{tag: t}
-	end 'create'
-end 'Node'
-
-function swap(n Node) returns Integer
-	n = Node.create(99)
-	return n.tag
-end 'swap'
-
-function main() returns ExitCode
-	var owned = Node.create(5)
-	let bumped = swap(owned)
-	var nums = [3 as Integer, 1, 2]
-	nums.sort()
-	return bumped + (try nums.get(0) otherwise 0)
-end 'main'
-```
-```exitcode
-100
-```
-
-<!-- test: a-user-method-may-share-a-self-called-stdlib-methods-name -->
-`stdlib`'s `Array.compareAndSwap` is only ever reached as `self.compareAndSwap(…)`, and a `self.`
-receiver is the enclosing type — so a user method wearing that name is a different declaration and
-does not make the sort helpers by-reference. Exits with the reassigned tag.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Node
-	export var tag as Integer
-
-	static function create(t Integer) returns Self
-		return Self{tag: t}
-	end 'create'
-end 'Node'
-
-type Holder
-	export var v as Integer
-
-	static function create(v Integer) returns Self
-		return Self{v: v}
-	end 'create'
-
-	function compareAndSwap(n Node) returns Integer
-		n = Node.create(99)
-		return n.tag
-	end 'compareAndSwap'
-end 'Holder'
-
-function main() returns ExitCode
-	var h = Holder.create(1)
-	var owned = Node.create(5)
-	return h.compareAndSwap(owned)
-end 'main'
-```
-```exitcode
-99
-```
-
-<!-- test: a-bare-call-still-widens-a-sibling-method -->
-The other direction is NOT narrowed, and this is what says so. `outer` hands its parameter to
-`inner` with a bare call, which implicit `self` resolves to the sibling method — so `outer`'s
-parameter is by-reference too and `inner`'s write is visible through it. A rule that let a bare call
-reach only free functions would return 7 here.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Runner
-	export var seed as Integer
-
-	static function create() returns Self
-		return Self{seed: 0}
-	end 'create'
-
-	function inner(n Integer) returns Integer
-		n = 42
-		return n
-	end 'inner'
-
-	function outer(n Integer) returns Integer
-		_ = inner(n)
-		return n
-	end 'outer'
-end 'Runner'
-
-function main() returns ExitCode
-	var r = Runner.create()
-	var start = 7 as Integer
-	return r.outer(start)
-end 'main'
-```
-```exitcode
-42
-```
 
 <!-- test: narrow-ranged-byref-param-guards-the-pointee -->
 The entry guard of a by-reference parameter checks what the cell HOLDS. Both 5 (in) and 99 (out) sit
@@ -159,7 +23,7 @@ well inside `Int`, so nothing panics and the reassigned value comes back.
 ```maxon
 typealias Int = int(0 to 1000000)
 
-function bump(n Int) returns Int
+function bump(n mutable Int) returns Int
 	n = 99
 	return n
 end 'bump'
@@ -180,7 +44,7 @@ not.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
-function bump(n Wide) returns Wide
+function bump(n mutable Wide) returns Wide
 	n = 99
 	return n
 end 'bump'
@@ -203,7 +67,7 @@ are **E3106**. So no out-of-range value can arrive at the parameter itself.
 ```maxon
 typealias Small = int(1 to 100)
 
-function bump(n Small) returns Small
+function bump(n mutable Small) returns Small
 	n = n + n
 	return n
 end 'bump'
@@ -224,32 +88,13 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: error.an-out-of-range-literal-at-a-byref-param-is-a-compile-error -->
-A literal handed to a by-reference parameter is range-checked where it is written, exactly as at a by-value
-parameter: 2000 does not fit `Count`, so the program never builds.
-```maxon
-typealias Count = int(0 to 1000)
-
-function setOnce(dest Count)
-	dest = 7
-end 'setOnce'
-
-function main() returns ExitCode
-	setOnce(2000)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:9:2: Value 2000 is outside the range of 'Count' (int(0 to 1000))
-```
-
 <!-- test: narrow-ranged-float-byref-param-guards-the-pointee -->
 A ranged FLOAT parameter takes the same door and the same dereference, in f64 — the domain is
 decided where the bounds are read, never where the site is recorded.
 ```maxon
 typealias Ratio = float(0.0 to 10.0)
 
-function scale(r Ratio) returns Ratio
+function scale(r mutable Ratio) returns Ratio
 	r = r * 2.0
 	return r
 end 'scale'

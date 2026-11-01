@@ -1,9 +1,7 @@
-let CaseDirName = "cache-marks-the-root-a-run-can-use"
-
-let InUseWords = "in use"
+let CacheMarksTheRootARunCanUseCaseDirName = "cache-marks-the-root-a-run-can-use"
 
 test 'bare cache names a root it cannot create and marks the one a run can use'
-	let dir = freshCaseDir(CaseDirName)
+	let dir = freshCaseDir(CacheMarksTheRootARunCanUseCaseDirName)
 
 	let naming = rosterWithHighestRootBlocked(dir)
 	let blocked = blockedHighestRoot(dir)
@@ -15,9 +13,9 @@ test 'bare cache names a root it cannot create and marks the one a run can use'
 
 	Expect.equal(reported.exitCode(), expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over a roster whose first root cannot be created. Reporting where the cache is is a question, not a mistake. {said}")
 
-	let strandedState = try reportedStateOf(reported.stdout, directory: blockedRoot) otherwise panic("{CaseDirName}: `maxon {CacheCommandWord}` named no line for {blockedRoot.toString()}, the root {HomeDirectoryVariable} names. A root Maxon cannot create under may still hold builds made when it could, and the report is the only thing that shows them. {said}")
+	let strandedState = try reportedStateOf(reported.stdout, directory: blockedRoot) otherwise panic("{CacheMarksTheRootARunCanUseCaseDirName}: `maxon {CacheCommandWord}` named no line for {blockedRoot.toString()}, the root {HomeDirectoryVariable} names. A root Maxon cannot create under may still hold builds made when it could, and the report is the only thing that shows them. {said}")
 
-	let usableState = try reportedStateOf(reported.stdout, directory: owned) otherwise panic("{CaseDirName}: `maxon {CacheCommandWord}` named no line for {owned.toString()}, the root {rootRankedBelowHomeVariable()} names and the first one on this host's roster that can be created. {said}")
+	let usableState = try reportedStateOf(reported.stdout, directory: owned) otherwise panic("{CacheMarksTheRootARunCanUseCaseDirName}: `maxon {CacheCommandWord}` named no line for {owned.toString()}, the root {rootRankedBelowHomeVariable()} names and the first one on this host's roster that can be created. {said}")
 
 	Expect.contains(usableState, needle: InUseWords, message: "`maxon {CacheCommandWord}` said `{usableState}` of {owned.toString()} without marking it as the root in use. {HomeDirectoryVariable} names {blocked.toString()}, a path no directory can be made under, so this is the root the next `maxon {ExecuteCommandWord}` fills and the reader has nothing to tell it from the one that cannot be. {said}")
 

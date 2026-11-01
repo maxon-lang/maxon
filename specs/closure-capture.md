@@ -24,7 +24,7 @@ var f = function(x int) gives x + offset
 ```
 
 Nested closures capture through their enclosing closure, and a value held at an interface type is captured
-with its witness. Passing a captured name by reference inside a closure is E3159.
+with its witness. Passing a captured name to a `mutable` parameter inside a closure is E3159.
 
 A function value is one word: the address of a reference-counted closure record holding its code and its
 captures. A plain function is an immortal static record. The closure owns its environment, so it may be
@@ -246,15 +246,14 @@ end 'main'
 15
 ```
 
-<!-- test: closure-capture.block-local-overload-arg -->
+<!-- test: closure-capture.block-local-function-arg -->
 A `let` declared inside a `while`-loop body — a NESTED block scope — captured
-into a closure whose body passes it as an argument to an OVERLOADED function
-(`earliest(LiveRange)` vs `earliest(SlotRange)`). The block frame is popped
+into a closure whose body passes it as an argument to `earliest`. The block frame is popped
 once the loop finishes parsing, removing the local from the enclosing
 function's `Scope`. The capture's type is recorded with its slot when the
 closure body names it, while the loop's scope is still open, so building the
 closure record resolves the concrete `LiveRange` type without looking the name
-up in that pruned scope, and the overload disambiguates. Returns `7 + 10`.
+up in that pruned scope, so the call binds. Returns `7 + 10`.
 ```maxon
 typealias ValId = int(0 to u64.max)
 typealias IntThunk = function() returns ExitCode
@@ -280,9 +279,9 @@ function earliest(r LiveRange) returns ExitCode
 	return r.valueId
 end 'earliest'
 
-function earliest(r SlotRange) returns ExitCode
+function earliestSlot(r SlotRange) returns ExitCode
 	return r.off
-end 'earliest'
+end 'earliestSlot'
 
 function callThunk(t IntThunk) returns ExitCode
 	return t()
@@ -2031,7 +2030,7 @@ A `var` handed to a parameter its callee reassigns lives in a cell, and a captur
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -2052,7 +2051,7 @@ A cell-resident scalar is copied into the environment like any other scalar, so 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function bump(dest Integer)
+function bump(dest mutable Integer)
 	dest = dest + 1
 end 'bump'
 
@@ -2291,37 +2290,6 @@ end 'main'
 
 ### A capture beside the call it is an argument of
 
-<!-- test: closure-capture.error.a-capture-beside-a-by-reference-argument -->
-A `var` handed by reference to the call that also takes a closure capturing it: the capture moves `b` into
-the closure, so handing `b` to the by-reference parameter is a use after move.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Thunk = function() returns Integer
-
-type Box
-	export var n as Integer
-
-	static function create(n Integer) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-function show(dest Box, m Thunk) returns Integer
-	let seen = dest.n + m()
-	dest = Box.create(5)
-	return seen
-end 'show'
-
-function main() returns ExitCode
-	var b = Box.create(1)
-	print("{show(b, m: function() gives b.n)}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3102: <fragment>:21:15: use of moved value 'b': its ownership moved to the closure that captures it
-```
-
 <!-- test: closure-capture.error.a-capture-of-the-receiver-of-the-call -->
 The capture moves the receiver into the closure before `push` writes it, so the push is a use after move.
 ```maxon
@@ -2348,7 +2316,7 @@ handed its storage.
 typealias Integer = int(i64.min to i64.max)
 typealias Thunk = function() returns Integer
 
-function setIt(dest Integer) returns Integer
+function setIt(dest mutable Integer) returns Integer
 	dest = 99
 	return dest
 end 'setIt'

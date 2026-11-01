@@ -1,6 +1,5 @@
 let ParkingReturnCaseLabel = "step-and-finish-out-of-a-function-that-parks-return-to-the-caller"
-let CallerFunctionName = "main"
-let CalleeFunctionName = "rest"
+let StepAndFinishOutOfAFunctionThatParksReturnToTheCallerCalleeFunctionName = "rest"
 
 test 'a next and a finish out of a function that parks on a sleep land at the call in its caller'
 	let staged = builtFixture(ParkingReturnCaseLabel, fixture: ParkingCallFixtureName)
@@ -16,11 +15,11 @@ test 'a next and a finish out of a function that parks on a sleep land at the ca
 	try Expect.equal(stops.count(), expected: 4, message: "the breakpoint, the `{NextCommand}`, the breakpoint of the second call and the `{FinishCommand}` are four stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let firstReturn = eventAt(stops, index: 0)
-	try Expect.equal(textOf(firstReturn, node: firstReturn.root, key: FunctionKey), expected: CalleeFunctionName, message: "the breakpoint on the return line stops in `{CalleeFunctionName}`, after its sleeps parked and resumed it. {said}")
+	try Expect.equal(textOf(firstReturn, node: firstReturn.root, key: FunctionKey), expected: StepAndFinishOutOfAFunctionThatParksReturnToTheCallerCalleeFunctionName, message: "the breakpoint on the return line stops in `{StepAndFinishOutOfAFunctionThatParksReturnToTheCallerCalleeFunctionName}`, after its sleeps parked and resumed it. {said}")
 	try Expect.equal(numberOf(firstReturn, node: firstReturn.root, key: LineKey), expected: returnLine as EventNumber, message: "the first stop is on the return line. {said}")
 
 	let nextLanded = eventAt(stops, index: 1)
-	try Expect.equal(textOf(nextLanded, node: nextLanded.root, key: FunctionKey), expected: CallerFunctionName, message: "⛔ A `{NextCommand}` OUT OF A FUNCTION WHOSE RETURN IS `pop; jmp` steps through two instructions that are neither a `ret` nor the caller: between them the frame pointer is already the caller's, so a walk that reads the frame from rbp arrives inside `{CalleeFunctionName}` or past `{CallerFunctionName}`. {said}")
+	try Expect.equal(textOf(nextLanded, node: nextLanded.root, key: FunctionKey), expected: CallerFunctionName, message: "⛔ A `{NextCommand}` OUT OF A FUNCTION WHOSE RETURN IS `pop; jmp` steps through two instructions that are neither a `ret` nor the caller: between them the frame pointer is already the caller's, so a walk that reads the frame from rbp arrives inside `{StepAndFinishOutOfAFunctionThatParksReturnToTheCallerCalleeFunctionName}` or past `{CallerFunctionName}`. {said}")
 	try Expect.equal(numberOf(nextLanded, node: nextLanded.root, key: LineKey), expected: firstCallLine as EventNumber, message: "`{NextCommand}` out of the frame stops at the return address, on the call's line. {said}")
 	try Expect.equal(textOf(nextLanded, node: nextLanded.root, key: ReasonKey), expected: StepStopReason, message: "the walk's own return is a `{StepStopReason}`. {said}")
 
@@ -28,6 +27,6 @@ test 'a next and a finish out of a function that parks on a sleep land at the ca
 	try Expect.equal(textOf(secondReturn, node: secondReturn.root, key: ReasonKey), expected: BreakpointStopReason, message: "the second call's return line stops as the breakpoint. {said}")
 
 	let finishLanded = eventAt(stops, index: 3)
-	try Expect.equal(textOf(finishLanded, node: finishLanded.root, key: FunctionKey), expected: CallerFunctionName, message: "a `{FinishCommand}` out of `{CalleeFunctionName}` returns to the caller, not past it. {said}")
+	try Expect.equal(textOf(finishLanded, node: finishLanded.root, key: FunctionKey), expected: CallerFunctionName, message: "a `{FinishCommand}` out of `{StepAndFinishOutOfAFunctionThatParksReturnToTheCallerCalleeFunctionName}` returns to the caller, not past it. {said}")
 	try Expect.equal(numberOf(finishLanded, node: finishLanded.root, key: LineKey), expected: secondCallLine as EventNumber, message: "`{FinishCommand}` stops at the return address, on the second call's line. {said}")
 end 'a next and a finish out of a function that parks on a sleep land at the call in its caller'

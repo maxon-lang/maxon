@@ -1,0 +1,104 @@
+// One tier order resolves a bare name of every kind: types, bindings and free functions each tally
+// the tiers of the declarations the reader may name, and the highest tier decides.
+module typealias ScopeTier = int(0 to 5)
+
+module let ScopeTierHidden = 0
+module let ScopeTierLibrary = 1
+let ScopeTierElsewhere = 2 as ScopeTier
+module let ScopeTierRoot = 3 as ScopeTier
+module let ScopeTierReadersDirectory = 4 as ScopeTier
+module let ScopeTierReadersFile = 5
+
+module union ScopeHolding
+	vacant
+	held(let index ElementIndex, let tier ScopeTier)
+	contested
+end 'ScopeHolding'
+
+module union NameScopeVerdict
+	nowhere
+	meant(let index ElementIndex, let tier ScopeTier)
+	ambiguous
+end 'NameScopeVerdict'
+
+module type NameScopeTally
+	module var bestTier as ScopeTier
+	var bestAt as ElementIndex
+	var atBest as ElementIndex
+
+	module static function create() returns NameScopeTally
+		return Self{bestTier: ScopeTierHidden, bestAt: 0, atBest: 0}
+	end 'create'
+
+	module function note(tier ScopeTier, at ElementIndex)
+		if tier == ScopeTierHidden 'aDeclarationTheReaderCannotName'
+			return
+		end 'aDeclarationTheReaderCannotName'
+
+		if tier > self.bestTier 'aNearerDeclaration'
+			self.bestTier = tier
+			self.bestAt = at
+			self.atBest = 1
+			return
+		end 'aNearerDeclaration'
+
+		if tier == self.bestTier 'asNearAsTheBest'
+			self.atBest = self.atBest + 1
+		end 'asNearAsTheBest'
+	end 'note'
+
+	module function verdict() returns NameScopeVerdict
+		if self.atBest == 0 'nothingIsNameable'
+			return NameScopeVerdict.nowhere
+		end 'nothingIsNameable'
+
+		if self.atBest == 1 'oneIsNearest'
+			return NameScopeVerdict.meant(self.bestAt, tier: self.bestTier)
+		end 'oneIsNearest'
+
+		// Declarations as near as each other are ambiguous. The order they folded in never picks one:
+		// that would bind the name to a declaration the author may not have meant.
+		return NameScopeVerdict.ambiguous
+	end 'verdict'
+end 'NameScopeTally'
+
+module function heldIfNameable(index ElementIndex, tier ScopeTier) returns ScopeHolding
+	return ScopeHolding.vacant if tier == ScopeTierHidden else ScopeHolding.held(index, tier: tier)
+end 'heldIfNameable'
+
+// The answer the near probes (`contestedClaimHolders`, `bindingSiteHolders`,
+// `functionDirectoryHolders`) give without visiting every claimant. It must equal what the full scan
+// answers, which stays the fallback for `vacant` and `contested`. A contested own directory is
+// returned without consulting the root: the root is farther than any declaration of the reader's
+// directory, so a root declaration must not win over an ambiguity nearer than it.
+module function nearNameScope(readersDirectory ScopeHolding, theRoot ScopeHolding) returns ScopeHolding
+	match readersDirectory 'readersDirectory'
+		held or
+		contested then return readersDirectory
+		vacant then break
+	end 'readersDirectory'
+
+	return theRoot
+end 'nearNameScope'
+
+module enum DirectoryNearness
+	elsewhere
+	theRoot
+	theReadersOwn
+end 'DirectoryNearness'
+
+module function nearnessOfDirectory(declDirectory String, readerDirectory String) returns DirectoryNearness
+	if declDirectory.equals(readerDirectory) 'theReadersOwnDirectory'
+		return DirectoryNearness.theReadersOwn
+	end 'theReadersOwnDirectory'
+
+	return DirectoryNearness.theRoot if declDirectory.isEmpty() else DirectoryNearness.elsewhere
+end 'nearnessOfDirectory'
+
+module function tierOfNearness(nearness DirectoryNearness) returns ScopeTier
+	return match nearness 'nearness'
+		theReadersOwn gives ScopeTierReadersDirectory
+		theRoot gives ScopeTierRoot
+		elsewhere gives ScopeTierElsewhere
+	end 'nearness'
+end 'tierOfNearness'

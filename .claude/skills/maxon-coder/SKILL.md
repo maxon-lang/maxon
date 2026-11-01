@@ -81,10 +81,11 @@ After each edit:
 
 ## 5. Traps the compiler will not explain well
 
-- **A default parameter on an overloaded name is E2015** unless every declaration of the name has the same
-  parameters and the same defaults. Give the short form its own overload that calls the long one, and add
-  the new parameter LAST — a second function-typed parameter at argument 0 withholds closure parameter
-  inference from every caller.
+- **A name is declared once (E3006): there is no overloading.** A short form is a default parameter on the
+  one declaration, or a second function with its own name (`sort` / `sortBy`). Add a new parameter LAST — a
+  second function-typed parameter at argument 0 withholds closure parameter inference from every caller.
+- **A parameter is a `let` (E2013 on reassignment).** Mark it `mutable` to write through to the caller's
+  `var`, or copy it into a local `var`.
 - **A method is not a function value.** `apply(Ops.twice, …)` is E2078, for a static or an instance
   method; pass `function(n) gives Ops.twice(n)`.
 - **An unmarked field is private to its type (E3014); an unmarked method is private to its file (E3008).**

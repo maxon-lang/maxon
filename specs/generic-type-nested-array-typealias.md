@@ -2836,41 +2836,6 @@ reservation itself (`LowerMaxonToStd.buildLayoutNeedingFuncs` counts emitted par
 body does read has no error path — it aborts the compiler. So `solveDescriptorNeeds`' claim that same-named
 methods "share one answer" is MADE true where the columns are filled, rather than assumed.
 
-<!-- test: two-method-declarations-of-one-name-merge-their-descriptor-seeds -->
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Bag uses T
-	export var value as T
-
-	static function create(v T) returns Self
-		return Self{value: v}
-	end 'create'
-
-	function slotSize() returns Num
-		return sizeof(T)
-	end 'slotSize'
-
-	function slotSize(scale Num) returns Num
-		return scale
-	end 'slotSize'
-end 'Bag'
-
-typealias NumBag = Bag with Num
-
-function main() returns ExitCode
-	let b = NumBag.create(7)
-	print("{b.slotSize()}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-8
-```
-
 ### Forwarding a BORROWED opaque element to a sibling that stores it takes a reference for it
 
 ⛔ **This is the `Map.grow()` double free in its smallest form, and it once COMPILED.** The sibling's
@@ -3220,8 +3185,8 @@ end 'main'
 8 1
 ```
 
-<!-- test: a-closure-calls-the-overload-of-a-generic-method-that-reads-the-descriptor -->
-The second declaration of `size` is the one that reads `sizeof(T)`, and it is named by a registration name that wears a suffix for its parameter type.
+<!-- test: a-closure-calls-a-generic-method-that-reads-the-descriptor -->
+`size` is the method that reads `sizeof(T)`, and a closure calls it.
 ```maxon
 type Box uses T
 	export typealias Items = Array with Count
@@ -3231,9 +3196,9 @@ type Box uses T
 		return Self{n: 0}
 	end 'create'
 
-	function size(flag bool) returns Count
+	function sizeFlag(flag bool) returns Count
 		return 1 if flag else 0
-	end 'size'
+	end 'sizeFlag'
 
 	function size(items Items) returns Count
 		return sizeof(T) + items.count()
@@ -3265,8 +3230,8 @@ end 'main'
 9 2
 ```
 
-<!-- test: a-closure-calls-the-static-overloads-of-a-name-an-instance-method-also-wears -->
-The instance `m` and the two `static` overloads of `m` are three declarations of one source name. The statics are registered under a key of their own, and the declaration they are read back by is theirs, not the instance's.
+<!-- test: a-closure-calls-the-statics-of-a-generic-type -->
+The instance `own` and the two statics `m` and `mPlus` are three declarations. A closure that calls a static reads it back by the static's own declaration.
 ```maxon
 type Box uses T
 	export var n as Count
@@ -3275,20 +3240,20 @@ type Box uses T
 		return Self{n: 3}
 	end 'create'
 
-	function m() returns Count
+	function own() returns Count
 		return self.n
-	end 'm'
+	end 'own'
 
 	static function m(b SmallBox) returns Count
 		return sizeof(T) + b.n
 	end 'm'
 
-	static function m(b SmallBox, extra Count) returns Count
+	static function mPlus(b SmallBox, extra Count) returns Count
 		return sizeof(T) + b.n + extra
-	end 'm'
+	end 'mPlus'
 
 	function viaClosure(other SmallBox) returns Count
-		let f = function() gives Self.m(other, extra: 1)
+		let f = function() gives Self.mPlus(other, extra: 1)
 		return f()
 	end 'viaClosure'
 
@@ -3305,7 +3270,7 @@ typealias FlagBox = Box with bool
 function main() returns ExitCode
 	let a = SmallBox.create()
 	let b = FlagBox.create()
-	print("{a.viaClosure(a)} {b.viaClosure(a)} {a.viaClosureOneArgument(a)} {b.viaClosureOneArgument(a)} {a.m()} {SmallBox.m(a)} {FlagBox.m(a, extra: 2)}\n")
+	print("{a.viaClosure(a)} {b.viaClosure(a)} {a.viaClosureOneArgument(a)} {b.viaClosureOneArgument(a)} {a.own()} {SmallBox.m(a)} {FlagBox.mPlus(a, extra: 2)}\n")
 	return 0
 end 'main'
 ```
@@ -3316,8 +3281,8 @@ end 'main'
 12 5 11 4 3 11 6
 ```
 
-<!-- test: the-parameter-default-of-a-later-overload-of-a-generic-method-reads-sizeof -->
-The second overload of `width` declares its own defaulted parameter. Its default is a helper function named after the overload, and that helper reads the enclosing instance's layout descriptor like the method it belongs to.
+<!-- test: the-parameter-default-of-a-second-generic-method-reads-sizeof -->
+`widthText` declares its own defaulted parameter. Its default is a helper function named after the method, and that helper reads the enclosing instance's layout descriptor like the method it belongs to.
 ```maxon
 typealias Level = int(0 to 125)
 
@@ -3332,12 +3297,12 @@ type Gauge uses T
 		return n + extra
 	end 'width'
 
-	function width(n String, extra Level = sizeof(T) as Level) returns Level
+	function widthText(n String, extra Level = sizeof(T) as Level) returns Level
 		return (n.count() as Level) + extra
-	end 'width'
+	end 'widthText'
 
 	function probe() returns Level
-		return self.width("ab")
+		return self.widthText("ab")
 	end 'probe'
 end 'Gauge'
 
@@ -3356,7 +3321,7 @@ end 'main'
 10
 ```
 
-<!-- test: the-parameter-default-of-a-later-overload-of-a-generic-method-builds-a-container -->
+<!-- test: the-parameter-default-of-a-second-generic-method-builds-a-container -->
 ```maxon
 typealias Level = int(0 to 125)
 
@@ -3372,12 +3337,12 @@ type Gauge uses T
 		return n + (held.count() as Level)
 	end 'width'
 
-	function width(n String, held Held = Held.create()) returns Level
+	function widthText(n String, held Held = Held.create()) returns Level
 		return (n.count() as Level) + (held.count() as Level)
-	end 'width'
+	end 'widthText'
 
 	function probe() returns Level
-		return self.width("abcd")
+		return self.widthText("abcd")
 	end 'probe'
 end 'Gauge'
 
@@ -3448,7 +3413,7 @@ end 'main'
 6 7 18
 ```
 
-<!-- test: the-default-of-a-later-overload-is-filled-at-a-call-from-main -->
+<!-- test: the-default-of-a-second-method-is-filled-at-a-call-from-main -->
 ```maxon
 typealias Level = int(0 to 125)
 
@@ -3463,9 +3428,9 @@ type Gauge uses T
 		return n + extra
 	end 'width'
 
-	function width(n String, extra Level = sizeof(T) as Level) returns Level
+	function widthText(n String, extra Level = sizeof(T) as Level) returns Level
 		return (n.count() as Level) + extra
-	end 'width'
+	end 'widthText'
 end 'Gauge'
 
 typealias IntGauge = Gauge with Level
@@ -3474,7 +3439,7 @@ typealias FlagGauge = Gauge with bool
 function main() returns ExitCode
 	let g = IntGauge.create(3)
 	let h = FlagGauge.create(true)
-	print("{g.width("abcd")} {h.width("abcd")} {g.width(2)} {h.width(2)}\n")
+	print("{g.widthText("abcd")} {h.widthText("abcd")} {g.width(2)} {h.width(2)}\n")
 	return 0
 end 'main'
 ```
@@ -3485,7 +3450,7 @@ end 'main'
 12 5 10 3
 ```
 
-<!-- test: the-default-of-a-later-overload-is-filled-at-a-call-from-a-closure -->
+<!-- test: the-default-of-a-second-method-is-filled-at-a-call-from-a-closure -->
 ```maxon
 typealias Level = int(0 to 125)
 
@@ -3500,12 +3465,12 @@ type Gauge uses T
 		return n + extra
 	end 'width'
 
-	function width(n String, extra Level = sizeof(T) as Level) returns Level
+	function widthText(n String, extra Level = sizeof(T) as Level) returns Level
 		return (n.count() as Level) + extra
-	end 'width'
+	end 'widthText'
 
 	function viaClosure() returns Level
-		let f = function() gives self.width("abcd")
+		let f = function() gives self.widthText("abcd")
 		return f()
 	end 'viaClosure'
 end 'Gauge'
@@ -3517,7 +3482,7 @@ function main() returns ExitCode
 	let g = IntGauge.create(3)
 	let h = FlagGauge.create(true)
 	let k = IntGauge.create(4)
-	let f = function() gives k.width("ab")
+	let f = function() gives k.widthText("ab")
 	print("{g.viaClosure()} {h.viaClosure()} {f()}\n")
 	return 0
 end 'main'
@@ -3529,7 +3494,7 @@ end 'main'
 12 5 10
 ```
 
-<!-- test: the-default-of-a-later-overload-declared-in-an-extension-reads-sizeof -->
+<!-- test: the-default-of-a-second-method-declared-in-an-extension-reads-sizeof -->
 ```maxon
 typealias Level = int(0 to 125)
 
@@ -3546,12 +3511,12 @@ extension Gauge
 		return n + extra
 	end 'width'
 
-	function width(n String, extra Level = sizeof(T) as Level) returns Level
+	function widthText(n String, extra Level = sizeof(T) as Level) returns Level
 		return (n.count() as Level) + extra
-	end 'width'
+	end 'widthText'
 
 	function probe() returns Level
-		return self.width("abcd")
+		return self.widthText("abcd")
 	end 'probe'
 end 'Gauge'
 
@@ -3561,7 +3526,7 @@ typealias FlagGauge = Gauge with bool
 function main() returns ExitCode
 	let g = IntGauge.create(3)
 	let h = FlagGauge.create(true)
-	print("{g.probe()} {h.probe()} {g.width("ab")}\n")
+	print("{g.probe()} {h.probe()} {g.widthText("ab")}\n")
 	return 0
 end 'main'
 ```
@@ -3572,7 +3537,7 @@ end 'main'
 12 5 10
 ```
 
-<!-- test: the-default-of-a-later-static-overload-beside-an-instance-member-reads-sizeof -->
+<!-- test: the-default-of-a-second-static-reads-sizeof -->
 ```maxon
 typealias Level = int(0 to 125)
 
@@ -3583,17 +3548,17 @@ type Gauge uses T
 		return Self{item: item}
 	end 'create'
 
-	function width() returns Level
+	function fixed() returns Level
 		return 7
-	end 'width'
+	end 'fixed'
 
 	static function width(n Level, extra Level = sizeof(T) as Level) returns Level
 		return n + extra
 	end 'width'
 
-	static function width(n String, extra Level = sizeof(T) as Level) returns Level
+	static function widthText(n String, extra Level = sizeof(T) as Level) returns Level
 		return (n.count() as Level) + extra
-	end 'width'
+	end 'widthText'
 end 'Gauge'
 
 typealias IntGauge = Gauge with Level
@@ -3601,7 +3566,7 @@ typealias FlagGauge = Gauge with bool
 
 function main() returns ExitCode
 	let g = IntGauge.create(3)
-	print("{g.width()} {IntGauge.width("abcd")} {FlagGauge.width("abcd")} {IntGauge.width(2)}\n")
+	print("{g.fixed()} {IntGauge.widthText("abcd")} {FlagGauge.widthText("abcd")} {IntGauge.width(2)}\n")
 	return 0
 end 'main'
 ```

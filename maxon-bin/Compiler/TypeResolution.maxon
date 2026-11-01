@@ -529,7 +529,7 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 			value(inner) gives MaxonReturnType.value(functionAliasSlotIn(project, signatures: signatures, form: form, t: inner, declFilePath: alias.declFilePath, site: alias.typeSites.returnTypeSite(), declaration: name))
 		end 'storedReturn'
 
-		shapes.upsert(name, value: FunctionShape.create(params, returnType: returnType, paramAggregateNames: preErasedNames, paramDeclaredNames: spellings, returnAggregateName: alias.returnAggregateName, paramCapabilities: capabilities, returnCapability: alias.returnCapability))
+		shapes.upsert(name, value: FunctionShape.create(params, returnType: returnType, paramAggregateNames: preErasedNames, paramDeclaredNames: spellings, returnAggregateName: alias.returnAggregateName, paramCapabilities: capabilities, returnCapability: alias.returnCapability, byRefParams: alias.byRefParamMask()))
 	end 'eachAlias'
 
 	return shapes
@@ -569,8 +569,8 @@ end 'functionAliasSlotIn'
 // ⚠⚠ **`scopeFilePath` IS THE FILE THAT DECLARED THE *SLOT*, WHICH IS NOT ALWAYS THE FILE BEING
 // PARSED.** A parameter list, a field and a `sizeof` operand are slots of the file being parsed, so
 // those callers pass its path; a CALLEE'S RETURN TYPE is a slot of the file that declared the
-// CALLEE, and an OVERLOAD CANDIDATE'S PARAMETER a slot of the file that declared the candidate.
-// Passing the parsed file's path for those two is a wrong answer wherever a name means two things:
+// CALLEE. Passing the parsed file's path for that one is a wrong answer wherever a name means two
+// things:
 // a struct return read as an int (a false E3005), or an int dereferenced as a record at run time.
 // `ProgramSignatures.funcReturnDeclFiles`' header states the rule this parameter carries: *"the scope
 // file is the SLOT's declaring file and never a reader's."*
@@ -627,7 +627,7 @@ end 'signatureReturnIdentity'
 module function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
-		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: signatureReturnIdentity(registry, sig: sig), paramCapabilities: lentParams(sig.paramCount()), returnCapability: sig.returnCapability))
+		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: signatureReturnIdentity(registry, sig: sig), paramCapabilities: lentParams(sig.paramCount()), returnCapability: sig.returnCapability, byRefParams: sig.byRefParams))
 	end 'declaredFn'
 
 	if let aliasShape = try registry.aliasShapes.get(name) 'alias'
@@ -644,7 +644,8 @@ export function functionTypeRegistryOf(project Project) returns FunctionTypeRegi
 end 'functionTypeRegistryOf'
 
 // ⭐ **DO TWO FUNCTION TYPES AGREE? THE ONE ANSWER, for every door a function value passes through.** Same
-// arity, and position for position the same RESOLVED type — which is exactly what a call through the value
+// arity, the same positions marked `mutable`, and position for position the same RESOLVED type — which is
+// exactly what a call through the value
 // depends on, because a call site derives its argument register files, its argument count and its result
 // register from the type it was DECLARED with and gets whatever the callee actually is.
 //
@@ -711,11 +712,11 @@ export function functionShapesAgreeUnderSomeInstantiation(registry FunctionTypeR
 		return functionShapesAgree(registry, signatures: signatures, declared: declared, got: got, readerFilePath: readerFilePath)
 	end 'nothingToSubstitute'
 
-	if declared.paramTypes.count() != got.paramTypes.count() 'arity'
+	if declared.paramTypes.count() != got.paramTypes.count() or declared.byRefParams != got.byRefParams 'arity'
 		return false
 	end 'arity'
 
-	let writtenPositions = signatures.declaredByRefPositionsAtArity(declared.paramTypes.count() as ParamCount)
+	let writtenPositions = declared.byRefParams
 
 	for i in 0 upto declared.paramTypes.count() 'eachParam'
 		if not parameterAgreesUnderSomeInstantiation(registry, signatures: signatures, declared: declared, got: got, index: i as ParamCount, written: maskHasParam(writtenPositions, param: i as ParamCount), readerFilePath: readerFilePath) 'paramMismatch'
@@ -761,11 +762,11 @@ end 'parameterAgreesUnderSomeInstantiation'
 // same descent (see `FunctionTypePair`). Split from the entry point above only so the cycle guard is one
 // argument the three call sites never have to know about.
 function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
-	if declared.paramTypes.count() != got.paramTypes.count() 'arity'
+	if declared.paramTypes.count() != got.paramTypes.count() or declared.byRefParams != got.byRefParams 'arity'
 		return false
 	end 'arity'
 
-	let writtenPositions = signatures.declaredByRefPositionsAtArity(declared.paramTypes.count() as ParamCount)
+	let writtenPositions = declared.byRefParams
 
 	for i in 0 upto declared.paramTypes.count() 'eachParam'
 		let declaredParam = try declared.paramTypes.get(i) otherwise panic("shapesAgreeUnder: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
@@ -831,7 +832,7 @@ export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNa
 		value(inner) gives MaxonReturnType.value(unerasedType(inner, identity: shape.returnAggregateName, typeNames: typeNames))
 	end 'r'
 
-	return formatFnTypeDisplay(unerasedParams, returnType: unerasedReturn, typeNames: typeNames, signatures: signatures)
+	return formatFnTypeDisplay(unerasedParams, returnType: unerasedReturn, byRefParams: shape.byRefParams, typeNames: typeNames, signatures: signatures)
 end 'formatFunctionShapeDisplay'
 
 // One position, with its pre-erasure identity put back. A position that carries none is already the type it
@@ -1134,8 +1135,12 @@ function syncResolvedSignature(project Project, func IrFunction)
 		return
 	end 'noSig'
 
+	if project.poison.duplicates(func.name) 'aRefusedDuplicate'
+		return
+	end 'aRefusedDuplicate'
+
 	var sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, returnBrand: sig.returnBrand, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, offeredResultAlias: sig.offeredResultAlias, returnCapability: sig.returnCapability))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, returnBrand: sig.returnBrand, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, offeredResultAlias: sig.offeredResultAlias, byRefParams: sig.byRefParams, returnCapability: sig.returnCapability))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED

@@ -296,7 +296,7 @@ let WasmRegionAlignment = 8
 // model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, releasesRegistry bool, funcNames FunctionNameIndex, entryFunction ByteArray, spellings StdlibShadowSpellingArray) returns ByteArray
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, releasesRegistry bool, funcNames FunctionNameIndex, entryFunction ByteArray, roster ShadowSpellingRoster) returns ByteArray
 	var calleeParamTypes = buildCalleeParamTypesMap(funcNames)
 
 	var builder = WasmModuleBuilder.create()
@@ -339,7 +339,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	applyRdataAbsRelocs(rdataImage, globalData: globalData, rdataBase: rdataBase)
 	bakeFuncTableIndexRelocs(rdataImage, globalData: globalData, funcNames: funcNames)
 	let scratchFrames = WasmScratchFrames.layout(module, funcNames: funcNames, base: wasmRegionAfter(rdataBase, size: rdataImage.count() as BytePos))
-	let frames = WasmFrameStack.above(scratchFrames.endAddress, spellings: spellings)
+	let frames = WasmFrameStack.above(scratchFrames.endAddress, roster: roster)
 
 	// The WASI imports were added FIRST (above), in the order the `*ImportFuncIdx` constants fix, so every
 	// defined function gets the index `wasmFuncIdxOf` computes (`WasmImportCount + position`). Order
@@ -803,9 +803,9 @@ type WasmFrameStack
 	export let elidedLength as Imm32
 	export let lineTableBase as Wasm32Index
 	let prefix as ByteArray
-	var spellings as StdlibShadowSpellingArray
+	let roster as ShadowSpellingRoster
 
-	static function above(base Wasm32Index, spellings StdlibShadowSpellingArray) returns Self
+	static function above(base Wasm32Index, roster ShadowSpellingRoster) returns Self
 		let ringSlots = roundUpToPowerOfTwo(MaxBacktraceFrames)
 		var prefix = ByteArray.create()
 		let depthOffset = prefix.count()
@@ -832,7 +832,7 @@ type WasmFrameStack
 			elidedLength: ElidedFramesLine.count() as Imm32,
 			lineTableBase: wasmLinearAddress(base, byteOffset: prefix.count() as ByteOffset) as Wasm32Index,
 			prefix: prefix,
-			spellings: spellings
+			roster: roster
 		}
 	end 'above'
 
@@ -863,7 +863,7 @@ type WasmFrameStack
 
 	function appendFrameLine(lines ByteArray, name ByteArray)
 		lines.append(FrameLinePrefix)
-		lines.append(authorSpelledName(name, spellings: self.spellings))
+		lines.append(self.roster.authorSpelledName(name))
 		lines.append(FrameLineTerminator)
 	end 'appendFrameLine'
 

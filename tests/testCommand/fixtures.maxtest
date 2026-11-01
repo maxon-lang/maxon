@@ -105,7 +105,11 @@ let StagedCacheDirName = "cache"
 let PassedTestMarker = "✓ "
 let OnePassedTally = " 1 pass\n"
 let NoneFailedTally = " 0 fail\n"
-let AllPassedExitCode = 0
+module let CleanExitCode = 0
+module let ListFlag = "--list"
+module let BuildFlag = "--build"
+module let JsonFlag = "--json"
+module let BinaryKey = "binary"
 
 // How many case directories one corpus walk found. Named because it is the number the coverage guard
 // reads, not a loop counter.
@@ -261,7 +265,7 @@ end 'testCommandArgv'
 
 export function expectRanOnePassingTest(run CollectedOutput, testName String, caseName String) throws TestFailure
 	let report = "{run.stdout}{run.stderr}"
-	try Expect.equal(run.exitCode(), expected: AllPassedExitCode, message: "'{caseName}': `{TestCommandName}` exits {AllPassedExitCode} when its one test passed. It printed: {report}")
+	try Expect.equal(run.exitCode(), expected: CleanExitCode, message: "'{caseName}': `{TestCommandName}` exits {CleanExitCode} when its one test passed. It printed: {report}")
 	try Expect.contains(run.stdout, needle: "{PassedTestMarker}{testName}", message: "'{caseName}': the report shows `{testName}` passing. It printed: {report}")
 	try Expect.contains(run.stdout, needle: OnePassedTally, message: "'{caseName}': the report counts one passing test. It printed: {report}")
 	try Expect.contains(run.stdout, needle: NoneFailedTally, message: "'{caseName}': the report counts no failing test. It printed: {report}")

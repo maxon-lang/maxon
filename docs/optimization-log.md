@@ -2241,3 +2241,7 @@ The optimizer's A/B on the first implementer round, against 01fe9943e, measured 
 prefix walk incrementally; the ladder above is linear. The corpus has one- and two-segment qualified
 type references and qualified calls, but no qualified `spawn`/`async`/statics and no chain naming
 nothing, so those paths are argued from reading only.
+
+### Result — 2026-11-01, contested top-level names are indexed rather than scanned
+
+Stage A of the Verona plan (directory-scoped top-level names, minted `<dir>~Name`) plus the optimize pass. Contested names were quadratic in six places: spelling respelling (`respelledText`, per guard message, symbol and type, O(spellings x text)), per-token claim resolution in `authorMintedTokens`, `bareBindingMeaning`'s site scan, one refusal slot per directory in `TypeNameAdmission`, `recordGenericFunctionTemplate`'s dedupe scan and `bareSpellingOf`. Each is now an index: an exact-mint map over word-boundary slices, (name, directory) holders with the full scan as the fallback, one representative user-nominal slot, a swept-site set and a mint-to-position map. Measured on N directories declaring one type name (contested minus control, N=128/256/512): total delta 378k / 747k / 1.49M allocations, against 4.7M / 13.2M / 41.3M at N=32/64/128 before. At 8 directories and 16 to 128 names each, `link` is 7.7k to 57k, against 223k at 64. The standing ladder moves +7.6k allocations at rung 0 to +25.8k at rung 5 (0.02 to 0.06%), because the corpus contests nothing: the new settled fields, roster indexes and per-template site insert.

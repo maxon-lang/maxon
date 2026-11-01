@@ -34,15 +34,15 @@
 - `ProgramSignatures.methodInnerAliasParams` is filed under the swept METHOD name as written, not the
   registration key, so a static and an instance member of the same name in one generic type share one
   entry (last wins). No wrong answer reached. Found by reading, 2026-09-24.
-- `extensionMethodConstraints` / `unconstrainedExtensionMethods` (`noteTypeExtensionWitnessConstraints`,
-  SignatureIndex ~:21794) are keyed `T.m` whatever the member's kind, so a static/instance pair in
+- `extensionMethodConstraints` (`noteTypeExtensionWitnessConstraints`,
+  SignatureIndex ~:21794) is keyed `T.m` whatever the member's kind, so a static/instance pair in
   constrained type extensions overwrite each other, and the static is later looked up at `T.m#__static`.
   The cross-file extension contest maps (`extensionMethodDeclFiles`, `contestedExtensionMethods`,
   `stdlibPublishedExtensionMethods`, `stdlibExtensionMethodsBeatenByUser`, ~:13496-13530) are name-keyed
   too, so a static `m` in one file's extension and an instance `m` in another's read as a contest. Found by
   reading, 2026-09-24; no wrong answer reached yet.
 - `SemanticCheck.validateCall` (~:3913) reports E3004 from the real parse's `project.funcSignatures`
-  (post-overload-resolution names), while the parser's deferral and SemanticCheck's trace ask
+  (registered names), while the parser's deferral and SemanticCheck's trace ask
   `ProgramSignatures.definesCallee` (the sweep). E9003 enforces that the sweep holds every declaration the
   parse registers; nothing states the converse as one fact. Found by reading, 2026-09-24.
 
@@ -118,7 +118,6 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
 - The MCP `build` tool with `path: "maxon-bin"` is a PATH build (maxon-bin/Compiler/Mcp/McpTools.maxon ~241-280): no manifest, so no version stamp and no automatic second self-compile — yet maxon-bin/AGENTS.md's tool table and the maxon-coder and land skills name it as the way to build the compiler. Seen reviewing the automatic second self-compile.
 - tests/buildManifest's rebuild-with-output cases inherit the caller's environment, so a caller that already carries `MAXON_SECOND_STAGE` (e.g. running the corpus from inside a second-stage build) fails them; the stdlib `Environment` API cannot remove a variable from a child's environment. Seen reviewing the automatic second self-compile.
 - The soleness proof keeps a value's fresh-return mark through an immutable rebind (`let a = fresh`), so `valueIsSolelyOwnedHere` can answer "sole" while a second name still reads the record; the registry/SharedValue publish door patches over it with a live-name count (maxon-bin/Compiler/Parser.maxon `requirePublishedValueNamedOnce`). A message-door case would show whether a move can leave a readable alias: `var v = X.create(); let a = v; h.send(v); print(a.n)`. Seen reviewing the service registry.
-- The parser and the checker each score overload candidates (maxon-bin/Compiler/Parser.maxon `sweptOverloadAmong`/`sweptOverloadArgFit` and maxon-bin/Compiler/SemanticCheck.maxon `overloadArgTypeFit`); both carry the `T.handle` to `I.handle` widening. A divergence costs only a false E3005, never a wrong binary. Seen reviewing the service registry.
 - A `SharedValue` box steps both its own refcount and the cell's refs; any path that retains it with a plain `__mm_incref` instead of `__shv_box_retain` would drop the cell early. No failing program found; the same two-count shape service handles use. Seen reviewing the service registry.
 - A static-call statement now parses through `parsePostfix`, so `Foo.make().field` alone on a line is accepted, as receiver chains already are; a dead-expression statement check would refuse both. Seen reviewing the service registry.
 - tests/warmRebuild times out 2/2 at its 10 s limit on x64-windows, identically with a compiler built from 1d3610cc8. Seen during the log-as-a-service optimization pass.
@@ -178,20 +177,10 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
     value (H2).
   - **Lingering counts after a push.** A call after a push can yield, or run an awaited coroutine, that sends the
     pushed element while the local's count still lingers (H3).
-- `__module_init`'s synthesized calls pass a bare value to an inferred by-reference parameter (ModuleInit
-  `calledFactoryRecord` ~552, `emitMapEntryUpsert` ~462, `builtArrayLiteralRecord` ~440). `let g = Tag from "hello"`,
-  where `init` reassigns its parameter, prints `!` and exits 101. Inferred by-reference also reaches stdlib
-  parameters by name coincidence (`DeclNodeSpace` `pushDottedTargets`). The call sites a parse synthesizes were fixed
-  in 1b9466d24b.
 - Unverified: a member that writes its receiver may drop the receiver bit from its summary (StorageProvenance ~4141:
   `inside` loses the receiver when the returned value is `frozen` and the callee writes its receiver). If so,
   `let e = try self.items.get(0); self.reads = self.reads + 1; return e` on a read-only-element instance is not
   refused.
-- An overloaded generic constructor skips the escaping-borrow feed (Parser ~101194, `applyCallerConsume`
-  `'everyDeclarationBorrowsIt'`). When every declaration borrows a column, an escaping borrowed feed never reaches
-  `handleEscapingBorrowFeed`, so a borrowed trivial struct box may be stored without a retain. The tuple spawn hand-off
-  is skipped on the same road. Unverified repro: `Box uses T` with `create(item T)` beside `create(item T, tag Num)`,
-  both storing `item`, called with a borrowed `Point`, both plain and as `spawn`.
 - A coOwned `var` cell holding a trivial tuple is refused at a send instead of copied (`handOffTakeOf`'s
   `'aCellsOccupant'` arm runs before the copy arm). The shape has not been built yet, because a closure capture moves
   the `var` (E3102).
@@ -204,16 +193,6 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
     `readOnlyRootSubject("", viewRootKind)` (~6334, ~9489) in others.
   - Bindings read "the read-only 'x'" at the binding door, and "'x', which is read-only (kind)," elsewhere.
   - `rootKindOfBlame` (~7318) defaults silently to `letBinding`.
-- An overloaded factory on a bare generic base leaks (exit 101): `Box.create(p)` with no typealias, where `Box` declares
-  `create(item T)` and `create(item T, tag Num)`. `spawnFactoryConstructorInstance` (Parser ~75108) returns the
-  uninstantiated base, so no `__destruct_Box_Point` releases the `Point`. Infer from the declarations `slotCallArgs`
-  leaves, and refuse only when two or more still slot.
-- The opaque-overload refusal (E2015 "resolving an overload of 'add' against an argument of opaque generic type") has
-  two defects:
-  - its text says "whose concrete type is managed", which is false, since there is no managed/trivial split;
-  - it cascades into a false E3005, because the op stays on the first member and `checkCalls` re-checks it.
-
-  Repro: `Holder uses T` whose `put(item T)` calls an overloaded `Bag.add` with `tag: 1` and `tag: "x"`.
 - SemanticCheck's merge-incoming scan is quadratic (~570-593, `pushBlockArgumentInputs` / `pushEdgeInputs`).
   The same pairing of edge values with block arguments is walked separately by:
   - `EffectSummary.noteMergeEdges`
@@ -223,8 +202,6 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
   - StorageProvenance's `indexEdgePairs`
 
   One IR-level merge-incomings index should answer all of them.
-- Possible E3077 false negative: `storeOwnedValueIntoDurableSink` (Parser ~74220) marks the owner's mutability as
-  exercised even when the borrowing overload of a multi-declaration call is the one bound.
 - E3078 gives two verdicts for one borrowed union payload stored into a `let` field. A payload reached through a
   parameter of the filing function is refused, while the same payload taken from a `for` element of a parameter
   array is accepted. One of the two is wrong: write both shapes as cases and decide.
@@ -235,9 +212,6 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
   (`settleLayoutCarriers`'s spawn loop).
 - A closure that calls a witness-carrying static is refused (E2015) although the program is legal. The closure should
   capture the witness tables. It is pinned as `where-clauses` `a-closure-calling-a-witness-carrying-static-is-refused`.
-- An alias-typed argument ties between `f(x T)` and `f(x Whole)` with E3007 (`Box.create(7 as Whole)`), because the
-  alias stays in the type tag. A `Whole` argument to a `Whole` parameter should be exact, since aliases are nominal.
-  It is pinned as E3007 by `an-overloaded-factory-called-with-an-alias-valued-argument-both-members-take-equally-is-ambiguous`.
 - Module-scope factories through a generic-instance alias (`let b = IntBox.make(5)`, `IntBox.create(…)`, nested
   `Outer.create(IntBox.make(4))`), imaged as image data. A saved patch from the E2078 change has four open review
   findings:
@@ -250,5 +224,3 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
   `instanceSourceOfCall`.
 - Generic templates vanish for a name declared in two directories. Template keys stay bare (`describe`) while the
   non-generic declarations are directory-qualified (`ca.describe`), so `isGenericFunctionKey` is false.
-- `paramDefaultsCollide` over-enforces: two independent file-private helpers in two files of one directory, one with a
-  default, are refused.

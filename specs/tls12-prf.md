@@ -347,7 +347,7 @@ end 'toHex'
 
 function report(id String, suite Tls12CipherSuite, masterSecretHex String, clientRandomHex String, serverRandomHex String)
 	if let result = try Tls12Prf.keyBlock(suite, masterSecret: fromHex(masterSecretHex), clientRandom: fromHex(clientRandomHex), serverRandom: fromHex(serverRandomHex)) 'derived'
-		print("{id} {toHex(result.clientWriteKey())} {toHex(result.serverWriteKey())} {toHex(result.clientWriteIv())} {toHex(result.serverWriteIv())}\n")
+		print("{id} {toHex(result.clientWriteKey)} {toHex(result.serverWriteKey)} {toHex(result.clientWriteIv)} {toHex(result.serverWriteIv)}\n")
 	end 'derived' else (failure) 'refused'
 		print("{id} {failure}\n")
 	end 'refused'

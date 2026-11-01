@@ -6,7 +6,7 @@ let BranchConditionAnchor = "branch"
 let LoopBackEdgeAnchor = "backedge"
 let ReturnStatementAnchor = "outer-return"
 
-let ContinuesPastEveryHit = 200
+let BreakpointOnEachInstructionClassContinuesPastEveryHit = 200
 
 test 'a breakpoint on each instruction class is hit and resumed, and the program answers exactly as it does undebugged'
 	let staged = builtFixture(InstructionClassCaseLabel, fixture: SteppingFixtureName)
@@ -27,7 +27,7 @@ test 'a breakpoint on each instruction class is hit and resumed, and the program
 
 	armings.push(RunCommand)
 
-	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryHit)))
+	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: BreakpointOnEachInstructionClassContinuesPastEveryHit)))
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)

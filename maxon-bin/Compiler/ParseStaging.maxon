@@ -293,7 +293,7 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		enumMatchNotExhaustive(_, typeName, _, _, _) gives namedConsequence(typeName.toByteArray())
 		serviceTypeNotASpawnTarget(_, typeName, _, _) gives namedConsequence(typeName.toByteArray())
 		serviceReplyGraphNotWalkable(_, message, _, _) gives ConsequenceOf.handlerBody(message.toByteArray())
-		spawnStartRequiresTry(_, factory, _, _) gives namedConsequence(overloadRegistrationBaseName(factory))
+		spawnStartRequiresTry(_, factory, _, _) gives namedConsequence(genericTemplateName(factory))
 		memberAccessOnNonStruct(_, _, _, origin) gives consequenceOfReceiverOrigin(origin)
 		returnTypeMismatch(_, _, _, _, _, _, origin) gives consequenceOfReceiverOrigin(origin)
 		unexpectedToken or
@@ -318,7 +318,7 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		droppedSignature or
 		declarationTheSweepMissed or
 		duplicateParameter or
-		ambiguousBareFunctionName or
+		ambiguousBareName or
 		assignToImmutable or
 		useAfterMove or
 		useAfterMoveInto or
@@ -489,7 +489,6 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		genericTypeParameterNotInferable or
 		genericArgumentsHaveNoCommonType or
 		genericConstraintNotSatisfied or
-		genericCallAmbiguous or
 		genericArgumentKindUnsupported or
 		genericTypeGrowsWithoutBound or
 		illegalBitWidth or
@@ -515,7 +514,7 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		serviceReplyAliasesState or
 		serviceReplyInstanceUnknown or
 		registryRefused or
-		extensionMemberHidesOwnMember gives ConsequenceOf.unrelated
+		duplicateDeclaration gives ConsequenceOf.unrelated
 	end 'kind'
 end 'consequenceNamedBy'
 
@@ -574,8 +573,7 @@ end 'cacheReadParseMintsMinted'
 // before a `MaxonReturnType` exists. It rides THIS record rather than a column of its own for one reason:
 // the two facts must never disagree about the same declaration, and they cannot when they are written,
 // remapped and folded as one entry. `ProgramSignatures.record` applies them together, with identical
-// last-wins semantics, so the surface is exactly as accurate as the return type it accompanies —
-// including for an overload set, where the sweep publishes ONE answer per bare name for both.
+// last-wins semantics, so the surface is exactly as accurate as the return type it accompanies.
 // ⭐⭐ **`visibility` IS THE DECLARATION'S OWN TIER, AND IT RIDES HERE FOR `declaredSurface`'S REASON** — it
 // is a second fact about the SAME declaration, applied by `ProgramSignatures.record` beside the declaring
 // file it already receives, so the tier and the file a visibility question needs are written together and
@@ -599,11 +597,10 @@ end 'cacheReadParseMintsMinted'
 // declaration outside a generic type, which is the overwhelming majority.
 // ⭐⭐ **`paramNames`/`paramTypes` ARE THE DECLARATION'S OWN SOURCE PARAMETER LIST — THE RECEIVER EXCLUDED —
 // AND THEY RIDE HERE FOR `opaqueParams`' REASON: a fifth fact about the SAME declaration, applied by
-// `ProgramSignatures.record` in the same act.** They are what lets a CALL SITE tell one member of an overload
-// set from another while its own file is being parsed, which is the one moment a call's result type is
-// decided and a whole pass before `SemanticCheck.resolveOverloadedCalls` picks a member. See
-// `ProgramSignatures.overloadedDeclsOf`. Both default EMPTY for the synthesized helpers named above — a
-// synthesized helper is never overloaded, so there is nothing to tell apart.
+// `ProgramSignatures.record` in the same act.** They are what lets a CALL SITE read a callee's declared
+// parameters while its own file is being parsed, which is the one moment a call's result type is decided.
+// See `ProgramSignatures.sweptDeclarationOf`. Both default EMPTY for the synthesized helpers named
+// above.
 export type FuncReturnTypeEntry
 	export let name as ByteArray
 	export let returnType as MaxonReturnType
@@ -654,22 +651,18 @@ export type FuncSignatureEntry
 
 	// ⭐⭐ **DID THE COMPILER MINT THIS FUNCTION, OR DID THE AUTHOR WRITE IT? — the bit
 	// `commitFuncSignatures` needs to keep a duplicate diagnostic on a name the author can grep for.**
-	// A default value is compiled as a synthesized nullary function named after the declaration that owns it
-	// (`Project.paramDefaultHelperName`), so two of THEM colliding is never a fact of its own: the join is
-	// injective, so one helper name means one owner registration name and one parameter position — and two
-	// declarations claiming one registration name is the duplicate `commitFuncSignatures` reports, in the same
-	// run, at a position the author wrote. The FIELD door's mint is injective for the same reason over
-	// `(type name, field name)`, so two of ITS helpers colliding means two `type` declarations of one name,
-	// and the duplicate `type` and its duplicate factory are both reported. STATED here rather than decoded
-	// from the name's `__` prefix at the
-	// merge, for the reason this file keeps: a minted name is a thing to be RECORDED, never a thing to be
-	// read back apart.
+	// A field's default is compiled as a synthesized nullary function named `(type name, field name)`
+	// (`Project.fieldDefaultHelperName`), so two of THEM colliding is never a fact of its own: the mint is
+	// injective, so one helper name means two `type` declarations of one name, and the duplicate `type` and
+	// its duplicate factory are both reported at positions the author wrote. A global's initializer and a
+	// closure's environment drop are minted from the name of the declaration that owns them. STATED here
+	// rather than decoded from the minted name's spelling at the merge, for the reason this file keeps: a
+	// minted name is a thing to be RECORDED, never a thing to be read back apart.
 	export let synthesized as bool
-	export var role as FunctionDeclarationRole
 	export var returnType as MaxonReturnType
 
-	export static function create(name ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool, role FunctionDeclarationRole) returns FuncSignatureEntry
-		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized, role: role, returnType: returnType}
+	export static function create(name ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool) returns FuncSignatureEntry
+		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized, returnType: returnType}
 	end 'create'
 
 	// @generated library-cache begin
@@ -680,7 +673,6 @@ export type FuncSignatureEntry
 		writer.unsigned(self.nameColumn as CacheUnsigned)
 		writer.text(self.sourceFilePath.toString())
 		writer.flag(self.synthesized)
-		writer.unsigned(self.role.ordinal as CacheUnsigned)
 		cacheWriteMaxonReturnType(writer, value: self.returnType)
 	end 'cacheWrite'
 
@@ -691,14 +683,13 @@ export type FuncSignatureEntry
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
 		let f_sourceFilePath = try reader.path()
 		let f_synthesized = try reader.flag()
-		let f_role = try cacheReadFunctionDeclarationRole(reader)
 		let f_returnType = try cacheReadMaxonReturnType(reader)
 
-		return Self{name: f_name, signature: f_signature, nameLine: f_nameLine, nameColumn: f_nameColumn, sourceFilePath: f_sourceFilePath, synthesized: f_synthesized, role: f_role, returnType: f_returnType}
+		return Self{name: f_name, signature: f_signature, nameLine: f_nameLine, nameColumn: f_nameColumn, sourceFilePath: f_sourceFilePath, synthesized: f_synthesized, returnType: f_returnType}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize64
-		return sizeof(FuncSignatureEntry) as CacheSize64
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(FuncSignatureEntry) as CacheSize56
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -727,49 +718,6 @@ function cacheReadFuncSignatureEntryArray(reader LibraryCacheReader) returns Fun
 
 	return result
 end 'cacheReadFuncSignatureEntryArray'
-
-// @generated library-cache end
-
-export enum FunctionDeclarationRole
-	ordinary
-	contestedFreeFunction
-end 'FunctionDeclarationRole'
-
-// @generated library-cache begin
-let CacheCasesFunctionDeclarationRole = [FunctionDeclarationRole.ordinary, FunctionDeclarationRole.contestedFreeFunction]
-
-function cacheReadFunctionDeclarationRole(reader LibraryCacheReader) returns FunctionDeclarationRole throws LibraryCacheDamage
-	let ordinal = try reader.unsigned()
-
-	return try CacheCasesFunctionDeclarationRole.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
-end 'cacheReadFunctionDeclarationRole'
-
-function cacheTableAgreesFunctionDeclarationRole() returns bool
-	let declared = FunctionDeclarationRole.allCases
-
-	if CacheCasesFunctionDeclarationRole.count() != declared.count() 'differentCount'
-		return false
-	end 'differentCount'
-
-	for position in 0 upto declared.count() 'eachCase'
-		let listed = try CacheCasesFunctionDeclarationRole.get(position) otherwise return false
-		let expected = try declared.get(position) otherwise return false
-
-		if listed != expected 'anotherCase'
-			return false
-		end 'anotherCase'
-	end 'eachCase'
-
-	return true
-end 'cacheTableAgreesFunctionDeclarationRole'
-
-module function cacheEnumTablesAgreeInCompilerParseStaging() returns bool
-	if not cacheTableAgreesFunctionDeclarationRole() 'disagreesCacheTableAgreesFunctionDeclarationRole'
-		return false
-	end 'disagreesCacheTableAgreesFunctionDeclarationRole'
-
-	return true
-end 'cacheEnumTablesAgreeInCompilerParseStaging'
 
 // @generated library-cache end
 
@@ -942,8 +890,6 @@ export type FileParseArtifact
 	// to be captured here rather than recovered downstream.
 	export var asyncSpawnSites as AsyncSpawnSiteMap
 
-	export var overloadAnswers as OverloadAnswerMap
-
 	// The twin of `asyncSpawnSites` for services: every `await` of a service reply this file holds, keyed by the op
 	// index in THIS artifact's module and folded with the merge's offset. See `Project.serviceAwaitSites`.
 	export var serviceAwaitSites as ServiceAwaitSiteMap
@@ -977,16 +923,6 @@ export type FileParseArtifact
 
 	// This file's `funcSignatures` registry contributions, in declaration order.
 	export var funcSignatures as FuncSignatureEntryArray
-
-	// ⭐ This file's OVERLOAD SETS — each overloaded bare name ⇒ its members' registration names, in
-	// declaration order. Folded into `project.overloadSets` by `commitOverloadSets`.
-	//
-	// A MAP where the other contributions are ordered arrays, and for the reason those are arrays: what has
-	// to be deterministic is the ORDER OF THE MEMBERS (the E3007 candidate list prints them, and the
-	// resolver's tie-breaks read them), and that order lives inside each value. The KEY order decides
-	// nothing — the commit is one independent upsert per name. Empty for every file that overloads nothing,
-	// so the shared empty map keeps a non-overloading parse allocation-identical.
-	export var overloadSets as OverloadSetTable
 
 	// This file's recorded function-value merges awaiting whole-program signature agreement.
 	// Appended to `project.pendingFnMergeChecks` by `commitPendingFnMergeChecks`; the check itself is
@@ -1155,7 +1091,6 @@ export type FileParseArtifact
 			opRanges: SourceRangeTable.create(),
 			covPoints: CovPointArray.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
-			overloadAnswers: OverloadAnswerMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			registryUseSites: noRegistryUseSites,
 			allocTagSites: AllocTagSiteMap.create(),
@@ -1165,7 +1100,6 @@ export type FileParseArtifact
 			valueOrigins: ValueOriginTable.create(),
 			deferredChains: DeferredChainTable.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
-			overloadSets: noOverloadSets,
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
 			pendingBrandRecords: PendingBrandRecordArray.create(),
@@ -1278,10 +1212,6 @@ export type FileParseArtifact
 		self.asyncSpawnSites.upsert(self.module.opCount(), value: site)
 	end 'recordAsyncSpawnSite'
 
-	export function recordOverloadAnswer(opIndex ElementIndex, answer OverloadAnswer)
-		self.overloadAnswers.upsert(opIndex, value: answer)
-	end 'recordOverloadAnswer'
-
 	// The service twin, on the same read-it-through-here contract and for its reason: the site lands on the op
 	// the parser is ABOUT to append, so the key is the current count.
 	export function recordServiceAwaitSite(site ServiceAwaitSite)
@@ -1387,17 +1317,9 @@ export type FileParseArtifact
 	// after it builds a function — NEVER touching `Project`. The name's source position
 	// travels with the entry so a merge-time duplicate can be positioned on the blamed
 	// declaration.
-	export function recordFuncSignature(name ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool, role FunctionDeclarationRole)
-		self.funcSignatures.push(FuncSignatureEntry.create(name.clone(), signature: signature.clone(), returnType: returnType.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized, role: role))
+	export function recordFuncSignature(name ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool)
+		self.funcSignatures.push(FuncSignatureEntry.create(name.clone(), signature: signature.clone(), returnType: returnType.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
 	end 'recordFuncSignature'
-
-	// Record the whole current member list of one overloaded bare name. REPLACES rather than appends:
-	// the parser hands back the complete list every time a member joins, which is what keeps this table a
-	// projection of the parser's own records rather than a second accumulation to keep in step.
-	export function recordOverloadSet(base ByteArray, members NameRoster)
-		var byBase = self.overloadSetsForWrite()
-		byBase.upsert(base.clone(), value: members.clone())
-	end 'recordOverloadSet'
 
 	// ⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3159), so a
 	// list cannot be written in the arm that reads it: each door below installs the
@@ -1426,17 +1348,6 @@ export type FileParseArtifact
 		self.hiddenTypeNames = DeferredDiagnosticRoster.entries(fresh)
 		return fresh
 	end 'hiddenTypeNamesForWrite'
-
-	function overloadSetsForWrite() returns OverloadSetMap
-		match self.overloadSets 'state'
-			unwritten then break
-			entries(byBase) then return byBase
-		end 'state'
-
-		let fresh = OverloadSetMap.create()
-		self.overloadSets = OverloadSetTable.entries(fresh)
-		return fresh
-	end 'overloadSetsForWrite'
 
 	// Record a function's range-check sites as this file's contribution to `project.rangeChecks`.
 	// Called by the parser at function completion, and ONLY when the function actually has
@@ -1537,7 +1448,6 @@ export type FileParseArtifact
 		self.opRanges.cacheWrite(writer)
 		cacheWriteCovPointArray(writer, value: self.covPoints)
 		cacheWriteAsyncSpawnSiteMap(writer, value: self.asyncSpawnSites)
-		cacheWriteOverloadAnswerMap(writer, value: self.overloadAnswers)
 		cacheWriteServiceAwaitSiteMap(writer, value: self.serviceAwaitSites)
 		cacheWriteRegistryUseSiteTable(writer, value: self.registryUseSites)
 		cacheWriteAllocTagSiteMap(writer, value: self.allocTagSites)
@@ -1547,7 +1457,6 @@ export type FileParseArtifact
 		self.valueOrigins.cacheWrite(writer)
 		self.deferredChains.cacheWrite(writer)
 		cacheWriteFuncSignatureEntryArray(writer, value: self.funcSignatures)
-		cacheWriteOverloadSetTable(writer, value: self.overloadSets)
 		cacheWritePendingFnMergeCheckArray(writer, value: self.pendingFnMergeChecks)
 		cacheWritePendingFunctionTypeDoorArray(writer, value: self.pendingFunctionTypeDoors)
 		cacheWritePendingBrandRecordArray(writer, value: self.pendingBrandRecords)
@@ -1585,7 +1494,6 @@ export type FileParseArtifact
 		let f_opRanges = try SourceRangeTable.cacheRead(reader)
 		let f_covPoints = try cacheReadCovPointArray(reader)
 		let f_asyncSpawnSites = try cacheReadAsyncSpawnSiteMap(reader)
-		let f_overloadAnswers = try cacheReadOverloadAnswerMap(reader)
 		let f_serviceAwaitSites = try cacheReadServiceAwaitSiteMap(reader)
 		let f_registryUseSites = try cacheReadRegistryUseSiteTable(reader)
 		let f_allocTagSites = try cacheReadAllocTagSiteMap(reader)
@@ -1595,7 +1503,6 @@ export type FileParseArtifact
 		let f_valueOrigins = try ValueOriginTable.cacheRead(reader)
 		let f_deferredChains = try DeferredChainTable.cacheRead(reader)
 		let f_funcSignatures = try cacheReadFuncSignatureEntryArray(reader)
-		let f_overloadSets = try cacheReadOverloadSetTable(reader)
 		let f_pendingFnMergeChecks = try cacheReadPendingFnMergeCheckArray(reader)
 		let f_pendingFunctionTypeDoors = try cacheReadPendingFunctionTypeDoorArray(reader)
 		let f_pendingBrandRecords = try cacheReadPendingBrandRecordArray(reader)
@@ -1624,11 +1531,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, overloadAnswers: f_overloadAnswers, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize360
-		return sizeof(FileParseArtifact) as CacheSize360
+	static function cacheLayoutBytes() returns CacheSize344
+		return sizeof(FileParseArtifact) as CacheSize344
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1774,7 +1681,6 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitCovPoints(project, artifact: artifact)
 	commitOpKeyedSites(project, artifact: artifact, opOffset: opOffset)
 	commitFuncSignatures(project, artifact: artifact)
-	commitOverloadSets(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitPendingFunctionTypeDoors(project, artifact: artifact)
 	commitPendingBrandRecords(project, artifact: artifact, opOffset: opOffset)
@@ -1802,15 +1708,12 @@ module enum OpKeyedTable
 	registryUseSites
 	serviceAwaitSites
 	asyncSpawnSites
-	overloadAnswers
 	allocTagSites
 	debugStreamNameSites
 	immortalConstArraySites
 	provenFixedArrayAccesses
 	valueOrigins
 	deferredChains
-	refusedOverloadCalls
-	undecidedOverloadCalls
 	pendingDiscardedResults
 	opRanges
 end 'OpKeyedTable'
@@ -1823,15 +1726,12 @@ module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 		registryUseSites gives project.registryUseSites.count()
 		serviceAwaitSites gives project.serviceAwaitSites.count()
 		asyncSpawnSites gives project.asyncSpawnSites.count()
-		overloadAnswers gives project.overloadAnswers.count()
 		allocTagSites gives project.allocTagSites.count()
 		debugStreamNameSites gives project.debugStreamNameSites.count()
 		immortalConstArraySites gives project.immortalConstArraySites.count()
 		provenFixedArrayAccesses gives project.provenFixedArrayAccesses.count()
 		valueOrigins gives project.valueOrigins.count()
 		deferredChains gives project.deferredChains.count()
-		refusedOverloadCalls gives project.refusedOverloadCalls.count()
-		undecidedOverloadCalls gives project.undecidedOverloadCalls.count()
 		pendingDiscardedResults gives project.pendingDiscardedResults.count()
 		opRanges gives project.opRanges.count()
 	end 'whichTable'
@@ -1986,7 +1886,7 @@ end 'noteBodyAbandonedAt'
 // incumbent's PATH is deliberately not in the text: a second absolute path inside a message is
 // machine-dependent and unmatchable in a `maxoncstderr` block.
 function commitTypeNameDecls(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
-	reportTypeNameCollisions(project, collisions: project.typeNameDecls.recordAll(artifact.typeNameDecls, directories: signatures.settledDeclarations().fileModuleDirectories))
+	reportTypeNameCollisions(project, collisions: project.typeNameDecls.recordAll(artifact.typeNameDecls, roster: project.shadowRoster, directories: signatures.settledDeclarations().fileModuleDirectories))
 end 'commitTypeNameDecls'
 
 // Type-name collision is not transitive — d1's `enum Box` collides with d2's, d2's collides with an alias
@@ -2025,7 +1925,7 @@ module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathA
 		let path = try paths.get(entry.position) otherwise panic("nominalNameCollisionsOf: paths.get OOB at {entry.position} below count {paths.count()}")
 		view declared = try byFile.get(path.toString()) otherwise continue
 
-		for collision in registry.recordAll(declared, directories: directories) 'eachCollisionHere'
+		for collision in registry.recordAll(declared, roster: ShadowSpellingRoster.none(), directories: directories) 'eachCollisionHere'
 			if isTypeAliasDecl(collision.decl.claim.kind) or isTypeAliasDecl(collision.winner.claim.kind) 'anAliasIsInvolved'
 				continue
 			end 'anAliasIsInvolved'
@@ -2051,7 +1951,7 @@ module function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileIn
 		ordered.push(SourceFileInPathOrder.create(pathIdentity(path, workingDirectory: workingDirectory), position: iter.index()))
 	end 'eachSourcePath'
 
-	ordered.sort(function(left SourceFileInPathOrder, right SourceFileInPathOrder) gives compareBytesOrdinally(left.identity, right: right.identity))
+	ordered.sortBy(function(left SourceFileInPathOrder, right SourceFileInPathOrder) gives compareBytesOrdinally(left.identity, right: right.identity))
 	return ordered
 end 'sourceFilesInPathOrder'
 
@@ -2076,8 +1976,8 @@ function reportTypeNameCollision(project Project, decl TypeNameDecl, winner Type
 	// unused check runs at the parse and this one at the merge, so nothing structural separates the two.
 	//
 	// ⚠ **KEYED PER DECLARING FILE, and that is not caution — a bare name would suppress the wrong
-	// file's diagnostic.** Two files may each legally declare a file-private `typealias Byte` (see
-	// `TypeNameRegistry`), so one file declaring it twice would poison the name project-wide and
+	// file's diagnostic.** Two files of different directories may each legally declare a `typealias Byte`
+	// (see `TypeNameRegistry`), so one file declaring it twice would poison the name project-wide and
 	// silently swallow another file's genuinely-unused `Byte`.
 	project.collidedTypeNames.insert(fileScopedDeclKey(decl.name, declFilePath: decl.claim.declFilePath))
 
@@ -2086,7 +1986,7 @@ function reportTypeNameCollision(project Project, decl TypeNameDecl, winner Type
 		return
 	end 'bothAreTypeAliases'
 
-	reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{String.from(decl.name)}' — already declared as `{typeDeclKeyword(winner.claim.kind)} {String.from(winner.name)}`", line: decl.nameLine, column: decl.nameColumn, filePath: decl.claim.declFilePath)
+	reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateDefinitionMessage(String.from(project.shadowRoster.authorBareSpellingOf(decl.name)), incumbentKeyword: typeDeclKeyword(winner.claim.kind)), line: decl.nameLine, column: decl.nameColumn, filePath: decl.claim.declFilePath)
 end 'reportTypeNameCollision'
 
 // --- The COMPILED half of the same namespace: one emitted type name, one INSTANTIATION ---
@@ -2708,8 +2608,9 @@ end 'renumberedOp'
 // declaration order) — is a duplicate: a plain `upsert` would SILENTLY overwrite the first
 // entry, and a call would then validate against (and lower to) the WRONG signature. So one
 // declaration is kept and each other is reported at its own name (E3006);
-// `newcomerDisplacesTheFloor` decides which. This is the single whole-program duplicate check: every
-// function the parser builds records exactly one signature entry here.
+// `newcomerDisplacesTheFloor` decides which. A name two directories declare is registered under each
+// directory's own mint, so only a same-directory duplicate meets here; every function the parser builds
+// records exactly one signature entry. `checkTopLevelNameScopes` is the cross-kind judge beside it.
 function commitFuncSignatures(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcSignatures 'each'
 		if project.funcSignatures.contains(entry.name) 'duplicate'
@@ -2717,14 +2618,14 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 
 			// ⚠ **A SYNTHESIZED FUNCTION'S DUPLICATE IS THE SHADOW OF ONE THE AUTHOR CAN SEE, AND IS NOT
 			// REPORTED TWICE.** See `FuncSignatureEntry.synthesized` for why the two always arrive
-			// together. Reporting it would add, beside the correct `Duplicate function 'f'`, a second E3006
-			// naming `__paramDefault#f#0` — a symbol absent from the source. The kept entry is still chosen
+			// together. Reporting it would add, beside the correct duplicate, a second E3006 naming
+			// `__fieldDefault#Bag#items` — a symbol absent from the source. The kept entry is still chosen
 			// exactly as for a reported duplicate: the two paths differ in what they SAY, never in what the
 			// registry holds.
 			view blamed = blamedFunctionDeclaration(project, newcomer: entry)
 
 			if not blamed.synthesized 'theAuthorWroteThisName'
-				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: blamed.name, declFilePath: blamed.sourceFilePath), line: blamed.nameLine, column: blamed.nameColumn, filePath: blamed.sourceFilePath)
+				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(blamed), line: blamed.nameLine, column: blamed.nameColumn, filePath: blamed.sourceFilePath)
 			end 'theAuthorWroteThisName'
 
 			continue
@@ -2745,7 +2646,7 @@ end 'holdFunctionFloor'
 function blamedFunctionDeclaration(project Project, newcomer FuncSignatureEntry) returns FuncSignatureEntry
 	var floor = try project.funcSignatureFloors.get(newcomer.name) otherwise panic("blamedFunctionDeclaration: '{String.from(newcomer.name)}' is in funcSignatures, and every name committed there has its floor committed beside it")
 
-	if newcomerDisplacesTheFloor(newcomer, floor: floor) 'theFloorIsBlamed'
+	if newcomerDisplacesTheFloor(project, newcomer: newcomer, floor: floor) 'theFloorIsBlamed'
 		holdFunctionFloor(project, entry: newcomer)
 		return floor
 	end 'theFloorIsBlamed'
@@ -2753,174 +2654,19 @@ function blamedFunctionDeclaration(project Project, newcomer FuncSignatureEntry)
 	return newcomer
 end 'blamedFunctionDeclaration'
 
-// Role decides before path: a contested free function's `<directory>.<name>` key colliding with a
-// method's always blames the free function, because that E3006 text tells its author to rename the
-// directory or the function. Otherwise the file whose path identity sorts earliest keeps the name, so the
-// blame is the same on every host and for every spelling of the invocation.
-function newcomerDisplacesTheFloor(newcomer FuncSignatureEntry, floor FuncSignatureEntry) returns bool
-	if newcomer.role != floor.role 'twoRoles'
-		return floor.role == FunctionDeclarationRole.contestedFreeFunction
-	end 'twoRoles'
+function newcomerDisplacesTheFloor(project Project, newcomer FuncSignatureEntry, floor FuncSignatureEntry) returns bool
+	let newcomerIsTheLibrarys = isStdlibSourceFile(project, path: newcomer.sourceFilePath)
+
+	if newcomerIsTheLibrarys != isStdlibSourceFile(project, path: floor.sourceFilePath) 'oneIsTheLibrarys'
+		return newcomerIsTheLibrarys
+	end 'oneIsTheLibrarys'
 
 	return precedesInPathOrder(newcomer.sourceFilePath, other: floor.sourceFilePath)
 end 'newcomerDisplacesTheFloor'
 
-// ⭐⭐ **WHY ONE NAME HAS TWO DECLARATIONS — and the CONTESTED case earns its own sentence because the name
-// the message quotes is one NEITHER declaration wrote.**
-//
-// E3006 already carries a sentence per KIND of duplicate, each at the site that owns that kind; this is the
-// same discipline applied to the one kind whose name is SYNTHESIZED. A free function contested across
-// directories is filed as `<directory>.<name>` — the same construction, and the same flat key space, a
-// method is filed under — so a `create` in a directory called `Point/` collides with `type Point`'s own
-// `create`. Told only "Duplicate function 'Point.create'", the author searches for a string that appears
-// nowhere in their source and finds two declarations that do not look like duplicates of each other. The
-// fix is a rename on either side, and it has to be said, because it is not inferable from the name.
-//
-// ⭐⭐ **THE SECOND SYNTHESIZED-NAME KIND IS A CONTESTED `extension` METHOD**, and it earns its
-// own sentence for the identical reason one kind up. A `<Conformer>.<method>` declared by extensions in more
-// than one FILE is registered by every one of them under its parameter-type spelling — nobody keeps the bare
-// name — so two declarations of one signature claim `Array.contains#Element` and collide there. That is the
-// refusal working exactly as designed (`Parser.overloadRegistrationNameFor`), but the name it names is one
-// no declaration wrote, and the fix — change the PARAMETERS, or the name — is not inferable from it.
-//
-// ⭐ **AND THE THIRD IS A `static` MEMBER BESIDE AN INSTANCE MEMBER OF ONE NAME** (`same-name-methods.md`),
-// whose static side is filed as `<name>#__static`. Same reason again; see its arm below.
-//
-// ⛔ **THE PLAIN SENTENCE'S WORDING IS THE CANONICAL ONE AND IS NOT OURS TO CHOOSE** — `Duplicate function
-// 'X'` is what `/specs/duplicate-functions.md` states the language emits for a plain redefinition.
-//
-// ⚠ **THE MANGLED SENTENCES ARE COMPILER-SPECIFIC SITUATIONS CANONICAL DOES NOT COVER, and the citation below is
-// to the REGISTER, not to a spelling.** `/specs` does carry a `duplicate definition of 'X' - <why they
-// collide>` register for a name collision after mangling (`function-overloads.md:821`,
-// `generic-instance-names.md:238`) — but that is its own sentence for its own situation, and no canonical
-// text spells any of the three below. Nothing here may be described as "matching canonical": these say
-// `duplicate definition of function 'X' — …`, which is a fourth spelling, and the compiler's generic-instance
-// sentence (`reportInstantiationPairCollision`) is a fifth. Reconciling the wordings is a decision about ALL
-// of them at once, never about one member alone.
-//
-// ⛔ **WHAT MUST NOT CHANGE IS THE SPLIT, whatever the wordings settle on.** A plain redefinition tells the
-// author to DELETE a definition; a mangled collision tells them to RENAME a spelling. Folding these into one
-// sentence would erase the only thing that distinguishes those two fixes.
-//
-// ⚠ The index is taken through the memo `compileToCodeResult` fills before the pipeline runs — merge is
-// downstream of it, so this can only ever be the hit, exactly as `SemanticCheck.programSignaturesIn` argues
-// for its own three askers.
-//
-// ⭐⭐ **THE SORT IS ON A PROPERTY, NOT ON AN ENUMERATION OF KINDS, and that is the correctness of it.** The
-// plain sentence is earned by `name` BEING the name a declaration wrote — never by failing to match the
-// mangled kinds this function happens to know about. The set of names the parser MINTS is larger than any
-// list kept here: an ordinary same-file overload set whose member is redeclared with identical parameters is
-// handed the incumbent's minted name (`Parser.overloadMemberHoldingSignature`), which matches neither
-// contested test. An enumeration would give two declarations of `pick(x bool)` beside a `pick(x Integer)`
-// the canonical `Duplicate function 'pick#bool'`, quoting a symbol that appears nowhere in the program.
-// Pinned by `function-overloads/error.overload-redeclared-with-the-same-parameters`.
-//
-// ⇒ A new mint nobody classifies lands on a mangled sentence and says what the author WROTE, which is
-// imprecise rather than wrong.
-function duplicateFunctionMessage(project Project, name ByteArray, declFilePath FilePath) returns String
-	var signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage:queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
-
-	if signatures.isContestedRegistrationName(name) 'aFreeFunctionContestedAcrossDirectories'
-		return mangledDuplicateFunctionMessage(name, signatures: signatures, why: "a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function")
-	end 'aFreeFunctionContestedAcrossDirectories'
-
-	let base = overloadRegistrationBaseName(name)
-
-	if signatures.isContestedExtensionMethod(base) 'anExtensionMethodContestedAcrossFiles'
-		return parameterSpellingCollisionMessage(name, base: base, signatures: signatures, whyThereAreSeveral: "is declared by an `extension` in more than one FILE")
-	end 'anExtensionMethodContestedAcrossFiles'
-
-	// ⭐⭐ **THE FOURTH SYNTHESIZED-NAME KIND: A FREE FUNCTION MORE THAN ONE FILE OF ITS DIRECTORY DECLARES**,
-	// and it is the `extension` kind above one declaration kind over — same construction, same reason for a
-	// sentence of its own. Its own `whyThereAreSeveral` rather than the fall-through's "has more than one
-	// declaration in this program", because a file boundary is the fact the author has to see: the two
-	// declarations are in two files, and nothing in either one of them looks like a duplicate.
-	if signatures.isCrossFileOverloadedFreeFunctionAt(base, declFilePath: declFilePath) 'aFreeFunctionDeclaredByTwoFilesOfOneDirectory'
-		return parameterSpellingCollisionMessage(name, base: base, signatures: signatures, whyThereAreSeveral: "is declared as a free function in more than one FILE of its directory")
-	end 'aFreeFunctionDeclaredByTwoFilesOfOneDirectory'
-
-	// ⛔⛔ **THE MINTED-NAME SENTENCES ARE GATED ON THE PROPERTY — `name` IS NOT WHAT A DECLARATION WROTE — AND
-	// NOT ON WHICH CONTEST EXISTS. A CONTEST FLAG READ OUTSIDE THIS BAND IS A WRONG SENTENCE.** Asked above
-	// this gate, `isStaticInstanceContest(base)` would tell a `type Box` declaring `static getValue()` plus TWO
-	// instance `getValue()` that *"more than one `static` declaration of it claims that spelling"* — about a
-	// program whose statics are fine, quoting `Box.getValue`, which is exactly what the author wrote. The two
-	// instance members take the redeclaration path (`Parser.overloadMemberHoldingSignature`) and collide on the
-	// SOURCE name, where the canonical wording is the whole point of the header's sort rule.
-	//
-	// ⇒ Every sentence that names a synthesized spelling lives inside this band, so it cannot fire on a name
-	// the author can grep for, and the plain sentence is earned by the property rather than by exhausting a
-	// list of kinds.
-	if not base.equals(name) 'aMintedNameNoDeclarationWrote'
-		// ⭐⭐ **THE THIRD SYNTHESIZED-NAME KIND: A `static` MEMBER BESIDE AN INSTANCE MEMBER OF THE SAME NAME**
-		// (`same-name-methods.md`), and it earns its own sentence for the two kinds above's reason plus one of
-		// its own. The `#__static` spelling is minted by `staticMemberRegistrationName` and no declaration wrote
-		// it — but unlike those two, the reason the name has several declarations is NOT the parameter spelling:
-		// two `static getValue()` declarations collide on it because they are two STATICS. The advice is still
-		// about parameters, because that IS the remaining way two statics of one type may differ — and it is
-		// correct for the further-suffixed spelling too (`Box.getValue#__static#Integer` collides when two
-		// statics spell `Integer`), which is why the arm keys on the base rather than on an exact suffix.
-		if signatures.isStaticInstanceContest(base) 'aStaticBesideAnInstanceOfOneName'
-			return mangledDuplicateFunctionMessage(name, signatures: signatures, why: "'{String.from(base)}' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names")
-		end 'aStaticBesideAnInstanceOfOneName'
-
-		return parameterSpellingCollisionMessage(name, base: base, signatures: signatures, whyThereAreSeveral: "has more than one declaration in this program")
-	end 'aMintedNameNoDeclarationWrote'
-
-	return "Duplicate function '{String.from(name)}'"
+function duplicateFunctionMessage(blamed FuncSignatureEntry) returns String
+	return duplicateDeclarationMessage(blamed.name)
 end 'duplicateFunctionMessage'
-
-// THE one speller of the mangled register's opening. Three call sites above, identical up to the tail; it is
-// written once so that a future reconciliation of the wordings (see the header) is one edit and cannot leave
-// a sibling behind.
-function mangledDuplicateFunctionMessage(name ByteArray, why String, signatures ProgramSignatures) returns String
-	return "duplicate definition of function '{registrationNameDisplay(name, signatures: signatures)}' — {why}"
-end 'mangledDuplicateFunctionMessage'
-
-// The two PARAMETER-SPELLING kinds — a contested `extension` method, and an ordinary overload set's member
-// redeclared — differ only in why the name has several declarations. What follows from that is one fact: every
-// declaration is filed under its parameter spelling, two spelled the same, and the fix is the parameters or
-// the name. It is stated once.
-function parameterSpellingCollisionMessage(name ByteArray, base ByteArray, whyThereAreSeveral String, signatures ProgramSignatures) returns String
-	let spelling = "parameter types and labels" if registrationNameCarriesLabels(name) else "parameter-type spelling"
-	return mangledDuplicateFunctionMessage(name, signatures: signatures, why: "'{String.from(base)}' {whyThereAreSeveral}, so every one of those declarations is registered under its {spelling}, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names")
-end 'parameterSpellingCollisionMessage'
-
-// Commit this file's overload sets. A file that overloads nothing carries the shared empty table and
-// this loop does not run.
-//
-// ⭐⭐ **THE MEMBERS ACCUMULATE ACROSS FILES RATHER THAN REPLACING.** An `extension` method
-// declared by two files' extensions onto one conformer is ONE overload set whose members are minted in two
-// different parses, and neither parser can see the other's — so this is where they meet, and a plain upsert
-// would leave whichever file merged last as the whole set. The dedup is by registration NAME and not by
-// position, because the same file is re-merged on a warm rebuild; `OverloadSetMap` carries why that makes
-// the reset mandatory.
-//
-// ⚠ The resulting ORDER is file-merge order, then declaration order within a file — the order E3007 lists
-// tied candidates in. It is deterministic (the merge walks the project's sources in one fixed order), but it
-// is not "declaration order" in any sense the author of a single file can see, which is why the
-// diagnostic says which candidates rather than which came first.
-function commitOverloadSets(project Project, artifact FileParseArtifact)
-	match artifact.overloadSets 'file'
-		unwritten then break
-		entries(byBase) then commitEachOverloadSet(project, byBase: byBase)
-	end 'file'
-end 'commitOverloadSets'
-
-// The walk behind the door above — its own function because a `match` arm may not open a `for`, and a file
-// that overloads nothing never reaches it.
-function commitEachOverloadSet(project Project, byBase OverloadSetMap)
-	for (base, members) in byBase 'each'
-		var accumulated = try project.overloadSets.get(base) otherwise NameRoster.create()
-
-		for member in members 'eachMember'
-			if not accumulated.contains(member) 'notYetCommitted'
-				accumulated.push(member)
-			end 'notYetCommitted'
-		end 'eachMember'
-
-		project.overloadSets.upsert(base, value: accumulated)
-	end 'each'
-end 'commitEachOverloadSet'
 
 // Append this file's recorded function-value merge checks to the whole-program list. Unlike
 // the signature commit above there is NO dedup: each entry is a DISTINCT merge SITE (its own position),
@@ -2959,7 +2705,6 @@ function commitOpKeyedSites(project Project, artifact FileParseArtifact, opOffse
 	end 'registryUses'
 
 	project.asyncSpawnSites.upsertRelocated(artifact.asyncSpawnSites, offset: opOffset)
-	project.overloadAnswers.upsertRelocated(artifact.overloadAnswers, offset: opOffset)
 	project.allocTagSites.upsertRelocated(artifact.allocTagSites, offset: opOffset)
 	project.debugStreamNameSites.upsertRelocated(artifact.debugStreamNameSites, offset: opOffset)
 	project.immortalConstArraySites.upsertRelocated(artifact.immortalConstArraySites, offset: opOffset)

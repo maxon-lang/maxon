@@ -2,30 +2,30 @@
 // `--user` that has no passwd entry `HOME=/`, a home directory that exists and cannot be written
 // under.
 
-let CaseDirName = "run-falls-through-a-root-it-cannot-create"
+let ExecuteFallsThroughARootItCannotCreateCaseDirName = "run-falls-through-a-root-it-cannot-create"
 
-let ProgramFileName = "fellthrough.maxon"
-let ProgramSource = "function main() returns ExitCode\n\tprint(\"the build was kept\\n\")\n\treturn 0\nend 'main'\n"
-let ProgramOutput = "the build was kept"
+let ExecuteFallsThroughARootItCannotCreateProgramFileName = "fellthrough.maxon"
+let ExecuteFallsThroughARootItCannotCreateProgramSource = "function main() returns ExitCode\n\tprint(\"the build was kept\\n\")\n\treturn 0\nend 'main'\n"
+let ExecuteFallsThroughARootItCannotCreateProgramOutput = "the build was kept"
 
 let NothingPublished = 0
 
 test 'execute falls through to the next root when the highest-ranked one cannot be created'
-	let dir = freshCaseDir(CaseDirName)
+	let dir = freshCaseDir(ExecuteFallsThroughARootItCannotCreateCaseDirName)
 
 	let naming = rosterWithHighestRootBlocked(dir)
 	let blocked = blockedHighestRoot(dir)
 	let owned = fallThroughCacheRoot(dir)
 
-	let program = dir.join(ProgramFileName)
-	writeStagedFile(program, content: ProgramSource)
+	let program = dir.join(ExecuteFallsThroughARootItCannotCreateProgramFileName)
+	writeStagedFile(program, content: ExecuteFallsThroughARootItCannotCreateProgramSource)
 
 	let run = runWithCacheRoots([ExecuteCommandWord, program.toString()], naming: naming, workingDirectory: dir)
 	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
 	Expect.equal(run.exitCode(), expected: 0, message: "`maxon {ExecuteCommandWord}` did not run a one-line program because {HomeDirectoryVariable} named {blocked.toString()}, a path no directory can be made under. {rootRankedBelowHomeVariable()} named a writable directory, and a roster is consulted in order precisely so that a candidate that does not work is not the end of it. {said}")
 
-	Expect.contains(run.stdout, needle: ProgramOutput, message: "`maxon {ExecuteCommandWord}` did not print what the program prints. {said}")
+	Expect.contains(run.stdout, needle: ExecuteFallsThroughARootItCannotCreateProgramOutput, message: "`maxon {ExecuteCommandWord}` did not print what the program prints. {said}")
 
 	let published = filesUnder(owned).count()
 

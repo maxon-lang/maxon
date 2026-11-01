@@ -1,0 +1,191 @@
+enum TopLevelNameFamily
+	typeLike
+	freeFunction
+	binding
+end 'TopLevelNameFamily'
+
+module let FunctionKeyword = "function"
+
+let MutableBindingKeyword = "var"
+
+let ImmutableBindingKeyword = "let"
+
+module function bindingKeyword(mutable bool) returns String
+	return MutableBindingKeyword if mutable else ImmutableBindingKeyword
+end 'bindingKeyword'
+
+// The one E3006 text for a name declared twice, shared by every judge that reports one. Specs pin
+// it byte for byte (`specs/top-level-name-scope.md`, `specs/duplicate-functions.md`).
+module function duplicateDefinitionMessage(name String, incumbentKeyword String) returns String
+	return "duplicate definition of '{name}' — already declared as `{incumbentKeyword} {name}`"
+end 'duplicateDefinitionMessage'
+
+type TopLevelNameClaim
+	let name as ByteArray
+	let family as TopLevelNameFamily
+	let keyword as String
+	let filePath as FilePath
+	let line as LineNumber
+	let column as ColumnNumber
+
+	static function create(name ByteArray, family TopLevelNameFamily, keyword String, filePath FilePath, line LineNumber, column ColumnNumber) returns TopLevelNameClaim
+		return Self{name: name, family: family, keyword: keyword, filePath: filePath, line: line, column: column}
+	end 'create'
+
+	function directoryKey(directories ModuleDirectoryByFile) returns ByteArray
+		return directoryScopedNameKey(self.name, declFilePath: self.filePath, directories: directories)
+	end 'directoryKey'
+
+	function comparePosition(other TopLevelNameClaim) returns Ordering
+		if not self.filePath.equals(other.filePath) 'differentFiles'
+			return comparePathIdentity(self.filePath, other: other.filePath)
+		end 'differentFiles'
+
+		let byLine = self.line.compare(other.line)
+
+		if byLine != Ordering.equalTo 'differentLines'
+			return byLine
+		end 'differentLines'
+
+		return self.column.compare(other.column)
+	end 'comparePosition'
+
+	function report(project Project, incumbent TopLevelNameClaim)
+		reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateDefinitionMessage(String.from(self.name), incumbentKeyword: incumbent.keyword), line: self.line, column: self.column, filePath: self.filePath)
+	end 'report'
+end 'TopLevelNameClaim'
+
+typealias TopLevelNameClaimArray = Array with TopLevelNameClaim
+
+typealias FirstTopLevelNameClaimMap = Map with (ByteArray, TopLevelNameClaim)
+
+typealias ContestedTopLevelNameMap = Map with (ByteArray, TopLevelNameClaimArray)
+
+type TopLevelNameCollision
+	let incumbent as TopLevelNameClaim
+	let newcomer as TopLevelNameClaim
+
+	static function create(incumbent TopLevelNameClaim, newcomer TopLevelNameClaim) returns TopLevelNameCollision
+		return Self{incumbent: incumbent, newcomer: newcomer}
+	end 'create'
+
+	function comparePosition(other TopLevelNameCollision) returns Ordering
+		return self.newcomer.comparePosition(other.newcomer)
+	end 'comparePosition'
+
+	function report(project Project)
+		self.newcomer.report(project, incumbent: self.incumbent)
+	end 'report'
+end 'TopLevelNameCollision'
+
+typealias TopLevelNameCollisionArray = Array with TopLevelNameCollision
+
+// The only judge of a name that two families (`TopLevelNameFamily`) claim in one directory. It skips
+// no pair by family. A repeat within one family is refused earlier by a structural judge --
+// `refuseCollidingNominalDeclarations`, `TypeNameAdmission`'s directory and same-file refusal, the
+// `funcSignatures` and `recordDecl` key uniqueness, `requireGenericNameDeclaredOnce` -- because the
+// key space each keeps cannot hold two entries; the ledger is built from the entries they kept.
+type TopLevelNameLedger
+	var first as FirstTopLevelNameClaimMap
+	var contested as ContestedTopLevelNameMap
+
+	static function create() returns TopLevelNameLedger
+		return Self{first: FirstTopLevelNameClaimMap.create(), contested: ContestedTopLevelNameMap.create()}
+	end 'create'
+
+	function note(claim TopLevelNameClaim, directories ModuleDirectoryByFile)
+		let key = claim.directoryKey(directories)
+
+		if self.contested.contains(key) 'alreadyContested'
+			var claims = try self.contested.get(key) otherwise panic("TopLevelNameLedger.note: a contested key holds its claims")
+			claims.push(claim)
+			self.contested.upsert(key, value: claims)
+			return
+		end 'alreadyContested'
+
+		if let incumbent = try self.first.get(key) 'aSecondClaim'
+			var claims = TopLevelNameClaimArray.create()
+			claims.push(incumbent)
+			claims.push(claim)
+			self.contested.upsert(key, value: claims)
+			return
+		end 'aSecondClaim'
+
+		self.first.upsert(key, value: claim)
+	end 'note'
+
+	function noteTypes(project Project, directories ModuleDirectoryByFile)
+		for decl in project.typeNameDecls.declarations() 'eachTypeDecl'
+			self.note(TopLevelNameClaim.create(project.shadowRoster.bareSpellingOf(decl.name), family: TopLevelNameFamily.typeLike, keyword: typeDeclKeyword(decl.claim.kind), filePath: decl.claim.declFilePath, line: decl.nameLine, column: decl.nameColumn), directories: directories)
+		end 'eachTypeDecl'
+	end 'noteTypes'
+
+	function noteFunctions(project Project, directories ModuleDirectoryByFile)
+		for (registered, entry) in project.funcSignatureFloors 'eachFunction'
+			if entry.synthesized or not registersAFreeFunction(registered) 'notAFreeFunctionTheAuthorWrote'
+				continue
+			end 'notAFreeFunctionTheAuthorWrote'
+
+			self.note(TopLevelNameClaim.create(bareNameOfMint(registered), family: TopLevelNameFamily.freeFunction, keyword: FunctionKeyword, filePath: entry.sourceFilePath, line: entry.nameLine, column: entry.nameColumn), directories: directories)
+		end 'eachFunction'
+	end 'noteFunctions'
+
+	function noteBindings(signatures ProgramSignatures, directories ModuleDirectoryByFile)
+		for index in 0 upto signatures.topLevelDeclCount() 'eachBinding'
+			view decl = signatures.declAt(index)
+
+			self.note(TopLevelNameClaim.create(signatures.shadowRoster().bareSpellingOf(decl.name), family: TopLevelNameFamily.binding, keyword: bindingKeyword(decl.mutable), filePath: decl.declFilePath, line: decl.nameLine, column: decl.nameColumn), directories: directories)
+		end 'eachBinding'
+	end 'noteBindings'
+
+	function collisions() returns TopLevelNameCollisionArray
+		var found = TopLevelNameCollisionArray.create()
+
+		for (_, claims) in self.contested 'eachContestedName'
+			self.collisionsOfOneName(claims, found: found)
+		end 'eachContestedName'
+
+		found.sortBy(function(left TopLevelNameCollision, right TopLevelNameCollision) gives left.comparePosition(right))
+		return found
+	end 'collisions'
+
+	function collisionsOfOneName(claims TopLevelNameClaimArray, found TopLevelNameCollisionArray)
+		var earliest = 0 as ElementIndex
+
+		for index in 1 upto claims.count() 'eachClaim'
+			let challenger = try claims.get(index) otherwise panic("TopLevelNameLedger.collisionsOfOneName: claims.get OOB at {index} below count {claims.count()}")
+			let held = try claims.get(earliest) otherwise panic("TopLevelNameLedger.collisionsOfOneName: claims.get OOB at {earliest} below count {claims.count()}")
+
+			if challenger.comparePosition(held) == Ordering.lessThan 'declaredBeforeTheHeldOne'
+				earliest = index
+			end 'declaredBeforeTheHeldOne'
+		end 'eachClaim'
+
+		let incumbent = try claims.get(earliest) otherwise panic("TopLevelNameLedger.collisionsOfOneName: claims.get OOB at {earliest} below count {claims.count()}")
+
+		for index in 0 upto claims.count() 'eachNewcomer'
+			if index == earliest 'theIncumbent'
+				continue
+			end 'theIncumbent'
+
+			let newcomer = try claims.get(index) otherwise panic("TopLevelNameLedger.collisionsOfOneName: claims.get OOB at {index} below count {claims.count()}")
+			found.push(TopLevelNameCollision.create(incumbent, newcomer: newcomer))
+		end 'eachNewcomer'
+	end 'collisionsOfOneName'
+end 'TopLevelNameLedger'
+
+export function checkTopLevelNameScopes(project Project, signatures ProgramSignatures)
+	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
+		return
+	end 'theUniverseIsUnreadable'
+
+	let directories = signatures.settledDeclarations().fileModuleDirectories
+	var ledger = TopLevelNameLedger.create()
+	ledger.noteTypes(project, directories: directories)
+	ledger.noteFunctions(project, directories: directories)
+	ledger.noteBindings(signatures, directories: directories)
+
+	for collision in ledger.collisions() 'eachCollision'
+		collision.report(project)
+	end 'eachCollision'
+end 'checkTopLevelNameScopes'

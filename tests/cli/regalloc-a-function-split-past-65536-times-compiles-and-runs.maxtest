@@ -7,9 +7,7 @@
 typealias UnitTally = int(0 to 100000)
 typealias UnitValue = int(0 to u32.max)
 
-let CaseDirName = "regalloc-split-past-65536"
-let AppDirName = "app"
-let LogFlag = "--log=codegen:debug"
+let RegallocAFunctionSplitPast65536TimesCompilesAndRunsCaseDirName = "regalloc-split-past-65536"
 let ValuesSplitFieldPrefix = "valuesSplit="
 
 let Units = 8000 as UnitTally
@@ -21,9 +19,9 @@ let OpaqueThreshold = 100
 let PathLengthMask = 0xFF as UnitValue
 
 let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction opaque(x Word) returns Word\n\tif x > 100 'big'\n\t\treturn (x - 100) and 0xFFFF\n\tend 'big'\n\n\treturn x + 1\nend 'opaque'\n\nfunction work(seed Word) returns Word\n\tvar total = seed\n"
-let FixtureFooter = "\treturn total\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tprint(\"\{work((spelled.byteLength() and 0xFF) as Word)\}\")\n\treturn 0\nend 'main'\n"
+let RegallocAFunctionSplitPast65536TimesCompilesAndRunsFixtureFooter = "\treturn total\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tprint(\"\{work((spelled.byteLength() and 0xFF) as Word)\}\")\n\treturn 0\nend 'main'\n"
 
-function fixtureSource() returns String
+function splitCountFixtureSource() returns String
 	var out = FixtureHeader
 
 	for unit in 0 upto Units 'eachUnit'
@@ -40,9 +38,9 @@ function fixtureSource() returns String
 		out.append(") and 0xFFFF\n")
 	end 'eachUnit'
 
-	out.append(FixtureFooter)
+	out.append(RegallocAFunctionSplitPast65536TimesCompilesAndRunsFixtureFooter)
 	return out
-end 'fixtureSource'
+end 'splitCountFixtureSource'
 
 function opaque(x UnitValue) returns UnitValue
 	if x > OpaqueThreshold 'big'
@@ -76,7 +74,7 @@ function valuesSplitIn(stderr String) returns ReportedTally
 end 'valuesSplitIn'
 
 test 'a function whose relief takes more than 65536 splits compiles and runs'
-	requireHeldOutsideCheckout(CaseDirName, check: SplitPast65536.create())
+	requireHeldOutsideCheckout(RegallocAFunctionSplitPast65536TimesCompilesAndRunsCaseDirName, check: SplitPast65536.create())
 end 'a function whose relief takes more than 65536 splits compiles and runs'
 
 type SplitPast65536 implements OutsideCheckoutCase
@@ -86,7 +84,7 @@ type SplitPast65536 implements OutsideCheckoutCase
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		let app = stagingDir(dir.join(AppDirName).toString())
-		writeStagedFile(app.join(StagedProgramFileName), content: fixtureSource())
+		writeStagedFile(app.join(StagedProgramFileName), content: splitCountFixtureSource())
 
 		let built = spawnCompiler([BuildCommandWord, AppDirName, LogFlag], staged: dir)
 		try Expect.equal(built.exitCode(), expected: 0, message: "a function of {Units} units, each holding {ValuesPerUnit} call results live across a call, did not build. It wrote to stderr: {built.stderr}")

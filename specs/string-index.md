@@ -18,7 +18,7 @@ endIndex() returns StringIndex
 findFirst(needle String) returns StringIndex throws StringError
 findLast(needle String) returns StringIndex throws StringError
 slice(start StringIndex, endIndex StringIndex) returns String
-slice(start StringIndex, length GraphemeIndex) returns String
+sliceLength(start StringIndex, length GraphemeIndex) returns String
 ```
 
 and the index itself answers two accessors, `charIndex()` and `bytePos()`.
@@ -31,8 +31,8 @@ Four properties are what these tests pin:
   exactly why a non-ASCII case is needed to tell a correct conversion from an omitted one.
 - **`slice` is END-EXCLUSIVE.** `s.slice(a, endIndex: b)` contains the bytes `[a.bytePos(), b.bytePos())`,
   so `s.slice(i, endIndex: i)` is empty.
-- **`slice(start, length: n)` counts GRAPHEME CLUSTERS, not bytes** — the second overload is chosen by its
-  argument LABEL, not by the argument's type.
+- **`sliceLength(start, length: n)` counts GRAPHEME CLUSTERS, not bytes** — `slice(start, endIndex:)` ends at a
+  byte position.
 - **A slice OWNS its bytes.** It is a copy, not a view into the receiver, so it outlives its parent and
   neither one's drop can reach the other's buffer.
 
@@ -208,16 +208,16 @@ end 'main'
 ```
 
 <!-- test: slice-by-length-counts-clusters -->
-### `slice(start, length: n)` advances by CLUSTERS
+### `sliceLength(start, length: n)` advances by CLUSTERS
 Three clusters of `"aéb👨‍👩‍👧cd"` is `aéb` (4 bytes, because `é` is two); four is that plus the whole
 18-byte family. A byte count would have cut the family in half.
 ```maxon
 function main() returns ExitCode
 	let uni = "aéb👨‍👩‍👧cd"
 	let start = uni.startIndex()
-	let three = uni.slice(start, length: 3)
+	let three = uni.sliceLength(start, length: 3)
 	print("{three} {three.byteLength()}\n")
-	let four = uni.slice(start, length: 4)
+	let four = uni.sliceLength(start, length: 4)
 	print("{four} {four.byteLength()}\n")
 	return 0
 end 'main'
@@ -237,9 +237,9 @@ whichever comes first.
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
-	let whole = s.slice(s.startIndex(), length: 99)
+	let whole = s.sliceLength(s.startIndex(), length: 99)
 	print("{whole} {whole.byteLength()}\n")
-	let none = s.slice(s.startIndex(), length: 0)
+	let none = s.sliceLength(s.startIndex(), length: 0)
 	print("[{none}] {none.byteLength()}\n")
 	return 0
 end 'main'
@@ -431,7 +431,7 @@ type Label
 	end 'create'
 
 	function head() returns String
-		return text.slice(text.startIndex(), length: 2)
+		return text.sliceLength(text.startIndex(), length: 2)
 	end 'head'
 
 	function width() returns Integer
@@ -566,9 +566,8 @@ error E3005: <fragment>:4:14: argument type mismatch for 'start': expected 'Stri
 ```
 
 <!-- test: error.slice-rejects-an-unknown-argument-label -->
-### `slice`'s second argument is `endIndex:` or `length:`
-⚠ **THE REFUSAL IS THE ORDINARY ONE.** The call matches NEITHER corpus overload, so `resolveOverloadedCalls` leaves the op alone (its documented step 5) and `checkCalls` reports
-against the first-declared member's parameter list, so E3037 names the offending label.
+### `slice`'s second argument is `endIndex:`
+`String.slice` has the one declaration `slice(start, endIndex:)`, so a call with another label is refused as any call is, and E3037 names the offending label. `sliceLength(start, length:)` is the form that takes a grapheme count.
 ```maxon
 function main() returns ExitCode
 	let s = "hello"

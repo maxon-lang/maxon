@@ -266,12 +266,12 @@ export type MxdbgTypeTable
 		end 'element'
 	end 'elementTypeIdOf'
 
-	export function writeInto(writer MxdbgWriter, spellings StdlibShadowSpellingArray)
+	export function writeInto(writer MxdbgWriter, roster ShadowSpellingRoster)
 		self.seal()
 
 		for i in 0 upto self.entries.count() 'eachType'
 			view entry = try self.entries.get(i) otherwise panic("MxdbgTypeTable.writeInto: entries.get OOB at {i} despite the upto bound")
-			writer.addType(String.from(authorSpelledName(entry.name, spellings: spellings)), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align, elementTypeId: self.elementTypeIdOf(entry.desc.element), flags: entry.desc.flags)
+			writer.addType(String.from(roster.authorSpelledName(entry.name)), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align, elementTypeId: self.elementTypeIdOf(entry.desc.element), flags: entry.desc.flags)
 
 			for field in entry.desc.fields 'eachField'
 				writer.addField(String.from(field.name), offset: field.offset, typeId: self.idOf(field.typeName))
@@ -286,7 +286,7 @@ export type MxdbgTypeTable
 			return
 		end 'alreadySealed'
 
-		self.entries.sort(function(left MxdbgTypeEntry, right MxdbgTypeEntry) gives compareBytesOrdinally(left.name, right: right.name))
+		self.entries.sortBy(function(left MxdbgTypeEntry, right MxdbgTypeEntry) gives compareBytesOrdinally(left.name, right: right.name))
 
 		// The names are lifted out before the map is refilled: an entry read from `entries` is an element
 		// borrow of it, and the map being rebuilt lives on the same record.

@@ -86,8 +86,7 @@ A program may declare one of these names itself. Its declaration is then what th
 file of the program, and the library's is reached as `stdlib.ByteArray` (see
 [Qualified Names](/docs/language/namespaces/#qualified-names)); the two are two types, and a value crossing
 between them needs a cast. Prefer the library's alias where it fits, and otherwise give your own a
-different name. Two project declarations of one name a file can both see are **E3063** in every file,
-the declaring ones included.
+different name. A file reads its own directory's declaration of a name bare; two project declarations of one name a file can both see, in directories other than its own and the root, are **E3063**.
 
 ### Names a library signature asks for
 
@@ -319,4 +318,5 @@ end 'main'
 Output: `42 3.25 true 255 -1` and `5.5 -4.0 2.0 -3 3.0` on stdout, `done` on stderr.
 
 Interpolation also takes format specifiers — `"{255:x}"` is `ff`, `"{7:04}"` is `0007`, `"{3.14159:.2}"`
-is `3.14`. See string interpolation in [LANGUAGE_REFERENCE.md](/docs/language/overview/).
+is `3.14`, and `"{name:q}"` prints a `String` or `Character` between quotes with the escapes of a literal. See string
+interpolation in [LANGUAGE_REFERENCE.md](/docs/language/overview/).

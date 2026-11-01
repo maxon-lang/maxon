@@ -646,28 +646,21 @@ export let ConcreteValueAtOpaquePlaceSuffix = "one body serves every instantiati
 // a ranged-int alias SCALAR share it, so `checkDeclaredType(named, named)` wrongly AGREES for a union
 // standing where an alias is declared. Only two SCALARS (both empty) defer to the caller's tag check,
 // which the name check runs AFTER — never instead of — so a genuine class mismatch keeps its tag message.
-// ⭐ **IS THE PARSER'S TAG STILL RIGHT FOR THIS MEMBER'S DECLARED RETURN? — asked so that RESOLUTION cannot
-// be mistaken for disagreement.** The value's tag was minted PRE-resolution and the member's return type is
-// read POST-resolution, so the two spell one type two ways all the time: a `returns ExitCode` call is tagged
-// `named`/`exitCode` at the parse and `exitCode` in the registry, and a ranged alias is `named` against
-// `integer`. Comparing them literally — or by storage width — reports every alias-returning overload as a
-// disagreement (MEASURED: `closure-capture.block-local-overload-arg`, whose two overloads BOTH return
-// `ExitCode`, is refused with "'int' and 'int'").
+// ⭐ **ARE TWO RETURN TAGS ONE TYPE? — asked so that RESOLUTION cannot be mistaken for disagreement.** A
+// tag minted PRE-resolution and one read POST-resolution spell one type two ways all the time: a
+// `returns ExitCode` is tagged `named`/`exitCode` at the parse and `exitCode` in the registry, and a ranged
+// alias is `named` against `integer`. Comparing them literally — or by storage width — reports every
+// alias-returning pair as a disagreement.
 //
-// ⭐⭐ **TWO ASKERS, AND THEY ASK IT AT OPPOSITE ENDS OF THE SAME PASS BOUNDARY.**
-// `SemanticCheck.requireOverloadResultTagAgrees` asks it of a value the parser already typed
-// against the member resolution chose — the CHECK. `Parser.returnAnswersAreInterchangeable` asks it
-// of two DECLARED return types, to find out whether the whole-program index's one-entry-per-key
-// answer can be trusted for this name at all — the GATE. A set the gate calls agreeing is exactly a
-// set the check can never report, and that is why the two share this rule rather than each spelling
-// one.
+// `Parser.returnAnswersAreInterchangeable` is the one asker, in both directions, of two DECLARED return
+// types.
 //
 // So agreement is the language's own coercion rule, plus the one thing that rule cannot see: a float and an
 // int AGREE under it (they must, or `5 + 2.0` would not compile) while living in DIFFERENT REGISTER FILES, so
 // a value tagged `integer` standing for a `float` return is a cross-file read whatever the rule says.
-export function overloadResultTagAgrees(current ValueTypeTag, declared ValueTypeTag) returns bool
+export function returnTagsAgree(current ValueTypeTag, declared ValueTypeTag) returns bool
 	return checkDeclaredType(current, declared: declared) == DeclaredTypeMatch.ok and tagIsFloat(current) == tagIsFloat(declared)
-end 'overloadResultTagAgrees'
+end 'returnTagsAgree'
 
 export function namedAggregatesConflict(expected ByteArray, got ByteArray) returns bool
 	return not (expected.isEmpty() and got.isEmpty()) and not got.equals(expected)
@@ -691,7 +684,7 @@ end 'brandsConflict'
 // quadrant where the declared side is a SCALAR and the value is an AGGREGATE — and the tag check cannot
 // refuse it either, because `resolveTypes` erases a boxed-union PARAMETER to `integer` while the ARGUMENT
 // keeps its `named` tag, and `checkDeclaredType(named, integer)` is a legal widening (that is how a ranged
-// alias reaches an `int`). MEASURED, with no overload in the program at all:
+// alias reaches an `int`). For example:
 //
 //     union Shape circle(r Integer) square(s Integer) end 'Shape'
 //     function takesInt(x Integer) returns Integer  return x + 1  end 'takesInt'
@@ -828,8 +821,6 @@ export function typeTagName(tag ValueTypeTag) returns String
 
 		// A call to a VOID function, used where a value belongs. `Parser.parseCall` rejects that at
 		// the call site with "Function 'noop' does not return a value".
-		// ⚠ A SECOND route reaches this arm: `SemanticCheck.requireOverloadVoidResult` prints it for an
-		// overload set whose members disagree about whether they return a value at all.
 		void gives "void"
 
 		// It names the KIND, not the type: a tag is a scalar and carries no name (see this file's
@@ -1013,10 +1004,10 @@ end 'tagIsInteger'
 // `Parser.arrayLiteralInstanceFor`'s ⭐ block and the packing ladder it turns on). Folding `named` in here
 // would silently retype every ranged-alias literal.
 //
-// ⚠ **THE `boolean`-INCLUSIVE SET IS A DIFFERENT ONE AND IS DELIBERATELY NOT THIS FUNCTION.** Two
-// sites spell `integer or boolean or exitCode` (`Parser.matchUsesIntervalPlan` and
-// `SemanticCheck.tagIsPlainOverloadScalar`); they are asking "does this lower to a GPR", not "is
-// this an integer", and merging the two would put a `bool` where an arithmetic domain is meant.
+// ⚠ **THE `boolean`-INCLUSIVE SET IS A DIFFERENT ONE AND IS DELIBERATELY NOT THIS FUNCTION.**
+// `Parser.matchUsesIntervalPlan` spells `integer or boolean or exitCode`; it is asking "does this lower
+// to a GPR", not "is this an integer", and merging the two would put a `bool` where an arithmetic
+// domain is meant.
 export function tagIsPlainInteger(tag ValueTypeTag) returns bool
 	return tagIsInteger(tag) or tag == ValueTypeTag.exitCode
 end 'tagIsPlainInteger'
@@ -3323,7 +3314,7 @@ end 'nonIntegralOperandOf'
 // lost). `not` has no such luck — the bitwise reading of `false` is -1 and of `true` is -2, and
 // BOTH read as TRUE in a condition, so `if not isReady()` would be taken unconditionally. That
 // is a silent miscompile, not a degradation, and it is exactly what
-// specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees` case exists to
+// specs/short-circuit-evaluation.md's `not-over-bool-or-with-same-named-callees` case exists to
 // forbid.
 //
 // So a `not` whose operand's type the parser cannot determine is REJECTED with a positioned

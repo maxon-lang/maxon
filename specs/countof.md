@@ -215,8 +215,8 @@ end 'main'
 3 5 6 15 3 5
 ```
 
-<!-- test: overloaded-statics-that-read-the-count-each-take-the-call-sites-count -->
-Two statics of one name read `countof`, the one without a parameter declared after the one with it. Both ends of the hidden count slot decide on the overload set's one name, so each call hands the count its overload reads.
+<!-- test: statics-that-read-the-count-each-take-the-call-sites-count -->
+Two statics read `countof`, one with a parameter and one without. Each call hands the count the static it names reads.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
@@ -226,9 +226,9 @@ extension FixedArray
 		return (countof(Self) as Int) + extra
 	end 'slotsOf'
 
-	static function slotsOf() returns Int
+	static function slotCount() returns Int
 		return countof(Self)
-	end 'slotsOf'
+	end 'slotCount'
 
 	static function makeOf(extra Int) returns Self
 		if (countof(Self) as Int) + extra == 0 'never'
@@ -238,15 +238,15 @@ extension FixedArray
 		return Self{}
 	end 'makeOf'
 
-	static function makeOf() returns Self
+	static function makeEmpty() returns Self
 		return Self{}
-	end 'makeOf'
+	end 'makeEmpty'
 end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
 	_ = Vec3.makeOf(1)
-	print("{Vec3.slotsOf(1)} {Vec3.slotsOf()} {v.count()}\n")
+	print("{Vec3.slotsOf(1)} {Vec3.slotCount()} {v.count()}\n")
 	return 0
 end 'main'
 ```
@@ -257,46 +257,17 @@ end 'main'
 4 3 3
 ```
 
-<!-- test: overloaded-statics-that-read-the-count-in-the-other-declaration-order -->
-The same two statics declared the other way round.
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias Vec3 = FixedArray with 3 Int
-
-extension FixedArray
-	static function slotsOf() returns Int
-		return countof(Self)
-	end 'slotsOf'
-
-	static function slotsOf(extra Int) returns Int
-		return (countof(Self) as Int) + extra
-	end 'slotsOf'
-end 'FixedArray'
-
-function main() returns ExitCode
-	var v = Vec3.create()
-	print("{Vec3.slotsOf(1)} {Vec3.slotsOf()} {v.count()}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-4 3 3
-```
-
-<!-- test: overloaded-instance-methods-that-read-the-count-each-take-the-receivers-count -->
-Two instance methods of one name read `countof` of the sized receiver, in both widths.
+<!-- test: instance-methods-that-read-the-count-each-take-the-receivers-count -->
+Two instance methods read `countof` of the sized receiver, in both widths.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 typealias Vec5 = FixedArray with 5 Int
 
 extension FixedArray
-	function slotsPlus() returns Int
+	function slotsBase() returns Int
 		return countof(Self)
-	end 'slotsPlus'
+	end 'slotsBase'
 
 	function slotsPlus(extra Int) returns Int
 		return (countof(Self) as Int) + extra
@@ -306,38 +277,7 @@ end 'FixedArray'
 function main() returns ExitCode
 	var a = Vec3.create()
 	var b = Vec5.create()
-	print("{a.slotsPlus(1)} {a.slotsPlus()} {b.slotsPlus(1)} {b.slotsPlus()}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-4 3 6 5
-```
-
-<!-- test: overloaded-instance-methods-that-read-the-count-in-the-other-declaration-order -->
-The same two methods declared the other way round.
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias Vec3 = FixedArray with 3 Int
-typealias Vec5 = FixedArray with 5 Int
-
-extension FixedArray
-	function slotsPlus(extra Int) returns Int
-		return (countof(Self) as Int) + extra
-	end 'slotsPlus'
-
-	function slotsPlus() returns Int
-		return countof(Self)
-	end 'slotsPlus'
-end 'FixedArray'
-
-function main() returns ExitCode
-	var a = Vec3.create()
-	var b = Vec5.create()
-	print("{a.slotsPlus(1)} {a.slotsPlus()} {b.slotsPlus(1)} {b.slotsPlus()}\n")
+	print("{a.slotsPlus(1)} {a.slotsBase()} {b.slotsPlus(1)} {b.slotsBase()}\n")
 	return 0
 end 'main'
 ```

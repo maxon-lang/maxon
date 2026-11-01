@@ -2249,8 +2249,7 @@ export union MaxonOp
 	// ⚠ **`maxonOpCalleeKind` ANSWERS `direct` FOR IT, WHICH IS THE WHOLE `UnusedExportCheck` STORY.** An
 	// export method reachable only as a message is credited by `noteOpReferences` exactly as an ordinary
 	// call's callee is, and `noteQualifiedOwner` credits `Calc` from the same name — so the pass needs no arm
-	// of its own. It can never reach the overload RESOLVER's rewrite: an overloaded message is refused at the
-	// `spawn` (`ServiceCompanions.classifyServiceRoster`), so `Calc.bump` is never an overload set's key.
+	// of its own.
 	serviceSend(result ValueId, status ValueId, let callee ByteArray, handle ValueId, request ValueId, bytes ValueId, timeoutMs ValueId, timed bool) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// ⭐⭐⭐ **`serviceReplyCell(result, messageName)` — MINT THE REPLY CELL ONE AWAITABLE SEND WILL RESOLVE
@@ -3101,59 +3100,45 @@ export let ErrorFlagOrdinalBias = 1 as FullRangeInt
 // Std graph's success edge reads THIS one, so a change to the encoding reaches all of them or none.
 export let NoErrorFlag = 0 as FullRangeInt
 
-// ⭐ **WHICH NAME, IF ANY, AN OP BINDS A CALLEE BY — the dialect's own answer to the one question overload
-// resolution asks of every op**. It lives here, beside the op set, because the answer is a property of
+// ⭐ **WHICH NAME, IF ANY, AN OP BINDS A CALLEE BY — the dialect's own answer to the one question every
+// callee-following walk asks of every op**. It lives here, beside the op set, because the answer is a property of
 // the OP SET: a new callee-carrying variant is added to `MaxonOp` and classified for this question in one
 // edit, rather than a consumer in another file inferring it from op ranges it does not own.
 //
 // ⚠ Proximity is NOT what makes that safe. What makes it safe is that the classifier names EVERY arm, so
 // the compiler refuses a new op until it has an answer here.
 export enum MaxonCalleeKind
-	// A DIRECT call's callee name — the one overload resolution may REWRITE (`withRewrittenCallee`).
+	// A DIRECT call's callee name.
 	direct
 
-	// A function VALUE's target name (`functionRef`). A resolution may NOT rewrite it: there are no arguments
-	// to pick an overload from. Its OWN case rather than `noCallee`, so a resolver can REFUSE an overloaded
-	// name here instead of silently binding whichever member registered first.
+	// A function VALUE's target name (`functionRef`). Its OWN case rather than `noCallee`, so a walk can
+	// follow it by name without treating the op as a call.
 	functionValue
 
 	// The op binds no callee name at all.
 	noCallee
 end 'MaxonCalleeKind'
 
-// ⭐⭐ **A SCALAR ENUM, NOT A UNION — AND THAT IS MEASURED, NOT A STYLE PREFERENCE.** A
-// `union MaxonOpCallee{direct(ByteArray), functionValue(ByteArray), none}` **allocates one box per op
-// asked** — a payload-free `none` included. That cost would be affordable only under the premise that its
-// ONE caller (`SemanticCheck.resolveOverloadedCalls`) returns immediately unless the program declares an
-// overload, and *"the overwhelming program declares no overload"*.
+// ⭐⭐ **A SCALAR ENUM, NOT A UNION.** A `union MaxonOpCallee{direct(ByteArray), functionValue(ByteArray),
+// none}` **allocates one box per op asked** — a payload-free `none` included — and the callers walk every
+// live op of every function, so the cost would grow linearly with the user's program.
 //
-// ⚠⚠ **THAT PREMISE IS FALSE FOR EVERY PROGRAM, PERMANENTLY.** The loader takes `stdlib/FilePath.maxon`,
-// which OVERLOADS a name (`join(component String)` / `join(component FilePath)`), so `project.overloadSets`
-// is non-empty in every compile, the gate never fires, and the resolver walks every live op of every
-// function boxing one union each. MEASURED on the scale ladder, per-phase, with the union:
-// `phase:semanticCheck` **+14,609 / +24,134 / +43,172 / +81,201 /
-// +157,253 / +309,305** allocations across the six rungs — ×1.97 per doubling, i.e. dead LINEAR in the user's
-// program, 1.9% of the whole compile at rung 5 and growing with it forever. Every OTHER phase moves by a flat
-// constant (the module's own load/lex/parse cost), which is what identifies this one exactly.
-//
-// ⇒ **THE KIND IS SPLIT FROM THE NAME.** An allocation-free `bool` twin would answer the wrong question —
-// the resolver needs the NAME — and this enum answers both halves: the KIND
-// is a scalar and costs nothing, and the NAME is fetched only for the two kinds that HAVE one, which is a
-// handful of ops rather than all of them. There is exactly ONE arm-per-variant table (below), naming every
-// variant and growing with the union, which is the whole property being
-// claimed; `maxonOpCalleeName` needs only the callee-carrying arms and is floored by a `default panic`, the
-// same shape `withRewrittenCallee` and SemanticCheck's `overloadCallArgs`/`overloadResultValue` already have.
+// ⇒ **THE KIND IS SPLIT FROM THE NAME.** The KIND is a scalar and costs nothing, and the NAME is fetched
+// only for the two kinds that HAVE one, which is a handful of ops rather than all of them. There is
+// exactly ONE arm-per-variant table (below), naming every variant and growing with the union, which is
+// the whole property being claimed; `maxonOpCalleeName` needs only the callee-carrying arms and is
+// floored by a `default panic`.
 //
 // ⚠ `indirectCall` and the two witness dispatches carry NO name to bind: an indirect call's callee is a
 // VALUE, and a witness dispatch was resolved against the enclosing type's `where` constraints at parse time
-// (there is no callee name anywhere on the op). Neither can be an overload set's member.
+// (there is no callee name anywhere on the op).
 //
 // ⚠⚠ **EVERY ARM IS NAMED, AND NOT ONE IS A RANGE — because a RANGE ARM IS EXACTLY HOW THIS ANSWER GOES
 // SILENTLY WRONG.** Living beside the union does not stop a new callee-carrying variant being classified
 // as callee-free: `MaxonOp`'s own growth convention is to APPEND AT THE END (every one of its last six
 // arms says so in its comment), and an appended arm lands INSIDE a range like
 // `await to witnessTryDispatch`, which would answer `noCallee` for it without a word — no compile error,
-// no panic, just an overload that stops being resolvable at that op kind. Naming every variant is the only
+// no panic, just a callee the walks stop following at that op kind. Naming every variant is the only
 // spelling under which adding an op cannot compile until someone classifies it — the same argument
 // `TypeRules.tagIsIntegral` records for `ValueTypeTag`.
 export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
@@ -3228,7 +3213,7 @@ end 'maxonOpCalleeKind'
 
 // The callee NAME an op binds — asked only of an op `maxonOpCalleeKind` did not answer `noCallee` for, so
 // every other variant panics rather than returning an empty name. An empty ByteArray would be a sentinel,
-// and a caller that forgot the gate would silently resolve "the overload set named by the empty string".
+// and a caller that forgot the gate would silently follow a callee named by the empty string.
 export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 	return match op 'op'
 		call(_, callee, _, _, _, _, _, _) gives callee
@@ -3343,50 +3328,6 @@ export function maxonOpIsServiceSpawn(op MaxonOp) returns bool
 	end 'op'
 end 'maxonOpIsServiceSpawn'
 
-export function maxonOpIsServiceSend(op MaxonOp) returns bool
-	return match op 'op'
-		serviceSend gives true
-		call or
-		literal or
-		ret or
-		retVoid or
-		binOp or
-		unaryOp or
-		compare or
-		condBranch or
-		branch or
-		globalAddr or
-		loadIndirect or
-		storeIndirect or
-		stringLiteral or
-		tryCall or
-		throwError or
-		propagateError or
-		panicAbort or
-		functionRef or
-		indirectCall or
-		asyncCall or
-		await or
-		tryAwait or
-		sizeofType or
-		constArrayLiteral or
-		switch or
-		witnessDispatch or
-		witnessTryDispatch or
-		panicAbortValue or
-		errorFlagEncode or
-		serviceSpawn or
-		serviceReplyCell or
-		immortalStructRecord or
-		immortalStringTable or
-		covPoint or
-		rawIntrinsic or
-		existentialWitness or
-		holdValue or
-		holdEnd gives false
-	end 'op'
-end 'maxonOpIsServiceSend'
-
 export function maxonOpLeavesByError(op MaxonOp) returns bool
 	return match op 'op'
 		throwError or
@@ -3438,30 +3379,6 @@ export function maxonOpSpawnedServiceType(op MaxonOp) returns ByteArray
 		default panic("maxonOpSpawnedServiceType: asked of an op that starts no service — `maxonOpIsServiceSpawn` answers false for it, and every caller gates on that")
 	end 'op'
 end 'maxonOpSpawnedServiceType'
-
-// The same op with its callee name replaced — every other operand carried through verbatim. Asked only of an
-// op `maxonOpCalleeKind` answered `direct` for, so every other variant panics rather than returning the op
-// unchanged: a silent pass-through would make a resolver's rewrite vanish for one op kind.
-export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonOp
-	return match op 'op'
-		// ⚠ `mint` rides through UNCHANGED, and that is the loud choice rather than the safe-looking one. Only
-		// overload resolution rewrites a callee, and it rewrites a BARE source name to an overload member — a
-		// name E2051 bars from the reserved space, so a minted callee can never be its subject. Resetting the
-		// mint here would hide that if it ever changed; carrying it makes `primitiveStaticSourceSpelling`'s
-		// re-mint check panic on the spot.
-		call(result, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
-		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
-		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
-		serviceSpawn(result, typeName, state, capacity, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint, startReplies) gives MaxonOp.serviceSpawn(result, typeName: typeName, state: state, capacity: capacity, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies)
-
-		// ⚠ **`serviceSend` IS `direct` AND IS DELIBERATELY ABSENT.** Only overload resolution rewrites a
-		// callee, and a message's name can never be an overload set's key: `classifyServiceRoster` refuses
-		// an overloaded message at the `spawn`, so `resolveOneOverloadedCall` returns at its
-		// `overloadSets.get` and never reaches this door. Admitting it would claim a capability nothing can
-		// exercise; the panic states the invariant instead.
-		default panic("withRewrittenCallee: asked of an op that binds no REWRITABLE direct callee — `maxonOpCalleeKind` answers `direct` for four variants, and the fourth (`serviceSend`) names a message an overload set can never hold")
-	end 'op'
-end 'withRewrittenCallee'
 
 export enum WriteBlameError implements Error
 	unblamed
@@ -3691,12 +3608,11 @@ end 'cacheReadWriteBlameArray'
 // @generated library-cache end
 
 // The same op with its ARGUMENT LIST and blame names replaced — every other operand, the parallel
-// label / range columns and `defaultedArgs` included, carried through verbatim. `withRewrittenCallee`'s
-// twin one operand over, and it exists for the same reason: `LiteralArgPromotion` substitutes a
-// writable record for an immortal or merged one at a call, `SemanticCheck.bindDeferredArguments`
-// binds the arguments the parser left to overload resolution, and doing either at the call
-// variants' own match arms would put the reconstruction in several places, where a field added to
-// `MaxonOp.call` could be carried by one and dropped by another.
+// label / range columns and `defaultedArgs` included, carried through verbatim. It exists so that
+// `LiteralArgPromotion` (which substitutes a writable record for an immortal or merged one at a call) and
+// `SemanticCheck.bindIndirectCall` (which binds the arguments the parser left deferred) share one
+// reconstruction: doing either at the call variants' own match arms would put it in several places,
+// where a field added to `MaxonOp.call` could be carried by one and dropped by another.
 //
 // ⚠ **IT REBUILDS RATHER THAN WRITING THROUGH THE OLD `args` ARRAY, AND THAT IS THE POINT.** A Maxon op is
 // a heap box that `IrModule.merge` copies BY REFERENCE out of the file's parse artifact, so an argument

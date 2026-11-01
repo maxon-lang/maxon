@@ -36,7 +36,7 @@ let TrustStoreScratchSlot = 0 as SpillSlot
 let TrustStoreSettingsFrameBytes = 16
 let TrustStoreOutOffset = 0
 let TrustStoreNumberOffset = 8
-let TrustStoreKeyNameOffset = TrustStoreOutOffset + WordBytes
+let TrustStoreKeyNameOffset = TrustStoreOutOffset + TrustStoreWordBytes
 let TrustStoreSlotWordOffset = 0
 let TrustStoreHeaderStart = 0
 let TrustStoreKeyNameStart = 0
@@ -80,7 +80,7 @@ let SecResultDeny = 3
 let SecResultUnspecified = 4
 let CfNumberSInt32Type = 3
 let RtldDefault = -2
-let WordBytes = 8
+let TrustStoreWordBytes = 8
 let TrustStoreByteRadix = 256
 
 // The macOS store is a raw block: the three `CFArrayRef`s that `SecTrustSettingsCopyCertificates`
@@ -88,8 +88,8 @@ let TrustStoreByteRadix = 256
 // per `TrustStoreKey`. `__trust_close` releases whichever arrays are set and the keys the store
 // owns.
 let TrustStoreArraysOffset = TrustStoreHeaderStart
-let TrustStoreCountsOffset = TrustStoreArraysOffset + SecDomainCount * WordBytes
-let TrustStoreKeysOffset = TrustStoreCountsOffset + SecDomainCount * WordBytes
+let TrustStoreCountsOffset = TrustStoreArraysOffset + SecDomainCount * TrustStoreWordBytes
+let TrustStoreKeysOffset = TrustStoreCountsOffset + SecDomainCount * TrustStoreWordBytes
 let CfStringEncodingUtf8 = 0x08000100
 
 let TrustStoreKeyPolicyName = b"kSecTrustSettingsPolicy"
@@ -143,11 +143,11 @@ function trustStoreKeyOffset(key TrustStoreKey) returns ByteOffset
 end 'trustStoreKeyOffset'
 
 function trustStoreHeaderWords() returns FullRangeInt
-	return (TrustStoreKeysOffset / WordBytes + TrustStoreKey.allCases.count()) as FullRangeInt
+	return (TrustStoreKeysOffset / TrustStoreWordBytes + TrustStoreKey.allCases.count()) as FullRangeInt
 end 'trustStoreHeaderWords'
 
 function trustStoreKeyNameWords(key TrustStoreKey) returns FullRangeInt
-	return ((trustStoreKeyName(key).count() + WordBytes) / WordBytes) as FullRangeInt
+	return ((trustStoreKeyName(key).count() + TrustStoreWordBytes) / TrustStoreWordBytes) as FullRangeInt
 end 'trustStoreKeyNameWords'
 
 function trustStoreOpenFrameBytes() returns StackSize
@@ -350,14 +350,14 @@ function trustStoreDomainWord(domain TrustStoreDomain) returns FullRangeInt
 end 'trustStoreDomainWord'
 
 function trustStoreWordOffset(base FullRangeInt, word FullRangeInt) returns ByteOffset
-	return (base + word * WordBytes) as ByteOffset
+	return (base + word * TrustStoreWordBytes) as ByteOffset
 end 'trustStoreWordOffset'
 
 function trustStoreNameWord(name ByteArray, word FullRangeInt) returns FullRangeInt
 	var packed = 0 as FullRangeInt
 
-	for step in 0 upto WordBytes 'eachByte'
-		let at = word * WordBytes + (WordBytes - 1 - step)
+	for step in 0 upto TrustStoreWordBytes 'eachByte'
+		let at = word * TrustStoreWordBytes + (TrustStoreWordBytes - 1 - step)
 		let octet = try name.get(at as ElementIndex) otherwise 0
 
 		packed = packed * TrustStoreByteRadix + (octet as FullRangeInt)

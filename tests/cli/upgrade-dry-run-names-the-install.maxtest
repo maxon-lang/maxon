@@ -5,17 +5,16 @@
 // caller's MAXON_INSTALL, which may name another install entirely. So the child is handed a decoy there,
 // and the decoy must appear nowhere in what it prints.
 
-let StagedRootName = "upgrade_dry_run_root"
+let UpgradeDryRunNamesTheInstallStagedRootName = "upgrade_dry_run_root"
 let DecoyRootName = "upgrade_dry_run_decoy"
 let DecoyWord = "decoy"
 let InstallVariable = "MAXON_INSTALL"
 
 // What the dry run prints, one line each.
 let InstallRootLabel = "install root: "
-let CommandLabel = "command: "
 
 test 'upgrade --dry-run from a script install names that install and runs nothing'
-	let staged = stageCompiler(StagedRootName, binaryIn: ScriptInstallBinDirName, stdlibIn: CaseDirItself)
+	let staged = stageCompiler(UpgradeDryRunNamesTheInstallStagedRootName, binaryIn: ScriptInstallBinDirName, stdlibIn: CaseDirItself)
 	let binDir = try staged.parent() otherwise panic("upgrade dry run: the gate could not run - {staged.toString()} has no parent directory")
 	let installRoot = try binDir.parent() otherwise panic("upgrade dry run: the gate could not run - {binDir.toString()} has no parent directory")
 	let decoyParent = try installRoot.parent() otherwise panic("upgrade dry run: the gate could not run - {installRoot.toString()} has no parent directory")
@@ -39,7 +38,7 @@ test 'upgrade --dry-run from a script install names that install and runs nothin
 		end 'theRootLine'
 	end 'eachLine'
 
-	Expect.contains(rootLine, needle: StagedRootName, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` printed no `{InstallRootLabel}` line naming the install the running compiler sits in ({installRoot.toString()}). It said: {run.stdout}")
+	Expect.contains(rootLine, needle: UpgradeDryRunNamesTheInstallStagedRootName, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` printed no `{InstallRootLabel}` line naming the install the running compiler sits in ({installRoot.toString()}). It said: {run.stdout}")
 	Expect.contains(run.stdout, needle: CommandLabel, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` does not say what command it would run. It said: {run.stdout}")
 	Expect.contains(run.stdout, needle: InstallScriptAddress, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` would not run the published install script from {InstallScriptAddress}. It said: {run.stdout}")
 	Expect.isFalse(run.stdout.contains(DecoyWord), message: "`maxon {UpgradeCommandWord} {DryRunFlag}` took its root from the caller's {InstallVariable} ({decoy}) instead of from where the compiler is. It said: {run.stdout}")

@@ -4188,10 +4188,10 @@ function main() returns ExitCode
 		let records = server.session().takeRecords()
 		let alertRecord = try records.get(0) otherwise return 8
 		let keys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: fromHex("dd962e033fab1421beac25be66794c191b2f355c67d82f8f2d4e6d7cf2c4133d")) otherwise return 9
-		var reader = try Tls13RecordProtection.create(suite, key: keys.key(), iv: keys.iv()) otherwise return 10
+		var reader = try Tls13RecordProtection.create(suite, key: keys.key, iv: keys.iv) otherwise return 10
 		let opened = try reader.open(alertRecord) otherwise return 11
 
-		print("records={records.count()} prefix={toHex(try alertRecord.slice(0, endIndex: 5) otherwise return 12)} type={opened.contentType().rawValue} plaintext={toHex(opened.plaintext())}\n")
+		print("records={records.count()} prefix={toHex(try alertRecord.slice(0, endIndex: 5) otherwise return 12)} type={opened.contentType.rawValue} plaintext={toHex(opened.plaintext())}\n")
 	end 'refused'
 
 	return 0
@@ -4343,7 +4343,7 @@ type OptionalExtendedMasterSecret implements TlsClientHelloSource
 			end 'other'
 		end 'eachExtension'
 
-		let hello = TlsClientHello.create(message.legacyVersion(), random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods(), extensions: TlsExtensionBlock.listed(kept))
+		let hello = TlsClientHello.create(message.legacyVersion, random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods, extensions: TlsExtensionBlock.listed(kept))
 
 		return try TlsHandshakeCodec.encode(TlsHandshakeMessage.clientHello(hello)) otherwise panic("a ClientHello without an extension encodes")
 	end 'first'
@@ -4420,7 +4420,7 @@ function signatureSchemeOf(raw ByteArray) returns String
 	let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls12) otherwise panic("a plaintext TLS 1.2 flight holds whole messages")
 
 	return match message 'message'
-		serverKeyExchange(exchange) gives "{exchange.signatureScheme()}"
+		serverKeyExchange(exchange) gives "{exchange.signatureScheme}"
 		certificateVerify(scheme, _) gives "{scheme}"
 		default panic("only signed messages are asked for")
 	end 'message'

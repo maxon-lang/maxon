@@ -443,7 +443,7 @@ end 'toHex'
 
 function report(id String, suite Tls13CipherSuite, sharedSecretHex String, helloHashHex String, serverFinishedHashHex String)
 	if let result = try Tls13KeySchedule.keySchedule(suite, sharedSecret: fromHex(sharedSecretHex), helloHash: fromHex(helloHashHex), serverFinishedHash: fromHex(serverFinishedHashHex)) 'derived'
-		print("{id} {toHex(result.earlySecret())} {toHex(result.handshakeSecret())} {toHex(result.clientHandshakeTrafficSecret())} {toHex(result.serverHandshakeTrafficSecret())} {toHex(result.masterSecret())} {toHex(result.clientApplicationTrafficSecret0())} {toHex(result.serverApplicationTrafficSecret0())} {toHex(result.exporterMasterSecret())}\n")
+		print("{id} {toHex(result.earlySecret)} {toHex(result.handshakeSecret)} {toHex(result.clientHandshakeTrafficSecret)} {toHex(result.serverHandshakeTrafficSecret)} {toHex(result.masterSecret)} {toHex(result.clientApplicationTrafficSecret0)} {toHex(result.serverApplicationTrafficSecret0)} {toHex(result.exporterMasterSecret)}\n")
 	end 'derived' else (failure) 'refused'
 		print("{id} {failure}\n")
 	end 'refused'
@@ -538,7 +538,7 @@ end 'toHex'
 
 function report(id String, suite Tls13CipherSuite, trafficSecretHex String)
 	if let result = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: fromHex(trafficSecretHex)) 'derived'
-		print("{id} {toHex(result.key())} {toHex(result.iv())}\n")
+		print("{id} {toHex(result.key)} {toHex(result.iv)}\n")
 	end 'derived' else (failure) 'refused'
 		print("{id} {failure}\n")
 	end 'refused'
@@ -824,7 +824,7 @@ function main() returns ExitCode
 	secret.resize(32)
 
 	let keys = try Tls13KeySchedule.trafficKeys(Tls12CipherSuite.ecdheRsaAes128GcmSha256, trafficSecret: secret) otherwise return 1
-	print("{keys.key().count()}\n")
+	print("{keys.key.count()}\n")
 	return 0
 end 'main'
 ```

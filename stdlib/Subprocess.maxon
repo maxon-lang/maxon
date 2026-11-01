@@ -468,23 +468,9 @@ end 'Configuration'
 // =============================================================================
 
 public type Subprocess
-	/// Run `executable arguments...` with default options and collect output.
-	public static function run(executable Executable, arguments StringArray) returns CollectedOutput throws SubprocessError
-		var c = Configuration.create(executable)
-		c.arguments = arguments
-		return try c.run()
-	end 'run'
-
-	/// Same as above, with an explicit working directory.
-	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath) returns CollectedOutput throws SubprocessError
-		var c = Configuration.create(executable)
-		c.arguments = arguments
-		c.workingDirectory = workingDirectory
-		return try c.run()
-	end 'run'
-
-	/// Same as above, with an explicit working directory and timeout.
-	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath, timeoutMs DurationMs) returns CollectedOutput throws SubprocessError
+	/// Run `executable arguments...` and collect output. An empty working directory inherits the
+	/// parent's, and a timeout of 0 waits indefinitely.
+	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0) returns CollectedOutput throws SubprocessError
 		var c = Configuration.create(executable)
 		c.arguments = arguments
 		c.workingDirectory = workingDirectory

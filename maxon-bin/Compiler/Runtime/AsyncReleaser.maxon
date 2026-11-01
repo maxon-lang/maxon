@@ -157,12 +157,11 @@ typealias AsyncCellSlotArray = Array with AsyncCellSlot
 export type AsyncSpawnTarget
 	export let callee as ByteArray
 	export let byReference as ParamPositionMask
-	export let declarationSite as ByteArray
 	export let target as Target
 	export let startsService as bool
 
-	export static function create(callee ByteArray, byReference ParamPositionMask, declarationSite ByteArray, target Target, startsService bool) returns AsyncSpawnTarget
-		return Self{callee: callee, byReference: byReference, declarationSite: declarationSite, target: target, startsService: startsService}
+	export static function create(callee ByteArray, byReference ParamPositionMask, target Target, startsService bool) returns AsyncSpawnTarget
+		return Self{callee: callee, byReference: byReference, target: target, startsService: startsService}
 	end 'create'
 end 'AsyncSpawnTarget'
 
@@ -367,7 +366,7 @@ function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatu
 	var argSlots = AsyncManagedSlotArray.create()
 	var consumedArgSlots = AsyncManagedSlotArray.create()
 	var cellSlots = AsyncCellSlotArray.create()
-	let consume = signatures.consumeOfDeclarationUnder(overloadRegistrationBaseName(callee), site: target.declarationSite)
+	let consume = signatures.consumeOf(genericTemplateName(callee))
 
 	// The ARGUMENTS, in PARAMETER order, each at the offset `placement` gives it — the order the spawn
 	// stores them in, because the lowering slots them (`slotCallArgs`) before storing. A labelled
@@ -585,12 +584,12 @@ end 'collectAsyncSpawnTargets'
 
 export function asyncSpawnTargetOf(callee ByteArray, funcNames FunctionNameIndex, target Target) returns AsyncSpawnTarget
 	let member = try funcNames.funcNamed(callee) otherwise panic("asyncSpawnTargetOf: '{String.from(callee)}' is spawned but no function of the module carries the name")
-	return AsyncSpawnTarget.create(callee, byReference: member.reassignedParamMask, declarationSite: member.declarationSite(), target: target, startsService: false)
+	return AsyncSpawnTarget.create(callee, byReference: member.reassignedParamMask, target: target, startsService: false)
 end 'asyncSpawnTargetOf'
 
 export function serviceStartTargetOf(factory ByteArray, funcNames FunctionNameIndex, target Target) returns AsyncSpawnTarget
 	let member = try funcNames.funcNamed(factory) otherwise panic("serviceStartTargetOf: '{String.from(factory)}' is a spawned factory but no function of the module carries the name")
-	return AsyncSpawnTarget.create(factory, byReference: member.reassignedParamMask, declarationSite: member.declarationSite(), target: target, startsService: true)
+	return AsyncSpawnTarget.create(factory, byReference: member.reassignedParamMask, target: target, startsService: true)
 end 'serviceStartTargetOf'
 
 function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets NameRoster, seenFactories AsyncReleaserSet, factories NameRoster)

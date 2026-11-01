@@ -3,18 +3,16 @@
 // The image is renamed out of the slot only once the compile has succeeded. Emptying the slot on a compile
 // error would leave the tree with no compiler to build the fix.
 
-let StagedDirName = "temp/mcp-rebuild-with-a-compile-error"
-let CompilerStem = "maxon"
-let PreviousInfix = ".previous"
+let RebuildWithACompileErrorStagedDirName = "temp/mcp-rebuild-with-a-compile-error"
 let BrokenFileName = "broken.maxon"
 let FixedFileName = "fixed.maxon"
 let BrokenSource = "function main() returns ExitCode\n\treturn undeclaredName\nend 'main'\n"
-let KnownLine = "built after a failed self-rebuild"
+let RebuildWithACompileErrorKnownLine = "built after a failed self-rebuild"
 
 let CompileErrorExit = 1
 
 test 'a self-rebuild that fails to compile leaves the running image in the slot, and it can build again'
-	let dir = stagingDir(StagedDirName)
+	let dir = stagingDir(RebuildWithACompileErrorStagedDirName)
 	clearStagedFiles(dir)
 
 	let imageName = "{CompilerStem}{executableSuffix()}"
@@ -35,11 +33,11 @@ test 'a self-rebuild that fails to compile leaves the running image in the slot,
 	Expect.isFalse(File.exists(previous), message: "a self-rebuild that failed to compile moved its image to {previous.path}; nothing should be vacated before the compile succeeds.")
 
 	let fixed = dir.join(FixedFileName)
-	writeStagedFile(fixed, content: printingProgramSource(KnownLine))
+	writeStagedFile(fixed, content: printingProgramSource(RebuildWithACompileErrorKnownLine))
 
 	let rebuilt = rebuildOwnImage(dir, compiler: compiler, program: fixed)
 	Expect.equal(rebuilt.exitCode(), expected: 0, message: "the compiler a failed self-rebuild left in the slot could not build again. It exited {rebuilt.exitCode()} and said: {rebuilt.stderr}")
 
 	let built = spawnCompiler(StringArray.create(), staged: dir, what: "the rebuilt image", binary: compiler)
-	Expect.equal(built.stdout.trim(), expected: KnownLine, message: "{imageName} should now be the program the second build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
+	Expect.equal(built.stdout.trim(), expected: RebuildWithACompileErrorKnownLine, message: "{imageName} should now be the program the second build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
 end 'a self-rebuild that fails to compile leaves the running image in the slot, and it can build again'

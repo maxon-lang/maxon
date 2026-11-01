@@ -285,10 +285,11 @@ regresses them silently, so arguments past the register files ride the stack. Th
 position masks and its refusals stay; do not propose lifting them. A ceiling hit is a clear refusal, never
 silent mishandling.
 
-⚠ **A PARAMETER REASSIGNMENT IS A WHOLE-PROGRAM SWITCH.** `ProgramSignatures.programTakesAParamByRef` is false
-until some function reassigns a parameter, and true turns on the name-keyed, over-approximating cell-local
-prescan in every body of the program, stdlib included. Read and write of a by-ref parameter are specified
-(`specs/pass-by-reference.md`).
+⚠ **A `mutable` PARAMETER MARKER IS A WHOLE-PROGRAM SWITCH.** `ProgramSignatures.programTakesAParamByRef` is
+false until some function marks a parameter `mutable`, and true turns on the name-keyed, over-approximating
+cell-local prescan in every body of the program, stdlib included. The prescan reads its callee out of tokens
+before the body parses, so it cannot resolve a method's receiver type. Read and write of a by-ref parameter
+are specified (`specs/pass-by-reference.md`).
 
 ⚠ **AN INTERMITTENT COMPILER DEATH ON arm64 ALONE (EXIT 86, A SIGSEGV IN A POOL WORKER, EXIT 101 WITH EVERY
 TEST PASSING) POINTS AT MEMORY ORDERING FIRST.** x86-TSO forbids the reorder, so a clean x64 run is no

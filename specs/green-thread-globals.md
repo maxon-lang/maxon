@@ -368,7 +368,7 @@ count=7
 <!-- test: a-handler-may-sort-its-own-field -->
 **THE STANDARD LIBRARY'S LARGEST ALGORITHM RUNS ON A MESSAGE.** `Array.sort` reaches no module storage, so
 sorting a field of `self` is the cure this rule prescribes rather than something it refuses. All four entries
-run — both `Comparable` overloads, which pass a comparator closure through the extension's witness slot, and
+run — both `Comparable` forms, which pass a comparator closure through the extension's witness slot, and
 both explicit-comparator ones — over forty elements, which is past the small-sort short-circuit, so driftsort's
 run stack and pdqsort's pivot machinery are both on the message's green thread.
 
@@ -389,8 +389,8 @@ type Sorter
 	export function arrange() returns Integer
 		self.items.sortUnstable()
 		self.items.sort()
-		self.items.sortUnstable(function(a, b) gives b.compare(a))
-		self.items.sort(function(a, b) gives a.compare(b))
+		self.items.sortUnstableBy(function(a, b) gives b.compare(a))
+		self.items.sortBy(function(a, b) gives a.compare(b))
 		let low = try self.items.get(0) otherwise 0
 		let high = try self.items.get(39) otherwise 0
 		return low + high

@@ -22,7 +22,7 @@ stdout/stderr into a `CollectedOutput`. For more control, build a
 INTRINSIC floor — `__Builtins.subprocessSpawn`, `subprocessWaitCollect`,
 `subpReadLine` — and assert what the runtime does with a handle. This file
 drives the layer ABOVE it, `stdlib/Subprocess.maxon`'s public surface:
-`Subprocess.run` and its `workingDirectory:` / `timeoutMs:` overloads,
+`Subprocess.run` and its defaulted `workingDirectory:` / `timeoutMs:` parameters,
 `Executable.name` / `Executable.path`, `Configuration` with `InputSource`,
 `CollectedOutput` and `match TerminationStatus`, the `SubprocessError` arms,
 and `StreamingSubprocess`. A spawn that works at the intrinsic and fails here

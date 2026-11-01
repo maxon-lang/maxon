@@ -324,7 +324,6 @@ than admitted into a slot the sweep never recorded.
 typealias Integer = int(i64.min to i64.max)
 
 interface Tagged
-	function tag() returns Integer
 end 'Tagged'
 
 type Widget implements Tagged
@@ -344,7 +343,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:9: Unsupported: a `let` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it in the `type` body as a `static let`
+error E2015: <fragment>:12:9: Unsupported: a `let` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it in the `type` body as a `static let`
 ```
 
 ### A static member's initializer is the TOP-LEVEL initializer grammar, not a subset of it
@@ -1823,74 +1822,6 @@ end 'main'
 error E2015: <fragment>:5:21: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in the compiler, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
 ```
 
-<!-- test: error.let-global-alias-in-a-cell-keeps-its-mark -->
-⛔⛔ **A CELL IS A THIRD PLACE THE RECORD LIVES, AND THE REFUSAL REACHES IT.** A parameter its function
-reassigns is CELL-RESIDENT, and a cell binding's `boundValue` is the CELL, not the value the promotion marked —
-so a door asking only about `boundValue` would see an unmarked binding and let `grow(xs)` through **in the
-very frame that rebound `xs`**, silently mutating the global.
-
-⇒ The reassignment `xs = expose()` hands that cell a `let` global's record, and it is refused where it
-happens (E3078), as `var xs = expose()` is: where a binding's value lives cannot change whether it may hold
-the record.
-```maxon
-typealias Names = Array with String
-
-let A = ["a", "b"]
-
-function expose() returns Names
-	return A
-end 'expose'
-
-function grow(xs Names) returns Integer
-	xs.push("zz")
-	return xs.count()
-end 'grow'
-
-function regrow(xs Names) returns Integer
-	xs = expose()
-	return grow(xs)
-end 'regrow'
-
-function main() returns ExitCode
-	var b = ["c"]
-	let n = regrow(b)
-	return ((A.count() as Integer) + n) as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3078: <fragment>:16:2: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'xs'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: error.let-global-read-reassigned-into-a-cell-keeps-its-mark -->
-A cell-resident parameter reassigned a bare read of the `let` global would take its own reference to that
-record; the reassignment is refused just as it is for a call's result.
-```maxon
-typealias Names = Array with String
-
-let A = ["a", "b"]
-
-function grow(xs Names) returns Integer
-	xs.push("zz")
-	return xs.count()
-end 'grow'
-
-function regrow(xs Names) returns Integer
-	xs = A
-	return grow(xs)
-end 'regrow'
-
-function main() returns ExitCode
-	var b = ["c"]
-	let n = regrow(b)
-	return ((A.count() as Integer) + n) as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3078: <fragment>:12:2: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'xs'; use 'let' instead of 'var', or use clone()
-```
-
 <!-- test: error.let-global-alias-captured-by-a-closure -->
 ⛔⛔ **A CLOSURE MUST NOT LAUNDER THE TAINT.** A closure body is its own SSA space, so the per-value marks are
 swapped out at its boundary — correctly, since an id means nothing there — and the read of the module-level `let`
@@ -2121,7 +2052,7 @@ An initializer cannot name another global, but it may call, and a callee may rea
 The refusal is E3165, at the read, with the `var`'s declaration as a note — even when only a scalar is read out
 of the `var`: the compiler does not follow what the initializer keeps.
 
-"Reaches" is the call graph once overload resolution has chosen each callee, closed through run-time
+"Reaches" is the call graph, closed through run-time
 dispatches the way every whole-program service rule closes it. A scalar `var` owns no record and is not
 refused; a `var` initializer and a `let` read by a `let` initializer are legal.
 
@@ -2219,8 +2150,8 @@ error E3165: <fragment>:14:10: the initializer of the `let` `l` reaches the modu
 note: <fragment>:18:5: `g` is declared here
 ```
 
-<!-- test: error.a-let-initializer-may-not-reach-a-managed-var-through-the-overload-it-calls -->
-The initializer calls the one-argument `make`, and that member reads `g`.
+<!-- test: error.a-let-initializer-may-not-reach-a-managed-var-through-the-member-it-calls -->
+The initializer calls `make`, and that member reads `g`.
 ```maxon
 type Box
 	export var n as Integer
@@ -2228,10 +2159,6 @@ type Box
 	static function create() returns Self
 		return Self{n: 7}
 	end 'create'
-
-	static function make() returns Self
-		return Self{n: 1}
-	end 'make'
 
 	static function make(seed Integer) returns Self
 		return Self{n: g.n + seed}
@@ -2248,12 +2175,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3165: <fragment>:14:18: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
-note: <fragment>:18:5: `g` is declared here
+error E3165: <fragment>:10:18: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:14:5: `g` is declared here
 ```
 
-<!-- test: an-overload-a-let-initializer-does-not-call-may-read-a-managed-var -->
-**THE CONTROL FOR THE CASE ABOVE.** The initializer calls the zero-argument `make`; the member that reads `g`
+<!-- test: a-member-a-let-initializer-does-not-call-may-read-a-managed-var -->
+**THE CONTROL FOR THE CASE ABOVE.** The initializer calls `plain`; the member `make` that reads `g`
 is never called from it, so nothing refuses the program.
 ```maxon
 type Box
@@ -2263,9 +2190,9 @@ type Box
 		return Self{n: 7}
 	end 'create'
 
-	static function make() returns Self
+	static function plain() returns Self
 		return Self{n: 1}
-	end 'make'
+	end 'plain'
 
 	static function make(seed Integer) returns Self
 		return Self{n: g.n + seed}
@@ -2273,7 +2200,7 @@ type Box
 end 'Box'
 
 var g = Box.create()
-let l = Box.make()
+let l = Box.plain()
 
 function main() returns ExitCode
 	g.n = 9
@@ -2828,13 +2755,13 @@ typealias Integer = int(i64.min to i64.max)
 error E3078: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.pass` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
 ```
 
-### A managed constant is the WEAKEST claim on `<base>.<member>(…)`
+### A top-level `let` and a type of one name are one name declared twice
 
-A top-level managed `let` is the first method RECEIVER whose name can also be a declared TYPE, so
-`Widget.byteLength()` is ambiguous in a way `c.increment()` never was. The type-based reading is tried
-FIRST and the constant is its fallback: 42 here, 10 in the next case.
+A directory declares a name once, whatever its kind: a top-level `let` beside a `type`, `union` or
+`typealias` of the same name is E3006 at the later declaration, in one file or in two
+(`specs/top-level-name-scope.md`).
 
-<!-- test: top-level-let-name-shadowed-by-type -->
+<!-- test: error.top-level-let-and-type-of-one-name -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2852,40 +2779,11 @@ function main() returns ExitCode
 	return Widget.byteLength() as ExitCode
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3006: <fragment>:6:6: duplicate definition of 'Widget' — already declared as `let Widget`
 ```
 
-When the type declares no static of that name there is no static call to make, and the same spelling
-reads as the CONSTANT, which is why the rule is a fallback rather than "a type name always wins".
-
-<!-- test: top-level-let-falls-back-when-type-has-no-such-static -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-let Widget = "abcdefghij"
-
-type Widget
-	export var v as Integer
-
-	static function create() returns Widget
-		return Self{v: 7}
-	end 'create'
-end 'Widget'
-
-function main() returns ExitCode
-	return Widget.byteLength() as ExitCode
-end 'main'
-```
-```exitcode
-10
-```
-
-A union CONSTRUCT (`Move.walk(5)`) has the same token shape, and an `Array`-instance alias's static
-(`IntArray.create()`) is claimed by the array runtime rather than by any declared callee — both keep
-their reading when a managed constant happens to share the name.
-
-<!-- test: top-level-let-name-shadowed-by-union -->
+<!-- test: error.top-level-let-and-union-of-one-name -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2905,11 +2803,11 @@ function main() returns ExitCode
 	return n as ExitCode
 end 'main'
 ```
-```exitcode
-5
+```maxoncstderr
+error E3006: <fragment>:6:7: duplicate definition of 'Move' — already declared as `let Move`
 ```
 
-<!-- test: top-level-let-name-shadowed-by-array-alias -->
+<!-- test: error.top-level-let-and-array-alias-of-one-name -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -2922,27 +2820,8 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```exitcode
-1
-```
-
-<!-- test: top-level-let-name-shadowed-by-a-type-with-a-static-var -->
-A type and a top-level `let` of one name: `Box.m` is the type's static, read and written, exactly as a
-static call on `Box` is, so the immutable `let` is neither blamed nor read.
-```maxon
-type Box
-	static var m = 0 as ExitCode
-end 'Box'
-
-let Box = 5 as ExitCode
-
-function main() returns ExitCode
-	Box.m = 3
-	return Box.m
-end 'main'
-```
-```exitcode
-3
+```maxoncstderr
+error E3006: <fragment>:5:5: duplicate definition of 'IntArray' — already declared as `typealias IntArray`
 ```
 
 <!-- test: data-section-bool-global-with-green-threads-runs -->
@@ -3069,7 +2948,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:3:5: duplicate definition of 'A'
+error E3006: <fragment>:3:5: duplicate definition of 'A' — already declared as `let A`
 ```
 
 <!-- test: top-level-var-let-duplicate-declaration-error -->
@@ -3085,7 +2964,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:3:5: duplicate definition of 'counter'
+error E3006: <fragment>:3:5: duplicate definition of 'counter' — already declared as `var counter`
 ```
 
 <!-- test: error.top-level-let-array-owned-merge-alias -->

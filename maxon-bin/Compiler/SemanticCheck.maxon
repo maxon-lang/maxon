@@ -15,7 +15,7 @@
 //
 // ⚠ **EXPORTED, because the parser has to STATE the contract rather than merely keep it.** A free
 // function whose bare name is declared in two directories is registered under its
-// namespace-qualified spelling; `main` is the one exception, and the exclusion is written where the
+// minted `<dir>~name` spelling; `main` is the one exception, and the exclusion is written where the
 // exclusion happens (`Parser.recordScannedSignature`) against this constant — not against a second
 // `b"main"` that could drift from the name `checkMainFunction` looks the entry point up by.
 export let MainFunctionName = b"main"
@@ -29,18 +29,11 @@ export let MainFunctionName = b"main"
 // so there is no constant: one producer, at the one place the name is in hand.
 
 module function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
-	// ⭐ **OVERLOAD RESOLUTION RUNS FIRST, BEFORE ANYTHING READS A CALLEE**. Until it has run, a call
-	// to an overloaded name carries the BARE name the source wrote, which is the registration name of
-	// the FIRST declaration only — so `checkCalls` would validate every one of them against that
-	// member's signature and `lowerMaxonToStd` would emit a call to it. It rewrites the ops in place,
-	// so every pass below (and the whole backend) sees the member the call actually meant.
-	resolveOverloadedCalls(project, module: module, signatures: signatures, funcNames: funcNames)
 	try requireStillWanted(project)
 	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(module, target: project.target)
 	var summaryIndex = CallSummaryIndex.create(project, module: module, signatures: signatures, funcIndexByName: funcNames.byName, funcCount: funcNames.functions.count())
 	settleBrandAdoption(project, module: module, signatures: signatures, calls: summaryIndex)
-	project.functionValueConventions = buildFunctionValueConventions(project, module: module, signatures: signatures, calls: summaryIndex)
-	bindIndirectCallPlaces(project, module: module)
+	bindIndirectCallPlaces(project, module: module, signatures: signatures)
 
 	// E3113 — every `throws` clause in the program names a declared enum or union. It runs BEFORE the throws
 	// map below, and before every check that reads one: `buildThrowsMap` and the catch-site decode both treat
@@ -102,9 +95,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	checkFunctionTypeDoors(project, provenance: provenance)
 
 	// E3064: the sites the parser recorded that used none of a call's result (`PendingDiscardedResult`),
-	// judged against the whole-program effect summary built here. Beside the drain above and after
-	// `resolveOverloadedCalls`, whose rewrite is what makes a call op's `callee` the name the summary is
-	// keyed by.
+	// judged against the whole-program effect summary built here. Beside the drain above.
 	checkDiscardedResults(project, module: module, signatures: signatures, funcNames: funcNames)
 	try requireStillWanted(project)
 
@@ -134,7 +125,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	checkMainFunction(project)
 	checkMainCannotThrow(project, module: module)
 
-	// ⭐ **THE ONE REWRITE THIS PASS MAKES BESIDES `resolveOverloadedCalls`, AND IT IS LAST ON PURPOSE.**
+	// ⭐ **THE ONE REWRITE THIS PASS MAKES, AND IT IS LAST ON PURPOSE.**
 	// A byte record handed to a parameter the callee WRITES — a `String` literal, or a MERGE whose edges
 	// disagree about their provenance — is given one the write may land in (`LiteralArgPromotion`). It
 	// reads the same `mutationSummary` the E3159 check above does — which is
@@ -144,76 +135,6 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	promoteArgsNeedingAWritableRecord(project, module: module, mutationSummary: mutationSummary)
 	resolveHoldMarkers(project, module: module, signatures: signatures, funcNames: funcNames)
 end 'semanticCheck'
-
-// ⭐⭐ **PICK THE OVERLOAD EACH CALL MEANT, AND REWRITE THE CALL TO NAME IT**.
-//
-// The parse picks the member wherever no argument is a type parameter or still untyped
-// (`Parser.pickDeclaration`), and records
-// the answer by op (`Project.overloadAnswers`); this pass applies a recorded answer and scores only a call
-// the parse left unasked. Both decide through `selectOverload`, over one row per swept declaration
-// (`overloadRowOfDecl`).
-//
-// The SELECTION ORDER:
-//   1. **candidates** — the set's members that survived to the registry at all (see `overloadCandidates`),
-//      narrowed to the ones the calling file may name when that leaves some but not all of them; when the
-//      narrowed ones fit nothing, every candidate is scored (`selectOverload`).
-//   2. **labels + arity, together, through `placeCallArgs`** — the ONE label→position mapping in the compiler.
-//      A candidate the call cannot be slotted against is out: every named argument must name a parameter
-//      and every parameter no argument fills must declare a default, asked as ONE question by the function
-//      that already owns the rule. Asking them separately would be a second copy of it.
-//   3. **argument-type SCORE** — `ExactArgScore` for a tag-for-tag match, `WideningArgScore` for a legal
-//      coercion, and INCOMPATIBLE (dropped) for anything `checkDeclaredType` refuses. Summed over the
-//      arguments; the unique highest total wins.
-//   4. **a tie is E3007**, anchored at the call, listing the tied candidates in declaration order.
-//   5. **no compatible candidate leaves the op ON THE FIRST MEMBER**, so `checkCalls` then reports its own
-//      per-argument mismatch, which names the offending argument. "Ambiguous" would be the wrong sentence
-//      for a call that matches nothing. For an ordinary set that is the op left ALONE — the bare name IS
-//      the first member's registration name — and for a CONTESTED extension method, where no member holds
-//      the bare name, it takes a rewrite: see `leaveUnmatchedCallOnFirstCandidate`.
-//
-// There is no post-scoring heuristic. A first-argument token-shape test would be a proxy for type
-// information this pass already holds, and an enclosing-type tie-break would break ties between same-named
-// methods of DIFFERENT types, which are not one overload set at all — a method is registered `Type.method`,
-// so `Box.contains` and `Bag.contains` never contend.
-function resolveOverloadedCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
-	// A program that declares no overload has nothing here to do and does not walk.
-	//
-	// ⚠⚠ **THAT GATE CANNOT CARRY THE COST ARGUMENT — `stdlib/FilePath.maxon` OVERLOADS `join`, so EVERY
-	// compile has a non-empty `overloadSets` and takes this walk** (the measurement is at
-	// `maxonOpCalleeKind`). The gate is kept because it is exactly right for a compile that loads
-	// no stdlib, but the walk below is the common path and is written to cost nothing per op that is not
-	// a call: `maxonOpCalleeKind` is a scalar enum, and the NAME — the only part that ever allocates — is
-	// fetched for the two kinds that have one.
-	if project.overloadSets.count() == 0 'noOverloadInThisProgram'
-		return
-	end 'noOverloadInThisProgram'
-
-	// One column for the whole pass, re-keyed to each function and filled only by a call that asks it —
-	// see `FunctionValueOrigins`.
-	var valueDefiners = FunctionValueOrigins.create()
-	var state = OverloadPassState.create()
-
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		valueDefiners.beginFunction()
-		resolveOverloadedCallsInFunc(project, module: module, signatures: signatures, funcNames: funcNames, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), valueDefiners: valueDefiners, state: state)
-	end 'eachFunc'
-end 'resolveOverloadedCalls'
-
-function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, valueDefiners FunctionValueOrigins, state OverloadPassState)
-	var resolution = CallResolution.create(func)
-
-	for opIdx in module.liveOpIndices(func) 'eachOp'
-		view op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCallsInFunc: opIdx {opIdx} from liveOpIndices is not in module.ops")
-
-		match maxonOpCalleeKind(op) 'callee'
-			noCallee then break
-			functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
-			direct then resolveOneOverloadedCall(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIdx, valueDefiners: valueDefiners, resolution: resolution, state: state)
-		end 'callee'
-	end 'eachOp'
-
-	settleConditionalArguments(project, module: module, func: func, taken: resolution.taken)
-end 'resolveOverloadedCallsInFunc'
 
 type DeferredBindingRun
 	export let first as ElementIndex
@@ -226,327 +147,28 @@ end 'DeferredBindingRun'
 
 typealias DeferredBindingsByCall = Map with (ValueId, DeferredBindingRun)
 
-type CallResolution
-	export var taken as TakenHandoffs
-	export let deferredByCall as DeferredBindingsByCall
+// Indexed once per function, so each indirect call finds its own deferred columns without rescanning the
+// whole column.
+function deferredBindingRunsOf(func IrFunction) returns DeferredBindingsByCall
+	var byCall = DeferredBindingsByCall.create()
 
-	static function create(func IrFunction) returns Self
-		var byCall = DeferredBindingsByCall.create()
+	for (position, binding) in func.deferredArgumentBindings.withIterator() 'eachDeferred'
+		let index = position.index()
 
-		for (position, binding) in func.deferredArgumentBindings.withIterator() 'eachDeferred'
-			let index = position.index()
+		if let run = try byCall.get(binding.callResult) 'anotherColumnOfThisCall'
+			if run.first + run.count != index 'notBesideItsCallsOtherColumns'
+				panic("deferredBindingRunsOf: the deferred binding at {index} belongs to v{binding.callResult}, whose other columns end at {run.first + run.count} — `Parser.recordDeferredArgumentBindings` records one call's columns together")
+			end 'notBesideItsCallsOtherColumns'
 
-			if let run = try byCall.get(binding.callResult) 'anotherColumnOfThisCall'
-				if run.first + run.count != index 'notBesideItsCallsOtherColumns'
-					panic("CallResolution.create: the deferred binding at {index} belongs to v{binding.callResult}, whose other columns end at {run.first + run.count} — `Parser.recordDeferredArgumentBindings` records one call's columns together")
-				end 'notBesideItsCallsOtherColumns'
+			byCall.upsert(binding.callResult, value: DeferredBindingRun.create(run.first, count: run.count + 1))
+			continue
+		end 'anotherColumnOfThisCall'
 
-				byCall.upsert(binding.callResult, value: DeferredBindingRun.create(run.first, count: run.count + 1))
-				continue
-			end 'anotherColumnOfThisCall'
+		byCall.upsert(binding.callResult, value: DeferredBindingRun.create(index, count: 1))
+	end 'eachDeferred'
 
-			byCall.upsert(binding.callResult, value: DeferredBindingRun.create(index, count: 1))
-		end 'eachDeferred'
-
-		return Self{taken: TakenHandoffs.create(), deferredByCall: byCall}
-	end 'create'
-end 'CallResolution'
-
-function settleConditionalArguments(project Project, module MaxonModule, func IrFunction, taken TakenHandoffs)
-	var withdrawn = ValueMarkSet.create()
-
-	for conditional in func.conditionalOps 'eachConditionalOp'
-		if not conditional.isKept(taken) 'itsHandoffsDecidedAgainstIt'
-			for result in conditional.results 'eachResult'
-				withdrawn.insert(result)
-			end 'eachResult'
-		end 'itsHandoffsDecidedAgainstIt'
-	end 'eachConditionalOp'
-
-	withdrawOpsDefining(module, func: func, fromBlock: 0, results: withdrawn)
-
-	for refusal in func.conditionalRefusals 'eachRefusal'
-		if taken.anyOf(refusal.whenAnyTaken) 'theCalleeTookIt'
-			reportDiagnostic(project, diagnostic: parseErrorDiagnostic(refusal.error, path: func.sourceFilePath, keywords: project.keywords))
-			return
-		end 'theCalleeTookIt'
-	end 'eachRefusal'
-end 'settleConditionalArguments'
-
-// Which op defines each value of the function being walked, which the op stream does not offer.
-// `repointDefaultedArgHelpers` rewrites the op that produced a synthesized default argument.
-//
-// ⚠ `Project.valueOrigins` already answers this and may not be used for it. That table is
-// whole-program and its `lookup` is a linear scan meant for a single diagnostic. Asked once per
-// re-pointed argument it would be O(program values) per call, which is quadratic in a test file
-// whose every assertion is an overloaded defaulted call. This is the same question asked per
-// function, off the walk that is happening anyway.
-//
-// ⚠ It is filled lazily, so a program that asks nothing pays nothing: `beginFunction` only clears a
-// flag, and the two columns are built by the first lookup in a function.
-type FunctionValueOrigins
-	// Do the columns below describe the function currently being walked? Cleared as each function is
-	// entered, set by the fill.
-	var filled as bool
-	var definedAt as OpIndexArray
-	var isDefined as BoolArray
-
-	static function create() returns FunctionValueOrigins
-		return Self{filled: false, definedAt: OpIndexArray.create(), isDefined: BoolArray.create()}
-	end 'create'
-
-	function beginFunction()
-		self.filled = false
-	end 'beginFunction'
-
-	// The op that defined `value` in `func`. It PANICS for a value no op defines, because the one caller
-	// asks only about a value `Parser.emitDefaultArgValue` synthesized — the result of a nullary helper
-	// `call`, and of nothing else: `typeCallResultThroughInstance` answers `asItStands` for a call with no
-	// argument and no constructed instance, so no reinterpretation is ever wrapped around it and the call's own result IS the argument.
-	function definingOp(module MaxonModule, func IrFunction, value ValueId) returns ElementIndex
-		if not self.filled 'theFirstAskInThisFunction'
-			self.fill(module, func: func)
-		end 'theFirstAskInThisFunction'
-
-		if not (try self.isDefined.get(value) otherwise panic("FunctionValueOrigins.definingOp: value v{value} is past '{String.from(func.name)}'s own value count — every SSA value is minted through Parser.mintValue, which is what sizes this column")) 'noOpDefinesIt'
-			panic("FunctionValueOrigins.definingOp: value v{value} of '{String.from(func.name)}' is defined by no live op — it was read back as a synthesized default ARGUMENT, which `Parser.emitDefaultArgValue` produces as a nullary call's result")
-		end 'noOpDefinesIt'
-
-		return try self.definedAt.get(value) otherwise panic("FunctionValueOrigins.definingOp: definedAt.get OOB at v{value} — the two columns are pushed in lockstep")
-	end 'definingOp'
-
-	function fill(module MaxonModule, func IrFunction)
-		self.definedAt = OpIndexArray.create()
-		self.isDefined = BoolArray.create()
-
-		for _ in 0 upto func.valueTags.count() 'oneSlotPerValue'
-			// Filler, never read: `isDefined` is what says whether the slot beside it means anything, so
-			// this is the array's zero rather than a "no op" index anything could mistake for one.
-			self.definedAt.push(0)
-			self.isDefined.push(false)
-		end 'oneSlotPerValue'
-
-		for opIdx in module.liveOpIndices(func) 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("FunctionValueOrigins.fill: opIdx {opIdx} from liveOpIndices is not in module.ops")
-
-			let id = try maxonOpDefinedValue(op) otherwise continue
-			self.record(id, at: opIdx, func: func)
-		end 'eachOp'
-
-		self.filled = true
-	end 'fill'
-
-	function record(value ValueId, at ElementIndex, func IrFunction)
-		try self.definedAt.set(value, value: at) otherwise panic("FunctionValueOrigins.record: op {at} of '{String.from(func.name)}' defines v{value}, which is past the function's own value count")
-		try self.isDefined.set(value, value: true) otherwise panic("FunctionValueOrigins.record: isDefined.set OOB at v{value} — the two columns are pushed in lockstep")
-	end 'record'
-end 'FunctionValueOrigins'
-
-// One call. A callee that names no overload set is left exactly as the parser wrote it, which is
-// nearly every call in the program.
-function resolveOneOverloadedCall(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState)
-	let readerFilePath = authoredFileOf(project, func: func, opIndex: opIndex)
-	var op = try module.ops.get(opIndex) otherwise panic("resolveOneOverloadedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
-	view callee = maxonOpCalleeName(op)
-	view members = try project.overloadSets.get(callee) otherwise return
-
-	if maxonOpIsServiceSend(op) 'aMessageIsRefusedWhereItsServiceIsSpawned'
-		return
-	end 'aMessageIsRefusedWhereItsServiceIsSpawned'
-
-	if project.poison.duplicatesAMemberOf(members) 'aMemberIsDeclaredTwice'
-		return
-	end 'aMemberIsDeclaredTwice'
-
-	let candidates = overloadCandidates(project, members: members)
-	let call = overloadCallFactsOf(func, readerFilePath: readerFilePath, op: op)
-	let opaque = opaqueArgumentOf(func, op: op) if candidates.count() > 1 else OpaqueArgument.none
-
-	if opaque == OpaqueArgument.typeParameter 'cannotDiscriminate'
-		refuseOpaqueOverloadArgument(project, func: func, opIndex: opIndex, callee: callee)
-		return
-	end 'cannotDiscriminate'
-
-	// Left on the first candidate as `noMatch` is, and no silent pick: a deferred argument rests on an error
-	// already reported, and nothing judges the call (`Project.undecidedOverloadCalls`).
-	if opaque == OpaqueArgument.deferred 'aDeferredArgumentPicksNothing'
-		project.undecidedOverloadCalls.insert(opIndex)
-		leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: nameableMemberNamesOf(project, signatures: signatures, funcNames: funcNames, state: state, callee: callee, candidates: candidates, call: call))
-		return
-	end 'aDeferredArgumentPicksNothing'
-
-	let parsed = try project.overloadAnswers.get(opIndex) otherwise 'neverAsked'
-		let rows = state.rowsOf(project, signatures: signatures, funcNames: funcNames, callee: callee, candidates: candidates)
-		let selection = selectOverload(signatures, interner: project.typeNames, call: call, rows: rows, views: overloadArgsOf(project, func: func, op: op, uncast: sharedNoUncastLiterals))
-		applyVerdict(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: readerFilePath, callee: callee, selection: selection, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates)
-		return
-	end 'neverAsked'
-
-	applyParsedAnswer(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: readerFilePath, callee: callee, answer: parsed, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates)
-end 'resolveOneOverloadedCall'
-
-function applyVerdict(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, selection OverloadSelection, call OverloadCallFacts, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState, candidates NameRoster)
-	let pool = memberNamesOf(selection.pool)
-
-	match selection.verdict 'pick'
-		chosen(row) then bindChosenMember(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: callerFilePath, callee: callee, member: overloadRowAt(selection.pool, row: row).registeredName, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates, disagreement: sharedCallResultSubject)
-
-		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND LEAVING IT ON THE BARE NAME
-		// EARNS THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
-		// name (`Parser.overloadRegistrationNameFor`), so an op left naming it reaches `validateCall` and is
-		// reported **`E3004: call to undefined function 'f'`** — about a name declared twice over — under the
-		// E3007 that has just explained the real fault. It is the same premise `noMatch` needed made true, so
-		// it takes the same repair.
-		tied(rowIndices) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: overloadRowsAt(selection.pool, rowIndices: rowIndices), module: module, candidates: pool)
-
-		// Nothing the call could mean. Left on a DECLARED member deliberately — see this pass's header,
-		// step 5, and `leaveUnmatchedCallOnFirstCandidate` for the one set where "left alone" is not that.
-		noMatch then refuseUnmatchedCall(project, module: module, func: func, opIndex: opIndex, callee: callee, candidates: pool)
-	end 'pick'
-end 'applyVerdict'
-
-function applyParsedAnswer(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, answer OverloadAnswer, call OverloadCallFacts, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState, candidates NameRoster)
-	match answer 'parsed'
-		bound(site) then bindParsedSite(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: callerFilePath, callee: callee, site: site, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates)
-		tied(sites) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tiedRowsAtSites(project, signatures: signatures, funcNames: funcNames, state: state, callee: callee, candidates: candidates, sites: sites), module: module, candidates: nameableMemberNamesOf(project, signatures: signatures, funcNames: funcNames, state: state, callee: callee, candidates: candidates, call: call))
-		noMember then refuseUnmatchedCall(project, module: module, func: func, opIndex: opIndex, callee: callee, candidates: candidates)
-	end 'parsed'
-end 'applyParsedAnswer'
-
-function bindParsedSite(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, site ByteArray, call OverloadCallFacts, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState, candidates NameRoster)
-	let member = try memberAtSite(funcNames, candidates: candidates, site: site) otherwise panic("bindParsedSite: the parse bound '{String.from(callee)}' at {String.from(site)} and no live member of the set is declared there — the parse scores only declarations the pass holds")
-
-	bindChosenMember(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: callerFilePath, callee: callee, member: member, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates, disagreement: sharedBoundCallResultSubject)
-end 'bindParsedSite'
-
-function refuseUnmatchedCall(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, callee ByteArray, candidates NameRoster)
-	retireEveryLiteralCast(func, op: try module.ops.get(opIndex) otherwise panic("refuseUnmatchedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices"))
-	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
-end 'refuseUnmatchedCall'
-
-function bindChosenMember(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, member ByteArray, call OverloadCallFacts, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState, candidates NameRoster, disagreement OverloadDisagreementSubject)
-	var op = try module.ops.get(opIndex) otherwise panic("bindChosenMember: ops.get({opIndex}) OOB — the index came from liveOpIndices")
-
-	retireDisambiguatingLiteralCasts(project, func: func, op: op, signatures: signatures, funcNames: funcNames, state: state, callee: callee, candidates: candidates, call: call, member: member)
-	bindOverloadChoice(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: callerFilePath, callee: callee, member: member, valueDefiners: valueDefiners, resolution: resolution, disagreement: disagreement)
-end 'bindChosenMember'
-
-function memberAtSite(funcNames FunctionNameIndex, candidates NameRoster, site ByteArray) returns ByteArray throws AbsentError
-	for member in candidates 'eachCandidate'
-		let held = try funcNames.funcNamed(member) otherwise continue
-
-		if held.declarationSite().equals(site) 'thisMember'
-			return member
-		end 'thisMember'
-	end 'eachCandidate'
-
-	throw AbsentError.absent
-end 'memberAtSite'
-
-function tiedRowsAtSites(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, state OverloadPassState, callee ByteArray, candidates NameRoster, sites NameRoster) returns OverloadCandidateArray
-	var tied = OverloadCandidateArray.create()
-
-	for row in state.rowsOf(project, signatures: signatures, funcNames: funcNames, callee: callee, candidates: candidates) 'eachRowInMergeOrder'
-		if sites.contains(row.site) 'aTiedRow'
-			tied.push(row)
-		end 'aTiedRow'
-	end 'eachRowInMergeOrder'
-
-	if tied.count() != sites.count() 'aTiedSiteHoldsNoRow'
-		panic("tiedRowsAtSites: the parse tied '{String.from(callee)}' at {sites.count()} sites and the pass holds {tied.count()} rows there — every declaration the parse scores is a live member of the set")
-	end 'aTiedSiteHoldsNoRow'
-
-	return tied
-end 'tiedRowsAtSites'
-
-// ⭐⭐ **STEP 5's PREMISE, MADE TRUE RATHER THAN ASSUMED.** A call that fits no member is meant
-// to reach `checkCalls` still naming a DECLARED function, so the diagnostic the author gets is the
-// per-argument mismatch that names the offending argument. This pass got that for free while the bare name
-// was always the first member's registration name — "leave the op alone" and "leave it on the first member"
-// were the same act.
-//
-// ⛔ **THEY ARE NOT THE SAME ACT FOR A CONTESTED EXTENSION METHOD, WHERE NO MEMBER HOLDS THE BARE NAME.**
-// Every declaration of a `<Conformer>.<method>` two files' extensions declare is registered under its
-// parameter-type suffix (`Parser.overloadRegistrationNameFor`), so the bare callee names nothing in
-// `funcSignatures` and the untouched op reached `validateCall` instead. MEASURED: `f.pick("nope")` against
-// `pick(n Integer)` and `pick(flag bool)` split across two files reported
-// **`E3004: call to undefined function 'Five.pick'`** — about a method declared twice over — where the
-// identical program with both extensions in ONE file reports
-// `E3005: argument type mismatch for 'n': expected 'Integer', got 'String'`.
-//
-// So the op is pointed at the first candidate, which is exactly where the same-file case already leaves it.
-// ONLY the callee is rewritten: no result-type reconcile and no range-site retarget, because neither
-// happens on the same-file path either and this is a program that is being rejected — the sole job left is
-// to let `checkCalls` say which argument.
-//
-// ⚠ **TWO CALLERS, AND THE SECOND ONE HAS THE SAME NEED FOR A DIFFERENT REASON.** `noMatch` needs it so
-// `checkCalls` can name the offending ARGUMENT; `ambiguous` needs it so `validateCall` does not report the
-// bare name as UNDEFINED under the E3007 that has already said what is wrong. Both are programs being
-// rejected, and in both the only remaining job of the callee field is to not name something that is not
-// there.
-//
-// A set with NO live candidate is left alone, and there the bare name is the honest answer: nothing the
-// call could name survived to the registry.
-function leaveUnmatchedCallOnFirstCandidate(project Project, module MaxonModule, opIndex ElementIndex, callee ByteArray, candidates NameRoster)
-	if project.funcSignatures.contains(callee) 'theBareNameIsItselfAMember'
-		return
-	end 'theBareNameIsItselfAMember'
-
-	let first = try candidates.get(0) otherwise return
-
-	var op = try module.ops.get(opIndex) otherwise panic("leaveUnmatchedCallOnFirstCandidate: ops.get({opIndex}) OOB — the index came from liveOpIndices")
-	var rewritten = withRewrittenCallee(op, callee: first)
-	try module.ops.set(opIndex, value: rewritten) otherwise panic("leaveUnmatchedCallOnFirstCandidate: ops.set({opIndex}) OOB — the index came from liveOpIndices")
-end 'leaveUnmatchedCallOnFirstCandidate'
-
-// An opaque argument cannot discriminate, and "cannot discriminate" is not "is a scalar".
-//
-// A `typeParameter` value is a generic's `T` that `typeCallResultThroughInstance` could not make
-// concrete — a call that names no instance (a receiver, or a qualifier, whose argument fixes `T`)
-// leaves the declared opaque tag as it stands. It names no aggregate: `aggregateNameIn` answers
-// empty for it and `namedAggregatesConflict` reads empty as "a scalar", so the candidate with a scalar
-// parameter would match while the one with the correct aggregate parameter was refused for
-// disagreeing with it.
-//
-// So a set of two or more candidates and a type-parameter argument is refused. It cannot be a
-// selection (there is no fact to select on) and it must not be a silent one: `noMatch` would leave the
-// bare name, which is the first member's registration name, so whichever overload happened to be
-// written first would take the call. A single candidate needs no discrimination and is left alone.
-function refuseOpaqueOverloadArgument(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray)
-	let range = project.opRanges.get(opIndex)
-
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "resolving an overload of '{bareMethodName(callee)}' against an argument of opaque generic type — the value is a type parameter whose concrete type is managed, so its type is not known at the call and no overload can be picked by it. Bind the argument to a concretely-typed local first, or give the overloads distinct names", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
-end 'refuseOpaqueOverloadArgument'
-
-enum OpaqueArgument
-	none
-	typeParameter
-	deferred
-end 'OpaqueArgument'
-
-function opaqueArgumentOf(func IrFunction, op MaxonOp) returns OpaqueArgument
-	match overloadCallArgs(op) 'args'
-		supplied(args, _, _, _) then return opaqueArgumentAmong(func, args: args)
-	end 'args'
-end 'opaqueArgumentOf'
-
-function opaqueArgumentAmong(func IrFunction, args ValueIdArray) returns OpaqueArgument
-	var found = OpaqueArgument.none
-
-	for argId in args 'each'
-		let argTag = try func.valueTags.get(argId) otherwise panic("opaqueArgumentAmong: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
-
-		if argTag == ValueTypeTag.typeParameter 'aTypeParameterWins'
-			return OpaqueArgument.typeParameter
-		end 'aTypeParameterWins'
-
-		if argTag == ValueTypeTag.unresolved 'deferredUnlessATypeParameterFollows'
-			found = OpaqueArgument.deferred
-		end 'deferredUnlessATypeParameterFollows'
-	end 'each'
-
-	return found
-end 'opaqueArgumentAmong'
+	return byCall
+end 'deferredBindingRunsOf'
 
 function valueTagsInclude(func IrFunction, args ValueIdArray, tag ValueTypeTag) returns bool
 	for argId in args 'each'
@@ -560,354 +182,10 @@ function valueTagsInclude(func IrFunction, args ValueIdArray, tag ValueTypeTag) 
 	return false
 end 'valueTagsInclude'
 
-// ⭐ **A FUNCTION VALUE OF AN OVERLOADED NAME HAS NO ARGUMENTS TO PICK BY, so it is REFUSED rather than bound
-// to whichever member happens to have registered first.** `let f = process` names a set, not a function, and
-// the first member's registration name IS the bare name — so without this the value would silently take one
-// overload's body and one overload's signature, and every indirect call through it would be checked against
-// them. There is no way to be right here, so it says so.
-function refuseOverloadedFunctionValue(project Project, func IrFunction, opIndex ElementIndex, name ByteArray)
-	if not project.overloadSets.contains(name) 'notOverloaded'
-		return
-	end 'notOverloaded'
-
-	let range = project.opRanges.get(opIndex)
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("taking a function value of the overloaded name '{String.from(name)}' — a function value carries no arguments, so there is nothing to pick an overload by. Give the overloads distinct names, or call it directly"), line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
-end 'refuseOverloadedFunctionValue'
-
-// The members of a set that are actually in the signature registry, in declaration order. A member absent
-// from it is one left behind by a previous fold of a project whose sources have since changed (see
-// `OverloadSetMap`, which is deliberately not reset); skipping it is what makes that staleness inert.
-//
-// Exported for `ConformanceCheck.checkOverloadedMembers`, which asks the SAME map the same question a
-// call site does — the two differ in what they then match a candidate AGAINST (arguments vs a requirement's
-// signature), never in what the candidate list is, and a second walk of `overloadSets` would be free to
-// treat a stale member as live in one reader and not the other.
-export function overloadCandidates(project Project, members NameRoster) returns NameRoster
-	var candidates = NameRoster.create()
-
-	for member in members 'each'
-		if project.funcSignatures.contains(member) 'live'
-			candidates.push(member)
-		end 'live'
-	end 'each'
-
-	return candidates
-end 'overloadCandidates'
-
-// The unneeded literal casts of one call are uncast TOGETHER and the set re-scored, and they are
-// reported only if the same member is still chosen: the diagnostics tell the author to remove every
-// one of them, and removing two individually harmless casts together can silently select another
-// overload.
-function retireDisambiguatingLiteralCasts(project Project, func IrFunction, op MaxonOp, signatures ProgramSignatures, funcNames FunctionNameIndex, state OverloadPassState, callee ByteArray, candidates NameRoster, call OverloadCallFacts, member ByteArray)
-	if func.literalCastArguments.count() == 0 'noLiteralCastArgument'
-		return
-	end 'noLiteralCastArgument'
-
-	if uncastingTheUnneededKeepsTheMember(project, func: func, op: op, signatures: signatures, call: call, rows: state.rowsOf(project, signatures: signatures, funcNames: funcNames, callee: callee, candidates: candidates), member: member) 'everyUnneededCastCanGo'
-		return
-	end 'everyUnneededCastCanGo'
-
-	retireEveryLiteralCast(func, op: op)
-end 'retireDisambiguatingLiteralCasts'
-
-function retireEveryLiteralCast(func IrFunction, op MaxonOp)
-	if func.literalCastArguments.count() == 0 'noLiteralCastArgument'
-		return
-	end 'noLiteralCastArgument'
-
-	let args = overloadSuppliedArgs(op)
-
-	for argId in args 'retireEach'
-		func.retireLiteralCast(argId)
-	end 'retireEach'
-end 'retireEveryLiteralCast'
-
-function uncastingTheUnneededKeepsTheMember(project Project, func IrFunction, op MaxonOp, signatures ProgramSignatures, call OverloadCallFacts, rows OverloadCandidateArray, member ByteArray) returns bool
-	let unneeded = unneededLiteralCastArguments(project, func: func, op: op, member: member)
-
-	if unneeded.count() == 0 'nothingToUncast'
-		return true
-	end 'nothingToUncast'
-
-	let rescored = selectOverload(signatures, interner: project.typeNames, call: call, rows: rows, views: overloadArgsOf(project, func: func, op: op, uncast: unneeded))
-
-	return match rescored.verdict 'verdict'
-		chosen(row) gives overloadRowAt(rescored.pool, row: row).registeredName.equals(member)
-		tied or
-		noMatch gives false
-	end 'verdict'
-end 'uncastingTheUnneededKeepsTheMember'
-
-function memberNamesOf(rows OverloadCandidateArray) returns NameRoster
-	var names = NameRoster.create()
-
-	for row in rows 'eachRow'
-		names.push(row.registeredName)
-	end 'eachRow'
-
-	return names
-end 'memberNamesOf'
-
-function nameableMemberNamesOf(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, state OverloadPassState, callee ByteArray, candidates NameRoster, call OverloadCallFacts) returns NameRoster
-	return memberNamesOf(overloadPoolOf(signatures, rows: state.rowsOf(project, signatures: signatures, funcNames: funcNames, callee: callee, candidates: candidates), call: call).rows)
-end 'nameableMemberNamesOf'
-
-function overloadArgsOf(project Project, func IrFunction, op MaxonOp, uncast LiteralCastMap) returns OverloadArgArray
-	let args = overloadSuppliedArgs(op)
-
-	return overloadArgViews(args, tags: func.valueTags, nameIds: func.valueNameIds, brandIds: func.valueBrandIds, interner: project.typeNames, uncast: uncast)
-end 'overloadArgsOf'
-
-function overloadCallFactsOf(func IrFunction, readerFilePath FilePath, op MaxonOp) returns OverloadCallFacts
-	match overloadCallArgs(op) 'args'
-		supplied(_, argLabels, _, mint) then return OverloadCallFacts.create(readerFilePath, argLabels: argLabels, staticInstance: staticInstanceOf(func, op: op), callerName: func.name, mint: mint)
-	end 'args'
-end 'overloadCallFactsOf'
-
-function staticInstanceOf(func IrFunction, op MaxonOp) returns SuppliedInstance
-	let result = try maxonOpDefinedValue(op) otherwise panic("staticInstanceOf: asked of an op that defines no value — overload resolution reaches only the three CALL ops, and every one of them defines its result")
-	let id = try func.valueCallInstances.get(result) otherwise return SuppliedInstance.absent
-
-	if func.valueInferredInstances.contains(result) 'theInstanceWasInferredFromTheArguments'
-		return SuppliedInstance.absent
-	end 'theInstanceWasInferredFromTheArguments'
-
-	return SuppliedInstance.instance(id)
-end 'staticInstanceOf'
-
-function requireEveryParameterIsReadable(row OverloadCandidate, callee ByteArray)
-	for param in row.params 'eachParam'
-		if not param.readable 'anUnreadableParameter'
-			panic("requireEveryParameterIsReadable: a parameter of the declaration of '{String.from(callee)}' at {String.from(row.site)} reached overload resolution unread — the real parse refuses every parameter type the declaration sweep cannot read, and a refused program is never resolved")
-		end 'anUnreadableParameter'
-	end 'eachParam'
-end 'requireEveryParameterIsReadable'
-
-function sweptDeclarationOfMember(signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, member ByteArray) returns OverloadedDecl throws AbsentError
-	let held = try funcNames.funcNamed(member) otherwise throw AbsentError.absent
-	return try signatures.overloadedDeclAt(callee, site: held.declarationSite())
-end 'sweptDeclarationOfMember'
-
-typealias OverloadRowsByCallee = Map with (ByteArray, OverloadCandidateArray)
-
-type OverloadPassState
-	var rows as OverloadRowsByCallee
-
-	static function create() returns Self
-		return Self{rows: OverloadRowsByCallee.create()}
-	end 'create'
-
-	function rowsOf(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, candidates NameRoster) returns OverloadCandidateArray
-		if let cached = try self.rows.get(callee) 'alreadyBuilt'
-			return cached.clone()
-		end 'alreadyBuilt'
-
-		var built = OverloadCandidateArray.create()
-
-		for member in candidates 'eachCandidate'
-			let decl = try sweptDeclarationOfMember(signatures, funcNames: funcNames, callee: callee, member: member) otherwise panic("OverloadPassState.rowsOf: the live member '{String.from(member)}' of '{String.from(callee)}' has no swept declaration — every member of an overload set is registered from a declaration the sweep indexed")
-			let row = overloadRowOfDecl(signatures, interner: project.typeNames, decl: decl, registeredName: member)
-			requireEveryParameterIsReadable(row, callee: callee)
-			built.push(row)
-		end 'eachCandidate'
-
-		self.rows.upsert(callee, value: built)
-
-		return built.clone()
-	end 'rowsOf'
-end 'OverloadPassState'
-
-function unneededLiteralCastArguments(project Project, func IrFunction, op MaxonOp, member ByteArray) returns LiteralCastMap
-	let sig = try project.funcSignatures.get(member) otherwise panic("unneededLiteralCastArguments: the chosen member '{String.from(member)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
-
-	let slotted = match overloadCallArgs(op) 'args'
-		supplied(args, argLabels, _, _) gives slotCallArgs(sig.paramNames, args: args, argLabels: argLabels)
-	end 'args'
-
-	let argIds = match slotted 'slot'
-		ordered(slottedIds) gives slottedIds
-		default panic("unneededLiteralCastArguments: the chosen member '{String.from(member)}' fitted the call, and only a call `slotCallArgs` orders can fit")
-	end 'slot'
-
-	var unneeded = LiteralCastMap.create()
-
-	for i in 0 upto argIds.count() 'eachArg'
-		let argId = try argIds.get(i) otherwise panic("unneededLiteralCastArguments: argIds.get OOB at {i} inside its own count()")
-		let cast = try func.literalCastArguments.get(argId) otherwise continue
-		let destination = try calleeParamAlias(project, callee: member, position: i as ParamCount) otherwise continue
-
-		// A cast to any other alias stays as written: uncast, it could move the pick and suppress a real
-		// E3010.
-		if cast.repeats(destination) 'repeatsTheChosenParameter'
-			unneeded.upsert(argId, value: cast)
-		end 'repeatsTheChosenParameter'
-	end 'eachArg'
-
-	return unneeded
-end 'unneededLiteralCastArguments'
-
-// ⭐⭐ **A CONSTANT ARGUMENT'S RANGE IS CHECKED AGAINST A CALLEE'S DECLARED PARAMETER ALIAS, AND THAT
-// SITE WAS RECORDED PER NAME AT PARSE TIME — so it has to be RETARGETED when the call resolves
-// elsewhere.**
-//
-// `Parser.recordConstantArgRangeChecks` files a `RangeCheckArgSite` carrying the callee NAME the source wrote;
-// `InsertRangeChecks` then reads that callee's `paramSites` to decide whether the constant fits. When the
-// call resolves to a member registered under a MANGLED name, a site left naming the bare one aims the check at
-// the FIRST declaration's parameter list. MEASURED without this retarget, with `Small = int(0 to 10)`
-// and `f(x String)` declared first:
-//
-//     function f(x String) returns ExitCode … end 'f'
-//     function f(x Small)  returns ExitCode … end 'f'
-//     return f(99)          ⇒ compiled, exit 99
-//
-// while the identical program with only the `Small` overload is correctly `E3005: Value 99 is outside the
-// range of 'Small'`. A silent wrong answer.
-//
-// ⚠ **A SITE IS KEYED BY ITS ARGUMENT'S `ValueId`, NOT BY ITS CALL**, so the retarget matches on that value
-// being one of THIS call's arguments — exact for every program in which a value reaches one call, which is
-// every program where the argument is a literal (each literal mints its own value). The one shape it cannot
-// separate is a BINDING passed to two calls of the same bare name that resolve to DIFFERENT members: the two
-// sites are then indistinguishable, so the second claim is refused rather than allowed to overwrite the
-// first. The cure for that residual is to key the site by its call's op index, which is a change to the
-// `RangeCheckArgSite` record and its pass, not to this one.
-function bindOverloadChoice(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, member ByteArray, valueDefiners FunctionValueOrigins, resolution CallResolution, disagreement OverloadDisagreementSubject)
-	var op = try module.ops.get(opIndex) otherwise panic("bindOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
-	let reconcilesTheResult = not boundMemberIsRefusedAsHidden(project, signatures: signatures, funcNames: funcNames, func: func, callerFilePath: callerFilePath, op: op, member: member)
-
-	match overloadCallArgs(op) 'args'
-		supplied(args, argLabels, defaultedArgs, _) then bindOverloadChoiceArguments(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, args: args, argLabels: argLabels, defaultedArgs: defaultedArgs, origins: valueDefiners, reconcilesTheResult: reconcilesTheResult)
-	end 'args'
-
-	bindDeferredArguments(project, module: module, funcNames: funcNames, func: func, opIndex: opIndex, member: member, resolution: resolution)
-	requireSpawnAwaitsItsMember(project, module: module, funcNames: funcNames, func: func, opIndex: opIndex, callee: callee, member: member, disagreement: disagreement)
-	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, member: member, disagreement: disagreement, reconcilesTheResult: reconcilesTheResult)
-end 'bindOverloadChoice'
-
-function boundMemberIsRefusedAsHidden(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, callerFilePath FilePath, op MaxonOp, member ByteArray) returns bool
-	if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
-		return false
-	end 'notInTheProgram'
-
-	match overloadCallArgs(op) 'args'
-		supplied(_, _, _, mint) then return not calleeVisibleFrom(signatures, funcNames: funcNames, callee: member, caller: func, callerFilePath: callerFilePath, mint: mint)
-	end 'args'
-end 'boundMemberIsRefusedAsHidden'
-
-function requireSpawnAwaitsItsMember(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, disagreement OverloadDisagreementSubject)
-	let op = try module.ops.get(opIndex) otherwise panic("requireSpawnAwaitsItsMember: ops.get({opIndex}) OOB — the index came from liveOpIndices")
-
-	match overloadResultValue(op) 'result'
-		definesAPromise(promise) then requirePromiseAwaitsTheMember(project, funcNames: funcNames, func: func, opIndex: opIndex, promise: promise, callee: callee, member: member, disagreement: disagreement)
-		defines or
-		definesNothing then return
-	end 'result'
-end 'requireSpawnAwaitsItsMember'
-
-function requirePromiseAwaitsTheMember(project Project, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, promise ValueId, callee ByteArray, member ByteArray, disagreement OverloadDisagreementSubject)
-	var signatures = programSignaturesIn(project, asker: "requirePromiseAwaitsTheMember")
-	let decl = try sweptDeclarationOfMember(signatures, funcNames: funcNames, callee: callee, member: member) otherwise panic("requirePromiseAwaitsTheMember: the chosen member '{String.from(member)}' of '{String.from(callee)}' has no swept declaration — a call binds only a member the sweep indexed")
-	let gid = (try func.valueNameIds.get(promise) otherwise panic("requirePromiseAwaitsTheMember: value v{promise} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")) as GenericInstanceId
-
-	if signatures.promiseAwaits(gid, returnType: decl.returnType) 'awaitsTheMembersResult'
-		return
-	end 'awaitsTheMembersResult'
-
-	let awaitedTag = maxonTypeTag(signatures.substitutedInstanceArg(gid, position: PromiseResultArgPosition))
-	let declaredTag = match decl.returnType 'returns'
-		void gives ValueTypeTag.void
-		value(returned) gives maxonTypeTag(returned)
-	end 'returns'
-
-	reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: awaitedTag, declared: declaredTag, disagreement: disagreement)
-end 'requirePromiseAwaitsTheMember'
-
-// An overloaded call is parsed before its member is known, so an argument whose passing the members
-// disagree about — by reference, or taking ownership — is bound here, once the member is chosen.
-function bindDeferredArguments(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, member ByteArray, resolution CallResolution)
-	if func.deferredArgumentBindings.isEmpty() 'nothingWaitsOnResolution'
-		return
-	end 'nothingWaitsOnResolution'
-
-	var op = try module.ops.get(opIndex) otherwise panic("bindDeferredArguments: ops.get({opIndex}) OOB — the index came from liveOpIndices")
-	let result = try maxonOpDefinedValue(op) otherwise panic("bindDeferredArguments: asked of an op that defines no value — overload resolution reaches only the three CALL ops, and every one of them defines its result")
-
-	var bound = ValueIdArray.create()
-	var names = WriteBlameArray.create()
-	names.append(callArgImmutableNamesOf(op))
-
-	match overloadCallArgs(op) 'args'
-		supplied(supplied, _, _, _) then bound.append(supplied)
-	end 'args'
-
-	if not bindDeferredArgumentsInto(bound, argImmutableNames: names, resolution: resolution, project: project, funcNames: funcNames, func: func, result: result, member: member) 'everyArgumentTakesItsValue'
-		return
-	end 'everyArgumentTakesItsValue'
-
-	var rewritten = withRewrittenArgs(op, args: bound, argImmutableNames: names)
-	try module.ops.set(opIndex, value: rewritten) otherwise panic("bindDeferredArguments: ops.set({opIndex}) OOB — the index came from liveOpIndices")
-end 'bindDeferredArguments'
-
-function bindDeferredArgumentsInto(args ValueIdArray, argImmutableNames WriteBlameArray, resolution CallResolution, project Project, funcNames FunctionNameIndex, func IrFunction, result ValueId, member ByteArray) returns bool
-	let run = try resolution.deferredByCall.get(result) otherwise return false
-	let sig = try project.funcSignatures.get(member) otherwise panic("bindDeferredArgumentsInto: the chosen member '{String.from(member)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
-	let memberFunc = try funcNames.funcNamed(member) otherwise panic("bindDeferredArgumentsInto: the chosen member '{String.from(member)}' has a signature and no body in the module")
-	let memberSite = memberFunc.declarationSite()
-	var boundAny = false
-
-	for k in run.first upto run.first + run.count 'eachDeferred'
-		let binding = try func.deferredArgumentBindings.get(k) otherwise panic("bindDeferredArgumentsInto: deferredArgumentBindings.get OOB at {k} — the index was built off this very list")
-		let column = binding.column
-		let blame = binding.blame.clone()
-		let position = try argSlotPosition(sig.paramNames, argIndex: column, label: binding.label) otherwise panic("bindDeferredArgumentsInto: the argument at column {column} of a call resolved to '{String.from(member)}' slots to none of its parameters — the member was chosen by slotting that very list")
-		let takesStorage = maskHasParam(memberFunc.reassignedParamMask, param: position)
-		let takesOwnership = not takesStorage and binding.takingSites.contains(memberSite)
-		let handed = deferredArgumentHanded(binding, takesStorage: takesStorage, takesOwnership: takesOwnership, member: member, column: column)
-
-		match handed 'handed'
-			theValue then continue
-			storage(cell) then bindStorageArgument(args, argImmutableNames: argImmutableNames, func: func, column: column, cell: cell, blame: blame)
-			ownership(transferred) then bindTransferredArgument(args, taken: resolution.taken, func: func, handoff: ArgumentHandoff.create(result, column: column), transferred: transferred)
-		end 'handed'
-
-		boundAny = true
-	end 'eachDeferred'
-
-	return boundAny
-end 'bindDeferredArgumentsInto'
-
-union DeferredArgumentHanded
-	theValue
-	storage(cell ValueId)
-	ownership(transferred ValueId)
-end 'DeferredArgumentHanded'
-
-function deferredArgumentHanded(binding DeferredArgumentBinding, takesStorage bool, takesOwnership bool, member ByteArray, column ParamCount) returns DeferredArgumentHanded
-	if takesStorage 'byReference'
-		return match binding.storage 'storage'
-			cell(cell) gives DeferredArgumentHanded.storage(cell)
-			none panic("deferredArgumentHanded: '{String.from(member)}' takes the argument at column {column} by reference, and the parse left no storage there — a column is read as a place exactly when the declarations disagree about passing it by reference")
-		end 'storage'
-	end 'byReference'
-
-	if takesOwnership 'consumed'
-		return match binding.transfer 'transfer'
-			transferred(value) gives DeferredArgumentHanded.ownership(value)
-			none panic("deferredArgumentHanded: '{String.from(member)}' takes ownership of the argument at column {column}, and the parse prepared no transfer — a site is listed as taking a column only beside the transfer it takes")
-		end 'transfer'
-	end 'consumed'
-
-	return DeferredArgumentHanded.theValue
-end 'deferredArgumentHanded'
-
 function bindStorageArgument(args ValueIdArray, argImmutableNames WriteBlameArray, func IrFunction, column ParamCount, cell ValueId, blame WriteBlame)
 	replaceDeferredArgument(args, func: func, column: column, value: cell)
 	blameUnreachableStorage(argImmutableNames, column: column, blame: blame)
 end 'bindStorageArgument'
-
-function bindTransferredArgument(args ValueIdArray, taken TakenHandoffs, func IrFunction, handoff ArgumentHandoff, transferred ValueId)
-	replaceDeferredArgument(args, func: func, column: handoff.column, value: transferred)
-	taken.take(handoff)
-end 'bindTransferredArgument'
 
 function replaceDeferredArgument(args ValueIdArray, func IrFunction, column ParamCount, value ValueId)
 	let passed = try args.get(column) otherwise panic("replaceDeferredArgument: column {column} is outside the call's {args.count()} arguments")
@@ -948,77 +226,6 @@ function opDefinesOneOf(op MaxonOp, results ValueMarkSet) returns bool
 	return results.contains(defined)
 end 'opDefinesOneOf'
 
-// The two obligations a resolved call's ARGUMENT LIST carries, off ONE destructure of the op — the
-// constant-argument range sites this header describes, and the defaulted arguments. They share the
-// destructure because a `match` binding does not outlive the arm that binds it, so two askers of
-// `overloadCallArgs` would be two spellings of "what did this call pass".
-//
-// ⚠ **THE DEFAULT RE-POINT RUNS BEFORE THE `member == callee` RETURN, and the range retarget after it.** They
-// gate differently because they are asked of different things: a range SITE names the callee, so a member
-// that kept the bare name has nothing to move — while a defaulted argument's TYPE was read off a by-name
-// registry that is LAST-WINS over the whole set, so that member's argument may still be tagged as another
-// member's and owes the same reconcile every other member owes.
-function bindOverloadChoiceArguments(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, args ValueIdArray, argLabels NameRoster, defaultedArgs ParamCount, origins FunctionValueOrigins, reconcilesTheResult bool)
-	repointDefaultedArgHelpers(project, module: module, func: func, callee: callee, member: member, args: args, argLabels: argLabels, defaultedArgs: defaultedArgs, origins: origins, reconcilesTheResult: reconcilesTheResult)
-
-	if member.equals(callee) 'firstMemberKeptTheBareName'
-		return
-	end 'firstMemberKeptTheBareName'
-
-	retargetArgRangeSites(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args)
-end 'bindOverloadChoiceArguments'
-
-// File, in `Project.rangeSiteFacts`, the member each constant-argument range-check site this call
-// owns resolved to; the site itself is the parse artifact's and stays as parsed. A function with
-// no such site files no entry at all (`Parser.commitRangeChecks`), which is the common case and costs one
-// lookup.
-function retargetArgRangeSites(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, args ValueIdArray)
-	view checks = try project.rangeChecks.get(func.name) otherwise return
-
-	for i in 0 upto checks.argSites.count() 'eachSite'
-		view site = try checks.argSites.get(i) otherwise panic("retargetArgRangeSites: argSites.get OOB at {i} inside its own count()")
-
-		if let retargeted = try project.rangeSiteFacts.retargetedParameter(func.name, index: i) 'alreadyRetargeted'
-			claimArgSite(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args, argSites: checks.argSites, index: i, parameter: retargeted)
-			continue
-		end 'alreadyRetargeted'
-
-		claimArgSite(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args, argSites: checks.argSites, index: i, parameter: site.parameter)
-	end 'eachSite'
-end 'retargetArgRangeSites'
-
-function claimArgSite(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, args ValueIdArray, argSites RangeCheckArgSiteArray, index ElementIndex, parameter ArgSiteParameter)
-	view site = try argSites.get(index) otherwise panic("claimArgSite: argSites.get OOB at {index}")
-
-	// ⭐ **A SITE OF A DIFFERENT CALL IS NOT THIS ONE'S TO CLAIM OR TO COMPLAIN ABOUT.** The match below
-	// is by argument VALUE, which a binding passed to two calls shares — so without this the second call
-	// reads the first's already-retargeted site as claimed by a foreign member. `bareCallee` is the name
-	// the source wrote and is never rewritten; see `RangeCheckArgSite` for the twenty refusals it fixes.
-	if not parameter.bareCalleeIs(callee) 'aSiteOfADifferentCall'
-		return
-	end 'aSiteOfADifferentCall'
-
-	if not valueIdArrayContains(args, value: site.value) 'notThisCall'
-		return
-	end 'notThisCall'
-
-	view resolved = parameter.resolvedCallee()
-
-	if resolved.equals(callee) 'stillBare'
-		project.rangeSiteFacts.retargetArgParameter(func.name, argSites: argSites, index: index, to: parameter.retargetedTo(member))
-		return
-	end 'stillBare'
-
-	// Already claimed — by this same member (a second argument of one call, or a re-run of this pass over
-	// the memoized module) or, the residual the header names, by a DIFFERENT member.
-	if not resolved.equals(member) 'claimedByAnotherMember'
-		let range = project.opRanges.get(opIndex)
-		reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "two calls to different overloads of '{String.from(callee)}' pass the SAME binding as a constant argument whose range must be checked against the callee's declared parameter type. That check is recorded against the argument's value, before any overload is known, so the two calls cannot be told apart and one would be checked against the other's parameters. Bind the argument separately for each call, or give the overloads distinct names", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
-	end 'claimedByAnotherMember'
-end 'claimArgSite'
-
-// Is `value` one of these ids? A linear scan over an argument list, which is tiny — and asked only for a call
-// that resolved to a mangled overload member in a function that has a range-check site at all.
 export function valueIdArrayContains(values ValueIdArray, value ValueId) returns bool
 	for candidate in values 'each'
 		if candidate == value 'found'
@@ -1028,317 +235,6 @@ export function valueIdArrayContains(values ValueIdArray, value ValueId) returns
 
 	return false
 end 'valueIdArrayContains'
-
-// ⭐⭐ **SUPPLY THE RESOLVED MEMBER'S OWN PARAMETER DEFAULT, IN PLACE OF THE ONE THE PARSE COULD ONLY
-// GUESS.**
-//
-// A short call is FILLED while it is parsed, from a registry keyed by the name the source wrote — so every
-// member of an overload set publishes one entry and one synthesized helper name, and the fill emits a call to
-// it. That is sound for everything the members must agree on (`SignatureIndex.ParamDefaultInfo.matches` lists
-// exactly what, and `Parser.captureParamDefault` refuses a set that does not), and it leaves precisely one
-// thing still owed: the default's own EXPRESSION, which is a function BODY and belongs to one member.
-//
-// So each member emits its helper under its own REGISTRATION name (`Parser.declaredParamDefaultHelperName`),
-// and this re-points the emitted call the moment the member is known. It is the same move
-// `commitOverloadChoice` makes for the call itself, one op earlier in the block — including the RESULT-TYPE
-// reconcile, which is owed for the same reason: the argument's tag was minted from
-// `ProgramSignatures.returnTypeOf`, whose entry for the shared helper name is last-wins across the set. A
-// member whose defaulted parameter is declared at a different type therefore hands the call a value tagged
-// as another member's, and where the two live in different REGISTER FILES that is a wrong answer rather than
-// a wrong diagnostic — which is exactly the quadrant `reconcileOverloadResultType` refuses.
-//
-// A CALLER-LOCATION slot is skipped: nothing was synthesized for it, and the constant the fill emitted is
-// the caller's own line or path — the same value whichever member wins.
-function repointDefaultedArgHelpers(project Project, module MaxonModule, func IrFunction, callee ByteArray, member ByteArray, args ValueIdArray, argLabels NameRoster, defaultedArgs ParamCount, origins FunctionValueOrigins, reconcilesTheResult bool)
-	if defaultedArgs == NoDefaultedArgs 'thisCallOmittedNothingTheCalleeDefaults'
-		return
-	end 'thisCallOmittedNothingTheCalleeDefaults'
-
-	view shape = match programSignaturesIn(project, asker: "repointDefaultedArgHelpers").defaultsOf(callee) 'defaults'
-		defaults(info) gives info
-		allRequired panic("repointDefaultedArgHelpers: a call to '{String.from(callee)}' carries {defaultedArgs} synthesized default argument(s) and the declaration sweep publishes no defaults for that name — `Parser.fillOmittedArgDefaults` reads the same registry to decide what to fill")
-	end 'defaults'
-
-	view chosen = try project.funcSignatures.get(member) otherwise panic("repointDefaultedArgHelpers: the chosen member '{String.from(member)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
-
-	// The producer is read at the slot the fill used (`shape`, the by-name registry it read) and the helper is
-	// named at the slot the chosen member gives the same label, which may number its parameters differently.
-	let filledSlots = synthesizedArgSlots(shape.paramNames, argLabels: argLabels, defaultedArgs: defaultedArgs)
-	let chosenSlots = synthesizedArgSlots(chosen.paramNames, argLabels: argLabels, defaultedArgs: defaultedArgs)
-
-	for k in 0 upto defaultedArgs 'eachSuppliedDefault'
-		let filledSlot = try filledSlots.get(k) otherwise panic("repointDefaultedArgHelpers: filledSlots.get OOB at {k} inside the synthesized run")
-
-		match shape.producerFor(filledSlot) 'produces'
-			required then panic("repointDefaultedArgHelpers: a synthesized argument fills parameter {filledSlot} of '{String.from(callee)}', which is `required` — the fill leaves a slot with no default empty")
-			callerLine or
-			callerFile then continue
-			helper then break
-		end 'produces'
-
-		let slot = try chosenSlots.get(k) otherwise panic("repointDefaultedArgHelpers: chosenSlots.get OOB at {k} inside the synthesized run")
-		let argIndex = synthesizedArgIndex(args.count(), defaultedArgs: defaultedArgs, k: k as ParamCount)
-		let argValue = try args.get(argIndex) otherwise panic("repointDefaultedArgHelpers: args.get OOB at {argIndex} — the synthesized defaults are the trailing run of args")
-		let helperOpIndex = origins.definingOp(module, func: func, value: argValue)
-		commitOverloadChoice(project, module: module, func: func, opIndex: helperOpIndex, member: paramDefaultHelperName(member, paramIndex: slot), disagreement: OverloadDisagreementSubject.aDefaultedArgument(callee, slot: slot), reconcilesTheResult: reconcilesTheResult)
-	end 'eachSuppliedDefault'
-end 'repointDefaultedArgHelpers'
-
-// Bind the call to the member it chose: rewrite the op's callee IN PLACE, at the same `module.ops` index —
-// `block.opRefs` indexes that array, so appending a replacement instead would orphan every reference to it —
-// and then reconcile the RESULT's type, where the call may name the member.
-//
-// `disagreement` names what the reconcile is ABOUT, because this routine serves two ops of one call: the
-// call itself, and the synthesized helper behind an argument it omitted. The two need one rule and two
-// sentences — see `OverloadDisagreementSubject`.
-// ⛔⛔ **THE RECONCILE READS THE PRE-REWRITE OP, SO IT MUST RUN BEFORE THE STORE THAT RELEASES IT.** Same
-// use-after-free as `bindOverloadChoice`'s, one frame down: `module.ops.set` drops the old element, and
-// `reconcileOverloadResultType`'s `overloadResultValue(op)` would then read a released record. The op is
-// read here rather than handed in for the reason `resolveOneOverloadedCall`'s header states.
-function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, member ByteArray, disagreement OverloadDisagreementSubject, reconcilesTheResult bool)
-	var op = try module.ops.get(opIndex) otherwise panic("commitOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
-	var rewritten = withRewrittenCallee(op, callee: member)
-
-	if reconcilesTheResult 'theCallMayNameItsMember'
-		reconcileOverloadResultType(project, func: func, opIndex: opIndex, op: op, member: member, disagreement: disagreement)
-	end 'theCallMayNameItsMember'
-
-	try module.ops.set(opIndex, value: rewritten) otherwise panic("commitOverloadChoice: ops.set({opIndex}) OOB — the index came from liveOpIndices")
-end 'commitOverloadChoice'
-
-// ⭐ **WHICH VALUE OF A RESOLVED CALL THE RETURN-TYPE RECONCILE IS ABOUT** — the call's own result, or the
-// nullary helper standing behind an argument the call omitted. One RULE (`reconcileOverloadResultType`)
-// and two sentences: the second names a parameter position rather than a return type, and a reader handed the
-// first about a symbol no source wrote — `__paramDefault#Expect.equal#2` — would be reading about a name
-// they cannot find and a construct they did not write.
-union OverloadDisagreementSubject
-	theCallsResult
-	theBoundCallsResult
-	aDefaultedArgument(let callee ByteArray, slot ParamCount)
-end 'OverloadDisagreementSubject'
-
-// The two result answers, shared: a payload-free union case is still a heap object in Maxon, and
-// `commitOverloadChoice` runs at every resolved overloaded call in the program.
-let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
-let sharedBoundCallResultSubject = OverloadDisagreementSubject.theBoundCallsResult
-
-// ⭐⭐ **THE ONE THING SELECTING LATE COSTS: the parser has ALREADY TYPED the call's result, and it may have
-// typed it from a registry that cannot tell overloads apart.**
-//
-// A call's result value is minted during the parse (`Parser.mintCallResult`), typed by
-// `Parser.boundReturnOf`: a call the parse bound is typed from the member it bound, which is the member this
-// pass applies, so a disagreement there is a compiler bug (`theBoundCallsResult`). A call the parse did not
-// bind is typed from `ProgramSignatures.returnTypeOf`, whose table is keyed by the name the SOURCE wrote and
-// is LAST-WINS over duplicate declarations — so the call was typed from whichever declaration the sweep read
-// last. When the member this call actually resolves to returns something else, that tag is wrong, and it is
-// wrong in a way that reaches the machine: the tag is what `lowerMaxonToStd` reads to pick the Std type of
-// the call's result, so a `bool`-tagged result of an i64-returning callee is read one byte wide.
-//
-// So the tag is REPAIRED here — but only where the repair is provably complete:
-//
-//   • **Same STORAGE ⇒ nothing to do.** A ranged alias's `named` tag against a resolved `integer` is the
-//     common case and must NOT be rewritten: the parser keeps `named` on purpose (the alias name carries the
-//     signedness `valueIsUnsigned` reads), so "correcting" it would change codegen.
-//   • **Different storage, both PLAIN SCALARS ⇒ retype.** `integer`/`boolean`/`exitCode` carry no name, own
-//     no heap and travel in a GPR, so nothing the parser emitted for the value encodes which of the three it
-//     was: the type is read from this column at lowering and nowhere else.
-//   • **Anything else ⇒ REFUSED.** A managed↔scalar divergence is the case that matters: had the parser known
-//     the result was a `String` it would have enrolled a scope-exit drop, and no retype can add an op that
-//     was never emitted — the program would LEAK. A float↔int divergence changes the register FILE, and a
-//     void↔value one changes whether there is a result at all. Each is refused with the reason, rather than
-//     silently retyped into a wrong answer.
-//
-// ⚠ **The narrow residual, stated where it lives:** if the divergence IS scalar-to-scalar, the parser may
-// already have rejected or reshaped an expression using the stale tag (`if <int-tagged>`, `<bool> + 1`). That
-// is a false diagnostic, not a wrong answer, and it cannot arise for a set whose members agree on their
-// return type, nor for a call the parse bound — which is the common case.
-//
-// A member the call may not name is not reconciled at all (`boundMemberIsRefusedAsHidden`):
-// E3008 refuses the call, and a reconcile against that member would add a second, wrong diagnostic.
-function reconcileOverloadResultType(project Project, func IrFunction, opIndex ElementIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
-	match overloadResultValue(op) 'result'
-		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, op: op, result: result, member: member, disagreement: disagreement)
-		definesAPromise or
-		definesNothing then break
-	end 'result'
-end 'reconcileOverloadResultType'
-
-function reconcileOverloadResultTag(project Project, func IrFunction, opIndex ElementIndex, op MaxonOp, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
-	let declared = try project.funcReturnTypes.get(member) otherwise return
-
-	match declared 'declared'
-		value(returnType) then requireOverloadResultTagAgrees(project, func: func, opIndex: opIndex, op: op, result: result, member: member, declared: returnType, disagreement: disagreement)
-		void then requireOverloadVoidResult(project, func: func, opIndex: opIndex, result: result, member: member, disagreement: disagreement)
-	end 'declared'
-end 'reconcileOverloadResultTag'
-
-// ⭐⭐ **THE VOID SIDE OF THE SAME DISAGREEMENT, AND IT IS THE EASY QUADRANT TO LEAVE UNGUARDED.**
-//
-// It is tempting to `break` here on the grounds that *"a VOID member cannot have been chosen for a call
-// whose result is read: the parser refuses a void call in value position, and in statement position the
-// result tag is `void` already"*. **Both halves assume the SWEEP recorded the void member**, and the sweep
-// is LAST-WINS over one entry per NAME wherever the parse binds no member — so when the VALUE member
-// is the one it recorded, such a call is typed from it: the result carries that member's tag, and
-// `enrolOwnedCallTemp` has already enrolled the scope-exit drop a managed return owes. A call that then resolves HERE, to the void member,
-// spends that drop on a register the callee never wrote.
-//
-// A call the parse bound is typed from the member its ARGUMENT means, so the void call has no managed result
-// to enrol a drop for and the value call has one to drop — pinned as `function-overloads.md`'s two
-// `*-overload-beside-a-*-one-*-resolves-by-argument` cases, which assert the answer and the exit code
-// rather than a refusal.
-//
-// A `void`-tagged result is the agreement, and it is the only one: no repair is possible in either
-// direction, because the divergence is over whether there is a value AT ALL.
-function requireOverloadVoidResult(project Project, func IrFunction, opIndex ElementIndex, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
-	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadVoidResult: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
-
-	if currentTag == ValueTypeTag.void 'alreadyRight'
-		return
-	end 'alreadyRight'
-
-	reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: currentTag, declared: ValueTypeTag.void, disagreement: disagreement)
-end 'requireOverloadVoidResult'
-
-function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex ElementIndex, op MaxonOp, result ValueId, member ByteArray, declared MaxonType, disagreement OverloadDisagreementSubject)
-	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadResultTagAgrees: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
-	let declaredTag = maxonTypeTag(declared)
-
-	if not overloadResultTagAgrees(currentTag, declared: declaredTag) and returnAgreesAtTheCallsInstance(project, func: func, op: op, result: result, member: member, declared: declared, currentTag: currentTag) 'typedThroughTheInstance'
-		return
-	end 'typedThroughTheInstance'
-
-	if overloadDisagreementIsIrreparable(currentTag, declared: declaredTag) 'notRepairable'
-		reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: currentTag, declared: declaredTag, disagreement: disagreement)
-		return
-	end 'notRepairable'
-
-	if overloadResultTagAgrees(currentTag, declared: declaredTag) 'alreadyRight'
-		return
-	end 'alreadyRight'
-
-	if disagreementIsAVerifiedPick(disagreement) 'theParseMintedItFromThisMember'
-		reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: currentTag, declared: declaredTag, disagreement: disagreement)
-	end 'theParseMintedItFromThisMember'
-
-	func.retypeValueInPrivateColumns(result, tag: declaredTag, nameId: typeNameIdOf(declared))
-end 'requireOverloadResultTagAgrees'
-
-function returnTagAtTheCallsInstance(project Project, func IrFunction, op MaxonOp, result ValueId, member ByteArray, declared MaxonType) returns ValueTypeTag throws AbsentError
-	view sig = try project.funcSignatures.get(member) otherwise throw AbsentError.absent
-
-	let args = overloadSuppliedArgs(op)
-
-	let gid = try callInstanceOf(func, subject: callInstanceSubject(sig, result: result, argIds: args))
-	var signatures = programSignaturesIn(project, asker: "returnTagAtTheCallsInstance")
-	let fixed = maxonTypeTag(slotThroughInstance(signatures, interner: project.typeNames, slotType: declared, gid: gid))
-
-	if maxonTypeTag(declared) == ValueTypeTag.typeParameter and tagIsFloat(fixed) 'aFloatRidingTheOpaqueWord'
-		return ValueTypeTag.integer
-	end 'aFloatRidingTheOpaqueWord'
-
-	return fixed
-end 'returnTagAtTheCallsInstance'
-
-function returnAgreesAtTheCallsInstance(project Project, func IrFunction, op MaxonOp, result ValueId, member ByteArray, declared MaxonType, currentTag ValueTypeTag) returns bool
-	let carried = try returnTagAtTheCallsInstance(project, func: func, op: op, result: result, member: member, declared: declared) otherwise return false
-	return overloadResultTagAgrees(currentTag, declared: carried)
-end 'returnAgreesAtTheCallsInstance'
-
-function disagreementIsAVerifiedPick(disagreement OverloadDisagreementSubject) returns bool
-	return match disagreement 'about'
-		theBoundCallsResult gives true
-		theCallsResult or
-		aDefaultedArgument gives false
-	end 'about'
-end 'disagreementIsAVerifiedPick'
-
-// ONE sentence for every quadrant of the disagreement — value-vs-value that no retype can repair, and
-// value-vs-void which nothing can. Spelling it in each arm is how the two would drift into two accounts of
-// one rule.
-function reportOverloadReturnDisagreement(project Project, range SourceRange, filePath FilePath, member ByteArray, current ValueTypeTag, declared ValueTypeTag, disagreement OverloadDisagreementSubject)
-	let message = match disagreement 'about'
-		theCallsResult gives "the overloads of '{String.from(overloadRegistrationBaseName(member))}' do not agree on their return type ('{typeTagName(current)}' and '{typeTagName(declared)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from the parameter types the whole-program declaration sweep publishes — and the parse could not settle which overload this call means, so the result was typed from the single return type that index keeps per NAME. Only a difference between plain scalars can be corrected once resolution has chosen the overload. Make the overloads return the same type, or spell every overload's parameters as type NAMES that this call's arguments match in exactly one of them"
-
-		theBoundCallsResult panic("compiler bug: the parse bound a call to '{String.from(member)}' and typed its result '{typeTagName(current)}', and that member returns '{typeTagName(declared)}' — the parse and resolution read one pick, so the result is minted from the declaration resolution applies")
-
-		// The op being reconciled is the synthesized helper behind an omitted argument, so `member` is a
-		// symbol no source wrote. The sentence names the PARAMETER POSITION and the overloaded name the
-		// author did write, and asks for the one thing that repairs it.
-		aDefaultedArgument(callee, slot) gives "the overloads of '{bareMethodName(callee)}' do not agree on the TYPE of parameter {slot}, which this call omitted and the compiler supplied from that parameter's default ('{typeTagName(current)}' and '{typeTagName(declared)}'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and resolution applies the overload afterwards — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload"
-	end 'about'
-
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(message), line: range.line, column: range.column, filePath: filePath)
-end 'reportOverloadReturnDisagreement'
-
-// Is this tag one of the three the retype above may cross between — unmanaged, un-named, non-float, GPR? See
-// `reconcileOverloadResultType` for why each exclusion is load-bearing.
-function tagIsPlainOverloadScalar(tag ValueTypeTag) returns bool
-	return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.exitCode
-end 'tagIsPlainOverloadScalar'
-
-// The disagreement no retype can close: different storage, and not the plain-scalar pair the retype above
-// crosses between. Asked by the reconcile of a RESOLVED call and by the argument check of one that fit no
-// member, so the two cannot come to refuse different quadrants.
-function overloadDisagreementIsIrreparable(current ValueTypeTag, declared ValueTypeTag) returns bool
-	return not overloadResultTagAgrees(current, declared: declared) and (not tagIsPlainOverloadScalar(current) or not tagIsPlainOverloadScalar(declared))
-end 'overloadDisagreementIsIrreparable'
-
-// The value an overload-resolvable op DEFINES. Each defines one — a `call` in statement position
-// defines a `void`-tagged value it never reads — so the `definesNothing` arm exists for the op set to
-// grow into rather than for a case that occurs today.
-union OverloadResultValue
-	defines(result ValueId)
-	definesAPromise(result ValueId)
-	definesNothing
-end 'OverloadResultValue'
-
-function overloadResultValue(op MaxonOp) returns OverloadResultValue
-	return match op 'op'
-		call(result, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
-		tryCall(result, _, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
-		asyncCall(result, _, _, _, _, _, _, _) gives OverloadResultValue.definesAPromise(result)
-		serviceSpawn(_, _, state, _, _, _, _, _, _, _, _, _) gives OverloadResultValue.defines(state)
-		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly these four")
-	end 'op'
-end 'overloadResultValue'
-
-// **E3007 — the call cannot pick.** Anchored at the call (`opRanges` puts that at the callee token, which is
-// where the author must add a label), naming the callee as WRITTEN with its type qualifier stripped, and
-// listing the tied candidates' parameter lists in declaration order. The wording is pinned byte for byte
-// by `specs/function-overloads.md`.
-function reportAmbiguousOverload(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, tied OverloadCandidateArray, module MaxonModule, candidates NameRoster)
-	let range = project.opRanges.get(opIndex)
-	project.refusedOverloadCalls.insert(opIndex)
-	retireEveryLiteralCast(func, op: try module.ops.get(opIndex) otherwise panic("reportAmbiguousOverload: ops.get({opIndex}) OOB — the index came from liveOpIndices"))
-	reportPositioned(project, code: ErrorCode.semanticAmbiguousOverload, message: ambiguousOverloadMessage(bareMethodName(callee), candidates: renderOverloadRows(tied, interner: project.typeNames)), line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
-
-	// The op still names a callee, and for a CONTESTED set that name belongs to no declaration — see the
-	// `ambiguous` arm above for the second diagnostic that earns.
-	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
-end 'reportAmbiguousOverload'
-
-// The argument list an overload-resolvable op supplies. A THIRD match over the same variants would
-// be one too many, but this one asks a different question from `maxonOpCalleeKind`'s and cannot be
-// folded into it: that answer is built once per op, this one is read once per CANDIDATE.
-union OverloadCallArgs
-	supplied(args ValueIdArray, argLabels NameRoster, defaultedArgs ParamCount, mint CalleeMint)
-end 'OverloadCallArgs'
-
-function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
-	return match op 'op'
-		call(_, _, args, argLabels, _, _, defaultedArgs, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultedArgs: defaultedArgs, mint: mint)
-		asyncCall(_, _, args, argLabels, _, _, defaultedArgs, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultedArgs: defaultedArgs, mint: mint)
-		serviceSpawn(_, _, _, _, _, args, argLabels, _, _, defaultedArgs, mint, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultedArgs: defaultedArgs, mint: mint)
-		tryCall(_, _, _, args, argLabels, _, _, defaultedArgs, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultedArgs: defaultedArgs, mint: mint)
-		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly these four")
-	end 'op'
-end 'overloadCallArgs'
-
-function overloadSuppliedArgs(op MaxonOp) returns ValueIdArray
-	return match overloadCallArgs(op) 'args'
-		supplied(supplied, _, _, _) gives supplied
-	end 'args'
-end 'overloadSuppliedArgs'
 
 // E3054 — the ENTRY function cannot declare `throws`: there is no caller left to handle the error. Scans
 // the merged module for it (whose `throwsTypeName` the parser stamped), positioned at its name token.
@@ -2061,163 +957,11 @@ function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray,
 	end 'eachArg'
 end 'addCallParamEdges'
 
-// ⭐⭐ **THE BY-REFERENCE CONVENTION OF A FUNCTION VALUE IS KEYED BY ITS ARITY AND BY NOTHING ELSE.** A call
-// through a function value cannot know which body it lands on, so every function value of arity n passes a
-// cell at position i exactly when some free function of arity n takes position i by reference
-// (`ProgramSignatures.declaredByRefPositionsAtArity`) — the very table the parser's places are predicted
-// from. A body that takes the position by value reads the cell through its `__fnref_` thunk, one that takes
-// it by reference is handed the cell as is. The key is program-wide and does not depend on the order the
-// bodies or the calls are met in.
-function buildFunctionValueConventions(project Project, module MaxonModule, signatures ProgramSignatures, calls CallSummaryIndex) returns FunctionValueConventions
-	var conventions = FunctionValueConventions.none()
-
-	if not signatures.programTakesAParamByRef() 'nothingIsPassedByReference'
-		return conventions
-	end 'nothingIsPassedByReference'
-
-	conventions.settle()
-	var bodies = FuncIndexArray.create()
-	var noted = BoolArray.create()
-	noted.refill(module.functions.count(), value: false)
-
-	for index in calls.allFunctionValueBodies() 'eachFunctionRef'
-		bodies.push(index)
-		try noted.set(index, value: true) otherwise panic("buildFunctionValueConventions: noted.set OOB at {index}")
-	end 'eachFunctionRef'
-
-	for index in 0 upto module.functions.count() 'eachLiftedClosure'
-		let func = try module.functions.get(index) otherwise panic("buildFunctionValueConventions: functions.get OOB at {index}")
-
-		if isLiftedClosureName(func.name) and not (try noted.get(index) otherwise panic("buildFunctionValueConventions: noted.get OOB at {index}")) 'aClosureNoFunctionRefNamed'
-			bodies.push(index)
-		end 'aClosureNoFunctionRefNamed'
-	end 'eachLiftedClosure'
-
-	var thunked = FuncIndexArray.create()
-
-	for name in calls.bodilessFunctionValueNames() 'eachBodiless'
-		let arity = functionValueBodySignature(project, name: name).paramCount()
-		noteConventionAt(conventions, signatures: signatures, arity: arity)
-		conventions.noteBody(name, arity: arity, own: NoParamPositions)
-	end 'eachBodiless'
-
-	for index in bodies 'eachBody'
-		let body = try module.functions.get(index) otherwise panic("buildFunctionValueConventions: functions.get OOB at {index}")
-
-		if not isFunctionValueBodyName(body.name, funcSignatures: project.funcSignatures) 'aCompilerEmittedSymbol'
-			continue
-		end 'aCompilerEmittedSymbol'
-
-		let arity = functionValueBodySignature(project, name: body.name).paramCount()
-		noteConventionAt(conventions, signatures: signatures, arity: arity)
-		conventions.noteBody(body.name, arity: arity, own: userPositionsOf(body, userCount: arity))
-		thunked.push(index)
-	end 'eachBody'
-
-	for funcIndex in 0 upto module.functions.count() 'eachFunc'
-		let func = try module.functions.get(funcIndex) otherwise panic("buildFunctionValueConventions: functions.get OOB at {funcIndex}")
-
-		for opIdx in module.liveOpIndices(func) 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("buildFunctionValueConventions: opIdx {opIdx} from liveOpIndices is not in module.ops")
-
-			if maxonOpIsIndirectCall(op) 'anIndirectCall'
-				noteConventionAt(conventions, signatures: signatures, arity: userArityOfIndirectCall(indirectCallArgsOf(op)))
-			end 'anIndirectCall'
-		end 'eachOp'
-	end 'eachFunc'
-
-	for index in thunked 'eachThunkedBody'
-		let body = try module.functions.get(index) otherwise panic("buildFunctionValueConventions: functions.get OOB at {index}")
-
-		if adaptedPositionsOf(conventions, name: body.name) == NoParamPositions 'readsNoCell'
-			continue
-		end 'readsNoCell'
-
-		conventions.noteCellLoads(body.name, types: cellLoadTypesFor(project, signatures: signatures, name: body.name, paramTypes: body.maxonParamTypes, readerFilePath: body.sourceFilePath, conventions: conventions))
-		conventions.noteCellsEmptied(body.name, mask: promiseCellsTheBodyTakes(project, signatures: signatures, body: body, conventions: conventions))
-	end 'eachThunkedBody'
-
-	for name in calls.bodilessFunctionValueNames() 'eachBodilessTarget'
-		if adaptedPositionsOf(conventions, name: name) == NoParamPositions 'readsNoCell'
-			continue
-		end 'readsNoCell'
-
-		conventions.noteCellLoads(name, types: cellLoadTypesFor(project, signatures: signatures, name: name, paramTypes: functionValueBodySignature(project, name: name).paramTypes, readerFilePath: CompilerOwnedDeclFilePath, conventions: conventions))
-	end 'eachBodilessTarget'
-
-	return conventions
-end 'buildFunctionValueConventions'
-
-function promiseCellsTheBodyTakes(project Project, signatures ProgramSignatures, body IrFunction, conventions FunctionValueConventions) returns ParamPositionMask
-	var taken = NoParamPositions
-	let adapted = adaptedPositionsOf(conventions, name: body.name)
-
-	for i in 0 upto body.maxonParamTypes.count() 'eachDeclaredParameter'
-		if not maskHasParam(adapted, param: i as ParamCount) 'readsNoCellHere'
-			continue
-		end 'readsNoCellHere'
-
-		if signatures.typeIsAGreenThreadHandle(try body.maxonParamTypes.get(i) otherwise panic("promiseCellsTheBodyTakes: maxonParamTypes.get OOB at {i}"), from: project.typeNames) and functionTakesPromiseAt(signatures, func: body, position: i) 'aPromiseTheBodyKeeps'
-			taken = maskWithParam(taken, param: i as ParamCount)
-		end 'aPromiseTheBodyKeeps'
-	end 'eachDeclaredParameter'
-
-	return taken
-end 'promiseCellsTheBodyTakes'
-
-function functionValueBodySignature(project Project, name ByteArray) returns FuncSignature
-	return try project.funcSignatures.get(name) otherwise panic("functionValueBodySignature: '{String.from(name)}' is a function-value body with a signature, and has none")
-end 'functionValueBodySignature'
-
-function adaptedPositionsOf(conventions FunctionValueConventions, name ByteArray) returns ParamPositionMask
-	return conventions.maskAtArity(conventions.arityOf(name)) and not conventions.ownMaskOf(name)
-end 'adaptedPositionsOf'
-
-function noteConventionAt(conventions FunctionValueConventions, signatures ProgramSignatures, arity ParamCount)
-	if conventions.arityIsNoted(arity) 'alreadySettled'
-		return
-	end 'alreadySettled'
-
-	conventions.noteArity(arity, mask: signatures.declaredByRefPositionsAtArity(arity))
-end 'noteConventionAt'
-
-function userPositionsOf(body IrFunction, userCount ParamCount) returns ParamPositionMask
-	if isLiftedClosureName(body.name) 'aClosureTakesItsParametersByValue'
-		return NoParamPositions
-	end 'aClosureTakesItsParametersByValue'
-
-	var owned = NoParamPositions
-
-	for i in 0 upto userCount 'eachUserPosition'
-		if maskHasParam(body.reassignedParamMask, param: i as ParamCount) 'byReference'
-			owned = maskWithParam(owned, param: i as ParamCount)
-		end 'byReference'
-	end 'eachUserPosition'
-
-	return owned
-end 'userPositionsOf'
-
-function cellLoadTypesFor(project Project, signatures ProgramSignatures, name ByteArray, paramTypes MaxonTypeArray, readerFilePath FilePath, conventions FunctionValueConventions) returns StdTypeArray
-	var types = StdTypeArray.create()
-	let adapted = adaptedPositionsOf(conventions, name: name)
-
-	for i in 0 upto paramTypes.count() 'eachDeclaredParameter'
-		if not maskHasParam(adapted, param: i as ParamCount) 'readsNoCellHere'
-			types.push(StdType.i64)
-			continue
-		end 'readsNoCellHere'
-
-		types.push(cellOccupantStdType(signatures, declared: try paramTypes.get(i) otherwise panic("cellLoadTypesFor: paramTypes.get OOB at {i}"), typeNames: project.typeNames, readerFilePath: readerFilePath))
-	end 'eachDeclaredParameter'
-
-	return types
-end 'cellLoadTypesFor'
-
 // An indirect call's arguments at the positions its arity takes by reference are the cells the parser handed
 // over beside the loaded values. This is where the choice is made: it needs the convention, and the convention
 // needs every body of the program.
-function bindIndirectCallPlaces(project Project, module MaxonModule)
-	if project.functionValueConventions.isEmpty() 'noPositionIsByReference'
+function bindIndirectCallPlaces(project Project, module MaxonModule, signatures ProgramSignatures)
+	if not signatures.programTakesAParamByRef() 'noPositionIsByReference'
 		return
 	end 'noPositionIsByReference'
 
@@ -2227,21 +971,21 @@ function bindIndirectCallPlaces(project Project, module MaxonModule)
 end 'bindIndirectCallPlaces'
 
 function bindIndirectCallPlacesInFunc(project Project, module MaxonModule, func IrFunction)
-	let resolution = CallResolution.create(func)
+	let runs = deferredBindingRunsOf(func)
 
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		view op = try module.ops.get(opIdx) otherwise panic("bindIndirectCallPlacesInFunc: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
 		if maxonOpIsIndirectCall(op) 'anIndirectCall'
-			bindIndirectCall(project, module: module, func: func, opIndex: opIdx, resolution: resolution)
+			bindIndirectCall(project, module: module, func: func, opIndex: opIdx, runs: runs)
 		end 'anIndirectCall'
 	end 'eachOp'
 end 'bindIndirectCallPlacesInFunc'
 
-function bindIndirectCall(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, resolution CallResolution)
+function bindIndirectCall(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, runs DeferredBindingsByCall)
 	var op = try module.ops.get(opIndex) otherwise panic("bindIndirectCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	let arity = userArityOfIndirectCall(indirectCallArgsOf(op))
-	let byReference = project.functionValueConventions.maskAtArity(arity)
+	let byReference = indirectCallByRefMask(project, func: func, op: op)
 
 	if byReference == NoParamPositions 'everyArgumentTakesItsValue'
 		return
@@ -2249,7 +993,7 @@ function bindIndirectCall(project Project, module MaxonModule, func IrFunction, 
 
 	let result = try maxonOpDefinedValue(op) otherwise panic("bindIndirectCall: an indirect call defines its result")
 
-	let run = try resolution.deferredByCall.get(result) otherwise panic("bindIndirectCall: an indirect call of arity {arity} passes cells, and the parse recorded no places for it — the parser's places and this convention are read from one table (`declaredByRefPositionsAtArity`), and a library parse shared across programs is keyed by it")
+	let run = try runs.get(result) otherwise panic("bindIndirectCall: an indirect call of arity {arity} passes cells, and the parse recorded no places for it — the parser's places and this convention are both read off the called value's function type")
 	var bound = ValueIdArray.create()
 	var names = WriteBlameArray.create()
 	bound.append(indirectCallArgsOf(op))
@@ -2263,11 +1007,7 @@ function bindIndirectCall(project Project, module MaxonModule, func IrFunction, 
 			continue
 		end 'theValueStands'
 
-		match binding.storage 'storage'
-			cell(cell) then bindStorageArgument(bound, argImmutableNames: names, func: func, column: binding.column, cell: cell, blame: binding.blame.clone())
-			none then panic("bindIndirectCall: arity {arity} passes the argument at column {binding.column} as a cell, and the parse left no storage there")
-		end 'storage'
-
+		bindStorageArgument(bound, argImmutableNames: names, func: func, column: binding.column, cell: binding.cell, blame: binding.blame.clone())
 		boundAny = true
 	end 'eachDeferred'
 
@@ -2277,6 +1017,18 @@ function bindIndirectCall(project Project, module MaxonModule, func IrFunction, 
 
 	try module.ops.set(opIndex, value: withRewrittenArgs(op, args: bound, argImmutableNames: names)) otherwise panic("bindIndirectCall: ops.set({opIndex}) OOB")
 end 'bindIndirectCall'
+
+function indirectCallByRefMask(project Project, func IrFunction, op MaxonOp) returns ParamPositionMask
+	let calleeValue = match op 'op'
+		indirectCall(_, value, _, _) gives value
+		default panic("indirectCallByRefMask: asked of an op that is not an indirect call")
+	end 'op'
+
+	return match declaredFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: calleeValue)) 'shape'
+		declared(shape) gives shape.byRefParams
+		undeclared gives NoParamPositions
+	end 'shape'
+end 'indirectCallByRefMask'
 
 function indirectCallArgsOf(op MaxonOp) returns ValueIdArray
 	return match op 'op'
@@ -2299,8 +1051,8 @@ end 'indirectCallArgsOf'
 // instantiation and exact against the signature the shared body actually publishes.
 //
 // ⚠ **THE IMPL NAMES COME FROM `project.witnessSlotImpls`, THE SELECTION `checkConformance` ALREADY MADE**,
-// never from a join re-derived here: an overloaded or granted conformer's chosen member is that map's answer,
-// and a second derivation could name a body the witness table does not hold.
+// never from a join re-derived here: a granted conformer's chosen member is that map's answer, and a
+// second derivation could name a body the witness table does not hold.
 //
 // ⚠ A BUILTIN conformer (`int.hash` and its siblings) has no `implements` clause and so is in no
 // declared roster `DeclaredConformerIndex.conformersOf` holds. Those impls are compiler-synthesized
@@ -3139,10 +1891,6 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 			for opIdx in block.bodyOps() 'eachOp'
 				view op = try module.ops.get(opIdx) otherwise panic("checkCalls: opIdx {opIdx} not in module.ops")
 
-				if project.undecidedOverloadCalls.count() > 0 and project.undecidedOverloadCalls.contains(opIdx) 'anUndecidedOverload'
-					continue
-				end 'anUndecidedOverload'
-
 				match op 'op'
 					// A PLAIN call — its args are validated, and a call to a THROWING callee that is not
 					// under a `try` is E3057 (it is a `call`, not a `tryCall`, precisely because no `try`
@@ -3408,7 +2156,7 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 end 'checkWitnessArgTypes'
 
 function checkWitnessArgument(project Project, func IrFunction, signatures ProgramSignatures, interfaceName ByteArray, formal RequirementType, formalName ByteArray, paramType MaxonType, preErasedAggregate ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
-	if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formal.argumentCheckSpelling(formalName), param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance, overloadRefused: false) 'thisArgumentWasRefused'
+	if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formal.argumentCheckSpelling(formalName), param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance) 'thisArgumentWasRefused'
 		return
 	end 'thisArgumentWasRefused'
 
@@ -3424,9 +2172,9 @@ end 'checkWitnessArgument'
 // functions, so a returned flag is six places to remember and one place to silently forget — where
 // the record that a diagnostic exists cannot be forgotten by a new report site. It is
 // `Queries.foldOneFileInto`'s own before/after idiom.
-function argumentIsRefused(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool) returns bool
+function argumentIsRefused(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer) returns bool
 	let reportedBefore = project.diagnostics.count()
-	checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: paramExistentialSites, callRange: callRange, handedAt: handedAt, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
+	checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: paramExistentialSites, callRange: callRange, handedAt: handedAt, filePath: filePath, provenance: provenance)
 	return project.diagnostics.count() > reportedBefore
 end 'argumentIsRefused'
 
@@ -3732,12 +2480,12 @@ function validatePlainCall(project Project, module MaxonModule, func IrFunction,
 		// ⚠ The NOUN, not the callee: a bare `int.fromString(s)` is the shape an author most often writes by
 		// mistake, and quoting `'__int_fromString'` back names a callee they did not write — see
 		// `callDiagnosticNoun`.
-		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallMessage(func, signatures: signatures, funcNames: funcNames, callee: callee, mint: mint, args: args), line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallMessage(func, signatures: signatures, callee: callee, mint: mint, args: args), line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 	end 'throwing'
 end 'validatePlainCall'
 
-function throwingCallMessage(func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, mint CalleeMint, args ValueIdArray) returns String
-	let accessor = try sizedAccessorOfCall(func, signatures: signatures, callee: callee, args: args) otherwise return throwingCallRequiresTryMessage(boundCalleeSpelling(signatures, funcNames: funcNames, callee: callee, mint: mint))
+function throwingCallMessage(func IrFunction, signatures ProgramSignatures, callee ByteArray, mint CalleeMint, args ValueIdArray) returns String
+	let accessor = try sizedAccessorOfCall(func, signatures: signatures, callee: callee, args: args) otherwise return throwingCallRequiresTryMessage(boundCalleeSpelling(signatures, callee: callee, mint: mint))
 
 	return unprovenFixedArrayIndexMessage(fixedArrayAccessorMethodName(accessor.accessor), count: accessor.count)
 end 'throwingCallMessage'
@@ -3750,15 +2498,8 @@ function sizedAccessorOfCall(func IrFunction, signatures ProgramSignatures, call
 	return try sizedAccessorOf(signatures, receiverTag: tag, receiverNameId: nameId, callee: callee)
 end 'sizedAccessorOfCall'
 
-function boundCalleeSpelling(signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, mint CalleeMint) returns ByteArray
-	let noun = callDiagnosticNoun(callee, mint: mint)
-
-	if not noun.equals(callee) or overloadRegistrationBaseName(callee).equals(callee) 'notAnOverloadMember'
-		return signatures.diagnosticCalleeSpelling(noun)
-	end 'notAnOverloadMember'
-
-	let member = try funcNames.funcNamed(callee) otherwise panic("boundCalleeSpelling: the overload member '{String.from(callee)}' throws and has no body in the module")
-	return signatures.diagnosticMemberSpelling(callee, declFilePath: member.sourceFilePath)
+function boundCalleeSpelling(signatures ProgramSignatures, callee ByteArray, mint CalleeMint) returns ByteArray
+	return signatures.diagnosticCalleeSpelling(callDiagnosticNoun(callee, mint: mint))
 end 'boundCalleeSpelling'
 
 // Validate one call site. Reports the FIRST error found (unknown callee, then the arg
@@ -3767,6 +2508,10 @@ end 'boundCalleeSpelling'
 // (`project.opRanges[opIndex]`) anchors the callee/arity/type errors; an argument's own span
 // (`argRanges[argIndex]`) anchors a per-argument label error.
 function validateCall(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+	if project.poison.duplicates(callee) 'aNameDeclaredMoreThanOnce'
+		return
+	end 'aNameDeclaredMoreThanOnce'
+
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = authoredFileOf(project, func: func, opIndex: opIndex)
 
@@ -3816,7 +2561,7 @@ function validateCall(project Project, module MaxonModule, func IrFunction, sign
 		end 'aConsequenceOfARefusal'
 
 		// ⭐⭐ **E3095 RE-ASKS A RESOLUTION THE PARSER ALREADY MADE.** A subdirectory's declaration of a contested
-		// free function is registered under its directory-qualified spelling, so a bare callee that found no single
+		// free function is registered under its minted `<dir>~name` spelling, so a bare callee that found no single
 		// declaration this file may name (`ProgramSignatures.nameABareCallBinds`) reaches this arm still wearing
 		// the name as written. `ProgramSignatures.resolveFunctionName` answers again which candidates it chose among.
 		//
@@ -3878,7 +2623,7 @@ function validateCall(project Project, module MaxonModule, func IrFunction, sign
 	view sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 
 	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
-		ordered(argIds) then checkSlottedCall(project, module: module, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath, overloadRefused: project.refusedOverloadCalls.contains(opIndex))
+		ordered(argIds) then checkSlottedCall(project, module: module, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath)
 		refused(failure) then reportArgSlotFailure(project, failure: failure, noun: noun, callRange: callRange, argRanges: argRanges, filePath: filePath)
 	end 'slot'
 end 'validateCall'
@@ -3896,7 +2641,7 @@ function calleeIsRefusedWhereItsDeclarationIsNamed(project Project, signatures P
 		return true
 	end 'itMayBeAMemberOfARefusedExtension'
 
-	if project.poison.duplicatesAMemberOf(try project.overloadSets.get(callee) otherwise NameRoster.create()) 'aMemberIsDeclaredTwice'
+	if project.poison.duplicates(callee) or signatures.genericNameIsDeclaredTwiceInOneDirectory(genericTemplateName(callee)) 'aMemberIsDeclaredTwice'
 		return true
 	end 'aMemberIsDeclaredTwice'
 
@@ -4064,7 +2809,7 @@ function reportAmbiguousCrossFileCall(project Project, signatures ProgramSignatu
 end 'reportAmbiguousCrossFileCall'
 
 function reportAmbiguousCall(project Project, callee ByteArray, candidates NameRoster, callRange SourceRange, filePath FilePath)
-	reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareFunctionNameMessage(String.from(callee), candidates: renderAmbiguousCandidates(candidates), use: FunctionNameUse.call), line: callRange.line, column: callRange.column, filePath: filePath)
+	reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareNameMessage(String.from(callee), candidates: renderAmbiguousCandidates(candidates), use: BareNameUse.call), line: callRange.line, column: callRange.column, filePath: filePath)
 end 'reportAmbiguousCall'
 
 module function checkNonConstantCallInitializers(project Project, signatures ProgramSignatures)
@@ -4121,22 +2866,24 @@ module function reservedFunctionUndefinedMessage(name String, reason ReservedCal
 end 'reservedFunctionUndefinedMessage'
 
 // Where an author's function name was written: the three doors E3095 refuses an ambiguous bare name at.
-export enum FunctionNameUse
+export enum BareNameUse
 	call
 	value
 	enumCaseBacking
-end 'FunctionNameUse'
+	bindingRead
+end 'BareNameUse'
 
 // E3095's sentence, naming the door — a function value and an enum case's backing are not calls.
-export function ambiguousBareFunctionNameMessage(name String, candidates String, use FunctionNameUse) returns String
+export function ambiguousBareNameMessage(name String, candidates String, use BareNameUse) returns String
 	let subject = match use 'use'
 		call gives "bare-name call to '{name}'"
 		value gives "bare function name '{name}' used as a value"
 		enumCaseBacking gives "bare function name '{name}' backing an enum case"
+		bindingRead gives "bare-name read of '{name}'"
 	end 'use'
 
 	return ambiguousNameMessage(subject, candidates: candidates)
-end 'ambiguousBareFunctionNameMessage'
+end 'ambiguousBareNameMessage'
 
 module function ambiguousNameMessage(subject String, candidates String) returns String
 	return "Ambiguous {subject}: more than one visible declaration matches it. Qualify it as one of: {candidates}"
@@ -4162,7 +2909,7 @@ end 'renderAmbiguousCandidates'
 // reached only when it answered `false` — so it panics rather than inventing a third sentence.
 function reportCalleeNotVisible(project Project, funcNames FunctionNameIndex, callee ByteArray, noun ByteArray, callRange SourceRange, filePath FilePath)
 	let declared = try funcNames.funcNamed(callee) otherwise panic("reportCalleeNotVisible: '{String.from(callee)}' has no declaration — `calleeVisibleFrom` answered `false`, which it can only do for a callee it found")
-	reportDiagnostic(project, diagnostic: hiddenSymbolDiagnostic(HiddenSymbolKind.functionDeclaration, noun: registrationNameDisplay(noun, signatures: programSignaturesIn(project, asker: "reportCalleeNotVisible")), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath))
+	reportDiagnostic(project, diagnostic: hiddenSymbolDiagnostic(HiddenSymbolKind.functionDeclaration, noun: String.from(noun), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath))
 end 'reportCalleeNotVisible'
 
 // ⭐ **WHICH KIND OF DECLARATION A HIDDEN-SYMBOL REFUSAL IS ABOUT — the ONE axis on which its two sentences
@@ -4251,7 +2998,7 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
 		// ⚠ The CALLEE is this call's own subject, and it is a function VALUE — never `genericInstance`-tagged —
 		// so the shape substitution declines. That is the right answer as well as an honest one: an indirect
 		// call's declared shape is the function TYPE's own, written in no generic body's declaration view.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i as ParamCount), declaredParamName: shapeParamSpelling(shape, index: i as ParamCount), param: ArgumentParameter.unnamed, position: i as ParamCount, argId: argId, callInstanceSubject: CallSubject.heldBy(callee), paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance, overloadRefused: false)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i as ParamCount), declaredParamName: shapeParamSpelling(shape, index: i as ParamCount), param: ArgumentParameter.unnamed, position: i as ParamCount, argId: argId, callInstanceSubject: CallSubject.heldBy(callee), paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance)
 	end 'eachArg'
 
 	view bodies = calls.functionValueBodiesCalledThrough(func, callee: callee)
@@ -4316,7 +3063,7 @@ function checkLandingArguments(project Project, module MaxonModule, calls CallSu
 end 'checkLandingArguments'
 
 function refuseAtAFunctionValueLanding(project Project, module MaxonModule, func IrFunction, bodies CallLandingBodies, argId ValueId, named WriteBlame, position ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath) returns bool
-	let blame = blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and functionValueLandingRebinds(project, module: module, bodies: bodies, position: position))
+	let blame = blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and functionValueLandingRebinds(module, bodies: bodies, position: position))
 	var reported = false
 
 	for parameter in provenance.landingParamNames(bodies, position: position, mutationSummary: mutationSummary) 'eachWritersName'
@@ -4348,9 +3095,9 @@ function blameOfAWrittenArgument(named WriteBlame, rebindsIt bool) returns Write
 	return named.whenRebinding() if rebindsIt else named
 end 'blameOfAWrittenArgument'
 
-function functionValueLandingRebinds(project Project, module MaxonModule, bodies CallLandingBodies, position ParamCount) returns bool
+function functionValueLandingRebinds(module MaxonModule, bodies CallLandingBodies, position ParamCount) returns bool
 	for index in bodies.impls 'eachBody'
-		if functionValueBodyRebinds(project, name: (try module.functions.get(index) otherwise panic("functionValueLandingRebinds: function index {index} is past the module's functions")).name, position: position) 'aRebindingBody'
+		if functionValueBodyRebinds(try module.functions.get(index) otherwise panic("functionValueLandingRebinds: function index {index} is past the module's functions"), position: position) 'aRebindingBody'
 			return true
 		end 'aRebindingBody'
 	end 'eachBody'
@@ -4358,8 +3105,8 @@ function functionValueLandingRebinds(project Project, module MaxonModule, bodies
 	return false
 end 'functionValueLandingRebinds'
 
-function functionValueBodyRebinds(project Project, name ByteArray, position ParamCount) returns bool
-	return not project.functionValueConventions.isEmpty() and maskHasParam(project.functionValueConventions.ownMaskOf(name), param: position)
+function functionValueBodyRebinds(body IrFunction, position ParamCount) returns bool
+	return maskHasParam(body.reassignedParamMask, param: position)
 end 'functionValueBodyRebinds'
 
 function checkIndirectArgBrands(project Project, module MaxonModule, func IrFunction, bodies CallLandingBodies, args ValueIdArray, suppliedCount ParamCount, callRange SourceRange, filePath FilePath)
@@ -4404,7 +3151,7 @@ function checkImmutableArgsToCallbackSites(project Project, module MaxonModule, 
 
 			let named = immutableArgNameAt(argImmutableNames, index: i)
 
-			if refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and functionValueBodyRebinds(project, name: writer.name, position: i)), parameter: provenance.bodyParamName(writerIndex, position: i), asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: siteFile, report: report) 'reported'
+			if refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and functionValueBodyRebinds(writer, position: i)), parameter: provenance.bodyParamName(writerIndex, position: i), asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: siteFile, report: report) 'reported'
 				owned = maskWithParam(owned, param: i)
 			end 'reported'
 		end 'eachArg'
@@ -4928,8 +3675,6 @@ function resolveDiscardSite(project Project, module MaxonModule, siteIndex Eleme
 	end 'producer'
 end 'resolveDiscardSite'
 
-// `callee` is the name on the call op as it stands now: overload resolution has since rewritten it to
-// the member the arguments chose, which the parser could not know when it filed the site.
 function resolveCallSite(project Project, siteIndex ElementIndex, callee ByteArray, funcNames FunctionNameIndex) returns DiscardResolution
 	// A `__`-prefixed callee is the compiler's own name whatever a declaration says — a stdlib overlay
 	// may wear it, but a program that does so collides with the symbol the compiler emits, and E4015
@@ -4970,11 +3715,11 @@ function declaredCalleeVerdict(project Project, siteIndex ElementIndex, calleeIn
 	let calleeIsEffectFree = try effectFree.get(calleeIndex) otherwise panic("declaredCalleeVerdict: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into, and it is built whenever any site resolves to a purity question, which this one did")
 
 	if calleeIsEffectFree 'theCallHadNoOtherReasonToRun'
-		return DiscardVerdict.pureResultUnused(String.from(overloadRegistrationBaseName(callee)))
+		return DiscardVerdict.pureResultUnused(String.from(genericTemplateName(callee)))
 	end 'theCallHadNoOtherReasonToRun'
 
 	return match site.door 'whereTheResultFellAway'
-		statement gives DiscardVerdict.impureResultUnused(String.from(overloadRegistrationBaseName(callee)))
+		statement gives DiscardVerdict.impureResultUnused(String.from(genericTemplateName(callee)))
 		explicitDiscard gives DiscardVerdict.none
 	end 'whereTheResultFellAway'
 end 'declaredCalleeVerdict'
@@ -5078,14 +3823,9 @@ export type WitnessDispatchTargets
 	// a short column is an unsplit one and a program with no functions is split by having nothing to split.
 	//
 	// ⛔⛔ **BOTH JOINS HAVE TO COME OFF, AND `bareMethodName` UNDOES ONLY ONE.** A registration name
-	// is `Type.method` joined AGAIN with `#suffix` when the member contests an overload set
-	// (`Project.overloadRegistrationName`), so `bareMethodName` alone answers `digest#` for
-	// `Loud.digest#` and that member matches NO requirement: an interface member that is not the FIRST
-	// declaration of its base drops out of the candidate set, and a dispatch that can land on it then
-	// reads PURE. MEASURED, and it is the over-refusing direction this summary must never take: a
-	// conformer whose `digest()` sits behind a `digest(salt)` overload had its module-global write erased
-	// from the summary and `_ = box.itemDigest()` was refused E3064, while deleting the unrelated
-	// overload compiled the same program.
+	// can be `Type.method` joined AGAIN with `#suffix` (`Project.mintedName`), so `bareMethodName` alone
+	// answers `method#suffix` and that member matches NO requirement: it drops out of the candidate set,
+	// and a dispatch that can land on it then reads PURE.
 	//
 	// ⚠ **`#` COMES OFF FIRST.** A suffix part is a rendered TYPE name and may hold a `.` of its own
 	// (`hash#ns.Type`), so taking the last `.`-segment first would answer the suffix's tail.
@@ -5097,7 +3837,7 @@ export type WitnessDispatchTargets
 		var lastWithName = FunctionByBareName.create()
 
 		for i in 0 upto self.functions.count() 'eachFunc'
-			let name = bareMethodName(overloadRegistrationBaseName((try self.functions.get(i) otherwise panic("splitBareNames: functions.get OOB at {i} inside its own count()")).name)).toByteArray()
+			let name = bareMethodName(genericTemplateName((try self.functions.get(i) otherwise panic("splitBareNames: functions.get OOB at {i} inside its own count()")).name)).toByteArray()
 			self.nextWithName.push(i)
 			self.hasNextWithName.push(false)
 
@@ -6030,93 +4770,14 @@ end 'targetCanHostSubprocess'
 //
 // The two keep checks run before the write check and hand it the positions they refused, so an
 // argument a callee both keeps and writes is refused once, as E3078, and never again as E3159.
-function checkSlottedCall(project Project, module MaxonModule, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argLabels NameRoster, argImmutableNames WriteBlameArray, argIds ValueIdArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath, overloadRefused bool)
-	checkArgTypes(project, module: module, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argIds: argIds, argLabels: argLabels, defaultedArgs: defaultedArgs, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
+function checkSlottedCall(project Project, module MaxonModule, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argLabels NameRoster, argImmutableNames WriteBlameArray, argIds ValueIdArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath)
+	checkArgTypes(project, module: module, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
 	checkTypeParameterArgs(project, func: func, result: result, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
 	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	let keptReadOnly = checkReadOnlyArgToKeepingParam(func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange)
 	let keptWritable = noteSharedArgsToKeepingParams(func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange)
-	checkImmutableArgToMutatingParam(project, func: func, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, refusedAsKept: keptReadOnly or keptWritable, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath)
-	checkResolvedExtensionConstraints(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
+	checkImmutableArgToMutatingParam(project, func: func, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, refusedAsKept: keptReadOnly or keptWritable, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, argRanges: argRanges, filePath: filePath)
 end 'checkSlottedCall'
-
-// ⭐⭐ **THE CONDITIONAL-EXTENSION REFUSAL ASKED OF THE RESOLVED OVERLOAD MEMBER (E4006).** The parse-time
-// gate (`Parser.requireMethodNotWithheldByConstraint`) owns this question wherever the name has ONE reading,
-// and it words it better — at the member token, before anything is built. It CANNOT own it where a
-// `<Conformer>.<method>` is declared by a conditional extension AND by an unconditional one, because a call
-// is dispatched before its arguments are read: there the parser defers
-// (`ProgramSignatures.hasUnconstrainedExtensionDeclaration`) and this is the decider, on the member
-// `resolveOverloadedCalls` actually chose.
-//
-// ⚠ **IT IS NOT A SECOND RULE.** The predicate is `receiverMeetsExtensionConstraints` and the sentence is
-// `conditionalExtensionWithheldMessage`, both shared verbatim with the parse-time gate — what differs is only
-// WHICH callee is asked about, which is the entire reason two askers exist.
-//
-// ⛔ **THE CLAUSE COMES OFF THE RESOLVED MEMBER'S OWN SIGNATURE, NOT OFF THE DECLARATION-SWEEP MAP.**
-// That map is keyed by the DECLARED `<Conformer>.<method>`, and this asker holds the REGISTRATION name of the
-// member overload resolution chose — which for a contested set is a suffixed name the map has never heard of,
-// so this decider silently never fired for exactly the sets it was written for. `FuncSignature.extensionConstraints`
-// is the same clause recorded under the name that was actually minted; see it for the ABI half of the defect.
-//
-// Allocation-free on every program that declares no conditional type extension: the field is the shared empty
-// list for every other declaration.
-function checkResolvedExtensionConstraints(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
-	let constraints = sig.extensionConstraints
-
-	if constraints.isEmpty() 'notAConditionalTypeExtensionMethod'
-		return
-	end 'notAConditionalTypeExtensionMethod'
-
-	if not sig.takesReceiver() or argIds.count() == 0 'noReceiverToJudge'
-		return
-	end 'noReceiverToJudge'
-
-	let receiverId = try argIds.get(0) otherwise panic("checkResolvedExtensionConstraints: argIds.count() > 0 but get(0) failed")
-	let receiverTag = try func.valueTags.get(receiverId) otherwise panic("checkResolvedExtensionConstraints: value v{receiverId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
-
-	// An OPAQUE receiver (a generic body's own `self`, a value of its type parameter) forwards its witnesses
-	// from the caller and is the parse-time gate's other arm, which the deferral above does not disturb: that
-	// arm fires before the name is even looked at as an overload set.
-	if receiverTag != ValueTypeTag.genericInstance 'notAConcreteInstance'
-		return
-	end 'notAConcreteInstance'
-
-	let gid = try func.valueNameIds.get(receiverId) otherwise panic("checkResolvedExtensionConstraints: value v{receiverId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
-
-	// Asked only once every cheaper test has passed — the index is needed for the VERDICT and for the
-	// sentence, and neither is reached by a call whose callee carries no clause.
-	var signatures = programSignaturesIn(project, asker: "checkResolvedExtensionConstraints")
-
-	match receiverMeetsExtensionConstraints(signatures, gid: gid as GenericInstanceId, constraints: constraints) 'constraint'
-		met then reportOpaqueReceiverWithoutTables(project, signatures: signatures, func: func, callee: callee, constraints: constraints, gid: gid as GenericInstanceId, callRange: callRange, filePath: filePath)
-		unmet(interfaceName, argDisplayName) then reportConditionalExtensionWithheld(project, signatures: signatures, callee: callee, constraints: constraints, interfaceName: interfaceName, argDisplayName: argDisplayName, callRange: callRange, filePath: filePath)
-	end 'constraint'
-end 'checkResolvedExtensionConstraints'
-
-// The deferred twin of `Parser.requireTablesToForwardOpaqueArguments`, on the member overload
-// resolution chose.
-function reportOpaqueReceiverWithoutTables(project Project, signatures ProgramSignatures, func IrFunction, callee ByteArray, constraints WhereConstraintArray, gid GenericInstanceId, callRange SourceRange, filePath FilePath)
-	// The carrier fixpoint runs in lowering, after this check, so a static counts as carrying its tables
-	// here; lowering refuses the call (`refuseUnsuppliedTables`) when it turns out to carry none.
-	let holder = tableHolderOf(signatures, funcSignatures: project.funcSignatures, func: func, staticCarriesTheDescriptor: true)
-
-	if holder == TableHolder.carriesTables or not signatures.constraintsNameABareTypeParameter(callee, extensionConstraints: constraints, gid: gid) 'nothingToForwardOrSomewhereToForwardFrom'
-		return
-	end 'nothingToForwardOrSomewhereToForwardFrom'
-
-	let arrival = arrivalWhenWithoutTables(holder, outsideAClosure: NoWitnessTablesArrival.dispatchedOnAnInstanceOverATypeParameter)
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: noWitnessTablesRefusalText(callee, arrival: arrival), line: callRange.line, column: callRange.column, filePath: filePath)
-end 'reportOpaqueReceiverWithoutTables'
-
-// The refusal itself, split out so the arm above stays one line: the callee is a
-// `<Conformer>.<member>` (the fold files constraints under no other shape), possibly wearing an overload
-// suffix, and the message names the two halves separately.
-function reportConditionalExtensionWithheld(project Project, signatures ProgramSignatures, callee ByteArray, constraints WhereConstraintArray, interfaceName ByteArray, argDisplayName ByteArray, callRange SourceRange, filePath FilePath)
-	match splitQualifiedName(overloadRegistrationBaseName(callee)) 'q'
-		parts(typeName, member) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: conditionalExtensionWithheldMessage(String.from(typeName), methodName: String.from(member), clause: signatures.renderExtensionClause(typeName, constraints: constraints), unmetInterfaceName: String.from(interfaceName), bindingName: String.from(argDisplayName)), line: callRange.line, column: callRange.column, filePath: filePath)
-		notQualified then panic("reportConditionalExtensionWithheld: '{String.from(callee)}' carries extension constraints but is not a qualified method name — `Parser.noteTypeExtensionWitnessConstraints` files them under `<Conformer>.<member>` only")
-	end 'q'
-end 'reportConditionalExtensionWithheld'
 
 // ⭐⭐ **E3159, THE CALL-SITE HALF: AN IMMUTABLE BINDING MAY NOT FILL A PARAMETER THE CALLEE WRITES.**
 // The receiver half — `let a = [1,2,3]` then `a.push(9)` — is the PARSER's (`Parser.noteReceiverWrite`),
@@ -6141,7 +4802,7 @@ end 'reportConditionalExtensionWithheld'
 // ⭐⭐ **THE MASK IS THE UNION OF TWO WRITE COLUMNS, BECAUSE A FIELD WRITE THROUGH A PARAMETER WRITES THE
 // CALLER'S RECORD.** `let a = Box.create()` handed to a `bump(b Box)` whose body is `b.n = 99` is refused: a
 // `let` is immutable, and how deep the callee reaches to write it does not change whose record was written.
-function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, argImmutableNames WriteBlameArray, refusedAsKept ParamPositionMask, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath)
+function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, argImmutableNames WriteBlameArray, refusedAsKept ParamPositionMask, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, argRanges SourceRangeArray, filePath FilePath)
 	let (mask, recordWriteMask) = mutationSummary.writesOf(callee)
 	let written = mask or recordWriteMask
 	let asksWrittenArguments = provenance.enteredFunctionAsksWrittenArguments(func)
@@ -6167,6 +4828,12 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 
 		let paramName = try sig.paramNames.get(pos) otherwise panic("checkImmutableArgToMutatingParam: paramNames.get OOB at {pos} inside paramCount()")
 
+		if let callerParam = try unmarkedTextParameterOf(project, func: func, argId: argId) 'writesAnUnmarkedParameter'
+			let writtenRange = argumentRangeOf(args, argRanges: argRanges, argId: argId, fallback: callRange)
+			reportPositioned(project, code: ErrorCode.assignToImmutable, message: parameterReassignMessage(String.from(callerParam), kind: ParameterReassignKind.valueParameter), line: writtenRange.line, column: writtenRange.column, filePath: filePath)
+			continue
+		end 'writesAnUnmarkedParameter'
+
 		if maskHasParam(refusedAsKept, param: pos) 'refusedWhereItIsKept'
 			if asksWrittenArguments 'someDoorReadsIt'
 				provenance.noteArgumentWritten(argId, call: callRange, parameter: ArgumentParameter.named(paramName.clone()))
@@ -6181,6 +4848,29 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 		_ = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame.whenOnlyRebound() if byRef and not maskHasParam(recordWriteMask, param: pos) else blame, parameter: ArgumentParameter.named(paramName.clone()), asksWrittenArguments: asksWrittenArguments, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.atTheCall)
 	end 'eachArg'
 end 'checkImmutableArgToMutatingParam'
+
+function unmarkedTextParameterOf(project Project, func IrFunction, argId ValueId) returns ByteArray throws AbsentError
+	let position = argId as ElementIndex
+
+	if position >= func.maxonParamTypes.count() 'notAParameter'
+		throw AbsentError.absent
+	end 'notAParameter'
+
+	let tag = maxonTypeTag(try func.maxonParamTypes.get(position) otherwise throw AbsentError.absent)
+
+	if (tag != ValueTypeTag.string and tag != ValueTypeTag.character) or maskHasParam(func.reassignedParamMask, param: position as ParamCount) 'notAnUnmarkedText'
+		throw AbsentError.absent
+	end 'notAnUnmarkedText'
+
+	view callerSig = try project.funcSignatures.get(func.name) otherwise throw AbsentError.absent
+	let name = (try callerSig.paramNames.get(position) otherwise throw AbsentError.absent).clone()
+
+	if name.equals(SelfParamName) 'theReceiver'
+		throw AbsentError.absent
+	end 'theReceiver'
+
+	return name
+end 'unmarkedTextParameterOf'
 
 function blameIsOnlyAHeldPromise(blame WriteBlame) returns bool
 	let holder = try blame.blamedHolder() otherwise return false
@@ -6252,6 +4942,10 @@ function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, m
 		let calleeIndex = try mutationSummary.funcIndexByName.get(func.name) otherwise continue
 		let written = mask or recordWriteMask or provenance.keptParameters(calleeIndex, paramCount: sig.paramCount())
 
+		if maskHasParam(func.reassignedParamMask, param: WitnessReceiverArgCount) and project.refusedConformanceMembers.contains(func.name) 'refusedAsANonConformer'
+			continue
+		end 'refusedAsANonConformer'
+
 		if maskHasParam(written, param: WitnessReceiverArgCount) 'writesItsOperand'
 			view operand = try sig.paramNames.get(WitnessReceiverArgCount) otherwise panic("checkComparisonMethodsDoNotWrite: '{String.from(func.name)}' takes a receiver and one parameter and has no name for it")
 			reportAtFunctionName(project, func: func, code: ErrorCode.comparisonMethodWritesItsParameter, message: "'{functionSourceName(project, func: func)}' writes its parameter '{displayParamName(operand)}', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value")
@@ -6265,7 +4959,7 @@ function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, m
 end 'checkComparisonMethodsDoNotWrite'
 
 function namesAComparisonMethod(name ByteArray) returns bool
-	return match splitQualifiedName(overloadRegistrationBaseName(name)) 'q'
+	return match splitQualifiedName(genericTemplateName(name)) 'q'
 		parts(_, member) gives member.equals(EqualsMethodName) or member.equals(CompareMethodName)
 		notQualified gives false
 	end 'q'
@@ -6847,7 +5541,7 @@ function argumentRangeOf(args ValueIdArray, argRanges SourceRangeArray, argId Va
 	return fallback
 end 'argumentRangeOf'
 
-function checkArgTypes(project Project, module MaxonModule, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argIds ValueIdArray, argLabels NameRoster, defaultedArgs ParamCount, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
+function checkArgTypes(project Project, module MaxonModule, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argIds ValueIdArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
 	// ⭐⭐ **A CALL THROUGH A CONCRETE INSTANCE JUDGES ITS ARGUMENTS AGAINST THE INSTANCE VIEW OF EACH
 	// PARAMETER, NOT AGAINST THE SHARED BODY'S DECLARATION VIEW.** The compiler compiles one body per
 	// generic type, so `adopt(other Items)` and `merge(source Self)` are declared in terms the
@@ -6902,10 +5596,6 @@ function checkArgTypes(project Project, module MaxonModule, func IrFunction, res
 		let declaredParamName = receiverBrandForSelfParam(project, func: func, sig: sig, argIds: argIds, position: i as ParamCount, declared: try sig.paramDeclaredNames.get(i) otherwise panic("checkArgTypes: paramDeclaredNames.get OOB at {i} — a signature's param columns (names, types, aggregate names, declared names) are built in lockstep"))
 		let preErasedAggregate = EmptySourceText if reservedCalleeStatesAShape(project, callee: callee, declaredAggregate: declaredAggregate) else declaredAggregate
 
-		if reportIrreparableSuppliedDefault(project, func: func, callee: callee, position: i as ParamCount, argId: argId, paramType: paramType, sig: sig, argLabels: argLabels, defaultedArgs: defaultedArgs, callRange: callRange, filePath: filePath) 'theOverloadsDisagreeOnThisSlot'
-			return
-		end 'theOverloadsDisagreeOnThisSlot'
-
 		// ⭐⭐ **ONE CALL EARNS ONE ARGUMENT DIAGNOSTIC — the FIRST.** Past that the call is already
 		// refused, and every later argument's verdict is a second sentence about it. `Box.take(1.5, b: 2.5)`,
 		// both arguments wrong, earns ONE E3009 naming `a`. `testing-assertions`'
@@ -6915,7 +5605,7 @@ function checkArgTypes(project Project, module MaxonModule, func IrFunction, res
 		// ⚠ **IT IS THE ONE CALL'S RULE AND NOT A FIRST-ERROR GATE.** Two separately-bad calls still earn two
 		// diagnostics here. Nothing in the corpus asks for the narrower behaviour, and
 		// `project.diagnostics` being first-class is the point.
-		if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, param: ArgumentParameter.named(paramName), position: i as ParamCount, argId: argId, callInstanceSubject: instanceSubject, paramExistentialSites: sig.paramExistentialSites, callRange: callRange, handedAt: argumentRangeOf(args, argRanges: argRanges, argId: argId, fallback: callRange), filePath: filePath, provenance: provenance, overloadRefused: overloadRefused) 'thisArgumentWasRefused'
+		if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, param: ArgumentParameter.named(paramName), position: i as ParamCount, argId: argId, callInstanceSubject: instanceSubject, paramExistentialSites: sig.paramExistentialSites, callRange: callRange, handedAt: argumentRangeOf(args, argRanges: argRanges, argId: argId, fallback: callRange), filePath: filePath, provenance: provenance) 'thisArgumentWasRefused'
 			return
 		end 'thisArgumentWasRefused'
 
@@ -6939,34 +5629,6 @@ function receiverBrandForSelfParam(project Project, func IrFunction, sig FuncSig
 	let brand = receiverBrand(project, func: func, argIds: argIds)
 	return declared if brand.isEmpty() or isCompilerReservedName(brand) else brand
 end 'receiverBrandForSelfParam'
-
-// ⭐⭐ **A PARAMETER THIS CALL OMITTED IS JUDGED AS THE OVERLOADS' DISAGREEMENT, NOT AS THE AUTHOR'S
-// ARGUMENT.** The value at a compiler-supplied slot is the result of a helper the PARSE chose by NAME, so
-// for an overloaded callee it may carry another member's declared type — and a call that then fits no
-// member is left on the first one (`leaveUnmatchedCallOnFirstCandidate`) and reaches this check against
-// it. An argument mismatch here would name a value the author never wrote; the defect is the
-// declarations', and it is reported with the same sentence `repointDefaultedArgHelpers` earns for a call
-// that DID resolve. Only an IRREPARABLE difference is taken: a plain-scalar one (`true` supplied at an int
-// parameter) is a mismatch the ordinary sentence states accurately, and it stays the argument check's.
-//
-// A callee the registry does not hold as an overload set (a contested set's directory-qualified first
-// member, or a name declared once) is left to the argument check for the same reason: the sentence speaks
-// of "the overloads of", and must not be earned by a call that has none.
-function reportIrreparableSuppliedDefault(project Project, func IrFunction, callee ByteArray, position ParamCount, argId ValueId, paramType MaxonType, sig FuncSignature, argLabels NameRoster, defaultedArgs ParamCount, callRange SourceRange, filePath FilePath) returns bool
-	if not project.overloadSets.contains(callee) or not synthesizedArgSlots(sig.paramNames, argLabels: argLabels, defaultedArgs: defaultedArgs).contains(position) 'theAuthorWroteItOrNothingDisagrees'
-		return false
-	end 'theAuthorWroteItOrNothingDisagrees'
-
-	let current = try func.valueTags.get(argId) otherwise panic("reportIrreparableSuppliedDefault: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
-	let declared = maxonTypeTag(paramType)
-
-	if not overloadDisagreementIsIrreparable(current, declared: declared) 'agreesOrRepairable'
-		return false
-	end 'agreesOrRepairable'
-
-	reportOverloadReturnDisagreement(project, range: callRange, filePath: filePath, member: callee, current: current, declared: declared, disagreement: OverloadDisagreementSubject.aDefaultedArgument(callee, slot: position))
-	return true
-end 'reportIrreparableSuppliedDefault'
 
 // ⭐⭐ **ONE PARAMETER'S TYPE AS THE CALL'S CONCRETE INSTANCE SEES IT** — the declaration-view types
 // a shared generic body spells, resolved against the instance the call is actually made at:
@@ -7063,7 +5725,7 @@ function functionShapeThroughCallInstance(project Project, func IrFunction, subj
 		return shape
 	end 'theInstanceFixesNothingHere'
 
-	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, paramDeclaredNames: shape.paramDeclaredNames, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid), paramCapabilities: shape.paramCapabilities, returnCapability: shape.returnCapability)
+	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, paramDeclaredNames: shape.paramDeclaredNames, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid), paramCapabilities: shape.paramCapabilities, returnCapability: shape.returnCapability, byRefParams: shape.byRefParams)
 end 'functionShapeThroughCallInstance'
 
 // ⭐⭐ **THE IDENTITY OF A SLOT THE INSTANCE JUST FILLED IN — `Parser.erasedAggregateNameOf`'s RULE stated for
@@ -7934,7 +6596,7 @@ end 'existentialStoreWideningPlace'
 // which is their honest answer rather than a stand-in — an interface REQUIREMENT's formals are the
 // interface's own spelling, and a function TYPE names its parameters' declarations nowhere at all
 // (the same gap `declaredParamName` has at those two sites).
-function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
+function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let paramTag = maxonTypeTag(paramType)
@@ -8009,10 +6671,9 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		// `aggregateCannotDecayIn`, which has already answered the same question wider.
 		var signatures = programSignaturesIn(project, asker: "checkOneArgType")
 
-		// A handle the parser left unconverted because the call's overloads tied is already E3007; every
-		// other unconverted `T.handle` at an `I.handle` parameter is a conversion door that was missed,
-		// and is E3005.
-		if signatures.aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: declaredBrandOf(declaredParamName, paramTag: paramTag), got: gotAggregate, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId), readerFilePath: filePath) and not (overloadRefused and signatures.serviceHandleWidensTo(gotAggregate, interfaceHandleName: expectedAggregate)) 'aggregateArgMismatch'
+		// An unconverted `T.handle` at an `I.handle` parameter is a conversion door that was missed, and is
+		// E3005.
+		if signatures.aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: declaredBrandOf(declaredParamName, paramTag: paramTag), got: gotAggregate, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId), readerFilePath: filePath) 'aggregateArgMismatch'
 			// ⚠ **THE OPAQUE TAIL BELONGS HERE TOO, AND FOR ONE FACT THERE IS ONE SENTENCE.** A boxed
 			// UNION parameter carries a nominal identity, so an opaque `T` meeting one is refused by THIS arm and
 			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same

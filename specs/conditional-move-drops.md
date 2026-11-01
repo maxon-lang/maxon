@@ -1024,7 +1024,7 @@ function shoutAsync(text String) returns Integer
 	return 1
 end 'shoutAsync'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -1082,7 +1082,7 @@ type Echo
 	end 'shout'
 end 'Echo'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -1130,7 +1130,7 @@ function shout(text String) returns Integer
 	return 1
 end 'shout'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -1183,7 +1183,7 @@ type Echo
 	end 'shout'
 end 'Echo'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -1220,7 +1220,7 @@ function shout(text String) returns Integer
 	return 1
 end 'shout'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -1269,7 +1269,7 @@ type Echo
 	end 'shout'
 end 'Echo'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
@@ -1311,7 +1311,7 @@ function shout(text String) returns Integer
 	return 1
 end 'shout'
 
-function fill(dest String, n Integer)
+function fill(dest mutable String, n Integer)
 	dest = "filled {n} padded out long enough to heap allocate"
 end 'fill'
 
