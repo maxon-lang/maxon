@@ -1702,6 +1702,78 @@ error E2010: a/<fragment>:6:7: Expected '=' but got ':'
 error E3004: b/<fragment>:20:15: call to undefined function 'Shape.nothere'
 ```
 
+<!-- test: error.a-failed-file-leaves-a-healthy-callers-ownership-unjudged -->
+The file that fails to parse declares `pick`, which hands back a record. A healthy file binds a `let` to
+`pick`'s result while it also writes the record it handed `pick`. Nothing is known of what a refused
+declaration returns, so no ownership mistake is the healthy caller's: only the parse errors are reported.
+```maxon
+// --- file: a/broken.maxon
+export type Box
+	export var n as ExitCode
+
+	export static function create() returns Box
+		return Box{n: 0}
+	end 'create'
+end 'Box'
+
+export function pick(box Box) returns Box
+	let end = 1
+	return box
+end 'pick'
+
+// --- file: b/main.maxon
+function main() returns ExitCode
+	var box = Box.create()
+	let picked = pick(box)
+	box.n = 7
+	return picked.n
+end 'main'
+```
+```maxoncstderr
+error E2010: a/<fragment>:12:6: Expected identifier but got 'end'
+error E2001: a/<fragment>:12:10: Expected function declaration, got '='
+error E2001: a/<fragment>:14:1: Expected function declaration, got 'end'
+```
+
+<!-- test: error.a-failed-file-leaves-a-healthy-callers-sole-argument-unjudged -->
+A healthy file passes the result of a refused declaration, called with a record it still writes, to a
+`sole` parameter. What a refused declaration returns is unknown, so the pass is not judged: only the parse
+errors are reported.
+```maxon
+// --- file: a/broken.maxon
+export type Box
+	export var n as ExitCode
+
+	export static function create() returns Box
+		return Box{n: 0}
+	end 'create'
+end 'Box'
+
+export function pick(box Box) returns Box
+	let end = 1
+	return box
+end 'pick'
+
+// --- file: b/main.maxon
+typealias TakesBox = function(sole Box) returns ExitCode
+
+function main() returns ExitCode
+	var box = Box.create()
+	return passOn(function(b) gives b.n, box: box)
+end 'main'
+
+function passOn(take TakesBox, box Box) returns ExitCode
+	var other = Box.create()
+	other.n = box.n
+	return take(pick(other))
+end 'passOn'
+```
+```maxoncstderr
+error E2010: a/<fragment>:12:6: Expected identifier but got 'end'
+error E2001: a/<fragment>:12:10: Expected function declaration, got '='
+error E2001: a/<fragment>:14:1: Expected function declaration, got 'end'
+```
+
 <!-- test: error.a-parse-error-in-one-function-beside-an-undefined-call-in-another-function-of-the-same-file-reports-both -->
 A parse error abandons only the body it is in: the rest of the file is read, so an undefined call in another
 function of the same file is reported beside it.
@@ -1917,6 +1989,28 @@ end 'main'
 ```
 ```maxoncstderr
 error E2010: <fragment>:3:2: Expected ')' but got 'return'
+```
+
+<!-- test: error.a-function-whose-head-failed-to-parse-used-as-a-function-value-reports-only-the-parse-error -->
+`broken` is abandoned with its head, so its signature is gone; passing it as a function value is the parse error's consequence and is not reported.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function broken( returns ExitCode
+	return 0
+end 'broken'
+
+function main() returns ExitCode
+	return apply(broken, x: 1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:10:2: Expected ')' but got 'return'
 ```
 
 <!-- test: error.a-constant-reading-a-refused-call-constant-reports-the-call-once -->

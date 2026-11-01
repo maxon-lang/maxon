@@ -6160,6 +6160,11 @@ let ChainMethodMinHops = 2
 // A field STORE needs one hop and no more (`p.x = 1`, `o.inner.x = 1`) — the zero-hop `x = 1` is a
 // BINDING assignment, which `assignsAt` owns and `fieldAssignsAt` must not claim.
 let FieldStoreMinHops = 1
+
+// Counted from the static member's token, so the one hop a static member call needs is the method
+// itself (`Names.items.push(9)`) and any field hops of a longer chain come before it.
+let StaticMemberCallMinHops = 1
+
 let AnyFieldHops = 0
 
 // The label of the placeholder block a Parser holds before it has parsed a function. It
@@ -18645,6 +18650,13 @@ type FunctionBodyState
 	export var checkedCalls as ValueMarkColumn
 	export var wholeFieldDefaultCast as WholeInitializerCast
 	export var mergedBindingValues as ValueMarkColumn
+
+	// A merged binding with an unresolved incoming value: the result of a call already reported as an
+	// error, such as an unknown method. Such a merge makes no ownership claim and its binding is not
+	// judged for moves, so no ownership diagnostic follows the reported one. A program holding one
+	// never lowers (`requireNoUnresolvedTagsSurvivedTheMaxonTier`).
+	export var unresolvedMergeValues as ValueMarkColumn
+
 	export var movedBindingValues as ValueMarkColumn
 	export var capturedMoveValues as ValueMarkColumn
 	export var capturedPromiseReads as ValueMarkColumn
@@ -18995,6 +19007,7 @@ type FunctionBodyState
 			checkedCalls: noValueMarks,
 			wholeFieldDefaultCast: WholeInitializerCast.none,
 			mergedBindingValues: noValueMarks,
+			unresolvedMergeValues: noValueMarks,
 			movedBindingValues: noValueMarks,
 			capturedMoveValues: noValueMarks,
 			capturedPromiseReads: noValueMarks,
@@ -36808,10 +36821,12 @@ export type Parser
 			// has no arm that claims a dotted form, so it needs one of its own — exactly as
 			// `methodCallStmt` and `fieldChainMethodStmt` each do. Without it the canonical spelling of the
 			// only mutation a managed static supports died as `E2015: Unsupported: identifier statement`.
+			// With field hops between the member and the method (`Registry.current.items.push(9)`),
+			// `parsePostfix` applies the rest of the chain, as the expression form does.
 			let staticAnchor = self.dottedCallNameToken(self.pos)
 			let staticTempFloor = self.bodyState.pendingTempDrops.count()
 			let staticOpFloor = self.artifact.module.ops.count()
-			let staticResult = try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false)
+			let staticResult = try self.parsePostfix(func, value: try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false), resultUsed: false)
 			try self.finishCallStatement(func, result: staticResult, opFloor: staticOpFloor, tempFloor: staticTempFloor, anchor: staticAnchor)
 		end 'staticMemberCallStmt' else if form == StatementForm.qualifiedStaticCallStmt 'qualifiedStaticCallStmt'
 			// ⭐ `Clock.tick()` / `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A STATIC CALLED
@@ -60407,8 +60422,12 @@ export type Parser
 		//
 		// ⚠ The bit is read off the incoming the mint can see — `binding.boundValue`, the path parsed last —
 		// and `pushMergedEdgeValue` checks every OTHER incoming against it, because a phi that owns on one edge
-		// and borrows on another is an ownership question with no answer, not a mark to join.
-		if self.valueIsOwnedHeap(binding.boundValue) 'ownedBinding'
+		// and borrows on another is an ownership question with no answer, not a mark to join. That holds
+		// for resolved incomings only: an unresolved one (`unresolvedMergeValues`) leaves the phi owning
+		// nothing.
+		if self.valueIsDeferred(binding.boundValue) 'anUnresolvedIncoming'
+			self.bodyState.unresolvedMergeValues = withValueMarked(self.bodyState.unresolvedMergeValues, value: phiId)
+		end 'anUnresolvedIncoming' else if self.valueIsOwnedHeap(binding.boundValue) 'ownedBinding'
 			self.markValueOwnsHeap(phiId, exclusivity: OwnedHeapExclusivity.sole if self.valueIsSoleHeapOwner(binding.boundValue) else OwnedHeapExclusivity.coOwned)
 
 			if self.valueIsSolelyOwnedHere(binding.boundValue) 'aHandOffSource'
@@ -60484,6 +60503,16 @@ export type Parser
 		// merged name's settled value at each of these call sites (the continuation phi at an `if`/`match`, the
 		// exit phi at a loop), so a marked incoming makes the merged name marked.
 		self.carryProvenanceFromArms(binding.boundValue, arms: singletonArgs(value))
+
+		// One unresolved incoming (`unresolvedMergeValues`) makes the whole merge unresolved, and an
+		// unresolved merge has no ownership to check below.
+		if self.valueIsDeferred(value) 'anUnresolvedEdge'
+			self.bodyState.unresolvedMergeValues = withValueMarked(self.bodyState.unresolvedMergeValues, value: binding.boundValue)
+		end 'anUnresolvedEdge'
+
+		if valueIsMarked(self.bodyState.unresolvedMergeValues, value: binding.boundValue) 'anUnresolvedMerge'
+			return
+		end 'anUnresolvedMerge'
 
 		// ⭐⭐ **THE OWNERSHIP HALF OF THE SAME TWINNING** (see `mintPhiForBinding`). The mint stamped the phi
 		// from ONE incoming; these are the others, and they must answer the same. They do, and the reason is
@@ -87643,7 +87672,9 @@ export type Parser
 		//
 		// What remains is the case the arm is about: a binding rebound to a value owning nothing — a
 		// promise binding REASSIGNED to a bare scalar (`p = 5`), or a binding handed a deferred value —
-		// whose `movedFrom` means "owns nothing droppable" rather than "was moved from".
+		// whose `movedFrom` means "owns nothing droppable" rather than "was moved from". A merged binding
+		// with an unresolved incoming (`unresolvedMergeValues`) is admitted too, so it is not judged for
+		// moves.
 		// `rebindToAValueOwningNothing` re-points `boundValue` BEFORE setting that bit, so the binding
 		// asked about here is no longer a promise and the escape still admits it.
 		// ⚠ **THE MARK (`valueOwnsGreenThread`) AND NOT THE WIDER `valueIsPromise`, AND THE DIFFERENCE IS ONE
@@ -87670,7 +87701,7 @@ export type Parser
 		// `valueIsPromise` spelling cost **+8,176 allocations at the smallest size rising to +173,953 at the largest**
 		// (x1.65 x1.79 x1.88 x1.94 x1.97 — linear, a per-read constant, +0.37% of the compile at the largest size);
 		// the mark spelling costs a dense-column read and the ladder returns to the control's numbers.
-		if (tagOwnsNoHeapValue(self.tagOf(binding.boundValue)) or self.valueIsDeferred(binding.boundValue)) and not self.valueOwnsGreenThread(binding.boundValue) 'scalarBinding'
+		if (tagOwnsNoHeapValue(self.tagOf(binding.boundValue)) or self.valueIsDeferred(binding.boundValue) or valueIsMarked(self.bodyState.unresolvedMergeValues, value: binding.boundValue)) and not self.valueOwnsGreenThread(binding.boundValue) 'scalarBinding'
 			return
 		end 'scalarBinding'
 
@@ -100644,16 +100675,20 @@ export type Parser
 		return self.kindAt(index + TokensPerQualifierSegment + 1) == TokenKind.equals and self.staticMemberBaseAt(index)
 	end 'staticMemberAssignsAt'
 
-	// **The token shape of a METHOD CALL ON A STATIC MEMBER** — `<Type> . <member> . <method> (`, the
-	// STATEMENT half of the form `parseDottedPrimary`'s static arm already serves in expression position.
-	// The trailing member call is what makes it a statement at all: a bare `Names.items` on a line of its
-	// own computes nothing and stays the `Unsupported: identifier statement`.
+	// **The token shape of a METHOD CALL ON A STATIC MEMBER** —
+	// `<Type>.<member>(.<field>)*.<method>(`, the STATEMENT half of the form `parseDottedPrimary`'s
+	// static arm already serves in expression position. The trailing member call is what makes it a
+	// statement at all: a bare `Names.items` on a line of its own computes nothing and stays the
+	// `Unsupported: identifier statement`.
 	//
-	// The tail asks `memberCallFollows`, the predicate every other `<base> . <member> (` dispatcher asks, so
-	// this door cannot disagree with the rest of the file about what a member call looks like — and it is
-	// asked first for `staticMemberAssignsAt`'s cost reason.
+	// The chain is `fieldChainEndAfter`'s walk from the member token, the one answer every other chain
+	// door asks about where a chain ends, so this door cannot disagree with the rest of the file about
+	// what a member call looks like — and it is asked first for `staticMemberAssignsAt`'s cost reason.
 	function staticMemberCallsAt(index ElementIndex) returns bool
-		return self.memberCallFollows(index + TokensPerQualifierSegment + 1) and self.staticMemberBaseAt(index)
+		let memberIndex = index + TokensPerQualifierSegment
+		let chainEnd = self.fieldChainEndAfter(memberIndex, minHops: StaticMemberCallMinHops)
+
+		return chainEnd != memberIndex and self.kindAt(chainEnd) == TokenKind.leftParen and self.staticMemberBaseAt(index)
 	end 'staticMemberCallsAt'
 
 	// ⭐ **DOES A ONE-HOP DOTTED FORM AT `index` ROOT AT A STATIC MEMBER — the half the two STATEMENT

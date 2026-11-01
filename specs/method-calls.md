@@ -82,10 +82,9 @@ not decided here:
   receiver as an argument — which is what the same call shape already reports in
   `implicit-self-methods.md` (`'Maker.bump' expects 1 argument(s) but 0 were provided`, for a `bump()`
   that declares none) and in `where-clauses.md`.
-- **The unknown-method case is `E3004`, not `E4006`.** The compiler resolves a method call at PARSE time, so an
-  unknown name is refused before lowering ever runs, under E3004 `callUnknownFunction`, the code the
-  registry defines for "a call names a function that does not exist -- a typo" and which
-  `functions.md` already states as the rule.
+- **The unknown-method case is `E4006`, not `E3004`.** A method call on a receiver whose type does not declare
+  the method is refused under E4006, the code the registry defines for a method miss; `E3004`
+  `callUnknownFunction` is the code for a free or qualified function name that does not exist.
 
 ## Tests
 
@@ -483,4 +482,36 @@ end 'main'
 ```
 ```maxoncstderr
 error E4006: <fragment>:9:4: Type 'Map' has no method named 'set'
+```
+
+<!-- test: error.an-unknown-method-assigned-in-one-arm-of-a-join-reports-only-the-unknown-method -->
+An unknown method whose result is assigned to a managed record local in one arm of an `if`, with the other arm assigning a real value, then read after the join. Only the method miss is reported; the merged binding is not examined.
+```maxon
+type Box
+	export var name as String
+
+	static function create() returns Self
+		return Self{name: "a"}
+	end 'create'
+end 'Box'
+
+function pick(cond bool) returns String
+	var b = Box.create()
+
+	if cond 'branch'
+		b = b.nosuchMethod()
+	end 'branch' else 'other'
+		b = Box.create()
+	end 'other'
+
+	return b.name
+end 'pick'
+
+function main() returns ExitCode
+	print(pick(true))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4006: <fragment>:14:9: Type 'Box' has no method named 'nosuchMethod'
 ```

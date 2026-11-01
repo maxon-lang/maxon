@@ -251,8 +251,6 @@ enum SignatureDiscriminator
 	// two spellings must move every reader's memo.
 	fieldDefaultWrittenNegative = 110
 	fieldDefaultWrittenPlain = 111
-	constArrayElementWrittenPlain = 135
-	constArrayElementWrittenAboveSignedMax = 136
 	fieldDefaultWrittenAboveSignedMax = 134
 
 	// The two shapes a top-level constant's ANSWER hashes under: it evaluated to a value, or it did
@@ -587,6 +585,12 @@ enum SignatureDiscriminator
 	throwsShapeThrowing = 54
 
 	declShapeDeclaredParams = 149
+	columnBoundsUnknown = 150
+	columnBoundsIntegers = 151
+	columnBoundsUnsignedIntegers = 152
+	columnBoundsFloats = 153
+	mapColumnsNone = 154
+	mapColumnsColumns = 155
 end 'SignatureDiscriminator'
 
 // The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
@@ -24603,7 +24607,7 @@ export type ProgramSignatures
 			// same bytes as a `String` and as a `b"…"` produce different records and different types.
 			managedValue(bytes, kind) then return mixBytes(self.mixManagedKind(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeManagedValue), kind: kind), bytes: bytes)
 
-			storedRecord(valueType, brand, _, _) then return self.mixRecordStorage(mixBytes(self.mixType(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeFactoryValue), t: valueType), bytes: brand), decl: decl)
+			storedRecord(valueType, brand, _, mapColumns) then return self.mixMapColumns(self.mixRecordStorage(mixBytes(self.mixType(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeFactoryValue), t: valueType), bytes: brand), decl: decl), columns: mapColumns)
 			imagedRecord(image) then return self.mixImageRecord(self.mixRecordStorage(mixBytes(self.mixType(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeArrayValue), t: image.valueType), bytes: image.brand), decl: decl), image: image)
 			imagedBox(nodes, root, typeName, tag) then return mixImageBoxTree(Hasher.combined(mixBytes(self.mixRecordStorage(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeBoxedUnionValue), decl: decl), bytes: typeName), value: tag.ordinal as HashDigest), nodes: nodes, root: root, below: nodes.count())
 			deferredRecord then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is still a deferred record — `settleRecordInitializers` settles every record before it folds the hash")
@@ -24647,15 +24651,8 @@ export type ProgramSignatures
 		return Hasher.combined(state, value: SignatureDiscriminator.recordStorageShapeImage)
 	end 'mixRecordStorage'
 
-	// ⚠ **MUTABILITY RIDES THE HASH, and it is the half a `var` adds.** `let X = 5` and `var X = 5`
-	// carry the same key and the same value and compile to COMPLETELY different code in every reader:
-	// a constant becomes a `literal` op, a var becomes `globalAddr` + `loadIndirect`. A reader's own
-	// bytes do not move when `let` becomes `var`, so — exactly as for the constant's VALUE — only this
-	// hash can carry it, and without it every reader would keep a memo that inlines a number the
-	// declaration no longer promises. (`ProgramSignatures.hash`'s field comment is the whole argument;
-	// this is the second fact it applies to.)
 	function mixImageRecord(state HashDigest, image TopLevelImageRecord) returns HashDigest
-		let counted = Hasher.combined(Hasher.combined(state, value: image.elementCount as HashDigest), value: image.elementSize as HashDigest)
+		let counted = self.mixColumnBounds(Hasher.combined(Hasher.combined(state, value: image.elementCount as HashDigest), value: image.elementSize as HashDigest), bounds: image.bounds)
 
 		match image.kind 'kind'
 			constBlob then return mixBytes(counted, bytes: image.bytes)
@@ -24664,6 +24661,30 @@ export type ProgramSignatures
 			containerBox(nodes, root) then return mixImageBoxTree(counted, nodes: nodes, root: root, below: nodes.count())
 		end 'kind'
 	end 'mixImageRecord'
+
+	function mixMapColumns(state HashDigest, columns MapLiteralColumns) returns HashDigest
+		match columns 'mapShape'
+			none then return Hasher.combined(state, value: SignatureDiscriminator.mapColumnsNone)
+			columns(keys, values) then return self.mixColumnBounds(self.mixColumnBounds(Hasher.combined(state, value: SignatureDiscriminator.mapColumnsColumns), bounds: keys), bounds: values)
+		end 'mapShape'
+	end 'mixMapColumns'
+
+	// A reader copies a constant image's and an immutable map's column bounds into its own code
+	// (`Parser.emitImagedConstArrayLiteral`, `Parser.noteGlobalLetMapColumns`). `[1, -1]` and
+	// `[1, u64.max]` have identical bytes and differ only here, so a key without the bounds would
+	// leave a reader's memo with the old ones baked in.
+	function mixColumnBounds(state HashDigest, bounds ColumnBounds) returns HashDigest
+		match bounds 'boundsShape'
+			unknown then return Hasher.combined(state, value: SignatureDiscriminator.columnBoundsUnknown)
+			integers(low, high) then return self.mixColumnRange(Hasher.combined(state, value: SignatureDiscriminator.columnBoundsIntegers), low: low, high: high)
+			unsignedIntegers(low, high) then return self.mixColumnRange(Hasher.combined(state, value: SignatureDiscriminator.columnBoundsUnsignedIntegers), low: low, high: high)
+			floats(low, high) then return self.mixColumnRange(Hasher.combined(state, value: SignatureDiscriminator.columnBoundsFloats), low: low, high: high)
+		end 'boundsShape'
+	end 'mixColumnBounds'
+
+	function mixColumnRange(state HashDigest, low FullRangeInt, high FullRangeInt) returns HashDigest
+		return Hasher.combined(Hasher.combined(state, value: low as HashDigest), value: high as HashDigest)
+	end 'mixColumnRange'
 
 	function mixImageTexts(state HashDigest, texts ByteBlobArray) returns HashDigest
 		var mixed = state
@@ -24675,6 +24696,13 @@ export type ProgramSignatures
 		return mixed
 	end 'mixImageTexts'
 
+	// ⚠ **MUTABILITY RIDES THE HASH, and it is the half a `var` adds.** `let X = 5` and `var X = 5`
+	// carry the same key and the same value and compile to COMPLETELY different code in every reader:
+	// a constant becomes a `literal` op, a var becomes `globalAddr` + `loadIndirect`. A reader's own
+	// bytes do not move when `let` becomes `var`, so — exactly as for the constant's VALUE — only this
+	// hash can carry it, and without it every reader would keep a memo that inlines a number the
+	// declaration no longer promises. (`ProgramSignatures.hash`'s field comment is the whole argument;
+	// this is the second fact it applies to.)
 	function mixMutability(state HashDigest, mutable bool) returns HashDigest
 		return Hasher.combined(state, value: SignatureDiscriminator.declShapeMutable if mutable else SignatureDiscriminator.declShapeConstant)
 	end 'mixMutability'

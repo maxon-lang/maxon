@@ -1051,7 +1051,7 @@ typealias RuntimeStoreShapeArray = Array with RuntimeStoreShape
 // runtime rosters' comparisons) pays many times over for one answer.
 //
 // A body's rows are its `FunctionRows` range, in the order every pass of a walk meets its calls. A row is
-// DESCRIBED when a summary answers for its callee (`summarizedCalleeIndex`) and then names an entry
+// DESCRIBED when a summary answers for its callee (`classifyCallee`) and then names an entry
 // of the described columns; otherwise it names an entry of the runtime columns.
 export type CallSites
 	export var ranges as FunctionRows
@@ -1671,6 +1671,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function resultOfRuntimeCall(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, site ElementIndex)
 		view sites = self.calls.resolution.sites
+
+		match self.calls.resolution.classifyCallee(func, callee: maxonOpCalleeName(op)) 'calleeClass'
+			refused then return
+			summarized then panic("ProvenanceTracer.resultOfRuntimeCall: '{String.from(maxonOpCalleeName(op))}' is described by a summary and takes the summary path, never this one")
+			runtime then break
+		end 'calleeClass'
 
 		if sites.isBookkeepingAt(site) 'theOperandsRecordOrACopy'
 			self.flowThroughBookkeeping(func, op: op, result: result)
@@ -5870,7 +5876,15 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let defining = try self.definingOpIndexOf(value) otherwise return bound
 		view op = try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.lowestWritableRankPlacedByTheCall: op {defining} not in module.ops")
 		view callee = try freshCalleeOf(op) otherwise return bound
-		let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) otherwise return bound
+
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then return self.lowestWritableRankPlacedBySummary(func, op: op, callee: callee, calleeIndex: calleeIndex, value: value, kinds: kinds, skipped: skipped, reach: reach, bound: bound)
+			refused or
+			runtime then return bound
+		end 'calleeClass'
+	end 'lowestWritableRankPlacedByTheCall'
+
+	function lowestWritableRankPlacedBySummary(func IrFunction, op MaxonOp, callee ByteArray, calleeIndex ElementIndex, value ValueId, kinds HeldRecordKinds, skipped ElementIndex, reach LetReach, bound ElementIndex) returns ElementIndex
 		let placed = self.summary.placedWithinAt(calleeIndex)
 
 		if placed == NoParamPositions 'placesNothingInItsArguments'
@@ -5898,7 +5912,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachParameter'
 
 		return lowest
-	end 'lowestWritableRankPlacedByTheCall'
+	end 'lowestWritableRankPlacedBySummary'
 
 	function lowestWritableRankIn(func IrFunction, column ProvenanceColumn, value ValueId, kinds HeldRecordKinds, skipped ElementIndex, own ValueId, reach LetReach, bound ElementIndex) returns ElementIndex
 		var lowest = bound
@@ -8197,11 +8211,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'sweepFreshStore'
 
 	function sweepFreshCall(func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster) returns bool
-		if let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) 'described'
-			return self.sweepFreshDescribedCall(func, calleeIndex: calleeIndex, callee: callee, result: result, args: args, argLabels: argLabels)
-		end 'described'
-
-		return self.sweepFreshRuntimeCall(func, callee: callee, result: result, args: args)
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then return self.sweepFreshDescribedCall(func, calleeIndex: calleeIndex, callee: callee, result: result, args: args, argLabels: argLabels)
+			refused then return self.joinDerivedFreshValue(func, result: result)
+			runtime then return self.sweepFreshRuntimeCall(func, callee: callee, result: result, args: args)
+		end 'calleeClass'
 	end 'sweepFreshCall'
 
 	function sweepFreshDescribedCall(func IrFunction, calleeIndex ElementIndex, callee ByteArray, result ValueId, args ValueIdArray, argLabels NameRoster) returns bool
@@ -8310,8 +8324,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			loadIndirect(_, addr, _, _) gives self.requireFreshSource(addr)
 			holdValue(_, held, _, _, _) gives self.requireFreshSource(held)
 			immortalStructRecord(result, _, _) gives valueTagOf(func, value: result) == ValueTypeTag.named
-			call(_, callee, args, _, _, _, _, _) gives self.freshOriginOfCall(callee, args: args)
-			tryCall(_, _, callee, args, _, _, _, _, _) gives self.freshOriginOfCall(callee, args: args)
+			call(_, callee, args, _, _, _, _, _) gives self.freshOriginOfCall(func, callee: callee, args: args)
+			tryCall(_, _, callee, args, _, _, _, _, _) gives self.freshOriginOfCall(func, callee: callee, args: args)
 
 			literal or
 			ret or
@@ -8355,23 +8369,28 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return true
 	end 'requireFreshSource'
 
-	function freshOriginOfCall(callee ByteArray, args ValueIdArray) returns bool
-		if let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) 'described'
-			self.freshNeeds.push(calleeIndex)
-			return true
-		end 'described'
+	function freshOriginOfCall(func IrFunction, callee ByteArray, args ValueIdArray) returns bool
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then self.freshNeeds.push(calleeIndex)
+			refused then return true
+			runtime then return self.freshOriginOfRuntimeCall(callee, args: args)
+		end 'calleeClass'
 
+		return true
+	end 'freshOriginOfCall'
+
+	function freshOriginOfRuntimeCall(callee ByteArray, args ValueIdArray) returns bool
 		if runtimeCalleeMintsARecord(callee) 'aRuntimeMint'
 			return true
 		end 'aRuntimeMint'
 
 		if ownershipBookkeepingCallee(callee) and args.count() > 0 'aRetain'
-			self.requireFreshMember(try args.get(0) otherwise panic("ProvenanceTracer.freshOriginOfCall: a retain has no operand"))
+			self.requireFreshMember(try args.get(0) otherwise panic("ProvenanceTracer.freshOriginOfRuntimeCall: a retain has no operand"))
 			return true
 		end 'aRetain'
 
 		return false
-	end 'freshOriginOfCall'
+	end 'freshOriginOfRuntimeCall'
 
 	function acceptsAsSole(func IrFunction, value ValueId) returns bool
 		if not self.valueIsSoleOrAParameter(func, value: value, usesFreshReturns: true) 'notSole'
@@ -8526,7 +8545,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return true
 		end 'aRelease'
 
-		let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) otherwise return false
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then return self.summarizedCallFillsOnlyFreshRecords(func, calleeIndex: calleeIndex, callee: callee, args: args, argLabels: argLabels, cell: cell, depth: depth)
+			refused then return true
+			runtime then return false
+		end 'calleeClass'
+	end 'cellCallFillsOnlyFreshRecords'
+
+	function summarizedCallFillsOnlyFreshRecords(func IrFunction, calleeIndex ElementIndex, callee ByteArray, args ValueIdArray, argLabels NameRoster, cell ValueId, depth ElementIndex) returns bool
 		view sig = self.calls.resolution.signatureOf(callee)
 
 		for index in 0 upto args.count() 'eachArgument'
@@ -8545,7 +8571,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachArgument'
 
 		return true
-	end 'cellCallFillsOnlyFreshRecords'
+	end 'summarizedCallFillsOnlyFreshRecords'
 
 	function calleeFillsItsReferenceParameterOnlyWithFreshRecords(calleeIndex ElementIndex, position ParamCount, depth ElementIndex) returns bool
 		if depth > MaxFreshRounds 'tooDeep'
@@ -8592,7 +8618,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		view op = try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.baseIsSwappedOut: op {defining} not in module.ops")
 
 		if let callee = try freshCalleeOf(op) 'aCall'
-			return self.callResultIsSwappedOut(callee, depth: depth)
+			return self.callResultIsSwappedOut(func, callee: callee, depth: depth)
 		end 'aCall'
 
 		if not opLoadsOrStoresASlot(op) 'notASlotRead'
@@ -8608,9 +8634,15 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'read'
 	end 'baseIsSwappedOut'
 
-	function callResultIsSwappedOut(callee ByteArray, depth ElementIndex) returns bool
-		let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) otherwise return false
+	function callResultIsSwappedOut(func IrFunction, callee ByteArray, depth ElementIndex) returns bool
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then return self.summarizedResultIsSwappedOut(calleeIndex, depth: depth)
+			refused then return true
+			runtime then return false
+		end 'calleeClass'
+	end 'callResultIsSwappedOut'
 
+	function summarizedResultIsSwappedOut(calleeIndex ElementIndex, depth ElementIndex) returns bool
 		if let known = try self.swappedOutReturns.get(calleeIndex) 'asked'
 			return known
 		end 'asked'
@@ -8619,7 +8651,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let verdict = self.functionReturnsOnlySwappedOutRecords(self.functionAt(calleeIndex), depth: depth + 1)
 		self.swappedOutReturns.upsert(calleeIndex, value: verdict)
 		return verdict
-	end 'callResultIsSwappedOut'
+	end 'summarizedResultIsSwappedOut'
 
 	function functionReturnsOnlySwappedOutRecords(func IrFunction, depth ElementIndex) returns bool
 		view ir = self.module
@@ -9299,11 +9331,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return RecordUse.dropped
 		end 'bookkeeping'
 
-		if let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) 'summarized'
-			return self.summarizedArgumentUse(calleeIndex, callee: callee, argLabels: argLabels, index: index)
-		end 'summarized'
-
-		return self.runtimeArgumentUse(func, result: result, callee: callee, args: args, index: index)
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then return self.summarizedArgumentUse(calleeIndex, callee: callee, argLabels: argLabels, index: index)
+			refused then return RecordUse.readOnly
+			runtime then return self.runtimeArgumentUse(func, result: result, callee: callee, args: args, index: index)
+		end 'calleeClass'
 	end 'argumentUse'
 
 	function summarizedArgumentUse(calleeIndex ElementIndex, callee ByteArray, argLabels NameRoster, index ElementIndex) returns RecordUse
@@ -9362,7 +9394,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'neverWritten'
 
 		let callee = try freshCalleeOf(op) otherwise return false
-		return (usesFreshReturns and self.calleeReturnsFresh(callee)) or runtimeCalleeMintsARecord(callee)
+
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			refused then return true
+			summarized or
+			runtime then return (usesFreshReturns and self.calleeReturnsFresh(callee)) or runtimeCalleeMintsARecord(callee)
+		end 'calleeClass'
 	end 'recordIsMintedHere'
 
 	function recordMeetsClaim(func IrFunction, base ValueId, depth ElementIndex, claim RecordClaim) returns bool
@@ -9502,8 +9539,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return true
 		end 'aRuntimeMint'
 
-		let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) otherwise return false
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then return self.summarizedResultIsPermanentlyReadOnly(func, op: op, calleeIndex: calleeIndex, callee: callee, depth: depth, allowFresh: allowFresh)
+			refused then return allowFresh
+			runtime then return false
+		end 'calleeClass'
+	end 'callResultIsPermanentlyReadOnly'
 
+	function summarizedResultIsPermanentlyReadOnly(func IrFunction, op MaxonOp, calleeIndex ElementIndex, callee ByteArray, depth ElementIndex, allowFresh bool) returns bool
 		if allowFresh and self.calleeReturnsFresh(callee) 'aFreshReturn'
 			return true
 		end 'aFreshReturn'
@@ -9514,7 +9557,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'assumedUntilRefuted'
 
 		return self.permanentWhateverItIsHanded(calleeIndex, allowFresh: allowFresh) or self.callResultIsPermanentGivenArguments(func, op: op, calleeIndex: calleeIndex, callee: callee, depth: depth, allowFresh: allowFresh)
-	end 'callResultIsPermanentlyReadOnly'
+	end 'summarizedResultIsPermanentlyReadOnly'
 
 	function permanentWhateverItIsHanded(index ElementIndex, allowFresh bool) returns bool
 		if allowFresh 'orFresh'
@@ -9614,13 +9657,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return false
 		end 'notAReadOnlyElementType'
 
-		_ = try self.signatures.storedElementPositionOf(callee, instance: instance, declared: declared) otherwise return self.resultLiesWithinTheReceiver(callee)
+		_ = try self.signatures.storedElementPositionOf(callee, instance: instance, declared: declared) otherwise return self.resultLiesWithinTheReceiver(func, callee: callee)
 		return true
 	end 'callReadsAReadOnlyInstanceElement'
 
-	function resultLiesWithinTheReceiver(callee ByteArray) returns bool
-		let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) otherwise return false
-		return maskHasParam(self.summary.insideAt(calleeIndex), param: ReceiverParamPosition)
+	function resultLiesWithinTheReceiver(func IrFunction, callee ByteArray) returns bool
+		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then return maskHasParam(self.summary.insideAt(calleeIndex), param: ReceiverParamPosition)
+			refused or
+			runtime then return false
+		end 'calleeClass'
 	end 'resultLiesWithinTheReceiver'
 
 	module function settlePermanentReturns(funcNames FunctionNameIndex)

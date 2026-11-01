@@ -41,6 +41,18 @@ function declaredPositionsOf(capabilities ParamCapabilityArray, firstPosition Pa
 	return declared
 end 'declaredPositionsOf'
 
+// How the walks judge a call's callee. `refused` is a declaration poisoned by a parse error that no
+// summary describes: that error is already the program's diagnostic, so the call is judged to read,
+// keep, alias and write nothing and to hand back a fresh record, which keeps ownership diagnostics
+// from following it. Wherever freshness is asked a refused callee answers fresh, so
+// `decideServiceReply` raises nothing about one. A poisoned program never compiles, so these
+// answers never reach codegen.
+module union CalleeClass
+	summarized(index ElementIndex)
+	refused
+	runtime
+end 'CalleeClass'
+
 module union LandingTarget
 	functionValue(callee ValueId)
 	requirement(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex)
@@ -429,15 +441,19 @@ module type CallSummaryIndex
 		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, sites: CallSites.create(funcCount), conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), callbackFlows: CallbackFlows.create(), functionRefBodiless: NameRoster.create(), functionRefNames: FunctionRefNamesByFunc.create(), instanceHoldsARecord: InstanceRecordMemo.create(), instanceSharesFunctions: InstanceRecordMemo.create()}
 	end 'create'
 
-	module function summarizedCalleeIndex(callee ByteArray) returns ElementIndex throws AbsentError
-		let index = try self.funcIndexByName.get(callee) otherwise throw AbsentError.absent
+	module function classifyCallee(func IrFunction, callee ByteArray) returns CalleeClass
+		if let index = try self.funcIndexByName.get(callee) 'declared'
+			if self.project.funcSignatures.contains(callee) and self.implHasSummary(index) 'aSummaryDescribesIt'
+				return CalleeClass.summarized(index)
+			end 'aSummaryDescribesIt'
+		end 'declared'
 
-		if not self.project.funcSignatures.contains(callee) or not self.implHasSummary(index) 'noSummaryDescribesIt'
-			throw AbsentError.absent
-		end 'noSummaryDescribesIt'
+		if self.project.poison.refusesACalleeFrom(callee, reader: func.sourceFilePath, signatures: self.signatures) 'aDeclarationIsRefused'
+			return CalleeClass.refused
+		end 'aDeclarationIsRefused'
 
-		return index
-	end 'summarizedCalleeIndex'
+		return CalleeClass.runtime
+	end 'classifyCallee'
 
 	module function implHasSummary(index ElementIndex) returns bool
 		return not bodyIsUnreadable(self.functionAt(index))
@@ -464,7 +480,7 @@ module type CallSummaryIndex
 	end 'functionIndexOf'
 
 	module function signatureOf(callee ByteArray) returns FuncSignature
-		return try self.project.funcSignatures.get(callee) otherwise panic("CallSummaryIndex.signatureOf: '{String.from(callee)}' is no declared function — the caller asked `summarizedCalleeIndex` first")
+		return try self.project.funcSignatures.get(callee) otherwise panic("CallSummaryIndex.signatureOf: '{String.from(callee)}' is no declared function — the caller asked `classifyCallee` first")
 	end 'signatureOf'
 
 	module function witnessSlotOf(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethod
@@ -684,11 +700,10 @@ module type CallSummaryIndex
 
 	// An append clones records it can classify, but a function value is shared when copied, so an append whose
 	// elements may be functions stores the source's elements into its receiver.
+	//
+	// Callers classify the callee `runtime` (`classifyCallee`) before asking; a summarized or refused
+	// callee is not a runtime entry.
 	module function runtimeShapeOf(func IrFunction, callee ByteArray, args ValueIdArray) returns RuntimeStoreShape
-		if self.project.poison.refusesACalleeFrom(callee, reader: func.sourceFilePath, signatures: self.signatures) 'aRefusedDeclarationIsCalled'
-			return RuntimeStoreShape.nothing
-		end 'aRefusedDeclarationIsCalled'
-
 		if copiesItsSourceCallee(callee) and args.count() > 0 and self.appendSharesFunctions(func, receiver: try args.get(0) otherwise panic("CallSummaryIndex.runtimeShapeOf: an append has a receiver")) 'sharesTheSourcesFunctions'
 			return RuntimeStoreShape.theSourcesElementsIntoTheReceiver
 		end 'sharesTheSourcesFunctions'
@@ -788,21 +803,29 @@ module type CallSiteCursor
 			return site
 		end 'filed'
 
-		var sites = self.resolution.sites
+		view sites = self.resolution.sites
 
 		if site != sites.nextRow() 'outOfStep'
 			panic("CallSiteCursor.nextCallSite: call {site} of a body being resolved is not the next row ({sites.nextRow()})")
 		end 'outOfStep'
 
-		if let calleeIndex = try self.resolution.summarizedCalleeIndex(callee) 'described'
-			self.slotNamedArgs(self.resolution.signatureOf(callee), args: args, argLabels: argLabels)
-			sites.fileDescribedRow(calleeIndex, slottedArgs: self.argPositions, fills: self.argFills)
-			return site
-		end 'described'
+		match self.resolution.classifyCallee(func, callee: callee) 'calleeClass'
+			summarized(calleeIndex) then self.fileDescribedCall(calleeIndex, callee: callee, args: args, argLabels: argLabels)
+			refused then self.fileRuntimeCall(RuntimeStoreShape.nothing, callee: callee)
+			runtime then self.fileRuntimeCall(self.resolution.runtimeShapeOf(func, callee: callee, args: args), callee: callee)
+		end 'calleeClass'
 
-		sites.fileRuntimeRow(self.resolution.runtimeShapeOf(func, callee: callee, args: args), isBookkeeping: ownershipBookkeepingCallee(callee), linksANode: linksANewNodeCallee(callee))
 		return site
 	end 'nextCallSite'
+
+	function fileDescribedCall(calleeIndex ElementIndex, callee ByteArray, args ValueIdArray, argLabels NameRoster)
+		self.slotNamedArgs(self.resolution.signatureOf(callee), args: args, argLabels: argLabels)
+		self.resolution.sites.fileDescribedRow(calleeIndex, slottedArgs: self.argPositions, fills: self.argFills)
+	end 'fileDescribedCall'
+
+	function fileRuntimeCall(shape RuntimeStoreShape, callee ByteArray)
+		self.resolution.sites.fileRuntimeRow(shape, isBookkeeping: ownershipBookkeepingCallee(callee), linksANode: linksANewNodeCallee(callee))
+	end 'fileRuntimeCall'
 
 	module function slotCallSiteArgs(row ElementIndex, argCount ParamCount)
 		self.argPositions.clear()

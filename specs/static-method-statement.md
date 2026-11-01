@@ -254,3 +254,55 @@ end 'main'
 ```maxoncstderr
 error E3004: <fragment>:14:11: call to undefined function 'Pair.nope'
 ```
+
+<!-- test: static-method-statement.a-method-on-a-field-of-a-static-var-is-a-statement -->
+A method called on a field of a `static var`, written as a bare statement. The receiver chain `Registry.current.items` is longer than `Type.member`, and the call still mutates the shared array: `push` runs, and `count()` reads back `1`.
+```maxon
+typealias StringArray = Array with String
+
+type Registry
+	export var items as StringArray
+
+	static var current = Registry.create()
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+end 'Registry'
+
+function main() returns ExitCode
+	Registry.current.items.push("x")
+	print("{Registry.current.items.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: static-method-statement.error.a-method-writing-a-field-of-a-static-let-is-refused -->
+The same statement over a `static let`: the receiver chain `Registry.current.items` is read-only all the way down, so a method that writes the field is refused as writing through immutable storage, the way a bare statement on a `let` binding's field is.
+```maxon
+typealias StringArray = Array with String
+
+type Registry
+	export var items as StringArray
+
+	static let current = Registry.create()
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+end 'Registry'
+
+function main() returns ExitCode
+	Registry.current.items.push("x")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:15:25: cannot write through 'Registry.current.items': 'Registry.current' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+```
