@@ -17,13 +17,13 @@
 // ⭐⭐ **AND THERE IS EXACTLY ONE ALLOCATOR IN THE EMITTED RUNTIME.** A second one in this file —
 // size-classed free lists in a `.data`-rooted table serving a repeat box out of their own buckets and
 // asking `__slab_alloc` only on a miss — would be two size-class ladders, two reuse policies and two
-// places a box can be live. `__mm_alloc` asks `__slab_alloc` for the WHOLE box (header + payload) and
+// places a box can be live. `__mm_alloc` asks the slab for the WHOLE box (header + payload) and
 // `__mm_free` hands that same pointer back to the slab's free door; the span the slot came from knows its class, so
 // the box layer computes none.
 //
 // ⚠ **THE WHOLE SIZE DOMAIN IS RECLAIMED, WHICH IS GO'S BOUNDARY.** The slab recycles up to
 // `SlabMaxSmallSize` (32 KiB, the whole box) through spans and serves everything above it from its own
-// mapping — which `__slab_free` hands BACK to the OS. `specs/slab-allocator.md`'s
+// mapping — which the slab's free door hands BACK to the OS. `specs/slab-allocator.md`'s
 // `an-os-direct-buffer-round-trips` and `os-direct-mappings-coexist` are what stand behind that second
 // half.
 //
@@ -236,16 +236,15 @@ end 'emitRouteOnRefcountWord'
 
 // ⭐⭐ **THE BOX LAYER KEEPS NO `.data` WORD.** Its counters — the leak gate's live count and the two
 // traffic columns `__Builtins.mm*()` read — are the TRACKED trio of the slab's per-row traffic columns
-// (`SlabRuntime.SlabTrafficColumn`), stepped by `__mm_alloc`/`__mm_free` on the calling thread's own row
+// (`SlabRuntime.SlabTrafficColumn`), stepped by the tracked slab doors on the calling thread's own row
 // and summed by a reader. A `.data` word would be one shared counter every thread steps, and every heap
 // program's rendered Target IR shows the `data {` table it would sit in.
 //
 // ⭐⭐ **TWO LAYERS, NESTED: EVERY BOX IS ALSO A SLAB REQUEST.** The RAW trio counts every request at the
-// slab doors, boxes included; the TRACKED trio counts boxes at the box doors. The public raw readers
-// answer raw − tracked (`buildMmCounterAccessors`), so the layers they report are disjoint while the
-// allocator carries ONE door per shape. `__mm_alloc_bytes` records the payload rounded up to
-// `BoxSlotAlignment`, so the raw reader also subtracts the box prefix per box to keep its answer the
-// header-free volume.
+// slab doors, boxes included; the TRACKED trio counts boxes at the tracked doors. The public raw readers
+// answer raw − tracked (`buildMmCounterAccessors`), so the layers they report are disjoint.
+// `__mm_alloc_bytes` records the payload rounded up to `BoxSlotAlignment`, so the raw reader also subtracts
+// the box prefix per box to keep its answer the header-free volume.
 
 export let MmIncrefName = b"__mm_incref"
 export let MmRetainName = b"__mm_retain"
@@ -527,7 +526,7 @@ let RuntimeCallPrefix = b"__mm_"
 // ⭐ **IS THIS CALLEE A HEAP-RUNTIME ENTRY POINT?** The `__mm_`-only test that decides whether the
 // program carries the ALLOCATOR + the leak check. It is DELIBERATELY narrower than
 // `isCompilerInternalCallee` (below): a call to any `__mm_*` entry point implies the whole heap
-// runtime (`__mm_alloc` calls `__slab_alloc`, `__mm_decref` calls `__mm_free`, the leak check reads
+// runtime (`__mm_alloc` calls `__slab_alloc_tracked`, `__mm_decref` calls `__mm_free`, the leak check reads
 // the counter the others maintain), while a `__print_string`/`__str_eq` call implies NEITHER — a
 // print-only program must not drag in the heap floor or the leak gate.
 //
@@ -774,10 +773,10 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage, target Ta
 	// (`Compiler.compileToCodeResult`); this file builds the box layer over it.
 	let model = machineModel(target)
 
-	buildMmAlloc(module, model: model)
+	buildMmAlloc(module)
 	buildMmDecref(module)
 	buildMmRelease(module)
-	buildMmFree(module, model: model)
+	buildMmFree(module)
 	buildMmLeakCheck(module, usage: usage)
 	buildMmCounterAccessors(module, model: model)
 
@@ -1705,14 +1704,14 @@ end 'closeCopyRunSplit'
 // just to have a non-null pointer would be a function with no reason to exist.)
 //
 // ⭐⭐ **THE WHOLE BOX IS ONE SLAB REQUEST, AND THE BOX LAYER COMPUTES NO SIZE CLASS OF ITS OWN.**
-// `header + payload`, rounded up to `BoxSlotAlignment`, goes to `__slab_alloc`, which picks the class, hands
+// `header + payload`, rounded up to `BoxSlotAlignment`, goes to `__slab_alloc_tracked`, which picks the class, hands
 // back a slot of at least that many bytes and REMEMBERS which span it came from; `__mm_free` gives that same
 // pointer back and the span answers which class the slot belongs to, so the header records no size. The
 // slack between the rounded total and the end of the slot is the allocator's business, exactly as the slack
 // inside a size class is.
 //
 // ⚠ **A TRACED BUILD AND A NORMAL ONE SHARE ONE BODY SHAPE**, differing only in the tag argument below.
-function buildMmAlloc(module StdModule, model MachineModel)
+function buildMmAlloc(module StdModule)
 	// ⚠ **THE ARITY IS THE FLAG'S, AND THAT IS WHY EVERY CALL SITE GOES THROUGH `emitMmAllocCall`.** A
 	// `--debugstream` build takes a THIRD argument — the allocation's tag index — because a tag cannot be
 	// recovered from a pointer later and this is the only moment it is known. A normal build takes two, so
@@ -1786,13 +1785,6 @@ function buildMmAlloc(module StdModule, model MachineModel)
 	// caller re-establishing a guarantee the allocator already makes, which is the habit that lets a
 	// non-zeroing allocator survive its own bugs: every call site "handles" it locally, so nobody fixes
 	// the allocator. If this line ever becomes necessary, the allocator is broken, not this function.
-
-	// The TRACKED columns, on the calling thread's row. The figure is `total` less the prefix, the payload
-	// rounded to `BoxSlotAlignment`: both prefixes are multiples of it, so a traced and an untraced build
-	// credit the same number. The region is committed — the `__slab_alloc` above committed it — so the base
-	// is a plain load.
-	let roundedPayload = emitBin(module, block: block, a: total, b: headerConst, opcode: StdBinOpcode.sub, ids: ids)
-	block = emitTrackedTrafficStep(module, func: func, cur: block, model: model, event: SlabTrafficEvent.alloc(roundedPayload), ids: ids)
 
 	let payload = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(payload, lhs: base, rhs: payloadOffset, opcode: StdBinOpcode.add, operandType: StdType.i64))
@@ -2705,7 +2697,7 @@ end 'buildMmRelease'
 
 // ⭐⭐ **THE SLAB SLOT'S BASE FOR A BOX WHOSE PAYLOAD POINTER IS `ptr` — given the header base the caller
 // already holds.** `__mm_alloc` asked the slab for the WHOLE box, so what the slab's free door must be handed
-// is what `__slab_alloc` answered: the header base in an ordinary build, and `DebugStreamPackedIdBytes` BELOW it
+// is what the slab's alloc door answered: the header base in an ordinary build, and `DebugStreamPackedIdBytes` BELOW it
 // where a `--debugstream` build's packed id sits.
 //
 // ⚠ **IT TAKES THE HEADER BASE RATHER THAN THE PAYLOAD POINTER SO AN UNTRACED BUILD MINTS NOTHING.** With no
@@ -2719,9 +2711,9 @@ function emitBoxAllocationBase(module StdModule, block IrBlock, headerBase Value
 	return emitBin(module, block: block, a: headerBase, b: prefix, opcode: StdBinOpcode.sub, ids: ids)
 end 'emitBoxAllocationBase'
 
-// `__mm_free(ptr)` — the death of a box. Two things happen, in this order: the trace event and the live
-// count drop (the one number the leak gate reads), and the box goes back to the slab through
-// `emitSlabFree`, which is where its bytes become somebody else's.
+// `__mm_free(ptr)` — the death of a box. Two things happen, in this order: the trace event, and the box
+// goes back to the slab through `emitSlabFree`, which is where its live count drops (the one number the
+// leak gate reads) and its bytes become somebody else's.
 //
 // ⭐ **THE FILL IS OPT-IN: `--poison-freed` routes the free through `__slab_free_box`.** A use-after-free
 // that reads bytes nothing has overwritten returns exactly the value it wrote before the free, and is
@@ -2753,7 +2745,7 @@ end 'emitBoxAllocationBase'
 // ⚠ The header's `destructor@0` is not run here: `__mm_decref` runs it before calling this, and a
 // cascade that frees its own box has already released its fields, so running it here would release
 // them twice.
-function buildMmFree(module StdModule, model MachineModel)
+function buildMmFree(module StdModule)
 	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
@@ -2768,11 +2760,6 @@ function buildMmFree(module StdModule, model MachineModel)
 	// events unambiguous now that a traced build recycles.
 	var entry = emitMmFreeEvent(module, func: func, block: start, ptr: ptr, ids: ids)
 
-	// ⚠ **A FREE STEPS THE FREES COLUMN AND NOTHING ELSE.** The leak gate's live count is total less frees,
-	// and every column only rises, so each deltas exactly across a bracket. A free path that walked the
-	// total back would report a phase that allocated and released a million boxes as having done nothing.
-	entry = emitTrackedTrafficStep(module, func: func, cur: entry, model: model, event: SlabTrafficEvent.free, ids: ids)
-
 	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
 
 	// ⭐ **AND BACK TO THE SLAB, UNCONDITIONALLY.** There is one exit and no guard: the slab's free door routes on
@@ -2780,8 +2767,8 @@ function buildMmFree(module StdModule, model MachineModel)
 	// the OS-direct sentinel and the mapping goes back whole. The box layer knows neither which span nor
 	// which tier, and asking would be a second copy of a routing decision the allocator already owns.
 	//
-	// ⚠ **THE POINTER IS THE SLAB SLOT'S BASE, NOT THE PAYLOAD.** It is exactly what `__slab_alloc`
-	// answered, which is what the free doors require (they thread the free list through the SLOT's first
+	// ⚠ **THE POINTER IS THE SLAB SLOT'S BASE, NOT THE PAYLOAD.** It is exactly what the slab's
+	// alloc door answered, which is what the free doors require (they thread the free list through the SLOT's first
 	// word, so an interior pointer would corrupt the slot it landed in and then be handed out as a base).
 	let slot = emitBoxAllocationBase(module, block: entry, headerBase: header, ids: ids)
 	emitSlabFree(module, block: entry, ptr: slot, kind: SlabBufferKind.managedBox, ids: ids)
@@ -2790,22 +2777,6 @@ function buildMmFree(module StdModule, model MachineModel)
 	module.functions.push(func)
 end 'buildMmFree'
 
-// ⭐⭐ **ONE TRACKED EVENT ON THE CALLING THREAD'S ROW — the box doors' half of the traffic columns.** The
-// shard walk is `SlabRuntime.emitSlabResolveShard`, the same walk the slab doors take; its two arms are two
-// emissions of one credit, plain on a sole-writer row and atomic on the shared raw row. The calling green
-// thread's own columns are NOT stepped here — the slab door under this one already did, once per request.
-// Terminates `cur` and answers the block to continue in.
-function emitTrackedTrafficStep(module StdModule, func IrFunction, cur IrBlock, model MachineModel, event SlabTrafficEvent, ids ValueMinter) returns IrBlock
-	var done = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
-
-	let state = emitSlabStateCommitted(module, block: cur, ids: ids)
-	var arms = emitSlabResolveShard(module, func: func, cur: cur, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.none, ids: ids, label: b"shard")
-
-	emitSlabCreditBothArms(module, arms: arms, layer: SlabTrafficLayer.tracked, event: event, next: done, ids: ids)
-
-	return done
-end 'emitTrackedTrafficStep'
-
 // ⭐⭐ **THE SIX PER-LAYER READERS, THE THREE PER-THREAD COLUMNS AND THE THREE PROCESS-WIDE TOTALS.** They
 // are FUNCTIONS rather than an inline walk at the call site because that is the door every argumentless
 // intrinsic in this compiler takes (`Parser.emitZeroArgIntrinsic`), and because the row walk stays one
@@ -2813,9 +2784,8 @@ end 'emitTrackedTrafficStep'
 //
 // ⭐⭐ **THE RAW READERS ANSWER raw − tracked.** Every box is also a slab request, so the slab's raw
 // columns count boxes too; subtracting the tracked column at READ time keeps the two reported layers
-// disjoint while the allocator carries one door per shape. The byte column subtracts the box prefix per box
-// as well, because the tracked byte column records the rounded payload and the raw column the whole slot
-// request.
+// disjoint. The byte column subtracts the box prefix per box as well, because the tracked byte column
+// records the rounded payload and the raw column the whole slot request.
 //
 // ⛔⛔ **EVERY ONE OF THEM IS ONE WALK, AND A LAYER'S SUBTRACTION HAPPENS INSIDE IT.** Each figure is a
 // `SlabTrafficFigure` — an expression over a SINGLE row — so a difference reads its two columns together.
@@ -4919,7 +4889,7 @@ end 'emitManagedElementsFieldWalk'
 // the code to `mrt_start`, which already makes that call, keeps the one OS-exit path in one place.
 //
 // The live count is the tracked layer's total less its frees, taken per row and summed over every row
-// (`SlabRuntime.emitSlabTrafficRead`) — the columns `__mm_alloc`/`__mm_free` step on the calling thread's
+// (`SlabRuntime.emitSlabTrafficRead`) — the columns the tracked slab doors step on the calling thread's
 // own row. A program that never allocated has no region at all and reads an honest 0 without committing
 // one.
 //

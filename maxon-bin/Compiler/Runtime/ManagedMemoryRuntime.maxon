@@ -2185,6 +2185,9 @@ end 'checkManagedGeometry'
 // is correct for every width from 1 to 64 and needs no special case.
 let AllBitsSet = -1
 
+// Two operands below `1 << 31` multiply to less than 2^62, which fits a signed 64-bit word.
+let NonWrappingOperandShift = 31
+
 // ⭐ **THE BIT WIDTH OF ONE ELEMENT, FROM EITHER LADDER, BRANCHLESS** — `-es` when the stamp is negative,
 // `es · 8` when it is positive. It is the join that lets every derivation below be one formula: a byte
 // stride of 8 becomes 64 bits, a stride of 1 becomes 8 bits, and a packed `-2` becomes 2.
@@ -3692,13 +3695,21 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 	// could not be told from a legitimate size. `emitElementBits` never answers 0 — `__managed_create` diverges on a
 	// zero element size, so the stamp is at least 1 bit packed or 8 bits byte-strided — which keeps the
 	// round-trip division safe and makes it equal `newCap` exactly when the multiply did not wrap.
+	//
+	// The division runs only when an operand reaches `1 << NonWrappingOperandShift`, a negative one included;
+	// smaller operands cannot wrap, so the common grow skips it.
 	let es = emitLoadField(module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let bits = emitElementBits(module, block: cur, es: es, ids: ids)
 	let newBits = emitBin(module, block: cur, a: newCap, b: bits, opcode: StdBinOpcode.mul, ids: ids)
 	let newBytes = emitBitsToBytes(module, block: cur, totalBits: newBits, ids: ids)
+	var wide = module.addBlock(func, label: b"wide", heat: BlockHeat.normal)
+	let operands = emitBin(module, block: cur, a: newCap, b: bits, opcode: StdBinOpcode.bitOr, ids: ids)
+	let operandsHigh = emitBin(module, block: cur, a: operands, b: emitConst(module, block: cur, value: NonWrappingOperandShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: operandsHigh, pred: StdCmpPred.eq, against: 0, whenTrue: alloc, whenFalse: wide, ids: ids)
+
 	let roundTrip = ids.mint()
-	module.appendOp(cur, op: StdOp.div(roundTrip, lhs: newBits, rhs: bits, signedness: IntegerSignedness.signed))
-	emitBranchOnCompareValues(module, block: cur, a: roundTrip, pred: StdCmpPred.ne, b: newCap, whenTrue: onByteOverflow, whenFalse: alloc, ids: ids)
+	module.appendOp(wide, op: StdOp.div(roundTrip, lhs: newBits, rhs: bits, signedness: IntegerSignedness.signed))
+	emitBranchOnCompareValues(module, block: wide, a: roundTrip, pred: StdCmpPred.ne, b: newCap, whenTrue: onByteOverflow, whenFalse: alloc, ids: ids)
 
 	// alloc: allocate the new buffer and copy the live bytes forward. A fresh `__mm_alloc` is zeroed and only
 	// `length·es` bytes are copied in, so the new `[length, newCap)` slots read zero — the capacity-slot

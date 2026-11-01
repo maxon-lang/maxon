@@ -16,7 +16,7 @@ program, which is what the cases below drive:
 
 | Mechanism | What it decides |
 |---|---|
-| **the shard row** | the P read (`emitSlabResolveShard`, emitted inline into `__slab_alloc`/`__slab_free`) walks the scheduler word to the running M and to the P it holds; that P's clamped `id` is the mcache row, and a thread that holds NO P gets the dedicated RAW row (255), never row 0 |
+| **the shard row** | the P read (`emitSlabResolveShard`, emitted inline into each door of the three families, counted, tracked and scaffold, such as `__slab_alloc`/`__slab_free`; `__mm_alloc`/`__mm_free` walk no shard) walks the scheduler word to the running M and to the P it holds; that P's clamped `id` is the mcache row, and a thread that holds NO P gets the dedicated RAW row (255), never row 0 |
 | **the ownership stamp** | every span carries the P that owns it; a cached span owned by somebody else is a MISS, not something to pop |
 | **the remote-free queue** | a free by a P that does not hold the slot's span cached CAS-pushes it onto the SPAN's own Treiber stack; the chain is collected when a P takes that span off its class's list, when an exhausted span is relisted, and by the scavenger |
 
@@ -379,8 +379,8 @@ end 'main'
 
 <!-- test: slab-sharding.the-traffic-counters-are-exact-across-green-threads -->
 **THE COUNTERS, READ THROUGH THE SHARDED ALLOCATOR.** Every traffic column an emitted program keeps is
-stepped inside `__mm_alloc`/`__mm_free`, which reach their slot through a `__slab_alloc` that
-carries the class lookup, the processor read, the shard row, the state region and the pop in ONE body
+stepped inside the slab's doors, and `__mm_alloc`/`__mm_free` reach their slot through
+`__slab_alloc_tracked`/`__slab_free_tracked`. The allocation door carries the class lookup, the processor read, the shard row, the state region and the pop in ONE body
 — and a SHARDED build's copy of that body is a different emission from the single-threaded one (it
 carries the ownership gate, the remote drain and the lock arm). This drives two waves of green-thread
 allocations through it and asks the two tracked columns the only questions that are EXACT: the LIVE

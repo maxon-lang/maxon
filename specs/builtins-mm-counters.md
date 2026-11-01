@@ -87,8 +87,8 @@ can say whether a header-free BUFFER leaked:
 - **TRACKED.** An element buffer here is an ordinary `__mm_alloc` box with a header and a
   destructor, so this layer covers the header-carrying records (a struct, a String record, an
   array's outer handle) and the header-free buffers behind them alike.
-- **RAW.** Beneath the boxes sits `__slab_alloc`, whose direct callers are the scheduler's processors,
-  the service mailboxes' records, shared-value cells, environment-variable and host-text copies, and the
+- **RAW.** Beneath the boxes sits the slab, whose counted door `__slab_alloc` is called directly by the
+  scheduler's processors, the service mailboxes' records, shared-value cells, environment-variable and host-text copies, and the
   subprocess scratch buffers. A green thread is not among them: its STACK comes from `osAllocPages`, and
   its RECORD from the scheduler's own record arena, which is carved from `osAllocPages` chunks —
   scaffolding like the stack, invisible to both layers. A runtime buffer whose allocation count follows
@@ -108,8 +108,9 @@ and only the sum is stable across a change to it.
 
 ### The layers NEST in the allocator and are made DISJOINT at the reader
 
-A caller asking about both layers SUMS them, and `__mm_alloc` is itself a `__slab_alloc` caller, so the
-slab's RAW columns count every box as well as every scratch buffer. The public raw readers therefore answer
+A caller asking about both layers SUMS them, and `__mm_alloc` reaches the slab through
+`__slab_alloc_tracked`, which credits the RAW columns as well as the TRACKED ones, so the slab's RAW
+columns count every box as well as every scratch buffer. The public raw readers therefore answer
 **raw − tracked**: `mmRawAllocTotal()` is the slab's request count less the box count, `mmRawAllocLive()`
 the same for live, and `mmRawAllocBytes()` the slab's byte volume less the tracked payload volume less the
 box header per box (`MmRuntime.buildMmCounterAccessors`). Counted naively — a reader that forgot the
@@ -124,7 +125,7 @@ is exactly what the process-wide totals answer (`process-totals-are-the-six-summ
 ### `mmRawAllocLive` and `mmRawAllocTotal` are TWO numbers
 
 They read two columns. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive` rises with
-each slab request and FALLS at `__slab_free`. A `__slab_alloc` caller that frees its region moves the
+each slab request and FALLS at the slab's free doors (`__slab_free`, `__slab_free_tracked`). A `__slab_alloc` caller that frees its region moves the
 live column back: the subprocess runner's and the read probe's per-call scratch, and a service's
 mailbox, freed by whichever of its handle and its service lets go last (its message ring goes back with
 it through the uncounted door and moves neither column). A green-thread record is never credited at
@@ -307,8 +308,8 @@ end 'main'
 <!-- test: builtins-mm-counters.the-two-layers-are-disjoint -->
 <!-- tier: stdlib -->
 **THE CASE THAT PROVES THE TWO LAYERS' SUM DOES NOT DOUBLE-COUNT.** the compiler's `__mm_alloc` obtains its
-box from `__slab_alloc`, so the obvious implementation credits every allocation to BOTH columns and the
-sum reads exactly double. Here a program allocates 512 array elements and nothing else:
+box from `__slab_alloc_tracked`, which credits BOTH columns, so the obvious reader answers the raw column
+as it stands and the sum reads exactly double. Here a program allocates 512 array elements and nothing else:
 the TRACKED column moves and the RAW column does not, because the raw reader subtracts the boxes the
 slab counted on `__mm_alloc`'s behalf.
 
@@ -341,6 +342,249 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: builtins-mm-counters.a-known-box-pattern-moves-each-column-by-its-exact-figure -->
+<!-- tier: stdlib -->
+**THE EXACT FIGURES FOR A KNOWN ALLOCATION PATTERN, AND THE ONLY CASE HERE THAT PINS A COLUMN TO A NUMBER.**
+One hundred empty arrays are created and dropped inside a window. An empty array is one box, a 48-byte
+record behind a 16-byte header, so the slab sees 64 bytes per request. The window therefore moves the
+tracked total by 100, its live count by 0 and its byte column by 4800 (the payload, not the slot), the three
+per-thread columns by 100, 100 and 6400 (the whole request), and every raw column by 0, because the raw
+readers answer what the slab counted LESS the boxes inside it. A box credited to the wrong layer, twice to
+one layer, or by a figure that kept the header or lost the rounding, fails exactly one of the eight. The
+figures are an UNTRACED build's: a `--debugstream` box carries a 16-byte packed-id slot below its header as well, so the last
+assertion fails the case in a traced build rather than letting it pin the wrong numbers.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+#if debugstream(true)
+	let UntracedBuild = false
+#else
+	let UntracedBuild = true
+#endif
+
+function churn(rounds Count) returns Count
+	var seen = 0 as Count
+
+	for _ in 0 upto rounds 'each'
+		let empty = ByteArray.create()
+		seen = seen + empty.count() + 1
+	end 'each'
+
+	return seen
+end 'churn'
+
+function main() returns ExitCode
+	let totalBefore = __Builtins.mmAllocTotal()
+	let liveBefore = __Builtins.mmAllocLive()
+	let bytesBefore = __Builtins.mmAllocBytes()
+	let rawTotalBefore = __Builtins.mmRawAllocTotal()
+	let rawLiveBefore = __Builtins.mmRawAllocLive()
+	let rawBytesBefore = __Builtins.mmRawAllocBytes()
+	let threadAllocsBefore = __Builtins.threadAllocTotal()
+	let threadFreesBefore = __Builtins.threadFreeTotal()
+	let threadBytesBefore = __Builtins.threadAllocBytes()
+
+	let seen = churn(100)
+
+	var score = 0 as Count
+	if __Builtins.mmAllocTotal() - totalBefore == 100 'trackedTotal'
+		score = score + 1
+	end 'trackedTotal'
+	if __Builtins.mmAllocLive() - liveBefore == 0 'trackedLive'
+		score = score + 2
+	end 'trackedLive'
+	if __Builtins.mmAllocBytes() - bytesBefore == 4800 'trackedBytes'
+		score = score + 4
+	end 'trackedBytes'
+	if __Builtins.mmRawAllocTotal() - rawTotalBefore == 0 and __Builtins.mmRawAllocLive() - rawLiveBefore == 0 and __Builtins.mmRawAllocBytes() - rawBytesBefore == 0 'rawLayer'
+		score = score + 8
+	end 'rawLayer'
+	if __Builtins.threadAllocTotal() - threadAllocsBefore == 100 'threadAllocs'
+		score = score + 16
+	end 'threadAllocs'
+	if __Builtins.threadFreeTotal() - threadFreesBefore == 100 'threadFrees'
+		score = score + 32
+	end 'threadFrees'
+	if __Builtins.threadAllocBytes() - threadBytesBefore == 6400 'threadBytes'
+		score = score + 64
+	end 'threadBytes'
+	if seen == 100 and UntracedBuild 'theLoopRanUntraced'
+		score = score + 128
+	end 'theLoopRanUntraced'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+255
+```
+
+<!-- test: builtins-mm-counters.an-oversize-box-moves-each-column-by-its-exact-figure -->
+<!-- tier: stdlib -->
+**THE SAME EXACT FIGURES FOR A BOX THE SLAB DOES NOT CUT FROM A SPAN.** An empty array's element buffer of
+300000 bytes is past the 32 KiB small-object limit, so it takes the OS-direct road and the oversize doors,
+which credit their row on a walk of their own. The window reserves it and drops it. The tracked total moves
+by 2 (the record and the buffer), its live count by 0, and its byte column by 300048 (the 48-byte record and
+the 300000-byte buffer, each without its 16-byte header). The per-thread columns move by 2, 2 and 300080
+(the whole requests: 64 and 300016), and every raw column by 0. A credit that missed the oversize road moves
+the tracked total by 1, and one that kept the header moves the byte column by 16 more per box. The figures
+are an UNTRACED build's, and the last assertion fails the case in a traced one.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+#if debugstream(true)
+	let UntracedBuild = false
+#else
+	let UntracedBuild = true
+#endif
+
+function reserveAndDrop(bytes Count) returns Count
+	var big = ByteArray.create()
+	big.reserve(bytes)
+
+	return big.count() + 1
+end 'reserveAndDrop'
+
+function main() returns ExitCode
+	let totalBefore = __Builtins.mmAllocTotal()
+	let liveBefore = __Builtins.mmAllocLive()
+	let bytesBefore = __Builtins.mmAllocBytes()
+	let rawTotalBefore = __Builtins.mmRawAllocTotal()
+	let rawLiveBefore = __Builtins.mmRawAllocLive()
+	let rawBytesBefore = __Builtins.mmRawAllocBytes()
+	let threadAllocsBefore = __Builtins.threadAllocTotal()
+	let threadFreesBefore = __Builtins.threadFreeTotal()
+	let threadBytesBefore = __Builtins.threadAllocBytes()
+
+	let seen = reserveAndDrop(300000)
+
+	var score = 0 as Count
+	if __Builtins.mmAllocTotal() - totalBefore == 2 'trackedTotal'
+		score = score + 1
+	end 'trackedTotal'
+	if __Builtins.mmAllocLive() - liveBefore == 0 'trackedLive'
+		score = score + 2
+	end 'trackedLive'
+	if __Builtins.mmAllocBytes() - bytesBefore == 300048 'trackedBytes'
+		score = score + 4
+	end 'trackedBytes'
+	if __Builtins.mmRawAllocTotal() - rawTotalBefore == 0 and __Builtins.mmRawAllocLive() - rawLiveBefore == 0 and __Builtins.mmRawAllocBytes() - rawBytesBefore == 0 'rawLayer'
+		score = score + 8
+	end 'rawLayer'
+	if __Builtins.threadAllocTotal() - threadAllocsBefore == 2 'threadAllocs'
+		score = score + 16
+	end 'threadAllocs'
+	if __Builtins.threadFreeTotal() - threadFreesBefore == 2 'threadFrees'
+		score = score + 32
+	end 'threadFrees'
+	if __Builtins.threadAllocBytes() - threadBytesBefore == 300080 'threadBytes'
+		score = score + 64
+	end 'threadBytes'
+	if seen == 1 and UntracedBuild 'theWindowRanUntraced'
+		score = score + 128
+	end 'theWindowRanUntraced'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+255
+```
+
+<!-- test: builtins-mm-counters.a-traced-box-moves-each-column-by-its-exact-figure -->
+<!-- MmTrace -->
+**THE SMALL-BOX FIGURES IN A `--debugstream` BUILD, WHERE EVERY BOX CARRIES A 16-BYTE PACKED-ID SLOT BELOW ITS
+HEADER.** The prefix is 32 bytes, not 16, so an empty array's 48-byte record is an 80-byte request (64 untraced).
+Eight of them, created and dropped in a window, move the tracked total by 8, its live
+count by 0 and its byte column by 384 (80 less the 32-byte prefix, the same payload figure as untraced), the per-thread columns by
+8, 8 and 640 (the whole request), and every raw column by 0, which only holds if the raw readers subtract
+the same traced prefix from the whole request that the credit did.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function churn(rounds Count) returns Count
+	var seen = 0 as Count
+
+	for _ in 0 upto rounds 'each'
+		let empty = ByteArray.create()
+		seen = seen + empty.count() + 1
+	end 'each'
+
+	return seen
+end 'churn'
+
+function main() returns ExitCode
+	let totalBefore = HeapStats.allocationsMade()
+	let liveBefore = HeapStats.allocationsLive()
+	let bytesBefore = HeapStats.bytesAllocated()
+	let rawTotalBefore = HeapStats.rawAllocationsMade()
+	let rawLiveBefore = HeapStats.rawAllocationsLive()
+	let rawBytesBefore = HeapStats.rawBytesAllocated()
+	let threadAllocsBefore = HeapStats.threadAllocations()
+	let threadFreesBefore = HeapStats.threadFrees()
+	let threadBytesBefore = HeapStats.threadBytes()
+
+	let seen = churn(8)
+
+	var score = 0 as Count
+	if HeapStats.allocationsMade() - totalBefore == 8 'trackedTotal'
+		score = score + 1
+	end 'trackedTotal'
+	if HeapStats.allocationsLive() - liveBefore == 0 'trackedLive'
+		score = score + 2
+	end 'trackedLive'
+	if HeapStats.bytesAllocated() - bytesBefore == 384 'trackedBytes'
+		score = score + 4
+	end 'trackedBytes'
+	if HeapStats.rawAllocationsMade() - rawTotalBefore == 0 and HeapStats.rawAllocationsLive() - rawLiveBefore == 0 and HeapStats.rawBytesAllocated() - rawBytesBefore == 0 'rawLayer'
+		score = score + 8
+	end 'rawLayer'
+	if HeapStats.threadAllocations() - threadAllocsBefore == 8 'threadAllocs'
+		score = score + 16
+	end 'threadAllocs'
+	if HeapStats.threadFrees() - threadFreesBefore == 8 'threadFrees'
+		score = score + 32
+	end 'threadFrees'
+	if HeapStats.threadBytes() - threadBytesBefore == 640 'threadBytes'
+		score = score + 64
+	end 'threadBytes'
+	if seen == 8 'theLoopRan'
+		score = score + 128
+	end 'theLoopRan'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+255
+```
+```mm-trace
+mm_alloc ArrayRecord #1 size=48
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+mm_alloc ArrayRecord #2 size=48
+mm_decref ArrayRecord #2 rc=0
+mm_free ArrayRecord #2
+mm_alloc ArrayRecord #3 size=48
+mm_decref ArrayRecord #3 rc=0
+mm_free ArrayRecord #3
+mm_alloc ArrayRecord #4 size=48
+mm_decref ArrayRecord #4 rc=0
+mm_free ArrayRecord #4
+mm_alloc ArrayRecord #5 size=48
+mm_decref ArrayRecord #5 rc=0
+mm_free ArrayRecord #5
+mm_alloc ArrayRecord #6 size=48
+mm_decref ArrayRecord #6 rc=0
+mm_free ArrayRecord #6
+mm_alloc ArrayRecord #7 size=48
+mm_decref ArrayRecord #7 rc=0
+mm_free ArrayRecord #7
+mm_alloc ArrayRecord #8 size=48
+mm_decref ArrayRecord #8 rc=0
+mm_free ArrayRecord #8
 ```
 
 <!-- test: builtins-mm-counters.raw-total-is-never-below-tracked-total-after-boxes -->

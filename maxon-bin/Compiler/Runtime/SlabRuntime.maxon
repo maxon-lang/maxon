@@ -333,11 +333,12 @@ let SlabStateMcentralOffset = SlabStateLockOffset + (SlabStateLockBytes as ByteO
 // thread steps the raw row plainly. A reader walks the rows (`emitSlabTrafficRead`); the walk's answer is
 // the process-wide figure and no `.data` word carries one.
 //
-// The TRACKED trio counts boxes at `__mm_alloc`/`__mm_free`; the RAW trio counts every slab request
-// at the counted doors, `__slab_alloc`/`__slab_alloc_raw`/`__slab_free`/`__slab_free_box`, boxes included, and
-// none at the scaffold pair (`SlabScaffoldAllocName`). The two nest, and the public raw readers
-// answer raw − tracked (`MmRuntime.buildMmCounterAccessors`), so the layers they report stay
-// disjoint without a second allocation door.
+// The RAW trio counts every slab request at the counted doors (`__slab_alloc`, `__slab_alloc_raw`,
+// `__slab_free`) and the tracked ones, and none at the scaffold pair (`SlabScaffoldAllocName`). The
+// TRACKED trio counts managed boxes: the tracked doors (`__slab_alloc_tracked`, `__slab_free_tracked`, and
+// `__slab_free_box` under `--poison-freed`) credit it beside the raw trio in one shard resolution. The two
+// nest, and the public raw readers answer raw − tracked (`MmRuntime.buildMmCounterAccessors`), so the
+// layers they report stay disjoint.
 //
 // ⭐⭐⭐ **EVERY COLUMN IS MONOTONIC, AND A LIVE COUNT IS DERIVED AT READ TIME AS `total − frees`.** An
 // allocation steps two columns and a free steps one, so the hot path carries one read-modify-write per
@@ -361,7 +362,7 @@ end 'SlabTrafficLayer'
 
 // What one allocator event moves: an allocation credits the layer's total and byte columns, a free its
 // frees column. Every column only ever rises, which is what lets a phase delta be taken over any of them.
-export union SlabTrafficEvent
+union SlabTrafficEvent
 	alloc(bytes ValueId)
 	free
 end 'SlabTrafficEvent'
@@ -403,6 +404,8 @@ let SlabAllocName = b"__slab_alloc"
 // admitting a caller is an argument rather than a body.
 let SlabAllocRawName = b"__slab_alloc_raw"
 let SlabFreeName = b"__slab_free"
+let SlabTrackedAllocName = b"__slab_alloc_tracked"
+let SlabTrackedFreeName = b"__slab_free_tracked"
 
 // `__slab_alloc_scaffold(size) -> ptr` and `__slab_free_scaffold(ptr)` — the zeroing door and its
 // free, crediting neither the raw row nor the calling green thread's columns. `slabCountingOf`
@@ -410,7 +413,7 @@ let SlabFreeName = b"__slab_free"
 let SlabScaffoldAllocName = b"__slab_alloc_scaffold"
 let SlabScaffoldFreeName = b"__slab_free_scaffold"
 
-// `__slab_free_box(ptr)` — the counted free that fills a freed managed box; built only under
+// `__slab_free_box(ptr)` — the tracked free that fills a freed managed box; built only under
 // `--poison-freed`, see `slabFreeDoorOf` and `buildSlabFreedBoxPoison`.
 let SlabFreeBoxName = b"__slab_free_box"
 
@@ -449,11 +452,16 @@ let SlabFreedBoxPoisonByte = 0x3F
 let SlabOsDirectAllocName = b"__slab_os_direct_alloc"
 let SlabAllocOversizeName = b"__slab_alloc_oversize"
 let SlabFreeOversizeName = b"__slab_free_oversize"
+let SlabTrackedAllocOversizeName = b"__slab_alloc_tracked_oversize"
+let SlabTrackedFreeOversizeName = b"__slab_free_tracked_oversize"
 let SlabScaffoldAllocOversizeName = b"__slab_alloc_scaffold_oversize"
 let SlabScaffoldFreeOversizeName = b"__slab_free_scaffold_oversize"
 
+// `tracked` credits the tracked columns in the same shard resolution as the raw ones, so a managed box
+// pays one walk.
 enum SlabCounting
 	counted
+	tracked
 	scaffolding
 end 'SlabCounting'
 
@@ -479,7 +487,7 @@ end 'SlabBufferKind'
 // to be identical between two compiles of one program.
 function slabCountingOf(kind SlabBufferKind) returns SlabCounting
 	return match kind 'kind'
-		managedBox or
+		managedBox gives SlabCounting.tracked
 		mailboxRecord or
 		processorState or
 		environmentValue or
@@ -505,6 +513,7 @@ type SlabDoors
 	static function of(counting SlabCounting) returns SlabDoors
 		return match counting 'counting'
 			counted gives Self{alloc: SlabAllocName, free: SlabFreeName, allocOversize: SlabAllocOversizeName, freeOversize: SlabFreeOversizeName}
+			tracked gives Self{alloc: SlabTrackedAllocName, free: SlabTrackedFreeName, allocOversize: SlabTrackedAllocOversizeName, freeOversize: SlabTrackedFreeOversizeName}
 			scaffolding gives Self{alloc: SlabScaffoldAllocName, free: SlabScaffoldFreeName, allocOversize: SlabScaffoldAllocOversizeName, freeOversize: SlabScaffoldFreeOversizeName}
 		end 'counting'
 	end 'of'
@@ -524,7 +533,7 @@ union SlabFreeDoor
 	function counting() returns SlabCounting
 		return match self 'door'
 			plain(counting) gives counting
-			poisoning gives SlabCounting.counted
+			poisoning gives SlabCounting.tracked
 		end 'door'
 	end 'counting'
 
@@ -548,24 +557,39 @@ end 'slabFreeDoorOf'
 
 function slabThreadTrafficOf(counting SlabCounting, traffic ThreadTraffic) returns ThreadTraffic
 	return match counting 'counting'
-		counted gives traffic
+		counted or
+		tracked gives traffic
 		scaffolding gives ThreadTraffic.none
 	end 'counting'
 end 'slabThreadTrafficOf'
 
-function emitSlabRawCredit(module StdModule, block IrBlock, rowBase ValueId, event SlabTrafficEvent, atomic bool, counting SlabCounting, ids ValueMinter)
+// A tracked credit's bytes are the request less `boxPrefixBytes`; `MmRuntime.buildMmCounterAccessors`'s
+// raw byte reader subtracts the same prefix per box, so changing one without the other skews the public
+// raw byte count with no failure.
+function emitSlabCountingCredit(module StdModule, block IrBlock, rowBase ValueId, event SlabTrafficEvent, atomic bool, counting SlabCounting, ids ValueMinter)
 	match counting 'counting'
-		counted then emitSlabTrafficCredit(module, block: block, rowBase: rowBase, layer: SlabTrafficLayer.raw, event: event, atomic: atomic, ids: ids)
-		scaffolding then break
+		scaffolding then return
+		counted or
+		tracked then emitSlabTrafficCredit(module, block: block, rowBase: rowBase, layer: SlabTrafficLayer.raw, event: event, atomic: atomic, ids: ids)
 	end 'counting'
-end 'emitSlabRawCredit'
 
-function emitSlabRawCreditBothArms(module StdModule, arms SlabShardArms, event SlabTrafficEvent, counting SlabCounting, next IrBlock, ids ValueMinter)
-	match counting 'counting'
-		counted then emitSlabCreditBothArms(module, arms: arms, layer: SlabTrafficLayer.raw, event: event, next: next, ids: ids)
-		scaffolding then emitSlabArmsJoin(module, arms: arms, next: next)
-	end 'counting'
-end 'emitSlabRawCreditBothArms'
+	if counting != SlabCounting.tracked 'rawOnly'
+		return
+	end 'rawOnly'
+
+	let trackedEvent = match event 'event'
+		alloc(bytes) gives SlabTrafficEvent.alloc(emitBin(module, block: block, a: bytes, b: emitConst(module, block: block, value: boxPrefixBytes(module.debugStream), ids: ids), opcode: StdBinOpcode.sub, ids: ids))
+		free gives SlabTrafficEvent.free
+	end 'event'
+
+	emitSlabTrafficCredit(module, block: block, rowBase: rowBase, layer: SlabTrafficLayer.tracked, event: trackedEvent, atomic: atomic, ids: ids)
+end 'emitSlabCountingCredit'
+
+function emitSlabCountingCreditBothArms(module StdModule, arms SlabShardArms, event SlabTrafficEvent, counting SlabCounting, next IrBlock, ids ValueMinter)
+	emitSlabCountingCredit(module, block: arms.sole.block, rowBase: arms.sole.trafficRow, event: event, atomic: false, counting: counting, ids: ids)
+	emitSlabCountingCredit(module, block: arms.serial.block, rowBase: arms.serial.trafficRow, event: event, atomic: true, counting: counting, ids: ids)
+	emitSlabArmsJoin(module, arms: arms, next: next)
+end 'emitSlabCountingCreditBothArms'
 
 function emitSlabArmsJoin(module StdModule, arms SlabShardArms, next IrBlock)
 	module.setTerminator(arms.sole.block, op: StdOp.branch(next.id))
@@ -1172,8 +1196,8 @@ end 'emitSlabOwnerThreadOrBail'
 
 // What the calling green thread's own traffic columns should record for this event, or nothing — the
 // per-green-thread columns (`GtRuntime.GtOffThreadAllocs`) are stepped at the slab doors only, once per
-// request, so the box doors pass `none`.
-export union ThreadTraffic
+// request, and a scaffold door passes `none`.
+union ThreadTraffic
 	none
 	alloc(bytes ValueId)
 	free
@@ -1181,11 +1205,11 @@ end 'ThreadTraffic'
 
 // ⭐⭐ **WHAT A DOOR ASKS ITS ARMS TO CARRY BEYOND THE TRAFFIC ROW.** Every value an arm carries is
 // materialised in EVERY predecessor of that arm and stays live until its last reader, so a door asks for
-// what it reads and nothing else. The box doors credit their row and stop there; `__slab_free` routes on the
+// what it reads and nothing else. The oversize doors credit their row and stop there; `__slab_free` routes on the
 // P it holds and derives its lock where it takes it; `__slab_alloc` also pops from that row's mcache and
 // carries the lock depth across the pop. It is a build-time choice of the CALL SITE, one literal per entry
 // point, and no program varies it.
-export enum SlabShardNeed
+enum SlabShardNeed
 	creditsOnly
 	holdsProc
 	routed
@@ -1199,7 +1223,7 @@ end 'SlabShardNeed'
 // ⭐⭐ **THE MCACHE ROW IS AN ADDRESS AND NOT THE ROW INDEX**, for the reason the traffic row is: a row
 // index joined from two predecessors is a register, so `row * classCount * 8` stays an `imul` on the path
 // of every allocation. Built per predecessor, the constant-row edges fold to one displacement on `state`.
-export type SlabShardRoute
+type SlabShardRoute
 	export let p as ValueId
 	export let mcacheRow as ValueId
 	export let depthAddr as ValueId
@@ -1209,7 +1233,7 @@ export type SlabShardRoute
 	end 'create'
 end 'SlabShardRoute'
 
-export union SlabShardRouting
+union SlabShardRouting
 	credits
 	proc(p ValueId)
 	routes(route SlabShardRoute)
@@ -1221,7 +1245,7 @@ end 'SlabShardRouting'
 // ⭐⭐ **THE TRAFFIC ROW IS AN ADDRESS AND NOT THE ROW INDEX**, because crediting the row is the one thing
 // every door does in the arm itself: addressed in the predecessor, the edge whose row is a constant folds
 // the multiply and both adds away, while a row index joined across edges keeps all three on the hot path.
-export type SlabShardSite
+type SlabShardSite
 	export var block as IrBlock
 	export let trafficRow as ValueId
 	export let routing as SlabShardRouting
@@ -1257,7 +1281,7 @@ end 'slabShardProc'
 // into it carry `SlabRawShardRow` — that is what "serialised" means here, a thread serialising exactly when
 // the row it takes is the shared one — so both of that row's addresses are emitted inside the arm and no
 // edge carries either.
-export type SlabShardArms
+type SlabShardArms
 	export let schedulerWord as ValueId
 	export var sole as SlabShardSite
 	export var serial as SlabShardSite
@@ -1392,7 +1416,7 @@ end 'ownSoleEdgeArgs'
 // if-converts the test and lengthens the walk by the multiplies, the `lea`s and a `setcc` a straight-line
 // block cannot skip. That lengthening sits between a door's entry and the arm every allocation in an
 // unscheduled program lands in, which is I-cache the hot path pays for on every call.
-module function emitSlabResolveShard(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, need SlabShardNeed, traffic ThreadTraffic, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns SlabShardArms
+function emitSlabResolveShard(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, need SlabShardNeed, traffic ThreadTraffic, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns SlabShardArms
 	let schedulerWord = emitSlabSchedulerWord(module, block: cur, state: state, model: model, ids: ids)
 	var arms = SlabShardArms.create(module, func: func, state: state, schedulerWord: schedulerWord, need: need, ids: ids, label: label, heat: heat)
 
@@ -1610,17 +1634,6 @@ function emitSlabAllocColumns(module StdModule, block IrBlock, rowBase ValueId, 
 	emitSlabTrafficColumnStep(module, block: block, rowBase: rowBase, column: slabLayerTotalColumn(layer), delta: emitConst(module, block: block, value: OneMore, ids: ids), atomic: atomic, ids: ids)
 	emitSlabTrafficColumnStep(module, block: block, rowBase: rowBase, column: slabLayerBytesColumn(layer), delta: bytes, atomic: atomic, ids: ids)
 end 'emitSlabAllocColumns'
-
-// ⭐⭐ **CREDIT THE CALLING THREAD'S ROW ON BOTH ARMS AND CONVERGE — the whole of what a door that only
-// COUNTS does with the shard walk.** Terminates both arms. A door that also ROUTES carries values on its
-// edges and spells its own two branches, because the arms then differ in more than the credit.
-export function emitSlabCreditBothArms(module StdModule, arms SlabShardArms, layer SlabTrafficLayer, event SlabTrafficEvent, next IrBlock, ids ValueMinter)
-	emitSlabTrafficCredit(module, block: arms.sole.block, rowBase: arms.sole.trafficRow, layer: layer, event: event, atomic: false, ids: ids)
-	module.setTerminator(arms.sole.block, op: StdOp.branch(next.id))
-
-	emitSlabTrafficCredit(module, block: arms.serial.block, rowBase: arms.serial.trafficRow, layer: layer, event: event, atomic: true, ids: ids)
-	module.setTerminator(arms.serial.block, op: StdOp.branch(next.id))
-end 'emitSlabCreditBothArms'
 
 // --- Reading the traffic columns ---
 
@@ -2224,7 +2237,7 @@ function emitSlabProbe(module StdModule, func IrFunction, cur IrBlock, mcacheSlo
 	pushBranchEdge(owned, to: hit, values: argsOf(cached))
 end 'emitSlabProbe'
 
-// `__slab_alloc(size) -> ptr`, its non-zeroing sibling and the scaffold door.
+// `__slab_alloc(size) -> ptr`, its tracked and non-zeroing siblings and the scaffold door.
 //
 // ⭐ **`zeroed` DECIDES WHETHER A RECYCLED SLOT IS ZEROED**, which is what lets one builder serve
 // every door. It is BUILD-time, so it costs no branch and no argument at run time.
@@ -2239,7 +2252,7 @@ end 'emitSlabProbe'
 // `size` alone, so it runs before anything reads the state region; the credit is taken in the arm that knows
 // the row, and the lock a serialised thread takes is taken there too, so the pop needs no test of its own.
 //
-// ⭐ **ON A COUNTED DOOR, BOTH TIERS CREDIT THEIR ROW'S RAW COLUMNS** — a request served from a span
+// ⭐ **ON A COUNTED OR TRACKED DOOR, BOTH TIERS CREDIT THEIR ROW'S RAW COLUMNS** — a request served from a span
 // and one served by its own mapping are one allocation each — and both reach the credit through
 // `__slab_state_base`, so the FIRST allocation of a process commits the region whichever tier it
 // lands on.
@@ -2300,10 +2313,10 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, zeroed bool, coun
 	routed.blockArgs.push(IrBlockArg.create(mcacheRow, argType: StdType.i64))
 	routed.blockArgs.push(IrBlockArg.create(heldDepth, argType: StdType.i64))
 
-	emitSlabRawCredit(module, block: arms.sole.block, rowBase: arms.sole.trafficRow, event: SlabTrafficEvent.alloc(size), atomic: false, counting: counting, ids: ids)
+	emitSlabCountingCredit(module, block: arms.sole.block, rowBase: arms.sole.trafficRow, event: SlabTrafficEvent.alloc(size), atomic: false, counting: counting, ids: ids)
 	emitBranchCarrying(module, from: arms.sole.block, to: routed, values: threeArgs(soleRoute.p, second: soleRoute.mcacheRow, third: soleRoute.depthAddr))
 
-	emitSlabRawCredit(module, block: arms.serial.block, rowBase: arms.serial.trafficRow, event: SlabTrafficEvent.alloc(size), atomic: true, counting: counting, ids: ids)
+	emitSlabCountingCredit(module, block: arms.serial.block, rowBase: arms.serial.trafficRow, event: SlabTrafficEvent.alloc(size), atomic: true, counting: counting, ids: ids)
 	emitSlabLockEnter(module, block: arms.serial.block, state: state, depthAddr: serialRoute.depthAddr, ids: ids)
 	emitBranchCarrying(module, from: arms.serial.block, to: routed, values: threeArgs(serialRoute.p, second: serialRoute.mcacheRow, third: serialRoute.depthAddr))
 
@@ -2348,7 +2361,7 @@ function guardSlabStateBase(module StdModule)
 	panic("guardSlabStateBase: `{String.from(SlabStateName)}` is a runtime-tier body every allocating program carries, and the module holds no function of that name")
 end 'guardSlabStateBase'
 
-// The above-32 KiB road: the region committed, the calling thread's row credited on a counted door,
+// The above-32 KiB road: the region committed, the calling thread's row credited on a counted or tracked door,
 // and the request handed to a mapping of its own.
 //
 // ⚠ **IT TAKES NO LOCK, AND THAT IS A PROPERTY OF THE DESIGN RATHER THAN OF THE CAUTION.** The mapping's
@@ -2375,7 +2388,7 @@ function buildSlabOsDirectArm(module StdModule, func IrFunction, cur IrBlock, si
 	var arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.alloc(size)), ids: ids, label: b"shard", heat: BlockHeat.cold)
 
 	var osCall = module.addBlock(func, label: b"oscall", heat: BlockHeat.cold)
-	emitSlabRawCreditBothArms(module, arms: arms, event: SlabTrafficEvent.alloc(size), counting: counting, next: osCall, ids: ids)
+	emitSlabCountingCreditBothArms(module, arms: arms, event: SlabTrafficEvent.alloc(size), counting: counting, next: osCall, ids: ids)
 
 	let mapped = ids.mint()
 	module.appendOp(osCall, op: StdOp.call(mapped, callee: SlabOsDirectAllocName, args: argsOf(size)))
@@ -2834,10 +2847,11 @@ function buildSlabCollectRemote(module StdModule)
 	module.functions.push(func)
 end 'buildSlabCollectRemote'
 
-// `__slab_free(ptr)` (`__slab_free_box(ptr)` for a managed box under `--poison-freed`), and
-// `__slab_free_scaffold(ptr)` for a scaffold region — return a slot to its span, onto that span's remote stack, or a mapping to the OS.
+// `__slab_free(ptr)`, `__slab_free_tracked(ptr)` for a managed box (`__slab_free_box(ptr)` under
+// `--poison-freed`) and `__slab_free_scaffold(ptr)` for a scaffold region — return a slot to its span, onto
+// that span's remote stack, or a mapping to the OS.
 //
-// ⭐⭐ **ON THE COUNTED DOOR, BOTH TIERS DEBIT THE RAW LIVE COLUMN**, because a mapping and a slot
+// ⭐⭐ **ON A COUNTED OR TRACKED DOOR, BOTH TIERS DEBIT THE RAW LIVE COLUMN**, because a mapping and a slot
 // are one free each — but each on the road that reaches it, because the reverse-map walk needs
 // nothing but the pointer and holding the row, the P and the lock depth across it is what puts this
 // frame's working set into spill slots.
@@ -2909,10 +2923,10 @@ function buildSlabFree(module StdModule, door SlabFreeDoor, model MachineModel)
 	let myP = ids.mint()
 	routed.blockArgs.push(IrBlockArg.create(myP, argType: StdType.i64))
 
-	emitSlabRawCredit(module, block: arms.sole.block, rowBase: arms.sole.trafficRow, event: SlabTrafficEvent.free, atomic: false, counting: counting, ids: ids)
+	emitSlabCountingCredit(module, block: arms.sole.block, rowBase: arms.sole.trafficRow, event: SlabTrafficEvent.free, atomic: false, counting: counting, ids: ids)
 	emitBranchCarrying(module, from: arms.sole.block, to: routed, values: argsOf(slabShardProc(arms.sole)))
 
-	emitSlabRawCredit(module, block: arms.serial.block, rowBase: arms.serial.trafficRow, event: SlabTrafficEvent.free, atomic: true, counting: counting, ids: ids)
+	emitSlabCountingCredit(module, block: arms.serial.block, rowBase: arms.serial.trafficRow, event: SlabTrafficEvent.free, atomic: true, counting: counting, ids: ids)
 	emitBranchCarrying(module, from: arms.serial.block, to: routed, values: argsOf(slabShardProc(arms.serial)))
 
 	var rawOwned = module.addBlock(func, label: b"rawowned", heat: BlockHeat.normal)
@@ -3048,7 +3062,7 @@ function buildSlabFreeOversize(module StdModule, counting SlabCounting, model Ma
 	var osArms = emitSlabResolveShard(module, func: func, cur: entry, state: osState, model: model, need: SlabShardNeed.creditsOnly, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.free), ids: ids, label: b"shard", heat: BlockHeat.cold)
 
 	var osCall = module.addBlock(func, label: b"oscall", heat: BlockHeat.cold)
-	emitSlabRawCreditBothArms(module, arms: osArms, event: SlabTrafficEvent.free, counting: counting, next: osCall, ids: ids)
+	emitSlabCountingCreditBothArms(module, arms: osArms, event: SlabTrafficEvent.free, counting: counting, next: osCall, ids: ids)
 
 	module.appendOp(osCall, op: StdOp.call(ids.mint(), callee: SlabOsDirectFreeName, args: argsOf(ptr)))
 	module.setTerminator(osCall, op: StdOp.retVoid)

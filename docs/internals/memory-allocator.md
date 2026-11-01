@@ -15,8 +15,9 @@ The heap is part of the runtime the compiler emits into every program that alloc
   memory it reserves from the operating system.
 - `SlabRuntime.maxon` carves them into spans of one size class each. A request above 32 KiB bypasses the size
   classes and goes to the operating system directly, and is returned to it whole when freed.
-- `MmRuntime.maxon` is the box layer on top: `__mm_alloc` asks `__slab_alloc` for the box, header and payload
-  together, and `__mm_free` hands the same pointer back to `__slab_free`.
+- `MmRuntime.maxon` is the box layer on top: `__mm_alloc` asks `__slab_alloc_tracked` for the box, header and
+  payload together, and `__mm_free` hands the same pointer back to `__slab_free_tracked`. The tracked doors
+  credit the box layer's traffic columns in the shard walk that credits the allocator's own.
 
 Each processor (P) of the scheduler owns a cache of spans and is their only writer, so allocating from it
 takes no lock. A slot freed by another P is pushed onto the owning P's queue with a compare-and-swap, and the
@@ -41,17 +42,17 @@ path:
 - **Every byte of a span's bump region is zero** (INV-3), because the region is carved from chunks and is
   never written until a slot is handed out. A bump slot costs nothing to hand out.
 
-A recycled slot is re-zeroed as it is popped from the free list: `__slab_alloc` fills the whole slot with 0
-(`memFill`). `__slab_alloc_raw` is built without that fill, for a caller that provably writes every byte
+A recycled slot is re-zeroed as it is popped from the free list: `__slab_alloc` and `__slab_alloc_tracked` fill the
+whole slot with 0 (`memFill`). `__slab_alloc_raw` is built without that fill, for a caller that provably writes every byte
 before anything reads it and never keeps managed pointers in the region; it has no caller, so dead function
 elimination removes it from every program.
 
-`__mm_free` returns a box through `__slab_free`, which puts the slot back on its span as it is.
+`__mm_free` returns a box through `__slab_free_tracked`, which puts the slot back on its span as it is.
 A build made with `--poison-freed` returns a managed box through `__slab_free_box`, which fills the
 freed slot with `0x3F` (`SlabFreedBoxPoisonByte`) before the slot goes back to its span. The fill starts at the
 payload and runs to the end of the slot. A box is filled when it is freed into a span whose slot extends past
 the box's header (and `--debugstream` prefix); an OS-direct mapping goes back whole. Every other buffer kind
-frees through `__slab_free`. A filled integer reads as a conspicuous 63, and a filled pointer is a
+frees through `__slab_free` or `__slab_free_scaffold`. A filled integer reads as a conspicuous 63, and a filled pointer is a
 non-canonical x64 address that faults when dereferenced. In such a build a recycled slot is written twice,
 filled on free and zeroed on reuse. The spec harness builds every run case with `--poison-freed`, except a
 case that pins Target IR (see [SPECS.md](../SPECS.md)).

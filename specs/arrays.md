@@ -3541,6 +3541,79 @@ Stack trace:
   in mrt_start
 ```
 
+<!-- test: reserve-a-byte-array-whose-bit-total-wraps-panics -->
+The refusal is on the capacity times the element's BITS, so a one-byte element wraps at `1 shl 60` (eight bits each, `2^63` in all) long before the byte count itself would overflow. That is the first count the signed bit total cannot hold, and it is refused the way `reserve(1 shl 62)` of a word-sized element is.
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+	bytes.reserve(1 shl 60)
+	return bytes.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold
+Stack trace:
+  in Array.reserve
+  in main
+  in mrt_start
+```
+
+<!-- test: reserve-a-word-array-past-the-bit-total-panics -->
+A word-sized element is 64 bits, so `1 shl 62` of them is `2^68` bits: the wrapped total is refused, and the array keeps the buffer it had.
+```maxon
+function main() returns ExitCode
+	var words = [1 as Count]
+	words.reserve(1 shl 62)
+	return words.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold
+Stack trace:
+  in Array.reserve
+  in main
+  in mrt_start
+```
+
+<!-- test: growth-by-pushing-keeps-every-element-across-the-doublings -->
+Growth below the wrap bound takes the allocation road with no overflow refusal: a byte array and a word array pushed through many reallocations keep every element and agree on their counts.
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+	var words = [0 as Count]
+	var wrong = 0 as Count
+
+	for i in 0 upto 5000 'push'
+		bytes.push((i and 0xFF) as Byte)
+		words.push(i)
+	end 'push'
+
+	for i in 0 upto 5000 'check'
+		let b = try bytes.get(i) otherwise panic("a pushed byte is readable")
+		let w = try words.get(i + 1) otherwise panic("a pushed word is readable")
+
+		if (b as Count) != (i and 0xFF) or w != i 'mismatch'
+			wrong = wrong + 1
+		end 'mismatch'
+	end 'check'
+
+	if bytes.count() != 5000 or words.count() != 5001 'counts'
+		wrong = wrong + 1
+	end 'counts'
+
+	return wrong as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: an-array-literal-agrees-on-a-plain-constant-and-a-backing-alias-in-either-order -->
 A literal array mixing a plain `let` constant and an enum's `rawValue` agrees on its element whichever comes first, because a plain constant fits the alias in either position.
 ```maxon

@@ -273,10 +273,10 @@ a walk with a builder stays a builder:
   `SlabArena.emitSlabArenaMapGet`, so it is not an entry point and has no tier spelling.
 
 The slab object layer's remaining entries are builders in `installSlabRuntime`: `__slab_collect_remote`,
-`__slab_rounded_size`, `__slab_refill`, `__slab_alloc`, `__slab_alloc_raw`, `__slab_span_destroy`,
-`__slab_free_to_full`, `__slab_free_to_raw`, `__slab_scavenge`, `__slab_free_to_span`, `__slab_free`, and
-the eight census wrappers that take `__slab_lock` around a tier census walk. The refill, both allocation
-doors, the scavenger, the free and the census wrappers take `TargetFacilities.machineModel(target)`: on
+`__slab_rounded_size`, `__slab_refill`, `__slab_alloc`, `__slab_alloc_tracked`, `__slab_alloc_raw`, `__slab_span_destroy`,
+`__slab_free_to_full`, `__slab_free_to_raw`, `__slab_scavenge`, `__slab_free_to_span`, `__slab_free`,
+`__slab_free_tracked`, and the eight census wrappers that take `__slab_lock` around a tier census walk. The refill, the
+allocation doors, the scavenger, the free and the census wrappers take `TargetFacilities.machineModel(target)`: on
 wasm32-wasi (`singleMachine`) the "which processor am I" walk is a constant, elsewhere a TLS read. The
 allocator reads no usage bit; whether a second thread exists is a run-time word in the state head
 (`SlabStateSchedulerOffset`).
