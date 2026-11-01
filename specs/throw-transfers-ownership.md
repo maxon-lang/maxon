@@ -195,8 +195,8 @@ null the CALLER's box, a use-after-move if the caller CATCHES and re-reads the f
 Instead the throw RETAINS — `__mm_incref` makes the thrown reference a SECOND owner and
 leaves the slot intact — so the caller's box stays live. This test proves exactly that:
 after catching the thrown error, `main` RE-READS `lex.pendingError` and sees the same live
-value (a move-out would have left a nulled slot, which under the always-on poison-free
-`__mm_free` would fault or return `0x3F…`). The caller's container keeps its own reference,
+value (a move-out would have left a nulled slot, which under the poison-free
+`__mm_free` every spec case is built with would fault or return `0x3F…`). The caller's container keeps its own reference,
 the catch consumes the thrown one, and the refcount balances at one free — no leak, no
 double-free. This applies the #40 retain-promotion thesis to the throw error channel.
 

@@ -16,7 +16,7 @@ The heap is part of the runtime the compiler emits into every program that alloc
 - `SlabRuntime.maxon` carves them into spans of one size class each. A request above 32 KiB bypasses the size
   classes and goes to the operating system directly, and is returned to it whole when freed.
 - `MmRuntime.maxon` is the box layer on top: `__mm_alloc` asks `__slab_alloc` for the box, header and payload
-  together, and `__mm_free` hands the same pointer back to `__slab_free_box`.
+  together, and `__mm_free` hands the same pointer back to `__slab_free`.
 
 Each processor (P) of the scheduler owns a cache of spans and is their only writer, so allocating from it
 takes no lock. A slot freed by another P is pushed onto the owning P's queue with a compare-and-swap, and the
@@ -46,13 +46,15 @@ A recycled slot is re-zeroed as it is popped from the free list: `__slab_alloc` 
 before anything reads it and never keeps managed pointers in the region; it has no caller, so dead function
 elimination removes it from every program.
 
-`__mm_free` returns a box through `__slab_free_box`, which fills the freed slot with `0x3F`
-(`SlabFreedBoxPoisonByte`) before the slot goes back to its span. The fill starts at the payload and covers at
-most 256 bytes (`SlabFreedBoxPoisonCapBytes`). A box is filled when it is freed into a span whose slot
-extends past the box's header (and `--debugstream` prefix); an OS-direct mapping goes back whole. Every other
-buffer kind frees through `__slab_free`. A poisoned integer reads as a conspicuous 63, and a poisoned pointer is a
-non-canonical x64 address that faults when dereferenced. A recycled slot is therefore written twice, poisoned
-on free and zeroed on reuse.
+`__mm_free` returns a box through `__slab_free`, which puts the slot back on its span as it is.
+A build made with `--poison-freed` returns a managed box through `__slab_free_box`, which fills the
+freed slot with `0x3F` (`SlabFreedBoxPoisonByte`) before the slot goes back to its span. The fill starts at the
+payload and runs to the end of the slot. A box is filled when it is freed into a span whose slot extends past
+the box's header (and `--debugstream` prefix); an OS-direct mapping goes back whole. Every other buffer kind
+frees through `__slab_free`. A filled integer reads as a conspicuous 63, and a filled pointer is a
+non-canonical x64 address that faults when dereferenced. In such a build a recycled slot is written twice,
+filled on free and zeroed on reuse. The spec harness builds every run case with `--poison-freed`, except a
+case that pins Target IR (see [SPECS.md](../SPECS.md)).
 
 Code relies on the contract: `__mm_alloc` does not store an initial refcount, because the slot already holds
 0, and a C string's terminator is the zero already there. A layout that needs particular zero bytes for its
@@ -63,7 +65,7 @@ own correctness, such as an enum box's unused payload slots, stores them explici
 `StdOp.memFill(dest, byteCount, value)` fills `byteCount` bytes with the low byte of `value`; a count of 0
 writes nothing. It is an op, not a Std-IR loop, because the right code depends on the size and Std IR cannot
 express a size dispatch. A byte loop costs a store, an add, a compare and a branch per byte, on the
-allocator's hottest paths: zeroing a recycled slot or a released chunk run, and poisoning a freed payload.
+allocator's hottest paths: zeroing a recycled slot or a released chunk run, and, under `--poison-freed`, filling a freed box.
 `value` is a compile-time constant, so the 64-bit pattern (`byte × 0x0101010101010101`) is computed at
 compile time.
 

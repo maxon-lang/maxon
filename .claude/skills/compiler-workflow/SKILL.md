@@ -139,7 +139,8 @@ build of the same commit from the same seed (`scripts/fetch-seed.sh <target>`, t
 3. Disassemble that function (`otool -tvV` on macOS, `llvm-objdump -d` elsewhere).
 
 ⚠ **The panic words are the same for a nil dereference and a use-after-free; the faulting load tells them
-apart.** A freed box's first 256 payload bytes are poisoned with `0x3F` and stay mapped, so a read through a
+apart.** In a `--poison-freed` build (every spec case is one, bar those pinning Target IR) a freed box's payload
+is filled with `0x3F` to the end of its slot and stays mapped, so a read through a
 freed box returns poison without faulting — only a pointer read OUT of poison faults, on `0x3F3F3F3F3F3F3F3F`. A true nil
 faults on the first load.
 

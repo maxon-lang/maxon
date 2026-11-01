@@ -386,13 +386,14 @@ uses it.
 | `--coverage` | Instrument for code coverage: the binary counts each statement and branch arm it executes and writes the counts to `<output>.mxcov` as it exits. This changes the emitted code, so it is a separate build from the one you ship. Read the counts with `maxon coverage`. Needs the debug-info sidecar, so `--no-debug-info` beside it is refused. |
 | `--debugstream` | Emit the shared-memory debug-stream producer that `maxon monitor` reads, with the memory manager's events. Also enables the `__DebugStream` builtin; without the flag its calls emit nothing. Refused on a target without shared memory and an uptime clock. |
 | `--async-trace` | Write the green-thread trace to stderr as the program runs: one line per spawn, sleep, I/O wait, resume and await. See [Debugging and Profiling](#debugging-and-profiling). |
+| `--poison-freed` | Fill each freed managed box with `0x3F`, from its payload to the end of its slot, so a read after free returns 63, or a pointer of `0x3F3F3F3F3F3F3F3F` that faults when dereferenced. A box above 32 KiB goes back to the operating system whole and is not filled. |
 | `--census-by-tag`, `--census-by-tag=<phase>` | Census the *live* heap by allocation tag at every compile phase boundary — which types the bytes still held at that point belong to, rather than how many bytes the phase asked for. Naming a phase censuses that phase alone, which is what a large compile can afford. It samples residency whether or not `--log=compiler:debug` is given, and writes a `tag` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `livebytes` are the slots live at that boundary and their bytes; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so the census is by *size class* instead and says so in its headline. See [Logging](#logging). |
 | `--allocations-by-tag`, `--allocations-by-tag=<phase>` | Tally every allocation the compile *asks for* by allocation tag and by phase — churn rather than a level, so a phase that allocates a million short-lived boxes shows them here and in no other table. Naming a phase tallies that phase alone. It writes a `churn` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `bytes` are the allocations the phase made and the bytes they asked for; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so nothing is tallied and the report says so. See [Logging](#logging). |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
 | `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. Each row's first field is its kind: `phase`, `regalloc`, `total`, `unattributed`, `upkeep`, `code`, `tag` when `--census-by-tag` is given, and `churn` when `--allocations-by-tag` is. `upkeep` is the time and memory spent refreshing the records of the locks the compile holds, once every 5 s; the memory columns of `total` and `unattributed` exclude it, so two compiles of one program report the same memory however long each ran. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary. The TSV's five residency columns are filled only when it or `--census-by-tag` is given; on their own they are zero. |
 
-`--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**: each adds its machinery
-only to a build that names it.
+`--debugstream`, `--async-trace`, `--poison-freed` and `--coverage` are opt-in **per build**: each adds its
+machinery only to a build that names it.
 
 A build prints the compiler's version and an early-preview warning to stdout, then
 `Compiled -> <path>` when it compiled or `Up to date -> <path>` when its output was already current (see
@@ -476,7 +477,7 @@ kept, so a link at the output path is keyed as the file the build writes there. 
   compiler embeds, each with its modification time — and on `wasm32-wasi`, `vendor/wasm-tools` and the
   files under `vendor/wasi-wit`;
 - the target, whether the debug-info sidecar is written, `--coverage`, `--debugstream`,
-  `--async-trace`, the product version, and every define;
+  `--async-trace`, `--poison-freed`, the product version, and every define;
 - the compiler's path, size and modification time;
 - the size and modification time of the output and of its `.mxdbg` sidecar, and the time the compile
   started, read from the cache root's filesystem.
@@ -494,7 +495,7 @@ The reason a compiling build gives is one of these:
 | `<path> was modified at or after the last compile started` | A recorded file changed |
 | `<path> was replaced by an older copy` | A recorded file now has an earlier modification time than the record holds, as a restored backup does |
 | `source added: <path>`, `source removed: <path>` | The program or the library gained or lost a file; `tool added:` and `tool removed:` for the `wasm32-wasi` tools |
-| `option <name> changed: <old> -> <new>` | `<name>` is `target`, `debugInfo`, `coverage`, `debugStream`, `asyncTrace` or `version` |
+| `option <name> changed: <old> -> <new>` | `<name>` is `target`, `debugInfo`, `coverage`, `debugStream`, `asyncTrace`, `poisonFreed` or `version` |
 | `define <name> added`, `define <name> removed`, `define <name> changed: <old> -> <new>` | A `--define` or a described build's define differs |
 | `the compiler changed: <old> -> <new>` | A different compiler, or a rebuilt one, runs the build |
 | `the output is missing`, `the output was replaced since it was written` | The output is gone or differs from what the compile wrote; the same for `the debug-info sidecar` |

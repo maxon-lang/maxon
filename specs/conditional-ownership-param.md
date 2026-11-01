@@ -43,8 +43,8 @@ value semantics). The retain balances on every path:
 `q` gets a FRESH SSA value distinct from `p` (the retain RETURNS the pointer), so a later re-borrow
 of `p` (`let r = p`) cannot poison `q`, and moving `q` (`let r = q`) poisons `q` and not `p`.
 
-These cases guard USE-AFTER-FREE under poison-on-free (`__mm_free` overwrites a freed box with
-`0x3F`): a wrong-depth enrolment makes them return `0x3F3F3F3F` (1061109567) or fault (`0xC0000005`).
+These cases guard USE-AFTER-FREE under `--poison-freed`, which a spec case is built with (a freed box is
+overwritten with `0x3F`): a wrong-depth enrolment makes them return `0x3F3F3F3F` (1061109567) or fault (`0xC0000005`).
 
 ## Tests
 

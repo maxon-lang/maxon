@@ -7,6 +7,7 @@ export let StagingRootDirName = "temp/emittedRuntime"
 let TargetOptionPrefix = "--target="
 let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
 let DebugStreamOption = "--debugstream"
+export let PoisonFreedOption = "--poison-freed"
 export let EmittedNameSeparator = ","
 let IrFileSuffix = ".ir"
 
@@ -98,7 +99,7 @@ export type WordAccesses
 	end 'claimAccess'
 end 'WordAccesses'
 
-export function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false) returns FilePath
+export function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false) returns FilePath
 	let executable = staged.join("{OutputFileStem}-{caseLabel}-{target}")
 	let ir = staged.join("{OutputFileStem}-{caseLabel}-{target}{IrFileSuffix}")
 
@@ -109,6 +110,10 @@ export function buildStagedProgram(staged FilePath, caseLabel String, target Str
 	if debugStream 'withTheProducer'
 		extraArguments.push(DebugStreamOption)
 	end 'withTheProducer'
+
+	if poisonFreed 'withTheFill'
+		extraArguments.push(PoisonFreedOption)
+	end 'withTheFill'
 
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: extraArguments)
 

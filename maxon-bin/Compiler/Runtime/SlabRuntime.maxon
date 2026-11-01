@@ -410,7 +410,8 @@ let SlabFreeName = b"__slab_free"
 let SlabScaffoldAllocName = b"__slab_alloc_scaffold"
 let SlabScaffoldFreeName = b"__slab_free_scaffold"
 
-// `__slab_free_box(ptr)` — the counted free that poisons a managed box; see `buildSlabFreedBoxPoison`.
+// `__slab_free_box(ptr)` — the counted free that fills a freed managed box; built only under
+// `--poison-freed`, see `slabFreeDoorOf` and `buildSlabFreedBoxPoison`.
 let SlabFreeBoxName = b"__slab_free_box"
 
 let SlabRoundedSizeName = b"__slab_rounded_size"
@@ -439,7 +440,6 @@ let SlabDoorOwnerMoved = 0
 // 63, never the 0 a correct zeroed slot holds, and a word of it as a pointer is `0x3F3F3F3F3F3F3F3F`, a
 // non-canonical x64 address that faults on dereference.
 let SlabFreedBoxPoisonByte = 0x3F
-let SlabFreedBoxPoisonCapBytes = 256
 
 // ⭐⭐ **THE FIVE THIS FILE NAMES BUT NO LONGER BUILDS.** Their bodies are `runtime/SlabRuntime.maxon`
 // source — the OS-direct pair, the state region's commit and the metadata slab's two cursors — and what
@@ -509,6 +509,42 @@ type SlabDoors
 		end 'counting'
 	end 'of'
 end 'SlabDoors'
+
+union SlabFreeDoor
+	plain(counting SlabCounting)
+	poisoning
+
+	function name() returns ByteArray
+		return match self 'door'
+			plain(counting) gives SlabDoors.of(counting).free
+			poisoning gives SlabFreeBoxName
+		end 'door'
+	end 'name'
+
+	function counting() returns SlabCounting
+		return match self 'door'
+			plain(counting) gives counting
+			poisoning gives SlabCounting.counted
+		end 'door'
+	end 'counting'
+
+	function poisons() returns bool
+		return match self 'door'
+			plain gives false
+			poisoning gives true
+		end 'door'
+	end 'poisons'
+end 'SlabFreeDoor'
+
+// The one decision of which door frees a buffer of `kind`. `installSlabRuntime` builds the box door and
+// `emitSlabFree` calls it from this same answer, so a call never names a door the program lacks.
+function slabFreeDoorOf(module StdModule, kind SlabBufferKind) returns SlabFreeDoor
+	if module.poisonFreed and kind == SlabBufferKind.managedBox 'poisonsTheBox'
+		return SlabFreeDoor.poisoning
+	end 'poisonsTheBox'
+
+	return SlabFreeDoor.plain(slabCountingOf(kind))
+end 'slabFreeDoorOf'
 
 function slabThreadTrafficOf(counting SlabCounting, traffic ThreadTraffic) returns ThreadTraffic
 	return match counting 'counting'
@@ -707,10 +743,14 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabFreeToSpan(module)
 
 	for counting in SlabCounting.allCases 'eachFreeDoor'
-		buildSlabFree(module, counting: counting, poisoning: false, model: model)
+		buildSlabFree(module, door: SlabFreeDoor.plain(counting), model: model)
 	end 'eachFreeDoor'
 
-	buildSlabFree(module, counting: SlabCounting.counted, poisoning: true, model: model)
+	let boxDoor = slabFreeDoorOf(module, kind: SlabBufferKind.managedBox)
+
+	if boxDoor.poisons() 'buildsTheBoxDoor'
+		buildSlabFree(module, door: boxDoor, model: model)
+	end 'buildsTheBoxDoor'
 
 	buildSlabCensusEntry(module, name: SlabLiveBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusLiveBytes), model: model)
 	buildSlabCensusEntry(module, name: SlabFreeBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusFreeBytes), model: model)
@@ -2794,8 +2834,8 @@ function buildSlabCollectRemote(module StdModule)
 	module.functions.push(func)
 end 'buildSlabCollectRemote'
 
-// `__slab_free(ptr)`, `__slab_free_box(ptr)` for a managed box, and `__slab_free_scaffold(ptr)` for a
-// scaffold region — return a slot to its span, onto that span's remote stack, or a mapping to the OS.
+// `__slab_free(ptr)` (`__slab_free_box(ptr)` for a managed box under `--poison-freed`), and
+// `__slab_free_scaffold(ptr)` for a scaffold region — return a slot to its span, onto that span's remote stack, or a mapping to the OS.
 //
 // ⭐⭐ **ON THE COUNTED DOOR, BOTH TIERS DEBIT THE RAW LIVE COLUMN**, because a mapping and a slot
 // are one free each — but each on the road that reaches it, because the reverse-map walk needs
@@ -2841,9 +2881,9 @@ end 'buildSlabCollectRemote'
 // the slot's first word, so an INTERIOR pointer would corrupt the slot it lands in and then be
 // handed out as a slot base. Every caller passes back exactly what its alloc door answered
 // (`__mm_free` passes the box HEADER base, which is that pointer).
-function buildSlabFree(module StdModule, counting SlabCounting, poisoning bool, model MachineModel)
-	let name = SlabFreeBoxName if poisoning else SlabDoors.of(counting).free
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+function buildSlabFree(module StdModule, door SlabFreeDoor, model MachineModel)
+	let counting = door.counting()
+	var func = IrFunction.createFromStd(door.name(), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2858,7 +2898,7 @@ function buildSlabFree(module StdModule, counting SlabCounting, poisoning bool, 
 	var toSpan = module.addBlock(func, label: b"tospan", heat: BlockHeat.normal)
 	var afterMap = toSpan.id
 
-	if poisoning 'poisonsTheSlot'
+	if door.poisons() 'poisonsTheSlot'
 		afterMap = buildSlabFreedBoxPoison(module, func: func, span: span, ptr: ptr, next: toSpan, ids: ids)
 	end 'poisonsTheSlot'
 
@@ -2977,26 +3017,20 @@ function buildSlabFree(module StdModule, counting SlabCounting, poisoning bool, 
 end 'buildSlabFree'
 
 // The fill runs on a span hit only: an OS-direct mapping goes back to the OS whole. It starts at the
-// payload, so the prefix (whose first word the free list threads through) is untouched, and it stops at
-// the cap so a large slot costs a bounded fill per free. A class with no room past the prefix is skipped.
+// payload, so the prefix (whose first word the free list threads through) is untouched, and it runs to
+// the end of the slot, so its cost grows with the class. A class with no room past the prefix is skipped.
 function buildSlabFreedBoxPoison(module StdModule, func IrFunction, span ValueId, ptr ValueId, next IrBlock, ids ValueMinter) returns BlockId
 	var sized = module.addBlock(func, label: b"poisonsized", heat: BlockHeat.normal)
-	var measured = module.addBlock(func, label: b"poisonmeasured", heat: BlockHeat.normal)
-	var capped = module.addBlock(func, label: b"poisoncapped", heat: BlockHeat.normal)
-	var whole = module.addBlock(func, label: b"poisonwhole", heat: BlockHeat.normal)
+	var filled = module.addBlock(func, label: b"poisonfilled", heat: BlockHeat.normal)
 	let skip = boxPrefixBytes(module.debugStream)
 
 	let slotSize = emitGeomSlotSize(module, block: sized, geom: emitSpanGeometry(module, block: sized, span: span, ids: ids), ids: ids)
-	emitBranchOnCompare(module, block: sized, value: slotSize, pred: StdCmpPred.gt, against: skip, whenTrue: measured, whenFalse: next, ids: ids)
+	emitBranchOnCompare(module, block: sized, value: slotSize, pred: StdCmpPred.gt, against: skip, whenTrue: filled, whenFalse: next, ids: ids)
 
-	let poisonFrom = emitBin(module, block: measured, a: ptr, b: emitConst(module, block: measured, value: skip, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let room = emitBin(module, block: measured, a: slotSize, b: emitConst(module, block: measured, value: skip, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	emitBranchOnCompare(module, block: measured, value: room, pred: StdCmpPred.gt, against: SlabFreedBoxPoisonCapBytes, whenTrue: capped, whenFalse: whole, ids: ids)
-
-	module.appendOp(capped, op: StdOp.memFill(poisonFrom, byteCountId: emitConst(module, block: capped, value: SlabFreedBoxPoisonCapBytes, ids: ids), value: SlabFreedBoxPoisonByte))
-	module.setTerminator(capped, op: StdOp.branch(next.id))
-	module.appendOp(whole, op: StdOp.memFill(poisonFrom, byteCountId: room, value: SlabFreedBoxPoisonByte))
-	module.setTerminator(whole, op: StdOp.branch(next.id))
+	let poisonFrom = emitBin(module, block: filled, a: ptr, b: emitConst(module, block: filled, value: skip, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let room = emitBin(module, block: filled, a: slotSize, b: emitConst(module, block: filled, value: skip, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	module.appendOp(filled, op: StdOp.memFill(poisonFrom, byteCountId: room, value: SlabFreedBoxPoisonByte))
+	module.setTerminator(filled, op: StdOp.branch(next.id))
 
 	return sized.id
 end 'buildSlabFreedBoxPoison'
@@ -3025,8 +3059,7 @@ end 'buildSlabFreeOversize'
 // `ptr` must be exactly what `emitSlabAlloc` answered for the same `kind`, and never 0: a region
 // freed under another kind's counting drifts a frees column from its total.
 export function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, kind SlabBufferKind, ids ValueMinter)
-	let door = SlabFreeBoxName if kind == SlabBufferKind.managedBox else SlabDoors.of(slabCountingOf(kind)).free
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: door, args: argsOf(ptr)))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: slabFreeDoorOf(module, kind: kind).name(), args: argsOf(ptr)))
 end 'emitSlabFree'
 
 export function emitSlabAlloc(module StdModule, block IrBlock, bytes ValueId, kind SlabBufferKind, ids ValueMinter) returns ValueId

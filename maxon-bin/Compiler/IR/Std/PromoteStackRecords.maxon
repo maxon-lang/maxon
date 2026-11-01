@@ -889,7 +889,8 @@ end 'buildParamEscapeMasks'
 function seedEscapingParams(seeds BoolArray, nodes ParamNodeSpace, funcIndex ElementIndex, func IrFunction, tracked BoolArray, scan PointerScan)
 	for param in 0 upto func.paramCount 'eachParam'
 		// ⚠ A parameter the CALLEE DROPS has escaped: `__mm_decref` releases an ownership stake, and
-		// releasing a frame address would run `__slab_free_box`'s poison fill across live stack memory. That is
+		// releasing a frame address would hand live stack memory to the slab's free (and fill it, in a
+		// `--poison-freed` build). That is
 		// the one place this reading of the shared scan differs from the call site's, where a drop is
 		// exactly what promotion deletes.
 		//
@@ -1555,8 +1556,8 @@ end 'recordIsFrameLocal'
 // constant-valued field needs, minted above the function's whole value space.
 //
 // The drops are deleted in the same rebuild: a promoted record has no MM header to decrement and no
-// allocation to free, and `__mm_decref` on a frame address would run `__slab_free_box`'s poison fill across
-// live stack memory.
+// allocation to free, and `__mm_decref` on a frame address would hand live stack memory to the slab's free
+// (and fill it, in a `--poison-freed` build).
 function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, plans RecordPromotionArray)
 	var mint = ValueMinter.resuming(valueBound)
 

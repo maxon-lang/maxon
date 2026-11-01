@@ -159,6 +159,8 @@ let AsyncTraceMarker = "<!-- AsyncTrace"
 // of them at the character after "<!-- "), so the marker checks stay independent.
 let DebugInfoMarker = "<!-- DebugInfo"
 
+let PoisonFreedMarker = "<!-- PoisonFreed"
+
 // ⭐⭐ **WHICH FAMILY OF THE DEBUG STREAM A CAPTURE CASE ASSERTS.** Both families ride the SAME shared-memory
 // ring, are built the same way (`--debugstream`) and are read by the same consumer (`maxon monitor`), and
 // they differ in exactly four derived things: the marker that requests one, the fence that holds the
@@ -918,6 +920,8 @@ export type SpecTest
 	// refuse a desync, rather than on the sidecar's contents.
 	export let debugInfo as bool
 
+	export let poisonFreed as bool
+
 	// Whether this case asserts a DEBUG-STREAM trace, which family, and what it expects (see
 	// `SpecTraceCapture`). It sits beside `asyncTrace` for that field's stated reason and it is the same
 	// kind of fact: it changes how the program is BUILT (`--debugstream`) and how its output is COMPARED
@@ -967,9 +971,9 @@ export type SpecTest
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinsTargetIr bool) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinsTargetIr bool) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinsTargetIr: pinsTargetIr}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinsTargetIr: pinsTargetIr}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -981,6 +985,10 @@ export type SpecTest
 	export function runsOnOneLane() returns bool
 		return markerLeaves(self.unsupportedTargets, lanes: OneLane)
 	end 'runsOnOneLane'
+
+	export function buildsWithFreedBoxPoison() returns bool
+		return self.poisonFreed or not self.pinsTargetIr
+	end 'buildsWithFreedBoxPoison'
 
 	export function compilesAsLibrary() returns bool
 		return match self.tier 'tier'
@@ -1234,7 +1242,7 @@ export type TraceSlice
 	export let blockStart as ElementIndex
 	export let blockEnd as ElementIndex
 
-	static function create(blockStart ElementIndex, blockEnd ElementIndex) returns TraceSlice
+	module static function create(blockStart ElementIndex, blockEnd ElementIndex) returns TraceSlice
 		return Self{blockStart: blockStart, blockEnd: blockEnd}
 	end 'create'
 end 'TraceSlice'
@@ -1313,6 +1321,7 @@ type CaseBuilder
 	var sectionPins as SpecSectionPinArray
 	var asyncTrace as bool
 	var debugInfo as bool
+	var poisonFreed as bool
 	var markedFamily as MarkedTraceFamily
 	var captureBlock as CaptureBlock
 
@@ -1342,7 +1351,7 @@ type CaseBuilder
 	var pinsAnyLane as bool
 
 	static function create(name String, markerIndex ElementIndex, specPath FilePath, effectiveTargetKey String) returns CaseBuilder
-		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), asyncTrace: false, debugInfo: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIrBlock: TargetIrBlock.absent, pinsAnyLane: false}
+		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), asyncTrace: false, debugInfo: false, poisonFreed: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIrBlock: TargetIrBlock.absent, pinsAnyLane: false}
 	end 'create'
 
 	function refuseCrowdedLine(openings StringArray, line String, lineIndex ElementIndex)
@@ -1389,6 +1398,7 @@ type CaseBuilder
 			args then programArgs.append(parseProgramArgs(opening))
 			asyncTrace then asyncTrace = true
 			debugInfo then debugInfo = true
+			poisonFreed then poisonFreed = true
 			mmTrace then self.markTraceFamily(TraceFamily.mm, lineIndex: lineIndex)
 			logTrace then self.markTraceFamily(TraceFamily.log, lineIndex: lineIndex)
 			network then network = parseNetworkValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
@@ -1565,8 +1575,12 @@ type CaseBuilder
 			read(text) gives text
 		end 'program'
 
+		if poisonFreed and not pinsAnyLane 'poisonWithoutAPin'
+			panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: test '{name}' carries `{PoisonFreedMarker} -->` and pins no Target IR. Every case that pins none is already built with the freed-box fill, so the marker changes nothing for it. It means something only on a case with a ```{TargetIrQualifiedFencePrefix}<target> block, which is otherwise built the way a user's `maxon build` is. Drop the marker, or add the pin it is meant to change")
+		end 'poisonWithoutAPin'
+
 		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
-		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
 	end 'build'
 
 	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
@@ -2109,6 +2123,7 @@ enum CaseDirective
 	args
 	asyncTrace
 	debugInfo
+	poisonFreed
 	mmTrace
 	logTrace
 	network
@@ -2126,6 +2141,7 @@ enum CaseDirective
 			args gives ArgsMarker
 			asyncTrace gives AsyncTraceMarker
 			debugInfo gives DebugInfoMarker
+			poisonFreed gives PoisonFreedMarker
 			mmTrace gives MmTraceMarker
 			logTrace gives LogTraceMarker
 			network gives NetworkMarker
@@ -2142,6 +2158,7 @@ enum CaseDirective
 		return match self 'directive'
 			asyncTrace or
 			debugInfo or
+			poisonFreed or
 			mmTrace or
 			logTrace gives true
 			testCase or

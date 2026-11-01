@@ -1002,7 +1002,7 @@ end 'main'
 
 The deep clone and its source are fully independent: both may live at once and both drop at scope exit, each
 freeing its own two Strings exactly once. A shallow clone (shared element pointers) would double-free at the
-second container's drop — under the always-on free-poison this is a fault or an exit-101 leak, which the exit-0
+second container's drop — under the free-poison every spec case is built with this is a fault or an exit-101 leak, which the exit-0
 run rules out.
 
 <!-- test: opaque-clone-both-live -->

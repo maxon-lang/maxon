@@ -182,6 +182,8 @@ module let EmitIrFlag = "--emit-ir"
 // run time (see `GtRuntime.GtTraceEmitName`).
 let AsyncTraceFlag = "--async-trace"
 
+let PoisonFreedFlag = "--poison-freed"
+
 let CensusByTagFlag = "--census-by-tag"
 let CensusByTagFlagPrefix = "--census-by-tag="
 
@@ -671,7 +673,7 @@ type BuildJob
 	end 'create'
 
 	function recordRequestFor(output FilePath) returns BuildRecordRequest
-		return BuildRecordRequest.create(output, target: self.target, inputPaths: self.inputPaths, debugInfo: self.debugInfo, coverage: self.args.coverage, debugStream: self.args.debugStream, asyncTrace: self.args.asyncTrace, productVersion: self.productVersion, defines: self.defines)
+		return BuildRecordRequest.create(output, target: self.target, inputPaths: self.inputPaths, debugInfo: self.debugInfo, coverage: self.args.coverage, debugStream: self.args.debugStream, asyncTrace: self.args.asyncTrace, poisonFreed: self.args.poisonFreed, productVersion: self.productVersion, defines: self.defines)
 	end 'recordRequestFor'
 
 	function firstInputPath() returns FilePath
@@ -825,7 +827,7 @@ end 'acquireBuildTreeLock'
 function compileAndReport(job BuildJob, subject FilePath, reason String, keeping RecordKeeping, session CompileSession) returns BuildOutcome
 	compilerLogger(CompilerLogGroup.compiler).info("compiling {subject}: {reason}")
 
-	let product = try compile(job.inputPaths, target: job.target, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, runtimeIrNames: job.args.runtimeIrNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines, session: session) otherwise (e) 'compileErr'
+	let product = try compile(job.inputPaths, target: job.target, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, runtimeIrNames: job.args.runtimeIrNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, poisonFreed: job.args.poisonFreed, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines, session: session) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'compileErr'
@@ -1123,6 +1125,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 
 	// That a verdict nothing ran is still counted and not green; see `SpecVerdictSelfTest`.
 	requireSpecVerdictMapping()
+	requireFreedBoxPoisonDecision()
 
 	// The `.mxdbg` format is a contract with the bootstrap, which reads a sidecar this compiler
 	// writes. A drifted layout is a silent misread, so it is checked before any case writes one.
@@ -1956,6 +1959,7 @@ enum HelpOption
 	coverageInstrumentation
 	asyncTrace
 	debugStream
+	poisonFreed
 	censusByTag
 	allocationsByTag
 	define
@@ -2051,6 +2055,7 @@ function optionReference(option HelpOption) returns OptionReference
 		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(CoverageFlag)])
 		asyncTrace gives OptionReference.create(AsyncTraceFlag, description: "Write the green-thread trace to stderr as the program runs: one line per spawn, io_yield, io_resume and await. Opt-in per build: a build without it emits no trace calls at all.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(AsyncTraceFlag)])
 		debugStream gives OptionReference.create(DebugStreamFlag, description: "Emit the DebugStream producer that `{MonitorCommandName}` reads: the memory manager writes its events into a shared-memory ring. Opt-in per build: a build without it is unchanged. Refused on a target that cannot provide one.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(DebugStreamFlag)])
+		poisonFreed gives OptionReference.create(PoisonFreedFlag, description: "Fill each freed managed box with 0x3F, from its payload to the end of its slot, so a read after free returns 63, or a pointer of 0x3F3F3F3F3F3F3F3F that faults when dereferenced. A box above 32 KiB goes back to the operating system whole and is not filled.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(PoisonFreedFlag)])
 		censusByTag gives OptionReference.create("{CensusByTagFlag}, {CensusByTagFlagPrefix}<phase>", description: "Census the LIVE heap by allocation tag at every compile phase boundary, and report it beside the residency table (it implies `--log=compiler:debug`'s sampling) and as `tag` rows in {MetricsFlagPrefix}'s TSV. Naming a phase censuses that phase alone, which is what a large compile can afford. A compiler built without {DebugStreamFlag} carries no tags, so the census is by SIZE CLASS instead and says so.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(CensusByTagFlag), OptionArrival.prefixed(CensusByTagFlagPrefix)])
 		allocationsByTag gives OptionReference.create("{AllocationsByTagFlag}, {AllocationsByTagFlagPrefix}<phase>", description: "Tally every allocation this compile ASKS FOR by allocation tag and by phase, and report it under the memory table (with `--log=compiler:debug`) and as `churn` rows in {MetricsFlagPrefix}'s TSV. It is CHURN, not a level: a phase that allocates a million short-lived boxes shows them here and nowhere else. Naming a phase tallies that phase alone. A compiler built without {DebugStreamFlag} carries no tags, so nothing is tallied and the report says so.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(AllocationsByTagFlag), OptionArrival.prefixed(AllocationsByTagFlagPrefix)])
 		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.verifyRecheck], arrivals: [OptionArrival.prefixed(DefineFlagPrefix)])
@@ -2370,6 +2375,8 @@ export type MaxonArgs
 
 	export var asyncTrace as bool
 
+	export var poisonFreed as bool
+
 	export var debugStream as bool
 
 	export var censusByTag as bool
@@ -2478,7 +2485,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -2639,7 +2646,9 @@ export type MaxonArgs
 				parsed.emitIr = true
 			end 'emitIrFlag' else if arg == AsyncTraceFlag 'asyncTraceFlag'
 				parsed.asyncTrace = true
-			end 'asyncTraceFlag' else if arg == DebugStreamFlag 'debugStreamFlag'
+			end 'asyncTraceFlag' else if arg == PoisonFreedFlag 'poisonFreedFlag'
+				parsed.poisonFreed = true
+			end 'poisonFreedFlag' else if arg == DebugStreamFlag 'debugStreamFlag'
 				parsed.debugStream = true
 			end 'debugStreamFlag' else if arg == CensusByTagFlag 'censusByTagFlag'
 				parsed.censusByTag = true

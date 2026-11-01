@@ -1,0 +1,47 @@
+let PinnedSelfTestSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+function selfTestCase(name String, pinsTargetIr bool, poisonFreed bool) returns SpecTest
+	let expectation = SpecExpectation.run(SpecExitCode.unpinned, stderr: SpecStderr.unpinned, stdout: SpecStdout.unpinned, sectionPins: SpecSectionPinArray.create())
+	let targetIr = SpecTargetIr.pinned("", span: TraceSlice.create(0, blockEnd: 0)) if pinsTargetIr else SpecTargetIr.unpinned(TraceSlice.create(0, blockEnd: 0))
+
+	return SpecTest.create(name, source: PinnedSelfTestSource, expectation: expectation, unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, poisonFreed: poisonFreed, traceCapture: SpecTraceCapture.off, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIr: targetIr, pinsTargetIr: pinsTargetIr)
+end 'selfTestCase'
+
+export function requireFreedBoxPoisonDecision()
+	var broken = StringArray.create()
+
+	let plain = selfTestCase("plain", pinsTargetIr: false, poisonFreed: false)
+	let pinned = selfTestCase("pinned", pinsTargetIr: true, poisonFreed: false)
+	let pinnedAndMarked = selfTestCase("pinned-and-marked", pinsTargetIr: true, poisonFreed: true)
+
+	if not plain.buildsWithFreedBoxPoison() 'plainUnpoisoned'
+		broken.push("a case that pins no Target IR is built without the freed-box fill, so a premature free in it reads back intact")
+	end 'plainUnpoisoned'
+
+	if pinned.buildsWithFreedBoxPoison() 'pinnedPoisoned'
+		broken.push("a case that pins Target IR and carries no marker is built with the freed-box fill, so its pin shows a build no user's `maxon build` makes")
+	end 'pinnedPoisoned'
+
+	if not pinnedAndMarked.buildsWithFreedBoxPoison() 'markedUnpoisoned'
+		broken.push("a pinned case carrying the poison marker is built without the freed-box fill")
+	end 'markedUnpoisoned'
+
+	var tests = SpecTestArray.create()
+	tests.push(plain)
+	tests.push(selfTestCase("second", pinsTargetIr: false, poisonFreed: false))
+
+	var members = BatchMemberArray.create()
+	members.push(BatchMember.create(0, shape: MainShape.returnsExitCode))
+	members.push(BatchMember.create(1, shape: MainShape.returnsExitCode))
+
+	if not batchBuildsWithFreedBoxPoison(tests, members: members) 'batchUnpoisoned'
+		broken.push("a batch program of cases that pin no Target IR is built without the freed-box fill, though the same cases built alone get it")
+	end 'batchUnpoisoned'
+
+	if broken.isEmpty() 'everyRowHeld'
+		return
+	end 'everyRowHeld'
+
+	let report = indentedList(broken, indent: "\n  ")
+	panic("SpecPoisonSelfTest: {broken.count()} row(s) of the freed-box fill decision no longer hold:{report}")
+end 'requireFreedBoxPoisonDecision'

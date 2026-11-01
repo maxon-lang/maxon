@@ -18,7 +18,7 @@
 // size-classed free lists in a `.data`-rooted table serving a repeat box out of their own buckets and
 // asking `__slab_alloc` only on a miss — would be two size-class ladders, two reuse policies and two
 // places a box can be live. `__mm_alloc` asks `__slab_alloc` for the WHOLE box (header + payload) and
-// `__mm_free` hands that same pointer to `__slab_free_box`; the span the slot came from knows its class, so
+// `__mm_free` hands that same pointer back to the slab's free door; the span the slot came from knows its class, so
 // the box layer computes none.
 //
 // ⚠ **THE WHOLE SIZE DOMAIN IS RECLAIMED, WHICH IS GO'S BOUNDARY.** The slab recycles up to
@@ -147,7 +147,7 @@ let NoAllocationId = 0
 // holds no size, so the word sits below the header and a traced build's id word is the one before it.
 //
 // ⛔ **NO VALUE OF THAT WORD MAKES A MISSED IMMORTALITY TEST SAFE**: `__mm_free` would hand
-// `__slab_free_box` an `.rdata` address whatever this word said. So the word is TRUE, and the guarantee is
+// the slab an `.rdata` address whatever this word said. So the word is TRUE, and the guarantee is
 // the test at the release door (`emitRefcountCheckToLastOwner`) — `__mm_free`'s own header states why the
 // test cannot live there instead.
 //
@@ -2602,7 +2602,7 @@ end 'sharedAllocationGuardBox'
 //
 // ⚠ **THE LAST OWNER LEAVES `-1` (or `mark - 1`) IN THE WORD, AND THAT IS SOUND BECAUSE NOTHING READS IT
 // AGAIN.** The box is dead the instant that arm is taken: `__mm_free` never reads the count, and the slot
-// is poisoned and handed back to the slab before any other party can address it.
+// is handed back to the slab before any other party can address it.
 //
 // ⚠ **THE `mm_decref` EVENT IS EMITTED ONCE, BEFORE THE BRANCH.** See `emitMmDecrefEvent` for the identity
 // that makes one emission correct for both paths; it also leaves the caller's `lastOwner` block untouched by
@@ -2704,8 +2704,8 @@ function buildMmRelease(module StdModule)
 end 'buildMmRelease'
 
 // ⭐⭐ **THE SLAB SLOT'S BASE FOR A BOX WHOSE PAYLOAD POINTER IS `ptr` — given the header base the caller
-// already holds.** `__mm_alloc` asked the slab for the WHOLE box, so what `__slab_free_box` must be handed is
-// what `__slab_alloc` answered: the header base in an ordinary build, and `DebugStreamPackedIdBytes` BELOW it
+// already holds.** `__mm_alloc` asked the slab for the WHOLE box, so what the slab's free door must be handed
+// is what `__slab_alloc` answered: the header base in an ordinary build, and `DebugStreamPackedIdBytes` BELOW it
 // where a `--debugstream` build's packed id sits.
 //
 // ⚠ **IT TAKES THE HEADER BASE RATHER THAN THE PAYLOAD POINTER SO AN UNTRACED BUILD MINTS NOTHING.** With no
@@ -2721,33 +2721,31 @@ end 'emitBoxAllocationBase'
 
 // `__mm_free(ptr)` — the death of a box. Two things happen, in this order: the trace event and the live
 // count drop (the one number the leak gate reads), and the box goes back to the slab through
-// `__slab_free_box` — which poisons it and is where its bytes become somebody else's.
+// `emitSlabFree`, which is where its bytes become somebody else's.
 //
-// ⭐ **POISON-ON-FREE, ALWAYS ON.** A use-after-free that reads bytes nothing has
-// overwritten returns exactly the value it wrote before the free, and is INVISIBLE to every test.
-// Overwriting the payload with `SlabFreedBoxPoisonByte` the instant it dies turns that whole class loud: a
-// read-after-free returns 63 or faults on a poisoned pointer instead of stale-but-correct bytes. This is
-// deliberately not a flag — it is unconditional, so the class cannot hide in a build nobody thought to
-// enable it for, and so the committed suite is a standing gate against it. The fill is `__slab_free_box`'s
-// because only the span knows the slot's size, and the header holds none.
+// ⭐ **THE FILL IS OPT-IN: `--poison-freed` routes the free through `__slab_free_box`.** A use-after-free
+// that reads bytes nothing has overwritten returns exactly the value it wrote before the free, and is
+// INVISIBLE to every test. With the option the box's slot is overwritten with `SlabFreedBoxPoisonByte`
+// the instant it dies, so a read-after-free returns 63 or faults on a poisoned pointer. The spec
+// harness builds its run cases with the option (`SpecTest.buildsWithFreedBoxPoison`), which is what
+// makes the committed suite a standing gate against the class. The fill is `__slab_free_box`'s because
+// only the span knows the slot's size, and the header holds none.
 //
-// ⭐⭐ **THE POISON PAIRS WITH THE SLAB'S RE-ZERO.** The two are the halves of one contract and they live
-// one layer apart on purpose: the poison is a MANAGED-BOX discipline (only `__slab_free_box` fills; every
-// other buffer kind frees through a door that does not), the re-zero is an ALLOCATOR
-// obligation (`__slab_alloc`'s recycled arm memFills the whole slot, which is what lets `__mm_alloc` still
-// decline to write the refcount). Neither can be folded into the other, and the invariant they hold
-// between them is the one this file's alloc side leans on: **every box a caller sees is zero.**
+// ⭐⭐ **THE FILL AND THE SLAB'S RE-ZERO ARE INDEPENDENT.** They live one layer apart on purpose: the fill
+// is a MANAGED-BOX discipline (only `__slab_free_box` fills; every other buffer kind frees through a
+// door that does not), the re-zero is an ALLOCATOR obligation (`__slab_alloc`'s recycled arm memFills the
+// whole slot, which is what lets `__mm_alloc` still decline to write the refcount). Neither can be
+// folded into the other, and the invariant the re-zero holds is the one this file's alloc side leans
+// on: **every box a caller sees is zero**, filled on free or not.
 //
-// ⚠⚠ **A RECYCLE THEREFORE COSTS TWO PASSES OVER THE SAME BYTES — poison on free, zero on the way out —
-// and that is a STATED OPEN COST.** It is not paid on a VIRGIN
-// slot, which is exactly the point of the slab's bump region: those bytes are OS-fresh, so the alloc side
-// skips the fill and nothing ever poisoned them. It is paid on every reuse, up to the fill's cap. The two
-// halves cannot be collapsed into one pass without giving up either the poison (which is a debugging
-// guarantee) or the per-slot zero (which is a correctness guarantee), so what is left is to know the price
-// and not to pretend otherwise.
+// ⚠ **IN A `--poison-freed` BUILD A RECYCLE COSTS TWO PASSES OVER THE SAME BYTES — fill on free, zero on
+// the way out.** It is not paid on a VIRGIN slot, which is exactly the point of the slab's bump region:
+// those bytes are OS-fresh, so the alloc side skips the fill and nothing ever filled them. It is paid on
+// every reuse. The two passes cannot be collapsed into one without giving up either the fill (a
+// debugging guarantee) or the per-slot zero (a correctness guarantee).
 //
 // ⛔⛔ **THE IMMORTALITY TEST IS NOT HERE AND MUST NEVER BE MOVED HERE.** A synthetic header makes an image
-// record look WELL-FORMED to this function: it would hand `__slab_free_box` an `.rdata` address the
+// record look WELL-FORMED to this function: it would hand the slab an `.rdata` address the
 // allocator never returned — a failure that looks plausible rather than obvious. By the time control reaches a free the box has already been judged dead, so the judgement
 // is what has to be right; the test therefore sits at the top of the release door
 // (`emitRefcountCheckToLastOwner`), where a record is still deciding whether to die.
@@ -2777,7 +2775,7 @@ function buildMmFree(module StdModule, model MachineModel)
 
 	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
 
-	// ⭐ **AND BACK TO THE SLAB, UNCONDITIONALLY.** There is one exit and no guard: `__slab_free_box` routes on
+	// ⭐ **AND BACK TO THE SLAB, UNCONDITIONALLY.** There is one exit and no guard: the slab's free door routes on
 	// its own reverse map — a hit names the owning span and pushes the slot onto its free list, a MISS is
 	// the OS-direct sentinel and the mapping goes back whole. The box layer knows neither which span nor
 	// which tier, and asking would be a second copy of a routing decision the allocator already owns.

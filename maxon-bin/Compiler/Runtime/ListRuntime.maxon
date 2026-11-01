@@ -77,7 +77,8 @@ export let ListRecordBytes = 32 as BytePos
 //
 // ⛔ Retaining the LIST would not keep the node alive, because `clear` FREES nodes:
 // `var chain = …; let k = Keeper.create(chain.insertLast(7)); chain.clear(); k.read()` would then
-// compile clean and print `0x3F3F3F3F3F3F3F3F`, `__slab_free_box`'s poison, at exit 0.
+// compile clean and read a freed box at exit 0: `0x3F3F3F3F3F3F3F3F`, the fill of a `--poison-freed`
+// build.
 //
 // So a node is `__mm_alloc`'d like every other record and released through `__list_node_decref`.
 // Every unlink — `remove`, `remove_first`, `remove_last`, `detach`, `clear`, teardown — drops a

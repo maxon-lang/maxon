@@ -738,6 +738,23 @@ function stageBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 	return build
 end 'stageBatch'
 
+module function batchBuildsWithFreedBoxPoison(tests SpecTestArray, members BatchMemberArray) returns bool
+	var poisons = false
+
+	for (iter, member) in members.withIterator() 'eachMember'
+		let test = try tests.get(member.testIndex) otherwise panic("SpecBatch: batch member {iter.index()} names test {member.testIndex}, past the {tests.count()} the spec selected")
+		let wanted = test.buildsWithFreedBoxPoison()
+
+		if iter.index() == 0 'first'
+			poisons = wanted
+		end 'first' else if wanted != poisons 'disagrees'
+			panic("SpecBatch: test '{test.name}' is built {"with" if wanted else "without"} the freed-box fill and the members before it {"with" if poisons else "without"}, yet one program carries one fill setting. Placement must keep cases that disagree apart")
+		end 'disagrees'
+	end 'eachMember'
+
+	return poisons
+end 'batchBuildsWithFreedBoxPoison'
+
 function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchBuild
 	let stdlibDir = try locateStdlibDir() otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingStdlibReason()), refused: TestRunIndexArray.create())
 	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingRuntimeReason()), refused: TestRunIndexArray.create())
@@ -749,7 +766,7 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 	let exePath = batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension)
 
 	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
 		reportCompileError(e, sink: session.diagnostics)
 		let answer = CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text())
 		return BatchBuild.notBuilt(answer, refused: membersNamedIn(answer.diagnostics, ordinal: ordinal, count: members.count()))

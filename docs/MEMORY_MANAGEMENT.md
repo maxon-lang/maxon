@@ -408,13 +408,14 @@ a spec's ` ```mm-trace ` block asserts — see `docs/SPECS.md`. The ring is one 
 event carries no thread id, so with more than one green thread producing events the decoded order is the
 order they took the lock.
 
-### Corruption detection is always on
+### Detecting a use-after-free
 
-There is no opt-in debug allocator. On every build, a box freed into a slab span has its slot overwritten
-from the payload start with the poison byte `0x3F`, for at most 256 bytes: read back as a small integer it is
-a conspicuous 63 rather than the 0 a freshly zeroed slot would hold, and a word of it is the non-canonical
-address `0x3F3F3F3F3F3F3F3F`, so dereferencing a poisoned pointer faults instead of quietly reading. Either
-way a use-after-free becomes loud at the read.
+`maxon build --poison-freed` (also accepted by `maxon run`) overwrites a box freed into a slab span, from
+the payload start to the end of its slot, with the poison byte `0x3F`: read back as a small integer it is a
+conspicuous 63, where a freshly zeroed slot would hold 0, and a word of it is the non-canonical address
+`0x3F3F3F3F3F3F3F3F`, so dereferencing a poisoned pointer faults. A use-after-free becomes loud at the
+read. A box above 32 KiB goes back to the operating system whole and is not filled. The spec suite builds
+every run case with the option, except a case that pins Target IR.
 
 ### Leak Check
 

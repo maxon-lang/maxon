@@ -202,7 +202,7 @@ is a chain WALK (`__list_clone`), the structural twin of the buffer's `__managed
 `Array with (List with Integer)` copyable at all.
 
 The helper clones a source array of lists and returns the clone; the source array, its two chains and every
-one of their nodes are freed when the helper returns. `__mm_free` poisons freed bytes (0x3F), so a SHALLOW
+one of their nodes are freed when the helper returns. A spec case is built with `--poison-freed`, which poisons freed bytes (0x3F), so a SHALLOW
 copy faults here rather than reading stale-but-plausible values.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

@@ -1720,9 +1720,9 @@ Both sides write. The parent copies out first and gives up the shared buffer, le
 sole owner; the slice then copies out and reclaims it. This case reaches the path where a detach's release
 frees the bytes it just copied — but it does NOT *catch* a detach that released BEFORE copying.
 
-⛔⛔ **FREED BYTES DO NOT READ BACK INTACT.** `__mm_free` hands the box to `__slab_free`, which puts the
-slot back on its span's free list for the next allocation to take, and the payload is POISONED with `0x3F`
-on the way out whether or not anything reuses it.
+⛔⛔ **FREED BYTES DO NOT READ BACK INTACT.** `__mm_free` hands the box to the slab, which puts the slot
+back on its span's free list for the next allocation to take. A spec case is built with `--poison-freed`,
+so the payload is also POISONED with `0x3F` on the way out whether or not anything reuses it.
 
 ⭐ **YET WITH THE RELEASE EMITTED AHEAD OF `__mm_cow_detach`'s COPY THIS CASE STAYS GREEN**, so the ordering
 is a rule `__managed_cow_detach` keeps on its OWN rather than one this case gates. **Why the case survives a
