@@ -431,14 +431,14 @@ public type Configuration
 	public var timeoutMs as DurationMs
 	public var platformOptions as PlatformOptions
 
-	/// Build a Configuration with sensible defaults: empty argv, inherited
-	/// cwd, inherited env, no stdin, both output streams collected up to
-	/// 16 MiB, no timeout.
-	public static function create(executable Executable) returns Configuration
+	/// Build a Configuration with sensible defaults: empty argv, the given
+	/// working directory (empty inherits the parent's), inherited env, no
+	/// stdin, both output streams collected up to 16 MiB, no timeout.
+	public static function create(executable Executable, workingDirectory FilePath = FilePath.empty()) returns Configuration
 		return Configuration{
 			executable: executable,
 			arguments: StringArray.create(),
-			workingDirectory: try FilePath.from("") otherwise panic("Configuration.create: empty path is the sentinel for 'inherit cwd'"),
+			workingDirectory: workingDirectory,
 			environment: Environment.inherit,
 			standardInput: InputSource.none,
 			standardOutput: OutputDestination.collect(defaultCaptureLimit),
@@ -471,9 +471,8 @@ public type Subprocess
 	/// Run `executable arguments...` and collect output. An empty working directory inherits the
 	/// parent's, and a timeout of 0 waits indefinitely.
 	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0) returns CollectedOutput throws SubprocessError
-		var c = Configuration.create(executable)
+		var c = Configuration.create(executable, workingDirectory: workingDirectory)
 		c.arguments = arguments
-		c.workingDirectory = workingDirectory
 		c.timeoutMs = timeoutMs
 		return try c.run()
 	end 'run'

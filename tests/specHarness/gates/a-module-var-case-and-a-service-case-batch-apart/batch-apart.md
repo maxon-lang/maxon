@@ -22,7 +22,7 @@ type Sorter
 	end 'add'
 
 	export function arrange() returns Integer
-		self.items.sort(function(a, b) gives a.compare(b))
+		self.items.sortBy(function(a, b) gives a.compare(b))
 		let low = try self.items.get(0) otherwise 0
 		let high = try self.items.get(2) otherwise 0
 		return low + high

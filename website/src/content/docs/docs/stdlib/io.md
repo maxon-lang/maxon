@@ -626,7 +626,8 @@ one is tried with each `PATHEXT` extension in turn.
 
 ### Configuration
 
-Create one with `Configuration.create(executable)`, assign the fields you need, then run it.
+Create one with `Configuration.create(executable)` (or `Configuration.create(executable, workingDirectory: dir)`;
+an empty path inherits the parent's working directory), assign the fields you need, then run it.
 
 | Field | Type | Default |
 |-------|------|---------|
