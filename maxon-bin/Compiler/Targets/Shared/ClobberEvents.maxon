@@ -1,7 +1,8 @@
 // The clobber windows of one backward block sweep, in O(clobbered registers) per value rather than
 // a walk of the live row at every clobbering op. A value's window opens where the sweep first finds
-// it live (`enter`) and closes at its def or the block's entry (`finalize`), and the value is
-// forbidden every register clobbered inside it. Only each register's latest clobber — the lowest
+// it live (`enter`) and closes at its def or the block's entry (`finalize`), and every register
+// recorded inside it is added to the value's mask in the column `finalize` is given: a clobber for
+// `forbidden`, a wanted register for `contested`. Only each register's latest record — the lowest
 // position yet — is kept: every window closes at the sweep's current point, so that one lies inside
 // whenever any does.
 export type ClobberEvents
@@ -22,6 +23,42 @@ export type ClobberEvents
 	export function beginBlock()
 		self.seenMask = 0
 	end 'beginBlock'
+
+	export function enterLiveOut(values ValueIdArray, pos ElementIndex)
+		for v in values 'eachLiveOut'
+			self.enter(v, pos: pos)
+		end 'eachLiveOut'
+	end 'enterLiveOut'
+
+	export function closeDefWindows(buf OperandList, row BitRow, forbidden RegMaskColumn)
+		for o in buf 'eachOperand'
+			if operandIsDef(o) and operandIsVirtual(o) and row.test(operandValueId(o) as BitIndex) 'aLiveDef'
+				self.finalize(operandValueId(o), forbidden: forbidden)
+			end 'aLiveDef'
+		end 'eachOperand'
+	end 'closeDefWindows'
+
+	export function openUseWindows(buf OperandList, row BitRow, pos ElementIndex)
+		for o in buf 'eachOperand'
+			if not operandIsDef(o) and operandIsVirtual(o) and (not row.test(operandValueId(o) as BitIndex) or operandDefinesValue(buf, v: operandValueId(o))) 'aNewWindow'
+				self.enter(operandValueId(o), pos: pos)
+			end 'aNewWindow'
+		end 'eachOperand'
+	end 'openUseWindows'
+
+	export function closeEntryWindows(liveIn ValueIdArray, block IrBlock, row BitRow, forbidden RegMaskColumn)
+		for v in liveIn 'eachLiveIn'
+			if row.test(v as BitIndex) 'aLiveIn'
+				self.finalize(v, forbidden: forbidden)
+			end 'aLiveIn'
+		end 'eachLiveIn'
+
+		for arg in block.blockArgs 'eachPhi'
+			if row.test(arg.valueId as BitIndex) 'aLivePhi'
+				self.finalize(arg.valueId, forbidden: forbidden)
+			end 'aLivePhi'
+		end 'eachPhi'
+	end 'closeEntryWindows'
 
 	export function record(pos ElementIndex, mask RegMask)
 		var remaining = mask

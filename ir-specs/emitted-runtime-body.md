@@ -11508,14 +11508,12 @@ func @__slab_free_box {
     arm64.leaRdata x1, __slab_class_geom
     arm64.loadRegBaseIndexScale.word64 x0, [x1 + x0*8 + 0]
     arm64.movImm x1, 4294967295
-    arm64.and x0, x0, x1
-    arm64.cmp x0, 16
+    arm64.and x1, x0, x1
+    arm64.cmp x1, 16
     arm64.b.le tospan
   poisonfilled:
-    arm64.add x1, x4, 16
-    arm64.sub x2, x0, 16
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.add x0, x4, 16
+    arm64.sub x1, x1, 16
     arm64.arm64MemFill 0x3f
   tospan:
     arm64.leaGlobal x0, __slab_state
@@ -11971,14 +11969,12 @@ func @__slab_free_box {
     arm64.leaRdata x1, __slab_class_geom
     arm64.loadRegBaseIndexScale.word64 x0, [x1 + x0*8 + 0]
     arm64.movImm x1, 4294967295
-    arm64.and x0, x0, x1
-    arm64.cmp x0, 16
+    arm64.and x1, x0, x1
+    arm64.cmp x1, 16
     arm64.b.le tospan
   poisonfilled:
-    arm64.add x1, x4, 16
-    arm64.sub x2, x0, 16
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.add x0, x4, 16
+    arm64.sub x1, x1, 16
     arm64.arm64MemFill 0x3f
   tospan:
     arm64.leaGlobal x0, __slab_state
@@ -15780,11 +15776,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -17028,11 +17023,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -17288,11 +17282,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -17602,11 +17595,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -17867,11 +17859,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -18461,11 +18452,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -19102,23 +19092,22 @@ func @String.trim {
   whileexit:
     x64.loadRegSlot r13, slot3
   __il_cont#25:
-    x64.loadRegSlot rax, slot2
-    x64.movRegReg rsi, r13
-    x64.subRegReg rsi, r13, rax
-    x64.movRegReg rcx, r13
-    x64.xorRegImm32 rcx, r13, -1
-    x64.andRegReg rcx, rcx, rax
+    x64.loadRegSlot rcx, slot2
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rcx
     x64.movRegReg rdx, r13
-    x64.xorRegReg rdx, r13, rax
-    x64.xorRegImm32 rdx, rdx, -1
-    x64.andRegReg rdx, rdx, rsi
-    x64.orRegReg rcx, rcx, rdx
-    x64.cmpRegImm32 rcx, 0
+    x64.xorRegImm32 rdx, r13, -1
+    x64.andRegReg rdx, rdx, rcx
+    x64.movRegReg rsi, r13
+    x64.xorRegReg rsi, r13, rcx
+    x64.xorRegImm32 rsi, rsi, -1
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rdx, rdx, rsi
+    x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#24
   __rc_ok#23:
     x64.loadRegSlot rdx, slot2
     x64.movRegReg rcx, rbx
-    x64.movRegReg rax, rsi
     x64.callDirect String.makeCharFromBytes
     x64.movRegReg r14, r8
     x64.loadRegSlot rcx, slot1
@@ -19774,23 +19763,22 @@ func @String.trim {
   whileexit:
     x64.loadRegSlot r13, slot3
   __il_cont#25:
-    x64.loadRegSlot rax, slot2
-    x64.movRegReg rsi, r13
-    x64.subRegReg rsi, r13, rax
-    x64.movRegReg rcx, r13
-    x64.xorRegImm32 rcx, r13, -1
-    x64.andRegReg rcx, rcx, rax
+    x64.loadRegSlot rcx, slot2
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rcx
     x64.movRegReg rdx, r13
-    x64.xorRegReg rdx, r13, rax
-    x64.xorRegImm32 rdx, rdx, -1
-    x64.andRegReg rdx, rdx, rsi
-    x64.orRegReg rcx, rcx, rdx
-    x64.cmpRegImm32 rcx, 0
+    x64.xorRegImm32 rdx, r13, -1
+    x64.andRegReg rdx, rdx, rcx
+    x64.movRegReg rsi, r13
+    x64.xorRegReg rsi, r13, rcx
+    x64.xorRegImm32 rsi, rsi, -1
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rdx, rdx, rsi
+    x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#24
   __rc_ok#23:
     x64.loadRegSlot rdx, slot2
     x64.movRegReg rcx, rbx
-    x64.movRegReg rax, rsi
     x64.callDirect String.makeCharFromBytes
     x64.movRegReg r14, r8
     x64.loadRegSlot rcx, slot1
@@ -23233,11 +23221,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -23793,11 +23780,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -25235,11 +25221,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -25664,11 +25649,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -27130,11 +27114,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -27650,11 +27633,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -29801,11 +29783,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -30620,11 +30601,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -34476,11 +34456,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -35725,11 +35704,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -37601,11 +37579,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -37890,11 +37867,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -41331,11 +41307,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -41606,7 +41581,7 @@ func @__gt_strand_next {
     arm64.epilogue 64
     arm64.ret
   __rl_owned#77:
-    arm64.storeBaseDispReg.word64 [x19 + 8], x1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.b __rl_cont#76
   __rl_outermost#81:
     arm64.movImm x1, 0
@@ -41789,26 +41764,25 @@ func @__gt_strand_next {
     arm64.cmp x1, 1
     arm64.b.ne tshcheckpin
   tshholdback:
-    arm64.leaGlobal x1, __sched_lock
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.leaGlobal x2, __sched_lock
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 808]
+    arm64.mul x1, x16, x17
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 808]
     arm64.add x3, x3, 1
-    arm64.storeBaseDispReg.word64 [x2 + 808], x3
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x3
+    arm64.movImm x1, 1
+    arm64.arm64AtomicRmw.exchangeByte x1, [x2], x1
+    arm64.cmp x1, 0
     arm64.b.eq tshputback
   __rl_slow#75:
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __rtlock_acquire
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -41829,26 +41803,25 @@ func @__gt_strand_next {
     arm64.cmp x1, x2
     arm64.b.eq tshhandover
   tshstartlocked:
-    arm64.leaGlobal x1, __sched_lock
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.leaGlobal x2, __sched_lock
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 808]
+    arm64.mul x1, x16, x17
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 808]
     arm64.add x3, x3, 1
-    arm64.storeBaseDispReg.word64 [x2 + 808], x3
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x3
+    arm64.movImm x1, 1
+    arm64.arm64AtomicRmw.exchangeByte x1, [x2], x1
+    arm64.cmp x1, 0
     arm64.b.eq tshputback
   __rl_slow#84:
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __rtlock_acquire
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -41865,15 +41838,14 @@ func @__gt_strand_next {
     arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
     arm64.add x2, x2, 1
     arm64.storeBaseDispReg.word64 [x1 + 808], x2
-    arm64.arm64ThreadPointer x1, darwinMaskedReadOnly
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
-    arm64.cmp x2, 0
+    arm64.arm64ThreadPointer x2, darwinMaskedReadOnly
+    arm64.movImm x1, 1
+    arm64.arm64AtomicRmw.exchangeByte x1, [x19], x1
+    arm64.cmp x1, 0
     arm64.b.eq __rl_owned#77
   __rl_slow#78:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -43076,11 +43048,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -43351,7 +43322,7 @@ func @__gt_strand_next {
     arm64.epilogue 64
     arm64.ret
   __rl_owned#77:
-    arm64.storeBaseDispReg.word64 [x19 + 8], x1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.b __rl_cont#76
   __rl_outermost#81:
     arm64.movImm x1, 0
@@ -43534,26 +43505,25 @@ func @__gt_strand_next {
     arm64.cmp x1, 1
     arm64.b.ne tshcheckpin
   tshholdback:
-    arm64.leaGlobal x1, __sched_lock
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.leaGlobal x2, __sched_lock
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 808]
+    arm64.mul x1, x16, x17
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 808]
     arm64.add x3, x3, 1
-    arm64.storeBaseDispReg.word64 [x2 + 808], x3
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x3
+    arm64.movImm x1, 1
+    arm64.arm64AtomicRmw.exchangeByte x1, [x2], x1
+    arm64.cmp x1, 0
     arm64.b.eq tshputback
   __rl_slow#75:
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __rtlock_acquire
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -43574,26 +43544,25 @@ func @__gt_strand_next {
     arm64.cmp x1, x2
     arm64.b.eq tshhandover
   tshstartlocked:
-    arm64.leaGlobal x1, __sched_lock
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.leaGlobal x2, __sched_lock
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 808]
+    arm64.mul x1, x16, x17
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 808]
     arm64.add x3, x3, 1
-    arm64.storeBaseDispReg.word64 [x2 + 808], x3
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x3
+    arm64.movImm x1, 1
+    arm64.arm64AtomicRmw.exchangeByte x1, [x2], x1
+    arm64.cmp x1, 0
     arm64.b.eq tshputback
   __rl_slow#84:
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __rtlock_acquire
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -43610,15 +43579,14 @@ func @__gt_strand_next {
     arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
     arm64.add x2, x2, 1
     arm64.storeBaseDispReg.word64 [x1 + 808], x2
-    arm64.arm64ThreadPointer x1, linuxWritable
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
-    arm64.cmp x2, 0
+    arm64.arm64ThreadPointer x2, linuxWritable
+    arm64.movImm x1, 1
+    arm64.arm64AtomicRmw.exchangeByte x1, [x19], x1
+    arm64.cmp x1, 0
     arm64.b.eq __rl_owned#77
   __rl_slow#78:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -45445,11 +45413,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -45729,11 +45696,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -47675,11 +47641,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -48138,17 +48103,15 @@ func @__gt_runner_done {
     arm64.b gfswalkhdr
   runnerkeepstack:
     arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 0
     arm64.b.eq runnerafterstack
   stackkeepcheck:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 32]
-    arm64.cmp x2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, x2
     arm64.b.eq runnerafterstack
   stackkeepdrop:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
     arm64.bl __gt_stack_free
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -48558,11 +48521,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -49021,17 +48983,15 @@ func @__gt_runner_done {
     arm64.b gfswalkhdr
   runnerkeepstack:
     arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 0
     arm64.b.eq runnerafterstack
   stackkeepcheck:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 32]
-    arm64.cmp x2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, x2
     arm64.b.eq runnerafterstack
   stackkeepdrop:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
     arm64.bl __gt_stack_free
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -51852,11 +51812,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -52752,17 +52711,15 @@ func @__gt_runner_done {
     arm64.b gfswalkhdr
   runnerkeepstack:
     arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 0
     arm64.b.eq runnerafterstack
   stackkeepcheck:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 32]
-    arm64.cmp x2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, x2
     arm64.b.eq runnerafterstack
   stackkeepdrop:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
     arm64.bl __gt_stack_free
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -53172,11 +53129,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -54072,17 +54028,15 @@ func @__gt_runner_done {
     arm64.b gfswalkhdr
   runnerkeepstack:
     arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 0
     arm64.b.eq runnerafterstack
   stackkeepcheck:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 32]
-    arm64.cmp x2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, x2
     arm64.b.eq runnerafterstack
   stackkeepdrop:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
     arm64.bl __gt_stack_free
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -55879,11 +55833,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -56557,11 +56510,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -58054,11 +58006,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -58434,11 +58385,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -62838,11 +62788,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -62944,13 +62893,13 @@ func @Counter.__start_Counter.create {
 
 func @__gt_stack_alloc {
   entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot8, x24
-    arm64.storeSlotReg slot7, x23
-    arm64.storeSlotReg slot6, x22
-    arm64.storeSlotReg slot5, x21
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x24
+    arm64.storeSlotReg slot6, x23
+    arm64.storeSlotReg slot5, x22
+    arm64.storeSlotReg slot4, x21
+    arm64.storeSlotReg slot3, x20
+    arm64.storeSlotReg slot2, x19
     arm64.movRegReg x1, x0
     arm64.cmp x1, 65536
     arm64.b.le stkpooled
@@ -62961,13 +62910,13 @@ func @__gt_stack_alloc {
     arm64.movImm x4, 18446744073709551615
     arm64.movImm x5, 0
     arm64.importCall 2
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
   stkpooled:
     arm64.movImm x0, 11
@@ -63097,13 +63046,13 @@ func @__gt_stack_alloc {
     arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
     arm64.sub x1, x1, x19
     arm64.storeBaseDispReg.word64 [x22 + 8], x1
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
   stkpoolonly:
     arm64.add x21, x20, 64
@@ -63175,13 +63124,13 @@ func @__gt_stack_alloc {
     arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 808], x2
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
   stkclassstep:
     arm64.add x0, x0, 1
@@ -63220,74 +63169,74 @@ func @__gt_stack_alloc {
     arm64.loadRegSlot x1, slot1
     arm64.b __rl_cont#33
   stkrefillempty:
-    arm64.add x1, x20, 64
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x2, x20, 64
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
+    arm64.mul x1, x16, x17
     arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
+    arm64.arm64AtomicRmw.exchangeByte x3, [x2], x3
     arm64.cmp x3, 1
     arm64.b.eq __rl_cont#39
   __rl_slow#40:
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x2
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_pool_release
-    arm64.movRegReg x1, x0
+    arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x1, slot1
   __rl_cont#39:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 808]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x2 + 808], x1
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 808], x2
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
   stkpoolonlyrefused:
-    arm64.add x1, x20, 64
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x2, x20, 64
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
+    arm64.mul x1, x16, x17
     arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
+    arm64.arm64AtomicRmw.exchangeByte x3, [x2], x3
     arm64.cmp x3, 1
     arm64.b.eq __rl_cont#35
   __rl_slow#36:
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x2
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_pool_release
-    arm64.movRegReg x1, x0
+    arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x1, slot1
   __rl_cont#35:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 808]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x2 + 808], x1
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 808], x2
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
 }
 
@@ -63643,11 +63592,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -63749,13 +63697,13 @@ func @Counter.__start_Counter.create {
 
 func @__gt_stack_alloc {
   entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot8, x24
-    arm64.storeSlotReg slot7, x23
-    arm64.storeSlotReg slot6, x22
-    arm64.storeSlotReg slot5, x21
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x24
+    arm64.storeSlotReg slot6, x23
+    arm64.storeSlotReg slot5, x22
+    arm64.storeSlotReg slot4, x21
+    arm64.storeSlotReg slot3, x20
+    arm64.storeSlotReg slot2, x19
     arm64.movRegReg x1, x0
     arm64.cmp x1, 65536
     arm64.b.le stkpooled
@@ -63766,13 +63714,13 @@ func @__gt_stack_alloc {
     arm64.movImm x4, 18446744073709551615
     arm64.movImm x5, 0
     arm64.syscall 222
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
   stkpooled:
     arm64.movImm x0, 11
@@ -63902,13 +63850,13 @@ func @__gt_stack_alloc {
     arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
     arm64.sub x1, x1, x19
     arm64.storeBaseDispReg.word64 [x22 + 8], x1
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
   stkpoolonly:
     arm64.add x21, x20, 64
@@ -63980,13 +63928,13 @@ func @__gt_stack_alloc {
     arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 808], x2
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
   stkclassstep:
     arm64.add x0, x0, 1
@@ -64025,74 +63973,74 @@ func @__gt_stack_alloc {
     arm64.loadRegSlot x1, slot1
     arm64.b __rl_cont#33
   stkrefillempty:
-    arm64.add x1, x20, 64
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x2, x20, 64
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
+    arm64.mul x1, x16, x17
     arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
+    arm64.arm64AtomicRmw.exchangeByte x3, [x2], x3
     arm64.cmp x3, 1
     arm64.b.eq __rl_cont#39
   __rl_slow#40:
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x2
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_pool_release
-    arm64.movRegReg x1, x0
+    arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x1, slot1
   __rl_cont#39:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 808]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x2 + 808], x1
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 808], x2
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
   stkpoolonlyrefused:
-    arm64.add x1, x20, 64
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x2, x20, 64
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
+    arm64.mul x1, x16, x17
     arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
+    arm64.arm64AtomicRmw.exchangeByte x3, [x2], x3
     arm64.cmp x3, 1
     arm64.b.eq __rl_cont#35
   __rl_slow#36:
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x2
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_pool_release
-    arm64.movRegReg x1, x0
+    arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x1, slot1
   __rl_cont#35:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 808]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x2 + 808], x1
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.epilogue 96
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 808], x2
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.epilogue 80
     arm64.ret
 }
 
@@ -66884,17 +66832,15 @@ func @__gt_runner_done {
     arm64.b gfswalkhdr
   runnerkeepstack:
     arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 0
     arm64.b.eq runnerafterstack
   stackkeepcheck:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 32]
-    arm64.cmp x2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, x2
     arm64.b.eq runnerafterstack
   stackkeepdrop:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
     arm64.bl __gt_stack_free
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -67870,17 +67816,15 @@ func @__gt_runner_done {
     arm64.b gfswalkhdr
   runnerkeepstack:
     arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 0
     arm64.b.eq runnerafterstack
   stackkeepcheck:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 32]
-    arm64.cmp x2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, x2
     arm64.b.eq runnerafterstack
   stackkeepdrop:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
     arm64.bl __gt_stack_free
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -69668,11 +69612,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -70402,11 +70345,10 @@ func @main {
     arm64.bl __mbox_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.movImm x1, 16
-    arm64.movImm x2, 0
+    arm64.movImm x2, 16
+    arm64.movImm x1, 0
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
@@ -72858,17 +72800,15 @@ func @__gt_runner_done {
     arm64.b gfswalkhdr
   runnerkeepstack:
     arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 0
     arm64.b.eq runnerafterstack
   stackkeepcheck:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 32]
-    arm64.cmp x2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, x2
     arm64.b.eq runnerafterstack
   stackkeepdrop:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
     arm64.bl __gt_stack_free
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -73611,17 +73551,15 @@ func @__gt_runner_done {
     arm64.b gfswalkhdr
   runnerkeepstack:
     arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 0
     arm64.b.eq runnerafterstack
   stackkeepcheck:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 32]
-    arm64.cmp x2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, x2
     arm64.b.eq runnerafterstack
   stackkeepdrop:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
     arm64.bl __gt_stack_free
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -76315,24 +76253,22 @@ func @__managed_grow {
     x64.shlRegImm8 rsi, r13, 3
     x64.andRegReg rdx, rdx, rax
     x64.andRegReg rsi, rsi, rcx
-    x64.movRegReg rcx, rdx
-    x64.orRegReg rcx, rdx, rsi
+    x64.movRegReg rdi, rdx
+    x64.orRegReg rdi, rdx, rsi
   __il_cont#21:
     x64.movRegReg rax, r12
-    x64.imulRegReg rax, r12, rcx
+    x64.imulRegReg rax, r12, rdi
   __il_body#23:
-    x64.leaRegRegImm32 rdx, rax, 7
-    x64.shrRegImm8 rdx, rdx, 3
+    x64.leaRegRegImm32 rcx, rax, 7
+    x64.shrRegImm8 rcx, rcx, 3
   __il_cont#20:
-    x64.movRegReg rsi, r12
-    x64.orRegReg rsi, r12, rcx
-    x64.shrRegImm8 rsi, rsi, 31
-    x64.cmpRegImm32 rsi, 0
+    x64.movRegReg rdx, r12
+    x64.orRegReg rdx, r12, rdi
+    x64.shrRegImm8 rdx, rdx, 31
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, wide
   alloc:
-    x64.movRegImm32 rax, 0
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
+    x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
@@ -76403,10 +76339,8 @@ func @__managed_grow {
     x64.loadRegSlot rdx, slot0
     x64.jmp chkcap
   wide:
-    x64.storeSlotReg slot0, rdx
     x64.cqo
-    x64.idivReg rcx
-    x64.loadRegSlot rdx, slot0
+    x64.idivReg rdi
     x64.cmpRegReg rax, r12
     x64.jcc equal, alloc
   overflow:
@@ -76432,7 +76366,7 @@ func @__managed_mem_grow {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 48
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -76464,24 +76398,22 @@ func @__managed_mem_grow {
     x64.shlRegImm8 rsi, r13, 3
     x64.andRegReg rdx, rdx, rax
     x64.andRegReg rsi, rsi, rcx
-    x64.movRegReg rcx, rdx
-    x64.orRegReg rcx, rdx, rsi
+    x64.movRegReg rdi, rdx
+    x64.orRegReg rdi, rdx, rsi
   __il_cont#21:
     x64.movRegReg rax, r12
-    x64.imulRegReg rax, r12, rcx
+    x64.imulRegReg rax, r12, rdi
   __il_body#23:
-    x64.leaRegRegImm32 rdx, rax, 7
-    x64.shrRegImm8 rdx, rdx, 3
+    x64.leaRegRegImm32 rcx, rax, 7
+    x64.shrRegImm8 rcx, rcx, 3
   __il_cont#20:
-    x64.movRegReg rsi, r12
-    x64.orRegReg rsi, r12, rcx
-    x64.shrRegImm8 rsi, rsi, 31
-    x64.cmpRegImm32 rsi, 0
+    x64.movRegReg rdx, r12
+    x64.orRegReg rdx, r12, rdi
+    x64.shrRegImm8 rdx, rdx, 31
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, wide
   alloc:
-    x64.movRegImm32 rax, 0
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
+    x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
@@ -76526,7 +76458,7 @@ func @__managed_mem_grow {
   done:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -76552,16 +76484,14 @@ func @__managed_mem_grow {
     x64.callDirect __managed_cow_detach
     x64.jmp mgddone
   wide:
-    x64.storeSlotReg slot0, rdx
     x64.cqo
-    x64.idivReg rcx
-    x64.loadRegSlot rdx, slot0
+    x64.idivReg rdi
     x64.cmpRegReg rax, r12
     x64.jcc equal, alloc
   badcap:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 5
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -76690,24 +76620,22 @@ func @__managed_grow {
     x64.shlRegImm8 rsi, r13, 3
     x64.andRegReg rdx, rdx, rax
     x64.andRegReg rsi, rsi, rcx
-    x64.movRegReg rcx, rdx
-    x64.orRegReg rcx, rdx, rsi
+    x64.movRegReg rdi, rdx
+    x64.orRegReg rdi, rdx, rsi
   __il_cont#21:
     x64.movRegReg rax, r12
-    x64.imulRegReg rax, r12, rcx
+    x64.imulRegReg rax, r12, rdi
   __il_body#23:
-    x64.leaRegRegImm32 rdx, rax, 7
-    x64.shrRegImm8 rdx, rdx, 3
+    x64.leaRegRegImm32 rcx, rax, 7
+    x64.shrRegImm8 rcx, rcx, 3
   __il_cont#20:
-    x64.movRegReg rsi, r12
-    x64.orRegReg rsi, r12, rcx
-    x64.shrRegImm8 rsi, rsi, 31
-    x64.cmpRegImm32 rsi, 0
+    x64.movRegReg rdx, r12
+    x64.orRegReg rdx, r12, rdi
+    x64.shrRegImm8 rdx, rdx, 31
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, wide
   alloc:
-    x64.movRegImm32 rax, 0
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
+    x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
@@ -76778,10 +76706,8 @@ func @__managed_grow {
     x64.loadRegSlot rdx, slot0
     x64.jmp chkcap
   wide:
-    x64.storeSlotReg slot0, rdx
     x64.cqo
-    x64.idivReg rcx
-    x64.loadRegSlot rdx, slot0
+    x64.idivReg rdi
     x64.cmpRegReg rax, r12
     x64.jcc equal, alloc
   overflow:
@@ -76807,7 +76733,7 @@ func @__managed_mem_grow {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 48
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -76839,24 +76765,22 @@ func @__managed_mem_grow {
     x64.shlRegImm8 rsi, r13, 3
     x64.andRegReg rdx, rdx, rax
     x64.andRegReg rsi, rsi, rcx
-    x64.movRegReg rcx, rdx
-    x64.orRegReg rcx, rdx, rsi
+    x64.movRegReg rdi, rdx
+    x64.orRegReg rdi, rdx, rsi
   __il_cont#21:
     x64.movRegReg rax, r12
-    x64.imulRegReg rax, r12, rcx
+    x64.imulRegReg rax, r12, rdi
   __il_body#23:
-    x64.leaRegRegImm32 rdx, rax, 7
-    x64.shrRegImm8 rdx, rdx, 3
+    x64.leaRegRegImm32 rcx, rax, 7
+    x64.shrRegImm8 rcx, rcx, 3
   __il_cont#20:
-    x64.movRegReg rsi, r12
-    x64.orRegReg rsi, r12, rcx
-    x64.shrRegImm8 rsi, rsi, 31
-    x64.cmpRegImm32 rsi, 0
+    x64.movRegReg rdx, r12
+    x64.orRegReg rdx, r12, rdi
+    x64.shrRegImm8 rdx, rdx, 31
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, wide
   alloc:
-    x64.movRegImm32 rax, 0
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
+    x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
@@ -76901,7 +76825,7 @@ func @__managed_mem_grow {
   done:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -76927,16 +76851,14 @@ func @__managed_mem_grow {
     x64.callDirect __managed_cow_detach
     x64.jmp mgddone
   wide:
-    x64.storeSlotReg slot0, rdx
     x64.cqo
-    x64.idivReg rcx
-    x64.loadRegSlot rdx, slot0
+    x64.idivReg rdi
     x64.cmpRegReg rax, r12
     x64.jcc equal, alloc
   badcap:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 5
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -77056,20 +76978,19 @@ func @__managed_grow {
     arm64.lsl x3, x21, 3
     arm64.and x0, x2, x0
     arm64.and x1, x3, x1
-    arm64.orr x0, x0, x1
+    arm64.orr x1, x0, x1
   __il_cont#21:
-    arm64.mul x1, x20, x0
+    arm64.mul x2, x20, x1
   __il_body#23:
-    arm64.add x2, x1, 7
-    arm64.lsr x2, x2, 3
+    arm64.add x0, x2, 7
+    arm64.lsr x0, x0, 3
   __il_cont#20:
-    arm64.orr x3, x20, x0
+    arm64.orr x3, x20, x1
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
     arm64.b.ne wide
   alloc:
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
@@ -77137,8 +77058,8 @@ func @__managed_grow {
     arm64.loadRegSlot x1, slot0
     arm64.b chkcap
   wide:
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, x20
+    arm64.sdiv x1, x2, x1
+    arm64.cmp x1, x20
     arm64.b.eq alloc
   overflow:
     arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
@@ -77190,20 +77111,19 @@ func @__managed_mem_grow {
     arm64.lsl x3, x21, 3
     arm64.and x0, x2, x0
     arm64.and x1, x3, x1
-    arm64.orr x0, x0, x1
+    arm64.orr x1, x0, x1
   __il_cont#21:
-    arm64.mul x1, x20, x0
+    arm64.mul x2, x20, x1
   __il_body#23:
-    arm64.add x2, x1, 7
-    arm64.lsr x2, x2, 3
+    arm64.add x0, x2, 7
+    arm64.lsr x0, x0, 3
   __il_cont#20:
-    arm64.orr x3, x20, x0
+    arm64.orr x3, x20, x1
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
     arm64.b.ne wide
   alloc:
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
@@ -77271,8 +77191,8 @@ func @__managed_mem_grow {
     arm64.bl __managed_cow_detach
     arm64.b mgddone
   wide:
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, x20
+    arm64.sdiv x1, x2, x1
+    arm64.cmp x1, x20
     arm64.b.eq alloc
   badcap:
     arm64.movImm x0, 0
@@ -77399,20 +77319,19 @@ func @__managed_grow {
     arm64.lsl x3, x21, 3
     arm64.and x0, x2, x0
     arm64.and x1, x3, x1
-    arm64.orr x0, x0, x1
+    arm64.orr x1, x0, x1
   __il_cont#21:
-    arm64.mul x1, x20, x0
+    arm64.mul x2, x20, x1
   __il_body#23:
-    arm64.add x2, x1, 7
-    arm64.lsr x2, x2, 3
+    arm64.add x0, x2, 7
+    arm64.lsr x0, x0, 3
   __il_cont#20:
-    arm64.orr x3, x20, x0
+    arm64.orr x3, x20, x1
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
     arm64.b.ne wide
   alloc:
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
@@ -77480,8 +77399,8 @@ func @__managed_grow {
     arm64.loadRegSlot x1, slot0
     arm64.b chkcap
   wide:
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, x20
+    arm64.sdiv x1, x2, x1
+    arm64.cmp x1, x20
     arm64.b.eq alloc
   overflow:
     arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
@@ -77533,20 +77452,19 @@ func @__managed_mem_grow {
     arm64.lsl x3, x21, 3
     arm64.and x0, x2, x0
     arm64.and x1, x3, x1
-    arm64.orr x0, x0, x1
+    arm64.orr x1, x0, x1
   __il_cont#21:
-    arm64.mul x1, x20, x0
+    arm64.mul x2, x20, x1
   __il_body#23:
-    arm64.add x2, x1, 7
-    arm64.lsr x2, x2, 3
+    arm64.add x0, x2, 7
+    arm64.lsr x0, x0, 3
   __il_cont#20:
-    arm64.orr x3, x20, x0
+    arm64.orr x3, x20, x1
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
     arm64.b.ne wide
   alloc:
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x2
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
@@ -77614,8 +77532,8 @@ func @__managed_mem_grow {
     arm64.bl __managed_cow_detach
     arm64.b mgddone
   wide:
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, x20
+    arm64.sdiv x1, x2, x1
+    arm64.cmp x1, x20
     arm64.b.eq alloc
   badcap:
     arm64.movImm x0, 0

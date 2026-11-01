@@ -1886,16 +1886,54 @@ end 'RegisterHintLookup'
 type ColorHints
 	export var fixedHint as RegisterColumn
 	export var copyHint as CopyPartnerColumn
+	export var fixedHintIsHot as BitRow
+
+	// The registers that ops inside the value's live range want, filled by `computeBlockDeaths`. A
+	// preference for `pickPreferredRegister` only: `forbidden`, which the splitter and Hall's condition
+	// read, never includes it.
+	export var contested as RegMaskColumn
 
 	static function create(valueCount ValueId) returns ColorHints
-		return Self{fixedHint: RegisterColumn.absent(valueCount), copyHint: CopyPartnerColumn.absent(valueCount)}
+		var fixedHintIsHot = BitRow.create()
+		fixedHintIsHot.widen(bitsetWordsFor(valueCount as BitIndex))
+		return Self{fixedHint: RegisterColumn.absent(valueCount), copyHint: CopyPartnerColumn.absent(valueCount), fixedHintIsHot: fixedHintIsHot, contested: makeRegMaskColumn(valueCount)}
 	end 'create'
 
-	function setFixedIfUnset(v ValueId, regNum RegNum)
+	function contestedOf(v ValueId) returns RegMask
+		return try self.contested.get(v) otherwise panic("ColorHints.contestedOf: value {v} out of range")
+	end 'contestedOf'
+
+	function setFixed(v ValueId, regNum RegNum, sourceHeat BlockHeat)
+		let sourceIsHot = sourceHeat != BlockHeat.cold
+
 		if not self.fixedHint.holds(v) 'unset'
 			self.fixedHint.set(v, value: regNum)
+
+			if sourceIsHot 'hotSource'
+				self.fixedHintIsHot.add(v as BitIndex)
+			end 'hotSource'
+
+			return
 		end 'unset'
-	end 'setFixedIfUnset'
+
+		if sourceIsHot and not self.fixedHintIsHot.test(v as BitIndex) 'hotOverCold'
+			self.fixedHint.set(v, value: regNum)
+			self.fixedHintIsHot.add(v as BitIndex)
+		end 'hotOverCold'
+	end 'setFixed'
+
+	// A hint from a cold use costs only a cold-path move when missed, while contesting it would push
+	// the values live across a normal def off that register on the hot path. A cold def has no hot
+	// path to lose, so its hint always contests.
+	function contendingFixedOf(v ValueId, defHeat BlockHeat) returns RegNum throws RegisterHintLookup
+		let fr = try self.fixedOf(v)
+
+		if defHeat != BlockHeat.cold and not self.fixedHintIsHot.test(v as BitIndex) 'coldSourceHotDef'
+			throw RegisterHintLookup.noHint
+		end 'coldSourceHotDef'
+
+		return fr
+	end 'contendingFixedOf'
 
 	function setCopyIfUnset(v ValueId, partner ValueId)
 		if v == partner 'selfPartner'
@@ -1940,7 +1978,7 @@ function computeHints(module TargetModule, topo FuncTopology, valueCount ValueId
 
 		for opIdx in ordered 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("computeHints: opIdx not in module.ops")
-			collectOpHints(op, hints: hints)
+			collectOpHints(op, heat: block.heat, hints: hints)
 			collectReuseHints(op, hints: hints, buf: buf)
 		end 'eachOp'
 
@@ -1953,10 +1991,10 @@ end 'computeHints'
 // A copy to a fixed register hints its virtual source to that register, so the R8 return move
 // elides. No virtual-to-virtual copy exists at coloring time; the two-address hint comes from
 // `collectReuseHints`.
-function collectOpHints(op TargetOp, hints ColorHints)
+function collectOpHints(op TargetOp, heat BlockHeat, hints ColorHints)
 	match op 'hint'
-		movRegReg(dst, src) then addCopyHint(dst, src: src, hints: hints)
-		movReg32Reg32(dst, src) then addCopyHint(dst, src: src, hints: hints)
+		movRegReg(dst, src) then addCopyHint(dst, src: src, heat: heat, hints: hints)
+		movReg32Reg32(dst, src) then addCopyHint(dst, src: src, heat: heat, hints: hints)
 
 		// None of these is a move, so none carries a copy hint. A two-address reuse, `lock xadd`'s
 		// included, is a constraint `collectReuseHints` reads off the operand model and the colorer
@@ -2137,17 +2175,17 @@ function collectReuseHints(op TargetOp, hints ColorHints, buf OperandList)
 	end 'eachOperand'
 end 'collectReuseHints'
 
-function addCopyHint(dst TargetVReg, src TargetVReg, hints ColorHints)
+function addCopyHint(dst TargetVReg, src TargetVReg, heat BlockHeat, hints ColorHints)
 	match dst 'd'
-		physical(dReg) then addFixedFromPhysDst(dReg, src: src, hints: hints)
-		virtual(dId) then addCopyFromVirtualDst(dId, src: src, hints: hints)
+		physical(dReg) then addFixedFromPhysDst(dReg, src: src, heat: heat, hints: hints)
+		virtual(dId) then addCopyFromVirtualDst(dId, src: src, heat: heat, hints: hints)
 	end 'd'
 end 'addCopyHint'
 
 // `mov <fixed physical>, <virtual src>`: the source wants that fixed register.
-function addFixedFromPhysDst(dReg RegNum, src TargetVReg, hints ColorHints)
+function addFixedFromPhysDst(dReg RegNum, src TargetVReg, heat BlockHeat, hints ColorHints)
 	match src 's'
-		virtual(sId) then hints.setFixedIfUnset(sId, regNum: dReg)
+		virtual(sId) then hints.setFixed(sId, regNum: dReg, sourceHeat: heat)
 		physical then break
 	end 's'
 end 'addFixedFromPhysDst'
@@ -2156,10 +2194,10 @@ end 'addFixedFromPhysDst'
 // register (physical src). No such op survives to coloring today (the two-address seed
 // `mov` is retired and edge copies are post-coloring), but the handler stays general so
 // a future virtual-to-virtual copy op is hinted correctly.
-function addCopyFromVirtualDst(dId ValueId, src TargetVReg, hints ColorHints)
+function addCopyFromVirtualDst(dId ValueId, src TargetVReg, heat BlockHeat, hints ColorHints)
 	match src 's'
 		virtual(sId) then hints.setCopyIfUnset(dId, partner: sId)
-		physical(sReg) then hints.setFixedIfUnset(dId, regNum: sReg)
+		physical(sReg) then hints.setFixed(dId, regNum: sReg, sourceHeat: heat)
 	end 's'
 end 'addCopyFromVirtualDst'
 
@@ -2189,7 +2227,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	let valueCount = liveness.valueCount
 	let wordsPerRow = liveness.wordsPerRow
 	var alloc = Allocation.create(valueCount)
-	let hints = computeHints(module, topo: topo, valueCount: valueCount)
+	var hints = computeHints(module, topo: topo, valueCount: valueCount)
 	var buf = OperandList.create()
 
 	// Scratch reused across every block — the live-set walks, the op list, and the death sweep's
@@ -2206,6 +2244,22 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	// real and truthfully seeded. Allocated HERE and reused across every block, like every other
 	// buffer in this sweep.
 	var deathsLiveByClass = zeroClassRow()
+
+	var events = ClobberEvents.create()
+	events.widen(valueCount)
+
+	var deathsOfBlock = BlockDeathsArray.create()
+
+	// Every block's deaths come before any block is colored: `hints.contested` gathers wants from LATER
+	// blocks, and a value is colored at its def. Run per block inside the sweep below, a value's
+	// contested mask would be missing every want after its def's block.
+	for local in 0 upto topo.numBlocks 'eachBlockForDeaths'
+		let block = blockAt(module, topo: topo, local: local)
+
+		ordered.clear()
+		block.collectOpsInRunOrder(ordered)
+		deathsOfBlock.push(computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf, liveByClass: deathsLiveByClass, hints: hints, events: events))
+	end 'eachBlockForDeaths'
 
 	// The op's LAYOUT SEQUENCE across the whole function — the key `reuseCopies` is recorded
 	// under, and the same numbering the rewrite re-derives from `IrBlock.collectOpsInRunOrder`.
@@ -2224,7 +2278,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 
 		ordered.clear()
 		block.collectOpsInRunOrder(ordered)
-		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf, liveByClass: deathsLiveByClass)
+		view deaths = try deathsOfBlock.get(local) otherwise panic("colorFunction: no deaths for block {local}")
 
 		view runs = liveness.coldRuns.of(local)
 
@@ -2375,9 +2429,12 @@ end 'assertColouredInClass'
 //   3. its copy partner's PIN, when the partner is NOT yet colored (`pinnedPartnerRegister`).
 //
 // and the fallback is the lowest free register of `v`'s COPY GROUP's preferred VOLATILITY
-// (`copyGroupBlocked`). Hints 3 and the group volatility are the BACKWARD half: a forward sweep in
-// dominance order colors the def before the phi, so without them a phi's constraints can never
-// reach the value that feeds it, and the pair costs two registers.
+// (`copyGroupBlocked`), skipping the registers the group contests (`copyGroupContested`) while the
+// volatility has another free. Hints 3 and the group volatility are the BACKWARD half: a forward
+// sweep in dominance order colors the def before the phi, so without them a phi's constraints can
+// never reach the value that feeds it, and the pair costs two registers.
+//
+// The three hints ignore `contested`: only the fallback pick weighs it.
 //
 // **A hint may not ALLOCATE a register outside that class while the class still has one free — but
 // it may always TRANSFER one that is being vacated at this very op.** Those are different acts and
@@ -2446,11 +2503,13 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 	// Prefer the copy group's volatility. If nothing in it is free, `v` cannot coalesce with its
 	// partner however it is colored, so fall back to `v`'s OWN constraint and let SSA destruction
 	// emit the copy — which is strictly what would have happened without the group at all.
-	if let grouped = try pickPreferredRegister(groupBlocked, classPool: classPool, callerSaved: callerSaved) 'gotGrouped'
+	let contested = copyGroupContested(v, hints: hints, alloc: alloc)
+
+	if let grouped = try pickPreferredRegister(groupBlocked, classPool: classPool, callerSaved: callerSaved, contested: contested) 'gotGrouped'
 		return grouped
 	end 'gotGrouped'
 
-	return try pickPreferredRegister(blocked, classPool: classPool, callerSaved: callerSaved) otherwise panic("chooseRegister: no register for value {v} (class pool {classPool}, blocked {blocked}) — but `allocateDef` screens `blocked == fullRegisterMask()` before it calls this, and that screen and this failure are the SAME event: every hint path tests `blocked` first (`hintIsTakeable`), the copy-group pick measures a superset of `blocked`, and this fallback is `lowestClearRegister(blocked)`. Reaching here means the screen and the pick have come apart.")
+	return try pickPreferredRegister(blocked, classPool: classPool, callerSaved: callerSaved, contested: contested) otherwise panic("chooseRegister: no register for value {v} (class pool {classPool}, blocked {blocked}) — but `allocateDef` screens `blocked == fullRegisterMask()` before it calls this, and that screen and this failure are the SAME event: every hint path tests `blocked` first (`hintIsTakeable`), the copy-group pick measures a superset of `blocked`, and this fallback is `lowestClearRegister(blocked)`. Reaching here means the screen and the pick have come apart.")
 end 'chooseRegister'
 
 // ⭐⭐ **THE COLORER RAN OUT OF REGISTERS FOR `v`. Decide WHOSE bug that is** — and, when it is the one
@@ -2608,26 +2667,31 @@ function describeRegisterOccupants(occupants ValueIdArray, liveness LivenessResu
 	return text
 end 'describeRegisterOccupants'
 
-// The register `v`'s copy partner is PINNED to and will therefore take if it is free: the partner's
-// OWN fixed hint, when the partner is not yet colored and is not forbidden that register.
-//
-// This is the other half of `copyGroupBlocked`, and it exists for the same reason: the forward sweep
-// colors the DEF before the phi, so a pin on the PHI can only reach the value that feeds it by being
-// read AHEAD of time. `return sum` after a loop pins `sum`'s phi to R8 (the `mov r8, sum` return
-// move); the initial `sum = 0` in the entry block is colored first, cannot see that pin, lands
-// somewhere else, and the loop-entry edge copy survives — one value, two registers, for the second
-// time. Predicting the pin removes it.
-//
-// It is safe even when the prediction is WRONG (the partner's pin turns out to be occupied at its
-// own def, so the two do not coalesce after all): `v` still only ever takes a register that
-// `hintIsTakeable` has cleared for `v` itself, so the worst case is the copy we already had.
-function pinnedPartnerRegister(v ValueId, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegNum throws RegisterHintLookup
+function uncoloredPartnerOf(v ValueId, hints ColorHints, alloc Allocation) returns ValueId throws RegisterHintLookup
 	let p = try hints.copyOf(v)
 
 	if alloc.isColored(p) 'partnerColored'
 		throw RegisterHintLookup.noHint
 	end 'partnerColored'
 
+	return p
+end 'uncoloredPartnerOf'
+
+// The register `v`'s copy partner is PINNED to and will therefore take if it is free: the partner's
+// OWN fixed hint, when the partner is not yet colored and is not forbidden that register.
+//
+// This is the hint-path half of `copyGroupBlocked` and `copyGroupContested`, and it exists for the
+// same reason: the forward sweep colors the DEF before the phi, so a pin on the PHI can only reach
+// the value that feeds it by being read AHEAD of time. `return sum` after a loop pins `sum`'s phi to
+// R8 (the `mov r8, sum` return move); the initial `sum = 0` in the entry block is colored first,
+// cannot see that pin, lands somewhere else, and the loop-entry edge copy survives — one value, two
+// registers, for the second time. Predicting the pin removes it.
+//
+// It is safe even when the prediction is WRONG (the partner's pin turns out to be occupied at its
+// own def, so the two do not coalesce after all): `v` still only ever takes a register that
+// `hintIsTakeable` has cleared for `v` itself, so the worst case is the copy we already had.
+function pinnedPartnerRegister(v ValueId, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegNum throws RegisterHintLookup
+	let p = try uncoloredPartnerOf(v, hints: hints, alloc: alloc)
 	let pr = try hints.fixedOf(p)
 
 	if regMaskContains(liveness.forbiddenOf(p), regNum: pr) 'partnerCannotTakeIt'
@@ -2662,11 +2726,7 @@ end 'pinnedPartnerRegister'
 // It cannot over-constrain: the widened mask is only a PREFERENCE (`chooseRegister` falls back to
 // `blocked` when the group's preferred volatility is full), never a legality claim.
 function copyGroupBlocked(v ValueId, blocked RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegMask
-	let p = try hints.copyOf(v) otherwise return blocked
-
-	if alloc.isColored(p) 'partnerColored'
-		return blocked
-	end 'partnerColored'
+	let p = try uncoloredPartnerOf(v, hints: hints, alloc: alloc) otherwise return blocked
 
 	return blocked or liveness.forbiddenOf(p)
 end 'copyGroupBlocked'
@@ -2724,6 +2784,11 @@ end 'hintIsTakeable'
 // prologue then preserves. This is the standard "allocate volatiles first" bias; it keeps leaf and
 // call-free functions off the callee-saved registers entirely.
 //
+// `contested` ranks the choices within that preference and removes none: the order is the preferred
+// volatility without the contested registers, then the preferred volatility, then `blocked` alone. A
+// value whose free registers are all contested still gets one, and contention never moves a value
+// into the callee-saved half.
+//
 // The final fallback scans `blocked` alone and is class-safe BECAUSE of it: `allocateDef` put
 // `fullRegisterMask() and not classPool` into that mask, so every foreign-file register is already
 // blocked and `lowestClearRegister` — which reads every register of both files — cannot reach one.
@@ -2732,15 +2797,29 @@ end 'hintIsTakeable'
 // this one cannot disagree about what a value should take. Spelling the volatile probe twice makes
 // "the two must agree" a comment instead of a property — and a second spelling of a pool is exactly
 // how `fullRegisterMask()` comes to stand in for "the whole pool" in one of them and not the other.
-function pickPreferredRegister(blocked RegMask, classPool RegMask, callerSaved RegMask) returns RegNum throws RegisterSearch
+function pickPreferredRegister(blocked RegMask, classPool RegMask, callerSaved RegMask, contested RegMask) returns RegNum throws RegisterSearch
 	let preferred = preferredVolatilityMask(blocked, classPool: classPool, callerSaved: callerSaved)
+	let outsidePreferred = fullRegisterMask() and not preferred
 
-	if let pick = try lowestClearRegister(blocked or (fullRegisterMask() and not preferred)) 'gotPreferred'
+	if contested != 0 'anyContested'
+		if let pick = try lowestClearRegister(blocked or contested or outsidePreferred) 'gotUncontested'
+			return pick
+		end 'gotUncontested'
+	end 'anyContested'
+
+	if let pick = try lowestClearRegister(blocked or outsidePreferred) 'gotPreferred'
 		return pick
 	end 'gotPreferred'
 
 	return try lowestClearRegister(blocked)
 end 'pickPreferredRegister'
+
+function copyGroupContested(v ValueId, hints ColorHints, alloc Allocation) returns RegMask
+	let own = hints.contestedOf(v)
+	let p = try uncoloredPartnerOf(v, hints: hints, alloc: alloc) otherwise return own
+
+	return own or hints.contestedOf(p)
+end 'copyGroupContested'
 
 // Color one op: assert its uses are already colored (dominance), free the operands
 // that die here (so a def may reuse a dying use's register), allocate the def (a reuse
@@ -2837,6 +2916,8 @@ function allocateReuseDef(o Operand, seq OpSeq, pos ElementIndex, deaths BlockDe
 	return updated
 end 'allocateReuseDef'
 
+typealias BlockDeathsArray = Array with BlockDeaths
+
 // Which values DIE at each op of a block — i.e. whose live range ENDS there (its last use, or a
 // dead def) — as a CSR list keyed by the op's position: `list[start[pos] .. start[pos+1])`.
 //
@@ -2885,19 +2966,25 @@ end 'BlockDeaths'
 // is not live below it. `seenBelow` is a single dense row (bits flip at every op, so a bitset is the
 // right shape INSIDE a block) — seeded from the SPARSE live-out list and cleared back to zero in
 // O(live) by the caller, never copied a full value-space row at a time.
-function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local ElementIndex, block IrBlock, buf OperandList, seenBelow BitRow, seedBuf ValueIdArray, liveByClass RegCountColumn) returns BlockDeaths
+//
+// It also closes each value's clobber windows into `hints.contested`; `colorFunction` runs it over
+// every block before coloring any.
+function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local ElementIndex, block IrBlock, buf OperandList, seenBelow BitRow, seedBuf ValueIdArray, liveByClass RegCountColumn, hints ColorHints, events ClobberEvents) returns BlockDeaths
 	let n = ordered.count()
 
 	liveness.liveOutInto(local, out: seedBuf)
+	events.beginBlock()
 
 	for v in seedBuf 'seed'
 		seenBelow.add(v as BitIndex)
 	end 'seed'
 
-	// ⚠ `liveByClass` HERE TALLIES THE ROW, AND THIS ROW IS NOT A LIVE SET. `seenBelow` means "seen
-	// below this op", and the death scan ADDS to it itself (below) for values that die — so its
-	// population is not the live population and its tally is not a pressure. Nothing reads it: the
-	// scan wants the row alone.
+	events.enterLiveOut(seedBuf, pos: n)
+
+	// ⚠ `liveByClass` HERE TALLIES THE ROW, AND THE ROW IS A LIVE SET ONLY BETWEEN OPS. At each op
+	// boundary `seenBelow` is the live-after set, but the death scan ADDS to it itself (below) for the
+	// values that die at the op — so mid-scan its population is not the live population and its tally
+	// is not a pressure. Nothing reads it: the scan wants the row alone.
 	//
 	// It is maintained anyway, exactly, because `stepRowBackwardOverOperands` maintains a tally OF THE
 	// ROW as it flips bits, and that tally's decrements PANIC on underflow. That guard is not
@@ -2919,6 +3006,11 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 		let opIdx = try ordered.get(pos) otherwise panic("computeBlockDeaths: ordered.get OOB")
 		let op = try module.ops.get(opIdx) otherwise panic("computeBlockDeaths: opIdx not in module.ops")
 		targetOpOperands(op, buf: buf)
+
+		// The window order is `stepBackwardOverOp`'s, which owns the reason for it.
+		events.closeDefWindows(buf, row: seenBelow, forbidden: hints.contested)
+		events.record(pos, mask: wantedByOp(op, heat: block.heat, buf: buf, hints: hints, liveness: liveness))
+		events.openUseWindows(buf, row: seenBelow, pos: pos)
 
 		for o in buf 'markDeaths'
 			if operandIsVirtual(o) 'virt'
@@ -2945,6 +3037,9 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	// block's live-in set plus any of its own block-args an op re-added.
 	liveness.liveInInto(local, out: seedBuf)
 
+	// The entry windows are read off the row, so they close before the clears below empty it.
+	events.closeEntryWindows(seedBuf, block: block, row: seenBelow, forbidden: hints.contested)
+
 	for v in seedBuf 'clearLiveIn'
 		seenBelow.remove(v as BitIndex)
 	end 'clearLiveIn'
@@ -2957,6 +3052,30 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	// restores forward order in O(pairs + ops), keyed by the op's position in the block.
 	return BlockDeaths.create(buildCsr(posOf, to: valueOf, nodeCount: n as CsrIndex))
 end 'computeBlockDeaths'
+
+// A bracketed cold-run op confines nothing (`opClobberMask`), so its clobbers reach the colorer only
+// here, as a preference.
+function wantedByOp(op TargetOp, heat BlockHeat, buf OperandList, hints ColorHints, liveness LivenessResult) returns RegMask
+	var wanted = 0 as RegMask
+
+	if opIsBracketed(op, heat: heat, buf: buf, opFacts: liveness.opFacts) 'bracketed'
+		wanted = rawClobberMask(op, buf: buf, opFacts: liveness.opFacts)
+	end 'bracketed'
+
+	for o in buf 'eachOperand'
+		if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
+			let w = operandValueId(o)
+
+			if let fr = try hints.contendingFixedOf(w, defHeat: heat) 'hinted'
+				if not regMaskContains(liveness.forbiddenOf(w), regNum: fr) 'honourable'
+					wanted = regMaskAdd(wanted, regNum: fr)
+				end 'honourable'
+			end 'hinted'
+		end 'virtualDef'
+	end 'eachOperand'
+
+	return wanted
+end 'wantedByOp'
 
 // ==========================================================================
 // Applying a coloring to an op (used by the rewrite in SsaDestruction.maxon)

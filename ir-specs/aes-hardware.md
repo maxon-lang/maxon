@@ -257,18 +257,16 @@ func @__cpufeat_aes_cipher_encrypt_block {
   abddone:
     x64.movRegReg r8, rdi
     x64.shrRegImm8 r8, rdi, 5
-    x64.leaRegRegImm32 r8, r8, -1
+    x64.leaRegRegImm32 r10, r8, -1
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.shrRegImm8 rdi, rdi, 1
     x64.leaRegRegReg rdi, rax, rdi
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdi, [r9 + 0]
-    x64.leaRegRegReg r9, rcx, rdx
-    x64.leaRegRegReg rsi, rdi, rsi
-    x64.movRegReg rcx, r8
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.leaRegRegReg r9, rdi, rsi
+    x64.movRegReg rcx, r10
     x64.movRegReg rdx, rax
-    x64.movRegReg r8, r9
-    x64.movRegReg r9, rsi
     x64.callDirect mrt_aes_encrypt_block
     x64.epilogue 80
     x64.popReg rbp
@@ -528,18 +526,16 @@ func @__cpufeat_aes_cipher_encrypt_block {
   abddone:
     x64.movRegReg r8, rdi
     x64.shrRegImm8 r8, rdi, 5
-    x64.leaRegRegImm32 r8, r8, -1
+    x64.leaRegRegImm32 r10, r8, -1
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.shrRegImm8 rdi, rdi, 1
     x64.leaRegRegReg rdi, rax, rdi
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdi, [r9 + 0]
-    x64.leaRegRegReg r9, rcx, rdx
-    x64.leaRegRegReg rsi, rdi, rsi
-    x64.movRegReg rcx, r8
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.leaRegRegReg r9, rdi, rsi
+    x64.movRegReg rcx, r10
     x64.movRegReg rdx, rax
-    x64.movRegReg r8, r9
-    x64.movRegReg r9, rsi
     x64.callDirect mrt_aes_encrypt_block
     x64.epilogue 80
     x64.popReg rbp
@@ -791,16 +787,15 @@ func @__cpufeat_aes_cipher_encrypt_block {
   abddone:
     arm64.lsr x6, x5, 5
     arm64.sub x6, x6, 1
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.lsr x5, x5, 1
-    arm64.add x5, x2, x5
+    arm64.loadRegBaseDisp.word64 x7, [x2 + 0]
+    arm64.lsr x2, x5, 1
+    arm64.add x2, x7, x2
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x2, x0, x1
     arm64.add x3, x3, x4
     arm64.movRegReg x0, x6
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x5
+    arm64.movRegReg x1, x7
     arm64.bl mrt_aes_encrypt_block
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -1055,16 +1050,15 @@ func @__cpufeat_aes_cipher_encrypt_block {
   abddone:
     arm64.lsr x6, x5, 5
     arm64.sub x6, x6, 1
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.lsr x5, x5, 1
-    arm64.add x5, x2, x5
+    arm64.loadRegBaseDisp.word64 x7, [x2 + 0]
+    arm64.lsr x2, x5, 1
+    arm64.add x2, x7, x2
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x2, x0, x1
     arm64.add x3, x3, x4
     arm64.movRegReg x0, x6
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x5
+    arm64.movRegReg x1, x7
     arm64.bl mrt_aes_encrypt_block
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -2271,14 +2265,12 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.sub x5, x5, 1
     arm64.lsl x4, x4, 8
     arm64.orr x4, x4, x5
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.loadRegBaseDisp.word64 x5, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x3, x0, x1
     arm64.movRegReg x0, x4
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.movRegReg x3, x5
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_ctr_blocks_1
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -2312,14 +2304,12 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.sub x5, x5, 1
     arm64.lsl x4, x4, 8
     arm64.orr x4, x4, x5
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.loadRegBaseDisp.word64 x5, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x3, x0, x1
     arm64.movRegReg x0, x4
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.movRegReg x3, x5
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_ctr_blocks_2
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -2353,14 +2343,12 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.sub x5, x5, 1
     arm64.lsl x4, x4, 8
     arm64.orr x4, x4, x5
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.loadRegBaseDisp.word64 x5, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x3, x0, x1
     arm64.movRegReg x0, x4
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.movRegReg x3, x5
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_ctr_blocks_4
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -2394,14 +2382,12 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.sub x5, x5, 1
     arm64.lsl x4, x4, 8
     arm64.orr x4, x4, x5
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.loadRegBaseDisp.word64 x5, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x3, x0, x1
     arm64.movRegReg x0, x4
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.movRegReg x3, x5
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_ctr_blocks_8
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -2736,14 +2722,12 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.sub x5, x5, 1
     arm64.lsl x4, x4, 8
     arm64.orr x4, x4, x5
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.loadRegBaseDisp.word64 x5, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x3, x0, x1
     arm64.movRegReg x0, x4
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.movRegReg x3, x5
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_ctr_blocks_1
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -2777,14 +2761,12 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.sub x5, x5, 1
     arm64.lsl x4, x4, 8
     arm64.orr x4, x4, x5
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.loadRegBaseDisp.word64 x5, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x3, x0, x1
     arm64.movRegReg x0, x4
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.movRegReg x3, x5
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_ctr_blocks_2
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -2818,14 +2800,12 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.sub x5, x5, 1
     arm64.lsl x4, x4, 8
     arm64.orr x4, x4, x5
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.loadRegBaseDisp.word64 x5, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x3, x0, x1
     arm64.movRegReg x0, x4
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.movRegReg x3, x5
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_ctr_blocks_4
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -2859,14 +2839,12 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.sub x5, x5, 1
     arm64.lsl x4, x4, 8
     arm64.orr x4, x4, x5
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.loadRegBaseDisp.word64 x5, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x5, x0, x1
+    arm64.add x3, x0, x1
     arm64.movRegReg x0, x4
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.movRegReg x3, x5
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_ctr_blocks_8
     arm64.movRegReg x1, x0
     arm64.epilogue 64
@@ -6168,14 +6146,12 @@ func @__cpufeat_aes_cipher_gcm_init {
     arm64.b.ne giddetach
   giddone:
     arm64.lsr x2, x2, 5
-    arm64.sub x2, x2, 1
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x4, [x1 + 0]
-    arm64.movImm x5, 0
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x1, x3
-    arm64.movRegReg x2, x4
-    arm64.movRegReg x3, x5
+    arm64.sub x4, x2, 1
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x4
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_gcm_init
     arm64.movRegReg x1, x0
     arm64.epilogue 48
@@ -7291,14 +7267,12 @@ func @__cpufeat_aes_cipher_gcm_init {
     arm64.b.ne giddetach
   giddone:
     arm64.lsr x2, x2, 5
-    arm64.sub x2, x2, 1
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x4, [x1 + 0]
-    arm64.movImm x5, 0
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x1, x3
-    arm64.movRegReg x2, x4
-    arm64.movRegReg x3, x5
+    arm64.sub x4, x2, 1
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x4
+    arm64.movRegReg x1, x5
     arm64.bl mrt_aes_gcm_init
     arm64.movRegReg x1, x0
     arm64.epilogue 48

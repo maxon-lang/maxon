@@ -330,12 +330,10 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
-    arm64.leaRdata x0, __layout_FixedArray_N8_Word
+    arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body#21:
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20
@@ -456,12 +454,10 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
-    arm64.leaRdata x0, __layout_FixedArray_N8_Word
+    arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body#21:
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20
@@ -912,12 +908,10 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
-    arm64.leaRdata x0, __layout_FixedArray_N8_Word
+    arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body#21:
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20
@@ -1050,12 +1044,10 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
-    arm64.leaRdata x0, __layout_FixedArray_N8_Word
+    arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body#21:
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20
@@ -1482,12 +1474,10 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
-    arm64.leaRdata x0, __layout_FixedArray_N8_Word
+    arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body#10:
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20
@@ -1601,12 +1591,10 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 8
-    arm64.leaRdata x0, __layout_FixedArray_N8_Word
+    arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body#10:
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20

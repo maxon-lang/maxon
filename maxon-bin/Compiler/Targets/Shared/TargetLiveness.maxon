@@ -1268,7 +1268,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
-function makeRegMaskColumn(valueCount ValueId) returns RegMaskColumn
+module function makeRegMaskColumn(valueCount ValueId) returns RegMaskColumn
 	var col = RegMaskColumn.create()
 	col.resize(valueCount)
 	return col
@@ -4698,9 +4698,7 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
 	var events = scratch.events
 	events.beginBlock()
 
-	for v in liveOutList 'enterLiveOut'
-		events.enter(v, pos: ordered.count())
-	end 'enterLiveOut'
+	events.enterLiveOut(liveOutList, pos: ordered.count())
 
 	if block.heat == BlockHeat.cold 'coldBlock'
 		scratch.coldRun.emptyReadLater()
@@ -4723,17 +4721,7 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
 
 	live.explicitInInto(blockLocal, out: liveOutList)
 
-	for v in liveOutList 'closeLiveInWindows'
-		if liveRow.test(v as BitIndex) 'aLiveIn'
-			events.finalize(v, forbidden: forbidden)
-		end 'aLiveIn'
-	end 'closeLiveInWindows'
-
-	for arg in block.blockArgs 'closePhiWindows'
-		if liveRow.test(arg.valueId as BitIndex) 'aLivePhi'
-			events.finalize(arg.valueId, forbidden: forbidden)
-		end 'aLivePhi'
-	end 'closePhiWindows'
+	events.closeEntryWindows(liveOutList, block: block, row: liveRow, forbidden: forbidden)
 
 	// After the backward sweep `liveRow` is the live-IN view: a block-arg is present iff it is live
 	// (used here or live-out); a dead phi is absent.
@@ -5109,11 +5097,7 @@ function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockH
 
 	// A def's window closes BEFORE this op's clobber is recorded, and a use that dies here opens its
 	// window AFTER it: neither is live ACROSS the op, so neither may take its clobber.
-	for o in buf 'closeDefWindows'
-		if operandIsDef(o) and operandIsVirtual(o) and liveRow.test(operandValueId(o) as BitIndex) 'aLiveDef'
-			events.finalize(operandValueId(o), forbidden: forbidden)
-		end 'aLiveDef'
-	end 'closeDefWindows'
+	events.closeDefWindows(buf, row: liveRow, forbidden: forbidden)
 
 	if clobberMask != 0 'hasClobber'
 		events.record(pos, mask: clobberMask)
@@ -5140,11 +5124,7 @@ function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockH
 		forbidOperandsFromImplicit(forbidden, buf: buf, implicitMask: implicitTouch)
 	end 'hasImplicit'
 
-	for o in buf 'openUseWindows'
-		if not operandIsDef(o) and operandIsVirtual(o) and (not liveRow.test(operandValueId(o) as BitIndex) or operandDefinesValue(buf, v: operandValueId(o))) 'aNewWindow'
-			events.enter(operandValueId(o), pos: pos)
-		end 'aNewWindow'
-	end 'openUseWindows'
+	events.openUseWindows(buf, row: liveRow, pos: pos)
 
 	stepRowBackwardOverOperands(liveRow, buf: buf, liveByClass: liveByClass, classes: classes)
 
@@ -5175,12 +5155,16 @@ end 'stepBackwardOverOp'
 export function opClobberMask(op TargetOp, heat BlockHeat, buf OperandList, opFacts OpVariantFacts) returns RegMask
 	targetOpOperands(op, buf: buf)
 
-	if heat == BlockHeat.cold and coldRunOpKind(op, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'bracketedNotConfined'
+	if opIsBracketed(op, heat: heat, buf: buf, opFacts: opFacts) 'bracketedNotConfined'
 		return 0
 	end 'bracketedNotConfined'
 
 	return rawClobberMask(op, buf: buf, opFacts: opFacts)
 end 'opClobberMask'
+
+export function opIsBracketed(op TargetOp, heat BlockHeat, buf OperandList, opFacts OpVariantFacts) returns bool
+	return heat == BlockHeat.cold and coldRunOpKind(op, buf: buf, opFacts: opFacts) != ColdRunOpKind.none
+end 'opIsBracketed'
 
 // Every register `op` writes without naming a virtual — its implicit defs plus its physical def
 // operands — whatever the heat: the fact a bracket saves against, where `opClobberMask` is the fact a
@@ -5201,7 +5185,7 @@ end 'rawClobberMask'
 export function confiningImplicitDefsOf(op TargetOp, heat BlockHeat, buf OperandList, opFacts OpVariantFacts) returns RegMask
 	targetOpOperands(op, buf: buf)
 
-	if heat == BlockHeat.cold and coldRunOpKind(op, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'bracketedNotConfined'
+	if opIsBracketed(op, heat: heat, buf: buf, opFacts: opFacts) 'bracketedNotConfined'
 		return 0
 	end 'bracketedNotConfined'
 
@@ -5949,7 +5933,7 @@ function forbidLiveValue(v ValueId, forbidden RegMaskColumn, buf OperandList, cl
 	try forbidden.set(v, value: cur or clobberMask) otherwise panic("forbidLiveValue: forbidden.set OOB")
 end 'forbidLiveValue'
 
-function operandDefinesValue(buf OperandList, v ValueId) returns bool
+module function operandDefinesValue(buf OperandList, v ValueId) returns bool
 	for o in buf 'each'
 		if operandIsDef(o) and operandIsVirtual(o) and operandValueId(o) == v 'match'
 			return true

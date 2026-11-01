@@ -72,12 +72,12 @@ func @stamp {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
-    x64.cmpRegImm32 rsi, 0
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rsi, 255
+    x64.cmpRegImm32 rax, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
@@ -101,18 +101,17 @@ func @stamp {
     x64.cmpRegImm32 rdi, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.storeBaseDispReg.word64 [rcx + 0], rsi
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.jmp tryok
   __im_stride:
     x64.cmpRegImm32 rdi, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.storeBaseDispReg.byte [rcx + 0], rsi
+    x64.storeBaseDispReg.byte [rcx + 0], rax
     x64.jmp tryok
   __im_slow:
     x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.movRegReg rax, rsi
+    x64.movRegReg rdx, rsi
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -262,12 +261,12 @@ func @stamp {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
-    x64.cmpRegImm32 rsi, 0
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rsi, 255
+    x64.cmpRegImm32 rax, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
@@ -291,18 +290,17 @@ func @stamp {
     x64.cmpRegImm32 rdi, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.storeBaseDispReg.word64 [rcx + 0], rsi
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.jmp tryok
   __im_stride:
     x64.cmpRegImm32 rdi, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.storeBaseDispReg.byte [rcx + 0], rsi
+    x64.storeBaseDispReg.byte [rcx + 0], rax
     x64.jmp tryok
   __im_slow:
     x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.movRegReg rax, rsi
+    x64.movRegReg rdx, rsi
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -448,12 +446,12 @@ data {
 func @stamp {
   entry:
     arm64.prologue 16
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.cmp x3, 0
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x3, 255
+    arm64.cmp x2, 255
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
@@ -477,18 +475,17 @@ func @stamp {
     arm64.cmp x4, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.storeBaseDispReg.word64 [x0 + 0], x3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.b tryok
   __im_stride:
     arm64.cmp x4, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.storeBaseDispReg.byte [x0 + 0], x3
+    arm64.storeBaseDispReg.byte [x0 + 0], x2
     arm64.b tryok
   __im_slow:
     arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
+    arm64.movRegReg x1, x3
     arm64.bl __managed_set
     arm64.cmp x9, 0
     arm64.b.ne tryerr
@@ -629,12 +626,12 @@ data {
 func @stamp {
   entry:
     arm64.prologue 16
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.cmp x3, 0
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x3, 255
+    arm64.cmp x2, 255
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
@@ -658,18 +655,17 @@ func @stamp {
     arm64.cmp x4, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.storeBaseDispReg.word64 [x0 + 0], x3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.b tryok
   __im_stride:
     arm64.cmp x4, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.storeBaseDispReg.byte [x0 + 0], x3
+    arm64.storeBaseDispReg.byte [x0 + 0], x2
     arm64.b tryok
   __im_slow:
     arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
+    arm64.movRegReg x1, x3
     arm64.bl __managed_set
     arm64.cmp x9, 0
     arm64.b.ne tryerr

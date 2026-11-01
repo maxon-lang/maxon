@@ -1238,18 +1238,17 @@ func @__sched_steal {
     arm64.cmp x0, 0
     arm64.b.eq sgrab
   spublish:
-    arm64.sub x0, x1, 1
-    arm64.add x1, x22, x0
-    arm64.and x1, x1, 255
+    arm64.sub x1, x1, 1
+    arm64.add x0, x22, x1
+    arm64.and x0, x0, 255
     arm64.add x2, x19, 344
-    arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseIndexScale.word64 x0, [x2 + x0*8 + 0]
+    arm64.cmp x1, 0
     arm64.b.eq sanswer
   spubtail:
     arm64.add x2, x19, 8
-    arm64.arm64AtomicRmw.add x0, [x2], x0
+    arm64.arm64AtomicRmw.add x1, [x2], x1
   sanswer:
-    arm64.movRegReg x0, x1
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -1632,18 +1631,17 @@ func @__sched_steal {
     arm64.cmp x0, 0
     arm64.b.eq sgrab
   spublish:
-    arm64.sub x0, x1, 1
-    arm64.add x1, x22, x0
-    arm64.and x1, x1, 255
+    arm64.sub x1, x1, 1
+    arm64.add x0, x22, x1
+    arm64.and x0, x0, 255
     arm64.add x2, x19, 344
-    arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseIndexScale.word64 x0, [x2 + x0*8 + 0]
+    arm64.cmp x1, 0
     arm64.b.eq sanswer
   spubtail:
     arm64.add x2, x19, 8
-    arm64.arm64AtomicRmw.add x0, [x2], x0
+    arm64.arm64AtomicRmw.add x1, [x2], x1
   sanswer:
-    arm64.movRegReg x0, x1
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

@@ -182,11 +182,22 @@ defs as it passes; a register is free again at the op where its value dies.
 1. the value's fixed-register hint, such as the result register a return moves it into;
 2. the register of its already-coloured copy partner;
 3. the fixed register of a copy partner not yet coloured;
-4. the lowest free register, preferring caller-saved, first avoiding registers the partner is forbidden.
+4. the lowest free register, preferring caller-saved, first avoiding the registers the partner is forbidden and
+   the registers the value and its partner contest.
 
 A hint is taken only if it is free and either in the preferred set — the class's caller-saved registers while
 any is free, otherwise the whole class — or being vacated at this op. Hints come from phi edges, reuse pairs
-and moves into fixed registers (`computeHints`).
+and moves into fixed registers (`computeHints`). A value's fixed hint is its first hot source's register, or
+its first cold source's register when it has no hot source.
+
+**Contested registers.** A value's *contested* mask (`ColorHints.contested`) holds the registers that ops
+inside its live range want: the fixed hint of a value defined while it is live, and the raw clobber mask of a
+cold-run op, which confines nothing but still overwrites the register. A hint of a value defined in a hot
+block counts when its source is a hot use; a value defined in a cold block always counts it. `computeBlockDeaths`
+gathers the masks for every block before colouring starts, because the wants come from later blocks. The mask
+orders the choices of the last step only: the pick takes the lowest free register of the preferred set outside
+the contested registers, then the lowest of the preferred set, then the lowest free register of the class. The
+legal registers and the use of the callee-saved half stay as the `forbidden` masks define them.
 
 **Two-address ops.** On x64, `sub`, `imul` and `neg` overwrite their first input. The colourer gives the def
 its input's register and records a copy (`ReuseCopyPlan`) only if the input is still live after the op.
