@@ -485,7 +485,7 @@ end 'SuitePlan'
 // redundancy is the point: the parent's list is the oracle the answers are checked against. It is
 // also nearly free — parsing nineteen markdown files costs less than one of the compiles it is
 // about to dispatch.
-function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, effectiveTarget Target, includeNetwork bool) returns SuitePlan throws CompileError
+function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns SuitePlan throws CompileError
 	var plans = SpecPlanArray.create()
 	var excluded = ExcludedCaseArray.create()
 	var tally = FilterPatternTally.create(filterPatterns, spellings: filterPatterns)
@@ -496,6 +496,13 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, effecti
 		let parsed = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
 		let specTests = parsed.tests
 		let specName = specPath.stem()
+
+		// Over every case before selection, so no filter or lane hides an owed pin. A `--update-required`
+		// run is exempt: it mints only its own lane, so a new case is minted lane by lane.
+		if not mode.updateRequired 'mintingMayLeaveLanesOwed'
+			requireEveryLanePinned(specTests, specPath: specPath)
+		end 'mintingMayLeaveLanesOwed'
+
 		let selection = selectedTests(specTests, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false)
 
 		for excludedCase in selection.excluded 'eachExcluded'
@@ -1926,7 +1933,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// A worker death is not reproducible on demand, so the exit-status decode is what can be gated.
 	requireWorkerExitDecodeHolds()
 
-	let suitePlan = try buildPlans(specDir, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+	let suitePlan = try buildPlans(specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 	let plans = suitePlan.plans
 
 	if plans.count() == 0 or suitePlan.unmatchedPatterns.count() > 0 'selectsNothing'

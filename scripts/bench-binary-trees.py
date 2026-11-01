@@ -16,9 +16,12 @@ Usage:
 
 Arms:
   --compiler PATH [--label L]   a compiler binary; default arm is the slot compiler, labelled "slot"
-  --ref REF                     a compiler BUILT FROM a git ref, in a cached worktree under
-                                <out-dir>/ref-<sha>/tree, by that tree's own
-                                scripts/fetch-seed.sh and scripts/build-from-seed.sh.
+  --ref REF                     a compiler BUILT FROM a git ref, in a worktree that is deleted
+                                once built, by that tree's own scripts/fetch-seed.sh and
+                                scripts/build-from-seed.sh; the binary and its stdlib/, runtime/
+                                and scriptlib/ are kept under <out-dir>/ref-<sha>/.
+  --keep-refs N                 ref compilers kept in <out-dir>, this run's included (default 8);
+                                the least recently used beyond that are deleted.
 
 A label names an arm's output directory AND its timing list, so two arms may not share one, compared
 case-insensitively - a duplicate is refused before anything is built, because two arms writing one
@@ -115,7 +118,7 @@ def main():
         plan = bench_common.plan_arms(args)
 
         out_dir = os.path.abspath(args.out_dir)
-        os.makedirs(out_dir, exist_ok=True)
+        bench_common.open_output_root(out_dir, args.keep_refs, plan)
         context = bench_common.session_context()
         maxon_arms = [bench_common.build_arm(arm, out_dir, args.source, SOURCE_STEM) for arm in plan]
         bounds = agreed_bounds(maxon_arms)

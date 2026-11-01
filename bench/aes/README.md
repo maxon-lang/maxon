@@ -19,7 +19,7 @@ bench/aes/
   go/clock_windows.go  the Go timing clock on Windows: QueryPerformanceCounter
   go/clock_other.go    the Go timing clock elsewhere, wasip1 included: time.Since
   go/go.mod            the Go module (maxon.dev/bench/aes), which needs Go 1.27 or newer
-  out/                 builds, ref worktrees and profiles (gitignored)
+  out/                 builds, ref compilers and profiles (gitignored)
 tests/examples/bench-aes.maxtest
                        builds aes.maxon and checks every line but the time against Go crypto/aes's
                        output at a small size (correctness only)
@@ -118,8 +118,18 @@ The script needs Python 3 and only the standard library.
   `GOTOOLCHAIN=local`. Each Go variant lands in `out/<lane>/go/`, cached by a hash of `go/`'s sources,
   the `go version` line, the target settings `go env` reports and the build flags.
 - **Maxon is built once per arm** into `out/<lane>/<arm>/`: `slot`, `--ref <sha>` (a compiler built from
-  that commit in a cached worktree under `out/ref-<sha>/`, the way every bench harness builds one), or
-  `--compiler <path> --label <name>`. Each arm compiles its own checkout's `bench/aes/aes.maxon`.
+  that commit, the way every bench harness builds one), or `--compiler <path> --label <name>`. Each arm
+  compiles its own checkout's `bench/aes/aes.maxon`; a `--ref` arm's copy is read from its commit.
+- **A ref's compiler is kept as the binary plus the `stdlib/`, `runtime/` and `scriptlib/` directories
+  it finds by walking up from itself**, in `out/ref-<sha>/`; the worktree it was built in is deleted as
+  soon as it is built. A later run with the same sha reuses it. `--keep-refs N` (default 8) bounds the
+  cache: each run keeps N refs, its own among them, and deletes the least recently used beyond that
+  with their arm directories, and any entry that holds no compiler. `out/` carries a `.maxonignore`,
+  which the VS Code Test Explorer, the language server and `maxon build` skip.
+  `python scripts/bench_common.py bench/aes/out` marks a directory and prunes it without a run. A run
+  holds an OS lock on `out/` for its whole life; a second run on the same `out/` is refused, naming the
+  holder, and takes its own `--out-dir`. `--out-dir` may not be a checkout (a directory holding `.git`)
+  or this repository's root or one of its parents.
 - **Verification.** Every run of every arm must exit 0; a Maxon arm's exit 101 is reported as a LEAK.
   For each workload, every arm must print the same bytes per op, iterations, repeats and digest, and
   every Go arm must print every workload, and so must a Maxon arm unless it is a control compiler built

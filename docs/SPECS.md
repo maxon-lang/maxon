@@ -135,6 +135,16 @@ Three things pin what the compiler emits:
   compared against the COMPILE, so a lane this host cannot run (`--target=arm64-macos` on Windows) still
   checks it. A case carrying any `TargetIr` block always compiles and runs on its own. The cases that pin
   emitted code live in `ir-specs/`.
+
+  A spec that holds any `TargetIr` block is an IR spec, and in one every case that expects a successful compile
+  carries a block for each native lane its `<!-- unsupported-targets: … -->` marker does not exclude. A case
+  short of one is refused when the spec is read, on every host and for whichever lane the run is for, because a
+  lane with no block is a lane nothing gates. The refusal names each case, its missing lanes, and the
+  `--update-required --target=<lane> --filter=<spec>/` run that mints each. A compile-error case renders no
+  Target IR and is exempt. A lane the compiler refuses a successful case on (it answers E3104 there) renders
+  none either, so the case names that lane in its `unsupported-targets` marker. A run with `--update-required`
+  proceeds past an owed lane: it writes the one lane it is for, so the lanes still owed are named by the next
+  plain run.
 - **A `RequiredRuntime` block**, which opts a body the Target IR would otherwise withhold — an emitted
   runtime function, or a `stdlib/` body the program reaches — into the rendering, one name per line.
   `ir-specs/emitted-runtime-body.md` is the subject and the canonical example. It says nothing about the

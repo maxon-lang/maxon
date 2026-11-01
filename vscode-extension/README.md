@@ -201,7 +201,8 @@ when no compiler is found; running them then reports that none was.
 
 Test files are read from disk, and the tree follows them as they are created, saved and deleted. A file
 beneath a directory holding a `.maxonignore` is not listed, because no `maxon test` run compiles it. The
-refresh button in the Test Explorer re-reads every test file.
+refresh button in the Test Explorer re-reads every test file. A rescan that follows a `.maxonignore`
+being added or removed re-reads only the files whose size or modification time changed.
 
 ### Which project a test runs in
 

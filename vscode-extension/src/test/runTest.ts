@@ -3,9 +3,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { runTests } from '@vscode/test-electron';
 import { compilerBinaryName, slotCompilerOf } from '../compilerLocator';
+import { removeWhenReleased } from './processTree';
 
 const PinnedCompilerVariable = 'MAXON_E2E_COMPILER';
 const ServerPathSetting = 'maxon.serverPath';
+const VsCodeCacheDirectory = '.vscode-test';
 
 async function main() {
     try {
@@ -45,8 +47,12 @@ async function main() {
         fs.mkdirSync(path.join(userDataDir, 'User'));
         fs.writeFileSync(path.join(userDataDir, 'User', 'settings.json'), JSON.stringify({ [ServerPathSetting]: compiler }));
 
+        let runFailure: unknown;
         try {
             await runTests({
+                // The library's default cache is under the working directory, so a run started elsewhere
+                // would download Code again.
+                cachePath: path.join(extensionDevelopmentPath, VsCodeCacheDirectory),
                 extensionDevelopmentPath,
                 extensionTestsPath,
                 extensionTestsEnv: inheritedEditorEnv,
@@ -56,8 +62,16 @@ async function main() {
                     `--user-data-dir=${userDataDir}`
                 ]
             });
-        } finally {
-            fs.rmSync(userDataDir, { recursive: true, force: true });
+        } catch (err) {
+            runFailure = err;
+            console.error('The end-to-end run failed');
+            console.error(err);
+        }
+
+        await removeWhenReleased(userDataDir);
+
+        if (runFailure !== undefined) {
+            process.exit(1);
         }
     } catch (err) {
         console.error('Failed to run tests');

@@ -1,10 +1,17 @@
+let PinnedSelfTestLane = "x64-linux"
+
 let PinnedSelfTestSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 function selfTestCase(name String, pinsTargetIr bool, poisonFreed bool) returns SpecTest
 	let expectation = SpecExpectation.run(SpecExitCode.unpinned, stderr: SpecStderr.unpinned, stdout: SpecStdout.unpinned, sectionPins: SpecSectionPinArray.create())
 	let targetIr = SpecTargetIr.pinned("", span: TraceSlice.create(0, blockEnd: 0)) if pinsTargetIr else SpecTargetIr.unpinned(TraceSlice.create(0, blockEnd: 0))
+	var pinnedLanes = TargetKeyArray.create()
 
-	return SpecTest.create(name, source: PinnedSelfTestSource, expectation: expectation, unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, poisonFreed: poisonFreed, traceCapture: SpecTraceCapture.off, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIr: targetIr, pinsTargetIr: pinsTargetIr)
+	if pinsTargetIr 'pinsALane'
+		pinnedLanes.push(PinnedSelfTestLane)
+	end 'pinsALane'
+
+	return SpecTest.create(name, source: PinnedSelfTestSource, expectation: expectation, unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, poisonFreed: poisonFreed, traceCapture: SpecTraceCapture.off, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIr: targetIr, pinnedLanes: pinnedLanes)
 end 'selfTestCase'
 
 export function requireFreedBoxPoisonDecision()

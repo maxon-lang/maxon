@@ -3,7 +3,7 @@ feature: harness-gate-target-ir-remint-past-a-compile-error-case
 ---
 # The target-ir-remint-past-a-compile-error-case gate
 
-The gate appends a wrong host-lane `TargetIr` pin to the last case, so the spec holds a pin; `--update-required` must re-mint it and leave the first case, which expects a compile error and renders no Target IR, unpinned and passing.
+The gate appends a wrong host-lane `TargetIr` pin to the last case, so the spec holds a pin, and a placeholder pin for each other lane beneath that case's marker; `--update-required` must re-mint it and leave the first case, which expects a compile error and renders no Target IR, unpinned and passing.
 
 ## Tests
 

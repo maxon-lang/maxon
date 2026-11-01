@@ -142,20 +142,29 @@ The script runs on Python 3.9 or newer and needs only the standard library.
   `internal/` and `go.mod`, the `go version` line, the target settings `go env` reports (`GOOS`,
   `GOARCH`, `GOAMD64`, `GOARM64`, `GOEXPERIMENT`, `CGO_ENABLED`) and the build flags.
 - **Maxon is built once per arm** into `out/<host>/maxon/<arm>/`: `slot` (the compiler in
-  `maxon-bin/.maxon`), `--ref <sha>` (a compiler built from that commit in a cached worktree,
+  `maxon-bin/.maxon`), `--ref <sha>` (a compiler built from that commit in a worktree,
   `out/ref-<sha>/tree/`, by `scripts/bench_common.py`, which every bench harness shares), or
-  `--compiler <path> --label <name>`. A ref is built the way CI builds it, from the seed its
-  `scripts/seed-tag` pins. When the invoking tree pins the same seed, its `.bootstrap/maxon` is copied
+  `--compiler <path> --label <name>`. The worktree is deleted as soon as the compiler is built; what
+  stays in `out/ref-<sha>/` is the binary and the `stdlib/`, `runtime/` and `scriptlib/` directories it
+  finds by walking up from itself, and a later run with the same sha reuses it. `--keep-refs N`
+  (default 8) bounds the cache: each run keeps N refs, its own among them, and deletes the least
+  recently used beyond that with their arm directories, and any entry that holds no compiler. `out/` carries a
+  `.maxonignore`, which the VS Code Test Explorer, the language server and `maxon build` skip;
+  `python scripts/bench_common.py bench/concurrency/out` marks a directory and prunes it without a run.
+  A run holds an OS lock on `out/` for its whole life; a second run on the same `out/` is refused,
+  naming the holder, and takes its own `--out-dir`. `--out-dir` may not be a checkout (a directory
+  holding `.git`) or this repository's root or one of its parents. A ref is built the way CI builds it,
+  from the seed its `scripts/seed-tag` pins. When the invoking tree pins the same seed, its `.bootstrap/maxon` is copied
   into the worktree; otherwise the worktree's own `scripts/fetch-seed.sh` downloads it, which needs an
   authenticated `gh`. The worktree's own `scripts/build-from-seed.sh` then builds `C1` (staging its
   `scripts/seed-shim/` if the seed refuses the tree) and then `C2`, so the control carries its own runtime.
   It is always built on the host the harness runs on — Windows for `--host wsl`, the Mac for `--host orb` —
   with Git for Windows' `bash` on Windows, and any failure is a build failure (exit 2).
-- **Each arm compiles its own commit's programs.** A `--ref` arm compiles the workloads from its
-  worktree, `out/ref-<sha>/tree/bench/concurrency/<workload>.maxon`; `slot` and `--compiler` arms compile
-  this tree's. Where a workload's source changed between the two commits, an A/B therefore compares two
+- **Each arm compiles its own commit's programs.** A `--ref` arm compiles the workloads as its
+  commit holds them, written to `out/ref-<sha>/sources/bench/concurrency/<workload>.maxon`; `slot` and
+  `--compiler` arms compile this tree's. Where a workload's source changed between the two commits, an A/B therefore compares two
   PROGRAMS, each built by its own compiler, and the session header's `programs:` line names every such
-  workload. A workload the ref's tree does not have is a build failure (exit 2). The Go programs are
+  workload. A workload the ref's commit does not have is a build failure (exit 2). The Go programs are
   always this tree's: they are the oracle every arm's output is checked against.
   Labels compare case-insensitively, two arms with one label are refused, and `go` is reserved for the
   Go arm; each is a usage error (exit 3).

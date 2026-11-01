@@ -47,7 +47,7 @@ SERVER its tests spawn.
 | `docs/` | `maxon test`, under the compiler | `StdlibReferenceDocument` in `stdlib-reference-documents-every-public-api.maxtest` — the document it reads; it spawns nothing, and reads `stdlib/` through `StdlibDir` |
 | `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
 | `warmRebuild/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the `verify-warm-rebuild` driver whose properties are under test |
-| `targets/` | `maxon test`, under the compiler | `TargetsTablePath` in `TargetsHarness.maxon` — the table it reads; one case spawns the compiler under test (`TestedCompilerStem`) for its `--target` refusal |
+| `targets/` | `maxon test`, under the compiler | `TargetsTablePath` in `support/TargetsTable.maxon` — the table it reads; one case spawns the compiler under test (`TestedCompilerStem`) for its `--target` refusal |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler and
@@ -69,6 +69,7 @@ tests/
     ScratchNames.maxon           `scratchNameProbe`, `mintedScratchName`, `debugStreamSegmentPrefix`: the scratch-name probe below, built from the checkout's `maxon-bin/Run/ScratchName.maxon`
     scratch-name/main.maxon.fixture   the probe program: `mint` prints a name for given fields, any other word runs one check - stored name only, see rule 1
     OutsideCheckout.maxon        directories under the host's temp area, outside any checkout
+    TargetsTable.maxon           `tableTargets`, `nativeTargets`: the columns of `maxon-bin/targets.tsv`, read by header name
     LibraryTier.maxon            `stagedLibraryTierCompiler`, `builtLibraryTierFixture`
     Text.maxon                   the folds of a captured stream and the readers of a printed number, `joined`, `compareBytes`, `checkoutDocumentText`, `sectionOf`
     StagedSource.maxon           `anchorLine`, `sourceColumnOf`, `linesOfStagedSource`, `buildStagedSource`, `builtTestBinary`, `sidecarOf`
@@ -183,6 +184,7 @@ tests/
     byte-identical-debug-info.maxtest       the sidecar never decides an instruction, so the image is the same with and without it
     byte-identical-debug-info-under-inlining.maxtest      a program full of spliced bodies with folded and dead locals builds the same image with and without its sidecar
     dump-info-sections.maxtest              a word that is not a section is refused by name, and a real list prints only itself
+    every-function-entry-is-aligned-on-every-native-target.maxtest   every function the sidecar lists starts on its target's entry boundary (x64 32, arm64 16), and the image's `.text` begins on one
     sidecar-local-types.maxtest             every local of a two-file program is described under its own type
     sidecar-local-live-range.maxtest        a local row is scoped to the code it is live over
     sidecar-no-local-is-live-across-the-prologue.maxtest      a local of a parameterless function is placed from its first instruction on
@@ -642,7 +644,6 @@ tests/
     a-member-of-a-non-public-extension-belongs-to-the-extended-type.maxtest               a `public` member of an `extension` is owned by the extended type whatever the extension's own modifier
     each-shared-harness-helper-is-defined-once.maxtest       every `public function` in `tests/support/*.maxon` is declared by that one file and by no other `.maxon` or `.maxtest` under `tests/`
   targets/
-    TargetsHarness.maxon                                             the shared half: the columns of `maxon-bin/targets.tsv`, read by header name
     the-compiler-accepts-exactly-the-targets-the-table-lists.maxtest     `--target`'s refusal lists the table's `target` column, in its order
     fetch-vendor-pins-every-tool-for-every-native-target.maxtest         `scripts/fetch-vendor.sh` has a URL and a hash for every tool on exactly the native targets
     no-workflow-or-installer-spells-a-target.maxtest                     no `.github/workflows/*.yml` line and no installer line names a target the table lists
@@ -675,8 +676,7 @@ import — and `debug/DebugHarness.maxon`, `debug/ImageIdentity.maxon`, `dap/Dap
 `coverage/CoverageHarness.maxon`, `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`,
 `cli/CliHarness.maxon`, `define/DefineHarness.maxon`, `buildManifest/BuildManifestHarness.maxon`,
 `examples/ExamplesHarness.maxon`, `warmRebuild/WarmRebuildHarness.maxon`,
-`emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon`, `mcp/McpHarness.maxon` and
-`targets/TargetsHarness.maxon` are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
+`emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon` and `mcp/McpHarness.maxon` are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
 as helpers. That follows from the rule's own reason: the hazard above is `fmt` rewriting an ORACLE, and
 these corpora keep their oracles elsewhere — `lsp/`'s are `b"…"` byte literals inside its test files,
 `examples/`'s are string constants inside its case files, and the rest assert properties. A helper that
@@ -818,7 +818,7 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   a live-network case left out of a default run and named, an `alone` case run with nothing beside it, a
   run that writes no `fragments/` directory and speaks of no golden, a `TargetIr` pin that fails its case
   when it differs and that `--update-required` replaces or adds without asking a compile-error case for
-  one, plain run cases that batch into programs
+  one and that a run with `--update-required` mints while lanes are still owed, plain run cases that batch into programs
   by type name and keep their own names, a case declaring a module `var` and a case spawning a service
   kept in separate programs, a case keeping a function in a module `var` and a case holding closures in a
   record kept in separate programs, a case declaring a conformer with a file-private cursor and a case

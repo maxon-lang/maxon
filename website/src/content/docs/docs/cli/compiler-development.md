@@ -38,7 +38,11 @@ case is compiled inside this process, so the compiler under test is the executab
 The run prints one line per test, then `N passed, M failed`, the line `N run case(s) ran batched in M
 program(s); K ran alone`, and lines for skipped and not-run cases. A case whose spec carries a
 `TargetIr:<lane>` block for the lane being run fails when the Target IR the compiler renders differs from
-the block, and the failure shows the first differing line. The Target IR suite lives in its own
+the block, and the failure shows the first differing line. A spec that holds any `TargetIr` block must give
+every case that compiles a block for each native lane the case is not excluded from: a plain run refuses the
+spec otherwise, naming the case, the lanes it lacks and the `--update-required --target=<lane>` run that mints
+each, while a run with `--update-required` proceeds and mints the lane it is for. A lane the compiler refuses
+the case on is named in the case's `unsupported-targets` marker. The Target IR suite lives in its own
 directory, `maxon spec-test ir-specs`.
 
 Every worker starts from the [library cache](/docs/cli/#the-library-cache). After the summary, the run prints

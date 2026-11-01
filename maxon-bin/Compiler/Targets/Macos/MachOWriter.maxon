@@ -1215,7 +1215,8 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let loadCommandsSize = SegmentCommandBaseSize + textCmdSize + dataCmdSize + SegmentCommandBaseSize + SymtabCommandSize + DysymtabCommandSize + DylinkerCommandSize + MainCommandSize + UuidCommandSize + dylibCommandsSize + BuildVersionCommandSize + SourceVersionCommandSize + ChainedFixupsCommandSize + ExportsTrieCommandSize + CodeSignatureCommandSize
 
 	// --- __TEXT layout: __text only ---
-	let textSectionOffset = alignUp(MachHeaderSize + loadCommandsSize, alignment: 4)
+	let textAlignment = functionEntryAlignment(target.cpu)
+	let textSectionOffset = alignUp(MachHeaderSize + loadCommandsSize, alignment: textAlignment)
 	let imageBase = MachoTextVmAddr as MachineWord
 	let textSectionVmAddr = imageBase + (textSectionOffset as MachineWord)
 	let textSegmentFileSize = alignUp(textSectionOffset + codeSize as BytePos, alignment: MachoPageSize)
@@ -1323,7 +1324,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 
 	// __TEXT — __text only (rdata has moved to __DATA).
 	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MachoTextVmAddr, vmsize: textSegmentFileSize as MachineWord, fileoff: 0, filesize: textSegmentFileSize as MachineWord, maxprot: VmProtRead or VmProtExecute, initprot: VmProtRead or VmProtExecute, nsects: textSectionCount)
-	writeMachoSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVmAddr, size: codeSize as MachineWord, offset: textSectionOffset as MachineWord, alignLog2: 2, flags: SAttrPureInstructions or SAttrSomeInstructions or SRegular)
+	writeMachoSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVmAddr, size: codeSize as MachineWord, offset: textSectionOffset as MachineWord, alignLog2: log2OfPowerOfTwo(textAlignment as MachineWord) as MachineWord, flags: SAttrPureInstructions or SAttrSomeInstructions or SRegular)
 
 	// __DATA — __const (rebased rdata) | __got | __data (globals) | __symtab (interned names).
 	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVmAddr, vmsize: dataSegmentFileSize as MachineWord, fileoff: dataSegmentFileOff as MachineWord, filesize: dataSegmentFileSize as MachineWord, maxprot: VmProtRead or VmProtWrite, initprot: VmProtRead or VmProtWrite, nsects: dataSectionCount)

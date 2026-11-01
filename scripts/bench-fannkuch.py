@@ -17,10 +17,13 @@ Usage:
 
 Arms:
   --compiler PATH [--label L]   a compiler binary; default arm is the slot compiler, labelled "slot"
-  --ref REF                     a compiler BUILT FROM a git ref, in a cached worktree under
-                                bench/fannkuch/out/ref-<sha>/tree, by that tree's own
-                                scripts/fetch-seed.sh and scripts/build-from-seed.sh.
+  --ref REF                     a compiler BUILT FROM a git ref, in a worktree that is deleted
+                                once built, by that tree's own scripts/fetch-seed.sh and
+                                scripts/build-from-seed.sh; the binary and its stdlib/, runtime/
+                                and scriptlib/ are kept under bench/fannkuch/out/ref-<sha>/.
                                 A control arm for an A/B is `--ref <pre-change-sha>`.
+  --keep-refs N                 ref compilers kept in out/, this run's included (default 8); the
+                                least recently used beyond that are deleted.
 
 A label names an arm's output directory AND its timing list, so labels are compared
 case-insensitively, a duplicate is refused before anything is built, and `C` is reserved for the C
@@ -199,13 +202,13 @@ def main():
         if args.no_c and args.n not in EXPECTED:
             raise bench_common.UsageFailure(f"n={args.n} has no expected output and --no-c removes the oracle")
 
-        os.makedirs(out_dir, exist_ok=True)
         census = load_census()
         context = bench_common.session_context()
 
         # Ref arms first: an A/B's control is the pre-change ref, and the self-compile band is
         # measured against the FIRST arm.
         plan = bench_common.plan_arms(args, allow_no_arms=not args.no_c, reserved_labels=(C_LABEL,))
+        bench_common.open_output_root(out_dir, args.keep_refs, plan)
 
         c_exe = clang_line = None
         if not args.no_c:

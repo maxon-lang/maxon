@@ -1,0 +1,57 @@
+let MintOwesSpecName = "mint-owes-lanes"
+let MintOwesSpecFileName = "mint-owes-lanes.md"
+let MintOwesCase = "mint-owes-lanes.fresh"
+let MintOwesFilter = "--filter=mint-owes-lanes/"
+let TargetFlagPrefix = "--target="
+let MintOwesRefusalHeadline = "has no pin for"
+
+test 'update-required mints the host lane of a spec still owing other lanes, and the next plain run is refused naming each owed lane'
+	let staged = stagedGateFixture()
+	let specPath = staged.join(MintOwesSpecFileName)
+	plantBogusTargetIrPin(specPath)
+
+	var arguments = StringArray.create()
+	arguments.push(UpdateRequiredFlag)
+	arguments.push(MintOwesFilter)
+
+	let mint = runSpecTest(staged, includeNetwork: false, extraArguments: arguments)
+	let written = fileText(specPath)
+	let plain = runSpecTest(staged, includeNetwork: false)
+	discardOutsideCheckoutDir(staged)
+
+	let said = "The file now reads:\n{written}\nThe minting run said:\n{everythingSaid(mint)}\nThe plain run said:\n{everythingSaid(plain)}"
+	let refusal = everythingSaid(plain)
+	var broken = StringArray.create()
+
+	collectNotPassed(everythingSaid(mint), specName: MintOwesSpecName, testNames: [MintOwesCase], broken: broken)
+
+	if mint.exitCode() != SuccessExitCode 'mintRefused'
+		broken.push("the run with `{UpdateRequiredFlag}` exited {mint.exitCode()}: a minting run must not be refused for the lanes it leaves owed. {said}\n")
+	end 'mintRefused'
+
+	if written.contains(PlantedTargetIrLine) 'plantSurvived'
+		broken.push("the planted line '{PlantedTargetIrLine}' survived the mint. {said}\n")
+	end 'plantSurvived'
+
+	if plain.exitCode() == SuccessExitCode 'plainAccepted'
+		broken.push("the plain run exited {SuccessExitCode} over a spec that pins only {hostLaneName()}. {said}\n")
+	end 'plainAccepted'
+
+	if not refusal.contains("test '{MintOwesCase}' {MintOwesRefusalHeadline} ") 'caseUnnamed'
+		broken.push("the refusal does not name '{MintOwesCase}' and say it '{MintOwesRefusalHeadline}' a lane. {said}\n")
+	end 'caseUnnamed'
+
+	for lane in otherNativeLanes() 'eachOwedLane'
+		let fix = "{UpdateRequiredFlag} {TargetFlagPrefix}{lane} {MintOwesFilter}"
+
+		if not refusal.contains(fix) 'fixUnnamed'
+			broken.push("the refusal does not give the run that mints {lane}: '{fix}'. {said}\n")
+		end 'fixUnnamed'
+	end 'eachOwedLane'
+
+	if refusal.contains("{TargetFlagPrefix}{hostLaneName()} ") 'hostLaneAsked'
+		broken.push("the refusal asks for the lane the mint already wrote, {hostLaneName()}. {said}\n")
+	end 'hostLaneAsked'
+
+	requireNothingBroken(broken, headline: "`{UpdateRequiredFlag}` is not refused for the lanes a spec still owes, and a plain run is")
+end 'update-required mints the host lane of a spec still owing other lanes, and the next plain run is refused naming each owed lane'

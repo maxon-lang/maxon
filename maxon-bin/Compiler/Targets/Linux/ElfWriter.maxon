@@ -84,12 +84,10 @@ let ElfStbGlobal = 1
 let ElfSttFunc = 2
 let ElfStInfoBindShift = 4
 
-// Section alignments advertised in the section header table (`sh_addralign`). `.text` starts on a
-// BRANCH WINDOW: the x64 encoder pads every branch unit so none crosses or ends on a 32-byte boundary,
-// computed from `.text`-relative offsets, and that arithmetic holds in the loaded image only if `.text`
-// itself begins on one (the load address is page-aligned, so file offset and address agree modulo the
-// window). The data sections ride the 8-byte section cursor; the string tables are unaligned byte streams.
-let ElfTextAlign = BranchWindowBytes
+// Section alignments advertised in the section header table (`sh_addralign`). `.text` advertises
+// `functionEntryAlignment` and `writeElf` pads it up to that, so file offset and address agree modulo
+// it (the load address is page-aligned). The data sections ride the 8-byte section cursor; the string
+// tables are unaligned byte streams.
 let ElfStrtabAlign = 1
 
 // `.symtab`'s `sh_info` is the index of the first NON-local symbol. Every function symbol is emitted
@@ -337,12 +335,13 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	let headerSize = ElfHeaderSize + programHeaderCount * ElfProgramHeaderSize
 
 	// --- Segment 1 (R+X): headers | .text | .rodata ---
-	// `.text` is PADDED up from the end of the program headers to `ElfTextAlign`, so the section header's
+	// `.text` is PADDED up from the end of the program headers to `textAlignment`, so the section header's
 	// `sh_addralign` is a property this writer establishes rather than a claim about `64 + n*56`. The
 	// segment maps from file offset 0, so the pad is part of the image and `textVAddr` stays congruent
 	// with the file offset modulo the page, as a PT_LOAD requires.
-	let textFileOffset = headerSize + (ElfTextAlign - headerSize mod ElfTextAlign) mod ElfTextAlign
-	let textVAddr = ElfLoadAddr + textFileOffset
+	let textAlignment = functionEntryAlignment(target.cpu)
+	let textFileOffset = alignUp(headerSize, alignment: textAlignment)
+	let textVAddr = ElfLoadAddr + (textFileOffset as MachineWord)
 	let rodataFileOffset = textFileOffset + alignUp(codeSize as BytePos, alignment: ElfSectionAlign)
 	let rodataVAddr = ElfLoadAddr + rodataFileOffset
 	let codeSegmentSize = rodataFileOffset + rdataSize as BytePos
@@ -360,7 +359,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// asserts the stub leads `.text`), read from the CodeResult exactly as MachOWriter reads it for
 	// `LC_MAIN.entryoff` — NOT derived positionally from the header size, which would silently assume
 	// a layout this writer does not control.
-	let entryPoint = textVAddr + codeResult.mainCallFixupOffset
+	let entryPoint = textVAddr + (codeResult.mainCallFixupOffset as MachineWord)
 
 	compilerLogger(CompilerLogGroup.binary).info("Code size: {codeSize} bytes, rodata: {rdataSize} bytes, data: {preludeSize} bytes, entry point: {entryPoint}")
 
@@ -394,7 +393,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	elf.reserve(dataFileOffset + dataSegmentSize)
 
 	// === Elf64_Ehdr (64 bytes) ===
-	writeElfFileHeader(elf, elfMachine: elfMachine, entryPoint: entryPoint as MachineWord, programHeaderCount: programHeaderCount)
+	writeElfFileHeader(elf, elfMachine: elfMachine, entryPoint: entryPoint, programHeaderCount: programHeaderCount)
 
 	// === Program headers ===
 	// Segment 1 maps from file offset 0, so it covers the ELF header and these program headers too —
@@ -415,7 +414,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// while the segment's floor is a loader concern (see `ElfDataSegmentMinBytes`). The padding
 	// between them stays inside the segment and outside the section, exactly as Mach-O's page padding
 	// sits outside `__DATA,__data`.
-	writeElfTrailingSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset, codeSize: codeSize as BytePos, rodataVAddr: rodataVAddr as MachineWord, rodataFileOffset: rodataFileOffset as MachineWord, rdataSize: rdataSize as BytePos, dataVAddr: dataVAddr as MachineWord, dataFileOffset: dataFileOffset as MachineWord, dataSize: preludeSize as BytePos, shoffFieldOffset: ElfShoffFieldOffset as ByteOffset, shentsizeFieldOffset: ElfShentsizeFieldOffset as ByteOffset, shnumFieldOffset: ElfShnumFieldOffset as ByteOffset, shstrndxFieldOffset: ElfShstrndxFieldOffset as ByteOffset)
+	writeElfTrailingSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset as MachineWord, textAlignment: textAlignment, codeSize: codeSize as BytePos, rodataVAddr: rodataVAddr as MachineWord, rodataFileOffset: rodataFileOffset as MachineWord, rdataSize: rdataSize as BytePos, dataVAddr: dataVAddr as MachineWord, dataFileOffset: dataFileOffset as MachineWord, dataSize: preludeSize as BytePos, shoffFieldOffset: ElfShoffFieldOffset as ByteOffset, shentsizeFieldOffset: ElfShentsizeFieldOffset as ByteOffset, shnumFieldOffset: ElfShnumFieldOffset as ByteOffset, shstrndxFieldOffset: ElfShstrndxFieldOffset as ByteOffset)
 
 	// `mode` is NOT optional. PeWriter omits it because Windows derives executability from the file's
 	// contents; every POSIX loader derives it from the mode bits, and a file written without them
@@ -442,7 +441,7 @@ end 'writeElf'
 // `.rodata`, `.data`, the optional `.symdata`, the optional `.symtab`/`.strtab` pair, and finally
 // `.shstrtab`. Only `.text`'s index (every function symbol's `st_shndx`), `.strtab`'s (`.symtab`'s
 // `sh_link`) and `.shstrtab`'s are ever referenced, so the rest stay implicit in the write order.
-function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAddr MachineWord, textFileOffset MachineWord, codeSize BytePos, rodataVAddr MachineWord, rodataFileOffset MachineWord, rdataSize BytePos, dataVAddr MachineWord, dataFileOffset MachineWord, dataSize BytePos, shoffFieldOffset ByteOffset, shentsizeFieldOffset ByteOffset, shnumFieldOffset ByteOffset, shstrndxFieldOffset ByteOffset)
+function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAddr MachineWord, textFileOffset MachineWord, textAlignment BytePos, codeSize BytePos, rodataVAddr MachineWord, rodataFileOffset MachineWord, rdataSize BytePos, dataVAddr MachineWord, dataFileOffset MachineWord, dataSize BytePos, shoffFieldOffset ByteOffset, shentsizeFieldOffset ByteOffset, shnumFieldOffset ByteOffset, shstrndxFieldOffset ByteOffset)
 	let symbolCount = codeResult.debugSymbols.count()
 	let symdataSize = codeResult.symdata.count()
 	let hasSymbols = symbolCount > 0
@@ -559,7 +558,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	padTo(elf, size: sectionHeaderTableOffset)
 
 	writeElfSectionHeader(elf, nameOffset: 0, sectionType: ElfShtNull, flags: 0, addr: 0, fileOffset: 0, size: 0, link: 0, info: 0, addralign: 0, entsize: 0)
-	writeElfSectionHeader(elf, nameOffset: textNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: ElfShfAlloc or ElfShfExecinstr, addr: textVAddr, fileOffset: textFileOffset, size: codeSize as MachineWord, link: 0, info: 0, addralign: ElfTextAlign, entsize: 0)
+	writeElfSectionHeader(elf, nameOffset: textNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: ElfShfAlloc or ElfShfExecinstr, addr: textVAddr, fileOffset: textFileOffset, size: codeSize as MachineWord, link: 0, info: 0, addralign: textAlignment as MachineWord, entsize: 0)
 
 	if hasRodata 'rodataShdr'
 		writeElfSectionHeader(elf, nameOffset: rodataNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: ElfShfAlloc, addr: rodataVAddr, fileOffset: rodataFileOffset, size: rdataSize as MachineWord, link: 0, info: 0, addralign: ElfSectionAlign, entsize: 0)

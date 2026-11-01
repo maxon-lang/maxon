@@ -1956,6 +1956,11 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let codeSizeAligned = alignUp(codeSize as BytePos, alignment: FileAlignment)
 	let codeSizeVirtual = alignUp(codeSize as BytePos, alignment: SectionAlignment)
 	let textRva = SectionAlignment
+	let entryAlignment = functionEntryAlignment(target.cpu)
+
+	if (textRva and (entryAlignment - 1)) != 0 'textOffEntryBoundary'
+		panic("writePe: .text is at RVA {textRva}, which is not on the {entryAlignment}-byte boundary its function entries are laid out on — a function aligned within .text would not be aligned in the loaded image")
+	end 'textOffEntryBoundary'
 
 	// .rdata (optional)
 	let rdataRva = textRva + codeSizeVirtual

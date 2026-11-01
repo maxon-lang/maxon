@@ -10,8 +10,10 @@ import { registerSpecTestController } from './specTestController';
 import { appendRunOutput, childList, pipeLines } from './testItems';
 import {
 	debuggedTestVerdict,
+	fileStamp,
 	isIgnoredDirectory,
 	isTestFileName,
+	isUnchangedSince,
 	listedTestFor,
 	parseTestDeclarations,
 	parseTestListDocument,
@@ -42,7 +44,18 @@ const FILTER_FLAG = '--filter=';
 const LIST_FLAG = '--list';
 const BUILD_FLAG = '--build';
 const SELECT_FLAG = '--select=';
+const DISCOVERY_CHUNK_FILES = 200;
 const NOT_LISTED_MESSAGE = 'maxon test did not list this test. It compiles the files as saved on disk, so a test that is unsaved or was renamed is not among them.';
+
+interface DiscoveryScan {
+	ignoredDirectories: Map<string, boolean>;
+	rereadAll: boolean;
+}
+
+interface QueuedDiscovery {
+	rereadAll: boolean;
+	done: Promise<void>;
+}
 
 interface DeclaredTestItem {
 	file: string;
@@ -86,19 +99,28 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 	const controller = vscode.tests.createTestController('maxonTests', 'Maxon Tests');
 	const fileItems = new Map<string, vscode.TestItem>();
 	const declared = new Map<string, DeclaredTestItem>();
+	const stamps = new Map<string, string>();
 
-	function syncFile(uri: vscode.Uri): void {
+	function syncFile(uri: vscode.Uri, scan?: DiscoveryScan): void {
 		const file = uri.fsPath;
 		const folder = vscode.workspace.getWorkspaceFolder(uri);
 
 		// `maxon test` never compiles a file beneath a `.maxonignore`, so it has no tests to show.
-		if (!folder || !isTestFileName(file) || isIgnoredDirectory(path.dirname(file))) {
+		if (!folder || !isTestFileName(file) || isIgnoredDirectory(path.dirname(file), scan?.ignoredDirectories)) {
 			removeFile(uri);
 			return;
 		}
 
+		const key = pathKey(file);
 		let content: string;
+		let version: fs.Stats;
 		try {
+			version = fs.statSync(file);
+
+			// A rescan must not re-read every test file. Only a watcher event or an explicit refresh
+			// (`rereadAll`) forces a re-read.
+			if (scan && !scan.rereadAll && fileItems.has(key) && isUnchangedSince(stamps.get(key), version)) return;
+
 			content = fs.readFileSync(file, 'utf8');
 		} catch (err) {
 			log(`Could not read ${file}: ${err}`);
@@ -106,11 +128,11 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 			return;
 		}
 
-		let fileItem = fileItems.get(pathKey(file));
+		let fileItem = fileItems.get(key);
 		if (!fileItem) {
 			fileItem = controller.createTestItem(uri.toString(), vscode.workspace.asRelativePath(uri, true), uri);
 			controller.items.add(fileItem);
-			fileItems.set(pathKey(file), fileItem);
+			fileItems.set(key, fileItem);
 		}
 
 		const children: vscode.TestItem[] = [];
@@ -128,6 +150,10 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 			if (!kept.has(stale.id)) declared.delete(stale.id);
 		}
 		fileItem.children.replace(children);
+
+		// Recorded only after the children are replaced, so a parse that throws is retried by the next
+		// scan.
+		stamps.set(key, fileStamp(version));
 	}
 
 	function removeFile(uri: vscode.Uri): void {
@@ -138,31 +164,63 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		for (const child of childList(fileItem)) declared.delete(child.id);
 		controller.items.delete(fileItem.id);
 		fileItems.delete(key);
+		stamps.delete(key);
 	}
 
-	async function discoverAll(): Promise<void> {
+	async function scanWorkspace(rereadAll: boolean): Promise<void> {
 		const uris = await vscode.workspace.findFiles(TestFileGlob);
 		const found = new Set(uris.map(uri => pathKey(uri.fsPath)));
 
 		for (const [key, item] of [...fileItems]) {
 			if (!found.has(key) && item.uri) removeFile(item.uri);
 		}
-		for (const uri of uris) syncFile(uri);
+
+		const scan: DiscoveryScan = { ignoredDirectories: new Map<string, boolean>(), rereadAll };
+		// Yielding between chunks keeps a cold scan of a large workspace from freezing the extension
+		// host.
+		for (let first = 0; first < uris.length; first += DISCOVERY_CHUNK_FILES) {
+			for (const uri of uris.slice(first, first + DISCOVERY_CHUNK_FILES)) syncFile(uri, scan);
+
+			await new Promise<void>(resolve => setImmediate(resolve));
+		}
 
 		log(`Discovered ${declared.size} test(s) across ${fileItems.size} test file(s)`);
 	}
 
-	controller.refreshHandler = () => discoverAll();
-	discoverAll().catch(err => log(`Test discovery failed: ${err}`));
+	// Scans run one after another and at most one waits. A request joining the waiting scan keeps
+	// `rereadAll` if either caller asked for it, so a refresh storm costs one forced scan, and a
+	// refresh resolves only after a complete scan that started once it was asked.
+	let lastScan: Promise<void> = Promise.resolve();
+	let queuedScan: QueuedDiscovery | undefined;
+
+	function discoverAll(rereadAll: boolean): Promise<void> {
+		if (queuedScan) {
+			queuedScan.rereadAll = queuedScan.rereadAll || rereadAll;
+			return queuedScan.done;
+		}
+
+		const queued: QueuedDiscovery = { rereadAll, done: Promise.resolve() };
+		queued.done = lastScan.then(() => {
+			queuedScan = undefined;
+			return scanWorkspace(queued.rereadAll);
+		});
+		queuedScan = queued;
+		lastScan = queued.done.catch(() => undefined);
+
+		return queued.done;
+	}
+
+	controller.refreshHandler = () => discoverAll(true);
+	discoverAll(false).catch(err => log(`Test discovery failed: ${err}`));
 
 	const testFileWatcher = vscode.workspace.createFileSystemWatcher(TestFileGlob);
-	testFileWatcher.onDidCreate(syncFile);
-	testFileWatcher.onDidChange(syncFile);
+	testFileWatcher.onDidCreate(uri => syncFile(uri));
+	testFileWatcher.onDidChange(uri => syncFile(uri));
 	testFileWatcher.onDidDelete(removeFile);
 
 	// A marker added or removed changes which test files any compile can see.
 	const ignoreMarkerWatcher = vscode.workspace.createFileSystemWatcher(IGNORE_MARKER_GLOB, false, true, false);
-	const rediscover = () => { discoverAll().catch(err => log(`Test discovery failed: ${err}`)); };
+	const rediscover = () => { discoverAll(false).catch(err => log(`Test discovery failed: ${err}`)); };
 	ignoreMarkerWatcher.onDidCreate(rediscover);
 	ignoreMarkerWatcher.onDidDelete(rediscover);
 

@@ -122,6 +122,22 @@ export function padTo(buf ByteArray, size BytePos, fill Byte = 0)
 	end 'pad'
 end 'padTo'
 
+export function padToAlignment(buf ByteArray, alignment BytePos, fill Byte = 0)
+	padTo(buf, size: alignUp(buf.count() as BytePos, alignment: alignment), fill: fill)
+end 'padToAlignment'
+
+// The boundary every function entry is laid out on. Without one, an entry's address modulo the fetch
+// group is set by the size of all the code before it, so an edit that touches nothing on a hot path
+// can change how fast it runs. Each image writer starts `.text` on this boundary too: an offset aligned
+// within `.text` is aligned in the loaded image only then.
+export function functionEntryAlignment(cpu CpuArch) returns BytePos
+	return match cpu 'cpu'
+		x64 gives BranchWindowBytes as BytePos
+		arm64 gives Arm64FunctionEntryAlignment as BytePos
+		wasm32 panic("functionEntryAlignment: wasm32 places no native function entries")
+	end 'cpu'
+end 'functionEntryAlignment'
+
 // Raised when a byte-reader would run past the end of its buffer. Readers
 // deserialize data that may be CORRUPT or TRUNCATED (e.g. a damaged on-disk
 // cache file), so an out-of-range read is a recoverable condition the caller

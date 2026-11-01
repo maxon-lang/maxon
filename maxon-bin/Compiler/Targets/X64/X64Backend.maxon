@@ -3165,7 +3165,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		// Every chunk starts on a branch-window boundary, so the window `emitFunctionChunk` placed a jump
 		// in by chunk-local offset is the window its final address falls in. The gap is `int3`, so a stray
 		// jump into it traps rather than sliding into the next function.
-		padTo(code, size: alignUp(code.count() as BytePos, alignment: BranchWindowBytes), fill: OpcodeInt3)
+		padToAlignment(code, alignment: functionEntryAlignment(project.target.cpu), fill: OpcodeInt3)
 		let funcStart = code.count()
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart as CodeOffset, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
@@ -3211,14 +3211,14 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	// depends on it: a second claim on the label would move that bound and silently mis-size every
 	// backtrace, so it claims its label through the same door as every chunk. It is data, so it has no
 	// `debugSymbols` entry; one would let a walk symbolize a stray return address into the table.
-	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
+	padToAlignment(code, alignment: SymbolTableAlignment)
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
 	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, roster: project.shadowRoster))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in.
-	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
+	padToAlignment(code, alignment: SymbolTableAlignment)
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildInlineFrameTableBytes(inlineFrames, roster: project.shadowRoster))
 

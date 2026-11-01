@@ -64,6 +64,8 @@ export let Arm64AsyncPreemptResumeReg = Arm64Register.x15
 // x18 is where it must stop rather than a number the list restates.
 export let Arm64PlatformRegister = 18
 
+export let Arm64FunctionEntryAlignment = 16
+
 // The IP scratch registers (x16/x17) — never in the allocatable pool, so the encoder clobbers them
 // freely for immediate materialisation, the `xchg` cycle-break and the ADRP scratch of a float load.
 let Arm64Ip0 = 16
@@ -3037,6 +3039,9 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	var labelsLaid = 0 as EntryCount
 
 	for chunk in chunks 'eachChunk'
+		// The gap is zero words, which decode as `udf #0`, so a stray jump into it traps rather than
+		// sliding into the next function.
+		padToAlignment(code, alignment: functionEntryAlignment(project.target.cpu))
 		let funcStart = code.count()
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart as CodeOffset, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
@@ -3087,7 +3092,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	// depends on it: a second claim on the label would move that bound and silently mis-size every
 	// backtrace, so it claims its label through the same door as every chunk. It is data, so it has no
 	// `debugSymbols` entry; one would let a walk symbolize a stray return address into the table.
-	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
+	padToAlignment(code, alignment: SymbolTableAlignment)
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
 	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, roster: project.shadowRoster))
@@ -3095,7 +3100,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in; x64's
 	// concat lays them out the same way.
-	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
+	padToAlignment(code, alignment: SymbolTableAlignment)
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildInlineFrameTableBytes(inlineFrames, roster: project.shadowRoster))
 

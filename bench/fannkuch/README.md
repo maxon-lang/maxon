@@ -65,11 +65,21 @@ read), runs every binary interleaved after one warm-up, verifies stdout and the 
 (exit 101 is reported as a LEAK, and no row is written on any failure), and prints min / median / max
 per arm with the ratio against C, the emitted-code census of each Maxon binary, and with `--profile`
 the `maxon profile run` hot-function table. `--note` appends a row per Maxon arm to
-`docs/fannkuch-benchmark-log.md`. `--ref <sha>` builds a compiler from that commit in a cached
-worktree under `out/ref-<sha>/` with that worktree's own `scripts/fetch-seed.sh` and
+`docs/fannkuch-benchmark-log.md`. `--ref <sha>` builds a compiler from that commit in a worktree under
+`out/ref-<sha>/tree/` with that worktree's own `scripts/fetch-seed.sh` and
 `scripts/build-from-seed.sh` (seed → `C1` → `C2`, as CI builds it), which is how a control arm is made.
+The worktree is deleted as soon as it is built; `out/ref-<sha>/` keeps the binary and the `stdlib/`,
+`runtime/` and `scriptlib/` directories it finds by walking up from itself, and a later run with the
+same sha reuses it. `--keep-refs N` (default 8) keeps N refs, the run's own among them, and deletes the
+least recently used beyond that.
 
-`out/` is gitignored. The `/fannkuch-iterate` skill is the procedure that drives one round.
+`out/` is gitignored and carries a `.maxonignore`, which the VS Code Test Explorer, the language
+server and `maxon build` skip; `python scripts/bench_common.py bench/fannkuch/out` marks and prunes a
+directory without a run. A run holds an OS lock on `out/` for its whole life; a second run on the same
+`out/` is refused, naming the holder, and takes its own `--out-dir`. `--out-dir` may not be a checkout
+(a directory holding `.git`) or this repository's root or one of its parents.
+
+The `/fannkuch-iterate` skill is the procedure that drives one round.
 
 ## Census before and after the rewrite (same slot compiler, 2026-09-08)
 

@@ -40,6 +40,7 @@ ORB_MAC_MOUNT = "/mnt/mac"
 ORB_ARCHITECTURE = "aarch64"
 GUEST_STAGE_DIR = os.path.join(".cache", "maxon-bench-concurrency")
 CONTEXT_FILE = "context.json"
+MAXON_ARMS_DIR_NAME = "maxon"
 
 TIME_PROGRAM = "/usr/bin/time"
 WSL_LAUNCHER = "wsl.exe"
@@ -308,23 +309,21 @@ def maxon_executable_suffix(host):
 
 
 def build_maxon_arm(planned, workloads, host_out_dir, host, ref_out_dir):
-    label = planned["label"]
-    compiler = bench_common.arm_compiler(planned, ref_out_dir)
-
-    arm_dir = maxon_arm_dir(host_out_dir, label)
     target_args = [f"--target={GUESTS[host].target}"] if host in GUESTS else []
-    sources = {workload.name: bench_common.arm_source(planned, ref_out_dir, os.path.join(BENCH_DIR, f"{workload.name}.maxon"))
-               for workload in workloads}
-    executables = {name: bench_common.compile_in_arm(compiler, label, arm_dir, source, name, build_args=target_args,
-                                                     exe_suffix=maxon_executable_suffix(host))
-                   for name, source in sources.items()}
-    return {"label": label, "identity": bench_common.compiler_identity(compiler),
-            "exe_bytes": {name: os.path.getsize(path) for name, path in executables.items()},
-            "sources": {name: bench_common.sha256_of(source) for name, source in sources.items()}}
+    built = bench_common.build_arm_programs(
+        planned, ref_out_dir, {workload.name: os.path.join(BENCH_DIR, f"{workload.name}.maxon") for workload in workloads},
+        build_args=target_args, exe_suffix=maxon_executable_suffix(host), arms_dir=maxon_arms_dir(host_out_dir))
+    return {"label": built["label"], "identity": built["identity"],
+            "exe_bytes": {name: os.path.getsize(path) for name, path in built["executables"].items()},
+            "sources": {name: bench_common.sha256_of(path) for name, path in built["programs"].items()}}
+
+
+def maxon_arms_dir(host_out_dir):
+    return os.path.join(host_out_dir, MAXON_ARMS_DIR_NAME)
 
 
 def maxon_arm_dir(host_out_dir, label):
-    return os.path.join(host_out_dir, "maxon", label)
+    return os.path.join(maxon_arms_dir(host_out_dir), label)
 
 
 def arm_executables(arm, workloads, host, host_out_dir):
@@ -686,6 +685,7 @@ def main():
             return run_inside_guest(args, workloads)
         context = bench_common.session_context()
         planned_arms = bench_common.plan_arms(args, reserved_labels=(GO_ARM,))
+        bench_common.open_output_root(os.path.abspath(args.out_dir), args.keep_refs, planned_arms)
         if outer_guest:
             return run_outer_guest(args, workloads, context, planned_arms, args.host)
         return run_native(args, workloads, context, planned_arms)

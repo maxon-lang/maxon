@@ -82,7 +82,8 @@ every commit the rebase brought in.
 
 The harness builds the control once, in its own git worktree under `bench/fannkuch/out/ref-$PRE/tree/`,
 with that tree's own `scripts/fetch-seed.sh` and `scripts/build-from-seed.sh` — seed → `C1` → `C2`, so
-the control is at its own fixed point — and reuses it by sha.
+the control is at its own fixed point — then deletes the worktree, keeps the binary and its `stdlib/`,
+`runtime/` and `scriptlib/` in `bench/fannkuch/out/ref-$PRE/`, and reuses them by sha.
 
 ```
 python scripts/bench-fannkuch.py --n 11 --runs 5 --ref $PRE --self-compile --note "<candidate>: <mechanism>; census <col> a->b; predicted <shape>; both arms at their own fixed point"

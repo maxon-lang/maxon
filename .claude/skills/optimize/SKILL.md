@@ -200,7 +200,8 @@ interleaved; within a run, every repeat of a rung reports identical memory.
 executable's bytes, the emitted-code census and (`--self-compile`) the self-compile time. Each ref is a
 git worktree at the harness's `<out-dir>/ref-<sha>/tree/`, built by that tree's own
 `scripts/fetch-seed.sh` and `scripts/build-from-seed.sh` — seed → `C1` → `C2`, as CI builds it, so the
-control carries its own runtime.
+control carries its own runtime. The worktree is deleted once built; `<out-dir>/ref-<sha>/` keeps the
+binary and its `stdlib/`, `runtime/` and `scriptlib/`.
 
 ⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
 dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just

@@ -109,17 +109,38 @@ export function parseTestDeclarations(content: string): DeclaredTest[] {
 	return found;
 }
 
-/** Is `dir` excluded from every compile — by its own `.maxonignore` or by one in any directory above it? */
-export function isIgnoredDirectory(dir: string): boolean {
-	let current = path.resolve(dir);
+export interface FileVersion {
+	size: number;
+	mtimeMs: number;
+}
 
-	while (true) {
-		if (fs.existsSync(path.join(current, IgnoreMarkerName))) return true;
+export function fileStamp(version: FileVersion): string {
+	return `${version.size}:${version.mtimeMs}`;
+}
 
-		const above = path.dirname(current);
-		if (above === current) return false;
-		current = above;
-	}
+export function isUnchangedSince(recordedStamp: string | undefined, version: FileVersion): boolean {
+	return recordedStamp !== undefined && recordedStamp === fileStamp(version);
+}
+
+/**
+ * Is `dir` excluded from every compile — by its own `.maxonignore` or by one in any directory above it?
+ *
+ * `known` holds the answers by directory. A scan asks about tens of thousands of files in far fewer
+ * directories, and one `existsSync` per directory rather than one per ancestor per file keeps
+ * discovery from blocking the extension host. An answer does not see a marker added or removed
+ * later, so a caller keeps one map per scan.
+ */
+export function isIgnoredDirectory(dir: string, known: Map<string, boolean> = new Map()): boolean {
+	const current = path.resolve(dir);
+	const remembered = known.get(current);
+	if (remembered !== undefined) return remembered;
+
+	const above = path.dirname(current);
+	const ignored = fs.existsSync(path.join(current, IgnoreMarkerName)) || (above !== current && isIgnoredDirectory(above, known));
+
+	known.set(current, ignored);
+
+	return ignored;
 }
 
 function holdsFile(dir: string, matches: (name: string) => boolean): boolean {

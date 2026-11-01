@@ -432,10 +432,10 @@ def log_rows(context, order, best, seen, maxon_names, go_arms, note):
 def run_lane(args, lane_name):
     lane = LANE_TABLE[lane_name]
     out_dir = os.path.abspath(args.out_dir)
-    os.makedirs(out_dir, exist_ok=True)
     go = bench_common.locate_go()
     wasmtime = locate_wasmtime() if lane_name == LANE_WASM else None
     plan = bench_common.plan_arms(args, reserved_labels=[arm.name for arm in lane.go_arms])
+    bench_common.open_output_root(out_dir, args.keep_refs, plan)
 
     go_executables, go_version = build_go_arms(go, lane, out_dir)
     maxon_arms = [bench_common.build_arm(planned, out_dir, MAXON_SOURCE, MAXON_STEM, build_args=lane.maxon_args,
@@ -525,7 +525,7 @@ def require_shippable_tree():
 
 
 def mac_job_line(args, shas):
-    forwarded = ["--lane", LANE_ARM64, "--runs", str(args.runs), "--warmup", str(args.warmup)]
+    forwarded = ["--lane", LANE_ARM64, "--runs", str(args.runs), "--warmup", str(args.warmup), "--keep-refs", str(args.keep_refs)]
     for sha in shas:
         forwarded += ["--ref", sha]
     if args.no_slot:

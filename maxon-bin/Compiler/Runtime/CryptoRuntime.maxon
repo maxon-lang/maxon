@@ -342,8 +342,7 @@ function buildAesExpandKey(module StdModule)
 	expand = emitCowDetachWhenNeeded(module, func: func, block: expand, arr: schedule, prefix: "ak", ids: ids)
 	let encryptionKeys = emitLoadField(module, block: expand, record: schedule, offset: ManagedRecordBufferOffset, ids: ids)
 	let keyData = emitLoadField(module, block: expand, record: key, offset: ManagedRecordBufferOffset, ids: ids)
-	let halfBytes = emitBin(module, block: expand, a: scheduleBytes, b: emitConst(module, block: expand, value: AesScheduleHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
-	let decryptionKeys = emitBin(module, block: expand, a: encryptionKeys, b: halfBytes, opcode: StdBinOpcode.add, ids: ids)
+	let decryptionKeys = emitDecryptionKeys(module, block: expand, scheduleBytes: scheduleBytes, encryptionKeys: encryptionKeys, ids: ids)
 	let answer = ids.mint()
 	module.appendOp(expand, op: StdOp.cryptoRoutine(answer, routine: CryptoRoutine.aesExpandKey, a0Id: rounds, a1Id: keyData, a2Id: encryptionKeys, a3Id: decryptionKeys))
 	module.setTerminator(expand, op: StdOp.retVoid)
@@ -352,6 +351,16 @@ function buildAesExpandKey(module StdModule)
 
 	module.functions.push(func)
 end 'buildAesExpandKey'
+
+function emitHalfSchedule(module StdModule, block IrBlock, scheduleBytes ValueId, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: scheduleBytes, b: emitConst(module, block: block, value: AesScheduleHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+end 'emitHalfSchedule'
+
+function emitDecryptionKeys(module StdModule, block IrBlock, scheduleBytes ValueId, encryptionKeys ValueId, ids ValueMinter) returns ValueId
+	let halfBytes = emitHalfSchedule(module, block: block, scheduleBytes: scheduleBytes, ids: ids)
+
+	return emitBin(module, block: block, a: encryptionKeys, b: halfBytes, opcode: StdBinOpcode.add, ids: ids)
+end 'emitDecryptionKeys'
 
 function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRoutine)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: AesBlockParams, paramTypes: fiveI64Params())
@@ -383,9 +392,12 @@ function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRo
 	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: output, prefix: "ab", ids: ids)
 	let rounds = emitRoundCount(module, block: crypt, roundKeyBytes: scheduleBytes, shift: AesScheduleRoundShift, ids: ids)
 	let scheduleData = emitLoadField(module, block: crypt, record: schedule, offset: ManagedRecordBufferOffset, ids: ids)
-	let halfBytes = emitBin(module, block: crypt, a: scheduleBytes, b: emitConst(module, block: crypt, value: AesScheduleHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
-	let decryptionKeys = emitBin(module, block: crypt, a: scheduleData, b: halfBytes, opcode: StdBinOpcode.add, ids: ids)
-	let keys = decryptionKeys if routine == CryptoRoutine.aesDecryptBlock else scheduleData
+	let keys = match routine 'keysOfTheRoutine'
+		aesEncryptBlock gives scheduleData
+		aesDecryptBlock gives emitDecryptionKeys(module, block: crypt, scheduleBytes: scheduleBytes, encryptionKeys: scheduleData, ids: ids)
+		default panic("buildAesBlockRoutine: only the encrypt and decrypt routines are single AES blocks")
+	end 'keysOfTheRoutine'
+
 	let outputData = emitLoadField(module, block: crypt, record: output, offset: ManagedRecordBufferOffset, ids: ids)
 	let inputData = emitLoadField(module, block: crypt, record: input, offset: ManagedRecordBufferOffset, ids: ids)
 	let destination = emitBin(module, block: crypt, a: outputData, b: outputAt, opcode: StdBinOpcode.add, ids: ids)
@@ -479,7 +491,7 @@ function buildAesGcmInit(module StdModule)
 	AesSizeLimits.of(AesSizedBuffer.schedule).emitGuards(module, func: func, entry: entry, bytes: scheduleBytes, refused: bad, next: keyBlockCheck, ids: ids)
 
 	let keyBlockBytes = emitLoadField(module, block: keyBlockCheck, record: keyBlock, offset: ManagedRecordLengthOffset, ids: ids)
-	let roundKeyBytes = emitBin(module, block: keyBlockCheck, a: scheduleBytes, b: emitConst(module, block: keyBlockCheck, value: AesScheduleHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let roundKeyBytes = emitHalfSchedule(module, block: keyBlockCheck, scheduleBytes: scheduleBytes, ids: ids)
 	let expected = emitBin(module, block: keyBlockCheck, a: roundKeyBytes, b: emitConst(module, block: keyBlockCheck, value: AesGcmTableBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	emitBranchOnCompareValues(module, block: keyBlockCheck, a: keyBlockBytes, pred: StdCmpPred.ne, b: expected, whenTrue: bad, whenFalse: crypt, ids: ids)
 

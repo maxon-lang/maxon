@@ -1183,20 +1183,10 @@ union BatchCaseLookup
 	elsewhere
 end 'BatchCaseLookup'
 
-function specHoldsAnyPin(tests SpecTestArray) returns bool
-	for test in tests 'eachTest'
-		if test.pinsTargetIr 'aPin'
-			return true
-		end 'aPin'
-	end 'eachTest'
-
-	return false
-end 'specHoldsAnyPin'
-
 // An unpinned case is minted a pin only in a spec that already holds one, so `--update-required`
 // over `specs/`, which carries no pins, adds none.
 function irActionFor(test SpecTest, holdsPins bool, mode SpecRunMode, effectiveTarget Target) returns IrAction
-	if not emitsTargetIr(effectiveTarget) or test.expectation.expectsCompileError() 'noTargetIr'
+	if not emitsTargetIr(effectiveTarget) or not test.rendersTargetIrOn(targetToString(effectiveTarget)) 'noTargetIr'
 		return IrAction.none
 	end 'noTargetIr'
 
@@ -1357,14 +1347,14 @@ export function testsThatRun(tests SpecTestArray, runs SpecRuns) returns SpecTes
 end 'testsThatRun'
 
 // The per-target gates a run asks silently: a case either one passes over proves nothing about the
-// program. Both read the spec text — `markerAllowsTarget` an exclusion the author spelled,
+// program. Both read the spec text — `SpecTest.runsOn` an exclusion the author spelled,
 // `targetCanCheckSectionPins` one declared by a ```RequiredData / ```RequiredRdata block — so both are
 // answerable before a compiler is spawned.
 //
 // `targetCanCaptureTrace` is asked by the caller instead: it is the reach of an instrument on this host,
 // so a case it passes over is coverage the reader is told about (`ExclusionReason.traceInstrument`).
 function selectableThisRun(test SpecTest, effectiveTarget Target, effectiveTargetKey String) returns bool
-	return markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget)
+	return test.runsOn(effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget)
 end 'selectableThisRun'
 
 function chosenByFilter(tally FilterPatternTally, specName String, testName String) returns bool
@@ -1383,7 +1373,7 @@ end 'chosenByFilter'
 // real external host is green when the public internet is up and red when it is not, so its verdict is a
 // measurement of somebody else's uptime wearing this compiler's name.
 //
-// ⚠ **AND UNLIKE `markerAllowsTarget`, A CASE IT GATES OUT IS NEVER SILENT** (see
+// ⚠ **AND UNLIKE `SpecTest.runsOn`, A CASE IT GATES OUT IS NEVER SILENT** (see
 // `reportExclusions`). A target restriction excludes a case that this machine could not have
 // judged either way; this excludes one that WOULD have run, on a machine that could have run it, because
 // the operator did not ask for it. That is coverage a reader has to be told they are not getting.
@@ -1424,7 +1414,7 @@ end 'networkModeAllows'
 // case's source is ordinary Maxon that compiles and runs everywhere, and it is the instrument that has one
 // host. So the spec text stays portable and the harness answers for its own reach.
 //
-// ⚠ **A gated-out case is NOT RUN, not failed — and unlike `markerAllowsTarget`, IT IS REPORTED.** The
+// ⚠ **A gated-out case is NOT RUN, not failed — and unlike `SpecTest.runsOn`, IT IS REPORTED.** The
 // marker excludes a case this lane could not have judged either way; this excludes one the lane could
 // have judged and did not, because the instrument does not reach here. That is coverage a reader has to
 // be told they are not getting, so it is recorded as `ExclusionReason.traceInstrument` and named in the
@@ -1445,32 +1435,8 @@ function targetCanCaptureTrace(test SpecTest, effectiveTarget Target, assumeNati
 	return assumeNativeHost or not needsExternalRunner(effectiveTarget)
 end 'targetCanCaptureTrace'
 
-// The gate the spec author spelled. A gated-out test is not run, failed or reported, exactly as a
-// filtered-out test is.
-//
-// A test runs on every target unless an `<!-- unsupported-targets: … -->` marker names it. A marker
-// names a lane for a technical reason — an ISA-specific register pool, a fault handler, a runtime chunk
-// only one backend emits — never as a per-target opt-in, so a new lane inherits every unmarked case.
-//
-// A section pin is not one of those reasons. The lanes that can check one are
-// `LinkedSection.targetHasLinkedSections`, so that exclusion is derived (`targetCanCheckSectionPins`),
-// and a marker would state the same fact twice and can omit a case, which panics the worker on a lane
-// without linked sections.
-function markerAllowsTarget(test SpecTest, effectiveTargetKey String) returns bool
-	// An explicit walk rather than an `Array.contains`: the element comparison String equality needs
-	// is exactly what a bare `contains` would have to be told, and an exclusion list is one to four
-	// entries. The empty list needs no arm of its own — it names nothing, which is what it means.
-	for excluded in test.unsupportedTargets 'eachExcluded'
-		if excluded == effectiveTargetKey 'markerExcludes'
-			return false
-		end 'markerExcludes'
-	end 'eachExcluded'
-
-	return true
-end 'markerAllowsTarget'
-
 // ⭐⭐ **THE RESTRICTION A SECTION PIN CARRIES WITHOUT SPELLING IT — the same shape as
-// `markerAllowsTarget` and gated-out the same silent way, but DERIVED from the case rather than read
+// `SpecTest.runsOn` and gated-out the same silent way, but DERIVED from the case rather than read
 // off a marker.** A ```RequiredData / ```RequiredRdata block is checked by reading named bytes back out
 // of the LINKED IMAGE (`compareLinkedSection`), so a case carrying one asserts something only a
 // container format with named sections can answer. Which formats those are is

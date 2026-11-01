@@ -5,9 +5,11 @@ import * as path from 'path';
 import {
 	DebugInfoSidecarSuffix,
 	debuggedTestVerdict,
+	fileStamp,
 	isIgnoredDirectory,
 	isProgramSource,
 	isTestFileName,
+	isUnchangedSince,
 	listedTestFor,
 	parseTestDeclarations,
 	parseTestListDocument,
@@ -316,12 +318,63 @@ suite('testBuildDirectory', () => {
 	});
 });
 
+suite('isUnchangedSince', () => {
+	const version = { size: 120, mtimeMs: 1762000000123.5 };
+
+	test('a file with the recorded size and modification time is unchanged', () => {
+		assert.strictEqual(isUnchangedSince(fileStamp(version), { ...version }), true);
+	});
+
+	test('a file never recorded is not unchanged', () => {
+		assert.strictEqual(isUnchangedSince(undefined, version), false);
+	});
+
+	test('a different size or a different modification time is a change', () => {
+		const recorded = fileStamp(version);
+
+		assert.strictEqual(isUnchangedSince(recorded, { ...version, size: version.size + 1 }), false);
+		assert.strictEqual(isUnchangedSince(recorded, { ...version, mtimeMs: version.mtimeMs + 1 }), false);
+	});
+
+	test('a size and a time that run together the same way are not mistaken for each other', () => {
+		assert.strictEqual(isUnchangedSince(fileStamp({ size: 1, mtimeMs: 23 }), { size: 12, mtimeMs: 3 }), false);
+	});
+});
+
 suite('isIgnoredDirectory', () => {
 	test('a marker excludes its directory and everything beneath it', () => {
 		withTree(['fixtures/.maxonignore', 'fixtures/deep/a.maxtest', 'src/a.maxtest'], root => {
 			assert.strictEqual(isIgnoredDirectory(path.join(root, 'fixtures')), true);
 			assert.strictEqual(isIgnoredDirectory(path.join(root, 'fixtures', 'deep')), true);
 			assert.strictEqual(isIgnoredDirectory(path.join(root, 'src')), false);
+		});
+	});
+
+	test('a memo shared by many questions answers each as the unshared question does, and remembers every directory it walked', () => {
+		withTree(['fixtures/.maxonignore', 'fixtures/deep/a.maxtest', 'src/a.maxtest'], root => {
+			const known = new Map<string, boolean>();
+			const directories = [path.join(root, 'fixtures', 'deep'), path.join(root, 'src'), path.join(root, 'fixtures')];
+
+			for (const directory of directories) {
+				assert.strictEqual(isIgnoredDirectory(directory, known), isIgnoredDirectory(directory));
+			}
+
+			assert.strictEqual(known.get(path.resolve(path.join(root, 'fixtures', 'deep'))), true);
+			assert.strictEqual(known.get(path.resolve(path.join(root, 'src'))), false);
+			assert.strictEqual(known.get(path.resolve(root)), false);
+		});
+	});
+
+	test('a memo that has seen a directory does not look at the disk for it again', () => {
+		withTree(['src/a.maxtest'], root => {
+			const known = new Map<string, boolean>();
+			const src = path.join(root, 'src');
+
+			assert.strictEqual(isIgnoredDirectory(src, known), false);
+			fs.writeFileSync(path.join(src, '.maxonignore'), '');
+
+			assert.strictEqual(isIgnoredDirectory(src, known), false);
+			assert.strictEqual(isIgnoredDirectory(src), true);
 		});
 	});
 });

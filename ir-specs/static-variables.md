@@ -2228,6 +2228,112 @@ end 'main'
 ```RequiredData
 i64 42
 ```
+```TargetIr:x64-linux
+data {
+  __data_marker@0 = i64 42
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_marker
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 42
+    x64.jcc equal, ifcont
+  markerMoved:
+    x64.movRegImm32 r8, 99
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 3
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __data_marker@0 = i64 42
+  __mrt_program_started@8 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_marker
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 42
+    arm64.b.eq ifcont
+  markerMoved:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 3
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __data_marker@0 = i64 42
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_marker
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 42
+    arm64.b.eq ifcont
+  markerMoved:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 3
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:x64-windows
+data {
+  __data_marker@0 = i64 42
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+  __mrt_program_started@11 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_marker
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 42
+    x64.jcc equal, ifcont
+  markerMoved:
+    x64.movRegImm32 r8, 99
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 3
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}
+```
 
 <!-- test: an-inline-record-var-built-by-a-factory-over-constants-holds-its-word-in-data -->
 A `var` of an inline record keeps its `.data` slot because it can be written, and the slot is laid down
@@ -2256,6 +2362,155 @@ end 'main'
 ```
 ```RequiredData
 i64 25769803781
+```
+```TargetIr:x64-linux
+data {
+  __data_origin@0 = i64 25769803781
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_origin
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.leaRegGlobal rcx, __data_origin
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.shrRegImm8 rcx, rcx, 32
+    x64.movRegImm32 rdx, 4294967295
+    x64.andRegReg rcx, rcx, rdx
+    x64.leaRegRegReg r8, rax, rcx
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-inline-record-var-built-by-a-factory-over-constants-holds-its-word-in-data.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __data_origin@0 = i64 25769803781
+  __mrt_program_started@8 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_origin
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.leaGlobal x1, __data_origin
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.lsr x1, x1, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x1, x1, x2
+    arm64.add x0, x0, x1
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-inline-record-var-built-by-a-factory-over-constants-holds-its-word-in-data.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __data_origin@0 = i64 25769803781
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_origin
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.leaGlobal x1, __data_origin
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.lsr x1, x1, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x1, x1, x2
+    arm64.add x0, x0, x1
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-inline-record-var-built-by-a-factory-over-constants-holds-its-word-in-data.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:x64-windows
+data {
+  __data_origin@0 = i64 25769803781
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+  __mrt_program_started@11 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_origin
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.leaRegGlobal rcx, __data_origin
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.shrRegImm8 rcx, rcx, 32
+    x64.movRegImm32 rdx, 4294967295
+    x64.andRegReg rcx, rcx, rdx
+    x64.leaRegRegReg r8, rax, rcx
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-inline-record-var-built-by-a-factory-over-constants-holds-its-word-in-data.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
 ```
 
 <!-- test: an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data -->
@@ -2300,6 +2555,217 @@ end 'main'
 ```RequiredData
 i64 42
 ```
+```TargetIr:x64-linux
+data {
+  __data_marker@0 = i64 42
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_marker
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 42
+    x64.jcc equal, ifcont
+  markerMoved:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rax, [rip + __struct_rec_0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.leaRegRdata rcx, [rip + __struct_rec_0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.shrRegImm8 rcx, rcx, 32
+    x64.movRegImm32 rdx, 4294967295
+    x64.andRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRdata rcx, [rip + __struct_rec_0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __data_marker@0 = i64 42
+  __slab_state@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_marker
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 42
+    arm64.b.eq ifcont
+  markerMoved:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x0, __struct_rec_0
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.leaRdata x1, __struct_rec_0
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.lsr x1, x1, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x1, x1, x2
+    arm64.add x0, x0, x1
+    arm64.leaRdata x1, __struct_rec_0
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __data_marker@0 = i64 42
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_marker
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 42
+    arm64.b.eq ifcont
+  markerMoved:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x0, __struct_rec_0
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.leaRdata x1, __struct_rec_0
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.lsr x1, x1, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x1, x1, x2
+    arm64.add x0, x0, x1
+    arm64.leaRdata x1, __struct_rec_0
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:x64-windows
+data {
+  __data_marker@0 = i64 42
+  __slab_state@8 = i64 0
+  __mrt_console_probe_stdin@16 = i8 0
+  __mrt_console_probe_stdout@17 = i8 0
+  __mrt_console_probe_stderr@18 = i8 0
+  __mrt_program_started@19 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_marker
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 42
+    x64.jcc equal, ifcont
+  markerMoved:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rax, [rip + __struct_rec_0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.leaRegRdata rcx, [rip + __struct_rec_0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.shrRegImm8 rcx, rcx, 32
+    x64.movRegImm32 rdx, 4294967295
+    x64.andRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRdata rcx, [rip + __struct_rec_0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+```
 
 <!-- test: an-inline-record-let-naming-another-inline-record-let-is-a-baked-word -->
 A `let` bound to another inline-record `let` is the same word, so it owns no `.data` slot either.
@@ -2333,4 +2799,110 @@ end 'main'
 ```
 ```RequiredData
 i64 42
+```
+```TargetIr:x64-linux
+data {
+  __data_marker@0 = i64 42
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_marker
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 42
+    x64.jcc equal, ifcont
+  markerMoved:
+    x64.movRegImm32 r8, 99
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 7
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __data_marker@0 = i64 42
+  __mrt_program_started@8 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_marker
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 42
+    arm64.b.eq ifcont
+  markerMoved:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 7
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __data_marker@0 = i64 42
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_marker
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 42
+    arm64.b.eq ifcont
+  markerMoved:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 7
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:x64-windows
+data {
+  __data_marker@0 = i64 42
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+  __mrt_program_started@11 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_marker
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 42
+    x64.jcc equal, ifcont
+  markerMoved:
+    x64.movRegImm32 r8, 99
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 7
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}
 ```

@@ -1,11 +1,13 @@
 let PinMismatchSpecName = "pin-mismatch"
 let PinMismatchSpecFileName = "pin-mismatch.md"
 let PinMismatchPinnedCase = "pin-mismatch.pinned"
-let PinMismatchUnpinnedCase = "pin-mismatch.unpinned"
+let PinMismatchPinnedMarker = "<!-- test: pin-mismatch.pinned -->"
 
 test 'a host-lane TargetIr pin that differs from the compile fails its case and shows the differing line'
 	let staged = stagedGateFixture()
-	plantBogusTargetIrPin(staged.join(PinMismatchSpecFileName))
+	let specPath = staged.join(PinMismatchSpecFileName)
+	plantBogusTargetIrPin(specPath)
+	plantPlaceholderPinsBeneath(specPath, markers: [PinMismatchPinnedMarker])
 
 	let run = runSpecTest(staged, includeNetwork: false)
 	discardOutsideCheckoutDir(staged)
@@ -21,8 +23,6 @@ test 'a host-lane TargetIr pin that differs from the compile fails its case and 
 	if not said.contains(PlantedTargetIrLine) 'differingLineUnshown'
 		broken.push("the failure does not show the first differing line, '{PlantedTargetIrLine}'. It said:\n{said}\n")
 	end 'differingLineUnshown'
-
-	collectNotPassed(said, specName: PinMismatchSpecName, testNames: [PinMismatchUnpinnedCase], broken: broken)
 
 	if run.exitCode() == SuccessExitCode 'mismatchDidNotCount'
 		broken.push("the run exited {SuccessExitCode} with a failing pin in it. It said:\n{said}\n")

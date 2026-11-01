@@ -24,24 +24,9 @@ let ResultNoteIndent = "  "
 module let FragmentsDirName = "fragments"
 module let WasiTargetFlag = "--target=wasm32-wasi"
 
-#if os(Windows)
-	let HostLane = "x64-windows"
-#endif
-
-#if os(Macos)
-	let HostLane = "arm64-macos"
-#endif
-
-#if os(Linux) and arch(x64)
-	let HostLane = "x64-linux"
-#endif
-
-#if os(Linux) and arch(arm64)
-	let HostLane = "arm64-linux"
-#endif
-
 let TargetIrFenceStem = "```TargetIr:"
 module let PlantedTargetIrLine = "planted.byTheTargetIrPinGates r0"
+let PlaceholderTargetIrLine = "placeholder.forALaneTheRunIsNotOn r0"
 module let UpdateRequiredFlag = "--update-required"
 
 module typealias CaseTally = int(0 to u64.max)
@@ -153,11 +138,11 @@ module function skipVerdictLine(label String) returns String
 end 'skipVerdictLine'
 
 module function hostLaneName() returns String
-	return HostLane
+	return hostTargetTriple()
 end 'hostLaneName'
 
 module function hostTargetIrFence() returns String
-	return "{TargetIrFenceStem}{HostLane}"
+	return "{TargetIrFenceStem}{hostTargetTriple()}"
 end 'hostTargetIrFence'
 
 module function linesOpening(lines StringArray, prefix String) returns SpecLineArray
@@ -181,6 +166,43 @@ module function plantBogusTargetIrPin(specPath FilePath)
 	let text = fileText(specPath)
 	writeStagedFile(specPath, content: "{text}{LineFeed}{hostTargetIrFence()}{LineFeed}{PlantedTargetIrLine}{LineFeed}```{LineFeed}")
 end 'plantBogusTargetIrPin'
+
+// A spec holding a pin is refused unless every compiling case pins every native lane. The pin gates plant
+// a block for each lane but the host's beneath the named markers, so the run reaches the one host-lane pin
+// under test; a run only compares the block of its own lane.
+module function plantPlaceholderPinsBeneath(specPath FilePath, markers StringArray)
+	var planted = StringBuilder.create()
+
+	for (iter, line) in fileText(specPath).split(LineFeed).withIterator() 'eachLine'
+		if iter.index() > 0 'afterTheFirstLine'
+			planted.append(LineFeed)
+		end 'afterTheFirstLine'
+
+		planted.append(line)
+
+		if not markers.contains(line.trim()) 'notAMarker'
+			continue
+		end 'notAMarker'
+
+		for lane in otherNativeLanes() 'eachLane'
+			planted.append("{LineFeed}{TargetIrFenceStem}{lane}{LineFeed}{PlaceholderTargetIrLine}{LineFeed}```")
+		end 'eachLane'
+	end 'eachLine'
+
+	writeStagedFile(specPath, content: planted.build())
+end 'plantPlaceholderPinsBeneath'
+
+module function otherNativeLanes() returns StringArray
+	var others = StringArray.create()
+
+	for lane in nativeTargets() 'eachLane'
+		if lane != hostTargetTriple() 'anotherLane'
+			others.push(lane)
+		end 'anotherLane'
+	end 'eachLane'
+
+	return others
+end 'otherNativeLanes'
 
 module function batchSummaryLine(batched CaseTally, programs CaseTally, alone CaseTally) returns String
 	return "{batched} run case(s) ran batched in {programs} program(s); {alone} ran alone"

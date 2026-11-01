@@ -79,7 +79,7 @@ let TestMarker = "<!-- test:"
 // first ```maxon block. It EXCLUDES the test from the `targetToString` forms it names
 // (`x64-windows`, `wasm32-wasi`); on every other target the test runs. A missing marker — or one
 // with a blank value — excludes nothing (see `SpecTest.unsupportedTargets` and
-// `SpecTestRunner.markerAllowsTarget`).
+// `SpecTest.runsOn`).
 //
 // ⛔ **THE DIRECTION IS THE WHOLE POINT, because the alternative ROTS TOWARD SILENCE.** A whitelist —
 // which this was — makes every case that predates a new backend exclude it, so landing a target
@@ -886,7 +886,7 @@ export type SpecTest
 
 	// The `targetToString` forms this test CANNOT run on (an `<!-- unsupported-targets: … -->`
 	// marker), or EMPTY for the ordinary test that runs on every target. The runner SKIPS a test whose
-	// list names the effective target (`SpecTestRunner.markerAllowsTarget`) — the same treatment a
+	// list names the effective target (`SpecTest.runsOn`) — the same treatment a
 	// filtered-out test gets, never a failure. ⚠ Distinct from a SKIPPED result, which is a test that
 	// WAS selected, WAS compiled and was refused by the target; that one is counted and reported.
 	export let unsupportedTargets as TargetKeyArray
@@ -966,14 +966,14 @@ export type SpecTest
 
 	export let targetIr as SpecTargetIr
 
-	// A pin for any lane, this run's or another's.
-	export let pinsTargetIr as bool
+	// The lanes this test holds a `TargetIr` block for, this run's or another's.
+	export let pinnedLanes as TargetKeyArray
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinsTargetIr bool) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinnedLanes TargetKeyArray) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinsTargetIr: pinsTargetIr}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinnedLanes: pinnedLanes}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -986,8 +986,42 @@ export type SpecTest
 		return markerLeaves(self.unsupportedTargets, lanes: OneLane)
 	end 'runsOnOneLane'
 
+	export function pinsTargetIr() returns bool
+		return not self.pinnedLanes.isEmpty()
+	end 'pinsTargetIr'
+
+	// The gate the spec author spelled. A gated-out test is not run, failed or reported, exactly as a
+	// filtered-out test is.
+	//
+	// A test runs on every target unless an `<!-- unsupported-targets: … -->` marker names it. A marker
+	// names a lane for a technical reason — an ISA-specific register pool, a fault handler, a runtime chunk
+	// only one backend emits — never as a per-target opt-in, so a new lane inherits every unmarked case.
+	export function runsOn(key String) returns bool
+		return not self.unsupportedTargets.contains(key)
+	end 'runsOn'
+
+	// Asked by both the mint (`irActionFor`) and the pin requirement (`lanesAwaitingAPin`), so a lane
+	// cannot be owed a block that a mint never writes.
+	export function rendersTargetIrOn(key String) returns bool
+		return self.runsOn(key) and not self.expectation.expectsCompileError()
+	end 'rendersTargetIrOn'
+
+	export function lanesAwaitingAPin() returns TargetArray
+		var awaiting = TargetArray.create()
+
+		for candidate in pinnableTargets() 'eachLane'
+			let key = targetToString(candidate)
+
+			if self.rendersTargetIrOn(key) and not self.pinnedLanes.contains(key) 'unpinnedLane'
+				awaiting.push(candidate)
+			end 'unpinnedLane'
+		end 'eachLane'
+
+		return awaiting
+	end 'lanesAwaitingAPin'
+
 	export function buildsWithFreedBoxPoison() returns bool
-		return self.poisonFreed or not self.pinsTargetIr
+		return self.poisonFreed or not self.pinsTargetIr()
 	end 'buildsWithFreedBoxPoison'
 
 	export function compilesAsLibrary() returns bool
@@ -1095,6 +1129,55 @@ export function parseSpecFile(path FilePath, effectiveTargetKey String) returns 
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	return ParsedSpec.create(content, tests: extractTests(specLinesOf(content), specPath: path, effectiveTargetKey: effectiveTargetKey))
 end 'parseSpecFile'
+
+export function requireEveryLanePinned(tests SpecTestArray, specPath FilePath)
+	if not specHoldsAnyPin(tests) 'notAnIrSpec'
+		return
+	end 'notAnIrSpec'
+
+	var report = TextJoiner.create()
+	var owed = TargetKeyArray.create()
+
+	for test in tests 'eachTest'
+		let awaiting = test.lanesAwaitingAPin()
+
+		if awaiting.isEmpty() 'fullyPinned'
+			continue
+		end 'fullyPinned'
+
+		report.push("  test '{test.name}' has no pin for {targetRoster(awaiting)}")
+
+		for lane in awaiting 'eachLane'
+			let key = targetToString(lane)
+
+			if not owed.contains(key) 'newLane'
+				owed.push(key)
+			end 'newLane'
+		end 'eachLane'
+	end 'eachTest'
+
+	if owed.isEmpty() 'everyLanePinned'
+		return
+	end 'everyLanePinned'
+
+	var fixes = TextJoiner.create()
+
+	for lane in owed 'eachOwedLane'
+		fixes.push("  {UpdateRequiredFlag} {TargetFlagPrefix}{lane} {FilterFlagPrefix}{specPath.stem()}/")
+	end 'eachOwedLane'
+
+	panic("SpecParser: {specPath.toString()}: this spec holds a `TargetIr:<target>` block, so it is an IR spec, and every case of one that compiles carries a block for each lane its `{UnsupportedTargetsMarker} … -->` does not exclude. A lane with no block is a lane nothing gates: a run on it compares nothing and passes whatever the compiler emits there. A lane the compiler refuses the case on (it answers E3104 there, so it renders no Target IR) is not owed a block: name it in the case's `{UnsupportedTargetsMarker} … -->` instead. Missing:\n{report.build()}\nA block is minted per lane, so run each of these (a run with `{UpdateRequiredFlag}` is not refused for the lanes still owed):\n{fixes.build()}")
+end 'requireEveryLanePinned'
+
+export function specHoldsAnyPin(tests SpecTestArray) returns bool
+	for test in tests 'eachTest'
+		if test.pinsTargetIr() 'aPin'
+			return true
+		end 'aPin'
+	end 'eachTest'
+
+	return false
+end 'specHoldsAnyPin'
 
 export type ParsedSpec
 	export let text as String
@@ -1204,6 +1287,7 @@ function scanTestFromMarker(lines StringArray, markerIndex ElementIndex, markerL
 	var unsupportedTargets = TargetKeyArray.create()
 	var runtimeNames = RuntimeFunctionNameArray.create()
 	var programArgs = ProgramArgArray.create()
+	var pinnedLanes = TargetKeyArray.create()
 	builder.refuseCrowdedLine(markerOpenings, line: markerLine, lineIndex: markerIndex)
 
 	let lineCount = lines.count()
@@ -1227,10 +1311,10 @@ function scanTestFromMarker(lines StringArray, markerIndex ElementIndex, markerL
 			continue
 		end 'directiveLine'
 
-		i = builder.readLine(lines, index: i, fenceLine: line.trim(), runtimeNames: runtimeNames)
+		i = builder.readLine(lines, index: i, fenceLine: line.trim(), runtimeNames: runtimeNames, pinnedLanes: pinnedLanes)
 	end 'blocks'
 
-	tests.push(builder.build(lines, caseEnd: i, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs))
+	tests.push(builder.build(lines, caseEnd: i, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, pinnedLanes: pinnedLanes))
 	return i
 end 'scanTestFromMarker'
 
@@ -1348,10 +1432,9 @@ type CaseBuilder
 	var process as SpecProcess
 	var tier as SpecTier
 	var targetIrBlock as TargetIrBlock
-	var pinsAnyLane as bool
 
 	static function create(name String, markerIndex ElementIndex, specPath FilePath, effectiveTargetKey String) returns CaseBuilder
-		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), asyncTrace: false, debugInfo: false, poisonFreed: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIrBlock: TargetIrBlock.absent, pinsAnyLane: false}
+		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), asyncTrace: false, debugInfo: false, poisonFreed: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIrBlock: TargetIrBlock.absent}
 	end 'create'
 
 	function refuseCrowdedLine(openings StringArray, line String, lineIndex ElementIndex)
@@ -1429,7 +1512,7 @@ type CaseBuilder
 		refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
 	end 'refuseUnreadDirective'
 
-	function readLine(lines StringArray, index ElementIndex, fenceLine String, runtimeNames RuntimeFunctionNameArray) returns ElementIndex
+	function readLine(lines StringArray, index ElementIndex, fenceLine String, runtimeNames RuntimeFunctionNameArray, pinnedLanes TargetKeyArray) returns ElementIndex
 		// Asked before the fence arms: they match by prefix, so a prose line such as
 		// `` ```RequiredRuntime block, one name per line: `` would be consumed as a block and its words
 		// read as function names.
@@ -1489,7 +1572,7 @@ type CaseBuilder
 
 		if fenceLine.startsWith(TargetIrFence) 'targetIrBlock'
 			if fenceLine == TargetIrFence or fenceLine.startsWith(TargetIrQualifiedFencePrefix) 'aTargetIrPin'
-				return self.readTargetIrPin(lines, index: index, fenceLine: fenceLine)
+				return self.readTargetIrPin(lines, index: index, fenceLine: fenceLine, pinnedLanes: pinnedLanes)
 			end 'aTargetIrPin'
 		end 'targetIrBlock'
 
@@ -1525,7 +1608,7 @@ type CaseBuilder
 		return afterUnclaimedLine(lines, index: index, fenceLine: fenceLine, specPath: specPath, site: site)
 	end 'readLine'
 
-	function readTargetIrPin(lines StringArray, index ElementIndex, fenceLine String) returns ElementIndex
+	function readTargetIrPin(lines StringArray, index ElementIndex, fenceLine String, pinnedLanes TargetKeyArray) returns ElementIndex
 		if fenceLine == TargetIrFence 'unqualified'
 			panic("SpecParser: {specPath.toString()}:{index + 1}: test '{name}' opens a bare `{TargetIrFence}` fence. A Target IR pin is always qualified by the lane it was rendered for (`{TargetIrQualifiedFencePrefix}<target>`, one of {targetRoster(pinnableTargets())}), because the text of one lane means nothing on another")
 		end 'unqualified'
@@ -1538,7 +1621,7 @@ type CaseBuilder
 
 		self.claimBlock(fenceLine, lineIndex: index)
 		let block = readFence(lines, openIndex: index, specPath: specPath)
-		pinsAnyLane = true
+		pinnedLanes.push(qualifier)
 
 		if qualifier == effectiveTargetKey 'namesThisTarget'
 			targetIrBlock = TargetIrBlock.read(block.text, span: TraceSlice.create(index, blockEnd: block.nextIndex))
@@ -1569,18 +1652,18 @@ type CaseBuilder
 		claimedBlocks.push(kind)
 	end 'claimBlock'
 
-	function build(lines StringArray, caseEnd ElementIndex, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray) returns SpecTest
+	function build(lines StringArray, caseEnd ElementIndex, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, pinnedLanes TargetKeyArray) returns SpecTest
 		let source = match program 'program'
 			absent panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: test '{name}' has no ```maxon block, so there is no program to run and the case would run nowhere with nothing reported. Add its source under the marker, or delete the marker")
 			read(text) gives text
 		end 'program'
 
-		if poisonFreed and not pinsAnyLane 'poisonWithoutAPin'
+		if poisonFreed and pinnedLanes.isEmpty() 'poisonWithoutAPin'
 			panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: test '{name}' carries `{PoisonFreedMarker} -->` and pins no Target IR. Every case that pins none is already built with the freed-box fill, so the marker changes nothing for it. It means something only on a case with a ```{TargetIrQualifiedFencePrefix}<target> block, which is otherwise built the way a user's `maxon build` is. Drop the marker, or add the pin it is meant to change")
 		end 'poisonWithoutAPin'
 
 		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
-		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames, pinnedLanes: pinnedLanes), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinnedLanes: pinnedLanes)
 	end 'build'
 
 	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
@@ -1612,14 +1695,14 @@ type CaseBuilder
 		return SpecTraceCapture.pinned(blockFamily, trace: trace, span: span)
 	end 'agreeingCapture'
 
-	function expectationFor(traceCapture SpecTraceCapture, runtimeNames RuntimeFunctionNameArray) returns SpecExpectation
+	function expectationFor(traceCapture SpecTraceCapture, runtimeNames RuntimeFunctionNameArray, pinnedLanes TargetKeyArray) returns SpecExpectation
 		// A ```maxoncstderr block WINS over an ```exitcode one: the two are mutually exclusive,
 		// and a spec carrying both is asserting the compile FAILS — which no exit code of the
 		// program it never produced could also be true of.
 		if compilerError.isPinned() 'rejected'
 			// `SpecExpectation.compilerError` has nowhere to carry these, so without the refusal they would
 			// be dropped and the case would pass over them.
-			if sectionPins.count() > 0 or runtimeNames.count() > 0 or pinsAnyLane 'pinsOnARejectedCase'
+			if sectionPins.count() > 0 or runtimeNames.count() > 0 or not pinnedLanes.isEmpty() 'pinsOnARejectedCase'
 				panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence}/{TargetIrQualifiedFencePrefix}<target> block. A case that never links produces no image to read a section out of and no IR to render or compare, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 			end 'pinsOnARejectedCase'
 

@@ -8,6 +8,8 @@ This directory contains tests for the Maxon VS Code extension.
   root as the workspace, and pins the language server and the debug adapter to one compiler: the one
   `MAXON_E2E_COMPILER` names when it is set, otherwise this checkout's own at `maxon-bin/.maxon/`. The
   suite refuses to run without it.
+- `processTree.ts` - Lists the running processes and holds `runTest.ts` until none of those using the
+  temporary user-data directory is left
 - `suite/index.ts` - Mocha test suite configuration and test file discovery
 - `suite/fixtures.ts` - the extension id (derived from `package.json`), and staging for the fixture
   projects the end-to-end tests drive the server against
@@ -36,7 +38,16 @@ This will:
 The end-to-end tests need a built compiler, because the compiler *is* the language server and the debug
 adapter: `scripts/build-from-seed.sh`, or `maxon build maxon-bin`. To test another build, name its
 executable, under any file name, in `MAXON_E2E_COMPILER`. `runTest.ts` pins the compiler under test
-by setting `maxon.serverPath` in a temporary `--user-data-dir`.
+by setting `maxon.serverPath` in a temporary `--user-data-dir`. `MAXON_E2E_GREP` limits the run to the
+cases whose full title matches that regular expression, for example `MAXON_E2E_GREP=Debugging npm test`;
+a pattern that is not a regular expression, or that selects no case, fails the run. `runTests` resolves
+when the process it launched exits, while the editor's helper processes can still hold files under that
+directory, so
+`processTree.ts` waits for every process that names the directory, and every descendant of one, to exit
+before `runTest.ts` removes it; a process that outlives 60 seconds fails the run and is named, and the
+directory is still removed. The processes waited for are those whose arguments name the directory and
+their descendants. The downloaded VS Code is cached in `vscode-extension/.vscode-test/` whatever the
+working directory.
 
 ## Fixtures
 

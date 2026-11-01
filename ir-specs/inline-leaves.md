@@ -2546,6 +2546,383 @@ func @main {
     x64.ret
 }
 ```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ifcont
+  done:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rdx, rdx, -1
+    x64.callDirect opaque
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @blend {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rdi, rcx
+    x64.cmpRegImm32 rax, 1
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rax, 4
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
+    x64.cmpRegImm32 r9, 1
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 r9, 4
+    x64.jcc greater, __rc_panic#5
+  __rc_ok#4:
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 rsi, 4
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
+    x64.movRegReg rcx, rax
+    x64.movRegReg r8, rdi
+    x64.shlRegCl r8, rdi
+    x64.movRegReg rcx, r9
+    x64.movRegReg r10, rdx
+    x64.shrRegCl r10, rdx
+    x64.xorRegReg r8, r8, r10
+    x64.movRegReg rcx, r9
+    x64.shlRegCl rdx, rdx
+    x64.movRegReg rcx, rsi
+    x64.shrRegCl rdi, rdi
+    x64.xorRegReg rdx, rdx, rdi
+    x64.movRegReg rdi, r8
+    x64.andRegReg rdi, r8, rdx
+    x64.movRegReg r10, r8
+    x64.xorRegReg r10, r8, rdx
+    x64.orRegReg rdi, rdi, r10
+    x64.movRegReg rcx, rsi
+    x64.shlRegCl rdi, rdi
+    x64.movRegReg rcx, rax
+    x64.shrRegCl r8, r8
+    x64.movRegReg rcx, r9
+    x64.shrRegCl rdx, rdx
+    x64.andRegReg r8, r8, rdx
+    x64.xorRegReg rdi, rdi, r8
+    x64.movRegReg r8, rdi
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 3
+    x64.callDirect opaque
+    x64.cmpRegImm32 r8, 1
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 4
+    x64.jcc greater, __rc_panic
+  ifcont#2:
+    x64.movRegImm32 rcx, 240
+    x64.movRegImm32 rdx, 15
+    x64.leaRegRegReg rax, r8, r8
+    x64.movRegImm32 r9, 2
+    x64.movRegImm32 rsi, 3
+    x64.callDirect blend
+    x64.cmpRegImm32 r8, 7960
+    x64.jcc equal, ifcont#4
+  unproven:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:23: Range check failed: value outside typealias 'Stride'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @opaque {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.b.ne ifcont
+  done:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.sub x1, x1, 1
+    arm64.bl opaque
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @blend {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x2, 1
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x2, 4
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.cmp x3, 1
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x3, 4
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.cmp x4, 1
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x4, 4
+    arm64.b.gt __rc_panic#8
+  __rc_ok#7:
+    arm64.lslv x5, x0, x2
+    arm64.lsrv x6, x1, x3
+    arm64.eor x5, x5, x6
+    arm64.lslv x1, x1, x3
+    arm64.lsrv x0, x0, x4
+    arm64.eor x0, x1, x0
+    arm64.and x1, x5, x0
+    arm64.eor x6, x5, x0
+    arm64.orr x1, x1, x6
+    arm64.lslv x1, x1, x4
+    arm64.lsrv x2, x5, x2
+    arm64.lsrv x0, x0, x3
+    arm64.and x0, x2, x0
+    arm64.eor x0, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 3
+    arm64.bl opaque
+    arm64.cmp x0, 1
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 4
+    arm64.b.gt __rc_panic
+  ifcont#2:
+    arm64.movImm x5, 240
+    arm64.movImm x1, 15
+    arm64.add x2, x0, x0
+    arm64.movImm x3, 2
+    arm64.movImm x4, 3
+    arm64.movRegReg x0, x5
+    arm64.bl blend
+    arm64.movImm x16, 7960
+    arm64.cmp x0, x16
+    arm64.b.eq ifcont#4
+  unproven:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:23: Range check failed: value outside typealias 'Stride'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @opaque {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.b.ne ifcont
+  done:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.sub x1, x1, 1
+    arm64.bl opaque
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @blend {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x2, 1
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x2, 4
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.cmp x3, 1
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x3, 4
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.cmp x4, 1
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x4, 4
+    arm64.b.gt __rc_panic#8
+  __rc_ok#7:
+    arm64.lslv x5, x0, x2
+    arm64.lsrv x6, x1, x3
+    arm64.eor x5, x5, x6
+    arm64.lslv x1, x1, x3
+    arm64.lsrv x0, x0, x4
+    arm64.eor x0, x1, x0
+    arm64.and x1, x5, x0
+    arm64.eor x6, x5, x0
+    arm64.orr x1, x1, x6
+    arm64.lslv x1, x1, x4
+    arm64.lsrv x2, x5, x2
+    arm64.lsrv x0, x0, x3
+    arm64.and x0, x2, x0
+    arm64.eor x0, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:14: Range check failed: value outside typealias 'Stride'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 3
+    arm64.bl opaque
+    arm64.cmp x0, 1
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 4
+    arm64.b.gt __rc_panic
+  ifcont#2:
+    arm64.movImm x5, 240
+    arm64.movImm x1, 15
+    arm64.add x2, x0, x0
+    arm64.movImm x3, 2
+    arm64.movImm x4, 3
+    arm64.movRegReg x0, x5
+    arm64.bl blend
+    arm64.movImm x16, 7960
+    arm64.cmp x0, x16
+    arm64.b.eq ifcont#4
+  unproven:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-leaf-relying-on-declined-cascades-stays-a-call-at-an-unproven-site.test:23: Range check failed: value outside typealias 'Stride'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+```
 <!-- test: a-cursor-loop-reaches-the-runtime-only-on-its-slow-arms -->
 A loop driving an `ArrayIterator` reads its element and its index without calling the runtime's cursor entries: `current` and `index` are expanded inline, and `__managed_cursor_current` is reached only from the `__im_slow` arm that an out-of-range position, a stride the arm does not move in one operation or an empty managed slot is sent to.
 ```maxon
