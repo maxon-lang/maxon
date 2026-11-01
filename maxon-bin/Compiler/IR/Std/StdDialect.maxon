@@ -2656,8 +2656,8 @@ export union StdOp
 	// ⭐⭐ **IT IS AN OP BECAUSE THE THING IT LOWERS TO IS A SIZE LADDER, AND STD IR CANNOT SPELL ONE.**
 	// A hand-built Std-IR loop costs one `storeIndirect u8` plus an add, a compare and a branch PER
 	// BYTE — on the three hottest paths the runtime has: the zeroing a recycled free-list slot owes
-	// (docs/internals/memory-allocator.md, The zeroing contract), `__mm_free`'s poison of the whole
-	// dead payload, and the array capacity-slot eraser. A recycled 32 KB slot is 32,768 iterations of
+	// (docs/internals/memory-allocator.md, The zeroing contract), `__slab_free_box`'s poison of a
+	// dead box's payload, and the array capacity-slot eraser. A recycled 32 KB slot is 32,768 iterations of
 	// it. A backend can do the same work in a handful of stores because it may CHOOSE an instruction
 	// sequence by SIZE — straight-line overlapping stores in the small bands, a block loop in the
 	// middle, `rep stosq` at the top — and "eight overlapping qword stores" is not a thing this tier
@@ -2666,7 +2666,7 @@ export union StdOp
 	// ladders.
 	//
 	// ⭐ **`value` IS A COMPILE-TIME `FullRangeInt`, NOT A `ValueId`, AND THAT IS WHAT MAKES THE FILL PATTERN
-	// FREE.** Every call site passes a literal (0 to restore the zeroing contract, `PoisonByte` to poison a
+	// FREE.** Every call site passes a literal (0 to restore the zeroing contract, `SlabFreedBoxPoisonByte` to poison a
 	// dead payload), and a constant lets the isel compute the 64-bit broadcast `byte × 0x0101010101010101`
 	// AT COMPILE TIME and hand the backend an immediate. A `ValueId` operand would buy a generality no caller
 	// asks for and charge every fill a runtime multiply to widen the byte before the first store.

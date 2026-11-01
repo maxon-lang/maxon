@@ -18,7 +18,7 @@
 // size-classed free lists in a `.data`-rooted table serving a repeat box out of their own buckets and
 // asking `__slab_alloc` only on a miss — would be two size-class ladders, two reuse policies and two
 // places a box can be live. `__mm_alloc` asks `__slab_alloc` for the WHOLE box (header + payload) and
-// `__mm_free` hands that same pointer to `__slab_free`; the span the slot came from knows its class, so
+// `__mm_free` hands that same pointer to `__slab_free_box`; the span the slot came from knows its class, so
 // the box layer computes none.
 //
 // ⚠ **THE WHOLE SIZE DOMAIN IS RECLAIMED, WHICH IS GO'S BOUNDARY.** The slab recycles up to
@@ -41,24 +41,18 @@
 
 // The header sits IMMEDIATELY BEFORE the user pointer, so a managed pointer is usable as a plain
 // pointer: `p.x` is `[p+0]`, and nothing downstream needs to know a header exists. The layout is
-// `[-24] destructor · [-16] size · [-8] refcount`, expressed from the header BASE
+// `[-16] destructor · [-8] refcount`, expressed from the header BASE
 // because `ByteOffset` is `int(0 to u64.max)` — UNSIGNED — so a negative displacement is not
 // representable in a `loadIndirect`. The header is addressed as `ptr - HeaderBytes` once and read
 // at positive offsets from there, which costs one `sub` per header access and keeps the offset
 // type honest. (Making `ByteOffset` signed was the alternative and is wrong: it is shared with the
 // PE writer, where a file offset genuinely cannot be negative.)
 //
-// ⚠ THREE WORDS, NOT FOUR. The MM-TRACE `packedId` word is paid for only in a `--debugstream`
-// build, where it sits BELOW the three fields rather than among them (`DebugStreamPackedIdBytes`):
-// an unconditional word would be 8 bytes of nothing on every allocation in a program nobody is
+// ⚠ TWO WORDS, NOT THREE. The MM-TRACE `packedId` word is paid for only in a `--debugstream`
+// build, where it sits BELOW the two fields rather than among them (`DebugStreamPackedIdBytes`):
+// an unconditional word would be 16 bytes of nothing on every allocation in a program nobody is
 // tracing.
 let HeaderDestructorOffset = 0 as ByteOffset
-
-// ⭐⭐ **THE SIZE FIELD HOLDS THE SIZE THE CALLER ASKED FOR, AND THAT IS ITS ONLY MEANING.** The span
-// knows the class, so nothing asks this field a question about the ALLOCATOR — the one reader left is
-// `__mm_free`'s poison range, which wants exactly the bytes the caller could write, and `[ptr + size,
-// slot end)` is slack the caller never saw. One fact, one place: what the program asked for.
-let HeaderSizeOffset = 8 as ByteOffset
 
 // ⭐ **THE HEADER GEOMETRY IS PRIVATE TO THIS FILE, AND STAYS THAT WAY.** Every reader outside it —
 // `StringRuntime.__str_decref`, `ManagedMemoryRuntime.__managed_cow_detach`, the struct/union/instance destructor
@@ -66,36 +60,43 @@ let HeaderSizeOffset = 8 as ByteOffset
 // `emitIsSharedAllocation`), never by respelling `ptr - HeaderBytes + HeaderRefcountOffset`. That is what
 // makes "where the refcount lives" one fact rather than one per caller: a header that grew a field would
 // be a change to `emitHeaderBase` and nothing else, and a caller that got it wrong could not compile.
-let HeaderRefcountOffset = 16
-let HeaderBytes = 24
+let HeaderRefcountOffset = 8
+let HeaderBytes = 16
+
+// Every box total is a multiple of this and so is every prefix, so a heap box's payload is 16-aligned.
+// The slab's only smaller-aligned classes (8 and 24) are therefore unreachable for a box.
+let BoxSlotAlignment = 16
+let ImmortalSizeSlotBelowHeader = 8
 
 // ⭐⭐ **THE `--debugstream` PREFIX WORD — `(alloc_id << 16 | tag_index)`, AND IT SITS *BELOW* THE HEADER
 // ON PURPOSE.** `mm_incref`/`mm_decref`/`mm_free` know only a POINTER, so the id and the
 // type tag an mm-trace event needs must live in the box; `__mm_alloc` is the one place that knows both.
 //
-// ⚠ **PUTTING IT BELOW THE THREE EXISTING FIELDS RATHER THAN AMONG THEM IS THE WHOLE OF WHY THIS IS A
-// SMALL CHANGE.** `ptr - HeaderBytes` still addresses `destructor`/`size`/`refcount` at exactly the
-// offsets they have always had, so `emitHeaderBase` and every reader that goes through it — including
+// ⚠ **PUTTING IT BELOW THE TWO HEADER FIELDS RATHER THAN AMONG THEM IS THE WHOLE OF WHY THIS IS A
+// SMALL CHANGE.** `ptr - HeaderBytes` addresses `destructor`/`refcount` at the same offsets whether
+// or not the word exists, so `emitHeaderBase` and every reader that goes through it — including
 // `StringRuntime` and `ManagedMemoryRuntime`, which reach the refcount through this file's exported
 // builders — are untouched. Only `__mm_alloc` (which computes the total and the payload offset) and
 // `emitLoadPackedId` below know the word exists.
 //
-// ⚠⚠ **IT IS PRESENT ONLY UNDER `--debugstream`.** A normal build's box is 24 bytes of header exactly as
-// before, which is half of the compile-time gating rule (`DebugStreamRuntime`'s header states the other
-// half): 8 bytes on EVERY allocation in the language is not a price a debug instrument may charge a
-// program that is not being traced.
-let DebugStreamPackedIdBytes = 8
+// The word is 8 bytes padded to 16, so the payload stays `BoxSlotAlignment`-aligned.
+//
+// ⚠⚠ **IT IS PRESENT ONLY UNDER `--debugstream`.** A normal build's box carries the 16-byte header and
+// nothing else, which is half of the compile-time gating rule (`DebugStreamRuntime`'s header states the
+// other half): 16 bytes on EVERY allocation in the language is not a price a debug instrument may charge
+// a program that is not being traced.
+let DebugStreamPackedIdBytes = 16
 
 // The bytes `__mm_alloc` prepends to the payload — the header, plus the DebugStream word when this build
 // carries one. ONE derivation, read by the allocation itself and by `emitLoadPackedId`, so the two cannot
 // disagree about where the payload starts. (`emitBoxAllocationBase` walks the SAME distance in two hops,
 // from a header base a caller already holds, so an untraced build spends no op on a displacement of zero;
 // both routes come out of `HeaderBytes` and `DebugStreamPackedIdBytes` and there is no third number.)
-function boxPrefixBytes(debugStream bool) returns FullRangeInt
+export function boxPrefixBytes(debugStream bool) returns FullRangeInt
 	// ⚠ THE PARENTHESES ARE LOAD-BEARING. `a + b if c else d` binds as `a + (b if c else d)`, so the
-	// unparenthesized form returned `HeaderBytes + HeaderBytes` on an UNTRACED build — a 48-byte prefix
-	// where every box has always had 24. It compiled, it linked, and it was found only by the
-	// byte-identical check against a control build.
+	// unparenthesized form returns `HeaderBytes + HeaderBytes` on an UNTRACED build — a 32-byte prefix
+	// where an untraced box has 16. It compiles and links, so only a byte-identical check against a
+	// control build sees it.
 	return (HeaderBytes + DebugStreamPackedIdBytes) if debugStream else HeaderBytes
 end 'boxPrefixBytes'
 
@@ -123,8 +124,8 @@ let MmImmortalRefcount = 4611686018427387904  // 0x4000_0000_0000_0000 = 2^62
 // counted box from the other two, and the counted box is the common one.
 let MmSharedRefcountMark = 2305843009213693952  // 0x2000_0000_0000_0000 = 2^61
 
-// A header field is one machine word: the three offsets above are eight apart because of it, and the
-// DebugStream prefix word below them is the same width.
+// A header field is one machine word: the two offsets above are eight apart because of it, and the
+// DebugStream id and the image record's size word below them are the same width.
 let HeaderSlotBytes = 8
 
 // The packed id of a box that was never allocated.
@@ -134,19 +135,21 @@ let NoAllocationId = 0
 // `.rdata` immediately before the record, so that `ptr - HeaderBytes` reaches a header saying "immortal"
 // rather than whatever payload the section packer happened to place there.
 //
-// ⚠ **THE SIZE COMES FROM `boxPrefixBytes`, THE VERY FUNCTION `__mm_alloc` SIZES ITS OWN PREFIX WITH.** A
-// `--debugstream` build carries the packed-id word BELOW the three fields, so the prefix is 32 there and 24
-// otherwise; a header minted at a literal 24 would leave a traced build reading an image record's id out of
-// the `.rdata` payload in front of it.
+// ⚠ **THE SIZE COMES FROM `immortalPrefixBytes`, WHICH BUILDS ON `boxPrefixBytes`, THE FUNCTION `__mm_alloc`
+// SIZES ITS OWN PREFIX WITH.** A `--debugstream` build carries the packed-id word BELOW the header, so the
+// prefix is 32 there; an untraced image record spends 24, the 16-byte header and its size word. A header
+// minted at a literal width would leave a traced build reading an image record's id out of the `.rdata`
+// payload in front of it.
 //
-// ⭐⭐ **`size@8` IS THE RECORD'S OWN BYTE COUNT, AND ITS ONE READER IS `__mm_own`'s COPY ARM.** A durable
-// sink handed an image record must be given a PRIVATE box instead, and the extent of that copy has to come
-// from somewhere a runtime can read; the header is the only thing every record shape shares.
+// ⭐⭐ **THE WORD `ImmortalSizeSlotBelowHeader` BELOW THE HEADER IS THE RECORD'S OWN BYTE COUNT, AND ITS ONE
+// READER IS `__mm_own`'s COPY ARM.** A durable sink handed an image record must be given a PRIVATE box
+// instead, and the extent of that copy has to come from somewhere a runtime can read. A heap box's header
+// holds no size, so the word sits below the header and a traced build's id word is the one before it.
 //
-// ⛔ **IT IS ALSO WHAT A MISSED IMMORTALITY TEST WOULD USE, AND NO VALUE MAKES THAT ARM SAFE**: `__mm_free`
-// would hand `__slab_free` an `.rdata` address whatever this word said. So the field is TRUE, and the
-// guarantee is the test at the release door (`emitRefcountCheckToLastOwner`) — `__mm_free`'s own header
-// states why the test cannot live there instead.
+// ⛔ **NO VALUE OF THAT WORD MAKES A MISSED IMMORTALITY TEST SAFE**: `__mm_free` would hand
+// `__slab_free_box` an `.rdata` address whatever this word said. So the word is TRUE, and the guarantee is
+// the test at the release door (`emitRefcountCheckToLastOwner`) — `__mm_free`'s own header states why the
+// test cannot live there instead.
 //
 // The packed-id word a traced build carries is zero: an image record has no allocation id because it was
 // never allocated, and nothing reads it — every mm-trace event is emitted past a test that has already sent
@@ -162,23 +165,34 @@ export function immortalBoxHeaderBytes(debugStream bool, recordBytes FullRangeIn
 		header.append(scalarImage(NoAllocationId, byteCount: HeaderSlotBytes))
 	end 'tracedBuild'
 
+	let sizeSlot = header.count() as ByteOffset
+	header.append(scalarImage(recordBytes, byteCount: HeaderSlotBytes))
+
 	let base = header.count() as ByteOffset
+
+	if base - sizeSlot != ImmortalSizeSlotBelowHeader 'sizeSlotDrift'
+		panic("immortalBoxHeaderBytes: the size slot sits {base - sizeSlot} bytes below the header but its constant says {ImmortalSizeSlotBelowHeader} — `__mm_own` reads the byte count at that distance")
+	end 'sizeSlotDrift'
+
 	appendHeaderSlot(header, base: base, expectedOffset: HeaderDestructorOffset, value: TrivialDestructor)
-	appendHeaderSlot(header, base: base, expectedOffset: HeaderSizeOffset, value: recordBytes)
 	appendHeaderSlot(header, base: base, expectedOffset: HeaderRefcountOffset, value: MmImmortalRefcount)
 
-	if header.count() as FullRangeInt != boxPrefixBytes(debugStream) 'sizeDrift'
-		panic("immortalBoxHeaderBytes: assembled {header.count()} bytes, not the {boxPrefixBytes(debugStream)} `__mm_alloc` prepends — an image record addressed through a header of the wrong width reads its neighbour's bytes")
+	if header.count() as FullRangeInt != immortalPrefixBytes(debugStream) 'sizeDrift'
+		panic("immortalBoxHeaderBytes: assembled {header.count()} bytes, not the {immortalPrefixBytes(debugStream)} an image record's prefix spends — an image record addressed through a header of the wrong width reads its neighbour's bytes")
 	end 'sizeDrift'
 
 	return header
 end 'immortalBoxHeaderBytes'
 
+function immortalPrefixBytes(debugStream bool) returns FullRangeInt
+	return boxPrefixBytes(debugStream) + (0 if debugStream else ImmortalSizeSlotBelowHeader)
+end 'immortalPrefixBytes'
+
 // Where inside an image record's `.rdata` payload the record itself begins — the bytes the header above
 // spends, and therefore where the payload's LABEL points. Derived from `boxPrefixBytes`, the same number
 // `immortalBoxHeaderBytes` asserts its own length against, so an address and the bytes at it cannot drift.
 export function immortalBoxHeaderSize(debugStream bool) returns ByteOffset
-	return boxPrefixBytes(debugStream) as ByteOffset
+	return immortalPrefixBytes(debugStream) as ByteOffset
 end 'immortalBoxHeaderSize'
 
 // Append one header word at `expectedOffset` from the header BASE, refusing to write it anywhere else.
@@ -229,8 +243,9 @@ end 'emitRouteOnRefcountWord'
 // ⭐⭐ **TWO LAYERS, NESTED: EVERY BOX IS ALSO A SLAB REQUEST.** The RAW trio counts every request at the
 // slab doors, boxes included; the TRACKED trio counts boxes at the box doors. The public raw readers
 // answer raw − tracked (`buildMmCounterAccessors`), so the layers they report are disjoint while the
-// allocator carries ONE door per shape. `__mm_alloc_bytes` records the PAYLOAD the caller asked for,
-// so the raw reader also subtracts the box prefix per box to keep its answer the header-free volume.
+// allocator carries ONE door per shape. `__mm_alloc_bytes` records the payload rounded up to
+// `BoxSlotAlignment`, so the raw reader also subtracts the box prefix per box to keep its answer the
+// header-free volume.
 
 export let MmIncrefName = b"__mm_incref"
 export let MmRetainName = b"__mm_retain"
@@ -1598,7 +1613,7 @@ export let SingleStep = 1 as Imm32
 //
 // ⚠ **THE CONTIGUOUS FILL IS NOT A CALLER.** A fill is
 // `StdOp.memFill` — one op, lowered by each target as a size ladder of its own
-// (`encodeX64MemFill`, `arm64MemFill`, wasm's `memory.fill`) — so `buildMmFree`'s poison, the slab's
+// (`encodeX64MemFill`, `arm64MemFill`, wasm's `memory.fill`) — so the slab's freed-box poison, its
 // recycled-slot zeroer and `buildManagedZeroElems`'s byte arm build no loop here. The partition stays for
 // the copies, which have a SOURCE as well as a destination and no op in the dialect.
 //
@@ -1690,11 +1705,11 @@ end 'closeCopyRunSplit'
 // just to have a non-null pointer would be a function with no reason to exist.)
 //
 // ⭐⭐ **THE WHOLE BOX IS ONE SLAB REQUEST, AND THE BOX LAYER COMPUTES NO SIZE CLASS OF ITS OWN.**
-// `header + payload` goes to `__slab_alloc`, which picks the class, hands back a slot of at least that many
-// bytes and REMEMBERS which span it came from; `__mm_free` gives that same pointer back and the span
-// answers which class the slot belongs to, so nothing shifts a rounded size out of the header. The
-// header records what the CALLER asked for (see `HeaderSizeOffset`) and the slack between it and the end of
-// the slot is the allocator's business, exactly as the slack inside a size class is.
+// `header + payload`, rounded up to `BoxSlotAlignment`, goes to `__slab_alloc`, which picks the class, hands
+// back a slot of at least that many bytes and REMEMBERS which span it came from; `__mm_free` gives that same
+// pointer back and the span answers which class the slot belongs to, so the header records no size. The
+// slack between the rounded total and the end of the slot is the allocator's business, exactly as the slack
+// inside a size class is.
 //
 // ⚠ **A TRACED BUILD AND A NORMAL ONE SHARE ONE BODY SHAPE**, differing only in the tag argument below.
 function buildMmAlloc(module StdModule, model MachineModel)
@@ -1710,14 +1725,16 @@ function buildMmAlloc(module StdModule, model MachineModel)
 
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: block, count: paramCount)
-	let size = 0 as ValueId
+	let size = 0
 	let destructor = 1 as ValueId
 	let tagIndex = 2
 
 	let headerConst = ids.mint()
 	module.appendOp(block, op: StdOp.const(headerConst, value: boxPrefixBytes(debugStream), valueType: StdType.i64))
-	let total = ids.mint()
-	module.appendOp(block, op: StdOp.binOp(total, lhs: size, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let roundUpConst = emitConst(module, block: block, value: boxPrefixBytes(debugStream) + BoxSlotAlignment - 1, ids: ids)
+	let alignMaskConst = emitConst(module, block: block, value: -BoxSlotAlignment, ids: ids)
+	let unrounded = emitBin(module, block: block, a: size, b: roundUpConst, opcode: StdBinOpcode.add, ids: ids)
+	let total = emitBin(module, block: block, a: unrounded, b: alignMaskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let allocation = emitSlabAlloc(module, block: block, bytes: total, kind: SlabBufferKind.managedBox, ids: ids)
 
 	// The DebugStream prefix word, when this build has one: `(alloc_id << 16) | tag_index`, stamped once
@@ -1761,7 +1778,6 @@ function buildMmAlloc(module StdModule, model MachineModel)
 	end 'stampPackedId'
 
 	module.appendOp(block, op: StdOp.storeIndirect(base, offset: HeaderDestructorOffset, valueId: destructor, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(base, offset: HeaderSizeOffset, valueId: size, valueType: StdType.i64))
 
 	// ⭐ THE REFCOUNT IS NOT WRITTEN, AND ITS ABSENCE IS THE ZEROING CONTRACT DOING ITS JOB. The slab
 	// guarantees zeroed memory — a VIRGIN slot because its pages came straight from the OS, a RECYCLED one
@@ -1771,11 +1787,12 @@ function buildMmAlloc(module StdModule, model MachineModel)
 	// non-zeroing allocator survive its own bugs: every call site "handles" it locally, so nobody fixes
 	// the allocator. If this line ever becomes necessary, the allocator is broken, not this function.
 
-	// The TRACKED columns, on the calling thread's row. `size` and not `total`: the figure is the payload
-	// the caller asked for, so it does not move when the header does and is identical across a traced and
-	// an untraced build. The region is committed — the `__slab_alloc` above committed it — so the base is
-	// a plain load.
-	block = emitTrackedTrafficStep(module, func: func, cur: block, model: model, event: SlabTrafficEvent.alloc(size), ids: ids)
+	// The TRACKED columns, on the calling thread's row. The figure is `total` less the prefix, the payload
+	// rounded to `BoxSlotAlignment`: both prefixes are multiples of it, so a traced and an untraced build
+	// credit the same number. The region is committed — the `__slab_alloc` above committed it — so the base
+	// is a plain load.
+	let roundedPayload = emitBin(module, block: block, a: total, b: headerConst, opcode: StdBinOpcode.sub, ids: ids)
+	block = emitTrackedTrafficStep(module, func: func, cur: block, model: model, event: SlabTrafficEvent.alloc(roundedPayload), ids: ids)
 
 	let payload = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(payload, lhs: base, rhs: payloadOffset, opcode: StdBinOpcode.add, operandType: StdType.i64))
@@ -1991,7 +2008,8 @@ function buildMmOwn(module StdModule)
 	var owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: box, immortal: copy, ids: ids)
 
 	let header = emitHeaderBase(module, block: copy, ptr: box, ids: ids)
-	let size = emitLoadField(module, block: copy, record: header, offset: HeaderSizeOffset, ids: ids)
+	let sizeAddr = emitBin(module, block: copy, a: header, b: emitConst(module, block: copy, value: ImmortalSizeSlotBelowHeader, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let size = emitLoadField(module, block: copy, record: sizeAddr, offset: 0, ids: ids)
 	let trivial = emitConst(module, block: copy, value: TrivialDestructor, ids: ids)
 	let fresh = ids.mint()
 	emitMmAllocCall(module, block: copy, result: fresh, size: size, destructor: trivial, tag: mmTagIndex(MmTag.Untagged), ids: ids)
@@ -2583,9 +2601,8 @@ end 'sharedAllocationGuardBox'
 // negative, which the exit check reads as nonzero.
 //
 // ⚠ **THE LAST OWNER LEAVES `-1` (or `mark - 1`) IN THE WORD, AND THAT IS SOUND BECAUSE NOTHING READS IT
-// AGAIN.** The box is dead the instant that arm is taken: `__mm_free` reads the destructor and the SIZE out of
-// the header, never the count, and the slot is poisoned and handed back to the slab before any other party
-// can address it.
+// AGAIN.** The box is dead the instant that arm is taken: `__mm_free` never reads the count, and the slot
+// is poisoned and handed back to the slab before any other party can address it.
 //
 // ⚠ **THE `mm_decref` EVENT IS EMITTED ONCE, BEFORE THE BRANCH.** See `emitMmDecrefEvent` for the identity
 // that makes one emission correct for both paths; it also leaves the caller's `lastOwner` block untouched by
@@ -2686,22 +2703,13 @@ function buildMmRelease(module StdModule)
 	module.functions.push(func)
 end 'buildMmRelease'
 
-// The byte written over every freed payload. `0x3F` is chosen for what it does when a
-// use-after-free READS the dead memory it should not have: as a small integer it is a
-// conspicuous 63 (never the 0 a correct freshly-zeroed slot would hold), and as a POINTER a word
-// of it is `0x3F3F3F3F3F3F3F3F` — a non-canonical x64 address, so dereferencing it FAULTS rather
-// than silently reads. Either way the bug becomes loud at the read instead of invisible.
-let PoisonByte = 0x3F
-
 // ⭐⭐ **THE SLAB SLOT'S BASE FOR A BOX WHOSE PAYLOAD POINTER IS `ptr` — given the header base the caller
-// already holds.** `__mm_alloc` asked the slab for the WHOLE box, so what `__slab_free` must be handed is
-// what `__slab_alloc` answered: the header base in an ordinary build, and one word BELOW it where a
-// `--debugstream` build's packed id sits (`DebugStreamPackedIdBytes`).
+// already holds.** `__mm_alloc` asked the slab for the WHOLE box, so what `__slab_free_box` must be handed is
+// what `__slab_alloc` answered: the header base in an ordinary build, and `DebugStreamPackedIdBytes` BELOW it
+// where a `--debugstream` build's packed id sits.
 //
-// ⚠ **IT TAKES THE HEADER BASE RATHER THAN THE PAYLOAD POINTER SO AN UNTRACED BUILD MINTS NOTHING.** The
-// one caller has already computed `ptr - HeaderBytes` for the size load, and with no prefix word the two
-// addresses are the same value — recomputing it from `ptr` would put a second `sub` on the free path of
-// every heap operation in the language, for a distance of zero.
+// ⚠ **IT TAKES THE HEADER BASE RATHER THAN THE PAYLOAD POINTER SO AN UNTRACED BUILD MINTS NOTHING.** With no
+// prefix word the allocation base is the header base itself, so there is no distance to walk.
 function emitBoxAllocationBase(module StdModule, block IrBlock, headerBase ValueId, ids ValueMinter) returns ValueId
 	if not module.debugStream 'noPrefixWord'
 		return headerBase
@@ -2711,46 +2719,36 @@ function emitBoxAllocationBase(module StdModule, block IrBlock, headerBase Value
 	return emitBin(module, block: block, a: headerBase, b: prefix, opcode: StdBinOpcode.sub, ids: ids)
 end 'emitBoxAllocationBase'
 
-// `__mm_free(ptr)` — the death of a box. Three things happen, in this order: the trace event, the live
-// count drops (the one number the leak gate reads), the payload is POISONED, and the box goes back to the
-// slab — which is where its bytes become somebody else's.
+// `__mm_free(ptr)` — the death of a box. Two things happen, in this order: the trace event and the live
+// count drop (the one number the leak gate reads), and the box goes back to the slab through
+// `__slab_free_box` — which poisons it and is where its bytes become somebody else's.
 //
 // ⭐ **POISON-ON-FREE, ALWAYS ON.** A use-after-free that reads bytes nothing has
 // overwritten returns exactly the value it wrote before the free, and is INVISIBLE to every test.
-// Overwriting the payload with `PoisonByte` the instant it dies turns that whole class loud: a
+// Overwriting the payload with `SlabFreedBoxPoisonByte` the instant it dies turns that whole class loud: a
 // read-after-free returns 63 or faults on a poisoned pointer instead of stale-but-correct bytes. This is
 // deliberately not a flag — it is unconditional, so the class cannot hide in a build nobody thought to
-// enable it for, and so the committed suite is a standing gate against it. **The size is in the header**
-// (`__mm_alloc` stored the CALLER's size at `HeaderSizeOffset`), so the poisoned range is exactly
-// `[ptr, ptr + size)` — the payload the program could actually write, not the header (whose first word
-// `__slab_free` is about to overwrite with a free-list link anyway) and not the slack past the request
-// (which the slot's re-zero covers and no caller ever saw).
+// enable it for, and so the committed suite is a standing gate against it. The fill is `__slab_free_box`'s
+// because only the span knows the slot's size, and the header holds none.
 //
-// ⭐⭐ **AND THEN IT GOES TO `__slab_free`, WHICH IS WHAT MAKES THE POISON PAIR WITH SOMETHING.** The
-// two are the halves of one contract and they live one layer apart on purpose: the poison is a
-// MANAGED-BOX discipline (it wants the caller's size, and it is meaningless for a green-thread stack), the
-// re-zero is an ALLOCATOR obligation (`__slab_alloc`'s recycled arm memFills the whole slot, which is
-// what lets `__mm_alloc` still decline to write the refcount). Neither can be folded into the other, and
-// the invariant they hold between them is the one this file's alloc side leans on: **every box a caller
-// sees is zero.**
+// ⭐⭐ **THE POISON PAIRS WITH THE SLAB'S RE-ZERO.** The two are the halves of one contract and they live
+// one layer apart on purpose: the poison is a MANAGED-BOX discipline (only `__slab_free_box` fills; every
+// other buffer kind frees through a door that does not), the re-zero is an ALLOCATOR
+// obligation (`__slab_alloc`'s recycled arm memFills the whole slot, which is what lets `__mm_alloc` still
+// decline to write the refcount). Neither can be folded into the other, and the invariant they hold
+// between them is the one this file's alloc side leans on: **every box a caller sees is zero.**
 //
-// ⚠⚠ **A RECYCLE THEREFORE COSTS TWO PASSES OVER THE SAME BYTES — poison here, zero on the way out —
+// ⚠⚠ **A RECYCLE THEREFORE COSTS TWO PASSES OVER THE SAME BYTES — poison on free, zero on the way out —
 // and that is a STATED OPEN COST.** It is not paid on a VIRGIN
 // slot, which is exactly the point of the slab's bump region: those bytes are OS-fresh, so the alloc side
-// skips the fill and nothing ever poisoned them. It is paid in full on every reuse. The two halves cannot
-// be collapsed into one pass without giving up either the poison (which is a debugging guarantee) or the
-// per-slot zero (which is a correctness guarantee), so what is left is to know the price and not to
-// pretend otherwise.
-//
-// ⚠ **THE OS-DIRECT ARM PAYS THE POISON FOR NOTHING**, since the mapping is about to be handed back to
-// the OS whole. Skipping it would mean branching on the box's size on the path of every free in the
-// language to save work on the rarest one; a box past `SlabMaxSmallSize` is at least 32 KiB, so the fill is
-// also a rounding error against the `VirtualFree`/`munmap` that follows it.
+// skips the fill and nothing ever poisoned them. It is paid on every reuse, up to the fill's cap. The two
+// halves cannot be collapsed into one pass without giving up either the poison (which is a debugging
+// guarantee) or the per-slot zero (which is a correctness guarantee), so what is left is to know the price
+// and not to pretend otherwise.
 //
 // ⛔⛔ **THE IMMORTALITY TEST IS NOT HERE AND MUST NEVER BE MOVED HERE.** A synthetic header makes an image
-// record look WELL-FORMED to this function: it would read a `size@8`, poison that range and hand
-// `__slab_free` an `.rdata` address the allocator never returned — a failure that looks plausible rather
-// than obvious. By the time control reaches a free the box has already been judged dead, so the judgement
+// record look WELL-FORMED to this function: it would hand `__slab_free_box` an `.rdata` address the
+// allocator never returned — a failure that looks plausible rather than obvious. By the time control reaches a free the box has already been judged dead, so the judgement
 // is what has to be right; the test therefore sits at the top of the release door
 // (`emitRefcountCheckToLastOwner`), where a record is still deciding whether to die.
 //
@@ -2764,9 +2762,9 @@ function buildMmFree(module StdModule, model MachineModel)
 	var start = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: start, count: 1)
-	let ptr = 0 as ValueId
+	let ptr = 0
 
-	// The `mm_free` event BEFORE the poison and before the reclaim, so the trace reports the death of the
+	// The `mm_free` event BEFORE the reclaim, so the trace reports the death of the
 	// box while its header is still the one that identifies it — and so a recycled address reads
 	// `free(id=n)` ahead of the `alloc(id=m)` that takes it over, which is what keeps a traced build's
 	// events unambiguous now that a traced build recycles.
@@ -2777,21 +2775,15 @@ function buildMmFree(module StdModule, model MachineModel)
 	// total back would report a phase that allocated and released a million boxes as having done nothing.
 	entry = emitTrackedTrafficStep(module, func: func, cur: entry, model: model, event: SlabTrafficEvent.free, ids: ids)
 
-	// The payload size the alloc recorded in the header; the range to poison is exactly `[ptr, ptr + size)`.
-	// The fill itself is the shared `StdOp.memFill` (the slab's recycled-slot zeroer and the array
-	// capacity-slot eraser are its other callers) — a `size == 0` empty allocation poisons nothing.
 	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
-	let size = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(size, addrId: header, offset: HeaderSizeOffset, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.memFill(ptr, byteCountId: size, value: PoisonByte))
 
-	// ⭐ **AND BACK TO THE SLAB, UNCONDITIONALLY.** There is one exit and no guard: `__slab_free` routes on
+	// ⭐ **AND BACK TO THE SLAB, UNCONDITIONALLY.** There is one exit and no guard: `__slab_free_box` routes on
 	// its own reverse map — a hit names the owning span and pushes the slot onto its free list, a MISS is
 	// the OS-direct sentinel and the mapping goes back whole. The box layer knows neither which span nor
 	// which tier, and asking would be a second copy of a routing decision the allocator already owns.
 	//
 	// ⚠ **THE POINTER IS THE SLAB SLOT'S BASE, NOT THE PAYLOAD.** It is exactly what `__slab_alloc`
-	// answered, which is what `__slab_free` requires (it threads the free list through the SLOT's first
+	// answered, which is what the free doors require (they thread the free list through the SLOT's first
 	// word, so an interior pointer would corrupt the slot it landed in and then be handed out as a base).
 	let slot = emitBoxAllocationBase(module, block: entry, headerBase: header, ids: ids)
 	emitSlabFree(module, block: entry, ptr: slot, kind: SlabBufferKind.managedBox, ids: ids)
@@ -2824,8 +2816,8 @@ end 'emitTrackedTrafficStep'
 // ⭐⭐ **THE RAW READERS ANSWER raw − tracked.** Every box is also a slab request, so the slab's raw
 // columns count boxes too; subtracting the tracked column at READ time keeps the two reported layers
 // disjoint while the allocator carries one door per shape. The byte column subtracts the box prefix per box
-// as well, because the tracked byte column records the payload the caller asked for and the raw column the
-// whole slot request.
+// as well, because the tracked byte column records the rounded payload and the raw column the whole slot
+// request.
 //
 // ⛔⛔ **EVERY ONE OF THEM IS ONE WALK, AND A LAYER'S SUBTRACTION HAPPENS INSIDE IT.** Each figure is a
 // `SlabTrafficFigure` — an expression over a SINGLE row — so a difference reads its two columns together.

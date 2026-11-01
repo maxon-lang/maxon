@@ -16,7 +16,7 @@ The heap is part of the runtime the compiler emits into every program that alloc
 - `SlabRuntime.maxon` carves them into spans of one size class each. A request above 32 KiB bypasses the size
   classes and goes to the operating system directly, and is returned to it whole when freed.
 - `MmRuntime.maxon` is the box layer on top: `__mm_alloc` asks `__slab_alloc` for the box, header and payload
-  together, and `__mm_free` hands the same pointer back to `__slab_free`.
+  together, and `__mm_free` hands the same pointer back to `__slab_free_box`.
 
 Each processor (P) of the scheduler owns a cache of spans and is their only writer, so allocating from it
 takes no lock. A slot freed by another P is pushed onto the owning P's queue with a compare-and-swap, and the
@@ -46,9 +46,13 @@ A recycled slot is re-zeroed as it is popped from the free list: `__slab_alloc` 
 before anything reads it and never keeps managed pointers in the region; it has no caller, so dead function
 elimination removes it from every program.
 
-`__mm_free` poisons the freed payload with `0x3F` before returning it (`PoisonByte`): a poisoned integer
-reads as a conspicuous 63, and a poisoned pointer is a non-canonical x64 address that faults when
-dereferenced. A recycled slot is therefore written twice, poisoned on free and zeroed on reuse.
+`__mm_free` returns a box through `__slab_free_box`, which fills the freed slot with `0x3F`
+(`SlabFreedBoxPoisonByte`) before the slot goes back to its span. The fill starts at the payload and covers at
+most 256 bytes (`SlabFreedBoxPoisonCapBytes`). A box is filled when it is freed into a span whose slot
+extends past the box's header (and `--debugstream` prefix); an OS-direct mapping goes back whole. Every other
+buffer kind frees through `__slab_free`. A poisoned integer reads as a conspicuous 63, and a poisoned pointer is a
+non-canonical x64 address that faults when dereferenced. A recycled slot is therefore written twice, poisoned
+on free and zeroed on reuse.
 
 Code relies on the contract: `__mm_alloc` does not store an initial refcount, because the slot already holds
 0, and a C string's terminator is the zero already there. A layout that needs particular zero bytes for its

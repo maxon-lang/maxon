@@ -24,29 +24,28 @@ The memory manager provides four core operations:
 
 ## Header Layout
 
-Every managed heap object has a **24-byte inline header** immediately before the user-visible pointer. The header stores the destructor function pointer, the payload size, and the reference count.
+Every managed heap object has a **16-byte inline header** immediately before the user-visible pointer. The header stores the destructor function pointer and the reference count. A box's total size (prefix plus payload) is rounded up to a multiple of 16, so every heap object's user pointer is 16-byte aligned.
 
 ```
                        +--- user_ptr (what Maxon code sees)
                        |
-     +-----------+---------+---------+-------------------------+
-     | destructor|  size   | refcount|  user data (size bytes) |
-     +-----------+---------+---------+-------------------------+
-     [ptr-24]     [ptr-16]  [ptr-8]   [ptr]
+     +-----------+---------+-------------------------+
+     | destructor| refcount|  user data              |
+     +-----------+---------+-------------------------+
+     [ptr-16]     [ptr-8]   [ptr]
 ```
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
-| `ptr - 24` | `destructor` | `fn_ptr` | Generated destructor function (or NULL for no managed fields) |
-| `ptr - 16` | `size` | `u64` | The payload's byte count |
+| `ptr - 16` | `destructor` | `fn_ptr` | Generated destructor function (or NULL for no managed fields) |
 | `ptr - 8` | `refcount` | `u64` | Reference count |
 | `ptr` | user data | varies | The object's fields |
 
-**There is no type tag in the header.** A build passed `--debugstream` prepends one more word *below* the
-header, at `ptr - 32`, holding `(alloc_id << 16) | tag_index` — the allocation's id and the interned index
-of its type's name, which is what a trace event carries. It is present only under that flag: eight bytes on
-every allocation in the language is not a price a debug instrument may charge a program that is not being
-traced, so a normal build's box is 24 bytes of header exactly.
+A build passed `--debugstream` prepends a 16-byte prefix *below* the header; its first word, at `ptr - 32`,
+holds `(alloc_id << 16) | tag_index` — the allocation's id and the interned index of its type's name, which is
+what a trace event carries — and the second word pads the prefix to 16 so the user pointer stays aligned. The
+prefix is present only under that flag, so a normal build's box is 16 bytes of header exactly and a program
+that is not being traced pays nothing for the instrument.
 
 ## API
 
@@ -54,8 +53,8 @@ traced, so a normal build's box is 24 bytes of header exactly.
 
 Allocates a new heap object:
 
-1. Asks the slab allocator for `size + 24` bytes (24 for the inline header), or `size + 32` under `--debugstream`.
-2. Initializes the header: `destructor = destructor`, `size = size`, `refcount = 0`. Under `--debugstream` it also writes the packed id below the header; `tag` is read nowhere else.
+1. Asks the slab allocator for `size + 16` bytes (16 for the inline header), or `size + 32` under `--debugstream`, rounded up to a multiple of 16.
+2. Initializes the header: `destructor = destructor`, `refcount = 0`. Under `--debugstream` it also writes the packed id below the header; `tag` is read nowhere else.
 3. Increments the global `__mm_alloc_count`.
 4. Returns the pointer to user data (past the header).
 
@@ -84,7 +83,7 @@ if refcount == 0:
     destructor = [ptr - 16]
     if destructor != NULL:
         destructor(ptr)        // decrefs managed fields
-    HeapFree(ptr - 24)         // free the entire block
+    HeapFree(ptr - 16)         // free the entire block
     __mm_alloc_count -= 1
 ```
 
@@ -411,10 +410,11 @@ order they took the lock.
 
 ### Corruption detection is always on
 
-There is no opt-in debug allocator. `__mm_free` overwrites every freed payload with the poison byte `0x3F`
-on every build: read back as a small integer it is a conspicuous 63 rather than the 0 a freshly zeroed slot
-would hold, and a word of it is the non-canonical address `0x3F3F3F3F3F3F3F3F`, so dereferencing a poisoned
-pointer faults instead of quietly reading. Either way a use-after-free becomes loud at the read.
+There is no opt-in debug allocator. On every build, a box freed into a slab span has its slot overwritten
+from the payload start with the poison byte `0x3F`, for at most 256 bytes: read back as a small integer it is
+a conspicuous 63 rather than the 0 a freshly zeroed slot would hold, and a word of it is the non-canonical
+address `0x3F3F3F3F3F3F3F3F`, so dereferencing a poisoned pointer faults instead of quietly reading. Either
+way a use-after-free becomes loud at the read.
 
 ### Leak Check
 
@@ -464,7 +464,7 @@ All managed (heap-allocated) variables are **zero-initialized** at function entr
 
 ## Summary of Invariants
 
-1. Every heap object has a 24-byte inline header at `[ptr-24]` containing tag, destructor, and refcount.
+1. Every heap object has a 16-byte inline header at `[ptr-16]` containing destructor and refcount.
 2. Refcount starts at 0 after `mm_alloc`. The caller's assignment emits `mm_incref` to set it to 1.
 3. Refcount reaches 0 -> destructor called (decrefs managed fields) -> object freed.
 4. Reference cycles are impossible -- they are compile-time errors.

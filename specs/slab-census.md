@@ -1288,7 +1288,7 @@ typealias TallyArray = Array with HeapCount
 
 let Population = 1000
 let BucketCount = 2048
-let HeaderBytes = 24
+let HeaderBytes = 16
 
 type Widget
 	export var low as WidgetField

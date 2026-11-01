@@ -1129,8 +1129,8 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow
   __im_viewed:
-    x64.leaRegRegImm32 rsi, rcx, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.leaRegRegImm32 rsi, rcx, -16
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __im_slow
   __im_store#17:
@@ -1231,8 +1231,8 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow
   __im_viewed:
-    x64.leaRegRegImm32 rsi, rcx, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.leaRegRegImm32 rsi, rcx, -16
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __im_slow
   __im_store#17:
@@ -1331,8 +1331,8 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq __im_slow
   __im_viewed:
-    arm64.sub x3, x0, 24
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.sub x3, x0, 16
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
     arm64.cmp x3, 0
     arm64.b.ne __im_slow
   __im_store#17:
@@ -1425,8 +1425,8 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq __im_slow
   __im_viewed:
-    arm64.sub x3, x0, 24
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.sub x3, x0, 16
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
     arm64.cmp x3, 0
     arm64.b.ne __im_slow
   __im_store#17:
@@ -1547,8 +1547,8 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow
   __im_viewed:
-    x64.leaRegRegImm32 rdx, rcx, -24
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
+    x64.leaRegRegImm32 rdx, rcx, -16
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow
   __im_store:
@@ -1648,8 +1648,8 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow
   __im_viewed:
-    x64.leaRegRegImm32 rdx, rcx, -24
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
+    x64.leaRegRegImm32 rdx, rcx, -16
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow
   __im_store:
@@ -1744,8 +1744,8 @@ func @main {
     arm64.cmp x1, 0
     arm64.b.eq __im_slow
   __im_viewed:
-    arm64.sub x2, x1, 24
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
+    arm64.sub x2, x1, 16
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x2, 0
     arm64.b.ne __im_slow
   __im_store:
@@ -1841,8 +1841,8 @@ func @main {
     arm64.cmp x1, 0
     arm64.b.eq __im_slow
   __im_viewed:
-    arm64.sub x2, x1, 24
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
+    arm64.sub x2, x1, 16
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x2, 0
     arm64.b.ne __im_slow
   __im_store:

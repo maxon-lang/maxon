@@ -16,7 +16,7 @@ functions any file declares. This spec pins the six that read the ALLOCATOR's ow
 |---|---|
 | `__Builtins.mmAllocTotal()` | cumulative count of TRACKED allocations since process start |
 | `__Builtins.mmAllocLive()` | TRACKED allocations currently live |
-| `__Builtins.mmAllocBytes()` | cumulative USER bytes handed out by TRACKED allocations |
+| `__Builtins.mmAllocBytes()` | cumulative USER bytes handed out by TRACKED allocations, each payload rounded up to a multiple of 16 |
 | `__Builtins.mmRawAllocTotal()` | cumulative count of RAW (header-free) allocations |
 | `__Builtins.mmRawAllocLive()` | RAW allocations currently live |
 | `__Builtins.mmRawAllocBytes()` | cumulative bytes handed out by RAW allocations |

@@ -90,17 +90,15 @@ hello world len=11
 
 <!-- test: terminates-an-exactly-full-receiver-without-leaking -->
 <!-- tier: stdlib -->
-The same shape at the length that lands exactly full in its slab slot: `HeaderBytes(24) + 8` is 32, a
-whole size class, so `buffer[8]` is past the end of the record's allocation entirely and belongs to the
-allocator. Its own case beside the eleven-byte one because the two differ in WHOSE byte an unguarded
-probe would read — at length 11 the ask rounds up to a 48-byte slot, leaving 13 bytes of the record's
-own private zeroed slack, so that read would be harmless; at length 8 there is no slack and the read is out of
-bounds. The answer this spec requires is the same for both, and that is the point: the guard cannot see the
-allocator's rounding, so it refuses the whole shape rather than the half that is actually unsafe.
+The same shape at a second length: `HeaderBytes(16) + 16` is 32, exactly one 32-byte slot, so
+`buffer[length]` belongs to the allocator; at length 11 the ask is 27, which a box rounds up to the same
+slot, leaving 5 bytes of the record's own private zeroed slack. The answer this spec requires is the same
+at every length, and that is the point: the guard cannot see the allocator's rounding, so it refuses the
+whole shape rather than the half that is actually unsafe.
 ```maxon
 function main() returns ExitCode
 	var s = ""
-	s.append("xxxxxxxx")
+	s.append("xxxxxxxxxxxxxxxx")
 	print("{String.fromCString(s.cstr())} len={s.count()}\n")
 	return 0
 end 'main'
@@ -109,7 +107,7 @@ end 'main'
 0
 ```
 ```stdout
-xxxxxxxx len=8
+xxxxxxxxxxxxxxxx len=16
 ```
 
 <!-- test: packed-receiver-pays-once-and-only-once -->

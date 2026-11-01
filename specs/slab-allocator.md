@@ -423,7 +423,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: slab-allocator.empty-buffers-go-back-to-their-span -->
 **THE SPAN FREE LIST, AT THE SMALLEST BOX THERE IS.** An EMPTY element buffer is a box with a ZERO
-payload — 24 bytes of header and nothing else — so it lands in the ladder's smallest class, and its
+payload — 16 bytes of header and nothing else — so it lands in the smallest class a box reaches, and its
 death pushes that slot back onto its span's free list. Two thousand of them are built and dropped
 here, so one class's slots are pushed and popped thousands of times over, and a run of survivors built
 the same way is verified afterwards.
@@ -491,18 +491,18 @@ end 'main'
 ```
 
 <!-- test: slab-allocator.the-header-decides-which-side-of-the-os-direct-boundary-a-box-lands -->
-**THE ROUTING BOUNDARY, AND THE 24 BYTES THAT DECIDE IT.** `__slab_alloc` serves a request of at
+**THE ROUTING BOUNDARY, AND THE 16 BYTES THAT DECIDE IT.** `__slab_alloc` serves a request of at
 most `SlabMaxSmallSize` (32,768) out of a span and gives anything larger its own mapping.
-`__mm_alloc` asks for the WHOLE box, so the boundary in USER terms sits 24 bytes lower: a 32,744-byte
-buffer is the largest a span can serve, and 32,745 is the first that needs a mapping of its own.
+`__mm_alloc` asks for the WHOLE box, so the boundary in USER terms sits 16 bytes lower: a 32,752-byte
+buffer is the largest a span can serve, and 32,753 is the first that needs a mapping of its own.
 
 This sweeps 26 buffers across that line, four bytes apart, all live at once and every byte verified —
 so the population contains both routes and each one's neighbours are on the other side. Then it drops
 them all and rebuilds the identical sweep, which runs both FREE routes (a slot pushed back onto its
 span, a mapping handed back to the OS) before the second round asks for the same sizes again.
 
-⚠ **IT IS THE OFF-BY-ONE THE BOX HEADER CREATES, AND NOTHING ELSE IN THIS FILE STRADDLES IT.** A total computed WITHOUT the header sends a 32,750-byte
-request down the span path, where the widest class is 32,768 bytes and the box needs 32,774: the tail
+⚠ **IT IS THE OFF-BY-ONE THE BOX HEADER CREATES, AND NOTHING ELSE IN THIS FILE STRADDLES IT.** A total computed WITHOUT the header sends a 32,756-byte
+request down the span path, where the widest class is 32,768 bytes and the box needs 32,784 rounded: the tail
 of that buffer lands in the following slot, which is its neighbour in this sweep. Verifying every byte
 of every buffer only after all 26 exist is what makes that visible.
 ```maxon

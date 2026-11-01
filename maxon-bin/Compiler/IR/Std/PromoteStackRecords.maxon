@@ -1,7 +1,7 @@
 // PromoteStackRecords — ESCAPE ANALYSIS AND STACK PROMOTION FOR STRUCT RECORDS.
 //
 // Every struct value in Maxon is a heap record: `__mm_alloc(sizeBytes, destructor)` hands back a payload
-// pointer behind a 24-byte MM header, the caller owns it, and a scope-exit `__mm_decref` releases it. This
+// pointer behind a 16-byte MM header, the caller owns it, and a scope-exit `__mm_decref` releases it. This
 // pass finds the records a frame provably cannot let escape and gives them FRAME STORAGE instead — a
 // reserved slot region addressed by `StdOp.stackRecordAddr` — deleting the allocation, the header, the
 // entry in the tracked traffic columns and the drop together.
@@ -889,7 +889,7 @@ end 'buildParamEscapeMasks'
 function seedEscapingParams(seeds BoolArray, nodes ParamNodeSpace, funcIndex ElementIndex, func IrFunction, tracked BoolArray, scan PointerScan)
 	for param in 0 upto func.paramCount 'eachParam'
 		// ⚠ A parameter the CALLEE DROPS has escaped: `__mm_decref` releases an ownership stake, and
-		// releasing a frame address would run `__mm_free`'s poison fill across live stack memory. That is
+		// releasing a frame address would run `__slab_free_box`'s poison fill across live stack memory. That is
 		// the one place this reading of the shared scan differs from the call site's, where a drop is
 		// exactly what promotion deletes.
 		//
@@ -1555,8 +1555,8 @@ end 'recordIsFrameLocal'
 // constant-valued field needs, minted above the function's whole value space.
 //
 // The drops are deleted in the same rebuild: a promoted record has no MM header to decrement and no
-// allocation to free, and `__mm_decref` on a frame address would run `__mm_free`'s poison fill across live
-// stack memory.
+// allocation to free, and `__mm_decref` on a frame address would run `__slab_free_box`'s poison fill across
+// live stack memory.
 function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, plans RecordPromotionArray)
 	var mint = ValueMinter.resuming(valueBound)
 

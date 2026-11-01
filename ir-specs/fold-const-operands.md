@@ -112,8 +112,8 @@ func @main {
     x64.cmpRegImm32 r15, 0
     x64.jcc equal, forhdr#18
   __us_test#53:
-    x64.leaRegRegImm32 rax, r15, -24
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.leaRegRegImm32 rax, r15, -16
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, forhdr#18
     x64.jmp __us_test#54
@@ -134,8 +134,8 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#27
   __im_viewed:
-    x64.leaRegRegImm32 rcx, rax, -24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.leaRegRegImm32 rcx, rax, -16
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#27
   __im_store#32:
@@ -480,8 +480,8 @@ func @__managed_fill {
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, flddone
   fldshared:
-    x64.leaRegRegImm32 rsi, rsi, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.leaRegRegImm32 rsi, rsi, -16
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, flddetach
   flddone:
@@ -677,8 +677,8 @@ func @main {
     x64.cmpRegImm32 r15, 0
     x64.jcc equal, forhdr#18
   __us_test#53:
-    x64.leaRegRegImm32 rax, r15, -24
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.leaRegRegImm32 rax, r15, -16
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, forhdr#18
     x64.jmp __us_test#54
@@ -699,8 +699,8 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#27
   __im_viewed:
-    x64.leaRegRegImm32 rcx, rax, -24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.leaRegRegImm32 rcx, rax, -16
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#27
   __im_store#32:
@@ -1044,8 +1044,8 @@ func @__managed_fill {
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, flddone
   fldshared:
-    x64.leaRegRegImm32 rsi, rsi, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.leaRegRegImm32 rsi, rsi, -16
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, flddetach
   flddone:
@@ -1245,8 +1245,8 @@ func @main {
     arm64.cmp x23, 0
     arm64.b.eq forhdr#18
   __us_test#53:
-    arm64.sub x0, x23, 24
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.sub x0, x23, 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
     arm64.b.ne forhdr#18
     arm64.b __us_test#54
@@ -1267,8 +1267,8 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#27
   __im_viewed:
-    arm64.sub x1, x0, 24
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.sub x1, x0, 16
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
     arm64.cmp x1, 0
     arm64.b.ne __im_slow#27
   __im_store#32:
@@ -1593,8 +1593,8 @@ func @__managed_fill {
     arm64.cmp x4, 0
     arm64.b.eq flddone
   fldshared:
-    arm64.sub x4, x4, 24
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.sub x4, x4, 16
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
     arm64.cmp x4, 0
     arm64.b.ne flddetach
   flddone:
@@ -1783,8 +1783,8 @@ func @main {
     arm64.cmp x23, 0
     arm64.b.eq forhdr#18
   __us_test#53:
-    arm64.sub x0, x23, 24
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.sub x0, x23, 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
     arm64.b.ne forhdr#18
     arm64.b __us_test#54
@@ -1805,8 +1805,8 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#27
   __im_viewed:
-    arm64.sub x1, x0, 24
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.sub x1, x0, 16
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
     arm64.cmp x1, 0
     arm64.b.ne __im_slow#27
   __im_store#32:
@@ -2131,8 +2131,8 @@ func @__managed_fill {
     arm64.cmp x4, 0
     arm64.b.eq flddone
   fldshared:
-    arm64.sub x4, x4, 24
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.sub x4, x4, 16
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
     arm64.cmp x4, 0
     arm64.b.ne flddetach
   flddone:

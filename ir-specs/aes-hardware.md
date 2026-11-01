@@ -250,8 +250,8 @@ func @__cpufeat_aes_cipher_encrypt_block {
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, abddone
   abdshared:
-    x64.leaRegRegImm32 r8, r8, -24
-    x64.loadRegBaseDisp.word64 r8, [r8 + 16]
+    x64.leaRegRegImm32 r8, r8, -16
+    x64.loadRegBaseDisp.word64 r8, [r8 + 8]
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, abddetach
   abddone:
@@ -521,8 +521,8 @@ func @__cpufeat_aes_cipher_encrypt_block {
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, abddone
   abdshared:
-    x64.leaRegRegImm32 r8, r8, -24
-    x64.loadRegBaseDisp.word64 r8, [r8 + 16]
+    x64.leaRegRegImm32 r8, r8, -16
+    x64.loadRegBaseDisp.word64 r8, [r8 + 8]
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, abddetach
   abddone:
@@ -784,8 +784,8 @@ func @__cpufeat_aes_cipher_encrypt_block {
     arm64.cmp x6, 0
     arm64.b.eq abddone
   abdshared:
-    arm64.sub x6, x6, 24
-    arm64.loadRegBaseDisp.word64 x6, [x6 + 16]
+    arm64.sub x6, x6, 16
+    arm64.loadRegBaseDisp.word64 x6, [x6 + 8]
     arm64.cmp x6, 0
     arm64.b.ne abddetach
   abddone:
@@ -1048,8 +1048,8 @@ func @__cpufeat_aes_cipher_encrypt_block {
     arm64.cmp x6, 0
     arm64.b.eq abddone
   abdshared:
-    arm64.sub x6, x6, 24
-    arm64.loadRegBaseDisp.word64 x6, [x6 + 16]
+    arm64.sub x6, x6, 16
+    arm64.loadRegBaseDisp.word64 x6, [x6 + 8]
     arm64.cmp x6, 0
     arm64.b.ne abddetach
   abddone:
@@ -1352,8 +1352,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, cx1ddone
   cx1dshared:
-    x64.leaRegRegImm32 rdi, rdi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.leaRegRegImm32 rdi, rdi, -16
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, cx1ddetach
   cx1ddone:
@@ -1391,8 +1391,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, cx2ddone
   cx2dshared:
-    x64.leaRegRegImm32 rdi, rdi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.leaRegRegImm32 rdi, rdi, -16
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, cx2ddetach
   cx2ddone:
@@ -1430,8 +1430,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, cx4ddone
   cx4dshared:
-    x64.leaRegRegImm32 rdi, rdi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.leaRegRegImm32 rdi, rdi, -16
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, cx4ddetach
   cx4ddone:
@@ -1469,8 +1469,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, cx8ddone
   cx8dshared:
-    x64.leaRegRegImm32 rdi, rdi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.leaRegRegImm32 rdi, rdi, -16
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, cx8ddetach
   cx8ddone:
@@ -1811,8 +1811,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, cx1ddone
   cx1dshared:
-    x64.leaRegRegImm32 rdi, rdi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.leaRegRegImm32 rdi, rdi, -16
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, cx1ddetach
   cx1ddone:
@@ -1850,8 +1850,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, cx2ddone
   cx2dshared:
-    x64.leaRegRegImm32 rdi, rdi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.leaRegRegImm32 rdi, rdi, -16
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, cx2ddetach
   cx2ddone:
@@ -1889,8 +1889,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, cx4ddone
   cx4dshared:
-    x64.leaRegRegImm32 rdi, rdi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.leaRegRegImm32 rdi, rdi, -16
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, cx4ddetach
   cx4ddone:
@@ -1928,8 +1928,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, cx8ddone
   cx8dshared:
-    x64.leaRegRegImm32 rdi, rdi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.leaRegRegImm32 rdi, rdi, -16
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, cx8ddetach
   cx8ddone:
@@ -2262,8 +2262,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.cmp x5, 0
     arm64.b.eq cx1ddone
   cx1dshared:
-    arm64.sub x5, x5, 24
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.sub x5, x5, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
     arm64.b.ne cx1ddetach
   cx1ddone:
@@ -2303,8 +2303,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.cmp x5, 0
     arm64.b.eq cx2ddone
   cx2dshared:
-    arm64.sub x5, x5, 24
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.sub x5, x5, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
     arm64.b.ne cx2ddetach
   cx2ddone:
@@ -2344,8 +2344,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.cmp x5, 0
     arm64.b.eq cx4ddone
   cx4dshared:
-    arm64.sub x5, x5, 24
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.sub x5, x5, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
     arm64.b.ne cx4ddetach
   cx4ddone:
@@ -2385,8 +2385,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.cmp x5, 0
     arm64.b.eq cx8ddone
   cx8dshared:
-    arm64.sub x5, x5, 24
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.sub x5, x5, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
     arm64.b.ne cx8ddetach
   cx8ddone:
@@ -2727,8 +2727,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.cmp x5, 0
     arm64.b.eq cx1ddone
   cx1dshared:
-    arm64.sub x5, x5, 24
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.sub x5, x5, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
     arm64.b.ne cx1ddetach
   cx1ddone:
@@ -2768,8 +2768,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.cmp x5, 0
     arm64.b.eq cx2ddone
   cx2dshared:
-    arm64.sub x5, x5, 24
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.sub x5, x5, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
     arm64.b.ne cx2ddetach
   cx2ddone:
@@ -2809,8 +2809,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.cmp x5, 0
     arm64.b.eq cx4ddone
   cx4dshared:
-    arm64.sub x5, x5, 24
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.sub x5, x5, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
     arm64.b.ne cx4ddetach
   cx4ddone:
@@ -2850,8 +2850,8 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.cmp x5, 0
     arm64.b.eq cx8ddone
   cx8dshared:
-    arm64.sub x5, x5, 24
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.sub x5, x5, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
     arm64.b.ne cx8ddetach
   cx8ddone:
@@ -3282,8 +3282,8 @@ func @__cpufeat_aes_cipher_gcm_init {
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, giddone
   gidshared:
-    x64.leaRegRegImm32 rsi, rsi, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.leaRegRegImm32 rsi, rsi, -16
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, giddetach
   giddone:
@@ -3367,8 +3367,8 @@ func @__cpufeat_aes_cipher_gcm_seal {
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, gpddone
   gpdshared:
-    x64.leaRegRegImm32 r11, r11, -24
-    x64.loadRegBaseDisp.word64 r11, [r11 + 16]
+    x64.leaRegRegImm32 r11, r11, -16
+    x64.loadRegBaseDisp.word64 r11, [r11 + 8]
     x64.cmpRegImm32 r11, 0
     x64.jcc notEqual, gpddetach
   gpddone:
@@ -3552,8 +3552,8 @@ func @__cpufeat_aes_cipher_gcm_open {
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, gpddone
   gpdshared:
-    x64.leaRegRegImm32 r11, r11, -24
-    x64.loadRegBaseDisp.word64 r11, [r11 + 16]
+    x64.leaRegRegImm32 r11, r11, -16
+    x64.loadRegBaseDisp.word64 r11, [r11 + 8]
     x64.cmpRegImm32 r11, 0
     x64.jcc notEqual, gpddetach
   gpddone:
@@ -4724,8 +4724,8 @@ func @__cpufeat_aes_cipher_gcm_init {
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, giddone
   gidshared:
-    x64.leaRegRegImm32 rsi, rsi, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.leaRegRegImm32 rsi, rsi, -16
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, giddetach
   giddone:
@@ -4809,8 +4809,8 @@ func @__cpufeat_aes_cipher_gcm_seal {
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, gpddone
   gpdshared:
-    x64.leaRegRegImm32 r11, r11, -24
-    x64.loadRegBaseDisp.word64 r11, [r11 + 16]
+    x64.leaRegRegImm32 r11, r11, -16
+    x64.loadRegBaseDisp.word64 r11, [r11 + 8]
     x64.cmpRegImm32 r11, 0
     x64.jcc notEqual, gpddetach
   gpddone:
@@ -4994,8 +4994,8 @@ func @__cpufeat_aes_cipher_gcm_open {
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, gpddone
   gpdshared:
-    x64.leaRegRegImm32 r11, r11, -24
-    x64.loadRegBaseDisp.word64 r11, [r11 + 16]
+    x64.leaRegRegImm32 r11, r11, -16
+    x64.loadRegBaseDisp.word64 r11, [r11 + 8]
     x64.cmpRegImm32 r11, 0
     x64.jcc notEqual, gpddetach
   gpddone:
@@ -6162,8 +6162,8 @@ func @__cpufeat_aes_cipher_gcm_init {
     arm64.cmp x3, 0
     arm64.b.eq giddone
   gidshared:
-    arm64.sub x3, x3, 24
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.sub x3, x3, 16
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
     arm64.cmp x3, 0
     arm64.b.ne giddetach
   giddone:
@@ -6248,8 +6248,8 @@ func @__cpufeat_aes_cipher_gcm_seal {
     arm64.cmp x8, 0
     arm64.b.eq gpddone
   gpdshared:
-    arm64.sub x8, x8, 24
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 16]
+    arm64.sub x8, x8, 16
+    arm64.loadRegBaseDisp.word64 x8, [x8 + 8]
     arm64.cmp x8, 0
     arm64.b.ne gpddetach
   gpddone:
@@ -6434,8 +6434,8 @@ func @__cpufeat_aes_cipher_gcm_open {
     arm64.cmp x8, 0
     arm64.b.eq gpddone
   gpdshared:
-    arm64.sub x8, x8, 24
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 16]
+    arm64.sub x8, x8, 16
+    arm64.loadRegBaseDisp.word64 x8, [x8 + 8]
     arm64.cmp x8, 0
     arm64.b.ne gpddetach
   gpddone:
@@ -7285,8 +7285,8 @@ func @__cpufeat_aes_cipher_gcm_init {
     arm64.cmp x3, 0
     arm64.b.eq giddone
   gidshared:
-    arm64.sub x3, x3, 24
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.sub x3, x3, 16
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
     arm64.cmp x3, 0
     arm64.b.ne giddetach
   giddone:
@@ -7371,8 +7371,8 @@ func @__cpufeat_aes_cipher_gcm_seal {
     arm64.cmp x8, 0
     arm64.b.eq gpddone
   gpdshared:
-    arm64.sub x8, x8, 24
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 16]
+    arm64.sub x8, x8, 16
+    arm64.loadRegBaseDisp.word64 x8, [x8 + 8]
     arm64.cmp x8, 0
     arm64.b.ne gpddetach
   gpddone:
@@ -7557,8 +7557,8 @@ func @__cpufeat_aes_cipher_gcm_open {
     arm64.cmp x8, 0
     arm64.b.eq gpddone
   gpdshared:
-    arm64.sub x8, x8, 24
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 16]
+    arm64.sub x8, x8, 16
+    arm64.loadRegBaseDisp.word64 x8, [x8 + 8]
     arm64.cmp x8, 0
     arm64.b.ne gpddetach
   gpddone:

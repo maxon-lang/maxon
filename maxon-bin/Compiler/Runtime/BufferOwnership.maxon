@@ -275,8 +275,9 @@ end 'immortalRecordShapeOf'
 // The header and the record are ONE payload so that `appendRdataPayload`'s registration-order packing
 // cannot put anything between them, and the LABEL names the record rather than the header
 // (`GlobalDataTable.rdataLabelOffsets`), so a read stays a bare `lea` with no displacement to add.
-// Alignment holds by construction: `MmRuntime.HeaderBytes` and the DebugStream prefix word are both
-// multiples of `GlobalDataTable.RdataPayloadAlignment`, so the record inside the payload lands aligned too.
+// Alignment holds by construction: `MmRuntime.immortalBoxHeaderSize` is a multiple of
+// `GlobalDataTable.RdataPayloadAlignment` in a traced and an untraced build, so the record inside the
+// payload lands aligned too.
 function immortalRecordPayload(record ByteArray, kind RdataPayloadKind, debugStream bool) returns ByteArray
 	if immortalRecordShapeOf(kind) == ImmortalRecordShape.managedRecord and not recordCarriesImmortalCapacity(record) 'markSplit'
 		panic("immortalRecordPayload: a {record.count()}-byte managed record is being given the immortal HEADER without ImmortalRecordCapacity at capacity@16 — the two marks are read by different runtime entries, so a record carrying one of them is skipped by half the readers and counted by the other half")

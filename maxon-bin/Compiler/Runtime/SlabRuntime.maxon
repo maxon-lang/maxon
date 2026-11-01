@@ -334,7 +334,7 @@ let SlabStateMcentralOffset = SlabStateLockOffset + (SlabStateLockBytes as ByteO
 // the process-wide figure and no `.data` word carries one.
 //
 // The TRACKED trio counts boxes at `__mm_alloc`/`__mm_free`; the RAW trio counts every slab request
-// at the three counted doors, `__slab_alloc`/`__slab_alloc_raw`/`__slab_free`, boxes included, and
+// at the counted doors, `__slab_alloc`/`__slab_alloc_raw`/`__slab_free`/`__slab_free_box`, boxes included, and
 // none at the scaffold pair (`SlabScaffoldAllocName`). The two nest, and the public raw readers
 // answer raw − tracked (`MmRuntime.buildMmCounterAccessors`), so the layers they report stay
 // disjoint without a second allocation door.
@@ -410,6 +410,9 @@ let SlabFreeName = b"__slab_free"
 let SlabScaffoldAllocName = b"__slab_alloc_scaffold"
 let SlabScaffoldFreeName = b"__slab_free_scaffold"
 
+// `__slab_free_box(ptr)` — the counted free that poisons a managed box; see `buildSlabFreedBoxPoison`.
+let SlabFreeBoxName = b"__slab_free_box"
+
 let SlabRoundedSizeName = b"__slab_rounded_size"
 let SlabStateName = b"__slab_state_base"
 let SlabMetaAllocName = b"__slab_meta_alloc"
@@ -431,6 +434,12 @@ let SlabSpanDestroyName = b"__slab_span_destroy"
 
 let SlabDoorHandled = 1
 let SlabDoorOwnerMoved = 0
+
+// `0x3F` is loud when a use-after-free reads the dead memory it should not have: as a small integer it is
+// 63, never the 0 a correct zeroed slot holds, and a word of it as a pointer is `0x3F3F3F3F3F3F3F3F`, a
+// non-canonical x64 address that faults on dereference.
+let SlabFreedBoxPoisonByte = 0x3F
+let SlabFreedBoxPoisonCapBytes = 256
 
 // ⭐⭐ **THE FIVE THIS FILE NAMES BUT NO LONGER BUILDS.** Their bodies are `runtime/SlabRuntime.maxon`
 // source — the OS-direct pair, the state region's commit and the metadata slab's two cursors — and what
@@ -698,8 +707,10 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabFreeToSpan(module)
 
 	for counting in SlabCounting.allCases 'eachFreeDoor'
-		buildSlabFree(module, counting: counting, model: model)
+		buildSlabFree(module, counting: counting, poisoning: false, model: model)
 	end 'eachFreeDoor'
+
+	buildSlabFree(module, counting: SlabCounting.counted, poisoning: true, model: model)
 
 	buildSlabCensusEntry(module, name: SlabLiveBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusLiveBytes), model: model)
 	buildSlabCensusEntry(module, name: SlabFreeBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusFreeBytes), model: model)
@@ -980,6 +991,12 @@ function emitClassGeometry(module StdModule, block IrBlock, classIdx ValueId, id
 	module.appendOp(block, op: StdOp.rdataAddr(base, label: SlabClassGeomLabelBytes))
 	return emitWordSlotLoad(module, block: block, base: base, index: classIdx, ids: ids)
 end 'emitClassGeometry'
+
+function emitSpanGeometry(module StdModule, block IrBlock, span ValueId, ids ValueMinter) returns ValueId
+	let classIdx = emitLoadField(module, block: block, record: span, offset: MspanClassIdxOffset, ids: ids)
+
+	return emitClassGeometry(module, block: block, classIdx: classIdx, ids: ids)
+end 'emitSpanGeometry'
 
 function emitGeomSlotSize(module StdModule, block IrBlock, geom ValueId, ids ValueMinter) returns ValueId
 	let mask = emitConst(module, block: block, value: SlabClassGeomSlotMask, ids: ids)
@@ -2444,8 +2461,7 @@ function buildSlabSpanDestroy(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let span = 0
 
-	let classIdx = emitLoadField(module, block: entry, record: span, offset: MspanClassIdxOffset, ids: ids)
-	let geom = emitClassGeometry(module, block: entry, classIdx: classIdx, ids: ids)
+	let geom = emitSpanGeometry(module, block: entry, span: span, ids: ids)
 	let slotSize = emitGeomSlotSize(module, block: entry, geom: geom, ids: ids)
 	let totalSlots = emitGeomTotalSlots(module, block: entry, geom: geom, ids: ids)
 	let numChunks = emitSpanChunkCount(module, block: entry, slotSize: slotSize, totalSlots: totalSlots, ids: ids)
@@ -2778,8 +2794,8 @@ function buildSlabCollectRemote(module StdModule)
 	module.functions.push(func)
 end 'buildSlabCollectRemote'
 
-// `__slab_free(ptr)`, and `__slab_free_scaffold(ptr)` for a scaffold region — return a slot to its
-// span, onto that span's remote stack, or a mapping to the OS.
+// `__slab_free(ptr)`, `__slab_free_box(ptr)` for a managed box, and `__slab_free_scaffold(ptr)` for a
+// scaffold region — return a slot to its span, onto that span's remote stack, or a mapping to the OS.
 //
 // ⭐⭐ **ON THE COUNTED DOOR, BOTH TIERS DEBIT THE RAW LIVE COLUMN**, because a mapping and a slot
 // are one free each — but each on the road that reaches it, because the reverse-map walk needs
@@ -2825,8 +2841,9 @@ end 'buildSlabCollectRemote'
 // the slot's first word, so an INTERIOR pointer would corrupt the slot it lands in and then be
 // handed out as a slot base. Every caller passes back exactly what its alloc door answered
 // (`__mm_free` passes the box HEADER base, which is that pointer).
-function buildSlabFree(module StdModule, counting SlabCounting, model MachineModel)
-	var func = IrFunction.createFromStd(SlabDoors.of(counting).free, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+function buildSlabFree(module StdModule, counting SlabCounting, poisoning bool, model MachineModel)
+	let name = SlabFreeBoxName if poisoning else SlabDoors.of(counting).free
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2839,6 +2856,11 @@ function buildSlabFree(module StdModule, counting SlabCounting, model MachineMod
 	let unmapped = emitCompareWithConstant(module, block: mapped, value: span, pred: StdCmpPred.eq, against: ArenaMapNoSpan, ids: ids)
 
 	var toSpan = module.addBlock(func, label: b"tospan", heat: BlockHeat.normal)
+	var afterMap = toSpan.id
+
+	if poisoning 'poisonsTheSlot'
+		afterMap = buildSlabFreedBoxPoison(module, func: func, span: span, ptr: ptr, next: toSpan, ids: ids)
+	end 'poisonsTheSlot'
 
 	let state = emitSlabStateCommitted(module, block: toSpan, ids: ids)
 	var arms = emitSlabResolveShard(module, func: func, cur: toSpan, state: state, model: model, need: SlabShardNeed.holdsProc, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.free), ids: ids, label: b"shard")
@@ -2949,10 +2971,35 @@ function buildSlabFree(module StdModule, counting SlabCounting, model MachineMod
 	module.appendOp(osDirect, op: StdOp.call(ids.mint(), callee: SlabDoors.of(counting).freeOversize, args: argsOf(ptr)))
 	module.setTerminator(osDirect, op: StdOp.retVoid)
 
-	module.setTerminator(mapped, op: StdOp.condBranch(unmapped, thenBlockId: osDirect.id, elseBlockId: toSpan.id))
+	module.setTerminator(mapped, op: StdOp.condBranch(unmapped, thenBlockId: osDirect.id, elseBlockId: afterMap))
 
 	module.functions.push(func)
 end 'buildSlabFree'
+
+// The fill runs on a span hit only: an OS-direct mapping goes back to the OS whole. It starts at the
+// payload, so the prefix (whose first word the free list threads through) is untouched, and it stops at
+// the cap so a large slot costs a bounded fill per free. A class with no room past the prefix is skipped.
+function buildSlabFreedBoxPoison(module StdModule, func IrFunction, span ValueId, ptr ValueId, next IrBlock, ids ValueMinter) returns BlockId
+	var sized = module.addBlock(func, label: b"poisonsized", heat: BlockHeat.normal)
+	var measured = module.addBlock(func, label: b"poisonmeasured", heat: BlockHeat.normal)
+	var capped = module.addBlock(func, label: b"poisoncapped", heat: BlockHeat.normal)
+	var whole = module.addBlock(func, label: b"poisonwhole", heat: BlockHeat.normal)
+	let skip = boxPrefixBytes(module.debugStream)
+
+	let slotSize = emitGeomSlotSize(module, block: sized, geom: emitSpanGeometry(module, block: sized, span: span, ids: ids), ids: ids)
+	emitBranchOnCompare(module, block: sized, value: slotSize, pred: StdCmpPred.gt, against: skip, whenTrue: measured, whenFalse: next, ids: ids)
+
+	let poisonFrom = emitBin(module, block: measured, a: ptr, b: emitConst(module, block: measured, value: skip, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let room = emitBin(module, block: measured, a: slotSize, b: emitConst(module, block: measured, value: skip, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	emitBranchOnCompare(module, block: measured, value: room, pred: StdCmpPred.gt, against: SlabFreedBoxPoisonCapBytes, whenTrue: capped, whenFalse: whole, ids: ids)
+
+	module.appendOp(capped, op: StdOp.memFill(poisonFrom, byteCountId: emitConst(module, block: capped, value: SlabFreedBoxPoisonCapBytes, ids: ids), value: SlabFreedBoxPoisonByte))
+	module.setTerminator(capped, op: StdOp.branch(next.id))
+	module.appendOp(whole, op: StdOp.memFill(poisonFrom, byteCountId: room, value: SlabFreedBoxPoisonByte))
+	module.setTerminator(whole, op: StdOp.branch(next.id))
+
+	return sized.id
+end 'buildSlabFreedBoxPoison'
 
 function buildSlabFreeOversize(module StdModule, counting SlabCounting, model MachineModel)
 	var func = IrFunction.createFromStd(SlabDoors.of(counting).freeOversize, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
@@ -2978,7 +3025,8 @@ end 'buildSlabFreeOversize'
 // `ptr` must be exactly what `emitSlabAlloc` answered for the same `kind`, and never 0: a region
 // freed under another kind's counting drifts a frees column from its total.
 export function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, kind SlabBufferKind, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SlabDoors.of(slabCountingOf(kind)).free, args: argsOf(ptr)))
+	let door = SlabFreeBoxName if kind == SlabBufferKind.managedBox else SlabDoors.of(slabCountingOf(kind)).free
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: door, args: argsOf(ptr)))
 end 'emitSlabFree'
 
 export function emitSlabAlloc(module StdModule, block IrBlock, bytes ValueId, kind SlabBufferKind, ids ValueMinter) returns ValueId
