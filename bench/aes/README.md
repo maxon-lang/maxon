@@ -16,6 +16,8 @@ bench/aes/
   aes.maxon            the Maxon program
   go/main.go           the Go program: the `std` arm (crypto/aes, crypto/cipher) and the `bitsliced` arm
   go/bitsliced.go      the stdlib's bitsliced AES and GHASH, in Go
+  go/clock_windows.go  the Go timing clock on Windows: QueryPerformanceCounter
+  go/clock_other.go    the Go timing clock elsewhere, wasip1 included: time.Since
   go/go.mod            the Go module (maxon.dev/bench/aes), which needs Go 1.27 or newer
   out/                 builds, ref worktrees and profiles (gitignored)
 tests/examples/bench-aes.maxtest
@@ -68,6 +70,12 @@ workload bytesPerOp iterations repeats bestNanos digest
 `bestNanos` is the fastest of the repeats. `digest` sums each byte of the last op's output times its
 1-based position, modulo 2^24, so two arms that computed different bytes print different lines.
 
+Before the workload lines each program prints one line, `clock resolutionNanos`, the smallest step its timing
+clock makes. The Maxon program reads `Clock.nowNanos()` and measures the smallest step between two distinct
+readings. The Go program times with `QueryPerformanceCounter` on Windows, because `time.Now` there moves in
+0.5 ms steps and biases a short row low; the counter's period is the resolution. Elsewhere it times with
+`time.Since` and measures the smallest step between two distinct readings.
+
 On wasm the Maxon program reads no arguments and runs 5 repeats at divisor 10. ⚠ **These are coupled to
 the harness:** `defaultRepeats` and `wasmDivisor` in `aes.maxon` equal `REPEATS` and `WASM_DIVISOR` in
 `scripts/bench-aes.py`, which hands them to the Go arms. A mismatch fails the run's agreement check on
@@ -115,8 +123,12 @@ The script needs Python 3 and only the standard library.
 - **Verification.** Every run of every arm must exit 0; a Maxon arm's exit 101 is reported as a LEAK.
   For each workload, every arm must print the same bytes per op, iterations, repeats and digest, and
   every Go arm must print every workload, and so must a Maxon arm unless it is a control compiler built
-  before the workload existed, whose cells then read `-` and which gets no log row for it. Any failure is a
-  verification failure (exit 1).
+  before the workload existed, whose cells then read `-` and which gets no log row for it. Every Go arm must
+  print exactly one `clock` line, and so must a Maxon arm unless it is a control built from a commit before
+  the line existed, which prints none and is reported as not gated. A workload whose best repetition is under
+  1000 times its arm's clock resolution is refused, naming the row and the arm: raise that workload's base
+  iterations in `aes.maxon` and `go/main.go` together. Each lane prints its arms' resolutions before the
+  tables. Any failure is a verification failure (exit 1).
 - **Timing.** `--warmup` untimed runs per arm (default 0: each process already takes the best of its
   repeats), then `--runs` timed runs interleaved. A cell is the best `bestNanos` over the runs, shown as
   MB/s, or as microseconds per op for `keysetup-128`.

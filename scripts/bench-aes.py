@@ -7,8 +7,13 @@ iteration counts and output digests on every workload, runs the arms interleaved
 workload's best time as MB/s with every Maxon/Go ratio. With --note it appends rows to
 docs/aes-benchmark-log.md.
 
+Every arm prints a `clock <resolutionNanos>` line before its rows: the smallest step its timing clock
+makes. A row whose best time is under 1000 times its arm's resolution is refused, because the clock
+cannot resolve it. A Maxon control built before the line existed prints none and is not gated.
+
 It is an INSTRUMENT: it exits 0 whatever the ratio is. Non-zero means the run itself is invalid - a
-digest that differs between arms, a leak (exit 101), a crash, or a build that failed.
+digest that differs between arms, a row too short for its arm's clock, a leak (exit 101), a crash, or
+a build that failed.
 
 Usage:
   python scripts/bench-aes.py [--lane x64|wasm|arm64] [--runs 5] [--profile] [--note "..."]
@@ -90,6 +95,11 @@ PROFILE_DIVISOR = 10
 PROFILE_RATE_HZ = 1000
 OUTPUT_FIELDS = 6
 OUTPUT_LAYOUT = "workload bytesPerOp iterations repeats bestNanos digest"
+CLOCK_LINE = "clock"
+CLOCK_FIELDS = 2
+CLOCK_LAYOUT = "clock resolutionNanos"
+# A timed interval is wrong by under one clock tick, so 1000 ticks bounds the error at 0.1%.
+RESOLVABLE_TICKS = 1000
 KIND_MAXON = "maxon"
 KIND_GO = "go"
 BYTES_PER_MB_PER_NS = 1e3
@@ -244,10 +254,28 @@ def runnable_command(lane, wasmtime, kind, exe, go_arm=None):
     return [wasmtime, "run"] + flags + [exe] + arguments
 
 
+def parse_clock_line(name, line, fields):
+    digits = fields[1]
+
+    if not (digits.isascii() and digits.isdigit()):
+        raise bench_common.VerificationFailure(f"{name} printed {line!r}, not '{CLOCK_LAYOUT}' with a positive integer")
+
+    resolution = int(digits)
+
+    if resolution < 1:
+        raise bench_common.VerificationFailure(f"{name} printed {line!r}, whose resolution is not positive")
+
+    return resolution
+
+
 def parse_output(name, stdout):
     results = {}
+    resolutions = []
     for line in stdout.replace("\r\n", "\n").splitlines():
         fields = line.split()
+        if fields and fields[0] == CLOCK_LINE and len(fields) == CLOCK_FIELDS:
+            resolutions.append(parse_clock_line(name, line, fields))
+            continue
         if len(fields) != OUTPUT_FIELDS:
             raise bench_common.VerificationFailure(f"{name} printed {line!r}, not '{OUTPUT_LAYOUT}'")
         workload, per_op, iterations, repeats, nanos, digest = fields
@@ -260,7 +288,7 @@ def parse_output(name, stdout):
             raise bench_common.VerificationFailure(f"{name} printed {line!r}, whose numeric fields are not integers") from None
     if not results:
         raise bench_common.VerificationFailure(f"{name} printed nothing")
-    return results
+    return results, resolutions
 
 
 def run_once(runnable):
@@ -277,8 +305,14 @@ def collect(runnables, runs, warmup):
     best = {}
     seen = {}
     order = []
+    resolutions = {}
+    kinds = {r["name"]: r["kind"] for r in runnables}
     for name, rounds in measured.items():
-        for results in rounds:
+        for results, clock_lines in rounds:
+            resolution = arm_resolution(name, kinds[name], clock_lines)
+            if name in resolutions and (resolutions[name] is None) != (resolution is None):
+                raise bench_common.VerificationFailure(f"{name} printed a '{CLOCK_LAYOUT}' line in some runs and not in others")
+            resolutions[name] = resolution if resolutions.get(name) is None else max(resolutions[name], resolution)
             for workload, cell in results.items():
                 if workload not in order:
                     order.append(workload)
@@ -287,7 +321,38 @@ def collect(runnables, runs, warmup):
                 shape = (cell["bytes"], cell["iterations"], cell["repeats"], cell["digest"])
                 seen.setdefault(workload, {}).setdefault(shape, set()).add(name)
     check_agreement(seen, runnables, order)
-    return best, seen, order
+    check_resolution(best, resolutions, order)
+    return best, seen, order, resolutions
+
+
+def arm_resolution(name, kind, clock_lines):
+    # A control compiler built before the clock line existed prints none; only a Maxon arm may.
+    if kind == KIND_MAXON and not clock_lines:
+        return None
+
+    if len(clock_lines) != 1:
+        raise bench_common.VerificationFailure(f"{name} printed {len(clock_lines)} '{CLOCK_LAYOUT}' lines, not one")
+
+    return clock_lines[0]
+
+
+def describe_resolutions(resolutions):
+    return ", ".join(f"{name} {resolution} ns" if resolution is not None else f"{name} built before the clock line existed, not gated"
+                     for name, resolution in resolutions.items())
+
+
+def check_resolution(best, resolutions, order):
+    for workload in order:
+        for name, resolution in resolutions.items():
+            if resolution is None or (workload, name) not in best:
+                continue
+
+            floor = RESOLVABLE_TICKS * resolution
+            if best[(workload, name)] < floor:
+                raise bench_common.VerificationFailure(
+                    f"{name} timed {workload} at {best[(workload, name)]} ns, under {RESOLVABLE_TICKS} times its clock's "
+                    f"{resolution} ns resolution ({floor} ns): the reading cannot resolve it. Raise {workload}'s base iterations "
+                    f"in bench/aes/aes.maxon (baseIterationsOf) and bench/aes/go/main.go together")
 
 
 def check_agreement(seen, runnables, order):
@@ -394,8 +459,9 @@ def run_lane(args, lane_name):
         runnables.append({"name": go_arm.name, "kind": KIND_GO, "dir": os.path.dirname(exe),
                           "command": runnable_command(lane, wasmtime, KIND_GO, exe, go_arm)})
 
-    best, seen, order = collect(runnables, args.runs, args.warmup)
+    best, seen, order, resolutions = collect(runnables, args.runs, args.warmup)
     maxon_names = [arm["label"] for arm in maxon_arms]
+    print("  clock resolution: " + describe_resolutions(resolutions))
     print_tables(order, best, seen, maxon_names, lane.go_arms)
 
     if args.profile:

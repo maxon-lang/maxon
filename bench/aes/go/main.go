@@ -6,9 +6,9 @@ import (
 	"crypto/cipher"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
-	"time"
 )
 
 const (
@@ -17,6 +17,7 @@ const (
 	ctrCounter     = 2
 	armStd         = "std"
 	armBitsliced   = "bitsliced"
+	clockLine      = "clock"
 )
 
 func filled(count int, seed byte) []byte {
@@ -136,9 +137,15 @@ func bitslicedImpl(key128, key256 []byte) impl {
 	}
 }
 
+type clock struct {
+	nanos      func() int64
+	resolution int64
+}
+
 type settings struct {
 	repeats int
 	divisor int
+	clock   clock
 }
 
 func positiveArgument(position int, fallback int) int {
@@ -159,19 +166,19 @@ func (s settings) iterations(base int) int {
 
 func (s settings) measure(name string, bytesPerOp, baseIterations int, op func(prev []byte) []byte, seed []byte) {
 	iterations := s.iterations(baseIterations)
-	best := time.Duration(1<<63 - 1)
+	best := int64(math.MaxInt64)
 	var last []byte
 	for r := 0; r < s.repeats; r++ {
-		start := time.Now()
+		start := s.clock.nanos()
 		last = bytes.Clone(seed)
 		for i := 0; i < iterations; i++ {
 			last = op(last)
 		}
-		if took := time.Since(start); took < best {
+		if took := s.clock.nanos() - start; took < best {
 			best = took
 		}
 	}
-	fmt.Printf("%s %d %d %d %d %d\n", name, bytesPerOp, iterations, s.repeats, best.Nanoseconds(), digest(last))
+	fmt.Printf("%s %d %d %d %d %d\n", name, bytesPerOp, iterations, s.repeats, best, digest(last))
 }
 
 func main() {
@@ -180,7 +187,7 @@ func main() {
 		os.Exit(usageExit)
 	}
 
-	run := settings{repeats: positiveArgument(2, defaultRepeats), divisor: positiveArgument(3, 1)}
+	run := settings{repeats: positiveArgument(2, defaultRepeats), divisor: positiveArgument(3, 1), clock: newClock()}
 
 	key128 := filled(16, 0)
 	key256 := filled(32, 0)
@@ -203,6 +210,8 @@ func main() {
 	}
 
 	sealed16k := m.seal128(nonce, kib16, aad)
+
+	fmt.Printf("%s %d\n", clockLine, run.clock.resolution)
 
 	run.measure("keysetup-128", 0, 20000, func([]byte) []byte { return m.keySetup(key128) }, nil)
 	run.measure("keysetup-128-into", 0, 20000, func(prev []byte) []byte { return m.keySetupInto(prev, key128) }, nil)

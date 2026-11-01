@@ -14,6 +14,7 @@ let defaultDivisor = 1
 let wasmDivisor = 10
 let usageExit = 2
 let ctrCounter = 2
+let resolutionSamples = 16
 
 type Settings
 	export let repeats as RepeatCount
@@ -241,6 +242,23 @@ function runOnce(workload Workload, f Fixtures, iterations Count) returns ByteAr
 	return last
 end 'runOnce'
 
+function clockResolution() returns DurationNanos
+	var smallest = u64.max as DurationNanos
+
+	for _ in 0 upto resolutionSamples 'eachSample'
+		let first = Clock.nowNanos()
+		var step = Clock.elapsedNanos(first)
+
+		while step == 0 'sameReading'
+			step = Clock.elapsedNanos(first)
+		end 'sameReading'
+
+		smallest = step if step < smallest else smallest
+	end 'eachSample'
+
+	return smallest
+end 'clockResolution'
+
 function measure(workload Workload, f Fixtures, settings Settings)
 	let iterations = iterationsOf(workload, divisor: settings.divisor)
 	var best = u64.max as DurationNanos
@@ -267,6 +285,8 @@ function main() returns ExitCode
 	#endif
 
 	let f = Fixtures.create()
+
+	print("clock {clockResolution()}\n")
 
 	for workload in Workload.allCases 'eachWorkload'
 		measure(workload, f: f, settings: settings)
