@@ -5210,8 +5210,8 @@ end 'confiningImplicitDefsOf'
 
 // How an op of a cold block figures in the block's RUNS (`ColdCallBracketPlan` states the region rule):
 // a `clobber` writes a register by name or implicitly and defines no virtual — an argument pre-move,
-// an `idiv` — a `call` is a call, a `capture` reads a call's answer into a virtual, a `store` is a
-// spill store, and `none` is any other op. A store continues the run of the capture it follows — the
+// an `idiv`, a high multiply — a `call` is a call, a `capture` reads a call's answer, or a divide's
+// quotient or remainder, into a virtual, a `store` is a spill store, and `none` is any other op. A store continues the run of the capture it follows — the
 // splitter stores a captured value right after its capture, and a run closed there would restore the
 // register the NEXT capture reads — and opens none. An op that DEFINES A VIRTUAL and also writes
 // scratch implicitly (`negF64RegReg`'s xmm scratch, the arm64 atomics' x16/x17) is `none`: a value
@@ -5275,13 +5275,16 @@ end 'ColdRunAt'
 // ONE cold block's runs, computed by ONE forward walk (`rebuild`) and read by every consumer — the
 // liveness sweep, the colorer, the splitter's forbid rebuild and, through the plan's sequences, the
 // rewrite — so no two of them spell the run structure. A run is a maximal sequence of clobbers and
-// calls closed by the captures that follow its last call and the spill stores of what they captured;
-// a clobber or call after that opens the next run, and a cold block's terminator is never a run op.
+// calls closed by the captures that follow its last call or clobber and the spill stores of what they
+// captured; a clobber or call after that opens the next run, and a cold block's terminator is never a
+// run op.
 //
-// THE CALL GROUP the walk asserts: a capture directly follows a call, another capture or a captured
-// value's store, and a store inside a run follows a capture or another store. A `none` op between a
-// call and one of its captures would close the run before that capture, and the run's reloads would
-// restore the very register the capture then reads — which is why the splitter anchors a reload for
+// THE CALL GROUP the walk asserts: a capture directly follows a run op — a call, a clobber, another
+// capture or a captured value's store — and one that follows a clobber reads a register that clobber
+// writes, as a divide's capture reads the quotient or remainder register. A store inside a run follows
+// a capture or another store. A `none` op between a call or divide and one of its captures would close
+// the run before that capture, and the run's reloads would restore the very register the capture then
+// reads — which is why the splitter anchors a reload for
 // a pre-move's read before the group's first pre-move (`firstPreMoveBefore`) rather than between two
 // pre-moves, and why a captured value's store, the one op of the splitter's that lands between two
 // captures, is a run op.
@@ -5355,7 +5358,7 @@ export type ColdBlockRuns
 			match kind 'k'
 				none or
 				store then break
-				capture then self.requireCaptureAdjacent(lastKind, block: block, pos: pos)
+				capture then self.requireCaptureAdjacent(module, bodyOps: bodyOps, lastKind: lastKind, block: block, pos: pos, buf: buf, opFacts: opFacts)
 				clobber or
 				call then self.openRunIfClosed(lastKind, pos: pos)
 			end 'k'
@@ -5377,10 +5380,33 @@ export type ColdBlockRuns
 		end 'terminated'
 	end 'rebuild'
 
-	function requireCaptureAdjacent(lastKind ColdRunOpKind, block IrBlock, pos ElementIndex)
-		if lastKind != ColdRunOpKind.call and not closesACallGroup(lastKind) 'separated'
-			panic("ColdBlockRuns.rebuild: the capture at position {pos} of cold block '{String.from(block.label)}' does not directly follow its call, another capture or a captured value's store — an op was inserted into a call group, and the run's reloads would restore the register this capture reads")
+	function requireCaptureAdjacent(module TargetModule, bodyOps OpIndexArray, lastKind ColdRunOpKind, block IrBlock, pos ElementIndex, buf OperandList, opFacts OpVariantFacts)
+		if lastKind == ColdRunOpKind.none 'separated'
+			panic("ColdBlockRuns.rebuild: the capture at position {pos} of cold block '{String.from(block.label)}' does not directly follow a run op — an op was inserted between it and the call or divide it reads, and the run's reloads would restore the register this capture reads")
 		end 'separated'
+
+		if lastKind != ColdRunOpKind.clobber 'answeredByACall'
+			return
+		end 'answeredByACall'
+
+		var sources = RegNumColumn.create()
+
+		for o in buf 'eachOperand'
+			if (not operandIsDef(o)) and not operandIsVirtual(o) 'physicalRead'
+				sources.push(operandPhysicalRegNum(o))
+			end 'physicalRead'
+		end 'eachOperand'
+
+		let previous = (pos - 1) as ElementIndex
+		let producer = try module.ops.get(try bodyOps.get(previous) otherwise panic("ColdBlockRuns.requireCaptureAdjacent: bodyOps.get OOB at {previous}")) otherwise panic("ColdBlockRuns.requireCaptureAdjacent: op at position {previous} not in module.ops")
+		targetOpOperands(producer, buf: buf)
+		let written = rawClobberMask(producer, buf: buf, opFacts: opFacts)
+
+		for source in sources 'eachSource'
+			if not regMaskContains(written, regNum: source) 'unrelatedProducer'
+				panic("ColdBlockRuns.rebuild: the capture at position {pos} of cold block '{String.from(block.label)}' reads register {source}, which the preceding {producer.name} (register mask {written}) does not write — an unrelated clobber sits between the op that answers through that register and its capture")
+			end 'unrelatedProducer'
+		end 'eachSource'
 	end 'requireCaptureAdjacent'
 
 	function openRunIfClosed(lastKind ColdRunOpKind, pos ElementIndex)

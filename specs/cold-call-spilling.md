@@ -26,7 +26,9 @@ its registers; the cold path pays a store and a load per value, once, when it ru
 
 The unit of the bracket is a RUN, not the call: the argument pre-moves, the call and its result
 captures are one region, saved before its first op and reloaded after its last, so a pre-move's own
-write is paid exactly as the call's is and no run op confines. A cold block's runs are computed once,
+write is paid exactly as the call's is and no run op confines. A signed division is a run of the same
+shape without a call: the pre-moves into RAX and RDX, the divide (or, for a constant divisor, the high
+multiply) and the capture of the quotient or remainder, which reads a register that divide wrote. A cold block's runs are computed once,
 by one forward walk (`ColdBlockRuns`), and every consumer reads that table. Two things a run does not
 cover stay confining: a value the run itself reads after an earlier op of the run has written its
 register, which cannot sit in that register; and an op that defines a virtual of its own while writing
@@ -60,9 +62,9 @@ FULL pool and is a different mechanism.
 thing. The shape shows in the first case's emitted code (`--emit-ir`: no store or reload in the loop
 body; a save/reload pair inside each slow arm), which nothing in the suite pins; what the suite runs are
 the CONTROLS, which make a cold arm actually run under values live across it and read those values back
-afterwards. With the reload point re-storing instead of restoring, the six cases whose cold arm runs at
-their inputs answer wrong; the two whose arm never runs (`rotateAll`, the scratch-clobbering panic
-handler) stay green, and their bracket's shape shows only in their emitted code; the managed-element and
+afterwards. With the reload point re-storing instead of restoring, the cases whose cold arm runs at
+their inputs answer wrong; the ones whose arm never runs (`rotateAll`, the scratch-clobbering and the
+dividing panic handlers) stay green, and their bracket's shape shows only in their emitted code; the managed-element and
 hot-call controls stay green because nothing is bracketed there.
 
 ## Tests
@@ -555,4 +557,118 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-division-in-a-cold-arm -->
+A panic handler is a cold block, and a signed division in its message is a run of its own: the dividend
+and the sign extension are pre-moves into RAX and RDX, the divide writes both, and the capture of the
+quotient or the remainder reads the register the divide answers through. Every index is in range, so
+the handler never runs and the answer is the sum.
+```maxon
+typealias Word = int(i64.min to i64.max)
+typealias Scale = int(1 to 1000)
+typealias WordArray = Array with Word
+
+function walk(a WordArray, n Count, m Scale, d Scale) returns Word
+	var t = 0 as Word
+	for i in 0 upto n 'each'
+		let v = try a.get(i) otherwise panic("index {i} is past the end; ratio was {m / d} remainder {m mod d}")
+		t = t + v
+	end 'each'
+	return t
+end 'walk'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 5 'seed'
+		a.push(i + 3)
+	end 'seed'
+	let dividend = try a.get(4) otherwise 1
+	let divisor = try a.get(2) otherwise 1
+	return 0 if walk(a, n: 5, m: dividend as Scale, d: divisor as Scale) == 25 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-cold-arm-that-divides-reads-its-live-values-after-the-divide -->
+Control for the division above with the handler running. The counter, the running sum and the
+multiplier are live across both divides of the message and are read after them, so each is saved
+before the run and reloaded after the capture of the remainder; the message reads them back.
+```maxon
+typealias Word = int(i64.min to i64.max)
+typealias Scale = int(1 to 1000)
+typealias WordArray = Array with Word
+
+function walk(a WordArray, n Count, m Scale, d Scale) returns Word
+	var t = 0 as Word
+	var w = 1 as Word
+	for i in 0 upto n 'each'
+		w = w * 3 + (i as Word)
+		let v = try a.get(i) otherwise panic("ratio {m / d} remainder {m mod d} sum {t} multiplier {w} index {i}")
+		t = t + v
+	end 'each'
+	return t
+end 'walk'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 5 'seed'
+		a.push(i + 3)
+	end 'seed'
+	let dividend = try a.get(4) otherwise 1
+	let divisor = try a.get(2) otherwise 1
+	return 0 if walk(a, n: 8, m: dividend as Scale, d: divisor as Scale) == 25 else 1
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-cold-arm-that-divides-reads-its-live-values-after-the-divide.test:11: ratio 1 remainder 2 sum 25 multiplier 908 index 5
+Stack trace:
+  in walk
+  in main
+  in mrt_start
+```
+
+<!-- test: a-cold-arm-that-divides-by-a-constant-reads-its-live-values-after-the-divide -->
+Control for a divisor known at compile time. The division becomes a multiply that keeps only the high
+half of the product, whose answer is read from RDX, and the remainder is taken from that quotient. The
+run is the pre-moves into RAX, the high multiply and the capture of RDX, and the sum, multiplier and
+index live across it are saved before the run and reloaded after the capture.
+```maxon
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function walk(a WordArray, n Count, m Word) returns Word
+	var t = 0 as Word
+	var w = 1 as Word
+	for i in 0 upto n 'each'
+		w = w * 3 + (i as Word)
+		let v = try a.get(i) otherwise panic("ratio {m / 7} remainder {m mod 7} sum {t} multiplier {w} index {i}")
+		t = t + v
+	end 'each'
+	return t
+end 'walk'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 5 'seed'
+		a.push(i + 3)
+	end 'seed'
+	let seed = try a.get(4) otherwise 1
+	return 0 if walk(a, n: 8, m: seed * 31 + 3) == 25 else 1
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-cold-arm-that-divides-by-a-constant-reads-its-live-values-after-the-divide.test:10: ratio 31 remainder 3 sum 25 multiplier 908 index 5
+Stack trace:
+  in walk
+  in main
+  in mrt_start
 ```

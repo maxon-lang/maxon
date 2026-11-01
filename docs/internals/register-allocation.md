@@ -191,8 +191,9 @@ and moves into fixed registers (`computeHints`).
 **Two-address ops.** On x64, `sub`, `imul` and `neg` overwrite their first input. The colourer gives the def
 its input's register and records a copy (`ReuseCopyPlan`) only if the input is still live after the op.
 
-**Cold runs.** Inside a cold block a call does not confine the values live across it; the colourer saves the
-registers it holds before the run and reloads them after (`ColdCallBracketPlan`).
+**Cold runs.** Inside a cold block a call, or a division's fixed-register clobbers, does not confine the values
+live across it; the colourer saves the registers it holds before the run and reloads them after
+(`ColdCallBracketPlan`).
 
 **Repair.** When no register is left for a value, `reportExhaustion` runs Hall's condition at that point. An
 overflow verdict means the splitter left a point over its pool, and panics. A feasible verdict records the

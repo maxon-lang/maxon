@@ -3637,7 +3637,7 @@ function buildManagedGrow(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
 	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
-	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.normal)
+	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.cold)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
@@ -3697,15 +3697,15 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 	// round-trip division safe and makes it equal `newCap` exactly when the multiply did not wrap.
 	//
 	// The division runs only when an operand reaches `1 << NonWrappingOperandShift`, a negative one included;
-	// smaller operands cannot wrap, so the common grow skips it.
+	// smaller operands cannot wrap, so the common grow skips it and `wide`, the block holding it, is cold.
 	let es = emitLoadField(module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let bits = emitElementBits(module, block: cur, es: es, ids: ids)
 	let newBits = emitBin(module, block: cur, a: newCap, b: bits, opcode: StdBinOpcode.mul, ids: ids)
 	let newBytes = emitBitsToBytes(module, block: cur, totalBits: newBits, ids: ids)
-	var wide = module.addBlock(func, label: b"wide", heat: BlockHeat.normal)
+	var wide = module.addBlock(func, label: b"wide", heat: BlockHeat.cold)
 	let operands = emitBin(module, block: cur, a: newCap, b: bits, opcode: StdBinOpcode.bitOr, ids: ids)
 	let operandsHigh = emitBin(module, block: cur, a: operands, b: emitConst(module, block: cur, value: NonWrappingOperandShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
-	emitBranchOnCompare(module, block: cur, value: operandsHigh, pred: StdCmpPred.eq, against: 0, whenTrue: alloc, whenFalse: wide, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: operandsHigh, pred: StdCmpPred.ne, against: 0, whenTrue: wide, whenFalse: alloc, ids: ids)
 
 	let roundTrip = ids.mint()
 	module.appendOp(wide, op: StdOp.div(roundTrip, lhs: newBits, rhs: bits, signedness: IntegerSignedness.signed))
@@ -5076,7 +5076,7 @@ function buildManagedMemGrow(module StdModule)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"badcap", heat: BlockHeat.normal)
+	var bad = module.addBlock(func, label: b"badcap", heat: BlockHeat.cold)
 	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 

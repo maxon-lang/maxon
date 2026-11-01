@@ -76442,35 +76442,18 @@ func @__managed_grow {
     x64.movRegReg rax, r12
     x64.imulRegReg rax, r12, rcx
   __il_body#23:
-    x64.leaRegRegImm32 rsi, rax, 7
-    x64.shrRegImm8 rsi, rsi, 3
+    x64.leaRegRegImm32 rdx, rax, 7
+    x64.shrRegImm8 rdx, rdx, 3
   __il_cont#20:
-    x64.movRegReg rdx, r12
-    x64.orRegReg rdx, r12, rcx
-    x64.shrRegImm8 rdx, rdx, 31
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, alloc
-  wide:
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegReg rax, r12
-    x64.jcc equal, alloc
-  overflow:
-    x64.leaRegRdata rcx, [rip + __abort_msg_71]  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
-    x64.movRegImm32 rdx, 54
-    x64.movRegImm32 rax, 71
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.movRegReg rsi, r12
+    x64.orRegReg rsi, r12, rcx
+    x64.shrRegImm8 rsi, rsi, 31
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, wide
   alloc:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rsi
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
@@ -76540,6 +76523,26 @@ func @__managed_grow {
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rdx, slot0
     x64.jmp chkcap
+  wide:
+    x64.storeSlotReg slot0, rdx
+    x64.cqo
+    x64.idivReg rcx
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegReg rax, r12
+    x64.jcc equal, alloc
+  overflow:
+    x64.leaRegRdata rcx, [rip + __abort_msg_71]  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 71
+    x64.callDirect __rt_abort
+    x64.movRegReg rax, r8
+    x64.epilogue 48
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @__managed_mem_grow {
@@ -76550,7 +76553,7 @@ func @__managed_mem_grow {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.prologue 48
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -76588,32 +76591,18 @@ func @__managed_mem_grow {
     x64.movRegReg rax, r12
     x64.imulRegReg rax, r12, rcx
   __il_body#23:
-    x64.leaRegRegImm32 rsi, rax, 7
-    x64.shrRegImm8 rsi, rsi, 3
+    x64.leaRegRegImm32 rdx, rax, 7
+    x64.shrRegImm8 rdx, rdx, 3
   __il_cont#20:
-    x64.movRegReg rdx, r12
-    x64.orRegReg rdx, r12, rcx
-    x64.shrRegImm8 rdx, rdx, 31
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, alloc
-  wide:
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegReg rax, r12
-    x64.jcc equal, alloc
-  badcap:
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 5
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.movRegReg rsi, r12
+    x64.orRegReg rsi, r12, rcx
+    x64.shrRegImm8 rsi, rsi, 31
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, wide
   alloc:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rsi
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
@@ -76658,7 +76647,7 @@ func @__managed_mem_grow {
   done:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -76683,6 +76672,23 @@ func @__managed_mem_grow {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.jmp mgddone
+  wide:
+    x64.storeSlotReg slot0, rdx
+    x64.cqo
+    x64.idivReg rcx
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegReg rax, r12
+    x64.jcc equal, alloc
+  badcap:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 5
+    x64.epilogue 48
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 ```
 ```TargetIr:x64-linux
@@ -76811,35 +76817,18 @@ func @__managed_grow {
     x64.movRegReg rax, r12
     x64.imulRegReg rax, r12, rcx
   __il_body#23:
-    x64.leaRegRegImm32 rsi, rax, 7
-    x64.shrRegImm8 rsi, rsi, 3
+    x64.leaRegRegImm32 rdx, rax, 7
+    x64.shrRegImm8 rdx, rdx, 3
   __il_cont#20:
-    x64.movRegReg rdx, r12
-    x64.orRegReg rdx, r12, rcx
-    x64.shrRegImm8 rdx, rdx, 31
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, alloc
-  wide:
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegReg rax, r12
-    x64.jcc equal, alloc
-  overflow:
-    x64.leaRegRdata rcx, [rip + __abort_msg_71]  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
-    x64.movRegImm32 rdx, 54
-    x64.movRegImm32 rax, 71
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.movRegReg rsi, r12
+    x64.orRegReg rsi, r12, rcx
+    x64.shrRegImm8 rsi, rsi, 31
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, wide
   alloc:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rsi
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
@@ -76909,6 +76898,26 @@ func @__managed_grow {
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rdx, slot0
     x64.jmp chkcap
+  wide:
+    x64.storeSlotReg slot0, rdx
+    x64.cqo
+    x64.idivReg rcx
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegReg rax, r12
+    x64.jcc equal, alloc
+  overflow:
+    x64.leaRegRdata rcx, [rip + __abort_msg_71]  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 71
+    x64.callDirect __rt_abort
+    x64.movRegReg rax, r8
+    x64.epilogue 48
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @__managed_mem_grow {
@@ -76919,7 +76928,7 @@ func @__managed_mem_grow {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.prologue 48
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -76957,32 +76966,18 @@ func @__managed_mem_grow {
     x64.movRegReg rax, r12
     x64.imulRegReg rax, r12, rcx
   __il_body#23:
-    x64.leaRegRegImm32 rsi, rax, 7
-    x64.shrRegImm8 rsi, rsi, 3
+    x64.leaRegRegImm32 rdx, rax, 7
+    x64.shrRegImm8 rdx, rdx, 3
   __il_cont#20:
-    x64.movRegReg rdx, r12
-    x64.orRegReg rdx, r12, rcx
-    x64.shrRegImm8 rdx, rdx, 31
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, alloc
-  wide:
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegReg rax, r12
-    x64.jcc equal, alloc
-  badcap:
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 5
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.movRegReg rsi, r12
+    x64.orRegReg rsi, r12, rcx
+    x64.shrRegImm8 rsi, rsi, 31
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, wide
   alloc:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rsi
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
@@ -77027,7 +77022,7 @@ func @__managed_mem_grow {
   done:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -77052,6 +77047,23 @@ func @__managed_mem_grow {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.jmp mgddone
+  wide:
+    x64.storeSlotReg slot0, rdx
+    x64.cqo
+    x64.idivReg rcx
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegReg rax, r12
+    x64.jcc equal, alloc
+  badcap:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 5
+    x64.epilogue 48
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 ```
 ```TargetIr:arm64-macos
@@ -77175,23 +77187,7 @@ func @__managed_grow {
     arm64.orr x3, x20, x0
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
-    arm64.b.eq alloc
-  wide:
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, x20
-    arm64.b.eq alloc
-  overflow:
-    arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
-    arm64.movImm x1, 54
-    arm64.movImm x2, 71
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.ret
+    arm64.b.ne wide
   alloc:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x2
@@ -77261,6 +77257,22 @@ func @__managed_grow {
     arm64.bl __managed_cow_detach
     arm64.loadRegSlot x1, slot0
     arm64.b chkcap
+  wide:
+    arm64.sdiv x0, x1, x0
+    arm64.cmp x0, x20
+    arm64.b.eq alloc
+  overflow:
+    arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 71
+    arm64.bl __rt_abort
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
+    arm64.ret
 }
 
 func @__managed_mem_grow {
@@ -77309,20 +77321,7 @@ func @__managed_mem_grow {
     arm64.orr x3, x20, x0
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
-    arm64.b.eq alloc
-  wide:
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, x20
-    arm64.b.eq alloc
-  badcap:
-    arm64.movImm x0, 0
-    arm64.movImm x9, 5
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.ne wide
   alloc:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x2
@@ -77392,6 +77391,19 @@ func @__managed_mem_grow {
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.b mgddone
+  wide:
+    arm64.sdiv x0, x1, x0
+    arm64.cmp x0, x20
+    arm64.b.eq alloc
+  badcap:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 5
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
 }
 ```
 ```TargetIr:arm64-linux
@@ -77518,23 +77530,7 @@ func @__managed_grow {
     arm64.orr x3, x20, x0
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
-    arm64.b.eq alloc
-  wide:
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, x20
-    arm64.b.eq alloc
-  overflow:
-    arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
-    arm64.movImm x1, 54
-    arm64.movImm x2, 71
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.ret
+    arm64.b.ne wide
   alloc:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x2
@@ -77604,6 +77600,22 @@ func @__managed_grow {
     arm64.bl __managed_cow_detach
     arm64.loadRegSlot x1, slot0
     arm64.b chkcap
+  wide:
+    arm64.sdiv x0, x1, x0
+    arm64.cmp x0, x20
+    arm64.b.eq alloc
+  overflow:
+    arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 71
+    arm64.bl __rt_abort
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
+    arm64.ret
 }
 
 func @__managed_mem_grow {
@@ -77652,20 +77664,7 @@ func @__managed_mem_grow {
     arm64.orr x3, x20, x0
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
-    arm64.b.eq alloc
-  wide:
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, x20
-    arm64.b.eq alloc
-  badcap:
-    arm64.movImm x0, 0
-    arm64.movImm x9, 5
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.ne wide
   alloc:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x2
@@ -77735,5 +77734,18 @@ func @__managed_mem_grow {
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.b mgddone
+  wide:
+    arm64.sdiv x0, x1, x0
+    arm64.cmp x0, x20
+    arm64.b.eq alloc
+  badcap:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 5
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
 }
 ```
