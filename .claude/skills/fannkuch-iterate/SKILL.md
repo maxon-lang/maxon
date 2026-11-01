@@ -62,11 +62,12 @@ A candidate that names no shape is not a candidate.
 - Every target the change touches gets the equivalent change (x64, arm64, wasm) or a stated reason.
 - ⛔ **During the round, never run the entire spec suite** (user ruling). Every spec run — yours, an
   implementer's, a reviewer's — is ONE `spec-test` over the spec files the change touches, one
-  `--filter=<spec>/` per file, on x64 and again with `--target=wasm32-wasi`. The full suite is
-  CI's, after the push (`/land` §8); the self-compile is the E3092 gate and is not a spec run.
-- ⛔ **A filtered-green compiler is not a working compiler.** After EVERY rebuild the implementer runs
-  the examples corpus, `maxon test tests/examples`, which builds every program in `examples/` and
-  checks fannkuch-redux's n=10 answer (73196 / 38) among the others. A red case there is a red gate,
+  `--filter=<spec>/` per file, on x64, and again with `--target=wasm32-wasi` only when the change
+  touches wasm lowering. The full suite is CI's, after the push (`/land` §8); the self-compile is the
+  E3092 gate and is not a spec run.
+- ⛔ **A filtered-green compiler is not a working compiler.** Once the filter is green, before the A/B,
+  the implementer runs `maxon test tests/examples --filter=fannkuch`, which builds the example this
+  round measures and checks its n=10 answer (73196 / 38). A red case there is a red gate,
   and the function it died in becomes a spec case. Round 5 shipped a filtered-green compiler that
   could not compile the example.
 - Run §5 and §6 below between `/land`'s landing gates and its commit, so the round is ONE commit carrying

@@ -130,7 +130,7 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 | 7 | Staging — `ONE /land` (default), or N stages with justification | §6 |
 | 8 | Open questions — what approval is actually being asked for | §5 |
 | 9 | **Amendments** — a dated line per amended fact; per re-design, what refuted the last approach | §5; a fresh session |
-| 10 | **Follow-up ledger** — every UNRELATED defect found while landing, with `file:line`, how seen and a reproducing program; struck with its sha as it lands | `/land` §10; §7 |
+| 10 | **Follow-up ledger** — every UNRELATED defect found while landing, with `file:line`, how seen and a reproducing program; landed together in one follow-up `/land`, struck with its sha | `/land` §10; §7 |
 
 > ### RESUMING FROM A PLAN FILE
 > `BASE` + §2a + §2b + §3 + §4 + §6 are the resume token — exactly `/land`'s inputs. ⚠ **A resume
@@ -214,8 +214,9 @@ is outside the repo; this is never a commit.
 ⛔ **Do not wait for CI** — not after the last stage, and not between stages: the next stage starts from
 the pushed commit (`/land` §9's ruling).
 
-**Then drain the plan file's §10 ledger** — `/land` per entry, after the LAST stage (never between
-stages), struck with its sha as it lands (`/land` §10). The plan is closed when the ledger is empty.
+**Then drain the plan file's §10 ledger** — ONE follow-up `/land` for every entry, after the LAST stage
+(never between stages), which also fixes whatever it finds on the way; each entry is struck with its sha
+(`/land` §10). The plan is closed when the ledger is empty.
 
 ---
 

@@ -438,7 +438,8 @@ missing or something changed after it.
 - **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
   not the suite is green over it. **When it is RELATED to this change it is fixed NOW, and the
   reproduction that found it becomes a case in the set; when it is not, it goes on the FOLLOW-UP LEDGER
-  and is landed right after this change (§10)** — fixed all the same, without slowing this one. A
+  and is landed in the follow-up land right after this change (§10)** — fixed all the same, without
+  slowing this one. Inside that follow-up land, everything found is fixed in it. A
   hand-run check is never evidence — it is unrepeatable, unreviewable, and invisible to the CI lanes a
   spec case reaches for free — so none is run to verify anything (the NO MANUAL TESTS box).
 - **When the set is green, re-run §1's count check yourself**, then stop editing for correctness. An
@@ -485,8 +486,8 @@ situation:
   skill's "fix what you find even if it is pre-existing" is satisfied by the follow-up /land, not by
   this diff.
 - **Anything it leaves for triage arrives in its REPORT, and you decide it here**, by §10's test: a
-  related defect is fixed now; an unrelated one goes on the follow-up ledger and gets its own `/land`
-  right after this one. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
+  related defect is fixed now; an unrelated one goes on the follow-up ledger and is landed in the single
+  follow-up `/land` right after this one. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
   (AGENTS.md, "No skipped work").
 - ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
   minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
@@ -583,6 +584,10 @@ during changes; gates run before the rebase measured a tree that no longer exist
 
 **There is no full local battery.** You commit and push on a build, filtered specs covering what changed
 and the codecs check, and CI runs the rest. **Do not wait for CI.**
+
+⭐ **The default is the MINIMUM targeted run.** A row below whose condition the diff does not meet is not
+run, and a filter is never widened "to be safe": a breadth question is CI's. The cost of a CI red is one
+fix commit; the cost of a local battery is paid on every change.
 
 ⛔ **No agent runs any part of this.** Every brief says so; this is where that promise is kept.
 
@@ -692,7 +697,7 @@ Then report in a few lines: the change, the cases that went red → green, each 
 anything skipped with the reason — including the lanes only CI runs. **Then go straight to §10** — that
 report is not the end of the task while the ledger has an entry.
 
-## 10. The follow-up ledger — unrelated defects land AFTER the change, every one
+## 10. The follow-up ledger — unrelated defects land AFTER the change, all in one follow-up land
 
 **Every defect found during the change gets fixed. Only the ones the change does not need wait — and they
 wait for the push, not longer.**
@@ -717,13 +722,21 @@ wait for the push, not longer.**
 wrong, `file:line`, how it was seen, and **a program that reproduces it** — that program is the seed of
 the follow-up's red set.
 
-**After the push, run `/land` on each entry in turn**, in ledger order, one commit each, each a full
-`/land` with its own red set and landing gates. Strike each entry with its sha as it lands. A follow-up's own
-unrelated findings are appended to the **same** ledger. An entry whose red will not go red was fixed on
-the way — strike it with the sha that fixed it.
+> ### ⭐ THE FOLLOW-UPS ARE ONE `/land`, AND IT ABSORBS WHAT IT FINDS
+> **After the push, the WHOLE ledger is landed as ONE follow-up `/land`, in ONE commit** — never a
+> `/land` per entry. Its red set is the union of every entry's reproducing program; its review, its
+> documenter pass and its landing gates run once, over all of them.
+>
+> **A defect found WHILE landing the follow-ups is part of that same land** — related or not, it is
+> added to the follow-up's red set and fixed in the follow-up's commit. It is never appended to the
+> ledger for another round, and §10's related/unrelated test does not apply inside the follow-up land:
+> its scope is "everything found", so everything found is in scope.
+
+Strike every entry with the follow-up's sha when it lands. An entry whose red will not go red was fixed
+on the way — strike it with the sha that fixed it.
 
 - ⛔ **The task is done when the ledger is EMPTY, not when the first push lands.** Do not stop to
-  report between follow-ups; one report at the end names every sha.
+  report between the change and its follow-up land; one report at the end names both shas.
 - ⛔ **The ledger is not `todo.md` and not a memory note** — it is a work queue this session drains.
 - **An entry that needs a design ruling is a question** to the user, asked when its turn comes — never
   a skipped entry.

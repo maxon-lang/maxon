@@ -19,7 +19,8 @@ owes a reason why the two cannot be one, and its absence is the finding.
 AGENTS.md is explicit that you do not care whether an issue predates the change. ⚠ **Under `/land`,
 WHO fixes it depends on whether it is related to the change** (`/land` §10): a related finding you fix
 in this diff; an unrelated one — pre-existing, and outside what the change wrote or changed — you
-REPORT, and the caller lands it in its own `/land` right after this one.
+REPORT, and the caller lands it in the single follow-up `/land` right after this one. When the change
+under review IS that follow-up land, everything you find is in scope: fix it in this diff.
 
 **Do not chase green.** Your job is **QUALITY and LATENT BUGS**, not re-running the suite — iterate on
 `--filter` while you work.
@@ -300,7 +301,7 @@ it to every changed file, do not restate it.** The three that get missed:
 - **Typed ranges as narrow as PROVABLY correct** — a wrong narrow bound is a runtime panic; wide is fine
   where there is no real bound.
 - **Cross-target consistency:** an x64 change needs its arm64 equivalent — **the CODE, which you review
-  by READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not in the battery, so
+  by READING. Never ask for it to be RUN**: the arm64 lanes are remote and run only in CI, so
   "unverified on arm64" is never a review finding and never blocks the change.
 
 **DOCUMENTATION IS A FINDING, NOT A SUGGESTION** (`AGENTS.md`'s Documentation section). ⚠ When
@@ -350,7 +351,7 @@ that summarizes **the change**, not what happened during the review.
   not own**, a **distinct feature**, or a **measured-linear perf debt** — **say so and leave
   it for your caller to triage**, rather than smuggling it in OR deferring it on your own authority.
   It goes in your REPORT — naming the defect, its file:line, how it was seen and a program that
-  reproduces it — and the caller FIXES it, in its own `/land` right after this one (`/land` §10);
+  reproduces it — and the caller FIXES it, in the follow-up `/land` right after this one (`/land` §10);
   standalone, fix it yourself in a separate commit. ⛔ It is never filed to `todo.md`. ⚠ **"Too big to ride
   along" is NOT the same as "a wrong answer in the files I just reviewed"** — that one you fix, exactly
   like a leak. Do not let this bullet become an escape hatch for a defect the change owns.

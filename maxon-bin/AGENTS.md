@@ -387,8 +387,8 @@ facts worth knowing before you get there:
   ⚠ **CI runs eight of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/specHarness`, `tests/ladders`, `tests/examples`, `tests/buildManifest`,
   `tests/emittedRuntime` and `tests/cli` — plus `tests/debug`,
   `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `tests/targets` on
-  one lane (the `targets-gate` role in `targets.tsv`), and `/land`'s battery runs `fmt`, `specHarness`,
-  `ladders`, `examples` and `emittedRuntime` beside the suite and the self-compile. Every other corpus runs only when someone names it, but CI BUILDS every one of them on every lane (`scripts/build-test-corpora.sh`: `maxon test tests/<corpus> --list --build` for each tracked directory directly under `tests/` that holds a `.maxtest`), so a corpus that stops compiling fails the run that broke it.
+  one lane (the `targets-gate` role in `targets.tsv`). `/land` runs a corpus only filtered to the cases
+  the change touched; the full corpora are CI's. Every other corpus runs only when someone names it, but CI BUILDS every one of them on every lane (`scripts/build-test-corpora.sh`: `maxon test tests/<corpus> --list --build` for each tracked directory directly under `tests/` that holds a `.maxtest`), so a corpus that stops compiling fails the run that broke it.
   Both also run `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory,
   and `maxon check-stdlib`, which compiles every `stdlib/` function for every target whether or not a program calls it.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
@@ -524,7 +524,7 @@ no doc comment, which is how it finds them.
   it — both are structural, so neither needs a checker.
 - **A duplicate NUMBER is neither**: two cases may carry one `"E3099"` and the program is well-formed.
   `website/scripts/sync-docs.mjs` refuses one while it reads the registry, naming BOTH lines —
-  `website.yml` runs it on every change to the registry, and `/land`'s battery runs it too. `spec-test`
+  `website.yml` runs it on every change to the registry, and `/land` §8 runs it with `--check`. `spec-test`
   does not check this.
 - **The stage is derived from the leading digit** (1xxx lexer … 9xxx internal) and is never written
   down, so it cannot disagree.
