@@ -16,8 +16,9 @@
 // --- THE ENCODING, stated once ---
 //
 // **`capacity@16` answers "IS THIS BUFFER MINE TO WRITE, AND MINE TO RELEASE?"**
-//   * `>= 0` — YES. `buffer@0` is a SEPARATE allocation this record owns; it may be written in place
-//     within `capacity` elements, and the record owes it a release when it dies or detaches.
+//   * `>= 0` — YES. `buffer@0` is either a SEPARATE allocation this record owns, which it owes a release
+//     when it dies or detaches, or bytes inside the record's own allocation (`coAllocatedBufferOffset`),
+//     which die with the record. Either may be written in place within `capacity` elements.
 //   * `< 0` — NO. The record must copy its bytes somewhere private before any in-place write, and must
 //     not release `buffer@0`. WHICH negative value says only where the buffer came from (below); almost
 //     no COMPILER-SIDE reader compares against a specific one, and that is deliberate — a further
@@ -78,12 +79,12 @@
 //
 // **`parent@32` answers "WHICH SEPARATE ALLOCATION DO I OWE A RELEASE TO?"** — the address `__mm_alloc`
 // RETURNED (so `__mm_decref` finds its header just below it), or `NoOwedAllocation` for "none". It is
-// consulted only when `capacity@16 < 0`; an owner's answer is its own `buffer@0`, and reading it out of
-// two fields rather than storing it twice is what keeps `buffer` and `parent` from being one fact in
-// two slots.
+// consulted only when `capacity@16 < 0`; an owner's answer is its own `buffer@0` (none when the buffer is
+// co-allocated), and reading it out of two fields rather than storing it twice is what keeps `buffer` and
+// `parent` from being one fact in two slots.
 //
-// ⭐ **THE FOUR PROVENANCES, and each is a record kind's answer to "where did these bytes come from?"**
-// A view windows another allocation's bytes; an rdata literal points at an immortal `.rdata` blob whose
+// ⭐ **THE FOUR NON-OWNED PROVENANCES, and each is a record kind's answer to "where did these bytes come
+// from?"** A view windows another allocation's bytes; an rdata literal points at an immortal `.rdata` blob whose
 // record is nonetheless an ordinary heap box; an IMMORTAL RECORD is in `.rdata` along with its blob; an
 // INLINE String's bytes sit inside the record's OWN `__mm_alloc` payload, at `record + StringRecordBytes`,
 // so its own free reclaims them and there is no separate allocation to release. All four are simply
@@ -137,10 +138,10 @@ export let InlineBufferCapacity = -3 as NotOwnedBufferCapacity
 // it is the RECORD's writability that decides, not the blob's.
 let ImmortalRecordCapacity = -4
 
-// `parent@32` when the record owes NOTHING: an owner (its debt is its own `buffer@0`), a byte-string or
-// String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an array that never
-// allocated a buffer at all. It is an ORDINARY answer, not an error case, which is why every release
-// step is null-guarded.
+// `parent@32` when the record owes NOTHING: an owner (its debt, if any, is its own `buffer@0`), a
+// byte-string or String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an
+// array that never allocated a buffer at all. It is an ORDINARY answer, not an error case, which is why
+// every release step is null-guarded.
 let NoOwedAllocation = 0
 
 // `buffer@0` when an immortal record names NO blob — a module-level EMPTY `Array with T`, whose `length@8`
@@ -575,18 +576,19 @@ end 'emitRouteOnCapacitySentinel'
 
 // ⭐ **THE SEPARATE ALLOCATION THIS RECORD OWES A RELEASE TO — `NoOwedAllocation` when it owes nothing.**
 // An OWNER's is its own `buffer@0` (the pointer `__mm_alloc` returned, which may be 0 if the record never
-// allocated one); a NON-OWNED record's is `parent@32` (a view's shared base, or 0 for an immortal `.rdata`
-// blob). ⭐ THE ONE HOME OF THAT CHOICE, read by every place whose correctness depends on picking the same
-// field: `__managed_slice` (which allocation to INCREF for the new view), `__mm_cow_detach` (which one to
-// RELEASE once the record has copied its bytes out — it reads the base here and RETURNS it, and both
-// detaching callers reach this through that one function rather than each asking) and
-// `__managed_decref`/`__str_decref` (which one to release at death). A disagreement between any two of them
-// is a double-free or a leak, so it is written once.
+// allocated one, and is `NoOwedAllocation` when the buffer is co-allocated); a NON-OWNED record's is
+// `parent@32` (a view's shared base, or 0 for an immortal `.rdata` blob). ⭐ THE ONE HOME OF THAT CHOICE,
+// read by every place whose correctness depends on picking the same field: `__managed_slice` (which
+// allocation to INCREF for the new view), `__mm_cow_detach` (which one to RELEASE once the record has
+// copied its bytes out — it reads the base here and RETURNS it, and both detaching callers reach this
+// through that one function rather than each asking) and `__managed_decref`/`__str_decref` (which one to
+// release at death). A disagreement between any two of them is a double-free or a leak, so it is written
+// once.
 //
-// ⭐ **TWO ARMS COVER EVERY RECORD KIND, AND NOTHING WRAPS THIS WITH A THIRD.** An owner's buffer is
-// always a separate allocation, because the only bytes that are NOT — an inline String's — are marked by
-// a negative `capacity@16` like every other non-owned buffer, so they leave through the `parent@32` arm
-// (`NoOwedAllocation`) with no special case here and none at the caller.
+// ⭐ **TWO ARMS COVER EVERY RECORD KIND, AND NOTHING WRAPS THIS WITH A THIRD.** An inline String's bytes
+// are marked by a negative `capacity@16` like every other non-owned buffer, so they leave through the
+// `parent@32` arm (`NoOwedAllocation`) with no special case here and none at the caller. An owner's
+// co-allocated bytes are the owner arm's one sub-case, answered by `emitCarryOwnedBufferBase`.
 //
 // It threads `cur` (sets its terminator) and returns the base as a BLOCK ARG on the caller-owned `join`,
 // which is why `join` is passed IN: the caller resumes there and the two arms are otherwise identical.
@@ -609,10 +611,47 @@ export function emitOwedAllocationBase(module StdModule, func IrFunction, cur Ir
 	emitBranchCarrying(module, from: viewBase, to: join, values: argsOf(parent))
 
 	let buffer = emitLoadField(module, block: ownBase, record: record, offset: ManagedRecordBufferOffset, ids: ids)
-	emitBranchCarrying(module, from: ownBase, to: join, values: argsOf(buffer))
+	emitCarryOwnedBufferBase(module, func: func, cur: ownBase, join: join, record: record, buffer: buffer, ids: ids)
 
 	return base
 end 'emitOwedAllocationBase'
+
+// A co-allocated buffer lives in its record's own `__mm_alloc`: `[48-byte record][8-byte refcount word]
+// [bytes]`, so `buffer@0 = record + 56`. The word is a real box refcount slot, so every reader of
+// `buffer - 8` (the shared-allocation probe, `__mm_share_buffer`, the detach test) works on it unchanged.
+//
+// ⚠ The offset is 8 mod 16 so that `buffer == record + offset` is an exact provenance test: a separate
+// buffer is a box payload and box payloads are 16-aligned, so none can sit at `record + 56`, though a
+// plain record's separate buffer often sits at `record + 64`. `checkManagedGeometry` refuses an offset
+// that is 16-aligned or not word-aligned, the alignment of the widest element.
+export function coAllocatedBufferOffset() returns FullRangeInt
+	return (ManagedRecordBytes as FullRangeInt) + (CoAllocatedRefcountBytes as FullRangeInt)
+end 'coAllocatedBufferOffset'
+
+// Exact only once `record` is known to be an owner (`emitBufferNotOwned` false): a non-owned record's
+// `buffer@0` points into bytes it does not allocate, such as an `.rdata` blob that may sit at exactly
+// `record + coAllocatedBufferOffset()`.
+export function emitRouteOnOwnedBuffer(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, absent IrBlock, coAllocated IrBlock, separate IrBlock, ids ValueMinter)
+	var probe = module.addBlock(func, label: b"obufprobe", heat: BlockHeat.normal)
+
+	let isAbsent = emitBufferAbsent(module, block: cur, buffer: buffer, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isAbsent, thenBlockId: absent.id, elseBlockId: probe.id))
+
+	let lead = emitConst(module, block: probe, value: coAllocatedBufferOffset(), ids: ids)
+	let coAddress = emitBin(module, block: probe, a: record, b: lead, opcode: StdBinOpcode.add, ids: ids)
+	emitBranchOnCompareValues(module, block: probe, a: buffer, pred: StdCmpPred.eq, b: coAddress, whenTrue: coAllocated, whenFalse: separate, ids: ids)
+end 'emitRouteOnOwnedBuffer'
+
+export function emitCarryOwnedBufferBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, buffer ValueId, ids ValueMinter)
+	var coAllocated = module.addBlock(func, label: b"obaseco", heat: BlockHeat.normal)
+	var separate = module.addBlock(func, label: b"obasesep", heat: BlockHeat.normal)
+
+	emitRouteOnOwnedBuffer(module, func: func, cur: cur, record: record, buffer: buffer, absent: separate, coAllocated: coAllocated, separate: separate, ids: ids)
+
+	let nothing = emitConst(module, block: coAllocated, value: NoOwedAllocation, ids: ids)
+	emitBranchCarrying(module, from: coAllocated, to: join, values: argsOf(nothing))
+	emitBranchCarrying(module, from: separate, to: join, values: argsOf(buffer))
+end 'emitCarryOwnedBufferBase'
 
 // `if base != NoOwedAllocation then <callee>(base)` — the null-guarded count step every view, share
 // and release of an owed allocation makes, since "this record owes nothing" is an ordinary answer
@@ -645,26 +684,29 @@ export function emitRouteOnOwedBase(module StdModule, block IrBlock, base ValueI
 end 'emitRouteOnOwedBase'
 
 // ⭐⭐ **WHICH ALLOCATION MUST STAY ALIVE FOR THIS RECORD'S BUFFER TO BE READABLE — `NoOwedAllocation` when
-// none must.** A near-twin of `emitOwedAllocationBase`, and DELIBERATELY BUILT ON IT rather than beside it,
-// because the two questions differ by exactly one provenance and the rest of the answer must not be
-// restated: *"which separate allocation do I owe a release to?"* and *"where do these bytes live?"* agree
-// for an OWNER (its own `buffer@0`), for a VIEW (its `parent@32`) and for an immortal literal (nothing) —
-// and part company for an INLINE String, whose bytes sit inside its OWN `__mm_alloc` payload. That one
-// honestly owes NOTHING, which is the right answer to the first question and a dangling `buffer@0` as an
+// none must.** A near-twin of `emitOwedAllocationBase`: it splits owner from non-owned and routes an owner
+// through `emitRouteOnOwnedBuffer` as that function does, because the two questions differ by exactly one
+// provenance and the rest of the answer must not be restated: *"which separate allocation do I owe a
+// release to?"* and *"where do these bytes live?"* agree for an OWNER's separate buffer (its own
+// `buffer@0`), for a VIEW (its `parent@32`) and for an immortal literal (nothing) — and part company for
+// bytes inside a record's OWN `__mm_alloc`: an INLINE String's payload and a co-allocated array's. Those
+// honestly owe NOTHING, which is the right answer to the first question and a dangling `buffer@0` as an
 // answer to this one.
 //
-// ⚠⚠ **IT IS THE QUESTION A VIEW MUST ASK.** For an Array the two answers coincide at every
-// provenance — an Array's elements are never inside its own record — but
-// `String.addressableBytes()` hands its receiver's own record to the buffer surface, so
-// `path.addressableBytes().slice(…)` slices an INLINE record: the owed-base answer is
-// `NoOwedAllocation`, and a view built on it would hold a raw interior pointer into a String's
+// ⚠⚠ **IT IS THE QUESTION A VIEW MUST ASK.** `String.addressableBytes()` hands its receiver's own record
+// to the buffer surface, so `path.addressableBytes().slice(…)` slices an INLINE record: the owed-base
+// answer is `NoOwedAllocation`, and a view built on it would hold a raw interior pointer into a String's
 // payload with no count on it. Asking THIS question instead counts the record.
 //
-// So: ask the shared question first, and answer this one only where it says "nothing".
+// A co-allocated array has no answer. Its bytes are freed with its record, which a view may outlive, so
+// `emitRecordView` copies the window and never asks; this door aborts with `viewOfACoAllocatedBuffer` if
+// it is asked anyway.
 //
-//   * a non-zero owed base — an OWNER's own buffer, or a VIEW's shared base. Both are the allocation the
-//     elements are in, and a view's flattens exactly as `emitRecordView`'s nesting note describes, so no
-//     chain is built or walked.
+// The answer is:
+//
+//   * a non-zero separate buffer or parent — an OWNER's own buffer, or a VIEW's shared base. Both are the
+//     allocation the elements are in, and a view's flattens exactly as `emitRecordView`'s nesting note
+//     describes, so no chain is built or walked.
 //   * `capacity@16 == InlineBufferCapacity` — an INLINE String, whose bytes sit at
 //     `record + StringRecordBytes` inside the record's OWN `__mm_alloc` payload, so the RECORD is the
 //     allocation that must stay alive. This is the one place a specific provenance value has to be compared
@@ -693,20 +735,29 @@ end 'emitRouteOnOwedBase'
 // record — and the view's `__managed_decref` then `__mm_decref`s it, which for an inline String is exactly
 // right because it owes nothing else. NOTHING-HOSTS-IT: nothing happens, twice.
 export function emitBufferHostAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
-	var owedJoin = module.addBlock(func, label: b"hostowed", heat: BlockHeat.normal)
+	var viewed = module.addBlock(func, label: b"hostview", heat: BlockHeat.normal)
+	var owned = module.addBlock(func, label: b"hostown", heat: BlockHeat.normal)
 	var separate = module.addBlock(func, label: b"hostsep", heat: BlockHeat.normal)
+	var viewedParent = module.addBlock(func, label: b"hostparent", heat: BlockHeat.normal)
 	var noSeparate = module.addBlock(func, label: b"hostnosep", heat: BlockHeat.normal)
 	var inlineBytes = module.addBlock(func, label: b"hostinline", heat: BlockHeat.normal)
 	var nothingHosts = module.addBlock(func, label: b"hostnone", heat: BlockHeat.normal)
-
-	let owedBase = emitOwedAllocationBase(module, func: func, cur: cur, join: owedJoin, record: record, ids: ids)
+	var coAllocated = module.addBlock(func, label: b"hostco", heat: BlockHeat.normal)
 
 	let base = ids.mint()
 	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
 
-	emitRouteOnOwedBase(module, block: owedJoin, base: owedBase, whenOwed: separate, whenNone: noSeparate, ids: ids)
+	let notOwned = emitBufferNotOwned(module, block: cur, record: record, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(notOwned, thenBlockId: viewed.id, elseBlockId: owned.id))
 
-	emitBranchCarrying(module, from: separate, to: join, values: argsOf(owedBase))
+	let buffer = emitLoadField(module, block: owned, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	emitRouteOnOwnedBuffer(module, func: func, cur: owned, record: record, buffer: buffer, absent: nothingHosts, coAllocated: coAllocated, separate: separate, ids: ids)
+	emitBranchCarrying(module, from: separate, to: join, values: argsOf(buffer))
+	emitRuntimeFatal(module, func: func, block: coAllocated, fatal: RuntimeFatal.viewOfACoAllocatedBuffer, ids: ids)
+
+	let parent = emitLoadField(module, block: viewed, record: record, offset: ManagedRecordParentOffset, ids: ids)
+	emitRouteOnOwedBase(module, block: viewed, base: parent, whenOwed: viewedParent, whenNone: noSeparate, ids: ids)
+	emitBranchCarrying(module, from: viewedParent, to: join, values: argsOf(parent))
 
 	// The ONE positive provenance test — the header states why the residual may not answer `record`. It goes
 	// through the shared link for the reason `emitCapacityIsSentinel` states: this file's own subject is that
@@ -739,7 +790,7 @@ end 'emitBufferHostAllocation'
 // either container's: both runtimes CALL it, neither owns it. ⭐ The prefix also earns its `usesHeap` bit
 // for free (`MmRuntime.isRuntimeCallee`). It is BUILT here rather than in `MmRuntime` because it reads five
 // record fields, and `MmRuntime` deliberately knows only the allocator HEADER's geometry — its own note
-// says that geometry "is private to this file, and stays that way". Its NAME lives with the other `__mm_*`
+// says that geometry "belongs to this file, and stays here". Its NAME lives with the other `__mm_*`
 // names there, where the one list of them is.
 //
 // ⭐ **THE ASK IS IN ELEMENTS, NOT BYTES, AND THAT IS WHAT LETS ONE FUNCTION SERVE BOTH RECORDS.** Every

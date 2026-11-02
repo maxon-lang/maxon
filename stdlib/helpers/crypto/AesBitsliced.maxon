@@ -688,6 +688,14 @@ export function aesOutputIsShort(output ByteArray, at ElementIndex) returns bool
 	return output.count() < at + aesBlockBytes
 end 'aesOutputIsShort'
 
+export function aesNewBlock() returns ByteArray
+	var memory = try __ManagedMemory.create(aesBlockBytes, 1) otherwise panic("aesNewBlock: a block-sized buffer is a valid allocation")
+
+	try memory.setLength(aesBlockBytes) otherwise panic("aesNewBlock: setLength refused the capacity the buffer was created with")
+
+	return ByteArray.init(memory)
+end 'aesNewBlock'
+
 export function aesHoldBlock(output ByteArray, at ElementIndex)
 	if aesOutputIsShort(output, at: at) 'short'
 		output.resize(at + aesBlockBytes)

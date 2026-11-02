@@ -29,7 +29,7 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 	///
 	/// ⛔ `managed.length()` is NOT the same question. It answers
 	/// out of the RECORD, by a route that can disagree with the type: the buffer under a fixed array is
-	/// grown through the array's policy, whose minimum is 4, so a three-element fixed array's record has
+	/// sized through the array's policy, whose minimum is 4, so a three-element fixed array's record has
 	/// a fourth slot the type has not got. A fixed size that can disagree with its own type is not
 	/// a fixed size. The two agree for every fixed array `create()` builds, which is exactly why the
 	/// difference is closed by construction rather than left to a test to notice.
@@ -39,7 +39,7 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 	/// `get` forwards to `managed.get`, which is LENGTH-bounded, and `createIterator` hands the raw
 	/// buffer to a cursor that walks the same length — so all three agree exactly while
 	/// `managed.length() == countof(Self)`, which every route into the record does establish:
-	/// `create()` grows then sets the length to the count, and `FixedArray from [...]` interns the
+	/// `create()` builds the record at the count with that length, and `FixedArray from [...]` interns the
 	/// instance at the literal's own element count. `init(managed)` is not exported, so no program
 	/// can hand this type a buffer of its own choosing.
 	///
@@ -115,7 +115,7 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 	/// `stdlib/Array.maxon`'s `set` word for word one container over. The BUFFER's setter is bounded by
 	/// CAPACITY where this type is bounded by its fixed SIZE (the ruling recorded at the builtin: the wider
 	/// bound is what makes the stage-then-`setLength` idiom spellable), and a fixed array's capacity is not its
-	/// count — `create()` grows through the array's policy, whose minimum is 4, so a three-element fixed array's
+	/// count — `create()` sizes through the array's policy, whose minimum is 4, so a three-element fixed array's
 	/// record has a fourth slot the type does not have. MEASURED forwarding straight to the buffer:
 	/// `v.set(3, value: 99)` on a `FixedArray with 3 Int` SUCCEEDED, writing a slot the type has not got, with
 	/// `count()` unmoved and no diagnostic anywhere.

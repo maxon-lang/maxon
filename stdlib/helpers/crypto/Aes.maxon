@@ -53,10 +53,9 @@ public type Aes
 
 	/// The encryption of one 16-byte block.
 	public function encryptBlock(block ByteArray) returns ByteArray throws AesError
-		var result = ByteArray.create()
-
-		// Sized here so the hardware entry takes its fit path and not the refit call.
-		aesHoldBlock(result, at: 0)
+		// Sized at creation: one allocation, and the hardware entry takes its fit path and not the
+		// refit call.
+		var result = aesNewBlock()
 		try encryptBlockInto(block, output: result, at: 0)
 
 		return result
@@ -64,8 +63,7 @@ public type Aes
 
 	/// The decryption of one 16-byte block.
 	public function decryptBlock(block ByteArray) returns ByteArray throws AesError
-		var result = ByteArray.create()
-		aesHoldBlock(result, at: 0)
+		var result = aesNewBlock()
 		try decryptBlockInto(block, output: result, at: 0)
 
 		return result

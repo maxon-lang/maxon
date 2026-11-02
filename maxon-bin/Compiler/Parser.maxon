@@ -10119,26 +10119,10 @@ function handOffWalk(handOff GreenThreadHandOff) returns CascadeAction
 	end 'handOff'
 end 'handOffWalk'
 
-// A one-element branch-edge argument list — the shape every short-circuit edge has (its
-// merge block carries exactly one phi: the expression's value).
-export function singletonArgs(value ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
-	args.push(value)
-	return args
-end 'singletonArgs'
-
-// A two-element call argument list — `__managed_append(dest, src)`'s pair. `singletonArgs`' sibling.
-module function pairArgs(first ValueId, second ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
-	args.push(first)
-	args.push(second)
-	return args
-end 'pairArgs'
-
 // A witness dispatch's final argument list: the BORROWED receiver, then the user's actuals already in the
 // interface's declaration order. It is what re-establishes the `args[0]` = receiver /
 // interface formal `j` = `args[j+1]` convention after `slotCallArgs` — which knows only about the formals —
-// has done the reordering. `pairArgs`' variadic sibling, and the ONE place the receiver is put back —
+// has done the reordering. `twoArgs`' variadic sibling, and the ONE place the receiver is put back —
 // `MaxonDialect.witnessDispatchReceiver` is the ONE place it is taken back off.
 function withWitnessReceiver(receiver ValueId, ordered ValueIdArray) returns ValueIdArray
 	var args = ValueIdArray.create()
@@ -10184,26 +10168,6 @@ function renderWitnessRequirements(candidates WitnessDispatchTargetArray, signat
 
 	return rendered
 end 'renderWitnessRequirements'
-
-// A three-element call argument list — `__managed_set(arr, index, value)`'s triple. `pairArgs`' sibling.
-function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
-	args.push(first)
-	args.push(second)
-	args.push(third)
-	return args
-end 'tripleArgs'
-
-// A four-element call argument list — `__managed_slice_managed(arr, start, end, cloneFn)`'s quad.
-// `tripleArgs`' sibling.
-function quadArgs(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
-	args.push(first)
-	args.push(second)
-	args.push(third)
-	args.push(fourth)
-	return args
-end 'quadArgs'
 
 // **THE BUILTIN `Array` METHODS.** `create` is a static factory; the rest are instance
 // methods dispatched by name in `dispatchArrayMethod` off an `Array`-instance receiver. `get`/`set`/
@@ -27404,7 +27368,7 @@ export type Parser
 			let slot = self.emitRegistrySlot(key, member: RegistryCurrentMemberName, range: range)
 
 			if isService 'aServiceLookup'
-				return self.emitOwnedRuntimeResult(RegistryServiceCurrentName, args: singletonArgs(slot), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+				return self.emitOwnedRuntimeResult(RegistryServiceCurrentName, args: argsOf(slot), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 			end 'aServiceLookup'
 
 			return self.emitSharedValueRead(slot, valueType: valueType, range: range)
@@ -27472,7 +27436,7 @@ export type Parser
 	end 'requireRegistryResultMatchesReplacement'
 
 	function emitSharedValueRead(holder ValueId, valueType MaxonType, range SourceRange) returns ValueId
-		let result = self.emitRuntimeCall(SharedValueCurrentName, args: singletonArgs(holder), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+		let result = self.emitRuntimeCall(SharedValueCurrentName, args: argsOf(holder), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 
 		if self.valueIsManagedHeap(result) 'aCountedReference'
 			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.coOwned)
@@ -27492,11 +27456,11 @@ export type Parser
 		// A clone, so the slot holds a box only the registry owns: the slot's box is released on whichever
 		// thread replaces it, while the caller's box takes a plain unshared decrement. A box both held would
 		// lose a count update, and that count alone decides when the mailbox closes and is freed.
-		let stored = self.emitRuntimeCall(serviceHandleClonerOf(self.signatures, handleName: self.valueTypeName(handle)), args: singletonArgs(handle), resultTag: self.tagOf(handle), resultNameId: self.valueNameId(handle), range: range)
+		let stored = self.emitRuntimeCall(serviceHandleClonerOf(self.signatures, handleName: self.valueTypeName(handle)), args: argsOf(handle), resultTag: self.tagOf(handle), resultNameId: self.valueNameId(handle), range: range)
 
 		return match replacement 'replacement'
-			unconditional gives self.emitRuntimeCall(RegistryServiceRegisterName, args: pairArgs(slot, second: stored), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-			replacing(old) gives self.emitRuntimeCall(RegistryServiceReplaceName, args: tripleArgs(slot, second: stored, third: try self.registryHandleOf(old, handleType: handleType, argTok: argTok)), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+			unconditional gives self.emitRuntimeCall(RegistryServiceRegisterName, args: twoArgs(slot, second: stored), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			replacing(old) gives self.emitRuntimeCall(RegistryServiceReplaceName, args: threeArgs(slot, second: stored, third: try self.registryHandleOf(old, handleType: handleType, argTok: argTok)), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'replacement'
 	end 'emitServiceRegistration'
 
@@ -27510,8 +27474,8 @@ export type Parser
 		let published = try self.publishableValue(given, valueType: valueType, key: publishedTo, placeName: RegistryPublishMemberName, argTok: argTok)
 
 		return match replacement 'replacement'
-			unconditional gives self.emitRuntimeCall(SharedValuePublishName, args: pairArgs(holder, second: published), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-			replacing(old) gives self.emitRuntimeCall(SharedValueReplaceName, args: tripleArgs(holder, second: published, third: old), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+			unconditional gives self.emitRuntimeCall(SharedValuePublishName, args: twoArgs(holder, second: published), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			replacing(old) gives self.emitRuntimeCall(SharedValueReplaceName, args: threeArgs(holder, second: published, third: old), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'replacement'
 	end 'emitSharedValuePublish'
 
@@ -27574,7 +27538,7 @@ export type Parser
 
 	function emitInterfaceHandleConversion(value ValueId, target ByteArray, first Token, last Token) returns ValueId
 		let conversion = interfaceHandleConversionName(self.signatures.serviceOfHandle(self.valueTypeName(value)), interfaceName: self.signatures.interfaceOfHandle(target))
-		return self.emitOwnedRuntimeResult(conversion, args: singletonArgs(value), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(target), range: SourceRange.between(first, last: last))
+		return self.emitOwnedRuntimeResult(conversion, args: argsOf(value), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(target), range: SourceRange.between(first, last: last))
 	end 'emitInterfaceHandleConversion'
 
 	function dispatchOnSharedValue(func IrFunction, holder ValueId, baseTok Token, resultUsed bool) returns ValueId throws SourceParseError
@@ -27589,7 +27553,7 @@ export type Parser
 
 		if memberTok.value.equals(CloneMethodName) 'aSecondHolder'
 			let rparenTok = try self.consume(TokenKind.rightParen)
-			return self.emitOwnedRuntimeResult(SharedValueBoxCloneName, args: singletonArgs(holder), resultTag: self.tagOf(holder), resultNameId: self.valueNameId(holder), range: SourceRange.between(baseTok, last: rparenTok))
+			return self.emitOwnedRuntimeResult(SharedValueBoxCloneName, args: argsOf(holder), resultTag: self.tagOf(holder), resultNameId: self.valueNameId(holder), range: SourceRange.between(baseTok, last: rparenTok))
 		end 'aSecondHolder'
 
 		if not memberTok.value.equals(RegistryPublishMemberName) 'notAMember'
@@ -27627,7 +27591,7 @@ export type Parser
 
 		match self.signatures.registryValueKindOf(self.signatures.sharedValueElementOf(giid), readerFilePath: self.job.path) 'kind'
 			service then panic("parseSharedValueCreate: a `SharedValue` holds a value, and `registryValueKindOf` answers `service` for no value type")
-			value(dropCallee, retainCallee, _) then return self.emitOwnedRuntimeResult(SharedValueBoxCreateName, args: tripleArgs(published, second: self.emitOptionalFuncAddr(dropCallee, range: range), third: self.emitOptionalFuncAddr(retainCallee, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+			value(dropCallee, retainCallee, _) then return self.emitOwnedRuntimeResult(SharedValueBoxCreateName, args: threeArgs(published, second: self.emitOptionalFuncAddr(dropCallee, range: range), third: self.emitOptionalFuncAddr(retainCallee, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
 		end 'kind'
 	end 'parseSharedValueCreate'
 
@@ -34950,7 +34914,7 @@ export type Parser
 		end 'notAKeptFeed'
 
 		if self.typeParamHoldsAGreenThread(self.valueTypeParamId(feed)) 'aMovedInstantiation'
-			self.emitOwnershipRuntimeCall(ReleaseTypeParamName, args: singletonArgs(feed), range: range)
+			self.emitOwnershipRuntimeCall(ReleaseTypeParamName, args: argsOf(feed), range: range)
 			self.moveOwnedValueOut(feed)
 			return
 		end 'aMovedInstantiation'
@@ -37509,22 +37473,22 @@ export type Parser
 		let tag = self.tagOf(source)
 
 		if tag == ValueTypeTag.typeParameter 'anOpaqueRecord'
-			return HoldRetainPlan.create(RetainTypeParamName, args: singletonArgs(source))
+			return HoldRetainPlan.create(RetainTypeParamName, args: argsOf(source))
 		end 'anOpaqueRecord'
 
 		if tagIsByteRecord(tag) 'aByteRecord'
-			return HoldRetainPlan.create(StrRetainName, args: singletonArgs(source))
+			return HoldRetainPlan.create(StrRetainName, args: argsOf(source))
 		end 'aByteRecord'
 
 		if tag == ValueTypeTag.interfaceRef 'anExistential'
-			return HoldRetainPlan.create(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source))
+			return HoldRetainPlan.create(RetainExistentialName, args: twoArgs(self.witnessOfValue(source), second: source))
 		end 'anExistential'
 
 		if self.valueIsAnImageableDeepBox(source) 'aBoxWithPointerSlots'
-			return HoldRetainPlan.create(MmOwnDeepName, args: pairArgs(source, second: self.emitCodeAddress(self.deepBoxCloneCallee(source), range: range)))
+			return HoldRetainPlan.create(MmOwnDeepName, args: twoArgs(source, second: self.emitCodeAddress(self.deepBoxCloneCallee(source), range: range)))
 		end 'aBoxWithPointerSlots'
 
-		return HoldRetainPlan.create(self.signatures.retainCalleeOf(tag, nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName), args: singletonArgs(source))
+		return HoldRetainPlan.create(self.signatures.retainCalleeOf(tag, nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName), args: argsOf(source))
 	end 'holdRetainPlan'
 
 	function holdKindsForWrite() returns HoldKindMap
@@ -43971,7 +43935,7 @@ export type Parser
 	end 'branchOnSendStatus'
 
 	function joinSendFlag(block IrBlock, settled IrBlock, flag ValueId)
-		self.recordBranchEdge(block, targetId: settled.id, argIds: singletonArgs(flag))
+		self.recordBranchEdge(block, targetId: settled.id, argIds: argsOf(flag))
 		self.emitBranch(block, targetId: settled.id)
 	end 'joinSendFlag'
 
@@ -44081,8 +44045,8 @@ export type Parser
 
 	function joinHeldSentLeg(leg SentLeg, join SentLegJoin, errBlock IrBlock)
 		self.attachDetachedPhi(errBlock, phi: join.joined.flag)
-		var refusedArgs = singletonArgs(leg.flag)
-		var handlerArgs = singletonArgs(join.handlerFlag)
+		var refusedArgs = argsOf(leg.flag)
+		var handlerArgs = argsOf(join.handlerFlag)
 
 		if leg.holdsAUnion() 'withTheFusedOrdinal'
 			self.attachDetachedPhi(errBlock, phi: join.joined.fused)
@@ -44200,9 +44164,9 @@ export type Parser
 		let word = stagedWordAt(staged, slot: slot)
 
 		match clone 'strategy'
-			throughWitness then self.emitOwnershipRuntimeCall(release, args: pairArgs(stagedWitnessAt(staged, slot: slot), second: word), range: range)
+			throughWitness then self.emitOwnershipRuntimeCall(release, args: twoArgs(stagedWitnessAt(staged, slot: slot), second: word), range: range)
 			direct or
-			managedElements then self.emitOwnershipRuntimeCall(release, args: singletonArgs(word), range: range)
+			managedElements then self.emitOwnershipRuntimeCall(release, args: argsOf(word), range: range)
 			unsupported then panic("emitSharedWordCopiedAndReleased: slot {slot} of `{String.from(sent.messageName)}` carries a strategy with no copy — `sharedSlotHandBack` hands such a slot back uncopied")
 		end 'strategy'
 
@@ -44213,9 +44177,9 @@ export type Parser
 		let word = stagedWordAt(staged, slot: slot)
 
 		match clone 'strategy'
-			direct(callee) then return self.emitRuntimeCall(callee, args: singletonArgs(word), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-			managedElements(containerCopy, elementCopy) then return self.emitRuntimeCall(containerCopy, args: pairArgs(word, second: self.emitCodeAddress(elementCopy, range: range)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-			throughWitness(entry) then return self.emitRuntimeCall(entry, args: pairArgs(stagedWitnessAt(staged, slot: slot), second: word), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			direct(callee) then return self.emitRuntimeCall(callee, args: argsOf(word), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			managedElements(containerCopy, elementCopy) then return self.emitRuntimeCall(containerCopy, args: twoArgs(word, second: self.emitCodeAddress(elementCopy, range: range)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			throughWitness(entry) then return self.emitRuntimeCall(entry, args: twoArgs(stagedWitnessAt(staged, slot: slot), second: word), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 			unsupported then panic("emitSharedWordCopy: slot {slot} of `{String.from(sent.messageName)}` carries a strategy with no copy — `sharedSlotHandBack` hands such a slot back uncopied")
 		end 'strategy'
 	end 'emitSharedWordCopy'
@@ -44235,7 +44199,7 @@ export type Parser
 	function releaseRefusedReply(reply ServiceReplyValue, range SourceRange)
 		match reply 'reply'
 			fireAndForget then return
-			cell(promise) then _ = self.emitRuntimeCall(MboxReplyRefusedName, args: singletonArgs(promise), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			cell(promise) then _ = self.emitRuntimeCall(MboxReplyRefusedName, args: argsOf(promise), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'reply'
 	end 'releaseRefusedReply'
 
@@ -44670,7 +44634,7 @@ export type Parser
 
 		// The merge wears the try-result's brand; the fallback was just checked against it.
 		self.brandValue(phiId, brand: self.brandOf(result))
-		var tryArms = singletonArgs(result)
+		var tryArms = argsOf(result)
 		tryArms.push(otherwiseValue)
 		self.carryMergeOrigin(phiId, arms: tryArms, anchor: tryTok)
 
@@ -44775,7 +44739,7 @@ export type Parser
 		// for nothing. Hoisted
 		// above the `phiOwned` gate deliberately: the alias reader is ungated, so the list is needed on every
 		// path anyway and the branch would only decide WHICH site paid for it.
-		let contEdges = pairArgs(result, second: errEdgeValue)
+		let contEdges = twoArgs(result, second: errEdgeValue)
 
 		// The phi is only as strong as its weakest path. Both branches above already downgraded what they
 		// increfed (`emitIncref` marks its operand co-owned), so this reads the state they left rather than
@@ -47091,7 +47055,7 @@ export type Parser
 
 		// The BOX, freed explicitly rather than through `emitDecref` — see `allocateCell` for why the
 		// tag-routed drop would run the CONTENT's destructor over a cell.
-		self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(value), range: range)
+		self.emitOwnershipRuntimeCall(MmDecrefName, args: argsOf(value), range: range)
 	end 'emitScopeRelease'
 
 	function emitFunctionExit(into IrBlock, exit FunctionExit, anchor Token, handedOff HandedOff = HandedOff.nothing)
@@ -47382,10 +47346,10 @@ export type Parser
 		let value = try exitValueOf(exit) otherwise return ValueIdArray.create()
 
 		if exitShapeCarriesAWitness(shape) 'anExistential'
-			return pairArgs(value, second: self.witnessOfValue(value))
+			return twoArgs(value, second: self.witnessOfValue(value))
 		end 'anExistential'
 
-		return singletonArgs(value)
+		return argsOf(value)
 	end 'exitPayloadOf'
 
 	function dropCascade() returns DropCascade
@@ -47854,7 +47818,7 @@ export type Parser
 
 	function emitDecrefOps(value ValueId, range SourceRange)
 		if let feed = try self.feedGuardedBy(value) 'aFeedDropGuard'
-			self.emitOwnershipRuntimeCall(ReclaimTypeParamName, args: singletonArgs(feed), range: range)
+			self.emitOwnershipRuntimeCall(ReclaimTypeParamName, args: argsOf(feed), range: range)
 			return
 		end 'aFeedDropGuard'
 
@@ -47863,7 +47827,7 @@ export type Parser
 		end 'anImmortalRecord'
 
 		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existential'
-			self.emitDropCall(value, callee: DropExistentialName, args: pairArgs(self.witnessOfValue(value), second: value), range: range)
+			self.emitDropCall(value, callee: DropExistentialName, args: twoArgs(self.witnessOfValue(value), second: value), range: range)
 			return
 		end 'existential'
 
@@ -47896,7 +47860,7 @@ export type Parser
 			self.bodyState.droppedAWitnessCursorElement = true
 		end 'aWitnessCursorElement'
 
-		self.emitDropCall(value, callee: callee, args: singletonArgs(value), range: range)
+		self.emitDropCall(value, callee: callee, args: argsOf(value), range: range)
 	end 'emitDecrefOps'
 
 	function emitDropCall(value ValueId, callee ByteArray, args ValueIdArray, range SourceRange)
@@ -47927,7 +47891,7 @@ export type Parser
 				continue
 			end 'notOpaque'
 
-			self.emitOwnershipRuntimeCall(DropTypeParamName, args: singletonArgs(self.emitFieldLoad(box, layout: layout, index: i, range: range)), range: range)
+			self.emitOwnershipRuntimeCall(DropTypeParamName, args: argsOf(self.emitFieldLoad(box, layout: layout, index: i, range: range)), range: range)
 		end 'eachField'
 	end 'emitOpaqueSlotReleases'
 
@@ -48536,7 +48500,7 @@ export type Parser
 			return
 		end 'anImmortalRecord'
 
-		self.emitOwnershipRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames, result: RetainResult.discarded), args: singletonArgs(value), range: range)
+		self.emitOwnershipRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames, result: RetainResult.discarded), args: argsOf(value), range: range)
 
 		// ⭐ **AND THE OP IS THE FACT: after this line `value`'s allocation has two owners.** The mark rides
 		// here rather than at the named doors above because that is what makes it unforgettable — see
@@ -49461,7 +49425,7 @@ export type Parser
 	end 'emitEmptyPromiseField'
 
 	function emitPromiseRelease(held ValueId, range SourceRange)
-		_ = self.emitRuntimeCall(GtPromiseReleaseName, args: singletonArgs(held), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(GtPromiseReleaseName, args: argsOf(held), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitPromiseRelease'
 
 	// ⭐⭐ **EMPTYING A SLOT RETIRES EVERY PENDING READ OF IT, NOT JUST THE ONE BEING CONSUMED.** A slot can be
@@ -49730,7 +49694,7 @@ export type Parser
 	// two branches ran is exactly what this frame cannot know (that is why the entry exists). A byte record has no
 	// slot a move-out can null, so the claim costs nothing today and is the true one.
 	function retainBorrowedByteRecord(source ValueId, range SourceRange) returns ValueId
-		let retained = self.emitRuntimeCall(StrRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		let retained = self.emitRuntimeCall(StrRetainName, args: argsOf(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 
 		// The SOURCE is downgraded too, for `emitIncref`'s reason — see `markValueCoOwnsHeap`. On the heap branch
 		// this op is an incref, so afterwards two names hold one record; on the `.rdata` branch it is a copy and
@@ -49872,7 +49836,7 @@ export type Parser
 		// `__mm_retain` gives `source`'s box a second owner exactly as `__mm_incref` does, so the source is
 		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(source)
-		let retained = self.emitRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(source), nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName), args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		let retained = self.emitRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(source), nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName), args: argsOf(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 		self.carryFromSharedRecord(retained, from: source, source: self.bodyState, path: ValueCarryPath.copy)
 		return retained
 	end 'emitRetainCall'
@@ -49887,7 +49851,7 @@ export type Parser
 		// choice (incref a record, copy a byte record, hand back a raw value), and the co-owned answer is the
 		// sound one under every branch — the incref one makes it literally true, and the others make it harmless.
 		self.markValueCoOwnsHeap(source)
-		let retained = self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		let retained = self.emitRuntimeCall(RetainExistentialName, args: twoArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 		self.carryInterfaceWitness(retained, from: source)
 		self.carryFromSharedRecord(retained, from: source, source: self.bodyState, path: ValueCarryPath.copy)
 		return retained
@@ -50069,7 +50033,7 @@ export type Parser
 	// The result is a distinct ValueId either way, which the sink needs for `emitRetainCall`'s reason.
 	function emitOwnBoxForSink(value ValueId, range SourceRange) returns ValueId
 		self.markValueCoOwnsHeap(value)
-		let owned = self.emitRuntimeCall(MmOwnName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		let owned = self.emitRuntimeCall(MmOwnName, args: argsOf(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 		self.carryFromSharedRecord(owned, from: value, source: self.bodyState, path: ValueCarryPath.copy)
 		return owned
 	end 'emitOwnBoxForSink'
@@ -50088,7 +50052,7 @@ export type Parser
 	function emitOwnDeepBoxCopy(value ValueId, range SourceRange) returns ValueId
 		self.markValueCoOwnsHeap(value)
 		let cloner = self.emitCodeAddress(self.deepBoxCloneCallee(value), range: range)
-		let copy = self.emitRuntimeCall(MmOwnDeepName, args: pairArgs(value, second: cloner), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		let copy = self.emitRuntimeCall(MmOwnDeepName, args: twoArgs(value, second: cloner), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 		self.carryFromSharedRecord(copy, from: value, source: self.bodyState, path: ValueCarryPath.copy)
 		return copy
 	end 'emitOwnDeepBoxCopy'
@@ -50107,7 +50071,7 @@ export type Parser
 	function unsharedByteRecord(value ValueId, range SourceRange) returns ValueId
 		self.removeFromPendingTemps(value)
 
-		let unshared = self.emitOwnedRuntimeResult(StrUnshareName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		let unshared = self.emitOwnedRuntimeResult(StrUnshareName, args: argsOf(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 		self.carryValueFacts(unshared, from: value, source: self.bodyState, path: ValueCarryPath.value)
 
 		return unshared
@@ -51855,8 +51819,8 @@ export type Parser
 				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 				self.pushMergedEdgeValue(edgeArgsA, binding: binding, value: a)
 				self.pushMergedEdgeValue(edgeArgsB, binding: binding, value: b)
-				self.markPhiImmortalIfEveryEdgeIs(phiId, edges: pairArgs(a, second: b))
-				self.admitUnsignedLiteralsAcross(pairArgs(a, second: b))
+				self.markPhiImmortalIfEveryEdgeIs(phiId, edges: twoArgs(a, second: b))
+				self.admitUnsignedLiteralsAcross(twoArgs(a, second: b))
 			end 'differ'
 		end 'eachVar'
 
@@ -52141,7 +52105,7 @@ export type Parser
 	function claimWithIteratorPromiseSlot(promise ValueId, pair ValueId, layout StructLayout, range SourceRange)
 		let iterator = self.emitFieldLoad(pair, layout: layout, index: WithIteratorSourcePosition, range: range)
 		self.emitEmptyPromiseField(pair, offset: layout.offsetOfField(WithIteratorElementPosition), range: range)
-		let slot = try self.emitIteratorCursorSlot(iterator, args: singletonArgs(iterator), range: range) otherwise panic("claimWithIteratorPromiseSlot: `pairsAnArrayIteratorWithAPromise` admitted this pair because its iterator holds a cursor")
+		let slot = try self.emitIteratorCursorSlot(iterator, args: argsOf(iterator), range: range) otherwise panic("claimWithIteratorPromiseSlot: `pairsAnArrayIteratorWithAPromise` admitted this pair because its iterator holds a cursor")
 		self.recordConsumablePromiseSlot(promise, container: slot.container, index: slot.index, isField: false)
 	end 'claimWithIteratorPromiseSlot'
 
@@ -52564,7 +52528,7 @@ export type Parser
 			// ⚠ The String's index is a BYTE position, not a cluster ordinal, so the header asks "is there a
 			// byte left?", the same condition `countGraphemes` loops on (`while pos < len`). A cluster
 			// ordinal would need the count, which costs a whole extra scan.
-			bound = self.emitLoadStringField(source, offset: StringLengthOffset, range: SourceRange.ofToken(forTok)) if src.isString else self.emitRuntimeCall(ManagedCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+			bound = self.emitLoadStringField(source, offset: StringLengthOffset, range: SourceRange.ofToken(forTok)) if src.isString else self.emitRuntimeCall(ManagedCountName, args: argsOf(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
 		end 'lengthReadLive'
 
 		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(src.testAnchorIndex))
@@ -52637,12 +52601,12 @@ export type Parser
 		// range — two producers of the SAME owned per-trip Character, which is why the ownership below is
 		// asked once for both rather than beside each. See `GraphemeRuntime.buildCharFromCodepoint`.
 		if src.isCharacterRange 'mintFromCodepoint'
-			loopValue = self.emitRuntimeCall(CharFromCodepointName, args: singletonArgs(indexPhi), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
+			loopValue = self.emitRuntimeCall(CharFromCodepointName, args: argsOf(indexPhi), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
 		end 'mintFromCodepoint'
 
 		if src.isString 'readCluster'
-			graphemeEnd = self.emitLabelledRuntimeCall(CorpusFindGraphemeEnd, args: pairArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok), argLabels: corpusFindGraphemeEndLabels())
-			loopValue = self.emitRuntimeCall(CharAtName, args: tripleArgs(source, second: indexPhi, third: graphemeEnd), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
+			graphemeEnd = self.emitLabelledRuntimeCall(CorpusFindGraphemeEnd, args: twoArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok), argLabels: corpusFindGraphemeEndLabels())
+			loopValue = self.emitRuntimeCall(CharAtName, args: threeArgs(source, second: indexPhi, third: graphemeEnd), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
 		end 'readCluster'
 
 		if src.isString or src.isCharacterRange 'ownsTheTripsCharacter'
@@ -52688,7 +52652,7 @@ export type Parser
 		// through `current()` like every other cursor, where this door reads `__managed_get_unchecked` off an
 		// ordinal.
 		if not src.isRange and not src.isString and not methodSurfaceExists(src.cursorSurface) 'readElement'
-			loopValue = try self.emitContainerElementAccessor(ManagedGetUncheckedName, container: source, args: pairArgs(source, second: indexPhi), giid: self.valueInstanceId(source), reference: ContainerElementReference.borrowed, range: SourceRange.ofToken(patternTok))
+			loopValue = try self.emitContainerElementAccessor(ManagedGetUncheckedName, container: source, args: twoArgs(source, second: indexPhi), giid: self.valueInstanceId(source), reference: ContainerElementReference.borrowed, range: SourceRange.ofToken(patternTok))
 			self.emitEmptySlotElementGuard(func, source: source, element: loopValue, index: indexPhi, forTok: forTok)
 			loopValue = self.holdLoopElement(loopValue, nameToks: nameToks, range: SourceRange.ofToken(patternTok))
 		end 'readElement'
@@ -52970,7 +52934,7 @@ export type Parser
 	// is recorded against the body's own value in one place rather than each shape minting its own.
 	function mintCounterOverRange(body IrBlock, header IrBlock, indexPhi ValueId, tag ValueTypeTag, nameId TypeNameId, low FullRangeInt, high FullRangeInt) returns ValueId
 		let counter = self.mintPhi(body, tag: tag, nameId: nameId)
-		self.recordBranchEdge(header, targetId: body.id, argIds: singletonArgs(indexPhi))
+		self.recordBranchEdge(header, targetId: body.id, argIds: argsOf(indexPhi))
 		self.recordProvenIntRange(counter, low: low, high: high)
 		return counter
 	end 'mintCounterOverRange'
@@ -53193,7 +53157,7 @@ export type Parser
 		end 'aRecordElement'
 
 		if self.tagOf(element) == ValueTypeTag.typeParameter 'anOpaqueElement'
-			let unfilled = self.emitRuntimeCall(ManagedSlotUnfilledName, args: pairArgs(source, second: element), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+			let unfilled = self.emitRuntimeCall(ManagedSlotUnfilledName, args: twoArgs(source, second: element), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
 			self.emitEmptySlotPanicBranch(func, isEmpty: unfilled, index: index, forTok: forTok)
 		end 'anOpaqueElement'
 	end 'emitEmptySlotElementGuard'
@@ -53208,7 +53172,7 @@ export type Parser
 		self.bodyState.currentBlock.heat = BlockHeat.cold
 
 		let site = self.emitStringLiteral(panicMessageLinePrefix(self.job.path, line: forTok.line), range: range)
-		let record = self.emitLabelledRuntimeCall(EmptySlotMessageName, args: pairArgs(site, second: index), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range, argLabels: emptySlotMessageLabels())
+		let record = self.emitLabelledRuntimeCall(EmptySlotMessageName, args: twoArgs(site, second: index), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range, argLabels: emptySlotMessageLabels())
 		self.removeFromPendingTemps(record)
 		let messagePointer = self.emitLoadStringField(record, offset: StringBufferOffset, range: range)
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.panicAbortValue(messagePointer), range: range)
@@ -53303,7 +53267,7 @@ export type Parser
 		// (`fillOmittedArgDefaults`), so they are its output as well as its input. No protocol method declares
 		// a parameter, so nothing is ever appended — but the mutability is the signature's, not the callee's,
 		// and E3159 asks about the signature.
-		var args = singletonArgs(source)
+		var args = argsOf(source)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: SourceRange.ofToken(anchor))
 		let callee = qualifiedMethodName(typeName, methodName: methodName)
@@ -53329,12 +53293,12 @@ export type Parser
 		end 'resolved'
 	end 'emitWitnessProtocolCall'
 
-	// The emit half of the fork above, taking the already-resolved requirement. `singletonArgs` is
+	// The emit half of the fork above, taking the already-resolved requirement. `argsOf` is
 	// `withWitnessReceiver`'s answer for a call with no user arguments — the receiver alone at `args[0]`,
 	// which is the convention `emitWitnessDispatch` and every reader below it index by.
 	function emitProtocolWitnessDispatch(requirement WitnessDispatchTarget, receiver ValueId, anchor Token, resultUsed bool) returns ValueId throws SourceParseError
 		let result = try self.mintWitnessDispatchResult(requirement, receiver: receiver, methodTok: anchor, resultUsed: resultUsed)
-		self.emitWitnessDispatch(result, args: singletonArgs(receiver), blames: NoImmutableArgNames, target: requirement, range: SourceRange.ofToken(anchor), siteTok: anchor)
+		self.emitWitnessDispatch(result, args: argsOf(receiver), blames: NoImmutableArgNames, target: requirement, range: SourceRange.ofToken(anchor), siteTok: anchor)
 		return result
 	end 'emitProtocolWitnessDispatch'
 
@@ -55936,7 +55900,7 @@ export type Parser
 			// ⛔ MEASURED without this line: `var b = ["q"]` + `for _ in 0 upto 2  b = expose()  end` +
 			// `grow(b)` compiled and grew a `let`-declared global (exit 6), while the same rebind under an `if`
 			// was already refused. The `if` half and this one are the same defect at two merge shapes.
-			self.carryProvenanceFromArms(pv.phiId, arms: singletonArgs(carried))
+			self.carryProvenanceFromArms(pv.phiId, arms: argsOf(carried))
 		end 'each'
 
 		return vals
@@ -60389,7 +60353,7 @@ export type Parser
 		// last); the others arrive as edge args, which is why the twin below carries from each of them. Both are
 		// needed and neither is redundant: this one covers a phi whose edges are pushed BEFORE it exists (the
 		// loop join), the other covers a phi minted before its edges are known (the `if` continuation).
-		self.carryProvenanceFromArms(phiId, arms: singletonArgs(binding.boundValue))
+		self.carryProvenanceFromArms(phiId, arms: argsOf(binding.boundValue))
 
 		// ⭐⭐ **AN EXISTENTIAL BINDING MERGES AS TWO PHIS, BECAUSE IT IS TWO VALUES.**
 		// The witness half is not derivable at the merge — two arms may carry
@@ -60451,7 +60415,7 @@ export type Parser
 		// same census argument its header already makes about the witness half. `binding.boundValue` is the
 		// merged name's settled value at each of these call sites (the continuation phi at an `if`/`match`, the
 		// exit phi at a loop), so a marked incoming makes the merged name marked.
-		self.carryProvenanceFromArms(binding.boundValue, arms: singletonArgs(value))
+		self.carryProvenanceFromArms(binding.boundValue, arms: argsOf(value))
 
 		// One unresolved incoming (`unresolvedMergeValues`) makes the whole merge unresolved, and an
 		// unresolved merge has no ownership to check below.
@@ -61311,7 +61275,7 @@ export type Parser
 
 		// `var` on all three: `emitCall` grows the argument columns in lockstep when the callee defaults an
 		// argument the call omits, so they are its output as well as its input.
-		var args = pairArgs(lo, second: hi)
+		var args = twoArgs(lo, second: hi)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
 		return try self.emitCall(qualifiedMethodName(self.signatures.interfaceMap().libraryNameOf(typeName), methodName: CreateMethod), anchor: rangeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: rangeTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.rangeOperator, places: self.placesOfArguments(args, anchor: rangeTok))
@@ -62061,15 +62025,15 @@ export type Parser
 		if self.movesALiveBinding(rhs.skippedMoveMark, after: rhs.rhsMoveMark) 'skipEdgeDrops'
 			var skip = self.artifact.module.addBlock(func, label: b"scskip", heat: BlockHeat.normal)
 			self.reconcileMovesAtTwoEdgeMerge(skip, markA: rhs.skippedMoveMark, b: rhsEnd, markB: rhs.rhsMoveMark, anchor: opTok)
-			self.recordBranchEdge(skip, targetId: merge.id, argIds: singletonArgs(seed))
+			self.recordBranchEdge(skip, targetId: merge.id, argIds: argsOf(seed))
 			self.emitBranch(skip, targetId: merge.id)
 			self.emitShortCircuitBranch(entry, cond: leftValue, rhsId: rhs.rhsId, mergeId: skip.id, takesRhsWhenTrue: takesRhsWhenTrue, range: range)
 		end 'skipEdgeDrops' else 'directSkipEdge'
-			self.recordBranchEdge(entry, targetId: merge.id, argIds: singletonArgs(seed))
+			self.recordBranchEdge(entry, targetId: merge.id, argIds: argsOf(seed))
 			self.emitShortCircuitBranch(entry, cond: leftValue, rhsId: rhs.rhsId, mergeId: merge.id, takesRhsWhenTrue: takesRhsWhenTrue, range: range)
 		end 'directSkipEdge'
 
-		self.recordBranchEdge(rhsEnd, targetId: merge.id, argIds: singletonArgs(rhs.value))
+		self.recordBranchEdge(rhsEnd, targetId: merge.id, argIds: argsOf(rhs.value))
 		self.emitBranch(rhsEnd, targetId: merge.id)
 
 		self.bodyState.currentBlock = merge
@@ -65911,7 +65875,7 @@ export type Parser
 		try self.requireImplicitMethodReachable(structName, methodName: methodName, anchor: opTok)
 		let callee = qualifiedMethodName(structName, methodName: methodName)
 		let range = SourceRange.ofToken(opTok)
-		var args = pairArgs(lhs, second: rhs)
+		var args = twoArgs(lhs, second: rhs)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
 		let verdict = try self.emitCall(callee, anchor: opTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier, places: self.placesOfArguments(args, anchor: opTok))
@@ -65996,10 +65960,10 @@ export type Parser
 		let range = SourceRange.ofToken(opTok)
 
 		if self.signatures.arrayEqualityIsBitwise(instance) 'theBytesAreTheContent'
-			return self.emitRuntimeCall(ManagedEqName, args: pairArgs(lhs, second: rhs), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedEqName, args: twoArgs(lhs, second: rhs), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'theBytesAreTheContent'
 
-		var args = pairArgs(lhs, second: rhs)
+		var args = twoArgs(lhs, second: rhs)
 		return try self.emitCall(qualifiedMethodName(self.signatures.genericInstanceBaseName(instance), methodName: EqualsMethodName), anchor: opTok, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.instance(instance), mint: CalleeMint.resolvedTypeQualifier, places: self.placesOfArguments(args, anchor: opTok))
 	end 'emitArrayEquals'
 
@@ -66078,7 +66042,7 @@ export type Parser
 		// `i.compare(j)`'s result, so the `Ordering` this hands `emitOrderingVerdict` carries the enum's
 		// `named` tag exactly as a witness dispatch's does.
 		let orderingType = self.interfaceReturnMaxonType(RequirementType.ofNominal(self.signatures.interfaceMap().synthesizedNominalOf(OrderingTypeName)))
-		let ordering = self.emitRuntimeCall(CharCmpName, args: pairArgs(lhs, second: rhs), resultTag: maxonTypeTag(orderingType), resultNameId: typeNameIdOf(orderingType), range: SourceRange.ofToken(opTok))
+		let ordering = self.emitRuntimeCall(CharCmpName, args: twoArgs(lhs, second: rhs), resultTag: maxonTypeTag(orderingType), resultNameId: typeNameIdOf(orderingType), range: SourceRange.ofToken(opTok))
 
 		return self.emitOrderingVerdict(ordering, op: op, opTok: opTok)
 	end 'emitByteRecordOrdering'
@@ -66131,7 +66095,7 @@ export type Parser
 		// The `other` operand fills the method's `Self`-typed formal, so it must be a value of the receiver's own
 		// `T` — a concrete literal (`item == 42`, `item < 42`) would be marshalled into the `Self` pointer and
 		// faulted. Same reject the method-call form runs, one shared helper.
-		let args = pairArgs(receiver, second: other)
+		let args = twoArgs(receiver, second: other)
 		try self.requireGenuineSelfArgs(target, args: args, what: comparisonOpSpelling(op), receiverParam: receiverParam as TypeParamId, errorTok: opTok)
 
 		// Typed through the SAME witness-dispatch result typer the `.method()` form uses, so `equals`'s `bool`
@@ -67689,7 +67653,7 @@ export type Parser
 			return
 		end 'someOperandNamesAnAlias'
 
-		for operand in pairArgs(lhs, second: rhs) 'eachOperand'
+		for operand in twoArgs(lhs, second: rhs) 'eachOperand'
 			if self.valueIsAnIntegerizedCharacterLiteral(operand) 'aCodepoint'
 				self.retypeValue(operand, valueType: self.signatures.libraryAliasType(CodepointTypeName, into: self.artifact.typeNames))
 			end 'aCodepoint'
@@ -70141,10 +70105,10 @@ export type Parser
 
 		let source = try fieldValues.get(managedIndex) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at {managedIndex} — the column is sized to the layout's field count")
 
-		let flagIndex = try layout.indexOfField(SingleByteGraphemesFieldName) otherwise return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(source), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
+		let flagIndex = try layout.indexOfField(SingleByteGraphemesFieldName) otherwise return self.emitOwnedRuntimeResult(StrFromBytesName, args: argsOf(source), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
 
 		let flag = try fieldValues.get(flagIndex) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at {flagIndex} — the column is sized to the layout's field count")
-		return self.emitOwnedRuntimeResult(StrOfBufferName, args: pairArgs(source, second: flag), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
+		return self.emitOwnedRuntimeResult(StrOfBufferName, args: twoArgs(source, second: flag), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
 	end 'emitFusedWrapperLiteral'
 
 	// ⭐⭐ **THE IDENTITY ARM HANDS THE BUFFER BACK *AS* `Self`, SO THE TWO MUST BE THE SAME INSTANCE.** A
@@ -71494,7 +71458,7 @@ export type Parser
 	// that names the member.
 	function emitEnumAllCases(layout EnumLayout, range SourceRange) returns ValueId throws SourceParseError
 		let giid = self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordBaseName(), element: layout.name)
-		let arr = try self.emitArrayCreateOp(giid, range: range)
+		let arr = try self.emitArrayCreateOp(giid, range: range, sizing: ValueIdArray.create())
 
 		for i in 0 upto layout.caseCount() 'eachCase'
 			self.emitArrayPush(arr, element: self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(i), range: range), range: range)
@@ -71539,7 +71503,7 @@ export type Parser
 		// and a resolved literal simply makes the helper's throw unreachable.
 		try self.requireFoldedRawValueNamesACase(layout, raw: raw, memberTok: memberTok)
 
-		return self.emitRuntimeCall(enumFromRawValueSymbol(layout.name), args: singletonArgs(self.rawValueSearchKey(raw, backing: layout.backing, range: range)), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		return self.emitRuntimeCall(enumFromRawValueSymbol(layout.name), args: argsOf(self.rawValueSearchKey(raw, backing: layout.backing, range: range)), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
 	end 'parseEnumFromRawValue'
 
 	// Does the written argument suit the backing's domain? A `named` value is admitted wherever an integer is
@@ -71656,7 +71620,7 @@ export type Parser
 
 		try self.consume(TokenKind.rightParen)
 
-		return self.emitEnumFromNameCall(layout, args: singletonArgs(name), range: range)
+		return self.emitEnumFromNameCall(layout, args: argsOf(name), range: range)
 	end 'parseEnumFromName'
 
 	// ⭐ **IS THE ARGUMENT A BARE STRING LITERAL — the shape whose case is a COMPILE-TIME fact?** A
@@ -71688,7 +71652,7 @@ export type Parser
 			// below's business, stated once for both directions.
 			try self.requireNoFurtherPayloadArgs(wanted, expected: 0, memberTok: memberTok)
 			try self.consume(TokenKind.rightParen)
-			return self.emitEnumFromNameCall(layout, args: singletonArgs(self.emitStringLiteral(wanted, range: SourceRange.ofToken(nameTok))), range: range)
+			return self.emitEnumFromNameCall(layout, args: argsOf(self.emitStringLiteral(wanted, range: SourceRange.ofToken(nameTok))), range: range)
 		end 'payloadFree'
 
 		return try self.parseEnumFromNameCase(func, layout: layout, caseIndex: index, nameTok: nameTok, memberTok: memberTok, range: range)
@@ -71830,7 +71794,7 @@ export type Parser
 	// is `false` and cannot be otherwise — the value was minted two lines up and names no binding to poison.
 	function emitEnumAllCaseNames(layout EnumLayout, range SourceRange) returns ValueId throws SourceParseError
 		let giid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: MaxonType.string)
-		let arr = try self.emitArrayCreateOp(giid, range: range)
+		let arr = try self.emitArrayCreateOp(giid, range: range, sizing: ValueIdArray.create())
 
 		for i in 0 upto layout.caseCount() 'eachCase'
 			let literal = self.emitStringLiteral(layout.caseNameAt(i), range: range)
@@ -72540,7 +72504,7 @@ export type Parser
 		// managed instantiation, and inert for a trivial one — so a second owner either exists or there is
 		// nothing to own, and neither case licenses a destructive write through `value`.
 		self.markValueCoOwnsHeap(value)
-		let retained = self.emitRuntimeCall(RetainTypeParamName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		let retained = self.emitRuntimeCall(RetainTypeParamName, args: argsOf(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 		self.carryFromSharedRecord(retained, from: value, source: self.bodyState, path: ValueCarryPath.copy)
 		self.noteFeedStored(value, range: range)
 		return retained
@@ -74689,7 +74653,7 @@ export type Parser
 		// perfectly well-formed. See `requireConsumedPromiseIsOwned` for the merge shape it catches.
 		try self.requireConsumedPromiseIsOwned(recv.value, anchor: methodTok, door: promiseConsumeDoorName(PromiseConsume.cancelled))
 		self.consumePromiseThread(recv.value, range: SourceRange.between(recv.anchor, last: methodTok), reclaimedBy: PromiseConsume.cancelled)
-		return self.emitRuntimeCall(GtPromiseDropName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
+		return self.emitRuntimeCall(GtPromiseDropName, args: argsOf(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
 	end 'emitPromiseCancel'
 
 	function methodCallPeeksAPromise(recv MethodReceiver) returns bool
@@ -74699,7 +74663,7 @@ export type Parser
 	function emitPromiseIsComplete(recv MethodReceiver) returns ValueId throws SourceParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		try self.consumeEmptyArgList()
-		return self.emitRuntimeCall(GtIsCompleteName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
+		return self.emitRuntimeCall(GtIsCompleteName, args: argsOf(recv.value), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
 	end 'emitPromiseIsComplete'
 
 	function methodCallSelectsOverPromises(recv MethodReceiver) returns bool
@@ -75727,7 +75691,7 @@ export type Parser
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		let range = SourceRange.between(baseTok, last: rparenTok)
-		return self.emitRuntimeCall(MboxCloseName, args: singletonArgs(self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(MboxCloseName, args: argsOf(self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitServiceShutdown'
 
 	// ⭐ **`h.clone()` — A SECOND HANDLE TO THE SAME SERVICE, NEVER A SECOND SERVICE.** It cannot take
@@ -75742,7 +75706,7 @@ export type Parser
 		// The receiver's OWN type, not the layout's name: a generic service's handle stands at
 		// `<T>.handle with <Args>`, and a clone that decayed to the base would leave the second handle unable
 		// to resolve a `returns T` reply.
-		return self.emitOwnedRuntimeResult(cloner, args: singletonArgs(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: SourceRange.between(baseTok, last: memberTok))
+		return self.emitOwnedRuntimeResult(cloner, args: argsOf(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: SourceRange.between(baseTok, last: memberTok))
 	end 'emitServiceHandleClone'
 
 	// ⭐ **A SEND OF A MESSAGE WITH NO REPLY HAS NO VALUE, SO THERE IS NOTHING TO BIND.** A
@@ -75904,7 +75868,7 @@ export type Parser
 			let instance = try self.cloneableInstanceOf(base, memberTok: memberTok)
 			self.advance()
 			try self.consumeEmptyArgList()
-			return self.emitOwnedRuntimeResult(self.signatures.genericInstanceBoxCloneCallee(instance), args: singletonArgs(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: range)
+			return self.emitOwnedRuntimeResult(self.signatures.genericInstanceBoxCloneCallee(instance), args: argsOf(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: range)
 		end 'aGenericBase'
 
 		try self.requireStructCloneVerdict(self.signatures.sourceCloneVerdictOfAggregate(base.layout.name), typeName: base.layout.name, display: String.from(base.layout.name), memberTok: memberTok)
@@ -75915,7 +75879,7 @@ export type Parser
 			return self.emitRetaggedCastValue(base.box, targetType: MaxonType.structRef(self.artifact.typeNames.intern(base.layout.name)), range: range)
 		end 'theCopyISTheWord'
 
-		return self.emitOwnedRuntimeResult(clonerSymbol(base.layout.name), args: singletonArgs(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: range)
+		return self.emitOwnedRuntimeResult(clonerSymbol(base.layout.name), args: argsOf(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: range)
 	end 'emitSynthesizedStructClone'
 
 	// ⭐ **WHICH DECLARED UNION `<receiver>.clone()` CLONES, or `undeclared` for every other member and every
@@ -75960,7 +75924,7 @@ export type Parser
 		self.advance()
 		try self.consumeEmptyArgList()
 
-		return self.emitOwnedRuntimeResult(clonerSymbol(layout.name), args: singletonArgs(recv.value), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: SourceRange.between(recv.anchor, last: memberTok))
+		return self.emitOwnedRuntimeResult(clonerSymbol(layout.name), args: argsOf(recv.value), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: SourceRange.between(recv.anchor, last: memberTok))
 	end 'emitSynthesizedUnionClone'
 
 	function requireUnionCloneSupported(layout EnumLayout, memberTok Token) throws SourceParseError
@@ -76598,8 +76562,8 @@ export type Parser
 	// TAG through `decrefCalleeFor` (`__managed_decref`), which destroys the elements the record's own
 	// `element_destroy@40` stamp names — so a managed-element fill needs nothing extra here.
 	function emitMaterializedFill(giid GenericInstanceId, callee ByteArray, source ValueId, range SourceRange) returns ValueId throws SourceParseError
-		let filled = try self.emitArrayCreateOp(giid, range: range)
-		_ = self.emitRuntimeCall(callee, args: pairArgs(source, second: filled), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		let filled = try self.emitArrayCreateOp(giid, range: range, sizing: ValueIdArray.create())
+		_ = self.emitRuntimeCall(callee, args: twoArgs(source, second: filled), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(filled, exclusivity: OwnedHeapExclusivity.sole)
 		return filled
 	end 'emitMaterializedFill'
@@ -76692,7 +76656,7 @@ export type Parser
 			// because `declaredAliasOfValue` had no name to look up. Reading the signature rather than
 			// naming the alias here is what stops the compiler holding a second copy of a stdlib
 			// declaration.
-			let asciiArgs = singletonArgs(recv.value)
+			let asciiArgs = argsOf(recv.value)
 			let asciiValue = self.emitRuntimeCallInto(self.mintValueOfType(self.declaredRuntimeMethodResult(CharacterConformerName, methodName: methodTok.value)), callee: CharAsciiValueName, args: asciiArgs, range: range, argLabels: emptyArgLabels(asciiArgs))
 			self.noteRuntimeReadMember(asciiValue, typeName: CharacterConformerName, methodName: methodTok.value)
 			return asciiValue
@@ -76782,12 +76746,12 @@ export type Parser
 
 	function parseManagedFileExists(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitLibraryAliasedRuntimeCall(ManagedFileExistsName, args: singletonArgs(path), alias: FullRangeIntAliasName, range: range)
+		return self.emitLibraryAliasedRuntimeCall(ManagedFileExistsName, args: argsOf(path), alias: FullRangeIntAliasName, range: range)
 	end 'parseManagedFileExists'
 
 	function parseManagedFileDelete(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitRuntimeCall(ManagedFileDeleteName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(ManagedFileDeleteName, args: argsOf(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseManagedFileDelete'
 
 	function parseManagedFileRename(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
@@ -76796,7 +76760,7 @@ export type Parser
 		try self.consume(TokenKind.comma)
 		let newPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileNewPathParamName, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
-		return self.emitRuntimeCall(ManagedFileRenameName, args: pairArgs(oldPath, second: newPath), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(ManagedFileRenameName, args: twoArgs(oldPath, second: newPath), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseManagedFileRename'
 
 	// ⚠ `stat` returns a RAW pointer the caller must hand back to `statFree`, so it is deliberately NOT
@@ -76804,7 +76768,7 @@ export type Parser
 	// reports a caller that forgets.
 	function parseManagedFileStat(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitLibraryAliasedRuntimeCall(ManagedFileStatName, args: singletonArgs(path), alias: FullRangeIntAliasName, range: range)
+		return self.emitLibraryAliasedRuntimeCall(ManagedFileStatName, args: argsOf(path), alias: FullRangeIntAliasName, range: range)
 	end 'parseManagedFileStat'
 
 	function parseManagedFileStatField(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
@@ -76816,7 +76780,7 @@ export type Parser
 	// `qualifiedStaticCallStmt` arm, which exists for it.
 	function parseManagedFileStatFree(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let buffer = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
-		return self.emitRuntimeCall(ManagedFileStatFreeName, args: singletonArgs(buffer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(ManagedFileStatFreeName, args: argsOf(buffer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseManagedFileStatFree'
 
 	// One of the three OPENS: a single `__ManagedMemory` path, and an OWNED `__ManagedFile` box back. Its tag
@@ -76824,7 +76788,7 @@ export type Parser
 	// `var file as __ManagedFile` field.
 	function parseManagedFileOpen(func IrFunction, callee ByteArray, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitOwnedRuntimeResult(callee, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
+		return self.emitOwnedRuntimeResult(callee, args: argsOf(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
 	end 'parseManagedFileOpen'
 
 	// ⚠ **OWNERSHIP: the one directory static that produces an owned box.** It goes through
@@ -76832,7 +76796,7 @@ export type Parser
 	// RAII close (`SignatureIndex.managedNameDropCallee`).
 	function parseManagedDirectoryOpenSearch(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitOwnedRuntimeResult(ManagedDirectoryOpenSearchName, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedDirectoryNameId(), range: range)
+		return self.emitOwnedRuntimeResult(ManagedDirectoryOpenSearchName, args: argsOf(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedDirectoryNameId(), range: range)
 	end 'parseManagedDirectoryOpenSearch'
 
 	// ⭐ **`exists` IS `bool`, NOT `int`.** `specs/managed-directory.md:205` writes `if not
@@ -76841,19 +76805,19 @@ export type Parser
 	// that makes the value a bool to everything above, the same arrangement `__managed_is_empty` has.
 	function parseManagedDirectoryExists(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitRuntimeCall(ManagedDirectoryExistsName, args: singletonArgs(path), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(ManagedDirectoryExistsName, args: argsOf(path), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 	end 'parseManagedDirectoryExists'
 
 	function parseManagedDirectoryCreate(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitRuntimeCall(ManagedDirectoryCreateName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(ManagedDirectoryCreateName, args: argsOf(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseManagedDirectoryCreate'
 
 	// `create`'s twin, and void for its reason: the removal either happened or threw, so there is no
 	// verdict left to answer with.
 	function parseManagedDirectoryDelete(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitRuntimeCall(ManagedDirectoryDeleteName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(ManagedDirectoryDeleteName, args: argsOf(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseManagedDirectoryDelete'
 
 	// The one static with NO arguments, and the one that hands back memory: an owned `__ManagedMemory`
@@ -76865,7 +76829,7 @@ export type Parser
 
 	function parseManagedDirectoryResolve(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-		return self.emitOwnedManagedMemoryResult(ManagedDirectoryResolveName, args: singletonArgs(path), range: range)
+		return self.emitOwnedManagedMemoryResult(ManagedDirectoryResolveName, args: argsOf(path), range: range)
 	end 'parseManagedDirectoryResolve'
 
 	// ⭐ **THE THREE `__ManagedDirectory` INSTANCE METHODS — `next`, `filename`, `close`.** The cursor
@@ -76885,7 +76849,7 @@ export type Parser
 
 		if methodTok.value.equals(ManagedDirectoryNextMethod) 'next'
 			try self.consumeEmptyArgList()
-			return self.emitLibraryAliasedRuntimeCall(ManagedDirectoryNextName, args: singletonArgs(recv.value), alias: FullRangeIntAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedDirectoryNextName, args: argsOf(recv.value), alias: FullRangeIntAliasName, range: range)
 		end 'next'
 
 		// A FRESH owned `__ManagedMemory` copy of the current entry's name — see
@@ -76893,12 +76857,12 @@ export type Parser
 		// pointer into the find block.
 		if methodTok.value.equals(ManagedDirectoryFilenameMethod) 'filename'
 			try self.consumeEmptyArgList()
-			return self.emitOwnedManagedMemoryResult(ManagedDirectoryFilenameName, args: singletonArgs(recv.value), range: range)
+			return self.emitOwnedManagedMemoryResult(ManagedDirectoryFilenameName, args: argsOf(recv.value), range: range)
 		end 'filename'
 
 		if methodTok.value.equals(ManagedDirectoryCloseMethod) 'close'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ManagedDirectoryCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedDirectoryCloseName, args: argsOf(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'close'
 
 		throw SourceParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these three: `next()`, `filename()` and `close()`", line: methodTok.line, column: methodTok.column)
@@ -76928,24 +76892,24 @@ export type Parser
 			try self.consumeArrayArgLabel(ManagedSocketLengthParamName, required: false)
 			let length = try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketLengthParamName, methodTok: methodTok)
 			try self.consume(TokenKind.rightParen)
-			return self.emitLibraryAliasedRuntimeCall(ManagedSocketSendFromName, args: quadArgs(recv.value, second: buffer, third: offset, fourth: length), alias: BytePosAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedSocketSendFromName, args: fourArgs(recv.value, second: buffer, third: offset, fourth: length), alias: BytePosAliasName, range: range)
 		end 'sendFrom'
 
 		if methodTok.value.equals(ManagedSocketRecvMethod) 'recv'
 			try self.consume(TokenKind.leftParen)
 			let buffer = try self.parseManagedMemoryFillArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok, methodIndex: methodIndex)
 			try self.consume(TokenKind.rightParen)
-			return self.emitLibraryAliasedRuntimeCall(ManagedSocketRecvName, args: pairArgs(recv.value, second: buffer), alias: BytePosAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedSocketRecvName, args: twoArgs(recv.value, second: buffer), alias: BytePosAliasName, range: range)
 		end 'recv'
 
 		if methodTok.value.equals(ManagedSocketCloseMethod) 'close'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ManagedSocketCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedSocketCloseName, args: argsOf(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'close'
 
 		if methodTok.value.equals(ManagedSocketShutdownWriteMethod) 'shutdownWrite'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ManagedSocketShutdownWriteName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedSocketShutdownWriteName, args: argsOf(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'shutdownWrite'
 
 		// ⭐ **THE TWO DEADLINE SETTERS TAKE ONE UNLABELLED MILLISECOND COUNT**, which is the shape every
@@ -76962,7 +76926,7 @@ export type Parser
 		// a question whose answer is yes-or-no must not arrive as a number.
 		if methodTok.value.equals(ManagedSocketTimedOutMethod) 'timedOut'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ManagedSocketTimedOutName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedSocketTimedOutName, args: argsOf(recv.value), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'timedOut'
 
 		// ⭐ **THE SERVER SIDE's TWO.** `boundPort()` reports the port a `bindListener` of 0 was given, and
@@ -76971,12 +76935,12 @@ export type Parser
 		// unwritable.
 		if methodTok.value.equals(ManagedSocketBoundPortMethod) 'boundPort'
 			try self.consumeEmptyArgList()
-			return self.emitLibraryAliasedRuntimeCall(ManagedListenerPortName, args: singletonArgs(recv.value), alias: NetworkPortAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedListenerPortName, args: argsOf(recv.value), alias: NetworkPortAliasName, range: range)
 		end 'boundPort'
 
 		if methodTok.value.equals(ManagedSocketAcceptMethod) 'accept'
 			try self.consumeEmptyArgList()
-			return self.emitOwnedRuntimeResult(ManagedListenerAcceptName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+			return self.emitOwnedRuntimeResult(ManagedListenerAcceptName, args: argsOf(recv.value), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
 		end 'accept'
 
 		throw SourceParseError.unsupported("`{String.from(ManagedSocketTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these nine: `sendFrom()`, `recv()`, `close()`, `shutdownWrite()`, `setReadDeadline()`, `setWriteDeadline()`, `timedOut()`, `boundPort()` and `accept()`", line: methodTok.line, column: methodTok.column)
@@ -77000,13 +76964,13 @@ export type Parser
 		let endpoint = try self.parseManagedSocketEndpointArgs(func, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
 
-		return self.emitOwnedRuntimeResult(ManagedListenerBindName, args: pairArgs(endpoint.0, second: endpoint.1), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+		return self.emitOwnedRuntimeResult(ManagedListenerBindName, args: twoArgs(endpoint.0, second: endpoint.1), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
 	end 'emitManagedSocketBindCall'
 
 	function parseManagedPagesReserve(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let bytes = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedPagesBytesParamName, methodTok: methodTok)
 
-		return self.emitOwnedRuntimeResult(ProfilePagesReserveName, args: singletonArgs(bytes), resultTag: ValueTypeTag.structRef, resultNameId: self.managedPagesNameId(), range: range)
+		return self.emitOwnedRuntimeResult(ProfilePagesReserveName, args: argsOf(bytes), resultTag: ValueTypeTag.structRef, resultNameId: self.managedPagesNameId(), range: range)
 	end 'parseManagedPagesReserve'
 
 	function parseManagedHandleTimer(range SourceRange) returns ValueId throws SourceParseError
@@ -77018,7 +76982,7 @@ export type Parser
 	function parseManagedHandleAdopting(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let handle = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedHandleWordParamName, methodTok: methodTok)
 
-		return self.emitOwnedRuntimeResult(ProfileHandleAdoptName, args: singletonArgs(handle), resultTag: ValueTypeTag.structRef, resultNameId: self.managedHandleNameId(), range: range)
+		return self.emitOwnedRuntimeResult(ProfileHandleAdoptName, args: argsOf(handle), resultTag: ValueTypeTag.structRef, resultNameId: self.managedHandleNameId(), range: range)
 	end 'parseManagedHandleAdopting'
 
 	function parseManagedPinAcquire(range SourceRange) returns ValueId throws SourceParseError
@@ -77034,25 +76998,25 @@ export type Parser
 		if methodTok.value.equals(ManagedPagesBaseMethod) 'base'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(ProfilePagesBaseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ProfilePagesBaseName, args: argsOf(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'base'
 
 		if methodTok.value.equals(ManagedPagesLendMethod) 'lend'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(ProfilePagesLendName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ProfilePagesLendName, args: argsOf(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'lend'
 
 		if methodTok.value.equals(ManagedPagesBytesMethod) 'bytes'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(ProfilePagesBytesName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ProfilePagesBytesName, args: argsOf(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'bytes'
 
 		if methodTok.value.equals(ManagedPagesReleaseMethod) 'release'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(ProfilePagesReleaseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ProfilePagesReleaseName, args: argsOf(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'release'
 
 		throw SourceParseError.unsupported("`{String.from(ManagedPagesTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these four: `base()`, `lend()`, `bytes()` and `release()`", line: methodTok.line, column: methodTok.column)
@@ -77065,13 +77029,13 @@ export type Parser
 		if methodTok.value.equals(ManagedHandleWordMethod) 'handle'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(ProfileHandleWordName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ProfileHandleWordName, args: argsOf(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'handle'
 
 		if methodTok.value.equals(ManagedHandleReleaseMethod) 'release'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(ProfileHandleReleaseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ProfileHandleReleaseName, args: argsOf(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'release'
 
 		throw SourceParseError.unsupported("`{String.from(ManagedHandleTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these two: `handle()` and `release()`", line: methodTok.line, column: methodTok.column)
@@ -77084,19 +77048,19 @@ export type Parser
 		if methodTok.value.equals(ManagedPinTokenMethod) 'token'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(GtPinTokenName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(GtPinTokenName, args: argsOf(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'token'
 
 		if methodTok.value.equals(ManagedPinSurrenderMethod) 'surrender'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(GtPinSurrenderName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(GtPinSurrenderName, args: argsOf(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'surrender'
 
 		if methodTok.value.equals(ManagedPinReleaseMethod) 'release'
 			try self.consumeEmptyArgList()
 
-			return self.emitRuntimeCall(GtPinReleaseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(GtPinReleaseName, args: argsOf(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'release'
 
 		throw SourceParseError.unsupported("`{String.from(ManagedPinTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these three: `token()`, `surrender()` and `release()`", line: methodTok.line, column: methodTok.column)
@@ -77107,7 +77071,7 @@ export type Parser
 		let deadline = try self.parseManagedSocketConnectDeadline(func, methodTok: methodTok, range: range)
 		try self.consume(TokenKind.rightParen)
 
-		return self.emitOwnedRuntimeResult(ManagedSocketTcpConnectName, args: tripleArgs(endpoint.0, second: endpoint.1, third: deadline), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+		return self.emitOwnedRuntimeResult(ManagedSocketTcpConnectName, args: threeArgs(endpoint.0, second: endpoint.1, third: deadline), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
 	end 'emitManagedSocketTcpConnectCall'
 
 	function parseManagedSocketConnectDeadline(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
@@ -77125,7 +77089,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		let milliseconds = try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketDeadlineParamName, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
-		return self.emitRuntimeCall(callee, args: pairArgs(recv.value, second: milliseconds), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(callee, args: twoArgs(recv.value, second: milliseconds), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitManagedSocketDeadlineCall'
 
 	// ⭐ **AN OWNED `__ManagedMemory` OUT OF A RUNTIME CALL — the shape `filename()`, `currentPath()`
@@ -77266,7 +77230,7 @@ export type Parser
 		try self.consumeArrayArgLabel(secondParam, required: false)
 		let second = try self.parseBuiltinIntegerArg(func, paramName: secondParam, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
-		return pairArgs(first, second: second)
+		return twoArgs(first, second: second)
 	end 'parseTwoBuiltinIntegerArgList'
 
 	// ⭐⭐⭐ **`String.from(bytes)` AND `String.init(managed)` ARE THE CORPUS'S, NOT SYNTHESIZED MEMBERS.**
@@ -77297,7 +77261,7 @@ export type Parser
 	// `strlen` away from walking whatever follows it in memory.
 	function parseManagedMemoryFromCString(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let cstr = try self.parseOneBuiltinCStringArgList(func, paramName: ManagedMemoryCStringParamName, methodTok: methodTok)
-		return self.emitOwnedManagedMemoryResult(MmFromCStringName, args: singletonArgs(cstr), range: range)
+		return self.emitOwnedManagedMemoryResult(MmFromCStringName, args: argsOf(cstr), range: range)
 	end 'parseManagedMemoryFromCString'
 
 	// ⭐ **`__ManagedMemory.create(count, elementSize)` — THE BUFFER'S CONSTRUCTOR.** It yields an OWNED
@@ -77737,12 +77701,12 @@ export type Parser
 
 		if methodTok.value.equals(ManagedFileCloseMethod) 'close'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ManagedFileCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedFileCloseName, args: argsOf(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'close'
 
 		if methodTok.value.equals(ManagedFileSizeMethod) 'size'
 			try self.consumeEmptyArgList()
-			return self.emitLibraryAliasedRuntimeCall(ManagedFileSizeName, args: singletonArgs(recv.value), alias: FileSizeAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedFileSizeName, args: argsOf(recv.value), alias: FileSizeAliasName, range: range)
 		end 'size'
 
 		// ⚠ The buffer is BORROWED, not consumed: `__mf_read` writes into it and `__mf_write` reads out of
@@ -77751,19 +77715,19 @@ export type Parser
 		// `openRead`'s path).
 		if methodTok.value.equals(ManagedFileReadMethod) 'read'
 			let (managed, size) = try self.parseManagedFileFillArgs(func, methodTok: methodTok, methodIndex: methodIndex)
-			return self.emitLibraryAliasedRuntimeCall(ManagedFileReadName, args: tripleArgs(recv.value, second: managed, third: size), alias: FileSizeAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedFileReadName, args: threeArgs(recv.value, second: managed, third: size), alias: FileSizeAliasName, range: range)
 		end 'read'
 
 		if methodTok.value.equals(ManagedFileReadAppendingMethod) 'readAppending'
 			let (managed, size) = try self.parseManagedFileFillArgs(func, methodTok: methodTok, methodIndex: methodIndex)
-			return self.emitLibraryAliasedRuntimeCall(ManagedFileReadAppendingName, args: tripleArgs(recv.value, second: managed, third: size), alias: FileSizeAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedFileReadAppendingName, args: threeArgs(recv.value, second: managed, third: size), alias: FileSizeAliasName, range: range)
 		end 'readAppending'
 
 		if methodTok.value.equals(ManagedFileWriteMethod) 'write'
 			try self.consume(TokenKind.leftParen)
 			let managed = try self.parseManagedMemoryArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok)
 			try self.consume(TokenKind.rightParen)
-			return self.emitLibraryAliasedRuntimeCall(ManagedFileWriteName, args: pairArgs(recv.value, second: managed), alias: FileSizeAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedFileWriteName, args: twoArgs(recv.value, second: managed), alias: FileSizeAliasName, range: range)
 		end 'write'
 
 		throw SourceParseError.unsupported("`{String.from(ManagedFileTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these five: `size()`, `read(managed, size)`, `readAppending(managed, size)`, `write(managed)` and `close()`", line: methodTok.line, column: methodTok.column)
@@ -78180,7 +78144,7 @@ export type Parser
 			return try self.parseCollectedArrayLiteralBody(func, first: head, firstStart: firstStart, giid: giid, range: range, restIsConstantRun: self.restIsIntegerLiteralRun() and self.constIsKnown(head) and self.admitIntegerLiteralIntoElementSlot(first, slot: self.elementSlotOf(giid)))
 		end 'anInlineStoredElement'
 
-		let arr = try self.emitArrayCreateOp(giid, range: range)
+		let arr = try self.emitArrayCreateOp(giid, range: range, sizing: ValueIdArray.create())
 		try self.pushArrayLiteralElement(arr, elem: head, giid: giid, valueStart: firstStart, range: range)
 
 		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
@@ -78236,7 +78200,7 @@ export type Parser
 			panic("Parser.parseCollectedArrayLiteralBody: a run of integer literals converted into '{String.from(self.signatures.instanceDisplayName(giid))}' left a non-constant element — every element of the run is a constant, converted or proven in range")
 		end 'aRunThatIsNotConstant'
 
-		let arr = try self.emitArrayCreateOp(giid, range: range)
+		let arr = try self.emitArrayCreateOp(giid, range: range, sizing: ValueIdArray.create())
 
 		for i in 0 upto values.count() 'eachElement'
 			let elem = try values.get(i) otherwise panic("parseCollectedArrayLiteralBody: values.get({i}) failed inside its own upto bound")
@@ -78904,7 +78868,7 @@ export type Parser
 	// ⚠ Distinct from the user's own `arr.push(x)`, which is `emitArrayVoidCall` — that form hands the
 	// RECEIVER back as "what the statement still denotes", where a build step's result is nobody's.
 	function emitArrayPush(arr ValueId, element ValueId, range SourceRange)
-		_ = self.emitRuntimeCall(ManagedPushName, args: pairArgs(arr, second: element), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(ManagedPushName, args: twoArgs(arr, second: element), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitArrayPush'
 
 	// The `Array with T` instance a literal's FIRST element fixes — an integer element → the
@@ -79536,33 +79500,55 @@ export type Parser
 	end 'literalColumnTypeFor'
 
 	// Emit `__managed_create(elementSize, elementDestroy)` for instance `giid`, yielding the array
-	// record — the shared producer for a literal and an `IntArray.create()`. Element size is a
+	// record — the shared producer for a literal and an `IntArray.create()`. A non-empty `sizing` (the
+	// capacity and the length) makes it `__managed_create_sized(elementSize, capacity, length,
+	// elementDestroy)`, the record of a sized container. Element size is a
 	// compile-time constant here (a concrete instance). The element destructor is the ADDRESS of the
 	// element's drop callee for an element that owes a drop, stamped into `element_destroy@40` before any
-	// element move (`__managed_create` stores it inside its body, so it is set at birth); 0 for a
+	// element move (both creates store it inside their bodies, so it is set at birth); 0 for a
 	// trivial element. NOT tracked owned — the caller decides that (a literal tracks after its pushes,
 	// a `create()` immediately). A create whose element is composed over the enclosing type's parameters
 	// (`containerCreateRoute`'s `composedFromTheCaller`) is emitted without the destructor argument, and the
 	// lowering reads it out of the body's descriptor table (`appendComposedElementStampCreate`).
-	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws SourceParseError
+	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
 		match self.signatures.containerCreateRoute(giid) 'route'
-			opaqueElement then return self.emitOpaqueArrayCreateOp(giid, range: range)
-			composedFromTheCaller then return self.emitComposedArrayCreateOp(giid, range: range)
-			staticStamp then return try self.emitStampedArrayCreateOp(giid, range: range)
+			opaqueElement then return self.emitOpaqueArrayCreateOp(giid, range: range, sizing: sizing)
+			composedFromTheCaller then return self.emitComposedArrayCreateOp(giid, range: range, sizing: sizing)
+			staticStamp then return try self.emitStampedArrayCreateOp(giid, range: range, sizing: sizing)
 		end 'route'
 	end 'emitArrayCreateOp'
 
-	function emitComposedArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+	function emitComposedArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId
 		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as FullRangeInt, valueType: MaxonType.integer, range: range)
-		return self.emitRuntimeCall(ManagedCreateName, args: singletonArgs(sizeVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+		return self.emitArrayCreateCall(giid, sizeVal: sizeVal, trailing: ValueIdArray.create(), sizing: sizing, range: range)
 	end 'emitComposedArrayCreateOp'
 
-	function emitStampedArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws SourceParseError
+	function emitStampedArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
 		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as FullRangeInt, valueType: MaxonType.integer, range: range)
 		try self.requireColumnDropIsNameable(giid, range: range)
 		let destroyVal = self.columnDestroyValue(self.signatures.containerElementType(giid), range: range)
-		return self.emitRuntimeCall(ManagedCreateName, args: pairArgs(sizeVal, second: destroyVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+		return self.emitArrayCreateCall(giid, sizeVal: sizeVal, trailing: argsOf(destroyVal), sizing: sizing, range: range)
 	end 'emitStampedArrayCreateOp'
+
+	function emitArrayCreateCall(giid GenericInstanceId, sizeVal ValueId, trailing ValueIdArray, sizing ValueIdArray, range SourceRange) returns ValueId
+		var args = argsOf(sizeVal)
+		args.append(sizing)
+		args.append(trailing)
+
+		return self.emitRuntimeCall(arrayCreateCallee(sizing), args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+	end 'emitArrayCreateCall'
+
+	function arrayCreateCallee(sizing ValueIdArray) returns ByteArray
+		if sizing.count() == 0 'unsized'
+			return ManagedCreateName
+		end 'unsized'
+
+		if sizing.count() == SizedCreateSizingCount 'sized'
+			return ManagedCreateSizedName
+		end 'sized'
+
+		panic("arrayCreateCallee: a sizing names {sizing.count()} values, and an array create takes none or the capacity and the length")
+	end 'arrayCreateCallee'
 
 	// ⭐ **CREATE AN OPAQUE-`T` ARRAY inside a shared generic body.** `ElementArray.create()`
 	// where `ElementArray = Array with typeParameter(token)`. Two things differ from a concrete create, both
@@ -79571,13 +79557,14 @@ export type Parser
 	//   • element_size is the fixed machine-word slot every opaque `T` occupies (`LAYOUT_TYPE_PARAM_SLOT_BYTES`),
 	//     NOT a source-`sizeof` — a managed element is a pointer and a trivial one an inline word, both 8 bytes.
 	//   • element_destroy@40 is not known statically, so it is READ from the enclosing instance's threaded
-	//     layout descriptor at RUN TIME (`destroyFunc@40`). The parser emits a ONE-argument `__managed_create`
-	//     (element_size only); LowerMaxonToStd supplies the descriptor-read second argument, so the tier that
+	//     layout descriptor at RUN TIME (`destroyFunc@40`). The parser emits a `__managed_create` short its
+	//     destructor argument (element_size only, plus the capacity and length of a sized create);
+	//     LowerMaxonToStd supplies the descriptor-read last argument, so the tier that
 	//     owns the descriptor's ValueId (`implicitLayoutValueId`) is the tier that reads it — the same split
 	//     `sizeof(T)` uses. For a TRIVIAL instance the slot reads 0 and the array's drop walk is skipped.
-	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId
 		let sizeVal = self.emitLiteral(LAYOUT_TYPE_PARAM_SLOT_BYTES as FullRangeInt, valueType: MaxonType.integer, range: range)
-		return self.emitRuntimeCall(ManagedCreateName, args: singletonArgs(sizeVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+		return self.emitArrayCreateCall(giid, sizeVal: sizeVal, trailing: ValueIdArray.create(), sizing: sizing, range: range)
 	end 'emitOpaqueArrayCreateOp'
 
 	// Emit the RAW `.text` address of a COMPILER-INTERNAL runtime function (`__str_decref`, `__destruct_<T>`,
@@ -79848,7 +79835,7 @@ export type Parser
 	// once for all three rather than at each `return`.
 	function emitOwnedContainerRecord(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws SourceParseError
 		if self.signatures.isArrayInstance(giid) 'array'
-			let arr = try self.emitArrayCreateOp(giid, range: range)
+			let arr = try self.emitArrayCreateOp(giid, range: range, sizing: ValueIdArray.create())
 			self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
 
 			if self.signatures.aliasElementIsBufferSurface(aliasName, readerFilePath: self.job.path) 'elementsAreBuffers'
@@ -79881,30 +79868,29 @@ export type Parser
 		return container
 	end 'emitOwnedContainerRecord'
 
-	// ⭐ **THE EMPTY RECORD, THEN ITS SLOTS PUBLISHED** — `__managed_create` yields a record with no slots
-	// (every index out of bounds) and `__managed_resize` grows it to the count and ZEROES the new range, which
-	// together are exactly *"zero-initialized, N elements"*. `element_destroy@40` stays 0, which
-	// `requireFixedArrayElementType` is what makes correct.
+	// ⭐ **THE RECORD IS BORN WITH ITS SLOTS PUBLISHED** — one
+	// `__managed_create_sized(elementSize, count, count, elementDestroy)` yields a zeroed buffer of `count`
+	// elements and a length of `count`, which together are exactly *"zero-initialized, N elements"*.
+	// `element_destroy@40` stays 0, which `requireFixedArrayElementType` is what makes correct. The call
+	// writes nothing but the record it returns, so `SemanticCheck.containerReadCallee` lists it as
+	// effect-free and a discarded `create()` is E3064.
 	//
-	// ⚠ **NOT `__managed_mem_create(N, elementSize)`, WHICH PUBLISHES `N` SLOTS IN ONE CALL AND WOULD
-	// OTHERWISE BE THE OBVIOUS FIT.** That entry is THROWING (`isManagedMemoryMemberCallee` — it reports
-	// `invalidAllocation` for a size the allocator cannot use), so a `create()` built on it is
-	// **E3057 throwing function requires try: 'create'** on every one of `/specs/fixed-array.md`'s cases, which
-	// write a bare `create()`. Measured, on the first build of the fixed array port. The two-call form throws
-	// nothing: `__managed_resize` rejects only a NEGATIVE length, and an element count cannot be one.
+	// ⚠ **NOT `__managed_mem_create(N, elementSize)`, WHICH WOULD OTHERWISE BE THE OBVIOUS FIT.** That entry
+	// is THROWING (`isManagedMemoryMemberCallee` — it reports `invalidAllocation` for a size the allocator
+	// cannot use), so a `create()` built on it is **E3057 throwing function requires try: 'create'** on
+	// every one of `/specs/fixed-array.md`'s cases, which write a bare `create()`.
+	// `__managed_create_sized` throws nothing.
 	//
-	// ⚠⚠ **IT REACHES `__managed_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS
-	// THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** `resize` grows a record by ZEROING the new
-	// range, so a published slot of a MANAGED element is a null pointer every accessor will dereference. The
-	// source-level rule cannot be reused here (its diagnostic is about a `resize` call the author wrote, and
-	// a fixed array's author wrote `create()`), so the guarantee is carried by `requireFixedArrayElementType` instead,
-	// at `requireSizedContainerElementType` — the construction door, where the element is concrete. **The two
+	// ⚠⚠ **IT PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS
+	// THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** A published slot of a MANAGED element is
+	// a null pointer every accessor will dereference. The source-level rule cannot be reused here (its
+	// diagnostic is about a `resize` call the author wrote, and a fixed array's author wrote `create()`), so
+	// the guarantee is carried by `requireFixedArrayElementType` instead, at
+	// `requireSizedContainerElementType` — the construction door, where the element is concrete. **The two
 	// are one invariant with two doors — do not relax either without the other.**
 	function emitSizedContainerRecord(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
-		let record = try self.emitArrayCreateOp(giid, range: range)
 		let count = try self.fixedElementCountValue(giid, anchor: anchor)
-		_ = self.emitRuntimeCall(ManagedResizeName, args: pairArgs(record, second: count), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		return record
+		return try self.emitArrayCreateOp(giid, range: range, sizing: twoArgs(count, second: count))
 	end 'emitSizedContainerRecord'
 
 	// What each container says when the author names a static it does not have. A per-container ROUTER rather
@@ -80071,7 +80057,7 @@ export type Parser
 	// load-bearing part: a SECOND, parse-time move here is the LEAK `parseSetMemberList`'s `consume:
 	// false` note measures, and a copy is free to add one back.
 	function emitContainerLiteralElement(baseName ByteArray, method ByteArray, container ValueId, value ValueId, anchor Token, range SourceRange) throws SourceParseError
-		var args = pairArgs(container, second: value)
+		var args = twoArgs(container, second: value)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
 		_ = try self.emitCall(qualifiedMethodName(baseName, methodName: method), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(container), mint: CalleeMint.notMinted, places: self.placesOfArguments(args, anchor: anchor))
@@ -80087,7 +80073,7 @@ export type Parser
 
 		let giid = try self.containerInstanceFromArray(source, headTok: headTok, sourceTok: sourceTok, container: container)
 
-		return try self.emitContainerConstructorCall(fromHeadBaseName(container), method: InitMethod, giid: giid, args: singletonArgs(source), mint: CalleeMint.fromConstructionInit, anchor: headTok, range: SourceRange.ofToken(sourceTok))
+		return try self.emitContainerConstructorCall(fromHeadBaseName(container), method: InitMethod, giid: giid, args: argsOf(source), mint: CalleeMint.fromConstructionInit, anchor: headTok, range: SourceRange.ofToken(sourceTok))
 	end 'parseContainerFromArray'
 
 	// The alias's element is checked here rather than by `init`'s argument check, so the E3005 names
@@ -80539,7 +80525,7 @@ export type Parser
 	// `receiverConstructorInstance`, the no-parse-time-move rule — is that function's answer and is stated
 	// there once.
 	function emitMapLiteralUpsert(map ValueId, key ValueId, value ValueId, anchor Token, range SourceRange) throws SourceParseError
-		var args = tripleArgs(map, second: key, third: value)
+		var args = threeArgs(map, second: key, third: value)
 		var argLabels = emptyArgLabels(args)
 		try argLabels.set(MapUpsertValueArgSlot, value: MapUpsertValueLabel) otherwise panic("emitMapLiteralUpsert: the label column for a three-argument call has no slot {MapUpsertValueArgSlot} — `emptyArgLabels` mints one entry per argument")
 		var argRanges = uniformArgRanges(args, range: range)
@@ -80708,7 +80694,7 @@ export type Parser
 	function emitStampedChainCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws SourceParseError
 		try self.requireColumnDropIsNameable(giid, range: range)
 		let elementDrop = self.columnDestroyValue(self.signatures.containerElementType(giid), range: range)
-		return self.emitRuntimeCall(ListCreateName, args: singletonArgs(elementDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+		return self.emitRuntimeCall(ListCreateName, args: argsOf(elementDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
 	end 'emitStampedChainCreateOp'
 
 	// ⭐ **CREATE AN OPAQUE-`T` CHAIN inside a shared generic body** — `EChain.create()` where
@@ -80792,7 +80778,7 @@ export type Parser
 	// the void member.
 	function emitChainReader(list ValueId, callee ByteArray, resultTag ValueTypeTag, range SourceRange) returns ValueId throws SourceParseError
 		try self.consumeEmptyArgList()
-		return self.emitRuntimeCall(callee, args: singletonArgs(list), resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(callee, args: argsOf(list), resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
 	end 'emitChainReader'
 
 	// ⭐ **A VOID CHAIN MEMBER TAKING ONE NODE HANDLE — `detach`, `reinsertFirst`, `reinsertLast`.** All
@@ -80814,7 +80800,7 @@ export type Parser
 	function emitChainNodeMutator(func IrFunction, list ValueId, giid GenericInstanceId, callee ByteArray, resultTag ValueTypeTag, resultUsed bool, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 		let node = try self.parseManagedListNodeArg(func, giid: giid, subject: methodTok.value)
-		_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: node), resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(callee, args: twoArgs(list, second: node), resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
 
 		return list
 	end 'emitChainNodeMutator'
@@ -80826,7 +80812,7 @@ export type Parser
 	function emitChainClear(list ValueId, resultUsed bool, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 		try self.consumeEmptyArgList()
-		_ = self.emitRuntimeCall(ListClearName, args: singletonArgs(list), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(ListClearName, args: argsOf(list), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		return list
 	end 'emitChainClear'
 
@@ -80871,13 +80857,13 @@ export type Parser
 			// such pairs in `ownership/no-leak-returned-managed-list` alone, in a program with no node handle
 			// in its source.
 			if self.chainInsertionHandleIsRead(callee, resultUsed: resultUsed) 'handleIsRead'
-				return self.emitManagedListNodeHandle(callee, args: pairArgs(list, second: value), nodeInstance: self.signatures.managedListNodeInstanceFor(giid as GenericInstanceId) as TypeNameId, provenance: NodeHandleProvenance.chain(list), range: range)
+				return self.emitManagedListNodeHandle(callee, args: twoArgs(list, second: value), nodeInstance: self.signatures.managedListNodeInstanceFor(giid as GenericInstanceId) as TypeNameId, provenance: NodeHandleProvenance.chain(list), range: range)
 			end 'handleIsRead'
 
 			// Nobody reads the node, so the call is typed as the `List` door types it — an `integer` the
 			// statement throws away — and the RECEIVER comes back as what the statement still denotes
 			// (`emitArrayVoidCall`'s answer).
-			_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			_ = self.emitRuntimeCall(callee, args: twoArgs(list, second: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 			return list
 		end 'insertAtAnEnd'
 
@@ -80887,7 +80873,7 @@ export type Parser
 		if methodTok.value.equals(ManagedListHeadMethod) or methodTok.value.equals(ManagedListTailMethod) 'nodeAtAnEnd'
 			try self.consumeEmptyArgList()
 			let callee = ListHeadCheckedName if methodTok.value.equals(ManagedListHeadMethod) else ListTailCheckedName
-			return self.emitManagedListNodeHandle(callee, args: singletonArgs(list), nodeInstance: self.signatures.managedListNodeInstanceFor(giid as GenericInstanceId) as TypeNameId, provenance: NodeHandleProvenance.chain(list), range: range)
+			return self.emitManagedListNodeHandle(callee, args: argsOf(list), nodeInstance: self.signatures.managedListNodeInstanceFor(giid as GenericInstanceId) as TypeNameId, provenance: NodeHandleProvenance.chain(list), range: range)
 		end 'nodeAtAnEnd'
 
 		// ⭐ **`insertAfter(target, value:)` / `insertBefore(target, value:)` — THE TWO INTERIOR INSERTIONS.**
@@ -80959,7 +80945,7 @@ export type Parser
 			// The element is MOVED OUT — the caller owns it, and a statement-position `remove` drops it at
 			// the statement's end like every other unbound owned temporary. Emitted through the ONE element
 			// accessor, so its ownership, its result type and its buffer-surface mark are the array's answers.
-			return try self.emitContainerElementAccessor(ListRemoveNodeName, container: list, args: pairArgs(list, second: node), giid: giid as GenericInstanceId, reference: ContainerElementReference.movedOut, range: range)
+			return try self.emitContainerElementAccessor(ListRemoveNodeName, container: list, args: twoArgs(list, second: node), giid: giid as GenericInstanceId, reference: ContainerElementReference.movedOut, range: range)
 		end 'remove'
 
 		// ⭐ **`detach(node)` — THE MEMBER THE SECOND RULING UNLOCKED.** Void and statement-position, like
@@ -81088,7 +81074,7 @@ export type Parser
 		let value = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart, destination: self.elementStoreDestination)
 		try self.consume(TokenKind.rightParen)
 
-		return self.emitManagedListNodeHandle(callee, args: tripleArgs(list, second: target, third: value), nodeInstance: self.signatures.managedListNodeInstanceFor(giid) as TypeNameId, provenance: NodeHandleProvenance.chain(list), range: range)
+		return self.emitManagedListNodeHandle(callee, args: threeArgs(list, second: target, third: value), nodeInstance: self.signatures.managedListNodeInstanceFor(giid) as TypeNameId, provenance: NodeHandleProvenance.chain(list), range: range)
 	end 'parseManagedListInsertBeside'
 
 	// `( node )` — the single node argument `remove`, `detach` and the two reinsertions each take.
@@ -81165,7 +81151,7 @@ export type Parser
 		if methodTok.value.equals(ManagedListNodeValueMethod) 'value'
 			try self.consumeEmptyArgList()
 			let reference = ContainerElementReference.retained if self.signatures.containerElementIsManaged(giid) else ContainerElementReference.borrowed
-			return try self.emitContainerElementAccessor(ListNodeValueName, container: node, args: singletonArgs(node), giid: giid, reference: reference, range: range)
+			return try self.emitContainerElementAccessor(ListNodeValueName, container: node, args: argsOf(node), giid: giid, reference: reference, range: range)
 		end 'value'
 
 		// ⭐ **`next()` / `prev()` — THE TWO THROWING NODE NAVIGATORS**, one arm because the direction is the
@@ -81178,7 +81164,7 @@ export type Parser
 		if methodTok.value.equals(ManagedListNodeNextMethod) or methodTok.value.equals(ManagedListNodePrevMethod) 'step'
 			try self.consumeEmptyArgList()
 			let callee = ListNodeNextCheckedName if methodTok.value.equals(ManagedListNodeNextMethod) else ListNodePrevCheckedName
-			return self.emitManagedListNodeHandle(callee, args: singletonArgs(node), nodeInstance: giid as TypeNameId, provenance: NodeHandleProvenance.unchained, range: range)
+			return self.emitManagedListNodeHandle(callee, args: argsOf(node), nodeInstance: giid as TypeNameId, provenance: NodeHandleProvenance.unchained, range: range)
 		end 'step'
 
 		// ⭐ **`setValue(v)` — VOID, so statement-position only, and the receiver comes back as what the
@@ -81189,7 +81175,7 @@ export type Parser
 		if methodTok.value.equals(ManagedListNodeSetValueMethod) 'setValue'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
-			_ = self.emitRuntimeCall(ListNodeSetValueName, args: pairArgs(node, second: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			_ = self.emitRuntimeCall(ListNodeSetValueName, args: twoArgs(node, second: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 			return node
 		end 'setValue'
 
@@ -81227,12 +81213,12 @@ export type Parser
 		if methodTok.value.equals(CursorCurrentMethod) 'current'
 			try self.consumeEmptyArgList()
 			let site = self.emitStringLiteral(panicMessageLinePrefix(self.job.path, line: methodTok.line), range: range)
-			return try self.emitContainerElementAccessor(ManagedCursorCurrentName, container: cursor, args: pairArgs(cursor, second: site), giid: giid, reference: ContainerElementReference.borrowed, range: range)
+			return try self.emitContainerElementAccessor(ManagedCursorCurrentName, container: cursor, args: twoArgs(cursor, second: site), giid: giid, reference: ContainerElementReference.borrowed, range: range)
 		end 'current'
 
 		if methodTok.value.equals(CursorIndexMethod) 'index'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ManagedCursorIndexName, args: singletonArgs(cursor), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedCursorIndexName, args: argsOf(cursor), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'index'
 
 		// ⭐ **THE THREE VOID NAVIGATORS, ONE ARM.** They differ only in the callee and in whether a target is
@@ -81242,20 +81228,20 @@ export type Parser
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consumeEmptyArgList()
 			let stepCallee = ManagedCursorAdvanceName if methodTok.value.equals(CursorAdvanceMethod) else ManagedCursorRetreatName
-			return self.emitRuntimeCall(stepCallee, args: singletonArgs(cursor), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(stepCallee, args: argsOf(cursor), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'step'
 
 		if methodTok.value.equals(CursorSeekMethod) 'seek'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let target = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ManagedCursorSeekName, args: pairArgs(cursor, second: target), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedCursorSeekName, args: twoArgs(cursor, second: target), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'seek'
 
 		// `peek(ahead)` reads WITHOUT moving, so it is the one member that both takes an argument and yields an
 		// element — the accessor door again, and a BORROW again, for `current`'s reason.
 		if methodTok.value.equals(CursorPeekMethod) 'peek'
 			let ahead = try self.parseOneBuiltinIntegerArgList(func, paramName: CursorPeekParamName, methodTok: methodTok)
-			return try self.emitContainerElementAccessor(ManagedCursorPeekName, container: cursor, args: pairArgs(cursor, second: ahead), giid: giid, reference: ContainerElementReference.borrowed, range: range)
+			return try self.emitContainerElementAccessor(ManagedCursorPeekName, container: cursor, args: twoArgs(cursor, second: ahead), giid: giid, reference: ContainerElementReference.borrowed, range: range)
 		end 'peek'
 
 		// ⚠ Unreachable while the roster and these arms agree — `dispatchArrayMethod`'s drift panic, for its
@@ -81355,7 +81341,7 @@ export type Parser
 
 	// ⭐ **WHAT A FIXED ARRAY MAY HOLD.** Its slot is an inline word of the element's own stride, so any element the
 	// managed-memory runtime already strides fits — an integer of any declared range, a `bool`, a `float`. What it may
-	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__managed_resize`) while
+	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__managed_create_sized`) while
 	// `element_destroy@40` stays 0, so a managed element would leak at teardown and every `set` would
 	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one.
 	//
@@ -81387,7 +81373,7 @@ export type Parser
 	// does not have, exit 0, no diagnostic — and `for a in v` with a read of `a` dereferences those NULLs
 	// through `__managed_get_unchecked` and **ACCESS-VIOLATES (0xC0000005)**.
 	// `requireArrayResizeHasZeroElement`'s
-	// E3106 is the rule that normally holds this shut, and `emitSizedContainerRecord` reaches `__managed_resize`
+	// E3106 is the rule that normally holds this shut, and `emitSizedContainerRecord` publishes zeroed slots
 	// without passing it; that header predicted this exact failure in these words — *"If this refusal is ever
 	// relaxed, that read becomes a null deref in a function whose own text still looks correct."*
 	// ⇒ The question is asked of the ONE door that answers it (`requireListElementType` opens with the same
@@ -81460,7 +81446,7 @@ export type Parser
 	// possible: the answer IS the size, the size is at the CALL, and a `static … returns Self` reads it out
 	// of the hidden slot every call site fills in from the instance it builds.
 	//
-	// ⚠⚠ **THE `create()` REACHES `__managed_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`,
+	// ⚠⚠ **THE `create()` PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayResizeHasZeroElement`,
 	// WHOSE E3106 IS THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ, AND THE CORPUS BODY REACHES
 	// `setLength` the same way.** A published slot of a MANAGED element is a null pointer every accessor
 	// dereferences, so the guarantee is carried by `requireFixedArrayElementType` instead — which is why that
@@ -83453,7 +83439,7 @@ export type Parser
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
 			try self.requireArmServedIndexArgument(giid, member: methodTok.value, value: index, anchor: methodTok, bufferSurface: isManagedMemory)
-			return self.noteArrayReadMember(try self.emitContainerElementAccessor(ManagedGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.borrowed, range: range), giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
+			return self.noteArrayReadMember(try self.emitContainerElementAccessor(ManagedGetName, container: arr, args: twoArgs(arr, second: index), giid: giid, reference: ContainerElementReference.borrowed, range: range), giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
 		end 'get'
 
 		// ⭐⭐ **ONE SPELLING, TWO ENTRIES — THE BUFFER'S `set` IS BOUNDED BY CAPACITY AND THE `Array`'s BY LENGTH.**
@@ -83516,7 +83502,7 @@ export type Parser
 
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
-			return self.noteArrayReadMember(try self.emitContainerElementAccessor(ManagedFirstName, container: arr, args: singletonArgs(arr), giid: giid, reference: ContainerElementReference.borrowed, range: range), giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
+			return self.noteArrayReadMember(try self.emitContainerElementAccessor(ManagedFirstName, container: arr, args: argsOf(arr), giid: giid, reference: ContainerElementReference.borrowed, range: range), giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
 		end 'first'
 
 		// ⭐ **`remove` IS BUFFER-SURFACE ONLY, AND THE GATE IS WHAT SAYS SO.** The
@@ -83528,7 +83514,7 @@ export type Parser
 		// that states the surface at the arm rather than only in a list.
 		if isManagedMemory and methodTok.value.equals(RemoveMethod) 'remove'
 			let index = try self.parseArrayOneArg(func)
-			return try self.emitContainerElementAccessor(ManagedRemoveName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.movedOut, range: range)
+			return try self.emitContainerElementAccessor(ManagedRemoveName, container: arr, args: twoArgs(arr, second: index), giid: giid, reference: ContainerElementReference.movedOut, range: range)
 		end 'remove'
 
 		// ⭐ **`slice` IS BUFFER-SURFACE ONLY**, for `remove`'s reason above and by its gate. The
@@ -83549,7 +83535,7 @@ export type Parser
 		if isManagedMemory and methodTok.value.equals(ByteAtMethod) 'byteAt'
 			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
 			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
-			return self.emitLibraryAliasedRuntimeCall(ManagedByteAtName, args: pairArgs(arr, second: index), alias: ByteAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedByteAtName, args: twoArgs(arr, second: index), alias: ByteAliasName, range: range)
 		end 'byteAt'
 
 		// Non-throwing value accessors.
@@ -83563,7 +83549,7 @@ export type Parser
 		// references never gave it, or the roster's own first entry becomes decorative.
 		if methodTok.value.equals(CountMethod) or (isManagedMemory and methodTok.value.equals(ManagedMemoryLengthMethod)) 'count'
 			try self.consumeEmptyArgList()
-			let countArgs = singletonArgs(arr)
+			let countArgs = argsOf(arr)
 			let counted = self.emitRuntimeCallInto(self.mintArrayCountResult(giid, bufferSurface: isManagedMemory), callee: ManagedCountName, args: countArgs, range: range, argLabels: emptyArgLabels(countArgs))
 
 			// ⭐ **A COUNT IS NON-NEGATIVE, AND THIS IS WHERE THAT FACT ENTERS THE COMPILER.** The backing
@@ -83638,7 +83624,7 @@ export type Parser
 			let window = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCharPosParamName, secondParam: ManagedMemoryCharLenParamName, methodTok: methodTok)
 			let startPos = try window.get(0) otherwise panic("makeCharFromBytes: parseTwoBuiltinIntegerArgList returned fewer than the two arguments it consumes")
 			let byteLen = try window.get(1) otherwise panic("makeCharFromBytes: parseTwoBuiltinIntegerArgList returned fewer than the two arguments it consumes")
-			return self.emitOwnedRuntimeResult(CharAtName, args: tripleArgs(arr, second: startPos, third: self.emitMachineWordBinOp(startPos, rhs: byteLen, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
+			return self.emitOwnedRuntimeResult(CharAtName, args: threeArgs(arr, second: startPos, third: self.emitMachineWordBinOp(startPos, rhs: byteLen, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
 		end 'makeCharFromBytes'
 
 		// ⭐ **ONE OF THE TWO DOORS THAT MINT A `cstring`** — the other is `String.cstr()`, whose whole body is
@@ -83646,14 +83632,14 @@ export type Parser
 		// nothing is enrolled for a drop; what the tag buys is the type rule, not a width or a lifetime.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryToCStringMethod) 'toCString'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(MmToCStringName, args: singletonArgs(arr), resultTag: ValueTypeTag.cstring, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(MmToCStringName, args: argsOf(arr), resultTag: ValueTypeTag.cstring, resultNameId: UnnamedTypeId, range: range)
 		end 'toCString'
 
 		// Buffer-surface only, for `remove`'s reason: `Array.capacity()` is
 		// `stdlib/Array.maxon:154`'s `managed.capacity()`, which is this arm reached from source.
 		if isManagedMemory and methodTok.value.equals(ArrayCapacityMethod) 'capacity'
 			try self.consumeEmptyArgList()
-			return self.emitLibraryAliasedRuntimeCall(ManagedCapacityName, args: singletonArgs(arr), alias: ReportedCapacityAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedCapacityName, args: argsOf(arr), alias: ReportedCapacityAliasName, range: range)
 		end 'capacity'
 
 		// ⭐ **`elementSize()` — THE BUFFER'S STRIDE, AND THE ONE MEMBER THAT REPORTS A REPRESENTATION**
@@ -83666,7 +83652,7 @@ export type Parser
 		// `-2`/`-4` as ordinary integers.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryElementSizeMethod) 'elementSize'
 			try self.consumeEmptyArgList()
-			return self.emitLibraryAliasedRuntimeCall(ManagedElementSizeName, args: singletonArgs(arr), alias: FullRangeIntAliasName, range: range)
+			return self.emitLibraryAliasedRuntimeCall(ManagedElementSizeName, args: argsOf(arr), alias: FullRangeIntAliasName, range: range)
 		end 'elementSize'
 
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM**
@@ -83678,7 +83664,7 @@ export type Parser
 		if methodTok.value.equals(ArrayPushMethod) 'push'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
-			return self.emitArrayVoidCall(ManagedPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedPushName, args: twoArgs(arr, second: value), receiver: arr, range: range)
 		end 'push'
 
 		if methodTok.value.equals(ArrayResizeMethod) 'resize'
@@ -83686,7 +83672,7 @@ export type Parser
 			try self.requireArrayResizeHasZeroElement(giid, methodTok: methodTok)
 			let n = try self.parseArrayOneArg(func)
 			try self.requireArmServedIndexArgument(giid, member: methodTok.value, value: n, anchor: methodTok, bufferSurface: isManagedMemory)
-			return self.emitArrayVoidCall(ManagedResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedResizeName, args: twoArgs(arr, second: n), receiver: arr, range: range)
 		end 'resize'
 
 		// ⭐ **`clear` IS BUFFER-SURFACE ONLY**, for `remove`'s reason above and by its gate. The
@@ -83695,7 +83681,7 @@ export type Parser
 		if isManagedMemory and methodTok.value.equals(ClearMethod) 'clear'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consumeEmptyArgList()
-			return self.emitArrayVoidCall(ManagedClearName, args: singletonArgs(arr), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedClearName, args: argsOf(arr), receiver: arr, range: range)
 		end 'clear'
 
 		// ⭐⭐ **ONE ARM FOR ALL THREE SPELLINGS OF ONE OPERATION — `Array.append`, `Array.appendMemory` AND THE
@@ -83759,7 +83745,7 @@ export type Parser
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let newLength = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewLengthParamName, methodTok: methodTok)
 			try self.requireZeroIsAnElement(giid, tok: methodTok, refusal: ZeroElementRefusal.bufferSetLength)
-			return self.emitRuntimeCall(ManagedSetLengthName, args: pairArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedSetLengthName, args: twoArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setLength'
 
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
@@ -83818,7 +83804,7 @@ export type Parser
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryGrowMethod) 'grow'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let newCapacity = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewCapacityParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ManagedMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedMemGrowName, args: twoArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'grow'
 
 		// ⭐⭐ **`fill(start, count:, value:)` — THE WHOLE-WINDOW ELEMENT WRITE, AND THE ONE BUFFER MEMBER THAT
@@ -83858,7 +83844,7 @@ export type Parser
 			let checked = try self.requireContainerElementType(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 			try self.consume(TokenKind.rightParen)
 			let element = self.containerElementWord(checked, giid: giid, range: SourceRange.ofToken(self.tokenAt(valueStart)))
-			return self.emitRuntimeCall(ManagedFillName, args: quadArgs(arr, second: start, third: count, fourth: element), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedFillName, args: fourArgs(arr, second: start, third: count, fourth: element), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'fill'
 
 		// ⭐⭐ **THE THREE RELOCATORS — void, throwing, two integer arguments each, and BUFFER-SURFACE ONLY.**
@@ -83919,7 +83905,7 @@ export type Parser
 		// the provenance table, because unlike the buffer it does not share a `GenericInstanceId` with anything.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryCreateCursorMethod) 'createCursor'
 			try self.consumeEmptyArgList()
-			let cursor = self.emitOwnedRuntimeResult(ManagedCursorCreateName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.managedMemoryCursorInstanceFor(giid) as TypeNameId, range: range)
+			let cursor = self.emitOwnedRuntimeResult(ManagedCursorCreateName, args: argsOf(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.managedMemoryCursorInstanceFor(giid) as TypeNameId, range: range)
 
 			return cursor
 		end 'createCursor'
@@ -84606,7 +84592,7 @@ export type Parser
 		end 'noSlotToVacateLater'
 
 		if callee.equals(ManagedCursorCurrentName) or callee.equals(ManagedCursorPeekName) 'aCursorRead'
-			let slotArgs = args if callee.equals(ManagedCursorPeekName) else singletonArgs(container)
+			let slotArgs = args if callee.equals(ManagedCursorPeekName) else argsOf(container)
 			return PromiseSlotResolution.slot(self.emitArrayCursorSlot(container, args: slotArgs, range: range))
 		end 'aCursorRead'
 
@@ -84627,7 +84613,7 @@ export type Parser
 	// second argument is how far ahead of the position it reads.
 	function emitArrayCursorSlot(cursor ValueId, args ValueIdArray, range SourceRange) returns PromiseSlot
 		let buffer = self.emitIndirectLoad(MaxonType.integer, box: cursor, offset: CursorSourceOffset, storageType: MaxonType.integer, range: range)
-		let position = self.emitRuntimeCall(ManagedCursorIndexName, args: singletonArgs(cursor), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		let position = self.emitRuntimeCall(ManagedCursorIndexName, args: argsOf(cursor), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 
 		if args.count() > OneArgumentIsJustTheContainer 'readsAhead'
 			let ahead = try args.get(1) otherwise panic("emitArrayCursorSlot: args.get OOB at 1 — the count was just tested")
@@ -85130,14 +85116,14 @@ export type Parser
 
 	function emitArraySliceCall(giid GenericInstanceId, arr ValueId, start ValueId, endIndex ValueId, range SourceRange) returns ValueId
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueSlice'
-			return self.emitOwnedRuntimeResult(ManagedSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+			return self.emitOwnedRuntimeResult(ManagedSliceOpaqueName, args: threeArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
 		end 'opaqueSlice'
 
 		if self.signatures.containerElementIsManaged(giid) 'managedSlice'
-			return self.emitOwnedRuntimeResult(ManagedSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+			return self.emitOwnedRuntimeResult(ManagedSliceManagedName, args: fourArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
 		end 'managedSlice'
 
-		return self.emitOwnedRuntimeResult(ManagedSliceName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+		return self.emitOwnedRuntimeResult(ManagedSliceName, args: threeArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
 	end 'emitArraySliceCall'
 
 	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved) and
@@ -85155,14 +85141,14 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueAppend'
-			return self.emitArrayVoidCall(ManagedAppendOpaqueName, args: pairArgs(arr, second: other), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedAppendOpaqueName, args: twoArgs(arr, second: other), receiver: arr, range: range)
 		end 'opaqueAppend'
 
 		if self.signatures.containerElementIsManaged(giid) 'managedAppend'
-			return self.emitArrayVoidCall(ManagedAppendManagedName, args: tripleArgs(arr, second: other, third: self.arrayElementCloneValue(giid, range: range)), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedAppendManagedName, args: threeArgs(arr, second: other, third: self.arrayElementCloneValue(giid, range: range)), receiver: arr, range: range)
 		end 'managedAppend'
 
-		return self.emitArrayVoidCall(ManagedAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
+		return self.emitArrayVoidCall(ManagedAppendName, args: twoArgs(arr, second: other), receiver: arr, range: range)
 	end 'parseArrayAppend'
 
 	// The argument rule all three `append` spellings make. The whole VERDICT is
@@ -85729,7 +85715,7 @@ export type Parser
 		// ⚠ The Std entry still ok-returns `(0, flag)` — a throwing `void` runtime function is normal
 		// (`__managed_set_length`, `__managed_set_byte` and `__managed_mem_grow` are all declared `StdReturnType.void`
 		// and all throw); what this tag decides is whether MAXON believes the call yields something.
-		return self.emitRuntimeCall(callee, args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(callee, args: threeArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseArraySet'
 
 	// `( expr )` — a single element-VALUE argument (`push(x)`), TYPE-CHECKED against the instance's element
@@ -88180,7 +88166,7 @@ export type Parser
 			// `declarationsValueIsTheManagedRecord`, which is the very test the arm above just made. Provably the
 			// same value, so asking it removes a spelling and changes no behaviour; what it buys is that a second
 			// byte-record instance can never be taught to two of the three doors and missed at the third.
-			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.bufferSurfaceInstanceOf(box, layout: layout) as TypeNameId, range: range, exclusivity: OwnedHeapExclusivity.coOwned)
+			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: argsOf(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.bufferSurfaceInstanceOf(box, layout: layout) as TypeNameId, range: range, exclusivity: OwnedHeapExclusivity.coOwned)
 			self.markBufferSurface(view, origin: EmptySourceText)
 			return view
 		end 'inlineManagedIsTheReceiver'
@@ -92427,7 +92413,7 @@ export type Parser
 				let gt = try args.get(0) otherwise panic("gtIsComplete: args.count() == GtIsCompleteArity just checked but get(0) failed")
 				try self.requireIntrinsicMachineWordArg(gt, callee: callee, calleeTok: anchor)
 
-				return self.emitLibraryAliasedRuntimeCall(GtIsCompleteName, args: singletonArgs(gt), alias: FullRangeIntAliasName, range: SourceRange.ofToken(anchor))
+				return self.emitLibraryAliasedRuntimeCall(GtIsCompleteName, args: argsOf(gt), alias: FullRangeIntAliasName, range: SourceRange.ofToken(anchor))
 			end 'gtIsComplete'
 
 			// ⭐ **THE SCHEDULER'S FOURTH ARM THAT HANDS OVER THE PROCESSOR, and the only one that asks a
@@ -92465,7 +92451,7 @@ export type Parser
 					throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWord(index), line: anchor.line, column: anchor.column)
 				end 'notAnIndex'
 
-				return self.emitOwnedManagedMemoryResult(CommandLineArgName, args: singletonArgs(index), range: SourceRange.ofToken(anchor))
+				return self.emitOwnedManagedMemoryResult(CommandLineArgName, args: argsOf(index), range: SourceRange.ofToken(anchor))
 			end 'commandLineArg'
 
 			// ⭐ Both answer an OWNED `__ManagedMemory` — `emitOwnedManagedMemoryResult` again, which is
@@ -92487,7 +92473,7 @@ export type Parser
 					throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWord(maxBytes), line: anchor.line, column: anchor.column)
 				end 'notAByteCount'
 
-				return self.emitOwnedManagedMemoryResult(ConsoleReadStdinName, args: singletonArgs(maxBytes), range: SourceRange.ofToken(anchor))
+				return self.emitOwnedManagedMemoryResult(ConsoleReadStdinName, args: argsOf(maxBytes), range: SourceRange.ofToken(anchor))
 			end 'readStdin'
 
 			if callee.equals(BuiltinsExecutablePathName) 'executablePath'
@@ -92504,7 +92490,7 @@ export type Parser
 				try self.requireManagedMemoryValue(buffer, paramName: ManagedFileManagedParamName, anchor: anchor)
 				try self.requireRawByteFillFitsItsElement(self.valueInstanceId(buffer), methodTok: anchor)
 				self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: anchor, calleeIndex: calleeIndex)
-				return self.emitLibraryAliasedRuntimeCall(RandomFillName, args: singletonArgs(buffer), alias: FullRangeIntAliasName, range: SourceRange.ofToken(anchor))
+				return self.emitLibraryAliasedRuntimeCall(RandomFillName, args: argsOf(buffer), alias: FullRangeIntAliasName, range: SourceRange.ofToken(anchor))
 			end 'fillRandom'
 
 			if callee.equals(BuiltinsTrustStoreOpenName) 'trustStoreOpen'
@@ -92549,7 +92535,7 @@ export type Parser
 				end 'probeParam'
 
 				let probed = try self.convertValueToDeclaredType(pid, sourceTag: self.tagOf(pid), targetType: probeType, targetAlias: probeAlias, opTok: anchor, sourceIsBareLocal: true, mustCarryTargetType: true)
-				return self.emitRuntimeCall(ProcessAliveName, args: singletonArgs(probed), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+				return self.emitRuntimeCall(ProcessAliveName, args: argsOf(probed), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
 			end 'processIsAlive'
 
 			// ⭐ **THE TWO CPU-PARALLEL QUERIES**, beside the checkpoint they share a family with. Both answer
@@ -93646,12 +93632,12 @@ export type Parser
 		end 'noValueToUse'
 
 		match intrinsic.access 'access'
-			get then return self.emitLibraryAliasedRuntimeCall(entry, args: pairArgs(buffer, second: integer), alias: OrderedWordAliasName, range: range)
+			get then return self.emitLibraryAliasedRuntimeCall(entry, args: twoArgs(buffer, second: integer), alias: OrderedWordAliasName, range: range)
 			put then break
 		end 'access'
 
 		self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, calleeIndex: calleeIndex)
-		return self.emitRuntimeCall(entry, args: pairArgs(buffer, second: integer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(entry, args: twoArgs(buffer, second: integer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitOrderedWordAccess'
 
 	function requireOrderedWordOperands(buffer ValueId, integer ValueId, widthOperand ValueId, callee ByteArray, calleeTok Token) returns WordBytes throws SourceParseError
@@ -93879,7 +93865,7 @@ export type Parser
 
 		try self.consume(TokenKind.rightParen)
 
-		return self.emitLibraryAliasedRuntimeCall(ucdRuntimeNameOf(load), args: singletonArgs(index), alias: self.ucdAnswerAliasOf(load), range: SourceRange.ofToken(anchor))
+		return self.emitLibraryAliasedRuntimeCall(ucdRuntimeNameOf(load), args: argsOf(index), alias: self.ucdAnswerAliasOf(load), range: SourceRange.ofToken(anchor))
 	end 'parseUcdTableLoad'
 
 	function ucdAnswerAliasOf(load UcdTableStride) returns ByteArray
@@ -94308,7 +94294,7 @@ export type Parser
 			panic("emitAwaitAnyCall: '__gt_any_completed' strides a promise array by {PromiseSlotBytes} bytes per slot, but `arrayElementSize` stamps this instance at {stamped} — `PromiseType.maxon`'s one-word promise handle and `GtRuntime.PromiseSlotBytes` have drifted apart")
 		end 'strideDisagreesWithTheScan'
 
-		return self.emitLibraryAliasedRuntimeCall(GtAwaitAnyName, args: singletonArgs(promises), alias: ElementIndexAliasName, range: range)
+		return self.emitLibraryAliasedRuntimeCall(GtAwaitAnyName, args: argsOf(promises), alias: ElementIndexAliasName, range: range)
 	end 'emitAwaitAnyCall'
 
 	// ⭐⭐ **IS THIS VALUE AN ARRAY WHOSE ELEMENTS ARE PROMISE HANDLES?** — `awaitAny`'s whole argument rule,
@@ -98653,9 +98639,9 @@ export type Parser
 	function emitTransferGraphProof(value ValueId, handOff GreenThreadHandOff, root TransferRootProof, anchor Token)
 		match self.transferWalkOfValue(value, handOff: handOff) 'graph'
 			closed then self.proveClosedRoot(value, root: root, anchor: anchor)
-			walkedBy(callee) then self.emitTransferWalk(singletonArgs(value), callee: callee, range: SourceRange.ofToken(anchor))
-			walkedAlone(callee) then _ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
-			walkedThroughWitness(entry) then self.emitTransferWalk(pairArgs(self.witnessOfValue(value), second: value), callee: entry, range: SourceRange.ofToken(anchor))
+			walkedBy(callee) then self.emitTransferWalk(argsOf(value), callee: callee, range: SourceRange.ofToken(anchor))
+			walkedAlone(callee) then _ = self.emitRuntimeCall(callee, args: argsOf(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			walkedThroughWitness(entry) then self.emitTransferWalk(twoArgs(self.witnessOfValue(value), second: value), callee: entry, range: SourceRange.ofToken(anchor))
 			refused then panic("emitTransferGraphProof: a graph no walk can be built for reaches the hand-off — `handOffTakeOf` refuses it before anything is emitted")
 		end 'graph'
 	end 'emitTransferGraphProof'
@@ -98663,7 +98649,7 @@ export type Parser
 	function proveClosedRoot(value ValueId, root TransferRootProof, anchor Token)
 		match root 'root'
 			provenAtCompileTime then return
-			provedAtRunTime then self.emitTransferWalk(singletonArgs(value), callee: MmSoleBoxName, range: SourceRange.ofToken(anchor))
+			provedAtRunTime then self.emitTransferWalk(argsOf(value), callee: MmSoleBoxName, range: SourceRange.ofToken(anchor))
 		end 'root'
 	end 'proveClosedRoot'
 
@@ -98690,7 +98676,7 @@ export type Parser
 
 		args.push(self.emitLiteral(NoVisitTable, valueType: MaxonType.integer, range: range))
 		let visits = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-		_ = self.emitRuntimeCall(WalkSettleName, args: singletonArgs(visits), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(WalkSettleName, args: argsOf(visits), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitTransferWalk'
 
 	// ⭐ **DID THIS PARSE MINT `value` AS A STRING LITERAL?** — `knownLiteralBytes`'s criterion asked as a
@@ -101209,7 +101195,7 @@ export type Parser
 			structRecord then return try self.emitEnumBackingRawValue(layout, tag: tag, anchor: anchor, range: range)
 		end 'backing'
 
-		let character = self.emitRuntimeCall(CharFromCodepointName, args: singletonArgs(tag), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
+		let character = self.emitRuntimeCall(CharFromCodepointName, args: argsOf(tag), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(character, exclusivity: OwnedHeapExclusivity.sole)
 		return character
 	end 'emitEnumRawValue'

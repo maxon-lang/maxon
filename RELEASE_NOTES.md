@@ -15,6 +15,9 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- Creating a `FixedArray` is a pure call, as creating an `Array` is, so discarding the result of
+  `Vec3.create()`, or of a static that returns `Self{}`, with `_ =` is E3064.
+  Fix: use the value, or delete the call.
 - `InputSource.delayed(data)` is removed, with the fixed one-second stdin feed it stood for.
   Fix: to feed a child after it prints a marker, run it as a `StreamingSubprocess`, read its stdout with
   `tryReadStdoutLine()` until the marker line, then `writeStdinLine(...)` and `closeStdin()`; where the

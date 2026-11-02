@@ -13,14 +13,13 @@ end of scope                   // decref q -> rc=0
                                // -> destructor -> free
 ```
 
-The memory manager provides four core operations:
+The memory manager provides three core operations:
 
 | Operation | What it does |
 |-----------|-------------|
 | `mm_alloc(size, destructor, tag)` | Allocate a tracked heap object with rc=0 |
 | `mm_incref(ptr)` | Increment reference count |
 | `mm_decref(ptr)` | Decrement reference count; if rc reaches 0, call destructor then free |
-| `mm_realloc(ptr, size)` | Reallocate a raw buffer (for `__ManagedMemory` growth) |
 
 ## Header Layout
 
@@ -89,15 +88,10 @@ if refcount == 0:
 
 Panics on NULL or refcount underflow (already zero).
 
-### `mm_realloc(ptr, new_size)` -> new_ptr
+### Growth
 
-Reallocates an existing allocation (used for raw buffer growth in `__ManagedMemory`):
-
-1. If `ptr` is NULL, allocates a fresh buffer via `HeapAlloc`.
-2. Otherwise, calls `HeapReAlloc` on the underlying block.
-3. Returns the new pointer.
-
-Note: `mm_realloc` is for raw buffers only (no inline header). Managed objects are never reallocated -- they are freed and a new one is allocated.
+An allocation keeps its size for its whole life. A buffer that outgrows its capacity is replaced: the runtime
+allocates a larger one, copies the live elements, and releases the old buffer with `mm_decref`.
 
 ## Destructors
 
@@ -165,7 +159,7 @@ __ManagedMemory layout (48 bytes):
 | +8   length          (i64) -> element count         |
 | +16  capacity        (i64) -> ownership mode        |
 | +24  element_size    (i64) -> stride; <0=bits/elem  |
-| +32  parent_ptr      (ptr) -> parent struct         |
+| +32  parent          (ptr) -> owed allocation       |
 | +40  element_destroy (ptr) -> per-element destructor |
 +-----------------------------------------------------+
 ```
@@ -191,33 +185,41 @@ is in-bounds: a short 40-byte allocation would leave the walk reading adjacent
 heap garbage and calling it as a function pointer. Every allocation site zeroes
 the slot when the elements are raw, so the walk's `== 0` gate no-ops.
 
-The `capacity` field encodes the buffer's ownership mode:
-- **capacity > 0** (owned): buffer is a writable heap allocation. When length reaches capacity, it is reallocated (typically doubled) via `mm_realloc`.
-- **capacity == 0** (rdata): buffer points to read-only static data (e.g., a string literal). Any mutation triggers a copy to a new writable buffer (copy-on-write).
-- **capacity == -1** (slice): buffer is a zero-copy view into another `__ManagedMemory`'s data. The `parent_ptr` field holds a pointer to the parent struct (incref'd). Mutations trigger a copy-on-write, after which the slice becomes owned and `parent_ptr` is decref'd and zeroed.
+The `capacity` field says whether the record may write its buffer and release it:
+- **capacity >= 0** (owned): the record owns the buffer and writes it in place up to `capacity` elements. The buffer is a separate allocation, which the record releases when it dies or detaches, or it sits inside the record's own allocation ([co-allocated](#co-allocated-buffers)). When the length reaches the capacity, the runtime allocates a larger buffer (the capacity doubles up to 256 elements, then eases toward 1.25x), copies the live elements into it, and releases the old buffer with `mm_decref`.
+- **capacity == -1** (view): the buffer is an interior pointer into another record's allocation, and `parent` names that allocation, on which the view holds a count.
+- **capacity == -2** (read-only data): the buffer is a static blob, such as a literal's bytes, and the record is an ordinary heap box.
+- **capacity == -3** (inline String): the bytes sit in the String record's own allocation, right after the record.
+- **capacity == -4** (immortal record): the record itself is read-only image data, left alone by every count and free.
 
-The `parent_ptr` field is `0` for owned and rdata buffers. For slices, it holds the parent struct pointer to keep the parent alive while the slice references its data.
+A negative capacity means the record copies its elements into a private buffer before any in-place write; the specific value only records where the buffer came from. `capacity()` returns it to user code.
 
-### `parent_ptr` sentinels and small-array inline storage
+The `parent` field is the address of the separate allocation the record owes a release to, or `0` when it owes none. A view stores the base of the allocation its bytes are in, and a view of a view stores that same base, so every view names the original allocation. Every other record stores `0`: an owner's debt is its own `buffer`, which the runtime reads where it would otherwise store the address twice.
 
-The runtime (`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`) keys teardown on the
-`parent_ptr` field (not `capacity`, which always holds the real slot count) via a
-small set of sentinels: `-1` root (owns an external buffer), `-2` rdata-backed,
-`-3` inline (see below), `0` uninitialized, and any other value a live slice
-parent pointer.
+### Co-allocated buffers
 
-As a single-allocation optimization, a small array or string whose element bytes
-fit within `MM_INLINE_CAP_BYTES` (64) holds its elements **inline** in the same
-slab slot as the 48-byte record, right after the record fields — `buffer@0` points
-into the record's own allocation. The slab rounds the record+inline request up to
-a size class, so **all** of that class's slack is reclaimed as spare element
-capacity (a few pushes past the requested count stay single-allocation at zero
-extra cost). Such a record is tagged `parent_ptr == -3`; its destructor still runs
-the managed-element walk but skips the buffer decref (the inline bytes are freed
-with the record's own slot). The first grow past the inline capacity detaches to a
-normal external buffer via copy-on-write, after which the record is an ordinary
-root array. This halves the allocation count for small arrays (previously one
-allocation for the record plus a second for the element buffer).
+An array created with a known capacity of at most 256 bytes holds its elements in the same allocation as its
+record, so creating it is one allocation and dropping it is one free. A `FixedArray`, the deep copy of an array
+of managed elements, and a `__ManagedMemory` created with a capacity are such creations; see
+[co-allocated-arrays](../specs/co-allocated-arrays.md).
+
+```
+[48-byte record][8-byte refcount word][element bytes ...]
+                                      ^ buffer = record + 56
+```
+
+The refcount word is a box refcount slot, so the checks that ask whether a buffer is shared or viewed read it as
+they read any buffer's. The record recognizes its own bytes by address alone: `buffer == record + 56`. Every
+allocation's payload is 16-byte aligned and 56 is 8 mod 16, so only a co-allocated buffer can sit at that address.
+
+- Dropping the record frees the elements with it; a separate buffer is released with `mm_decref`.
+- Growing past the capacity allocates a buffer of its own, copies the elements, and leaves the inline bytes
+  unused until the record dies. The 256-byte limit bounds that unused space.
+- `clone` and `slice` of a co-allocated array copy the window into a new array, because the bytes end with their
+  record and a view can outlive it. The copy owns its buffer, so `capacity()` reports the larger of its length and
+  4 (0 for an empty copy) where a view reports -1.
+- A record frozen for sharing with other threads has its refcount word marked like any other buffer's, so it
+  detaches to a buffer of its own before any write.
 
 ## What Gets Heap-Allocated
 
@@ -227,7 +229,7 @@ allocation for the record plus a second for the element buffer).
 | Structs | Yes | Every struct instance lives on the heap |
 | Strings | Yes | Struct (pointer to `__ManagedMemory`) with refcount |
 | Chars | Yes | Heap-allocated with refcounting, like a small string |
-| Arrays (`Array with T`) | Yes | Struct (count + `__ManagedMemory` pointer) with refcount |
+| Arrays (`Array with T`) | Yes | A 48-byte `__ManagedMemory` record with refcount; its element buffer is a separate allocation, or part of the record's own ([co-allocated](#co-allocated-buffers)) |
 | ManagedLists (`__ManagedList with T`) | Yes | Doubly-linked list, each node is a separate allocation |
 | Tuples | Yes | Structs with `_0`, `_1`, etc. fields |
 | Enums (with associated values) | Yes | Tagged enum with payload |
@@ -455,11 +457,11 @@ both readers answer 0.
 
 Strings and arrays use copy-on-write semantics for efficient sharing:
 
-- When a string/array is aliased (incref'd), both references share the same `__ManagedMemory` buffer.
-- On mutation (append, set, etc.), if `capacity <= 0` (read-only or slice), the `maxon_cow_check` runtime function allocates a new writable buffer and copies the data.
-- For slices (`capacity == -1`), COW also decrefs the parent pointer and zeros it, transitioning the slice to an owned buffer.
-- Struct-level COW (`maxon_cow_struct_detach`) handles the case where a parent `__ManagedMemory` has refcount > 1 due to slice references. It allocates a new struct and buffer, copies data, and decrefs the old struct.
-- This allows string literals and array slices to share memory without copying until a write occurs.
+- A `slice` or `clone` of a separately allocated buffer is a view: it holds a count on the allocation its bytes are in, so that allocation's refcount is non-zero while the view lives.
+- A mutator (`append`, `set`, `push`, and the rest) first detaches the record with `__managed_cow_detach` when `capacity` is negative (a view or read-only data) or when the buffer's refcount is non-zero (another record views it).
+- A detach allocates a buffer of exactly `length` elements, copies the live elements into it, and then releases the count on the allocation it left; the record becomes an owner with `parent` at `0`. A view and the owner it views detach independently, so either side's write leaves the other's elements as they were.
+- A co-allocated buffer is copied by `clone` and `slice` ([Co-allocated buffers](#co-allocated-buffers)), so every view is over a separate allocation.
+- String literals and array slices share memory this way until a write occurs.
 
 ## Managed Variable Initialization
 

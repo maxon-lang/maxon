@@ -46,7 +46,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 |--------|---------|-------------|
 | `Array.create()` | `Array` | An empty array. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
-| `clone()` | `Array` | An independent copy. Each record, `String` or union element is cloned; an array of scalars shares its storage copy-on-write, which separates on the first write to either. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is refused (an element slot is one machine word). A copy of an element that is or holds a promise is E3141, here and at `slice` and `append`. |
+| `clone()` | `Array` | An independent copy. Each record, `String` or union element is cloned; an array of scalars shares its storage copy-on-write, which separates on the first write to either, unless the storage was created at a known size of at most 256 bytes, which is copied at once. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is refused (an element slot is one machine word). A copy of an element that is or holds a promise is E3141, here and at `slice` and `append`. |
 | `Array.from(source Iterable)` | `Array` | Collect every element of an iterable, called through an alias (`ScoreArray.from(range)`). The iterable must bind `Element` to the alias's own element (E3127). |
 | `Array.init(managed)` | `Array` | Wrap raw compiler-managed storage; used by the compiler and the library. |
 | `managed` | field | The array's raw storage, for `appendMemory` and library code. Library tier: reading it elsewhere is [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier). |
@@ -57,7 +57,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 |--------|---------|-------------|
 | `count()` | `Count` | Number of elements. |
 | `isEmpty()` | `bool` | True when `count()` is 0. |
-| `capacity()` | `int(i64.min to i64.max)` | Slots allocated. Negative when the storage is not this array's own yet: `-1` for a slice view that has not been written, other negative values for a literal's or a module-level constant's read-only storage. Treat any negative value as "not owned yet". |
+| `capacity()` | `int(i64.min to i64.max)` | Slots allocated. Negative when the storage is not this array's own yet: `-1` for a slice view that has not been written, other negative values for a literal's or a module-level constant's read-only storage. Treat any negative value as "not owned yet". A `slice` or `clone` copied from co-allocated storage owns its storage and reports the larger of its length and 4, or 0 when empty. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past `count()`, `ArrayError.emptySlot` for a slot that was never written. |
 | `first()` | `Element` | Throws like `get(0)`. |
 | `last()` | `Element` | Throws `indexOutOfBounds` when empty. |
@@ -276,7 +276,7 @@ growable array is [`Array`](#array).
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0. |
+| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0. A pure call: discarding the result with `_ =` is E3064. A fixed array of at most 256 bytes of elements is one allocation. |
 | `FixedArray from [a, b, c]` | `FixedArray` | A literal; the count is the literal's length. |
 | `count()` | `Count` | The fixed size, answered from the type. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past the fixed size, unless the index is proven inside it. |

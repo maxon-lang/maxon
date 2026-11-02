@@ -355,7 +355,7 @@ end 'emitStoreByte'
 // `String.init(dir.filename())` reads its `length@8`/`buffer@0`, which a cstring pointer does not have.
 //
 // The record and its buffer come from `ManagedMemoryRuntime.emitManagedByteBuffer`, which is where the
-// `__managed_create` + `__managed_reserve` pair and the reason for it now live — `__con_read_stdin` fills the
+// `__managed_create_sized` call and the reason for it live — `__con_read_stdin` fills the
 // same kind of record from an OS read instead of from a copy, and the two must not grow two answers to
 // "how is a byte-element `Array` record made?".
 //
@@ -372,8 +372,8 @@ export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBl
 	let buffer = emitManagedByteBuffer(module, block: build, record: record, byteCount: i, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: build, dest: buffer, src: cstr, byteCount: i, ids: ids)
 
-	// PUBLISH the bytes. `__managed_reserve` sets the capacity and leaves the length 0 (that is its contract, and
-	// `__managed_mem_create`'s comment states it); `String.init` reads `length@8`, so an unpublished record would
+	// PUBLISH the bytes. `emitManagedByteBuffer` sets the capacity and leaves the length 0 (that is its contract,
+	// and `__managed_mem_create`'s comment states it); `String.init` reads `length@8`, so an unpublished record would
 	// answer with the empty string.
 	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordLengthOffset, value: i)
 	return afterCopy

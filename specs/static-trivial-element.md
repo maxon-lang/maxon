@@ -37,7 +37,7 @@ between, `insertRangeChecks`, splits blocks and never clones or replaces a call.
 
 ### WHY THE STAMP IS ALWAYS THE RECORD'S — unlike the stride
 
-`element_destroy@40` has two writers — `__managed_create`'s second argument, and
+`element_destroy@40` has two writers — the destructor argument of `__managed_create` and `__managed_create_sized`, and
 `BufferOwnership.immortalRecordBytes` for a record that is image data (a managed image record's slot is
 then filled by the `stampOwnershipWord` relocation, which an empty callee leaves at 0) — and every
 producer stamps it from the element type of the record's own instance: a concrete creation site and an

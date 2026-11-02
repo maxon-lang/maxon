@@ -21,8 +21,8 @@ one arm a bound failure reaches.
 `InlineManagedPrimitives` puts three SHAPE guards in front of every inlined `set` — the buffer is
 this record's (`capacity@16 ≥ 0`), it exists (`buffer@0 ≠ 0`), and nobody is viewing it (the
 buffer's refcount word is 0) — and reloads `length@8` and `buffer@0` for every access. Inside a loop
-none of those facts can change: an element store writes a buffer, which is its own allocation and not
-a record; `__managed_get` writes nothing; and `__managed_set` writes the header only through a
+none of those facts can change: an element store writes a buffer, which holds no record field;
+`__managed_get` writes nothing; and `__managed_set` writes the header only through a
 copy-on-write detach whose precondition is exactly that one of the three guards FAILED. So a loop
 that enters with the three guards true keeps them true — the detach the guards protect against can
 never fire — and every header load in the loop is invariant. The pass states the two facts it rests on

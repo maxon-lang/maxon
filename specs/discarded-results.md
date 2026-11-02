@@ -131,6 +131,47 @@ end 'main'
 error E3064: specs/discarded-results/pure-method-underscore-discard.maxon:4:2: result of pure function 'String.count' must be used
 ```
 
+<!-- test: fixed-array-create-discard -->
+Creating a `FixedArray` is a pure call, as creating an `Array` is: nothing is written but the record the call
+returns, so `_ =` does not license discarding it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+
+function main() returns ExitCode
+	_ = Vec3.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/fixed-array-create-discard.maxon:6:2: result of pure function 'FixedArray.create' must be used
+```
+
+<!-- test: fixed-array-static-factory-discard -->
+A static that returns `Self{}` of a `FixedArray` is pure for the same reason.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+
+extension FixedArray
+	static function makeOf(extra Int) returns Self
+		if (countof(Self) as Int) + extra == 0 'never'
+			panic("never")
+		end 'never'
+
+		return Self{}
+	end 'makeOf'
+end 'FixedArray'
+
+function main() returns ExitCode
+	_ = Vec3.makeOf(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/fixed-array-static-factory-discard.maxon:16:2: result of pure function 'FixedArray.makeOf' must be used
+```
+
 <!-- test: pure-function-used -->
 ```maxon
 

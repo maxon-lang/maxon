@@ -244,9 +244,8 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
-	_ = Vec3.makeOf(1)
-	print("{Vec3.slotsOf(1)} {Vec3.slotCount()} {v.count()}\n")
+	let made = Vec3.makeOf(1)
+	print("{Vec3.slotsOf(1)} {Vec3.slotCount()} {made.count()}\n")
 	return 0
 end 'main'
 ```

@@ -4336,6 +4336,7 @@ func @__ms_send_from {
     x64.movRegImm32 rax, 111
     x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -4397,6 +4398,7 @@ func @__ms_send_from {
     x64.movRegImm32 rax, 111
     x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14

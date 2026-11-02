@@ -54,18 +54,21 @@
 // tracing.
 let HeaderDestructorOffset = 0 as ByteOffset
 
-// ⭐ **THE HEADER GEOMETRY IS PRIVATE TO THIS FILE, AND STAYS THAT WAY.** Every reader outside it —
+// ⭐ **THE HEADER GEOMETRY BELONGS TO THIS FILE, AND STAYS HERE.** Every reader outside it —
 // `StringRuntime.__str_decref`, `ManagedMemoryRuntime.__managed_cow_detach`, the struct/union/instance destructor
 // cascades — reaches the refcount through the exported BUILDERS below (`emitRefcountCheckToLastOwner`,
 // `emitIsSharedAllocation`), never by respelling `ptr - HeaderBytes + HeaderRefcountOffset`. That is what
 // makes "where the refcount lives" one fact rather than one per caller: a header that grew a field would
 // be a change to `emitHeaderBase` and nothing else, and a caller that got it wrong could not compile.
+// `BoxSlotAlignment` and `CoAllocatedRefcountBytes` are exported for
+// `BufferOwnership.coAllocatedBufferOffset`, which lays a buffer out inside a record's allocation and
+// reads no refcount.
 let HeaderRefcountOffset = 8
 let HeaderBytes = 16
 
 // Every box total is a multiple of this and so is every prefix, so a heap box's payload is 16-aligned.
 // The slab's only smaller-aligned classes (8 and 24) are therefore unreachable for a box.
-let BoxSlotAlignment = 16
+export let BoxSlotAlignment = 16
 let ImmortalSizeSlotBelowHeader = 8
 
 // ⭐⭐ **THE `--debugstream` PREFIX WORD — `(alloc_id << 16 | tag_index)`, AND IT SITS *BELOW* THE HEADER
@@ -2566,6 +2569,8 @@ export function sharedAllocationGuardBox(reader StdShapeReader, condId ValueId) 
 	return try refcountLoadBox(reader, loadResultId: reader.arith.lhs)
 end 'sharedAllocationGuardBox'
 
+export let CoAllocatedRefcountBytes = (HeaderBytes - HeaderRefcountOffset) as ByteOffset
+
 // **THE RELEASE EVERY DECREF SHARES.** One owner leaves (`emitStepOwnerCount`); when the count it displaced
 // says nobody else held the box this was the FINAL owner and control branches to `lastOwner` — the caller's
 // block, which reclaims whatever it must before the memory dies — otherwise the box is kept. It fills `entry`
@@ -5023,8 +5028,8 @@ export function argsOf(only ValueId) returns ValueIdArray
 end 'argsOf'
 
 // The two- and three-argument branch-edge / call-argument builders — `argsOf`'s pair and triple
-// siblings, shared by the String, Array and GT runtimes (a `__mm_alloc(size, dtor)` is two, a
-// `__str_copy(dest, src, len)` three). One home so the runtime builders do not each mint their own.
+// siblings, shared by the runtime builders and the parser (a `__mm_alloc(size, dtor)` is two, a
+// `__str_copy(dest, src, len)` three). One home so no builder mints its own.
 export function twoArgs(first ValueId, second ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)

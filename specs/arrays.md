@@ -1391,7 +1391,8 @@ end 'main'
 
 `.slice()` and `.clone()` are **O(1)**: the result shares the source's element buffer until either side
 writes, at which point that side copies out. The sharing is invisible — every case below answers what an
-eager copy would.
+eager copy would. A buffer that lives in its record's own allocation is copied at once instead, as
+[co-allocated-arrays](co-allocated-arrays.md) states.
 
 <!-- test: slice-capacity-is-a-view-until-written -->
 A slice reports a negative capacity — its buffer is not its own — until a write gives it a private one
@@ -1409,6 +1410,35 @@ function main() returns ExitCode
 		return 0
 	end 'ok'
 	return 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slice-and-clone-of-a-co-allocated-array-report-a-capacity-of-their-own -->
+<!-- tier: stdlib -->
+An array whose buffer lives in its record's own allocation is copied, not viewed, by `slice` and `clone`, so
+the copy reports the capacity of a buffer it owns, the larger of its length and the growth policy's minimum of 4,
+where the slice of an ordinary array reports -1.
+```maxon
+function main() returns ExitCode
+	var memory = try __ManagedMemory.create(8, 1) otherwise return 1
+	try memory.setLength(8) otherwise return 2
+
+	let source = ByteArray.init(memory)
+	let sub = try source.slice(1, endIndex: 3) otherwise return 3
+	let whole = source.clone()
+
+	if sub.capacity() != 4 'slice'
+		return 4
+	end 'slice'
+
+	if whole.capacity() != 8 'clone'
+		return 5
+	end 'clone'
+
+	return 0
 end 'main'
 ```
 ```exitcode

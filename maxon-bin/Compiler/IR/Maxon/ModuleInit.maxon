@@ -181,7 +181,7 @@ function buildDefault(fn SynthesizedFunction, slot DefaultSlot)
 	let slotAddr = fn.emitLabelAddr(slot.label, site: site)
 
 	match slot.kind 'kind'
-		service then fn.emitPositionalCallDiscarding(RegistryServiceInstallName, args: pairArgs(slotAddr, second: value), site: site)
+		service then fn.emitPositionalCallDiscarding(RegistryServiceInstallName, args: twoArgs(slotAddr, second: value), site: site)
 		value(dropCallee, retainCallee, shareWalk) then buildDefaultValue(fn, value: value, slotAddr: slotAddr, dropCallee: dropCallee, retainCallee: retainCallee, shareWalk: shareWalk, site: site)
 	end 'kind'
 end 'buildDefault'
@@ -202,15 +202,15 @@ function emitDefaultShareWalk(fn SynthesizedFunction, value ValueId, shareWalk T
 	match shareWalk 'walk'
 		closed then return
 		walkedBy(callee) then emitSettledWalk(fn, value: value, walk: callee, site: site)
-		walkedAlone(callee) then fn.emitPositionalCallDiscarding(callee, args: singletonArgs(value), site: site)
+		walkedAlone(callee) then fn.emitPositionalCallDiscarding(callee, args: argsOf(value), site: site)
 		walkedThroughWitness then panic("emitDefaultShareWalk: a registry value is a declared struct, and a declared struct's graph is walked by its own per-type walk rather than through a witness")
 		refused then panic("emitDefaultShareWalk: `Parser.requireShareableRegistryValue` refuses a key no share walk can mark (E3171)")
 	end 'walk'
 end 'emitDefaultShareWalk'
 
 function emitSettledWalk(fn SynthesizedFunction, value ValueId, walk ByteArray, site SynthesizedSite)
-	let visits = fn.emitPositionalCall(walk, args: pairArgs(value, second: fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, site: site)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: site)
-	fn.emitPositionalCallDiscarding(WalkSettleName, args: singletonArgs(visits), site: site)
+	let visits = fn.emitPositionalCall(walk, args: twoArgs(value, second: fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, site: site)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: site)
+	fn.emitPositionalCallDiscarding(WalkSettleName, args: argsOf(visits), site: site)
 end 'emitSettledWalk'
 
 function runtimeFunctionOrNone(fn SynthesizedFunction, callee OwnershipCallee, site SynthesizedSite) returns ValueId
@@ -232,10 +232,10 @@ function markLetsShared(fn SynthesizedFunction, sharedLets SharedLetArray, site 
 	for shared in sharedLets 'eachLet'
 		let record = fn.mintOfType(shared.global.valueType)
 		fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(shared.global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), site: globalSite(shared.global))
-		visits = fn.emitPositionalCall(shared.walk, args: pairArgs(record, second: visits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: globalSite(shared.global))
+		visits = fn.emitPositionalCall(shared.walk, args: twoArgs(record, second: visits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: globalSite(shared.global))
 	end 'eachLet'
 
-	fn.emitPositionalCallDiscarding(WalkSettleName, args: singletonArgs(visits), site: site)
+	fn.emitPositionalCallDiscarding(WalkSettleName, args: argsOf(visits), site: site)
 end 'markLetsShared'
 
 // The OWNED value a managed global's slot starts life holding — either a record this function MATERIALIZES,
@@ -282,7 +282,7 @@ end 'builtRecord'
 function clonedStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType MaxonType, site SynthesizedSite) returns ValueId
 	let literal = fn.mintOfType(valueType)
 	fn.emit(MaxonOp.stringLiteral(literal, bytes: bytes), site: site)
-	return fn.emitPositionalCall(StrCloneName, args: singletonArgs(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
+	return fn.emitPositionalCall(StrCloneName, args: argsOf(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
 end 'clonedStringRecord'
 
 // The constant-array arm: ONE op, because the literal's own materialization is already the owned heap
@@ -332,7 +332,7 @@ end 'buildGlobalCleanup'
 function emitGlobalCleanupDrop(fn SynthesizedFunction, global ManagedGlobal, dropCallee ByteArray)
 	let record = fn.mintOfType(global.valueType)
 	fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), site: globalSite(global))
-	fn.emitPositionalCallDiscarding(dropCallee, args: singletonArgs(record), site: globalSite(global))
+	fn.emitPositionalCallDiscarding(dropCallee, args: argsOf(record), site: globalSite(global))
 end 'emitGlobalCleanupDrop'
 
 function openExitCodePassThrough(module MaxonModule, project Project, name ByteArray) returns SynthesizedFunction
@@ -351,7 +351,7 @@ function buildRegistryRelease(module MaxonModule, project Project, defaults Defa
 			value gives SharedValueRegistryReleaseName
 		end 'kind'
 
-		fn.emitPositionalCallDiscarding(release, args: singletonArgs(slotAddr), site: defaultSite(slot))
+		fn.emitPositionalCallDiscarding(release, args: argsOf(slotAddr), site: defaultSite(slot))
 	end 'eachDefault'
 
 	fn.terminate(MaxonOp.ret(ExitCodeParam), site: site)

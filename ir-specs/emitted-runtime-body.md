@@ -76258,7 +76258,7 @@ func @__managed_grow {
     x64.callDirect __managed_grown_cap
     x64.movRegReg r12, r8
     x64.loadRegBaseDisp.word64 r13, [rbx + 24]
-  __il_body#22:
+  __il_body#26:
     x64.movRegReg rax, r13
     x64.sarRegImm8 rax, r13, 63
     x64.movRegReg rcx, rax
@@ -76271,13 +76271,13 @@ func @__managed_grow {
     x64.andRegReg rsi, rsi, rcx
     x64.movRegReg rdi, rdx
     x64.orRegReg rdi, rdx, rsi
-  __il_cont#21:
+  __il_cont#25:
     x64.movRegReg rax, r12
     x64.imulRegReg rax, r12, rdi
-  __il_body#23:
+  __il_body#27:
     x64.leaRegRegImm32 rcx, rax, 7
     x64.shrRegImm8 rcx, rcx, 3
-  __il_cont#20:
+  __il_cont#24:
     x64.movRegReg rdx, r12
     x64.orRegReg rdx, r12, rdi
     x64.shrRegImm8 rdx, rdx, 31
@@ -76289,7 +76289,7 @@ func @__managed_grow {
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-  __il_body#28:
+  __il_body#32:
     x64.movRegReg rdx, r13
     x64.sarRegImm8 rdx, r13, 63
     x64.movRegReg rsi, rdx
@@ -76300,12 +76300,12 @@ func @__managed_grow {
     x64.andRegReg rdi, rdi, rdx
     x64.andRegReg r13, r13, rsi
     x64.orRegReg rdi, rdi, r13
-  __il_cont#27:
+  __il_cont#31:
     x64.imulRegReg rax, rax, rdi
-  __il_body#29:
+  __il_body#33:
     x64.leaRegRegImm32 rax, rax, 7
     x64.shrRegImm8 rax, rax, 3
-  __il_cont#24:
+  __il_cont#28:
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, cpyfd
   cpyfrun:
@@ -76319,6 +76319,15 @@ func @__managed_grow {
     x64.cmpRegReg rdx, rax
     x64.jcc less, cpyftb
   cpyfd:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, oldbase
+  obufprobe:
+    x64.leaRegRegImm32 rax, rbx, 56
+    x64.cmpRegReg rcx, rax
+    x64.jcc notEqual, oldbase
+  obaseco:
+    x64.movRegImm32 rcx, 0
+  oldbase:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, rccont
   rcstep:
@@ -76401,7 +76410,7 @@ func @__managed_mem_grow {
     x64.jcc less, badcap
   grow:
     x64.loadRegBaseDisp.word64 r13, [rbx + 24]
-  __il_body#22:
+  __il_body#26:
     x64.movRegReg rax, r13
     x64.sarRegImm8 rax, r13, 63
     x64.movRegReg rcx, rax
@@ -76414,13 +76423,13 @@ func @__managed_mem_grow {
     x64.andRegReg rsi, rsi, rcx
     x64.movRegReg rdi, rdx
     x64.orRegReg rdi, rdx, rsi
-  __il_cont#21:
+  __il_cont#25:
     x64.movRegReg rax, r12
     x64.imulRegReg rax, r12, rdi
-  __il_body#23:
+  __il_body#27:
     x64.leaRegRegImm32 rcx, rax, 7
     x64.shrRegImm8 rcx, rcx, 3
-  __il_cont#20:
+  __il_cont#24:
     x64.movRegReg rdx, r12
     x64.orRegReg rdx, r12, rdi
     x64.shrRegImm8 rdx, rdx, 31
@@ -76432,7 +76441,7 @@ func @__managed_mem_grow {
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-  __il_body#28:
+  __il_body#32:
     x64.movRegReg rdx, r13
     x64.sarRegImm8 rdx, r13, 63
     x64.movRegReg rsi, rdx
@@ -76443,12 +76452,12 @@ func @__managed_mem_grow {
     x64.andRegReg rdi, rdi, rdx
     x64.andRegReg r13, r13, rsi
     x64.orRegReg rdi, rdi, r13
-  __il_cont#27:
+  __il_cont#31:
     x64.imulRegReg rax, rax, rdi
-  __il_body#29:
+  __il_body#33:
     x64.leaRegRegImm32 rax, rax, 7
     x64.shrRegImm8 rax, rax, 3
-  __il_cont#24:
+  __il_cont#28:
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, cpyfd
   cpyfrun:
@@ -76462,6 +76471,15 @@ func @__managed_mem_grow {
     x64.cmpRegReg rdx, rax
     x64.jcc less, cpyftb
   cpyfd:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, oldbase
+  obufprobe:
+    x64.leaRegRegImm32 rax, rbx, 56
+    x64.cmpRegReg rcx, rax
+    x64.jcc notEqual, oldbase
+  obaseco:
+    x64.movRegImm32 rcx, 0
+  oldbase:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, rccont
   rcstep:
@@ -76623,7 +76641,7 @@ func @__managed_grow {
     x64.callDirect __managed_grown_cap
     x64.movRegReg r12, r8
     x64.loadRegBaseDisp.word64 r13, [rbx + 24]
-  __il_body#22:
+  __il_body#26:
     x64.movRegReg rax, r13
     x64.sarRegImm8 rax, r13, 63
     x64.movRegReg rcx, rax
@@ -76636,13 +76654,13 @@ func @__managed_grow {
     x64.andRegReg rsi, rsi, rcx
     x64.movRegReg rdi, rdx
     x64.orRegReg rdi, rdx, rsi
-  __il_cont#21:
+  __il_cont#25:
     x64.movRegReg rax, r12
     x64.imulRegReg rax, r12, rdi
-  __il_body#23:
+  __il_body#27:
     x64.leaRegRegImm32 rcx, rax, 7
     x64.shrRegImm8 rcx, rcx, 3
-  __il_cont#20:
+  __il_cont#24:
     x64.movRegReg rdx, r12
     x64.orRegReg rdx, r12, rdi
     x64.shrRegImm8 rdx, rdx, 31
@@ -76654,7 +76672,7 @@ func @__managed_grow {
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-  __il_body#28:
+  __il_body#32:
     x64.movRegReg rdx, r13
     x64.sarRegImm8 rdx, r13, 63
     x64.movRegReg rsi, rdx
@@ -76665,12 +76683,12 @@ func @__managed_grow {
     x64.andRegReg rdi, rdi, rdx
     x64.andRegReg r13, r13, rsi
     x64.orRegReg rdi, rdi, r13
-  __il_cont#27:
+  __il_cont#31:
     x64.imulRegReg rax, rax, rdi
-  __il_body#29:
+  __il_body#33:
     x64.leaRegRegImm32 rax, rax, 7
     x64.shrRegImm8 rax, rax, 3
-  __il_cont#24:
+  __il_cont#28:
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, cpyfd
   cpyfrun:
@@ -76684,6 +76702,15 @@ func @__managed_grow {
     x64.cmpRegReg rdx, rax
     x64.jcc less, cpyftb
   cpyfd:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, oldbase
+  obufprobe:
+    x64.leaRegRegImm32 rax, rbx, 56
+    x64.cmpRegReg rcx, rax
+    x64.jcc notEqual, oldbase
+  obaseco:
+    x64.movRegImm32 rcx, 0
+  oldbase:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, rccont
   rcstep:
@@ -76766,7 +76793,7 @@ func @__managed_mem_grow {
     x64.jcc less, badcap
   grow:
     x64.loadRegBaseDisp.word64 r13, [rbx + 24]
-  __il_body#22:
+  __il_body#26:
     x64.movRegReg rax, r13
     x64.sarRegImm8 rax, r13, 63
     x64.movRegReg rcx, rax
@@ -76779,13 +76806,13 @@ func @__managed_mem_grow {
     x64.andRegReg rsi, rsi, rcx
     x64.movRegReg rdi, rdx
     x64.orRegReg rdi, rdx, rsi
-  __il_cont#21:
+  __il_cont#25:
     x64.movRegReg rax, r12
     x64.imulRegReg rax, r12, rdi
-  __il_body#23:
+  __il_body#27:
     x64.leaRegRegImm32 rcx, rax, 7
     x64.shrRegImm8 rcx, rcx, 3
-  __il_cont#20:
+  __il_cont#24:
     x64.movRegReg rdx, r12
     x64.orRegReg rdx, r12, rdi
     x64.shrRegImm8 rdx, rdx, 31
@@ -76797,7 +76824,7 @@ func @__managed_mem_grow {
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-  __il_body#28:
+  __il_body#32:
     x64.movRegReg rdx, r13
     x64.sarRegImm8 rdx, r13, 63
     x64.movRegReg rsi, rdx
@@ -76808,12 +76835,12 @@ func @__managed_mem_grow {
     x64.andRegReg rdi, rdi, rdx
     x64.andRegReg r13, r13, rsi
     x64.orRegReg rdi, rdi, r13
-  __il_cont#27:
+  __il_cont#31:
     x64.imulRegReg rax, rax, rdi
-  __il_body#29:
+  __il_body#33:
     x64.leaRegRegImm32 rax, rax, 7
     x64.shrRegImm8 rax, rax, 3
-  __il_cont#24:
+  __il_cont#28:
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, cpyfd
   cpyfrun:
@@ -76827,6 +76854,15 @@ func @__managed_mem_grow {
     x64.cmpRegReg rdx, rax
     x64.jcc less, cpyftb
   cpyfd:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, oldbase
+  obufprobe:
+    x64.leaRegRegImm32 rax, rbx, 56
+    x64.cmpRegReg rcx, rax
+    x64.jcc notEqual, oldbase
+  obaseco:
+    x64.movRegImm32 rcx, 0
+  oldbase:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, rccont
   rcstep:
@@ -76981,7 +77017,7 @@ func @__managed_grow {
     arm64.bl __managed_grown_cap
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x21, [x19 + 24]
-  __il_body#22:
+  __il_body#26:
     arm64.asr x0, x21, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x1, x0, x16
@@ -76991,12 +77027,12 @@ func @__managed_grow {
     arm64.and x0, x2, x0
     arm64.and x1, x3, x1
     arm64.orr x1, x0, x1
-  __il_cont#21:
+  __il_cont#25:
     arm64.mul x2, x20, x1
-  __il_body#23:
+  __il_body#27:
     arm64.add x0, x2, 7
     arm64.lsr x0, x0, 3
-  __il_cont#20:
+  __il_cont#24:
     arm64.orr x3, x20, x1
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
@@ -77007,7 +77043,7 @@ func @__managed_grow {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-  __il_body#28:
+  __il_body#32:
     arm64.asr x2, x21, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x3, x2, x16
@@ -77017,12 +77053,12 @@ func @__managed_grow {
     arm64.and x2, x4, x2
     arm64.and x3, x5, x3
     arm64.orr x2, x2, x3
-  __il_cont#27:
+  __il_cont#31:
     arm64.mul x1, x1, x2
-  __il_body#29:
+  __il_body#33:
     arm64.add x1, x1, 7
     arm64.lsr x1, x1, 3
-  __il_cont#24:
+  __il_cont#28:
     arm64.cmp x1, 0
     arm64.b.le cpyfd
   cpyfrun:
@@ -77035,6 +77071,15 @@ func @__managed_grow {
     arm64.cmp x2, x1
     arm64.b.lt cpyftb
   cpyfd:
+    arm64.cmp x0, 0
+    arm64.b.eq oldbase
+  obufprobe:
+    arm64.add x1, x19, 56
+    arm64.cmp x0, x1
+    arm64.b.ne oldbase
+  obaseco:
+    arm64.movImm x0, 0
+  oldbase:
     arm64.cmp x0, 0
     arm64.b.eq rccont
   rcstep:
@@ -77112,7 +77157,7 @@ func @__managed_mem_grow {
     arm64.b.lt badcap
   grow:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 24]
-  __il_body#22:
+  __il_body#26:
     arm64.asr x0, x21, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x1, x0, x16
@@ -77122,12 +77167,12 @@ func @__managed_mem_grow {
     arm64.and x0, x2, x0
     arm64.and x1, x3, x1
     arm64.orr x1, x0, x1
-  __il_cont#21:
+  __il_cont#25:
     arm64.mul x2, x20, x1
-  __il_body#23:
+  __il_body#27:
     arm64.add x0, x2, 7
     arm64.lsr x0, x0, 3
-  __il_cont#20:
+  __il_cont#24:
     arm64.orr x3, x20, x1
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
@@ -77138,7 +77183,7 @@ func @__managed_mem_grow {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-  __il_body#28:
+  __il_body#32:
     arm64.asr x2, x21, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x3, x2, x16
@@ -77148,12 +77193,12 @@ func @__managed_mem_grow {
     arm64.and x2, x4, x2
     arm64.and x3, x5, x3
     arm64.orr x2, x2, x3
-  __il_cont#27:
+  __il_cont#31:
     arm64.mul x1, x1, x2
-  __il_body#29:
+  __il_body#33:
     arm64.add x1, x1, 7
     arm64.lsr x1, x1, 3
-  __il_cont#24:
+  __il_cont#28:
     arm64.cmp x1, 0
     arm64.b.le cpyfd
   cpyfrun:
@@ -77166,6 +77211,15 @@ func @__managed_mem_grow {
     arm64.cmp x2, x1
     arm64.b.lt cpyftb
   cpyfd:
+    arm64.cmp x0, 0
+    arm64.b.eq oldbase
+  obufprobe:
+    arm64.add x1, x19, 56
+    arm64.cmp x0, x1
+    arm64.b.ne oldbase
+  obaseco:
+    arm64.movImm x0, 0
+  oldbase:
     arm64.cmp x0, 0
     arm64.b.eq rccont
   rcstep:
@@ -77320,7 +77374,7 @@ func @__managed_grow {
     arm64.bl __managed_grown_cap
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x21, [x19 + 24]
-  __il_body#22:
+  __il_body#26:
     arm64.asr x0, x21, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x1, x0, x16
@@ -77330,12 +77384,12 @@ func @__managed_grow {
     arm64.and x0, x2, x0
     arm64.and x1, x3, x1
     arm64.orr x1, x0, x1
-  __il_cont#21:
+  __il_cont#25:
     arm64.mul x2, x20, x1
-  __il_body#23:
+  __il_body#27:
     arm64.add x0, x2, 7
     arm64.lsr x0, x0, 3
-  __il_cont#20:
+  __il_cont#24:
     arm64.orr x3, x20, x1
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
@@ -77346,7 +77400,7 @@ func @__managed_grow {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-  __il_body#28:
+  __il_body#32:
     arm64.asr x2, x21, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x3, x2, x16
@@ -77356,12 +77410,12 @@ func @__managed_grow {
     arm64.and x2, x4, x2
     arm64.and x3, x5, x3
     arm64.orr x2, x2, x3
-  __il_cont#27:
+  __il_cont#31:
     arm64.mul x1, x1, x2
-  __il_body#29:
+  __il_body#33:
     arm64.add x1, x1, 7
     arm64.lsr x1, x1, 3
-  __il_cont#24:
+  __il_cont#28:
     arm64.cmp x1, 0
     arm64.b.le cpyfd
   cpyfrun:
@@ -77374,6 +77428,15 @@ func @__managed_grow {
     arm64.cmp x2, x1
     arm64.b.lt cpyftb
   cpyfd:
+    arm64.cmp x0, 0
+    arm64.b.eq oldbase
+  obufprobe:
+    arm64.add x1, x19, 56
+    arm64.cmp x0, x1
+    arm64.b.ne oldbase
+  obaseco:
+    arm64.movImm x0, 0
+  oldbase:
     arm64.cmp x0, 0
     arm64.b.eq rccont
   rcstep:
@@ -77451,7 +77514,7 @@ func @__managed_mem_grow {
     arm64.b.lt badcap
   grow:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 24]
-  __il_body#22:
+  __il_body#26:
     arm64.asr x0, x21, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x1, x0, x16
@@ -77461,12 +77524,12 @@ func @__managed_mem_grow {
     arm64.and x0, x2, x0
     arm64.and x1, x3, x1
     arm64.orr x1, x0, x1
-  __il_cont#21:
+  __il_cont#25:
     arm64.mul x2, x20, x1
-  __il_body#23:
+  __il_body#27:
     arm64.add x0, x2, 7
     arm64.lsr x0, x0, 3
-  __il_cont#20:
+  __il_cont#24:
     arm64.orr x3, x20, x1
     arm64.lsr x3, x3, 31
     arm64.cmp x3, 0
@@ -77477,7 +77540,7 @@ func @__managed_mem_grow {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-  __il_body#28:
+  __il_body#32:
     arm64.asr x2, x21, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x3, x2, x16
@@ -77487,12 +77550,12 @@ func @__managed_mem_grow {
     arm64.and x2, x4, x2
     arm64.and x3, x5, x3
     arm64.orr x2, x2, x3
-  __il_cont#27:
+  __il_cont#31:
     arm64.mul x1, x1, x2
-  __il_body#29:
+  __il_body#33:
     arm64.add x1, x1, 7
     arm64.lsr x1, x1, 3
-  __il_cont#24:
+  __il_cont#28:
     arm64.cmp x1, 0
     arm64.b.le cpyfd
   cpyfrun:
@@ -77505,6 +77568,15 @@ func @__managed_mem_grow {
     arm64.cmp x2, x1
     arm64.b.lt cpyftb
   cpyfd:
+    arm64.cmp x0, 0
+    arm64.b.eq oldbase
+  obufprobe:
+    arm64.add x1, x19, 56
+    arm64.cmp x0, x1
+    arm64.b.ne oldbase
+  obaseco:
+    arm64.movImm x0, 0
+  oldbase:
     arm64.cmp x0, 0
     arm64.b.eq rccont
   rcstep:

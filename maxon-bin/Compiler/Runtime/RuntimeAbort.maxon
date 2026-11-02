@@ -537,8 +537,8 @@ end 'lastSegment'
 // ⭐ **THE TERMINATOR KIND IS DERIVED FROM THE FUNCTION, NOT PASSED IN.** A void function's dead
 // terminator is `retVoid` and a value-returning one's is `ret <0>`; that is exactly what
 // `func.returnType` already says, so it is read rather than restated, and a caller cannot pick the
-// wrong one. (A THROWING runtime function returns `value(i64)` through the dual-register ABI; its
-// `ret` is dead too, so the same answer is right there.)
+// wrong one. (A THROWING runtime function returns through the dual-register ABI, so its dead terminator
+// is the ok return `emitVoidOkReturn` builds, whatever its declared return type.)
 //
 // The stderr line is `.rdata` text, so an abort path allocates nothing — an allocator-failure abort
 // among them.
@@ -607,6 +607,7 @@ export enum RuntimeFatal
 	pinReleasedByAnotherGreenThread
 	pinReleasedWithNoPinHeld
 	cryptoBufferOutOfRange
+	viewOfACoAllocatedBuffer
 end 'RuntimeFatal'
 
 export union RuntimeAbortReason
@@ -675,6 +676,7 @@ function runtimeFatalReason(fatal RuntimeFatal) returns String
 		pinReleasedByAnotherGreenThread gives "a machine pin was released by a green thread other than the one that took it"
 		pinReleasedWithNoPinHeld gives "a machine pin was released by a green thread that holds none"
 		cryptoBufferOutOfRange gives "a hardware crypto routine was handed a buffer or schedule of the wrong size"
+		viewOfACoAllocatedBuffer gives "a view was asked of an array whose buffer lives in its record's own allocation"
 	end 'reason'
 end 'runtimeFatalReason'
 
@@ -716,11 +718,18 @@ export function registerReachedRuntimeAbortMessages(module StdModule, globalData
 end 'registerReachedRuntimeAbortMessages'
 
 export function emitDeadTerminator(module StdModule, func IrFunction, block IrBlock, ids ValueMinter)
+	match func.throwsTypeName 'convention'
+		none then emitDeadPlainTerminator(module, func: func, block: block, ids: ids)
+		throwing then emitVoidOkReturn(module, block: block, ids: ids)
+	end 'convention'
+end 'emitDeadTerminator'
+
+function emitDeadPlainTerminator(module StdModule, func IrFunction, block IrBlock, ids ValueMinter)
 	match func.returnType 'deadTerminator'
 		void then module.setTerminator(block, op: StdOp.retVoid)
 		value then emitDeadValueReturn(module, block: block, ids: ids)
 	end 'deadTerminator'
-end 'emitDeadTerminator'
+end 'emitDeadPlainTerminator'
 
 // The dead `ret 0` a value-returning function's abort block carries. The value is unread by
 // construction — `osExit` above it never returns — so a plain 0 is the honest filler. It is a function

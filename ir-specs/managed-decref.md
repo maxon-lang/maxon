@@ -217,6 +217,15 @@ func @__managed_release {
   obase:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, basejoin
+  obufprobe:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 56
+    x64.cmpRegReg rcx, rax
+    x64.jcc notEqual, basejoin
+  obaseco:
+    x64.movRegImm32 rcx, 0
   basejoin:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, freerec
@@ -412,6 +421,15 @@ func @__managed_release {
   obase:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, basejoin
+  obufprobe:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 56
+    x64.cmpRegReg rcx, rax
+    x64.jcc notEqual, basejoin
+  obaseco:
+    x64.movRegImm32 rcx, 0
   basejoin:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, freerec
@@ -598,6 +616,14 @@ func @__managed_release {
     arm64.b basejoin
   obase:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq basejoin
+  obufprobe:
+    arm64.add x1, x19, 56
+    arm64.cmp x0, x1
+    arm64.b.ne basejoin
+  obaseco:
+    arm64.movImm x0, 0
   basejoin:
     arm64.cmp x0, 0
     arm64.b.eq freerec
@@ -787,6 +813,14 @@ func @__managed_release {
     arm64.b basejoin
   obase:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq basejoin
+  obufprobe:
+    arm64.add x1, x19, 56
+    arm64.cmp x0, x1
+    arm64.b.ne basejoin
+  obaseco:
+    arm64.movImm x0, 0
   basejoin:
     arm64.cmp x0, 0
     arm64.b.eq freerec

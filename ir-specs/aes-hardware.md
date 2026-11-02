@@ -4128,7 +4128,7 @@ func @main {
     arm64.loadRegSlot x0, slot0
     arm64.b forstep#97
   __rc_panic#37:
-    arm64.leaRdata x0, __str_blob_81  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_81  ; "panic at AesBitsliced.maxon:721: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5204,7 +5204,7 @@ func @main {
     arm64.loadRegSlot x0, slot0
     arm64.b forstep#97
   __rc_panic#37:
-    arm64.leaRdata x0, __str_blob_81  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_81  ; "panic at AesBitsliced.maxon:721: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4

@@ -32,19 +32,22 @@
 // through the packed-aware helpers rather than multiplying — see **SUB-BYTE BIT-PACKED ELEMENTS** below,
 // which owns that arithmetic and states which parts of it are branchless and why.
 //
-// ⚠ THE ARRAY IS TWO ALLOCATIONS, not one: the 48-byte record (`__mm_alloc`, a managed box with the MM
-// header + refcount before it) and a SEPARATE external element buffer (`buffer@0` → a raw `__mm_alloc`'d
-// span, destructor 0). This mirrors a DETACHED String, not the inline one — an array grows, so its bytes
-// cannot live behind the record. `__managed_decref` releases both.
+// An array's element buffer is either its own allocation or the tail of the record's. The 48-byte record is
+// `__mm_alloc`'d, a managed box with the MM header + refcount before it. `buffer@0` points at a separate raw
+// `__mm_alloc`'d span (destructor 0), or, for an array created with a known capacity of at most
+// `CoAllocationMaxBytes`, at bytes inside the record's own allocation (`BufferOwnership.
+// coAllocatedBufferOffset` owns that layout). `__managed_decref` releases the record and a separate buffer;
+// a co-allocated buffer is freed with the record.
 //
-// ⭐⭐ **AND THAT SPLIT IS WHAT MAKES A ZERO-COPY SLICE POSSIBLE.** Because the element
-// buffer is its OWN `__mm_alloc` allocation, it has its OWN refcount word, and a non-zero count there says
+// ⭐⭐ **A SEPARATE BUFFER IS WHAT MAKES A ZERO-COPY SLICE POSSIBLE.** Because that buffer is its OWN
+// `__mm_alloc` allocation, it has its OWN refcount word, and a non-zero count there says
 // exactly one thing: **someone is viewing these bytes.** Refcounting the RECORD instead leaves a count of 2
 // unable to tell "two owners of this array" from "someone is viewing my buffer", which forces an eager copy
 // of an owned slice. The language is MOVE-ONLY, so a RECORD never
 // has two owners and the BUFFER's count is unambiguous. `.slice()`/`.clone()` are therefore O(1) — a fresh
 // 48-byte record over the parent's bytes — and `__managed_cow_detach` restores independence at the first write,
-// in BOTH directions (the viewer's and the owner's).
+// in BOTH directions (the viewer's and the owner's). A co-allocated buffer has no allocation of its own to
+// count, so `.slice()`/`.clone()` of one copy the window (`emitRecordView`).
 
 // --- The fused 48-byte `__ManagedMemory` backing record ---
 //
@@ -366,6 +369,13 @@ let EaseDivisor = 4
 // `__mm_alloc`/`__mm_free` inside their Std bodies). See this file's header for why the two prefixes must
 // stay disjoint: they are two prefix TESTS installing two different runtimes.
 export let ManagedCreateName = b"__managed_create"
+export let ManagedCreateSizedName = b"__managed_create_sized"
+export let SizedCreateSizingCount = 2
+
+// Growing past a co-allocated buffer's capacity moves the elements to an allocation of their own and leaves
+// the inline bytes unused until the record dies, so an array that outgrows its first buffer carries up to
+// this many dead bytes for its whole life.
+let CoAllocationMaxBytes = 256
 export let ManagedPushName = b"__managed_push"
 export let PushedElementCount = 1
 export let ManagedGetName = b"__managed_get"
@@ -438,8 +448,9 @@ let ManagedReleaseName = b"__managed_release"
 
 // The whole-array copy operations. `slice` is THROWING (bounds/inverted-range → `ArrayError`),
 // `clone`/`append` are not. `slice`/`clone` return an array that BEHAVES as an independent copy but is an
-// O(1) zero-copy VIEW over the source's buffer until either side writes (see
-// `emitRecordView`); `append` grows `self` and block-copies `other`'s bytes in, leaving `other` untouched.
+// O(1) zero-copy VIEW over the source's buffer until either side writes, unless the source is co-allocated
+// and the window is copied (see `emitRecordView`); `append` grows `self` and block-copies `other`'s bytes
+// in, leaving `other` untouched.
 // TRIVIAL elements only — a managed element would need a per-element deep clone (the parser rejects the
 // managed cases).
 //
@@ -1248,6 +1259,7 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	buildManagedGrownCap(module)
 	buildManagedGrow(module)
 	buildManagedCreate(module)
+	buildManagedCreateSized(module)
 	buildManagedPush(module)
 	buildManagedGet(module, greenThreads: usage.usesGt)
 	buildManagedGetUnchecked(module)
@@ -1279,7 +1291,7 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	// The `__ManagedMemory` members with a runtime of their own — part of the all-or-nothing
 	// `usesManagedMemory` install for the reason the header gives: `__`-prefixed functions are
 	// excluded from the rendered Target IR, so an unreferenced one costs nothing it shows, and these
-	// call `__managed_create`/`__managed_reserve`/`__managed_cow_detach` anyway.
+	// call `__managed_create_sized`/`__managed_reserve`/`__managed_cow_detach` anyway.
 	buildManagedMemCreate(module)
 	buildManagedSetLength(module)
 	buildManagedSetByte(module)
@@ -1621,24 +1633,28 @@ end 'recordGatedParamCount'
 // ⭐⭐ **A FRESH BYTE-ELEMENT `Array` RECORD WITH ROOM FOR `byteCount`, AND ITS BUFFER ADDRESS** — the
 // first half of every "hand the caller an owned `__ManagedMemory`" builder, written once.
 //
-// ⚠ **IT LEAVES `length@8` AT ZERO, WHICH IS `__managed_reserve`'s CONTRACT AND THE CALLER'S OBLIGATION.**
-// Reserving sets the CAPACITY; nothing is published until the caller stores the count it actually filled
-// into `ManagedRecordLengthOffset`. That split is the whole reason this is a shared builder rather than one function:
-// its two callers know DIFFERENT counts. `emitCStringToManaged` publishes a length it measured with a NUL
+// ⚠ **IT LEAVES `length@8` AT ZERO, WHICH IS `emitCreateSizedEmpty`'s CONTRACT AND THE CALLER'S
+// OBLIGATION.** Sizing sets the CAPACITY; nothing is published until the caller stores the count it
+// actually filled into `ManagedRecordLengthOffset`. That split is the whole reason this is a shared builder
+// rather than one function: its two callers know DIFFERENT counts. `emitCStringToManaged` publishes a length it measured with a NUL
 // scan; `__con_read_stdin` publishes the count the OS reported, which is the only binary-safe answer —
 // stdin may legitimately contain a NUL, so a scan there would truncate real input.
 //
-// ⚠ Built as `__managed_create(1, trivial)` + `__managed_reserve(rec, n)` rather than through `__managed_mem_create`
-// for the reason `emitCStringToManaged` has always recorded: that one THROWS, and these builders are
-// non-throwing, so routing through it would give a function with no error edge somewhere to send one. The
-// two calls here are the two `__managed_mem_create` itself makes.
+// ⚠ Built as `__managed_create_sized(1, n, 0, trivial)` rather than through `__managed_mem_create` for the
+// reason `emitCStringToManaged` records: that one THROWS, and these builders are non-throwing, so routing
+// through it would give a function with no error edge somewhere to send one. The call here is the one
+// `__managed_mem_create` itself makes.
 export function emitManagedByteBuffer(module StdModule, block IrBlock, record ValueId, byteCount ValueId, ids ValueMinter) returns ValueId
 	let elementSize = emitConst(module, block: block, value: ByteStringElementSize, ids: ids)
 	let trivial = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
-	module.appendOp(block, op: StdOp.call(record, callee: ManagedCreateName, args: twoArgs(elementSize, second: trivial)))
-	emitManagedReserve(module, block: block, record: record, elementCount: byteCount, ids: ids)
+	emitCreateSizedEmpty(module, block: block, record: record, elementSize: elementSize, capacity: byteCount, elementDestroy: trivial, ids: ids)
 	return emitLoadField(module, block: block, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 end 'emitManagedByteBuffer'
+
+function emitCreateSizedEmpty(module StdModule, block IrBlock, record ValueId, elementSize ValueId, capacity ValueId, elementDestroy ValueId, ids ValueMinter)
+	let noLength = emitConst(module, block: block, value: 0, ids: ids)
+	module.appendOp(block, op: StdOp.call(record, callee: ManagedCreateSizedName, args: fourArgs(elementSize, second: capacity, third: noLength, fourth: elementDestroy)))
+end 'emitCreateSizedEmpty'
 
 // ⭐⭐ **ONE RUN OF EQUAL-WIDTH CHUNKS OVER THE BYTE OFFSETS `[run.lower, run.upper)` OF A dest/src
 // PAIR** — the loop both copy directions and every chunk width are, so the load/store pair and its bound
@@ -2072,9 +2088,11 @@ end 'ElementSlotOperands'
 // `emitSlotAddr`'s, `buffer@0 + index · stride`, read back in each form the folds leave it: a sum of
 // the buffer and a scaled index; the buffer plus an immediate, where the index was a constant; the
 // buffer itself, where that constant was 0. The buffer is its own `__mm_alloc` allocation
-// (`emitReallocateToCapacity`) and every record — this one's `ManagedRecordBytes` and any other — is
-// another, so the bytes the store reaches are never a record's. What it CAN write is the buffer's own
-// header, one word below `buffer@0`, if a VARIABLE index were negative: that is why every emitter of
+// (`emitReallocateToCapacity`) or lies in its record's allocation past the record's `ManagedRecordBytes`
+// and the refcount word (`coAllocatedBufferOffset`), and every other record is another allocation, so the
+// bytes the store reaches are never a record's field. What it CAN write is the words below `buffer@0`,
+// the buffer's header (a co-allocated buffer's refcount word, then its record's `element_destroy@40`), if
+// a VARIABLE index were negative: that is why every emitter of
 // the shape bounds the index first (`InlineManagedPrimitives.guardIndexInRange` through
 // `emitIndexOutOfRange`, `emitStoreElemAt` behind the entries' own guards) or stores at an index the
 // parser proved in range (a proven store), and why a pass resting on
@@ -2210,6 +2228,14 @@ function checkManagedGeometry()
 	if BitPosToByteShift != TierBitPosToByteShift 'bitPosShiftDisagrees'
 		panic("managed geometry: a bit position becomes a byte index by shifting {BitPosToByteShift} and `runtime/ManagedGeometry.maxon` derives {TierBitPosToByteShift} — update `BitPosToByteShift` there, and this constant")
 	end 'bitPosShiftDisagrees'
+
+	if coAllocatedBufferOffset() mod (MachineWordBytes as FullRangeInt) != 0 'coAllocatedBufferIsMisaligned'
+		panic("managed geometry: a co-allocated buffer sits {coAllocatedBufferOffset()} bytes past its record, which is not a multiple of the {MachineWordBytes}-byte machine word, the widest element an array stores")
+	end 'coAllocatedBufferIsMisaligned'
+
+	if coAllocatedBufferOffset() mod BoxSlotAlignment == 0 'coAllocatedBufferIsAPayloadAddress'
+		panic("managed geometry: a co-allocated buffer sits {coAllocatedBufferOffset()} bytes past its record, a multiple of the {BoxSlotAlignment}-byte payload alignment, so a separate buffer could be allocated at that address and be taken for it")
+	end 'coAllocatedBufferIsAPayloadAddress'
 end 'checkManagedGeometry'
 
 // Every bit set — the `-1` the mask derivations start from. `(1 << bits) - 1` is the obvious spelling of a
@@ -2868,10 +2894,10 @@ end 'emitMoveElems'
 // for a managed pointer — the element walk skips a null slot and `emitLoadElemAndOkReturn` reports it as
 // `emptySlot`.
 //
-// ⚠ Fresh capacity is NEVER re-zeroed, because it is already zero at birth: `__managed_create` allocates
-// from the always-zeroing slab, `__managed_grow` reaches `emitReallocateToCapacity`, which copies the live
-// prefix into a fresh zeroed buffer and leaves the grown tail as it arrived, and `__managed_cow_detach`
-// copies into a fresh zeroed buffer too. A `resize` that grows into fresh memory therefore pays nothing
+// ⚠ Fresh capacity is NEVER re-zeroed, because it is already zero at birth: `__managed_create_sized`
+// allocates from the always-zeroing slab, `__managed_grow` reaches `emitReallocateToCapacity`, which copies
+// the live prefix into a fresh zeroed buffer and leaves the grown tail as it arrived, and
+// `__managed_cow_detach` copies into a fresh zeroed buffer too. A `resize` that grows into fresh memory therefore pays nothing
 // here — only slots that were actually occupied are ever erased.
 // ==============================================================================================
 
@@ -3376,15 +3402,15 @@ end 'emitOobReturn'
 // than one per family. (`emitMemoryThrow` below stays here: what it adds is which ENUM's ordinals
 // it names, and that IS a per-family fact.)
 
-// ⭐⭐ **BUILD AN O(1) ZERO-COPY VIEW of `srcRecord`'s elements `[start, start+sliceLen)`.**
+// ⭐⭐ **BUILD AN O(1) ZERO-COPY VIEW of `srcRecord`'s elements `[start, start+sliceLen)`, OR A PRIVATE
+// COPY OF THEM WHERE NO VIEW CAN BE CUT** (a sub-byte-packed source, a co-allocated one).
 // The shared body of `__managed_clone` (start 0, sliceLen = length) and `__managed_slice` (a bounds-checked sub-range).
 //
 // ⭐ **NOTHING IS COPIED, AND THE COST DOES NOT DEPEND ON `sliceLen`.** The result is a fresh 48-byte record
 // (`__managed_create`, carrying the SAME `element_size` and `element_destroy` as the source) whose `buffer@0` is
 // the INTERIOR pointer `srcBuffer + start·element_size`, whose `capacity@16` is `ViewBufferCapacity`,
 // and whose `parent@32` is the shared allocation's BASE — increfed here, released by `__managed_cow_detach` or
-// `__managed_decref`. That is ONE fixed-size allocation and no loop, where the previous eager copy allocated a
-// second buffer of `sliceLen · element_size` bytes and moved every one of them.
+// `__managed_decref`. That is ONE fixed-size allocation and no loop.
 //
 // ⭐ **INDEPENDENCE IS PRESERVED BY DETACH-ON-WRITE, IN BOTH DIRECTIONS**, which is what lets the sharing be
 // invisible: a write through the VIEW detaches it (`capacity < 0`), and a write through the OWNER detaches
@@ -3403,8 +3429,8 @@ end 'emitOobReturn'
 // are, and `String.addressableBytes()` hands its receiver's own record to this surface, so
 // `path.addressableBytes().slice(…)` slices an INLINE record: the owed answer is `NoOwedAllocation` and a
 // view built on it would hold a raw interior pointer into a live String's payload with NO count on it. The
-// host answer counts the record. The two functions are one built on the other and part company at exactly
-// this one provenance — see `BufferOwnership`.
+// host answer counts the record. The two answers part company at exactly this one provenance — see
+// `BufferOwnership`.
 //
 // A base of 0 ("nothing hosts it") is ordinary and needs no special case beyond the incref's null guard: it
 // is what a view over an immortal `.rdata` blob has, and what an OWNER that never allocated a buffer has.
@@ -3434,21 +3460,30 @@ end 'emitOobReturn'
 // taking it would give ONE value kind two representations decided by a RUNTIME property of an argument: a
 // packed array would sometimes own its buffer and sometimes share it, and every COW, drop and detach path
 // would have to be right about both for a saving no caller can ask for. One representation per element kind.
+//
+// A source whose buffer is co-allocated is copied the same way: its bytes are freed with its record, which a
+// view may outlive. `emitBufferHostAllocation` aborts rather than count a view of one.
 function emitRecordView(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, srcRecord ValueId, start ValueId, sliceLen ValueId, ids ValueMinter) returns ValueId
-	var packedArm = module.addBlock(func, label: b"vwpack", heat: BlockHeat.normal)
+	var copyArm = module.addBlock(func, label: b"vwcopy", heat: BlockHeat.normal)
+	var checkOwner = module.addBlock(func, label: b"vwowner", heat: BlockHeat.normal)
+	var checkBuffer = module.addBlock(func, label: b"vwbuffer", heat: BlockHeat.normal)
 	var shareArm = module.addBlock(func, label: b"vwshare", heat: BlockHeat.normal)
 
 	let es = emitLoadField(module, block: cur, record: srcRecord, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let dtor = emitLoadField(module, block: cur, record: srcRecord, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let srcBuffer = emitLoadField(module, block: cur, record: srcRecord, offset: ManagedRecordBufferOffset, ids: ids)
-	emitBranchOnCompare(module, block: cur, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: shareArm, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: copyArm, whenFalse: checkOwner, ids: ids)
+
+	let notOwned = emitBufferNotOwned(module, block: checkOwner, record: srcRecord, ids: ids)
+	module.setTerminator(checkOwner, op: StdOp.condBranch(notOwned, thenBlockId: shareArm.id, elseBlockId: checkBuffer.id))
+	emitRouteOnOwnedBuffer(module, func: func, cur: checkBuffer, record: srcRecord, buffer: srcBuffer, absent: shareArm, coAllocated: copyArm, separate: shareArm, ids: ids)
 
 	// The two arms build DIFFERENT records, so the result joins on `exit` as a block argument rather than
 	// being a value one arm happens to dominate.
 	let result = ids.mint()
 	exit.blockArgs.push(IrBlockArg.create(result, argType: StdType.i64))
 
-	emitPackedWindowCopy(module, cur: packedArm, exit: exit, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, es: es, elementDestroy: dtor, ids: ids)
+	emitWindowCopy(module, cur: copyArm, exit: exit, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, es: es, elementDestroy: dtor, ids: ids)
 
 	var baseJoin = module.addBlock(func, label: b"vwbase", heat: BlockHeat.normal)
 	var shareDone = module.addBlock(func, label: b"vwshared", heat: BlockHeat.normal)
@@ -3460,30 +3495,25 @@ function emitRecordView(module StdModule, func IrFunction, cur IrBlock, exit IrB
 	return result
 end 'emitRecordView'
 
-// The packed arm of a slice: a fresh OWNED record over a freshly packed private buffer holding the window's
-// elements from bit 0. It owes no allocation (`parent@32` stays at `__managed_create`'s zero) because it shares
-// nothing — which is the whole difference from the view beside it, and why its `capacity@16` is a real
-// capacity rather than the `ViewBufferCapacity` sentinel.
+// The copy arm of a slice: a fresh OWNED record over a private buffer holding the window's elements from
+// bit 0, taken for a sub-byte-packed or a co-allocated source. It owes no allocation (`parent@32` stays at
+// zero) because it shares nothing — which is the whole difference from the view beside it, and why its
+// `capacity@16` is a real capacity rather than the `ViewBufferCapacity` sentinel.
 //
-// The element-by-element copy is `__managed_move_elems`, which takes its own packed arm here: the source window
-// starts at an arbitrary bit and the destination at bit 0, so there is no alignment to blit on even in
-// principle. Terminates in a branch to `exit` carrying the new record.
-function emitPackedWindowCopy(module StdModule, cur IrBlock, exit IrBlock, srcBuffer ValueId, start ValueId, sliceLen ValueId, es ValueId, elementDestroy ValueId, ids ValueMinter)
+// The element-by-element copy is `__managed_move_elems`, which for a packed source takes its own packed arm
+// here: the source window starts at an arbitrary bit and the destination at bit 0, so there is no alignment
+// to blit on even in principle. Terminates in a branch to `exit` carrying the new record.
+function emitWindowCopy(module StdModule, cur IrBlock, exit IrBlock, srcBuffer ValueId, start ValueId, sliceLen ValueId, es ValueId, elementDestroy ValueId, ids ValueMinter)
 	let newRec = ids.mint()
-	module.appendOp(cur, op: StdOp.call(newRec, callee: ManagedCreateName, args: twoArgs(es, second: elementDestroy)))
+	emitCreateSizedEmpty(module, block: cur, record: newRec, elementSize: es, capacity: sliceLen, elementDestroy: elementDestroy, ids: ids)
 
-	let byteLen = emitElementByteLen(module, block: cur, count: sliceLen, es: es, ids: ids)
-	let bufferDtor = emitConst(module, block: cur, value: TrivialDestructor, ids: ids)
-	let newBuf = ids.mint()
-	emitMmAllocCall(module, block: cur, result: newBuf, size: byteLen, destructor: bufferDtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
-	emitStoreField(module, block: cur, record: newRec, offset: ManagedRecordBufferOffset, value: newBuf)
+	let newBuf = emitLoadField(module, block: cur, record: newRec, offset: ManagedRecordBufferOffset, ids: ids)
 	emitStoreField(module, block: cur, record: newRec, offset: ManagedRecordLengthOffset, value: sliceLen)
-	emitStoreField(module, block: cur, record: newRec, offset: ManagedRecordCapacityOffset, value: sliceLen)
 
 	let destStart = emitConst(module, block: cur, value: 0, ids: ids)
 	emitMoveElems(module, block: cur, destBuffer: newBuf, destIndex: destStart, srcBuffer: srcBuffer, srcIndex: start, count: sliceLen, es: es, ids: ids)
 	emitBranchCarrying(module, from: cur, to: exit, values: argsOf(newRec))
-end 'emitPackedWindowCopy'
+end 'emitWindowCopy'
 
 // ⭐⭐ **THE FIRST HALF OF A VIEW: MINT THE RECORD AND FILL EVERY SLOT BUT `parent@32`.** Split out of
 // `emitRecordView` because a view's SOURCE need not be an Array record: `StringRuntime.__str_bytes_view`
@@ -3793,13 +3823,42 @@ function buildManagedGrow(module StdModule)
 	module.functions.push(func)
 end 'buildManagedGrow'
 
+// Verify `count·bits` does not overflow — a wrapped small value would under-allocate and let the next
+// write run off the buffer (a heap overflow).
+//
+// ⚠ **THE CHECK IS ON THE BIT TOTAL AND NOT ON THE BYTE TOTAL, WHICH IS WHERE THE MULTIPLY ACTUALLY IS.**
+// `emitElementByteLen` rounds a bit count DOWN to a byte count, so a wrap detected only after the rounding
+// could not be told from a legitimate size. `emitElementBits` never answers 0 — `__managed_create` and
+// `__managed_create_sized` diverge on a zero element size, so the stamp is at least 1 bit packed or 8 bits
+// byte-strided — which keeps the round-trip division safe and makes it equal `count` exactly when the
+// multiply did not wrap.
+//
+// The division runs only when an operand reaches `1 << NonWrappingOperandShift`, a negative one included;
+// smaller operands cannot wrap, so the common call skips it and `wide`, the block holding it, is cold.
+function emitCheckedByteLength(module StdModule, func IrFunction, cur IrBlock, count ValueId, es ValueId, fits IrBlock, overflow IrBlock, ids ValueMinter) returns ValueId
+	let bits = emitElementBits(module, block: cur, es: es, ids: ids)
+	let totalBits = emitBin(module, block: cur, a: count, b: bits, opcode: StdBinOpcode.mul, ids: ids)
+	let bytes = emitBitsToBytes(module, block: cur, totalBits: totalBits, ids: ids)
+	var wide = module.addBlock(func, label: b"wide", heat: BlockHeat.cold)
+	let operands = emitBin(module, block: cur, a: count, b: bits, opcode: StdBinOpcode.bitOr, ids: ids)
+	let operandsHigh = emitBin(module, block: cur, a: operands, b: emitConst(module, block: cur, value: NonWrappingOperandShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: operandsHigh, pred: StdCmpPred.ne, against: 0, whenTrue: wide, whenFalse: fits, ids: ids)
+
+	let roundTrip = ids.mint()
+	module.appendOp(wide, op: StdOp.div(roundTrip, lhs: totalBits, rhs: bits, signedness: IntegerSignedness.signed))
+	emitBranchOnCompareValues(module, block: wide, a: roundTrip, pred: StdCmpPred.ne, b: count, whenTrue: overflow, whenFalse: fits, ids: ids)
+
+	return bytes
+end 'emitCheckedByteLength'
+
 // ⭐⭐ **REALLOCATE `arr`'s BUFFER TO EXACTLY `newCap` ELEMENTS AND PUBLISH IT — the reallocation both grows
 // share.** `__managed_grow` reaches it with a capacity the growth POLICY picked; `__managed_mem_grow` reaches
 // it with the one the SOURCE wrote. Nothing else about the two differs, and a second copy of this is a
 // second chance to get the release-then-publish order wrong.
 //
-// **PRECONDITION: the caller has already detached** (`emitCowDetachInto`, `emitCowDetachWhenNeeded`), so `buffer@0` is this record's own
-// allocation. That is why no "is this buffer MINE?" test appears below — see the release note.
+// **PRECONDITION: the caller has already detached** (`emitCowDetachInto`, `emitCowDetachWhenNeeded`), so
+// `buffer@0` is this record's own: a separate allocation, or the bytes inside the record's. That is why no
+// "is this buffer MINE?" test appears below — see the release note.
 //
 // It threads `cur` (setting its terminator) and returns the block the caller resumes in. The BYTE-COUNT
 // OVERFLOW arm is a block the CALLER supplies already terminated, because the two callers answer that
@@ -3808,29 +3867,8 @@ end 'buildManagedGrow'
 function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock, arr ValueId, newCap ValueId, onByteOverflow IrBlock, ids ValueMinter) returns IrBlock
 	var alloc = module.addBlock(func, label: b"alloc", heat: BlockHeat.normal)
 
-	// Verify `newCap·bits` does not overflow — a wrapped small value would under-allocate and let the next
-	// write run off the buffer (a heap overflow).
-	//
-	// ⚠ **THE CHECK IS ON THE BIT TOTAL AND NOT ON THE BYTE TOTAL, WHICH IS WHERE THE MULTIPLY ACTUALLY IS.**
-	// `emitElementByteLen` rounds a bit count DOWN to a byte count, so a wrap detected only after the rounding
-	// could not be told from a legitimate size. `emitElementBits` never answers 0 — `__managed_create` diverges on a
-	// zero element size, so the stamp is at least 1 bit packed or 8 bits byte-strided — which keeps the
-	// round-trip division safe and makes it equal `newCap` exactly when the multiply did not wrap.
-	//
-	// The division runs only when an operand reaches `1 << NonWrappingOperandShift`, a negative one included;
-	// smaller operands cannot wrap, so the common grow skips it and `wide`, the block holding it, is cold.
 	let es = emitLoadField(module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let bits = emitElementBits(module, block: cur, es: es, ids: ids)
-	let newBits = emitBin(module, block: cur, a: newCap, b: bits, opcode: StdBinOpcode.mul, ids: ids)
-	let newBytes = emitBitsToBytes(module, block: cur, totalBits: newBits, ids: ids)
-	var wide = module.addBlock(func, label: b"wide", heat: BlockHeat.cold)
-	let operands = emitBin(module, block: cur, a: newCap, b: bits, opcode: StdBinOpcode.bitOr, ids: ids)
-	let operandsHigh = emitBin(module, block: cur, a: operands, b: emitConst(module, block: cur, value: NonWrappingOperandShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
-	emitBranchOnCompare(module, block: cur, value: operandsHigh, pred: StdCmpPred.ne, against: 0, whenTrue: wide, whenFalse: alloc, ids: ids)
-
-	let roundTrip = ids.mint()
-	module.appendOp(wide, op: StdOp.div(roundTrip, lhs: newBits, rhs: bits, signedness: IntegerSignedness.signed))
-	emitBranchOnCompareValues(module, block: wide, a: roundTrip, pred: StdCmpPred.ne, b: newCap, whenTrue: onByteOverflow, whenFalse: alloc, ids: ids)
+	let newBytes = emitCheckedByteLength(module, func: func, cur: cur, count: newCap, es: es, fits: alloc, overflow: onByteOverflow, ids: ids)
 
 	// alloc: allocate the new buffer and copy the live bytes forward. A fresh `__mm_alloc` is zeroed and only
 	// `length·es` bytes are copied in, so the new `[length, newCap)` slots read zero — the capacity-slot
@@ -3845,13 +3883,19 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 
 	// afterCopy: release the OLD buffer if there was one, then publish the new one. It needs no "is this
 	// buffer MINE?" test: the caller's detach already replaced any non-owned buffer, so whatever is here
-	// was `__mm_alloc`'d and this record owns it. Such a test here would be a second
+	// is either `__mm_alloc`'d and this record owns it, or the bytes inside the record's own allocation,
+	// which stay where they are unused until the record dies. Such a test here would be a second
 	// `emitBufferNotOwned` in all but name; this is the ordinary null-guarded release every owner
 	// owes on its base, which is why it is the shared `emitReleaseOwedBase` rather than a fourth copy —
-	// an array that never grew simply has a base of 0. (Post-detach this record IS the last owner, so
-	// `__mm_decref` and `__mm_free` are equivalent here today; using the one rule everywhere is what stops
-	// them diverging tomorrow, and a mistaken decref leaks loudly where a mistaken free corrupts silently.)
-	var afterRelease = emitReleaseOwedBase(module, func: func, cur: afterCopy, base: oldBuf, callee: MmDecrefName, ids: ids)
+	// an array that never grew, or whose buffer was co-allocated, has a base of 0. (Post-detach this record
+	// IS the last owner, so `__mm_decref` and `__mm_free` are equivalent here today; using the one rule
+	// everywhere is what stops them diverging tomorrow, and a mistaken decref leaks loudly where a mistaken
+	// free corrupts silently.)
+	var baseJoin = module.addBlock(func, label: b"oldbase", heat: BlockHeat.normal)
+	let oldBase = ids.mint()
+	baseJoin.blockArgs.push(IrBlockArg.create(oldBase, argType: StdType.i64))
+	emitCarryOwnedBufferBase(module, func: func, cur: afterCopy, join: baseJoin, record: arr, buffer: oldBuf, ids: ids)
+	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: oldBase, callee: MmDecrefName, ids: ids)
 
 	emitStoreField(module, block: afterRelease, record: arr, offset: ManagedRecordBufferOffset, value: newBuf)
 	emitStoreField(module, block: afterRelease, record: arr, offset: ManagedRecordCapacityOffset, value: newCap)
@@ -3866,29 +3910,136 @@ function buildManagedCreate(module StdModule)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var badSize = module.addBlock(func, label: b"badsize", heat: BlockHeat.normal)
 	var ok = module.addBlock(func, label: b"ok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let elementSize = 0
 	let elementDestroy = 1
 
-	emitBranchOnCompare(module, block: entry, value: elementSize, pred: StdCmpPred.eq, against: 0, whenTrue: badSize, whenFalse: ok, ids: ids)
-
-	// This function RETURNS a record pointer, so its abort's dead terminator must carry a value — which
-	// `emitRuntimeAbort` derives from `func.returnType` rather than being told.
-	emitRuntimeAbort(module, func: func, block: badSize, abort: RuntimeAbort.arrayElementSizeZero, ids: ids)
+	emitRequireElementSize(module, func: func, entry: entry, elementSize: elementSize, proceed: ok, ids: ids)
 
 	let recordSize = emitConst(module, block: ok, value: ManagedRecordBytes as FullRangeInt, ids: ids)
-	let recordDtor = emitConst(module, block: ok, value: TrivialDestructor, ids: ids)
-	let record = ids.mint()
-	emitMmAllocCall(module, block: ok, result: record, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.ArrayRecord), ids: ids)
-	emitStoreField(module, block: ok, record: record, offset: ManagedRecordElementSizeOffset, value: elementSize)
-	emitStoreField(module, block: ok, record: record, offset: ManagedRecordElementDestroyOffset, value: elementDestroy)
+	let record = emitMintRecord(module, block: ok, allocBytes: recordSize, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
 	module.setTerminator(ok, op: StdOp.ret(record))
 
 	module.functions.push(func)
 end 'buildManagedCreate'
+
+// Both callers RETURN a record pointer, so the abort's dead terminator must carry a value — which
+// `emitRuntimeAbort` derives from `func.returnType` rather than being told.
+function emitRequireElementSize(module StdModule, func IrFunction, entry IrBlock, elementSize ValueId, proceed IrBlock, ids ValueMinter)
+	var badSize = module.addBlock(func, label: b"badsize", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: entry, value: elementSize, pred: StdCmpPred.eq, against: 0, whenTrue: badSize, whenFalse: proceed, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: badSize, abort: RuntimeAbort.arrayElementSizeZero, ids: ids)
+end 'emitRequireElementSize'
+
+function emitMintRecord(module StdModule, block IrBlock, allocBytes ValueId, elementSize ValueId, elementDestroy ValueId, ids ValueMinter) returns ValueId
+	let recordDestructor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
+	let record = ids.mint()
+	emitMmAllocCall(module, block: block, result: record, size: allocBytes, destructor: recordDestructor, tag: mmTagIndex(MmTag.ArrayRecord), ids: ids)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordElementSizeOffset, value: elementSize)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordElementDestroyOffset, value: elementDestroy)
+
+	return record
+end 'emitMintRecord'
+
+// `__managed_create_sized(elementSize, capacity, length, elementDestroy) -> arrPtr` — a record with room for
+// `capacity` elements (at least `MinimumCapacity`, or none when `capacity` is 0) and `length` of them
+// published, zero-filled because `__mm_alloc` zeroes. A buffer of at most `CoAllocationMaxBytes` is
+// allocated with the record; `BufferOwnership.coAllocatedBufferOffset` owns the layout.
+//
+// ⚠ It runs without a green-thread stack check, so E5004 prices every chain of unguarded functions below it.
+// It allocates through `__mm_alloc` itself: a chain through `__managed_reserve` and `__managed_grow` under
+// `__managed_clone` overruns the guard margin.
+function buildManagedCreateSized(module StdModule)
+	var func = IrFunction.createFromStd(ManagedCreateSizedName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
+	var emptyArm = module.addBlock(func, label: b"emptyarm", heat: BlockHeat.normal)
+	var floorCapacity = module.addBlock(func, label: b"floorcap", heat: BlockHeat.normal)
+	var takeMinimum = module.addBlock(func, label: b"takemin", heat: BlockHeat.normal)
+	var takeAsk = module.addBlock(func, label: b"takeask", heat: BlockHeat.normal)
+	var fit = module.addBlock(func, label: b"fit", heat: BlockHeat.normal)
+	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.cold)
+	var measure = module.addBlock(func, label: b"measure", heat: BlockHeat.normal)
+	var separateArm = module.addBlock(func, label: b"separm", heat: BlockHeat.normal)
+	var coAllocatedArm = module.addBlock(func, label: b"coarm", heat: BlockHeat.normal)
+	var alloc = module.addBlock(func, label: b"alloc", heat: BlockHeat.normal)
+	var coPublish = module.addBlock(func, label: b"copublish", heat: BlockHeat.normal)
+	var checkSeparate = module.addBlock(func, label: b"chksep", heat: BlockHeat.normal)
+	var separatePublish = module.addBlock(func, label: b"seppublish", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 4)
+	let elementSize = 0
+	let capacity = 1
+	let length = 2
+	let elementDestroy = 3
+
+	emitRequireElementSize(module, func: func, entry: entry, elementSize: elementSize, proceed: checkCapacity, ids: ids)
+
+	let recordBytes = emitConst(module, block: entry, value: ManagedRecordBytes as FullRangeInt, ids: ids)
+
+	let allocBytes = ids.mint()
+	alloc.blockArgs.push(IrBlockArg.create(allocBytes, argType: StdType.i64))
+	let bufferBytes = ids.mint()
+	alloc.blockArgs.push(IrBlockArg.create(bufferBytes, argType: StdType.i64))
+	let reservedRoom = ids.mint()
+	alloc.blockArgs.push(IrBlockArg.create(reservedRoom, argType: StdType.i64))
+
+	let room = ids.mint()
+	fit.blockArgs.push(IrBlockArg.create(room, argType: StdType.i64))
+
+	emitBranchOnCompare(module, block: checkCapacity, value: capacity, pred: StdCmpPred.eq, against: 0, whenTrue: emptyArm, whenFalse: floorCapacity, ids: ids)
+
+	let noBuffer = emitConst(module, block: emptyArm, value: 0, ids: ids)
+	emitBranchCarrying(module, from: emptyArm, to: alloc, values: threeArgs(recordBytes, second: noBuffer, third: noBuffer))
+
+	emitBranchOnCompare(module, block: floorCapacity, value: capacity, pred: StdCmpPred.lt, against: MinimumCapacity, whenTrue: takeMinimum, whenFalse: takeAsk, ids: ids)
+
+	let minimum = emitConst(module, block: takeMinimum, value: MinimumCapacity, ids: ids)
+	emitBranchCarrying(module, from: takeMinimum, to: fit, values: argsOf(minimum))
+	emitBranchCarrying(module, from: takeAsk, to: fit, values: argsOf(capacity))
+
+	emitRuntimeAbort(module, func: func, block: sizeOverflow, abort: RuntimeAbort.arrayCapacityOverflow, ids: ids)
+
+	let bytes = emitCheckedByteLength(module, func: func, cur: fit, count: room, es: elementSize, fits: measure, overflow: sizeOverflow, ids: ids)
+	emitBranchOnCompare(module, block: measure, value: bytes, pred: StdCmpPred.gt, against: CoAllocationMaxBytes, whenTrue: separateArm, whenFalse: coAllocatedArm, ids: ids)
+
+	emitBranchCarrying(module, from: separateArm, to: alloc, values: threeArgs(recordBytes, second: bytes, third: room))
+
+	let leadBytes = emitConst(module, block: coAllocatedArm, value: coAllocatedBufferOffset(), ids: ids)
+	let coAllocatedBytes = emitBin(module, block: coAllocatedArm, a: leadBytes, b: bytes, opcode: StdBinOpcode.add, ids: ids)
+	let coAllocatedNoBuffer = emitConst(module, block: coAllocatedArm, value: 0, ids: ids)
+	emitBranchCarrying(module, from: coAllocatedArm, to: alloc, values: threeArgs(coAllocatedBytes, second: coAllocatedNoBuffer, third: room))
+
+	let record = emitMintRecord(module, block: alloc, allocBytes: allocBytes, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
+	emitBranchOnCompareValues(module, block: alloc, a: allocBytes, pred: StdCmpPred.gt, b: recordBytes, whenTrue: coPublish, whenFalse: checkSeparate, ids: ids)
+
+	let leadOffset = emitConst(module, block: coPublish, value: coAllocatedBufferOffset(), ids: ids)
+	let coBuffer = emitBin(module, block: coPublish, a: record, b: leadOffset, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: coPublish, record: record, offset: ManagedRecordBufferOffset, value: coBuffer)
+	emitStoreField(module, block: coPublish, record: record, offset: ManagedRecordCapacityOffset, value: reservedRoom)
+	module.setTerminator(coPublish, op: StdOp.branch(done.id))
+
+	emitBranchOnCompare(module, block: checkSeparate, value: bufferBytes, pred: StdCmpPred.ne, against: 0, whenTrue: separatePublish, whenFalse: done, ids: ids)
+
+	let bufferDestructor = emitConst(module, block: separatePublish, value: TrivialDestructor, ids: ids)
+	let separateBuffer = ids.mint()
+	emitMmAllocCall(module, block: separatePublish, result: separateBuffer, size: bufferBytes, destructor: bufferDestructor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
+	emitStoreField(module, block: separatePublish, record: record, offset: ManagedRecordBufferOffset, value: separateBuffer)
+	emitStoreField(module, block: separatePublish, record: record, offset: ManagedRecordCapacityOffset, value: reservedRoom)
+	module.setTerminator(separatePublish, op: StdOp.branch(done.id))
+
+	emitStoreField(module, block: done, record: record, offset: ManagedRecordLengthOffset, value: length)
+	module.setTerminator(done, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildManagedCreateSized'
 
 // `__managed_push(arr, value)` — append `value`, growing first if the buffer is full.
 function buildManagedPush(module StdModule)
@@ -4739,13 +4890,13 @@ end 'buildArrayEquals'
 // `SignatureIndex.containerElementIsManaged(giid)`, so "this array's elements are managed" is one fact read at the
 // drop and at the copy — there is no third spelling to drift.
 // ⭐ `__managed_mem_create(count, elementSize) -> (rec, flag)` — the `__ManagedMemory.create` constructor.
-// PUBLISHES `count` elements: length == capacity == count, the buffer zeroed (a fresh `__mm_alloc` is), which
-// is the reason it is not `__managed_create`. Throws `invalidAllocation` on a
-// negative count or a non-positive element size.
+// RESERVES room for `count` elements: capacity at least `count`, length 0, the buffer zeroed (a fresh
+// `__mm_alloc` is). Throws `invalidAllocation` on a negative count or a non-positive element size.
 //
-// ⚠ The element-size check is FIRST and it is a THROW, not the abort `__managed_create` diverges with: a 0
-// element size reaching here came from SOURCE (`__ManagedMemory.create(4, 0)`), where `__managed_create`'s can
-// only be a compiler bug. Letting it through would end the process for a program error.
+// ⚠ The element-size check is FIRST and it is a THROW, not the abort `__managed_create_sized` diverges
+// with: a 0 element size reaching here came from SOURCE (`__ManagedMemory.create(4, 0)`), where
+// `__managed_create_sized`'s can only be a compiler bug. Letting it through would end the process for a
+// program error.
 function buildManagedMemCreate(module StdModule)
 	var func = IrFunction.createFromStd(ManagedMemCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(2)
@@ -4765,7 +4916,7 @@ function buildManagedMemCreate(module StdModule)
 
 	emitMemoryThrow(module, block: bad, flag: MemoryInvalidAllocationFlag, ids: ids)
 
-	// `__managed_create` stamps the element size and `__managed_reserve` allocates a zeroed buffer for `count` of
+	// `__managed_create_sized` stamps the element size and allocates a zeroed buffer for `count` of
 	// them. The LENGTH stays 0 — `count` is a CAPACITY request, and that is the contract:
 	// `specs/managed-memory-builtin.md:create-and-length` asserts `mm.length() != 0 ⇒ fail` and
 	// `mm.capacity() < 4 ⇒ fail` on a `create(4, elementSize: 8)`.
@@ -4775,8 +4926,7 @@ function buildManagedMemCreate(module StdModule)
 	// the SETTER's bound, which is CAPACITY and not length (`emitBufferAccessGuard`).
 	let dtor = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
 	let rec = ids.mint()
-	module.appendOp(build, op: StdOp.call(rec, callee: ManagedCreateName, args: twoArgs(elementSize, second: dtor)))
-	module.appendOp(build, op: StdOp.call(ids.mint(), callee: ManagedReserveName, args: twoArgs(rec, second: count)))
+	emitCreateSizedEmpty(module, block: build, record: rec, elementSize: elementSize, capacity: count, elementDestroy: dtor, ids: ids)
 	emitOkReturn(module, block: build, value: rec, ids: ids)
 
 	module.functions.push(func)
@@ -5959,11 +6109,9 @@ function buildManagedCloneManaged(module StdModule)
 
 	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let dtor = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
-	let newRec = ids.mint()
-	module.appendOp(entry, op: StdOp.call(newRec, callee: ManagedCreateName, args: twoArgs(es, second: dtor)))
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let reserved = ids.mint()
-	module.appendOp(entry, op: StdOp.call(reserved, callee: ManagedReserveName, args: twoArgs(newRec, second: length)))
+	let newRec = ids.mint()
+	emitCreateSizedEmpty(module, block: entry, record: newRec, elementSize: es, capacity: length, elementDestroy: dtor, ids: ids)
 
 	let srcBuf = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let destBuf = emitLoadField(module, block: entry, record: newRec, offset: ManagedRecordBufferOffset, ids: ids)
@@ -6054,10 +6202,19 @@ function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor Cascade
 	return bytesWalked
 end 'emitWalkedRecordBytes'
 
-// Mark an owner's separate buffer shared, when it has one; an owner that never allocated a buffer owes nothing.
+// Mark an owner's buffer shared, when it has one; an owner that never allocated a buffer owes nothing. A
+// co-allocated buffer is marked too: its refcount word is what the write path's detach test reads, so a
+// record frozen for sharing detaches to a buffer of its own before any write.
 function emitSharedOwnBuffer(module StdModule, func IrFunction, from CascadeCursor, arr ValueId, to CascadeCursor, ids ValueMinter)
+	var mark = module.addBlock(func, label: b"shrbuf", heat: BlockHeat.normal)
+	var marked = module.addBlock(func, label: b"shrbufdone", heat: BlockHeat.normal)
+
 	let buffer = emitLoadField(module, block: from.block, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	var marked = emitReleaseOwedBase(module, func: func, cur: from.block, base: buffer, callee: MmShareBufferName, ids: ids)
+	emitRouteOnOwnedBuffer(module, func: func, cur: from.block, record: arr, buffer: buffer, absent: marked, coAllocated: mark, separate: mark, ids: ids)
+
+	module.appendOp(mark, op: StdOp.call(ids.mint(), callee: MmShareBufferName, args: argsOf(buffer)))
+	module.setTerminator(mark, op: StdOp.branch(marked.id))
+
 	emitCascadeBranch(module, from: from.at(marked), to: to)
 end 'emitSharedOwnBuffer'
 
@@ -6105,9 +6262,7 @@ function buildManagedSliceManaged(module StdModule)
 	let es = emitLoadField(module, block: doSlice, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let dtor = emitLoadField(module, block: doSlice, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let newRec = ids.mint()
-	module.appendOp(doSlice, op: StdOp.call(newRec, callee: ManagedCreateName, args: twoArgs(es, second: dtor)))
-	let reserved = ids.mint()
-	module.appendOp(doSlice, op: StdOp.call(reserved, callee: ManagedReserveName, args: twoArgs(newRec, second: sliceLen)))
+	emitCreateSizedEmpty(module, block: doSlice, record: newRec, elementSize: es, capacity: sliceLen, elementDestroy: dtor, ids: ids)
 
 	let srcBuf = emitLoadField(module, block: doSlice, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let srcBase = emitSlotAddr(module, block: doSlice, buffer: srcBuf, index: start, elementSize: es, ids: ids)

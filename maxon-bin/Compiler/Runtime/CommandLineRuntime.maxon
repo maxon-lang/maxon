@@ -259,7 +259,7 @@ function buildCommandLineScanOne(module StdModule)
 	let notNulByte = emitLoadByte(module, block: notNul, base: cmd, index: notNulAt, ids: ids)
 	emitBranchOnCompare(module, block: notNul, value: notNulByte, pred: StdCmpPred.eq, against: BackslashByte, whenTrue: countRun, whenFalse: notBackslash, ids: ids)
 	let zeroRun = emitConst(module, block: notNul, value: 0, ids: ids)
-	pushBranchEdge(notNul, to: countRun, values: quadArgsOf(notNulAt, second: notNulWrote, third: notNulQuoted, fourth: zeroRun))
+	pushBranchEdge(notNul, to: countRun, values: fourArgs(notNulAt, second: notNulWrote, third: notNulQuoted, fourth: zeroRun))
 	pushBranchEdge(notNul, to: notBackslash, values: threeArgs(notNulAt, second: notNulWrote, third: notNulQuoted))
 
 	let plainAt = ids.mint()
@@ -338,31 +338,31 @@ function buildCommandLineScanOne(module StdModule)
 	let runWrote = ids.mint()
 	let runQuoted = ids.mint()
 	let runCount = ids.mint()
-	pushI64BlockArgs(countRun, values: quadArgsOf(runAt, second: runWrote, third: runQuoted, fourth: runCount))
+	pushI64BlockArgs(countRun, values: fourArgs(runAt, second: runWrote, third: runQuoted, fourth: runCount))
 	let runByte = emitLoadByte(module, block: countRun, base: cmd, index: runAt, ids: ids)
 	emitBranchOnCompare(module, block: countRun, value: runByte, pred: StdCmpPred.eq, against: BackslashByte, whenTrue: countStep, whenFalse: runEnded, ids: ids)
-	pushBranchEdge(countRun, to: countStep, values: quadArgsOf(runAt, second: runWrote, third: runQuoted, fourth: runCount))
-	pushBranchEdge(countRun, to: runEnded, values: quadArgsOf(runAt, second: runWrote, third: runQuoted, fourth: runCount))
+	pushBranchEdge(countRun, to: countStep, values: fourArgs(runAt, second: runWrote, third: runQuoted, fourth: runCount))
+	pushBranchEdge(countRun, to: runEnded, values: fourArgs(runAt, second: runWrote, third: runQuoted, fourth: runCount))
 
 	let stepAt = ids.mint()
 	let stepWrote = ids.mint()
 	let stepQuoted = ids.mint()
 	let stepCount = ids.mint()
-	pushI64BlockArgs(countStep, values: quadArgsOf(stepAt, second: stepWrote, third: stepQuoted, fourth: stepCount))
+	pushI64BlockArgs(countStep, values: fourArgs(stepAt, second: stepWrote, third: stepQuoted, fourth: stepCount))
 	let stepOne = emitConst(module, block: countStep, value: 1, ids: ids)
 	let stepNextAt = emitBin(module, block: countStep, a: stepAt, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
 	let stepNextCount = emitBin(module, block: countStep, a: stepCount, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: countStep, to: countRun, values: quadArgsOf(stepNextAt, second: stepWrote, third: stepQuoted, fourth: stepNextCount))
+	emitBranchCarrying(module, from: countStep, to: countRun, values: fourArgs(stepNextAt, second: stepWrote, third: stepQuoted, fourth: stepNextCount))
 
 	let endAt = ids.mint()
 	let endWrote = ids.mint()
 	let endQuoted = ids.mint()
 	let endCount = ids.mint()
-	pushI64BlockArgs(runEnded, values: quadArgsOf(endAt, second: endWrote, third: endQuoted, fourth: endCount))
+	pushI64BlockArgs(runEnded, values: fourArgs(endAt, second: endWrote, third: endQuoted, fourth: endCount))
 	let endByte = emitLoadByte(module, block: runEnded, base: cmd, index: endAt, ids: ids)
 	emitBranchOnCompare(module, block: runEnded, value: endByte, pred: StdCmpPred.eq, against: QuoteByte, whenTrue: runBeforeQuote, whenFalse: runPlain, ids: ids)
-	pushBranchEdge(runEnded, to: runBeforeQuote, values: quadArgsOf(endAt, second: endWrote, third: endQuoted, fourth: endCount))
-	pushBranchEdge(runEnded, to: runPlain, values: quadArgsOf(endAt, second: endWrote, third: endQuoted, fourth: endCount))
+	pushBranchEdge(runEnded, to: runBeforeQuote, values: fourArgs(endAt, second: endWrote, third: endQuoted, fourth: endCount))
+	pushBranchEdge(runEnded, to: runPlain, values: fourArgs(endAt, second: endWrote, third: endQuoted, fourth: endCount))
 
 	// Not before a quote: every backslash stands for itself, and the byte that ended the run is scanned
 	// again from the top (it may be a separator, a NUL or an ordinary byte — none of this block's business).
@@ -370,9 +370,9 @@ function buildCommandLineScanOne(module StdModule)
 	let pWrote = ids.mint()
 	let pQuoted = ids.mint()
 	let pCount = ids.mint()
-	pushI64BlockArgs(runPlain, values: quadArgsOf(pAt, second: pWrote, third: pQuoted, fourth: pCount))
+	pushI64BlockArgs(runPlain, values: fourArgs(pAt, second: pWrote, third: pQuoted, fourth: pCount))
 	let noLiteral = emitConst(module, block: runPlain, value: 0, ids: ids)
-	emitBranchCarrying(module, from: runPlain, to: emitRun, values: quintArgsOf(pWrote, second: pQuoted, third: pCount, fourth: pAt, fifth: noLiteral))
+	emitBranchCarrying(module, from: runPlain, to: emitRun, values: fiveArgs(pWrote, second: pQuoted, third: pCount, fourth: pAt, fifth: noLiteral))
 
 	// Before a quote: HALF the backslashes survive, and the run's PARITY decides what the quote itself
 	// becomes — even leaves it to toggle in the main scan, odd turns it into a literal this run swallows.
@@ -380,7 +380,7 @@ function buildCommandLineScanOne(module StdModule)
 	let bqWrote = ids.mint()
 	let bqQuoted = ids.mint()
 	let bqCount = ids.mint()
-	pushI64BlockArgs(runBeforeQuote, values: quadArgsOf(bqAt, second: bqWrote, third: bqQuoted, fourth: bqCount))
+	pushI64BlockArgs(runBeforeQuote, values: fourArgs(bqAt, second: bqWrote, third: bqQuoted, fourth: bqCount))
 	let oneBit = emitConst(module, block: runBeforeQuote, value: 1, ids: ids)
 	let half = emitBin(module, block: runBeforeQuote, a: bqCount, b: oneBit, opcode: StdBinOpcode.shrLogical, ids: ids)
 	let parity = emitBin(module, block: runBeforeQuote, a: bqCount, b: oneBit, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -388,7 +388,7 @@ function buildCommandLineScanOne(module StdModule)
 	// An ODD run consumes the quote (`resume` steps past it) AND emits one; an EVEN run does neither, so the
 	// parity IS both numbers and there is no second test.
 	let resumeAt = emitBin(module, block: runBeforeQuote, a: bqAt, b: parity, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: runBeforeQuote, to: emitRun, values: quintArgsOf(bqWrote, second: bqQuoted, third: half, fourth: resumeAt, fifth: parity))
+	emitBranchCarrying(module, from: runBeforeQuote, to: emitRun, values: fiveArgs(bqWrote, second: bqQuoted, third: half, fourth: resumeAt, fifth: parity))
 
 	// The ONE emit loop the three exits share: write `remaining` backslashes, then the tail.
 	let eWrote = ids.mint()
@@ -396,29 +396,29 @@ function buildCommandLineScanOne(module StdModule)
 	let eRemaining = ids.mint()
 	let eResume = ids.mint()
 	let eLiteral = ids.mint()
-	pushI64BlockArgs(emitRun, values: quintArgsOf(eWrote, second: eQuoted, third: eRemaining, fourth: eResume, fifth: eLiteral))
+	pushI64BlockArgs(emitRun, values: fiveArgs(eWrote, second: eQuoted, third: eRemaining, fourth: eResume, fifth: eLiteral))
 	emitBranchOnCompare(module, block: emitRun, value: eRemaining, pred: StdCmpPred.eq, against: 0, whenTrue: runTail, whenFalse: emitRunStep, ids: ids)
-	pushBranchEdge(emitRun, to: runTail, values: quadArgsOf(eWrote, second: eQuoted, third: eResume, fourth: eLiteral))
-	pushBranchEdge(emitRun, to: emitRunStep, values: quintArgsOf(eWrote, second: eQuoted, third: eRemaining, fourth: eResume, fifth: eLiteral))
+	pushBranchEdge(emitRun, to: runTail, values: fourArgs(eWrote, second: eQuoted, third: eResume, fourth: eLiteral))
+	pushBranchEdge(emitRun, to: emitRunStep, values: fiveArgs(eWrote, second: eQuoted, third: eRemaining, fourth: eResume, fifth: eLiteral))
 
 	let sWrote = ids.mint()
 	let sQuoted = ids.mint()
 	let sRemaining = ids.mint()
 	let sResume = ids.mint()
 	let sLiteral = ids.mint()
-	pushI64BlockArgs(emitRunStep, values: quintArgsOf(sWrote, second: sQuoted, third: sRemaining, fourth: sResume, fifth: sLiteral))
+	pushI64BlockArgs(emitRunStep, values: fiveArgs(sWrote, second: sQuoted, third: sRemaining, fourth: sResume, fifth: sLiteral))
 	let sByte = emitConst(module, block: emitRunStep, value: BackslashByte, ids: ids)
 	emitStoreByte(module, block: emitRunStep, base: dest, index: sWrote, value: sByte, ids: ids)
 	let sOne = emitConst(module, block: emitRunStep, value: 1, ids: ids)
 	let sNextWrote = emitBin(module, block: emitRunStep, a: sWrote, b: sOne, opcode: StdBinOpcode.add, ids: ids)
 	let sLeft = emitBin(module, block: emitRunStep, a: sRemaining, b: sOne, opcode: StdBinOpcode.sub, ids: ids)
-	emitBranchCarrying(module, from: emitRunStep, to: emitRun, values: quintArgsOf(sNextWrote, second: sQuoted, third: sLeft, fourth: sResume, fifth: sLiteral))
+	emitBranchCarrying(module, from: emitRunStep, to: emitRun, values: fiveArgs(sNextWrote, second: sQuoted, third: sLeft, fourth: sResume, fifth: sLiteral))
 
 	let tWrote = ids.mint()
 	let tQuoted = ids.mint()
 	let tResume = ids.mint()
 	let tLiteral = ids.mint()
-	pushI64BlockArgs(runTail, values: quadArgsOf(tWrote, second: tQuoted, third: tResume, fourth: tLiteral))
+	pushI64BlockArgs(runTail, values: fourArgs(tWrote, second: tQuoted, third: tResume, fourth: tLiteral))
 	emitBranchOnCompare(module, block: runTail, value: tLiteral, pred: StdCmpPred.ne, against: 0, whenTrue: runTailQuote, whenFalse: scan, ids: ids)
 	pushBranchEdge(runTail, to: runTailQuote, values: threeArgs(tWrote, second: tQuoted, third: tResume))
 	pushBranchEdge(runTail, to: scan, values: threeArgs(tResume, second: tWrote, third: tQuoted))
@@ -451,7 +451,7 @@ end 'buildCommandLineScanOne'
 // (a write cursor read as a quoting flag) with no diagnostic anywhere.
 //
 // ⇒ So a block's parameter list and its predecessors' argument lists are built by the SAME
-// `threeArgs`/`quadArgsOf`/`quintArgsOf` call, and this turns one such list into block args. One shape, two
+// `threeArgs`/`fourArgs`/`fiveArgs` call, and this turns one such list into block args. One shape, two
 // uses, no second ordering to keep in step. It replaces four hand-written per-arity pushers, two of which
 // had already grown misleading parameter names by being reused at a different arity.
 //
@@ -464,21 +464,6 @@ export function pushI64BlockArgs(block IrBlock, values ValueIdArray)
 		block.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
 	end 'each'
 end 'pushI64BlockArgs'
-
-// A four- and a five-value `BranchEdge` argument list. `MmRuntime` stops at three, and these two exist for
-// the same reason those do: a literal `ValueIdArray.create()` plus four `push`es at each of the nine sites
-// below is four chances to transpose two of them.
-function quadArgsOf(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
-	var args = threeArgs(first, second: second, third: third)
-	args.push(fourth)
-	return args
-end 'quadArgsOf'
-
-function quintArgsOf(first ValueId, second ValueId, third ValueId, fourth ValueId, fifth ValueId) returns ValueIdArray
-	var args = quadArgsOf(first, second: second, third: third, fourth: fourth)
-	args.push(fifth)
-	return args
-end 'quintArgsOf'
 
 // One byte of the separator test, and the reason it is a function: the leading skip asks it twice (space,
 // then tab) and would otherwise carry two copies of "load the byte, compare, branch". `miss` is where a

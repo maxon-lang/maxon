@@ -1338,7 +1338,7 @@ end 'buildSubpQueueStdin'
 // copy into it, **publish the length**, hand it back.
 //
 // ⚠ **THE THIRD STEP IS THE ONE THAT MADE THIS WORTH FACTORING.** `emitManagedByteBuffer` builds the record
-// through `__managed_create` + `__managed_reserve`, and reserve sets the CAPACITY while leaving the length 0
+// through `__managed_create_sized`, which sets the CAPACITY while leaving the length 0
 // — that is its contract. A copy that forgets to publish the length therefore answers a record holding the
 // right bytes and reading as the EMPTY String, with nothing to catch it: no fault, no leak, no diagnostic.
 // One copy of the step is one place for that to be right. (`emitCStringToManaged` is the same shape for a
@@ -2521,7 +2521,7 @@ function buildSubpLastErrorCode(module StdModule)
 	module.functions.push(func)
 end 'buildSubpLastErrorCode'
 
-// ⭐ **AN OWNED, EMPTY `__ManagedMemory`.** `__managed_reserve` sets the capacity and leaves the length 0 —
+// ⭐ **AN OWNED, EMPTY `__ManagedMemory`.** `emitManagedByteBuffer` sets the capacity and leaves the length 0 —
 // that is its contract — so a reserved-but-unpublished record IS the empty answer rather than a record that
 // forgot something. Two entry points here need it and mean different things by it: `__gt_subp_last_error`
 // means "nothing has failed", `__gt_subp_env_entry` means "there is no entry at that index".

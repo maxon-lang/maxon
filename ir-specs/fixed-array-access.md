@@ -84,24 +84,22 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 56
-    x64.movRegImm32 rbx, 8
-    x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
+    x64.movRegImm32 rax, 8
+    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect __managed_resize
+    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 1
     x64.movRegImm32 rcx, 20
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __im_missing
   __im_owned#7:
-    x64.loadRegBaseDisp.word64 rsi, [r12 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_detach#6
   __im_viewed#8:
@@ -113,11 +111,11 @@ func @main {
     x64.storeBaseIndexScaleReg.word64 [rdx + rax*8 + 0], rcx
   __im_cont#4:
     x64.movRegImm32 rax, 30
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_missing
   __im_owned#12:
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 16]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __im_detach#11
   __im_viewed#13:
@@ -129,30 +127,30 @@ func @main {
     x64.storeBaseDispReg.word64 [rcx + 16], rax
   __im_cont#10:
     x64.movRegImm32 rax, 40
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
   __im_detached#19:
     x64.storeBaseDispReg.word64 [rcx + 24], rax
   __im_cont#15:
     x64.leaRegGlobal rax, __data_reader
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.movRegReg rcx, rbx
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
     x64.callReg rax
     x64.cmpRegImm32 r8, 30
-    x64.setccReg equal, rbx
+    x64.setccReg equal, r12
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.cmpRegImm32 rbx, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, ifcont
   third:
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
@@ -160,10 +158,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
@@ -173,18 +171,18 @@ func @main {
   __im_detach#6:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.jmp __im_detached#9
   __im_detach#11:
     x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#14
   __im_missing:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
@@ -229,24 +227,22 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 56
-    x64.movRegImm32 rbx, 8
-    x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
+    x64.movRegImm32 rax, 8
+    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect __managed_resize
+    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 1
     x64.movRegImm32 rcx, 20
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __im_missing
   __im_owned#7:
-    x64.loadRegBaseDisp.word64 rsi, [r12 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_detach#6
   __im_viewed#8:
@@ -258,11 +254,11 @@ func @main {
     x64.storeBaseIndexScaleReg.word64 [rdx + rax*8 + 0], rcx
   __im_cont#4:
     x64.movRegImm32 rax, 30
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_missing
   __im_owned#12:
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 16]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __im_detach#11
   __im_viewed#13:
@@ -274,30 +270,30 @@ func @main {
     x64.storeBaseDispReg.word64 [rcx + 16], rax
   __im_cont#10:
     x64.movRegImm32 rax, 40
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
   __im_detached#19:
     x64.storeBaseDispReg.word64 [rcx + 24], rax
   __im_cont#15:
     x64.leaRegGlobal rax, __data_reader
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.movRegReg rcx, rbx
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
     x64.callReg rax
     x64.cmpRegImm32 r8, 30
-    x64.setccReg equal, rbx
+    x64.setccReg equal, r12
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.cmpRegImm32 rbx, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, ifcont
   third:
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
@@ -305,10 +301,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
@@ -318,18 +314,18 @@ func @main {
   __im_detach#6:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.jmp __im_detached#9
   __im_detach#11:
     x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#14
   __im_missing:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
@@ -369,24 +365,22 @@ func @main {
     arm64.storeSlotReg slot4, x21
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
-    arm64.movImm x19, 8
+    arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl __managed_resize
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 1
     arm64.movImm x1, 20
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.cmp x2, 0
     arm64.b.eq __im_missing
   __im_owned#7:
-    arm64.loadRegBaseDisp.word64 x3, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
     arm64.cmp x3, 0
     arm64.b.lt __im_detach#6
   __im_viewed#8:
@@ -398,11 +392,11 @@ func @main {
     arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
   __im_cont#4:
     arm64.movImm x0, 30
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __im_missing
   __im_owned#12:
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
     arm64.b.lt __im_detach#11
   __im_viewed#13:
@@ -414,39 +408,39 @@ func @main {
     arm64.storeBaseDispReg.word64 [x1 + 16], x0
   __im_cont#10:
     arm64.movImm x0, 40
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
   __im_detached#19:
     arm64.storeBaseDispReg.word64 [x1 + 24], x0
   __im_cont#15:
     arm64.leaGlobal x0, __data_reader
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
     arm64.bl __mm_retain
     arm64.movRegReg x21, x0
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
     arm64.blr x2
     arm64.cmp x0, 30
-    arm64.cset x19, eq
+    arm64.cset x20, eq
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.cbz x19, ifcont
+    arm64.cbz x20, ifcont
   third:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 0
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4
     arm64.epilogue 64
     arm64.ret
   ifcont:
-    arm64.movImm x19, 1
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 1
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4
@@ -455,20 +449,20 @@ func @main {
   __im_detach#6:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b __im_detached#9
   __im_detach#11:
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.b __im_detached#14
   __im_missing:
     arm64.leaRdata x0, __str_blob_6  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
@@ -510,24 +504,22 @@ func @main {
     arm64.storeSlotReg slot4, x21
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
-    arm64.movImm x19, 8
+    arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl __managed_resize
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 1
     arm64.movImm x1, 20
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.cmp x2, 0
     arm64.b.eq __im_missing
   __im_owned#7:
-    arm64.loadRegBaseDisp.word64 x3, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
     arm64.cmp x3, 0
     arm64.b.lt __im_detach#6
   __im_viewed#8:
@@ -539,11 +531,11 @@ func @main {
     arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
   __im_cont#4:
     arm64.movImm x0, 30
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __im_missing
   __im_owned#12:
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
     arm64.b.lt __im_detach#11
   __im_viewed#13:
@@ -555,39 +547,39 @@ func @main {
     arm64.storeBaseDispReg.word64 [x1 + 16], x0
   __im_cont#10:
     arm64.movImm x0, 40
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
   __im_detached#19:
     arm64.storeBaseDispReg.word64 [x1 + 24], x0
   __im_cont#15:
     arm64.leaGlobal x0, __data_reader
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
     arm64.bl __mm_retain
     arm64.movRegReg x21, x0
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
     arm64.blr x2
     arm64.cmp x0, 30
-    arm64.cset x19, eq
+    arm64.cset x20, eq
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.cbz x19, ifcont
+    arm64.cbz x20, ifcont
   third:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 0
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4
     arm64.epilogue 64
     arm64.ret
   ifcont:
-    arm64.movImm x19, 1
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 1
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4
@@ -596,20 +588,20 @@ func @main {
   __im_detach#6:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b __im_detached#9
   __im_detach#11:
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.b __im_detached#14
   __im_missing:
     arm64.leaRdata x0, __str_blob_6  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
@@ -707,24 +699,22 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 56
-    x64.movRegImm32 rbx, 8
-    x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
+    x64.movRegImm32 rax, 8
+    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect __managed_resize
+    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 4
     x64.movRegImm32 rcx, 50
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __im_missing
   __im_owned#7:
-    x64.loadRegBaseDisp.word64 rsi, [r12 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_detach#6
   __im_viewed#8:
@@ -736,11 +726,11 @@ func @main {
     x64.storeBaseIndexScaleReg.word64 [rdx + rax*8 + 0], rcx
   __im_cont#4:
     x64.movRegImm32 rax, 60
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_missing
   __im_owned#12:
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 16]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __im_detach#11
   __im_viewed#13:
@@ -752,31 +742,31 @@ func @main {
     x64.storeBaseDispReg.word64 [rcx + 40], rax
   __im_cont#10:
     x64.movRegImm32 rax, 70
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
   __im_detached#19:
     x64.storeBaseDispReg.word64 [rcx + 48], rax
   __im_cont#15:
     x64.leaRegGlobal rax, __data_reader
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.movRegReg rcx, rbx
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 5
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, rbx
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
     x64.callReg rsi
     x64.cmpRegImm32 r8, 60
-    x64.setccReg equal, rbx
+    x64.setccReg equal, r12
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.cmpRegImm32 rbx, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, ifcont
   sixth:
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
@@ -784,10 +774,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
@@ -797,18 +787,18 @@ func @main {
   __im_detach#6:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.jmp __im_detached#9
   __im_detach#11:
     x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#14
   __im_missing:
     x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
@@ -868,24 +858,22 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 56
-    x64.movRegImm32 rbx, 8
-    x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
+    x64.movRegImm32 rax, 8
+    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect __managed_resize
+    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 4
     x64.movRegImm32 rcx, 50
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __im_missing
   __im_owned#7:
-    x64.loadRegBaseDisp.word64 rsi, [r12 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_detach#6
   __im_viewed#8:
@@ -897,11 +885,11 @@ func @main {
     x64.storeBaseIndexScaleReg.word64 [rdx + rax*8 + 0], rcx
   __im_cont#4:
     x64.movRegImm32 rax, 60
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_missing
   __im_owned#12:
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 16]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __im_detach#11
   __im_viewed#13:
@@ -913,31 +901,31 @@ func @main {
     x64.storeBaseDispReg.word64 [rcx + 40], rax
   __im_cont#10:
     x64.movRegImm32 rax, 70
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
   __im_detached#19:
     x64.storeBaseDispReg.word64 [rcx + 48], rax
   __im_cont#15:
     x64.leaRegGlobal rax, __data_reader
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.movRegReg rcx, rbx
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 5
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, rbx
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
     x64.callReg rsi
     x64.cmpRegImm32 r8, 60
-    x64.setccReg equal, rbx
+    x64.setccReg equal, r12
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.cmpRegImm32 rbx, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, ifcont
   sixth:
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
@@ -945,10 +933,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
@@ -958,18 +946,18 @@ func @main {
   __im_detach#6:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
-    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.jmp __im_detached#9
   __im_detach#11:
     x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#14
   __im_missing:
     x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
@@ -1021,24 +1009,22 @@ func @main {
     arm64.storeSlotReg slot4, x21
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
-    arm64.movImm x19, 8
+    arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl __managed_resize
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 4
     arm64.movImm x1, 50
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.cmp x2, 0
     arm64.b.eq __im_missing
   __im_owned#7:
-    arm64.loadRegBaseDisp.word64 x3, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
     arm64.cmp x3, 0
     arm64.b.lt __im_detach#6
   __im_viewed#8:
@@ -1050,11 +1036,11 @@ func @main {
     arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
   __im_cont#4:
     arm64.movImm x0, 60
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __im_missing
   __im_owned#12:
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
     arm64.b.lt __im_detach#11
   __im_viewed#13:
@@ -1066,40 +1052,40 @@ func @main {
     arm64.storeBaseDispReg.word64 [x1 + 40], x0
   __im_cont#10:
     arm64.movImm x0, 70
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
   __im_detached#19:
     arm64.storeBaseDispReg.word64 [x1 + 48], x0
   __im_cont#15:
     arm64.leaGlobal x0, __data_reader
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
     arm64.bl __mm_retain
     arm64.movRegReg x21, x0
     arm64.movImm x1, 5
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x2, x19
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 0]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x2, x20
     arm64.blr x3
     arm64.cmp x0, 60
-    arm64.cset x19, eq
+    arm64.cset x20, eq
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.cbz x19, ifcont
+    arm64.cbz x20, ifcont
   sixth:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 0
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4
     arm64.epilogue 64
     arm64.ret
   ifcont:
-    arm64.movImm x19, 1
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 1
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4
@@ -1108,20 +1094,20 @@ func @main {
   __im_detach#6:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b __im_detached#9
   __im_detach#11:
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.b __im_detached#14
   __im_missing:
     arm64.leaRdata x0, __str_blob_7  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
@@ -1175,24 +1161,22 @@ func @main {
     arm64.storeSlotReg slot4, x21
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
-    arm64.movImm x19, 8
+    arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl __managed_resize
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 4
     arm64.movImm x1, 50
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.cmp x2, 0
     arm64.b.eq __im_missing
   __im_owned#7:
-    arm64.loadRegBaseDisp.word64 x3, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
     arm64.cmp x3, 0
     arm64.b.lt __im_detach#6
   __im_viewed#8:
@@ -1204,11 +1188,11 @@ func @main {
     arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
   __im_cont#4:
     arm64.movImm x0, 60
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __im_missing
   __im_owned#12:
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
     arm64.b.lt __im_detach#11
   __im_viewed#13:
@@ -1220,40 +1204,40 @@ func @main {
     arm64.storeBaseDispReg.word64 [x1 + 40], x0
   __im_cont#10:
     arm64.movImm x0, 70
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
   __im_detached#19:
     arm64.storeBaseDispReg.word64 [x1 + 48], x0
   __im_cont#15:
     arm64.leaGlobal x0, __data_reader
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
     arm64.bl __mm_retain
     arm64.movRegReg x21, x0
     arm64.movImm x1, 5
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x2, x19
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 0]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x2, x20
     arm64.blr x3
     arm64.cmp x0, 60
-    arm64.cset x19, eq
+    arm64.cset x20, eq
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.cbz x19, ifcont
+    arm64.cbz x20, ifcont
   sixth:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 0
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4
     arm64.epilogue 64
     arm64.ret
   ifcont:
-    arm64.movImm x19, 1
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 1
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4
@@ -1262,20 +1246,20 @@ func @main {
   __im_detach#6:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b __im_detached#9
   __im_detach#11:
     arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.b __im_detached#14
   __im_missing:
     arm64.leaRdata x0, __str_blob_7  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
@@ -1401,38 +1385,36 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegImm32 rbx, 8
-    x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
+    x64.movRegImm32 rax, 8
+    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect __managed_resize
+    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.movRegReg rbx, r8
   __il_cont:
     x64.leaRegGlobal rax, __data_writer
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.movRegReg rcx, rbx
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 77
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.movRegReg rcx, r12
-    x64.movRegReg r9, rbx
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg r9, r12
     x64.callReg rsi
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 48]
   __im_cont#6:
     x64.cmpRegImm32 rax, 77
     x64.movRegImm32 rax, 0
     x64.jcc notEqual, scmerge
   andrhs:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
   __im_cont#7:
     x64.cmpRegImm32 rax, 0
@@ -1441,10 +1423,10 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont
   written:
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -1452,10 +1434,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -1539,38 +1521,36 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegImm32 rbx, 8
-    x64.leaRegRdata rax, [rip + __layout_FixedArray_N8_Word]
+    x64.movRegImm32 rax, 8
+    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect __managed_resize
+    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.movRegReg rbx, r8
   __il_cont:
     x64.leaRegGlobal rax, __data_writer
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.movRegReg rcx, rbx
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 77
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.movRegReg rcx, r12
-    x64.movRegReg r9, rbx
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg r9, r12
     x64.callReg rsi
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 48]
   __im_cont#6:
     x64.cmpRegImm32 rax, 77
     x64.movRegImm32 rax, 0
     x64.jcc notEqual, scmerge
   andrhs:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
   __im_cont#7:
     x64.cmpRegImm32 rax, 0
@@ -1579,10 +1559,10 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont
   written:
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -1590,10 +1570,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -1669,38 +1649,36 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 8
+    arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl __managed_resize
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.movRegReg x19, x0
   __il_cont:
     arm64.leaGlobal x0, __data_writer
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
     arm64.bl __mm_retain
     arm64.movRegReg x21, x0
     arm64.movImm x1, 6
     arm64.movImm x2, 77
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x3, x19
+    arm64.loadRegBaseDisp.word64 x4, [x20 + 0]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x3, x20
     arm64.blr x4
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 48]
   __im_cont#6:
     arm64.cmp x0, 77
     arm64.movImm x0, 0
     arm64.b.ne scmerge
   andrhs:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
   __im_cont#7:
     arm64.cmp x0, 0
@@ -1708,20 +1686,20 @@ func @main {
   scmerge:
     arm64.cbz x0, ifcont
   written:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 0
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
   ifcont:
-    arm64.movImm x19, 1
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 1
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -1799,38 +1777,36 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 8
+    arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl __managed_resize
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.movRegReg x19, x0
   __il_cont:
     arm64.leaGlobal x0, __data_writer
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
     arm64.bl __mm_retain
     arm64.movRegReg x21, x0
     arm64.movImm x1, 6
     arm64.movImm x2, 77
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x3, x19
+    arm64.loadRegBaseDisp.word64 x4, [x20 + 0]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x3, x20
     arm64.blr x4
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 48]
   __im_cont#6:
     arm64.cmp x0, 77
     arm64.movImm x0, 0
     arm64.b.ne scmerge
   andrhs:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
   __im_cont#7:
     arm64.cmp x0, 0
@@ -1838,20 +1814,20 @@ func @main {
   scmerge:
     arm64.cbz x0, ifcont
   written:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 0
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
   ifcont:
-    arm64.movImm x19, 1
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
+    arm64.movImm x20, 1
     arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
