@@ -510,10 +510,10 @@ end 'wasmRegionAfter'
 //
 //   * **THE FRAMES ARE THE PROGRAM'S OWN RECORD (`WasmFrameStack`).** wasm has no
 //     saved-frame-pointer chain and cannot be given one — the call stack is the ENGINE's, not
-//     addressable memory — so every function records itself on entry and this walks that record. The
-//     engine's own trace cannot stand in: wasmtime passes every "name"-section entry through C++
-//     demangling, so a function named `h` or `_Z…` prints as `unsigned char` or worse, and no name
-//     encoding survives both demangling and non-demangling hosts verbatim.
+//     addressable memory — so a function that can reach a panic records itself on entry and this
+//     walks that record. The engine's own trace cannot stand in: wasmtime passes every "name"-section
+//     entry through C++ demangling, so a function named `h` or `_Z…` prints as `unsigned char` or
+//     worse, and no name encoding survives both demangling and non-demangling hosts verbatim.
 //
 //   * **A FAULT OR A STACK OVERFLOW IS NOT A PANIC**: it traps in the engine, which prints its own
 //     trace and exit status.
@@ -791,7 +791,8 @@ let WasmFrameLineLengthColumn = WasmFrameSlotBytes as Wasm32Index
 // depth stays in bounds while the newest `MaxBacktraceFrames` entries stay intact. The frame lines
 // are built from `WasmModuleBuilder.functionDebugNames()`, the `IrFunction.name` the native
 // `__symtable` prints, so both targets print the same strings. One stack serves the program because
-// the wasm lane is single-threaded (green threads and `async` are E3104 there).
+// the wasm lane is single-threaded (green threads and `async` are E3104 there). A function pushes a
+// record only if it can enter module code or panic (`stdOpObservesFrames`).
 type WasmFrameStack
 	export let base as Wasm32Index
 	export let depthAddress as Imm32
@@ -904,21 +905,31 @@ type WasmScratchFrames
 	end 'baseOf'
 end 'WasmScratchFrames'
 
-function requireLeafFrame(module StdModule, func IrFunction)
-	var ops = OpIndexArray.create()
+typealias StdOpTest = function(StdOp) returns bool
 
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("requireLeafFrame: blockRef {blockRef} not in module.blocks")
-		block.collectOpsInRunOrder(ops)
-	end 'eachBlock'
+function functionHasOp(module StdModule, func IrFunction, test StdOpTest) returns bool
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("functionHasOp: opIdx {opIdx} not in module.ops")
 
-	for opIdx in ops 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("requireLeafFrame: opIdx {opIdx} not in module.ops")
-
-		if stdOpEntersModuleCode(op) 'callsOut'
-			panic("requireLeafFrame: `{String.from(func.name)}` holds a frame on wasm32-wasi and also calls — a wasm frame is a fixed region of linear memory, one per function, so it is correct only while the function cannot be entered again before it returns, which a function that calls out does not promise")
-		end 'callsOut'
+		if test(op) 'found'
+			return true
+		end 'found'
 	end 'eachOp'
+
+	return false
+end 'functionHasOp'
+
+// `mrt_panic` is the only reader of the ring and is reached through module code or a diverging op
+// (`osPanic`, `osPanicValue`; `osExit` is an over-approximation). A trap aborts in the engine and a
+// WASI import cannot re-enter, so neither reads it.
+function stdOpObservesFrames(op StdOp) returns bool
+	return stdOpEntersModuleCode(op) or op.rawValue.role == OpRole.diverging
+end 'stdOpObservesFrames'
+
+function requireLeafFrame(module StdModule, func IrFunction)
+	if functionHasOp(module, func: func, test: stdOpEntersModuleCode) 'callsOut'
+		panic("requireLeafFrame: `{String.from(func.name)}` holds a frame on wasm32-wasi and also calls — a wasm frame is a fixed region of linear memory, one per function, so it is correct only while the function cannot be entered again before it returns, which a function that calls out does not promise")
+	end 'callsOut'
 end 'requireLeafFrame'
 
 // An inline position shares the frame-line index space with the function indices, numbered past
@@ -2006,6 +2017,7 @@ type WasmFuncEmitter
 
 	let ownFuncIdx as Wasm32Index
 	let frames as WasmFrameStack
+	let recordsFrame as bool
 	let savedDepthLocal as Wasm32Index
 	var slotOffsetLocal as Wasm32Index
 	var positions as WasmInlinePositions
@@ -2036,6 +2048,7 @@ type WasmFuncEmitter
 			blockPositionById: module.blockIndexById(func),
 			ownFuncIdx: funcIdx,
 			frames: frames,
+			recordsFrame: functionHasOp(module, func: func, test: stdOpObservesFrames),
 			savedDepthLocal: valtypes.count() as Wasm32Index,
 			slotOffsetLocal: 0,
 			positions: WasmInlinePositions.startingAt(firstPosition),
@@ -2049,7 +2062,7 @@ type WasmFuncEmitter
 	// Local layout, in the order `localTypes` (and the wasm local index space) demands:
 	//   0..paramCount-1        parameters (from the function SIGNATURE, NOT declared here)
 	//   paramCount..maxValueId value locals (identity model: value id == local index)
-	//   maxValueId+1           saved frame-stack depth (i32), always
+	//   maxValueId+1           saved frame-stack depth (i32), when `recordsFrame`
 	//   then                   inline-position slot offset (i32), when `tracksInlinePositions`
 	//   then                   dispatch local (i32), only under the dispatcher
 	//   then                   one scratch local per block-arg valtype, whenever the function branches
@@ -2061,8 +2074,12 @@ type WasmFuncEmitter
 			self.localTypes.push(getValtype(self.valtypes, v: i as ValueId))
 		end 'valueLocals'
 
-		self.localTypes.push(WasmValType.i32)
-		var nextLocal = (self.savedDepthLocal + 1) as Wasm32Index
+		var nextLocal = self.savedDepthLocal
+
+		if self.recordsFrame 'savedDepth'
+			self.localTypes.push(WasmValType.i32)
+			nextLocal = (nextLocal + 1) as Wasm32Index
+		end 'savedDepth'
 
 		if self.tracksInlinePositions() 'slotOffset'
 			self.slotOffsetLocal = nextLocal
@@ -2121,7 +2138,9 @@ type WasmFuncEmitter
 			return
 		end 'empty'
 
-		emitFramePush(self.body, frames: self.frames, funcIdx: self.ownFuncIdx, savedDepthLocal: self.savedDepthLocal)
+		if self.recordsFrame 'pushFrame'
+			emitFramePush(self.body, frames: self.frames, funcIdx: self.ownFuncIdx, savedDepthLocal: self.savedDepthLocal)
+		end 'pushFrame'
 
 		if self.tracksInlinePositions() 'slotOffset'
 			self.body.localGet(self.savedDepthLocal)
@@ -3350,10 +3369,14 @@ type WasmFuncEmitter
 	end 'emitCallArgsAndCall'
 
 	function tracksInlinePositions() returns bool
-		return self.func.inlineSites.count() != 0
+		return self.recordsFrame and self.func.inlineSites.count() != 0
 	end 'tracksInlinePositions'
 
 	function recordFramePosition()
+		if not self.recordsFrame 'unclassified'
+			panic("recordFramePosition: `{String.from(self.func.name)}` enters module code or panics and records no frame, so a panic below it would print a wrong trace — `stdOpObservesFrames` does not classify the op that reached this emission")
+		end 'unclassified'
+
 		if not self.tracksInlinePositions() 'ownFrameOnly'
 			return
 		end 'ownFrameOnly'
@@ -3598,10 +3621,14 @@ type WasmFuncEmitter
 		self.emitReturn()
 	end 'emitErrorReturn'
 
-	// The one exit that pops the frame stack, taken by the value, void and error returns (a `throw` is
-	// a return in this ABI). A path with no return ends in `unreachable`, so no frame is left behind.
+	// The one exit that pops the frame stack of a recording function, taken by the value, void and error
+	// returns (a `throw` is a return in this ABI). A path with no return ends in `unreachable`, so no
+	// frame is left behind.
 	function emitReturn()
-		emitFramePop(self.body, frames: self.frames, savedDepthLocal: self.savedDepthLocal)
+		if self.recordsFrame 'popFrame'
+			emitFramePop(self.body, frames: self.frames, savedDepthLocal: self.savedDepthLocal)
+		end 'popFrame'
+
 		self.body.returnOp()
 	end 'emitReturn'
 

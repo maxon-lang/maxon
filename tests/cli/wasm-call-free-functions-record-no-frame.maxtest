@@ -1,0 +1,56 @@
+// wasm-call-free-functions-record-no-frame.maxtest - the frame record a wasm32-wasi function pushes on entry
+// exists for the panic trace, which only a panic or a callee can read, so a function that makes no call and
+// holds no panic carries none of it: its body touches no linear memory, while a function that calls does.
+//
+// `mixLane` stays a call, not a splice: its ~37 ops exceed the 24-op leaf budget and it has two call sites.
+//
+// Built from the checkout, whose `vendor/` holds the tools the component wrap and `wasm-tools print` need.
+
+let WasmCallFreeFunctionsCaseDirName = "wasm-call-free-functions-record-no-frame"
+let WasmCallFreeFunctionsOutputStem = "main"
+let WasmToolsDirName = "vendor/wasm-tools"
+let WasmToolsStem = "wasm-tools"
+let WasmPrintCommand = "print"
+let CallFreeWasmExtension = ".wasm"
+let FunctionOpener = "(func $"
+let CallFreeFunctionName = "mixLane"
+let CallingFunctionName = "main"
+let FrameRecordInstruction = "i32.store"
+let MemoryReadInstruction = "i32.load"
+let CallFreeProgramSource = "typealias Lane = bits(64)\n\nfunction mixLane(word Lane) returns Lane\n\tlet a = (word shl 3) xor (word shr 5)\n\tlet b = (a shl 7) xor (a shr 11)\n\tlet c = (b shl 13) xor (b shr 17)\n\tlet d = (c shl 19) xor (c shr 23)\n\tlet e = (d shl 29) xor (d shr 31)\n\tlet f = (e shl 37) xor (e shr 41)\n\tlet g = (f shl 43) xor (f shr 47)\n\n\treturn g xor word\nend 'mixLane'\n\nfunction main() returns ExitCode\n\tlet first = mixLane(1)\n\n\tif mixLane(first) == 0 'zero'\n\t\tprint(\"zero\\n\")\n\tend 'zero'\n\n\treturn 0\nend 'main'\n"
+
+test 'a wasm function that calls nothing records no frame and one that calls does'
+	let dir = freshCaseDir(WasmCallFreeFunctionsCaseDirName)
+	let sourcePath = dir.join(StagedProgramFileName)
+	writeStagedFile(sourcePath, content: CallFreeProgramSource)
+
+	let outputStem = dir.join(WasmCallFreeFunctionsOutputStem)
+	let build = spawnCompiler([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{outputStem.toString()}", WasmTargetOption])
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+	Expect.equal(build.exitCode(), expected: 0, message: "the program did not build for wasm32-wasi. {said}")
+
+	let tool = executableIn(try FilePath.from(WasmToolsDirName) otherwise panic("{WasmToolsDirName} is a spellable path"), stem: WasmToolsStem)
+	let printed = runSystemTool(tool.toString(), arguments: [WasmPrintCommand, "{outputStem.toString()}{CallFreeWasmExtension}"], what: "printing the module the build wrote")
+
+	let leaf = functionText(printed.stdout, name: CallFreeFunctionName)
+	Expect.isFalse(leaf.contains(FrameRecordInstruction), message: "a function that calls nothing wrote to linear memory: it records a frame it can never be read from. Its text:\n{leaf}")
+	Expect.isFalse(leaf.contains(MemoryReadInstruction), message: "a function that calls nothing read linear memory: it records a frame it can never be read from. Its text:\n{leaf}")
+
+	let caller = functionText(printed.stdout, name: CallingFunctionName)
+	Expect.isTrue(caller.contains(FrameRecordInstruction), message: "a function that calls records no frame, so a panic below it would not name it. Its text:\n{caller}")
+	Expect.isTrue(caller.contains(MemoryReadInstruction), message: "a function that calls does not read the frame depth it pushes onto. Its text:\n{caller}")
+end 'a wasm function that calls nothing records no frame and one that calls does'
+
+function functionText(printed String, name String) returns String
+	let opening = "{FunctionOpener}{name} "
+
+	for section in printed.split(FunctionOpener) 'eachFunction'
+		let candidate = "{FunctionOpener}{section}"
+
+		if candidate.startsWith(opening) 'found'
+			return candidate
+		end 'found'
+	end 'eachFunction'
+
+	panic("wasm-call-free-functions-record-no-frame: the printed module holds no function named {name}")
+end 'functionText'

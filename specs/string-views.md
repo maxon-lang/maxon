@@ -303,7 +303,7 @@ error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepo
 HALVES OF THE ANSWER.** A range
 violation EXITS 1 on every target — that is the guard FIRING — and every target has a panic runtime that
 prints the message and the backtrace. wasm32-wasi has no saved-frame-pointer chain, so every function
-records itself on a frame stack in linear memory, and its panic runtime writes the message, walks that
+that can reach a panic records itself on a frame stack in linear memory, and its panic runtime writes the message, walks that
 stack for the frames and exits with the panic exit code (`StdToWasm.appendPanicRuntime`). `7` is what an
 UNGUARDED build returns, so the exit code separates a fired guard from a silent wrong answer, and the
 message is pinned everywhere as well.
