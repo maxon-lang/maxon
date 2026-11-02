@@ -94,8 +94,6 @@ func @Big.create {
     x64.callDirect __managed_create
     x64.storeSlotReg slot0, r8
   __il_body#4:
-    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
-    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
     x64.leaRegRdata rbx, [rip + __layout_Map_Count$0_1000000_Count$0_1000000]
   __il_body#11:
     x64.movRegImm32 rcx, 8
@@ -365,8 +363,6 @@ func @Big.create {
     x64.callDirect __managed_create
     x64.storeSlotReg slot0, r8
   __il_body#4:
-    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
-    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
     x64.leaRegRdata rbx, [rip + __layout_Map_Count$0_1000000_Count$0_1000000]
   __il_body#11:
     x64.movRegImm32 rcx, 8
@@ -636,8 +632,6 @@ func @Big.create {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
   __il_body#4:
-    arm64.leaRdata x0, __witness_int.Hashable
-    arm64.leaRdata x0, __witness_int.Equatable
     arm64.leaRdata x20, __layout_Map_Count$0_1000000_Count$0_1000000
   __il_body#11:
     arm64.movImm x0, 8
@@ -898,8 +892,6 @@ func @Big.create {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
   __il_body#4:
-    arm64.leaRdata x0, __witness_int.Hashable
-    arm64.leaRdata x0, __witness_int.Equatable
     arm64.leaRdata x20, __layout_Map_Count$0_1000000_Count$0_1000000
   __il_body#11:
     arm64.movImm x0, 8

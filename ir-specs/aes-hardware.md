@@ -1096,6 +1096,4423 @@ chunk @mrt_aes_encrypt_block {
 }
 ```
 
+<!-- test: aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry -->
+`Aes.encryptBlockInto` and `Aes.decryptBlockInto` dispatch on the backing once, and on the hardware backing test the
+block's length and the output's span once before one call to the checked entry of their direction: no layer between the
+method and the entry, no count held on the key schedule or on the software cipher, and a frame that saves no callee
+register. A block the output cannot hold takes one call off that path, which repairs the output and does the whole
+operation.
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create()
+	var wideKey = ByteArray.create()
+	var block = ByteArray.create()
+	key.resize(16)
+	wideKey.resize(32)
+	block.resize(16)
+	let narrow = try Aes.create(key) otherwise panic("key")
+	let wide = try Aes.create(wideKey) otherwise panic("key")
+	try narrow.encryptBlockInto(block, output: block, at: 0) otherwise panic("block")
+	try wide.encryptBlockInto(block, output: block, at: 0) otherwise panic("block")
+	try wide.decryptBlockInto(block, output: block, at: 0) otherwise panic("block")
+	try narrow.decryptBlockInto(block, output: block, at: 0) otherwise panic("block")
+	print("{try block.get(0) otherwise 0}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+```RequiredRuntime
+Aes.encryptBlockInto
+Aes.decryptBlockInto
+```
+```TargetIr:x64-windows
+data {
+  __mrt_cpu_aes_usable@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.movRegImm32 rdx, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 32
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 16
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_resize
+    x64.movRegReg rcx, rbx
+    x64.callDirect Aes.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot3, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
+    x64.movRegReg rcx, r12
+    x64.callDirect Aes.create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot4, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+  tryok#3:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r13
+    x64.callDirect Aes.encryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+  tryok#5:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r13
+    x64.callDirect Aes.encryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  tryok#7:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r13
+    x64.callDirect Aes.decryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#10
+  tryok#9:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r13
+    x64.callDirect Aes.decryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#12
+  tryok#11:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp tryok#13
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp tryok#13
+  __im_slow:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+  tryerr#14:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  critsplit:
+    x64.movRegReg rax, r8
+  tryok#13:
+    x64.movRegReg rbx, rax
+  trycont:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot5, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot7, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rax, slot7
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot6
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __mm_decref
+  __il_body:
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __destruct_Aes
+  exitdrop#17:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_Aes
+  exitdrop#18:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+  exitdrop#19:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+  exitdrop#20:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+  exitterminal:
+    x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:9: key\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:10: key\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:11: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:12: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:13: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:14: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Aes.encryptBlockInto {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rdi, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rdx, rdi
+    x64.callDirect AesBitsliced.cryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#3
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.cmpRegImm32 rcx, 16
+    x64.movRegImm32 rcx, 1
+    x64.jcc notEqual, scmerge
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.leaRegRegImm32 rdx, r9, 16
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg below, rcx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  refit:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, rdi
+    x64.callDirect aesHardwareCryptRefitted
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#17
+  tryok:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, r9
+    x64.movRegReg rax, r8
+    x64.movRegReg r9, rdi
+    x64.callDirect __cpufeat_aes_cipher_encrypt_block
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  tryerr#17:
+    x64.movRegReg rax, r10
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#7
+    x64.jmp matchcont
+  tryerr#3:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryerr#7:
+    x64.movRegReg r10, rax
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @Aes.decryptBlockInto {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rdi, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.movRegImm32 rsi, 1
+    x64.movRegReg rdx, rdi
+    x64.callDirect AesBitsliced.cryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#3
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.cmpRegImm32 rcx, 16
+    x64.movRegImm32 rcx, 1
+    x64.jcc notEqual, scmerge
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.leaRegRegImm32 rdx, r9, 16
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg below, rcx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  refit:
+    x64.movRegImm32 rsi, 1
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, rdi
+    x64.callDirect aesHardwareCryptRefitted
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#17
+  tryok:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, r9
+    x64.movRegReg rax, r8
+    x64.movRegReg r9, rdi
+    x64.callDirect __cpufeat_aes_cipher_decrypt_block
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  tryerr#17:
+    x64.movRegReg rax, r10
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#7
+    x64.jmp matchcont
+  tryerr#3:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryerr#7:
+    x64.movRegReg r10, rax
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_cpu_aes_usable@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.movRegImm32 rdx, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 32
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 16
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_resize
+    x64.movRegReg rcx, rbx
+    x64.callDirect Aes.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot3, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
+    x64.movRegReg rcx, r12
+    x64.callDirect Aes.create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot4, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+  tryok#3:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r13
+    x64.callDirect Aes.encryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+  tryok#5:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r13
+    x64.callDirect Aes.encryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  tryok#7:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r13
+    x64.callDirect Aes.decryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#10
+  tryok#9:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r13
+    x64.callDirect Aes.decryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#12
+  tryok#11:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp tryok#13
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp tryok#13
+  __im_slow:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+  tryerr#14:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  critsplit:
+    x64.movRegReg rax, r8
+  tryok#13:
+    x64.movRegReg rbx, rax
+  trycont:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot5, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot7, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rax, slot7
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot6
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __mm_decref
+  __il_body:
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __destruct_Aes
+  exitdrop#17:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_Aes
+  exitdrop#18:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+  exitdrop#19:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+  exitdrop#20:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+  exitterminal:
+    x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:9: key\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:10: key\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:11: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:12: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:13: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:14: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Aes.encryptBlockInto {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rdi, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rdx, rdi
+    x64.callDirect AesBitsliced.cryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#3
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.cmpRegImm32 rcx, 16
+    x64.movRegImm32 rcx, 1
+    x64.jcc notEqual, scmerge
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.leaRegRegImm32 rdx, r9, 16
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg below, rcx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  refit:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, rdi
+    x64.callDirect aesHardwareCryptRefitted
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#17
+  tryok:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, r9
+    x64.movRegReg rax, r8
+    x64.movRegReg r9, rdi
+    x64.callDirect __cpufeat_aes_cipher_encrypt_block
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  tryerr#17:
+    x64.movRegReg rax, r10
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#7
+    x64.jmp matchcont
+  tryerr#3:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryerr#7:
+    x64.movRegReg r10, rax
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @Aes.decryptBlockInto {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rdi, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.movRegImm32 rsi, 1
+    x64.movRegReg rdx, rdi
+    x64.callDirect AesBitsliced.cryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#3
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.cmpRegImm32 rcx, 16
+    x64.movRegImm32 rcx, 1
+    x64.jcc notEqual, scmerge
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.leaRegRegImm32 rdx, r9, 16
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg below, rcx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  refit:
+    x64.movRegImm32 rsi, 1
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, rdi
+    x64.callDirect aesHardwareCryptRefitted
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#17
+  tryok:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, r9
+    x64.movRegReg rax, r8
+    x64.movRegReg r9, rdi
+    x64.callDirect __cpufeat_aes_cipher_decrypt_block
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  tryerr#17:
+    x64.movRegReg rax, r10
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#7
+    x64.jmp matchcont
+  tryerr#3:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryerr#7:
+    x64.movRegReg r10, rax
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_cpu_aes_usable@0 = i64 1
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot11, x28
+    arm64.storeSlotReg slot10, x27
+    arm64.storeSlotReg slot9, x26
+    arm64.storeSlotReg slot8, x25
+    arm64.storeSlotReg slot7, x24
+    arm64.storeSlotReg slot6, x23
+    arm64.storeSlotReg slot5, x22
+    arm64.storeSlotReg slot4, x21
+    arm64.storeSlotReg slot3, x20
+    arm64.storeSlotReg slot2, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_resize
+    arm64.movImm x1, 32
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_resize
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_resize
+    arm64.movRegReg x0, x19
+    arm64.bl Aes.create
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+  tryok#1:
+    arm64.movRegReg x0, x20
+    arm64.bl Aes.create
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+  tryok#3:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x21
+    arm64.bl Aes.encryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+  tryok#5:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x21
+    arm64.bl Aes.encryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#8
+  tryok#7:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x21
+    arm64.bl Aes.decryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#10
+  tryok#9:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x21
+    arm64.bl Aes.decryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#12
+  tryok#11:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b tryok#13
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b tryok#13
+  __im_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#13
+  tryerr#14:
+    arm64.movImm x22, 0
+    arm64.b trycont
+  tryok#13:
+    arm64.movRegReg x22, x0
+  trycont:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_12  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x26, x22, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x22, x28, x22
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x22, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+  __il_body:
+    arm64.movRegReg x0, x27
+    arm64.bl __write_stdout
+  __il_cont:
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Aes
+  exitdrop#17:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Aes
+  exitdrop#18:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+  exitdrop#19:
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __managed_decref
+  exitdrop#20:
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+  exitterminal:
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:9: key\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:10: key\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:11: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:12: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#10:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:13: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#12:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:14: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+}
+
+func @Aes.encryptBlockInto {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x5, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x4, 0
+    arm64.movRegReg x1, x5
+    arm64.bl AesBitsliced.cryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#3
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 1
+    arm64.b.ne scmerge
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
+    arm64.add x1, x3, 16
+    arm64.cmp x0, x1
+    arm64.cset x0, lo
+  scmerge:
+    arm64.cbz x0, ifcont
+  refit:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x6
+    arm64.movRegReg x1, x5
+    arm64.bl aesHardwareCryptRefitted
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  tryok:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x1, x3
+    arm64.movRegReg x2, x6
+    arm64.movRegReg x3, x5
+    arm64.bl __cpufeat_aes_cipher_encrypt_block
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  tryerr#17:
+    arm64.movRegReg x0, x9
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#7
+    arm64.b matchcont
+  tryerr#3:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#7:
+    arm64.movRegReg x9, x0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @Aes.decryptBlockInto {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x5, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x4, 1
+    arm64.movRegReg x1, x5
+    arm64.bl AesBitsliced.cryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#3
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 1
+    arm64.b.ne scmerge
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
+    arm64.add x1, x3, 16
+    arm64.cmp x0, x1
+    arm64.cset x0, lo
+  scmerge:
+    arm64.cbz x0, ifcont
+  refit:
+    arm64.movImm x4, 1
+    arm64.movRegReg x0, x6
+    arm64.movRegReg x1, x5
+    arm64.bl aesHardwareCryptRefitted
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  tryok:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x1, x3
+    arm64.movRegReg x2, x6
+    arm64.movRegReg x3, x5
+    arm64.bl __cpufeat_aes_cipher_decrypt_block
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  tryerr#17:
+    arm64.movRegReg x0, x9
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#7
+    arm64.b matchcont
+  tryerr#3:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#7:
+    arm64.movRegReg x9, x0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_cpu_aes_usable@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot11, x28
+    arm64.storeSlotReg slot10, x27
+    arm64.storeSlotReg slot9, x26
+    arm64.storeSlotReg slot8, x25
+    arm64.storeSlotReg slot7, x24
+    arm64.storeSlotReg slot6, x23
+    arm64.storeSlotReg slot5, x22
+    arm64.storeSlotReg slot4, x21
+    arm64.storeSlotReg slot3, x20
+    arm64.storeSlotReg slot2, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_resize
+    arm64.movImm x1, 32
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_resize
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_resize
+    arm64.movRegReg x0, x19
+    arm64.bl Aes.create
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+  tryok#1:
+    arm64.movRegReg x0, x20
+    arm64.bl Aes.create
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+  tryok#3:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x21
+    arm64.bl Aes.encryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+  tryok#5:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x21
+    arm64.bl Aes.encryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#8
+  tryok#7:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x21
+    arm64.bl Aes.decryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#10
+  tryok#9:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x21
+    arm64.bl Aes.decryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#12
+  tryok#11:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b tryok#13
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b tryok#13
+  __im_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#13
+  tryerr#14:
+    arm64.movImm x22, 0
+    arm64.b trycont
+  tryok#13:
+    arm64.movRegReg x22, x0
+  trycont:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_12  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x26, x22, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x22, x28, x22
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x22, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+  __il_body:
+    arm64.movRegReg x0, x27
+    arm64.bl __write_stdout
+  __il_cont:
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Aes
+  exitdrop#17:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Aes
+  exitdrop#18:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+  exitdrop#19:
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __managed_decref
+  exitdrop#20:
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+  exitterminal:
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:9: key\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:10: key\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:11: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:12: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#10:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:13: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#12:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at aes-hardware.a-single-block-call-of-aes-is-one-frame-and-one-checked-entry.test:14: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+}
+
+func @Aes.encryptBlockInto {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x5, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x4, 0
+    arm64.movRegReg x1, x5
+    arm64.bl AesBitsliced.cryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#3
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 1
+    arm64.b.ne scmerge
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
+    arm64.add x1, x3, 16
+    arm64.cmp x0, x1
+    arm64.cset x0, lo
+  scmerge:
+    arm64.cbz x0, ifcont
+  refit:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x6
+    arm64.movRegReg x1, x5
+    arm64.bl aesHardwareCryptRefitted
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  tryok:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x1, x3
+    arm64.movRegReg x2, x6
+    arm64.movRegReg x3, x5
+    arm64.bl __cpufeat_aes_cipher_encrypt_block
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  tryerr#17:
+    arm64.movRegReg x0, x9
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#7
+    arm64.b matchcont
+  tryerr#3:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#7:
+    arm64.movRegReg x9, x0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @Aes.decryptBlockInto {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x5, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x4, 1
+    arm64.movRegReg x1, x5
+    arm64.bl AesBitsliced.cryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#3
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 1
+    arm64.b.ne scmerge
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
+    arm64.add x1, x3, 16
+    arm64.cmp x0, x1
+    arm64.cset x0, lo
+  scmerge:
+    arm64.cbz x0, ifcont
+  refit:
+    arm64.movImm x4, 1
+    arm64.movRegReg x0, x6
+    arm64.movRegReg x1, x5
+    arm64.bl aesHardwareCryptRefitted
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  tryok:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x1, x3
+    arm64.movRegReg x2, x6
+    arm64.movRegReg x3, x5
+    arm64.bl __cpufeat_aes_cipher_decrypt_block
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  tryerr#17:
+    arm64.movRegReg x0, x9
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#7
+    arm64.b matchcont
+  tryerr#3:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#7:
+    arm64.movRegReg x9, x0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+```
+
+<!-- test: aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean -->
+When a program calls `encryptBlockInto` alone, the software cipher's entry has one site, and splicing its loops and calls
+into `Aes.encryptBlockInto` would make that function save callee registers on every path, the hardware one included. The
+software arm stays a call: the frame below saves no register.
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create()
+	var block = ByteArray.create()
+	key.resize(16)
+	block.resize(16)
+	let aes = try Aes.create(key) otherwise panic("key")
+	try aes.encryptBlockInto(block, output: block, at: 0) otherwise panic("block")
+	print("{try block.get(0) otherwise 0}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+102
+```
+```RequiredRuntime
+Aes.encryptBlockInto
+```
+```TargetIr:x64-windows
+data {
+  __mrt_cpu_aes_usable@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegImm32 rdx, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 16
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_resize
+    x64.movRegReg rcx, rbx
+    x64.callDirect Aes.create
+    x64.storeSlotReg slot2, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r12
+    x64.callDirect Aes.encryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+  tryok#3:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp tryok#5
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp tryok#5
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+  tryerr#6:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  critsplit:
+    x64.movRegReg rax, r8
+  tryok#5:
+    x64.movRegReg rbx, rax
+  trycont:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot3, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot4
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
+  __il_body:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_Aes
+  exitdrop#9:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+  exitdrop#10:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+  exitterminal:
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:7: key\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:8: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Aes.encryptBlockInto {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rdi, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rdx, rdi
+    x64.callDirect AesBitsliced.cryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#3
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.cmpRegImm32 rcx, 16
+    x64.movRegImm32 rcx, 1
+    x64.jcc notEqual, scmerge
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.leaRegRegImm32 rdx, r9, 16
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg below, rcx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  refit:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, rdi
+    x64.callDirect aesHardwareCryptRefitted
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#17
+  tryok:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, r9
+    x64.movRegReg rax, r8
+    x64.movRegReg r9, rdi
+    x64.callDirect __cpufeat_aes_cipher_encrypt_block
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  tryerr#17:
+    x64.movRegReg rax, r10
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#7
+    x64.jmp matchcont
+  tryerr#3:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryerr#7:
+    x64.movRegReg r10, rax
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_cpu_aes_usable@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegImm32 rdx, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 16
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_resize
+    x64.movRegReg rcx, rbx
+    x64.callDirect Aes.create
+    x64.storeSlotReg slot2, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r12
+    x64.callDirect Aes.encryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+  tryok#3:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp tryok#5
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp tryok#5
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+  tryerr#6:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  critsplit:
+    x64.movRegReg rax, r8
+  tryok#5:
+    x64.movRegReg rbx, rax
+  trycont:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot3, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot4
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
+  __il_body:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_Aes
+  exitdrop#9:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+  exitdrop#10:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+  exitterminal:
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:7: key\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:8: block\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Aes.encryptBlockInto {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rdi, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rdx, rdi
+    x64.callDirect AesBitsliced.cryptBlockInto
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#3
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.cmpRegImm32 rcx, 16
+    x64.movRegImm32 rcx, 1
+    x64.jcc notEqual, scmerge
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.leaRegRegImm32 rdx, r9, 16
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg below, rcx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  refit:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, rdi
+    x64.callDirect aesHardwareCryptRefitted
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#17
+  tryok:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 rsi, 0
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, r9
+    x64.movRegReg rax, r8
+    x64.movRegReg r9, rdi
+    x64.callDirect __cpufeat_aes_cipher_encrypt_block
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  tryerr#17:
+    x64.movRegReg rax, r10
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#7
+    x64.jmp matchcont
+  tryerr#3:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryerr#7:
+    x64.movRegReg r10, rax
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_cpu_aes_usable@0 = i64 1
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 128
+    arm64.storeSlotReg slot13, x28
+    arm64.storeSlotReg slot12, x27
+    arm64.storeSlotReg slot11, x26
+    arm64.storeSlotReg slot10, x25
+    arm64.storeSlotReg slot9, x24
+    arm64.storeSlotReg slot8, x23
+    arm64.storeSlotReg slot7, x22
+    arm64.storeSlotReg slot6, x21
+    arm64.storeSlotReg slot5, x20
+    arm64.storeSlotReg slot4, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_resize
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_resize
+  __il_body#29:
+    arm64.bl __cpufeat_aes_usable
+  __il_cont#28:
+    arm64.cbz x0, __il_body#174
+  __il_body#166:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 0
+    arm64.b.eq scmerge#168
+  andrhs#167:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 24
+    arm64.cset x0, ne
+  scmerge#168:
+    arm64.movImm x1, 0
+    arm64.cbz x0, critsplit#202
+  andrhs#169:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 32
+    arm64.cset x0, ne
+    arm64.b scmerge#170
+  critsplit#202:
+    arm64.movRegReg x0, x1
+  scmerge#170:
+    arm64.cbz x0, ifcont#172
+  keyLength#171:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#165
+  ifcont#172:
+    arm64.movImm x0, 0
+  __il_cont#165:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#2
+  __il_body#31:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.lsr x0, x0, 2
+    arm64.add x21, x0, 6
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.add x0, x21, 1
+    arm64.lsl x1, x0, 5
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_resize
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl __cpufeat_aes_cipher_expand_key
+  __il_cont#30:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x22
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.movRegReg x21, x0
+    arm64.b tryok#1
+  __il_body#174:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 0
+    arm64.b.eq scmerge#176
+  andrhs#175:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 24
+    arm64.cset x0, ne
+  scmerge#176:
+    arm64.movImm x1, 0
+    arm64.cbz x0, critsplit#204
+  andrhs#177:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 32
+    arm64.cset x0, ne
+    arm64.b scmerge#178
+  critsplit#204:
+    arm64.movRegReg x0, x1
+  scmerge#178:
+    arm64.cbz x0, ifcont#180
+  keyLength#179:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#173
+  ifcont#180:
+    arm64.movImm x0, 0
+  __il_cont#173:
+    arm64.cmp x0, 0
+    arm64.b.eq tryok#34
+  tryerr#35:
+    arm64.movImm x21, 0
+    arm64.b __il_cont#32
+  tryok#34:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.lsr x0, x0, 2
+    arm64.add x21, x0, 6
+    arm64.cmp x21, 10
+    arm64.b.lt __rc_panic#37
+  __rc_chk#38:
+    arm64.cmp x21, 14
+    arm64.b.gt __rc_panic#37
+  __il_body#129:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.lsr x22, x0, 2
+    arm64.add x0, x21, 1
+    arm64.lsl x23, x0, 2
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x23
+    arm64.bl Array.reserve
+    arm64.movImm x0, 0
+    arm64.b forhdr#106
+  keyWords:
+    arm64.lsl x1, x0, 2
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#131
+  __il_body#182:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#186
+  __im_bounds#187:
+    arm64.sub x2, x2, x1
+    arm64.cmp x2, 4
+    arm64.b.lt __im_slow#186
+  __im_load#188:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
+    arm64.cmp x2, 1
+    arm64.b.ne __im_slow#186
+  __im_byte#189:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.add x1, x2, x1
+    arm64.loadRegBaseDisp.word32 x1, [x1 + 0]
+  __il_cont#181:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#152
+  __im_bounds#153:
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 16]
+    arm64.cmp x2, x3
+    arm64.b.hs __im_slow#152
+  __im_buffer#154:
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#152
+  __im_viewed#155:
+    arm64.sub x4, x3, 16
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#152
+  __im_store#156:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x1
+    arm64.add x1, x2, 1
+    arm64.storeBaseDispReg.word64 [x24 + 8], x1
+  forstep#108:
+    arm64.add x0, x0, 1
+  forhdr#106:
+    arm64.cmp x0, x22
+    arm64.b.lo keyWords
+  forexit#109:
+    arm64.sub x1, x22, 1
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x0, x22, x16
+    arm64.and x0, x0, 1
+    arm64.eor x2, x22, 1
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x2, x2, x16
+    arm64.and x2, x2, x1
+    arm64.orr x0, x0, x2
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#133
+  __rc_ok#132:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#158
+  __im_load#159:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+  tryok#110:
+    arm64.movImm x25, 0
+    arm64.movImm x26, 0
+    arm64.movRegReg x27, x26
+    arm64.movRegReg x26, x25
+    arm64.movRegReg x25, x22
+    arm64.b forhdr#112
+  eachWord:
+    arm64.cmp x26, 0
+    arm64.b.ne ifelse
+  rotate:
+    arm64.leaRdata x1, __barr_rec_28
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
+    arm64.cmp x27, x2
+    arm64.b.hs __im_slow#143
+  __im_load#144:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.loadRegBaseIndexScale.word64 x28, [x1 + x27*8 + 0]
+  __il_body#164:
+    arm64.lsr x1, x0, 8
+    arm64.lsl x0, x0, 24
+    arm64.orr x0, x1, x0
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+  __il_cont#163:
+    arm64.bl aesSubWord
+    arm64.eor x0, x0, x28
+    arm64.b ifcont#124
+  ifelse:
+    arm64.cmp x22, 8
+    arm64.movImm x1, 0
+    arm64.b.ne scmerge#121
+  andrhs#120:
+    arm64.cmp x26, 4
+    arm64.cset x1, eq
+  scmerge#121:
+    arm64.cbz x1, ifcont#124
+  longKey:
+    arm64.bl aesSubWord
+  ifcont#124:
+    arm64.sub x1, x25, x22
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#135
+  __rc_ok#134:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#161
+  __im_load#162:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
+  tryok#125:
+    arm64.eor x1, x0, x1
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 16]
+    arm64.cmp x2, 0
+    arm64.b.lt __im_slow#146
+  __im_bounds#147:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 16]
+    arm64.cmp x0, x2
+    arm64.b.hs __im_slow#146
+  __im_buffer#148:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 0]
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow#146
+  __im_viewed#149:
+    arm64.sub x3, x2, 16
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow#146
+  __im_store#150:
+    arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 8], x0
+  __im_cont#145:
+    arm64.add x0, x26, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#137
+  __rc_chk#138:
+    arm64.cmp x0, 8
+    arm64.b.gt __rc_panic#137
+  __rc_ok#136:
+    arm64.cmp x0, x22
+    arm64.b.ne critsplit#197
+  wrap:
+    arm64.movImm x0, 0
+    arm64.add x2, x27, 1
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic#140
+  __rc_chk#141:
+    arm64.cmp x2, 10
+    arm64.b.gt __rc_panic#140
+    arm64.b forstep#114
+  critsplit#197:
+    arm64.movRegReg x2, x27
+  forstep#114:
+    arm64.add x25, x25, 1
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x27, x2
+  forhdr#112:
+    arm64.cmp x25, x23
+    arm64.b.lo eachWord
+  __il_cont#105:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 8
+    arm64.leaRdata x1, __layout_FixedArray_N8_AesWord
+    arm64.bl FixedArray.create
+    arm64.movRegReg x23, x0
+    arm64.add x0, x21, 1
+    arm64.lsl x1, x0, 3
+    arm64.movRegReg x0, x22
+    arm64.bl Array.reserve
+    arm64.movImm x25, 0
+    arm64.add x26, x21, 1
+    arm64.b forhdr#41
+  eachRound:
+    arm64.lsl x1, x25, 2
+  __rc_ok#62:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#81
+  __im_load#82:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+  tryok#45:
+    arm64.add x2, x1, 1
+  __rc_ok#64:
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 8]
+    arm64.cmp x2, x3
+    arm64.b.hs __im_slow#84
+  __im_load#85:
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x3 + x2*8 + 0]
+  tryok#47:
+    arm64.add x3, x1, 2
+  __rc_ok#66:
+    arm64.loadRegBaseDisp.word64 x4, [x24 + 8]
+    arm64.cmp x3, x4
+    arm64.b.hs __im_slow#87
+  __im_load#88:
+    arm64.loadRegBaseDisp.word64 x4, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x3, [x4 + x3*8 + 0]
+  tryok#49:
+    arm64.add x1, x1, 3
+  __rc_ok#68:
+    arm64.loadRegBaseDisp.word64 x4, [x24 + 8]
+    arm64.cmp x1, x4
+    arm64.b.hs __im_slow#90
+  __im_load#91:
+    arm64.loadRegBaseDisp.word64 x4, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x4, [x4 + x1*8 + 0]
+  tryok#51:
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.movRegReg x3, x4
+    arm64.bl aesPackColumns
+    arm64.movRegReg x27, x0
+    arm64.loadRegBaseDisp.word64 x2, [x27 + 0]
+    arm64.loadRegBaseDisp.word64 x3, [x27 + 8]
+    arm64.movImm x1, 0
+    arm64.b forhdr#53
+  eachSlot:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#71
+  __im_bounds#72:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#71
+  __im_viewed#73:
+    arm64.sub x4, x0, 16
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#71
+  __im_store#74:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
+  __im_cont#70:
+    arm64.add x4, x1, 4
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#76
+  __im_bounds#77:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#76
+  __im_viewed#78:
+    arm64.sub x5, x0, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
+    arm64.cmp x5, 0
+    arm64.b.ne __im_slow#76
+  __im_store#79:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x4*8 + 0], x3
+  forstep#55:
+    arm64.add x1, x1, 1
+  forhdr#53:
+    arm64.cmp x1, 4
+    arm64.b.lt eachSlot
+  forexit#56:
+    arm64.movRegReg x0, x23
+    arm64.bl aesOrtho
+  __il_body#93:
+    arm64.movImm x0, 0
+    arm64.b forhdr#94
+  eachPlane:
+    arm64.loadRegBaseDisp.word64 x1, [x23 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x1 + x0*8 + 0]
+  __im_cont#98:
+    arm64.loadRegBaseDisp.word64 x2, [x22 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x22 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#100
+  __im_bounds#101:
+    arm64.loadRegBaseDisp.word64 x3, [x22 + 16]
+    arm64.cmp x2, x3
+    arm64.b.hs __im_slow#100
+  __im_buffer#102:
+    arm64.loadRegBaseDisp.word64 x3, [x22 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#100
+  __im_viewed#103:
+    arm64.sub x4, x3, 16
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#100
+  __im_store#104:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x1
+    arm64.add x1, x2, 1
+    arm64.storeBaseDispReg.word64 [x22 + 8], x1
+  forstep#96:
+    arm64.add x0, x0, 1
+  forhdr#94:
+    arm64.cmp x0, 8
+    arm64.b.lo eachPlane
+  __il_cont#92:
+    arm64.movRegReg x0, x27
+    arm64.bl __mm_decref
+  forstep#43:
+    arm64.add x25, x25, 1
+  forhdr#41:
+    arm64.cmp x25, x26
+    arm64.b.lo eachRound
+  forexit#44:
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+  exitdrop#58:
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_decref
+  __il_cont#39:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+    arm64.storeBaseDispReg.word64 [x0 + 8], x21
+    arm64.movImm x1, 0
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x1
+  __il_cont#32:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#2
+  tryok#26:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+    arm64.movRegReg x21, x0
+  tryok#1:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x20
+    arm64.bl Aes.encryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+  tryok#3:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#12
+  __im_load#13:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b tryok#5
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#12
+  __im_byte#15:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b tryok#5
+  __im_slow#12:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.movImm x22, 0
+    arm64.b trycont
+  tryok#5:
+    arm64.movRegReg x22, x0
+  trycont:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_8  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x26, x22, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x22, x28, x22
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x22, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+  __il_body#19:
+    arm64.movRegReg x0, x27
+    arm64.bl __write_stdout
+  __il_cont#18:
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Aes
+  exitdrop#9:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  exitdrop#10:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  exitterminal:
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __im_slow#186:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_word_get_le4
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#184
+    arm64.b __il_cont#181
+  __im_slow#152:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_push
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b forstep#108
+  __im_slow#158:
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#111
+    arm64.b tryok#110
+  __im_slow#143:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x27
+    arm64.bl __managed_get
+    arm64.movRegReg x28, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#118
+    arm64.b __il_body#164
+  __im_slow#161:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#126
+    arm64.b tryok#125
+  __im_slow#146:
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_push
+    arm64.loadRegSlot x1, slot1
+    arm64.b __im_cont#145
+  __im_slow#81:
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_get
+    arm64.loadRegSlot x1, slot1
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#46
+    arm64.b tryok#45
+  __im_slow#84:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#48
+    arm64.b tryok#47
+  __im_slow#87:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x3
+    arm64.bl __managed_get
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#50
+    arm64.b tryok#49
+  __im_slow#90:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_get
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#52
+    arm64.b tryok#51
+  __im_slow#71:
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_set_unchecked
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.b __im_cont#70
+  __im_slow#76:
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x4
+    arm64.movRegReg x2, x3
+    arm64.bl __managed_set_unchecked
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.b forstep#55
+  __im_slow#100:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_push
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b forstep#96
+  __rc_panic#37:
+    arm64.leaRdata x0, __str_blob_81  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#131:
+    arm64.leaRdata x0, __str_blob_69  ; "panic at AesBitsliced.maxon:601: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#184:
+    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:122: aes: a word inside an array the caller sized is missing\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#133:
+    arm64.leaRdata x0, __str_blob_70  ; "panic at AesBitsliced.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#111:
+    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:604: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#118:
+    arm64.leaRdata x0, __str_blob_29  ; "panic at AesBitsliced.maxon:612: aes: round constant index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#135:
+    arm64.leaRdata x0, __str_blob_71  ; "panic at AesBitsliced.maxon:618: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#126:
+    arm64.leaRdata x0, __str_blob_30  ; "panic at AesBitsliced.maxon:618: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#137:
+    arm64.leaRdata x0, __str_blob_72  ; "panic at AesBitsliced.maxon:621: Range check failed: value outside typealias 'AesKeySlot'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#140:
+    arm64.leaRdata x0, __str_blob_73  ; "panic at AesBitsliced.maxon:625: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#46:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at AesBitsliced.maxon:646: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#48:
+    arm64.leaRdata x0, __str_blob_32  ; "panic at AesBitsliced.maxon:647: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#50:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:648: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#52:
+    arm64.leaRdata x0, __str_blob_34  ; "panic at AesBitsliced.maxon:649: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:7: key\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:8: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+}
+
+func @Aes.encryptBlockInto {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x5, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x4, 0
+    arm64.movRegReg x1, x5
+    arm64.bl AesBitsliced.cryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#3
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 1
+    arm64.b.ne scmerge
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
+    arm64.add x1, x3, 16
+    arm64.cmp x0, x1
+    arm64.cset x0, lo
+  scmerge:
+    arm64.cbz x0, ifcont
+  refit:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x6
+    arm64.movRegReg x1, x5
+    arm64.bl aesHardwareCryptRefitted
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  tryok:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x1, x3
+    arm64.movRegReg x2, x6
+    arm64.movRegReg x3, x5
+    arm64.bl __cpufeat_aes_cipher_encrypt_block
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  tryerr#17:
+    arm64.movRegReg x0, x9
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#7
+    arm64.b matchcont
+  tryerr#3:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#7:
+    arm64.movRegReg x9, x0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_cpu_aes_usable@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 128
+    arm64.storeSlotReg slot13, x28
+    arm64.storeSlotReg slot12, x27
+    arm64.storeSlotReg slot11, x26
+    arm64.storeSlotReg slot10, x25
+    arm64.storeSlotReg slot9, x24
+    arm64.storeSlotReg slot8, x23
+    arm64.storeSlotReg slot7, x22
+    arm64.storeSlotReg slot6, x21
+    arm64.storeSlotReg slot5, x20
+    arm64.storeSlotReg slot4, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_resize
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_resize
+  __il_body#29:
+    arm64.bl __cpufeat_aes_usable
+  __il_cont#28:
+    arm64.cbz x0, __il_body#174
+  __il_body#166:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 0
+    arm64.b.eq scmerge#168
+  andrhs#167:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 24
+    arm64.cset x0, ne
+  scmerge#168:
+    arm64.movImm x1, 0
+    arm64.cbz x0, critsplit#202
+  andrhs#169:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 32
+    arm64.cset x0, ne
+    arm64.b scmerge#170
+  critsplit#202:
+    arm64.movRegReg x0, x1
+  scmerge#170:
+    arm64.cbz x0, ifcont#172
+  keyLength#171:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#165
+  ifcont#172:
+    arm64.movImm x0, 0
+  __il_cont#165:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#2
+  __il_body#31:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.lsr x0, x0, 2
+    arm64.add x21, x0, 6
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.add x0, x21, 1
+    arm64.lsl x1, x0, 5
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_resize
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl __cpufeat_aes_cipher_expand_key
+  __il_cont#30:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x22
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.movRegReg x21, x0
+    arm64.b tryok#1
+  __il_body#174:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 0
+    arm64.b.eq scmerge#176
+  andrhs#175:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 24
+    arm64.cset x0, ne
+  scmerge#176:
+    arm64.movImm x1, 0
+    arm64.cbz x0, critsplit#204
+  andrhs#177:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 32
+    arm64.cset x0, ne
+    arm64.b scmerge#178
+  critsplit#204:
+    arm64.movRegReg x0, x1
+  scmerge#178:
+    arm64.cbz x0, ifcont#180
+  keyLength#179:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#173
+  ifcont#180:
+    arm64.movImm x0, 0
+  __il_cont#173:
+    arm64.cmp x0, 0
+    arm64.b.eq tryok#34
+  tryerr#35:
+    arm64.movImm x21, 0
+    arm64.b __il_cont#32
+  tryok#34:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.lsr x0, x0, 2
+    arm64.add x21, x0, 6
+    arm64.cmp x21, 10
+    arm64.b.lt __rc_panic#37
+  __rc_chk#38:
+    arm64.cmp x21, 14
+    arm64.b.gt __rc_panic#37
+  __il_body#129:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.lsr x22, x0, 2
+    arm64.add x0, x21, 1
+    arm64.lsl x23, x0, 2
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x23
+    arm64.bl Array.reserve
+    arm64.movImm x0, 0
+    arm64.b forhdr#106
+  keyWords:
+    arm64.lsl x1, x0, 2
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#131
+  __il_body#182:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#186
+  __im_bounds#187:
+    arm64.sub x2, x2, x1
+    arm64.cmp x2, 4
+    arm64.b.lt __im_slow#186
+  __im_load#188:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
+    arm64.cmp x2, 1
+    arm64.b.ne __im_slow#186
+  __im_byte#189:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.add x1, x2, x1
+    arm64.loadRegBaseDisp.word32 x1, [x1 + 0]
+  __il_cont#181:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#152
+  __im_bounds#153:
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 16]
+    arm64.cmp x2, x3
+    arm64.b.hs __im_slow#152
+  __im_buffer#154:
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#152
+  __im_viewed#155:
+    arm64.sub x4, x3, 16
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#152
+  __im_store#156:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x1
+    arm64.add x1, x2, 1
+    arm64.storeBaseDispReg.word64 [x24 + 8], x1
+  forstep#108:
+    arm64.add x0, x0, 1
+  forhdr#106:
+    arm64.cmp x0, x22
+    arm64.b.lo keyWords
+  forexit#109:
+    arm64.sub x1, x22, 1
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x0, x22, x16
+    arm64.and x0, x0, 1
+    arm64.eor x2, x22, 1
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x2, x2, x16
+    arm64.and x2, x2, x1
+    arm64.orr x0, x0, x2
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#133
+  __rc_ok#132:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#158
+  __im_load#159:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+  tryok#110:
+    arm64.movImm x25, 0
+    arm64.movImm x26, 0
+    arm64.movRegReg x27, x26
+    arm64.movRegReg x26, x25
+    arm64.movRegReg x25, x22
+    arm64.b forhdr#112
+  eachWord:
+    arm64.cmp x26, 0
+    arm64.b.ne ifelse
+  rotate:
+    arm64.leaRdata x1, __barr_rec_28
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
+    arm64.cmp x27, x2
+    arm64.b.hs __im_slow#143
+  __im_load#144:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.loadRegBaseIndexScale.word64 x28, [x1 + x27*8 + 0]
+  __il_body#164:
+    arm64.lsr x1, x0, 8
+    arm64.lsl x0, x0, 24
+    arm64.orr x0, x1, x0
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+  __il_cont#163:
+    arm64.bl aesSubWord
+    arm64.eor x0, x0, x28
+    arm64.b ifcont#124
+  ifelse:
+    arm64.cmp x22, 8
+    arm64.movImm x1, 0
+    arm64.b.ne scmerge#121
+  andrhs#120:
+    arm64.cmp x26, 4
+    arm64.cset x1, eq
+  scmerge#121:
+    arm64.cbz x1, ifcont#124
+  longKey:
+    arm64.bl aesSubWord
+  ifcont#124:
+    arm64.sub x1, x25, x22
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#135
+  __rc_ok#134:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#161
+  __im_load#162:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
+  tryok#125:
+    arm64.eor x1, x0, x1
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 16]
+    arm64.cmp x2, 0
+    arm64.b.lt __im_slow#146
+  __im_bounds#147:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 16]
+    arm64.cmp x0, x2
+    arm64.b.hs __im_slow#146
+  __im_buffer#148:
+    arm64.loadRegBaseDisp.word64 x2, [x24 + 0]
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow#146
+  __im_viewed#149:
+    arm64.sub x3, x2, 16
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow#146
+  __im_store#150:
+    arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 8], x0
+  __im_cont#145:
+    arm64.add x0, x26, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#137
+  __rc_chk#138:
+    arm64.cmp x0, 8
+    arm64.b.gt __rc_panic#137
+  __rc_ok#136:
+    arm64.cmp x0, x22
+    arm64.b.ne critsplit#197
+  wrap:
+    arm64.movImm x0, 0
+    arm64.add x2, x27, 1
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic#140
+  __rc_chk#141:
+    arm64.cmp x2, 10
+    arm64.b.gt __rc_panic#140
+    arm64.b forstep#114
+  critsplit#197:
+    arm64.movRegReg x2, x27
+  forstep#114:
+    arm64.add x25, x25, 1
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x27, x2
+  forhdr#112:
+    arm64.cmp x25, x23
+    arm64.b.lo eachWord
+  __il_cont#105:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 8
+    arm64.leaRdata x1, __layout_FixedArray_N8_AesWord
+    arm64.bl FixedArray.create
+    arm64.movRegReg x23, x0
+    arm64.add x0, x21, 1
+    arm64.lsl x1, x0, 3
+    arm64.movRegReg x0, x22
+    arm64.bl Array.reserve
+    arm64.movImm x25, 0
+    arm64.add x26, x21, 1
+    arm64.b forhdr#41
+  eachRound:
+    arm64.lsl x1, x25, 2
+  __rc_ok#62:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#81
+  __im_load#82:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+  tryok#45:
+    arm64.add x2, x1, 1
+  __rc_ok#64:
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 8]
+    arm64.cmp x2, x3
+    arm64.b.hs __im_slow#84
+  __im_load#85:
+    arm64.loadRegBaseDisp.word64 x3, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x3 + x2*8 + 0]
+  tryok#47:
+    arm64.add x3, x1, 2
+  __rc_ok#66:
+    arm64.loadRegBaseDisp.word64 x4, [x24 + 8]
+    arm64.cmp x3, x4
+    arm64.b.hs __im_slow#87
+  __im_load#88:
+    arm64.loadRegBaseDisp.word64 x4, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x3, [x4 + x3*8 + 0]
+  tryok#49:
+    arm64.add x1, x1, 3
+  __rc_ok#68:
+    arm64.loadRegBaseDisp.word64 x4, [x24 + 8]
+    arm64.cmp x1, x4
+    arm64.b.hs __im_slow#90
+  __im_load#91:
+    arm64.loadRegBaseDisp.word64 x4, [x24 + 0]
+    arm64.loadRegBaseIndexScale.word64 x4, [x4 + x1*8 + 0]
+  tryok#51:
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.movRegReg x3, x4
+    arm64.bl aesPackColumns
+    arm64.movRegReg x27, x0
+    arm64.loadRegBaseDisp.word64 x2, [x27 + 0]
+    arm64.loadRegBaseDisp.word64 x3, [x27 + 8]
+    arm64.movImm x1, 0
+    arm64.b forhdr#53
+  eachSlot:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#71
+  __im_bounds#72:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#71
+  __im_viewed#73:
+    arm64.sub x4, x0, 16
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#71
+  __im_store#74:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
+  __im_cont#70:
+    arm64.add x4, x1, 4
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#76
+  __im_bounds#77:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#76
+  __im_viewed#78:
+    arm64.sub x5, x0, 16
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
+    arm64.cmp x5, 0
+    arm64.b.ne __im_slow#76
+  __im_store#79:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x4*8 + 0], x3
+  forstep#55:
+    arm64.add x1, x1, 1
+  forhdr#53:
+    arm64.cmp x1, 4
+    arm64.b.lt eachSlot
+  forexit#56:
+    arm64.movRegReg x0, x23
+    arm64.bl aesOrtho
+  __il_body#93:
+    arm64.movImm x0, 0
+    arm64.b forhdr#94
+  eachPlane:
+    arm64.loadRegBaseDisp.word64 x1, [x23 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x1 + x0*8 + 0]
+  __im_cont#98:
+    arm64.loadRegBaseDisp.word64 x2, [x22 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x22 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#100
+  __im_bounds#101:
+    arm64.loadRegBaseDisp.word64 x3, [x22 + 16]
+    arm64.cmp x2, x3
+    arm64.b.hs __im_slow#100
+  __im_buffer#102:
+    arm64.loadRegBaseDisp.word64 x3, [x22 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#100
+  __im_viewed#103:
+    arm64.sub x4, x3, 16
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#100
+  __im_store#104:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x1
+    arm64.add x1, x2, 1
+    arm64.storeBaseDispReg.word64 [x22 + 8], x1
+  forstep#96:
+    arm64.add x0, x0, 1
+  forhdr#94:
+    arm64.cmp x0, 8
+    arm64.b.lo eachPlane
+  __il_cont#92:
+    arm64.movRegReg x0, x27
+    arm64.bl __mm_decref
+  forstep#43:
+    arm64.add x25, x25, 1
+  forhdr#41:
+    arm64.cmp x25, x26
+    arm64.b.lo eachRound
+  forexit#44:
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+  exitdrop#58:
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_decref
+  __il_cont#39:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+    arm64.storeBaseDispReg.word64 [x0 + 8], x21
+    arm64.movImm x1, 0
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x1
+  __il_cont#32:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#2
+  tryok#26:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+    arm64.movRegReg x21, x0
+  tryok#1:
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x20
+    arm64.bl Aes.encryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+  tryok#3:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#12
+  __im_load#13:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b tryok#5
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#12
+  __im_byte#15:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b tryok#5
+  __im_slow#12:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.movImm x22, 0
+    arm64.b trycont
+  tryok#5:
+    arm64.movRegReg x22, x0
+  trycont:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_8  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x26, x22, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x22, x28, x22
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x22, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+  __il_body#19:
+    arm64.movRegReg x0, x27
+    arm64.bl __write_stdout
+  __il_cont#18:
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Aes
+  exitdrop#9:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  exitdrop#10:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  exitterminal:
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __im_slow#186:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_word_get_le4
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#184
+    arm64.b __il_cont#181
+  __im_slow#152:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_push
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b forstep#108
+  __im_slow#158:
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#111
+    arm64.b tryok#110
+  __im_slow#143:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x27
+    arm64.bl __managed_get
+    arm64.movRegReg x28, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#118
+    arm64.b __il_body#164
+  __im_slow#161:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#126
+    arm64.b tryok#125
+  __im_slow#146:
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_push
+    arm64.loadRegSlot x1, slot1
+    arm64.b __im_cont#145
+  __im_slow#81:
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_get
+    arm64.loadRegSlot x1, slot1
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#46
+    arm64.b tryok#45
+  __im_slow#84:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#48
+    arm64.b tryok#47
+  __im_slow#87:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x3
+    arm64.bl __managed_get
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#50
+    arm64.b tryok#49
+  __im_slow#90:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_get
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#52
+    arm64.b tryok#51
+  __im_slow#71:
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_set_unchecked
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.b __im_cont#70
+  __im_slow#76:
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x4
+    arm64.movRegReg x2, x3
+    arm64.bl __managed_set_unchecked
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.b forstep#55
+  __im_slow#100:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_push
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b forstep#96
+  __rc_panic#37:
+    arm64.leaRdata x0, __str_blob_81  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#131:
+    arm64.leaRdata x0, __str_blob_69  ; "panic at AesBitsliced.maxon:601: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#184:
+    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:122: aes: a word inside an array the caller sized is missing\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#133:
+    arm64.leaRdata x0, __str_blob_70  ; "panic at AesBitsliced.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#111:
+    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:604: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#118:
+    arm64.leaRdata x0, __str_blob_29  ; "panic at AesBitsliced.maxon:612: aes: round constant index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#135:
+    arm64.leaRdata x0, __str_blob_71  ; "panic at AesBitsliced.maxon:618: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#126:
+    arm64.leaRdata x0, __str_blob_30  ; "panic at AesBitsliced.maxon:618: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#137:
+    arm64.leaRdata x0, __str_blob_72  ; "panic at AesBitsliced.maxon:621: Range check failed: value outside typealias 'AesKeySlot'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#140:
+    arm64.leaRdata x0, __str_blob_73  ; "panic at AesBitsliced.maxon:625: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#46:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at AesBitsliced.maxon:646: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#48:
+    arm64.leaRdata x0, __str_blob_32  ; "panic at AesBitsliced.maxon:647: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#50:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:648: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#52:
+    arm64.leaRdata x0, __str_blob_34  ; "panic at AesBitsliced.maxon:649: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:7: key\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:8: block\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+}
+
+func @Aes.encryptBlockInto {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x5, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x4, 0
+    arm64.movRegReg x1, x5
+    arm64.bl AesBitsliced.cryptBlockInto
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#3
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
+    arm64.cmp x0, 16
+    arm64.movImm x0, 1
+    arm64.b.ne scmerge
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
+    arm64.add x1, x3, 16
+    arm64.cmp x0, x1
+    arm64.cset x0, lo
+  scmerge:
+    arm64.cbz x0, ifcont
+  refit:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x6
+    arm64.movRegReg x1, x5
+    arm64.bl aesHardwareCryptRefitted
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  tryok:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont:
+    arm64.movImm x4, 0
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x1, x3
+    arm64.movRegReg x2, x6
+    arm64.movRegReg x3, x5
+    arm64.bl __cpufeat_aes_cipher_encrypt_block
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  tryerr#17:
+    arm64.movRegReg x0, x9
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#7
+    arm64.b matchcont
+  tryerr#3:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#7:
+    arm64.movRegReg x9, x0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+```
+
 <!-- test: aes-hardware.a-counter-mode-call-is-one-checked-entry-and-one-routine-call -->
 <!-- tier: stdlib -->
 `__Builtins.aesCtrXor` becomes a call to the checked runtime entry `__cpufeat_aes_cipher_ctr_xor`, which tests the

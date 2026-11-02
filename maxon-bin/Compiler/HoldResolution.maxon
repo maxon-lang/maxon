@@ -347,7 +347,7 @@ type HoldJudge
 		let tag = try self.valueTags.get(receiver) otherwise return HoldEffect.wildElement
 		let nameId = try self.valueNameIds.get(receiver) otherwise return HoldEffect.wildElement
 
-		if self.signatures.isArrayInstanceAt(tag, nameId: nameId) and self.elementsAreOpaque(nameId as GenericInstanceId) 'opaqueElements'
+		if self.signatures.isManagedBufferRecordInstanceAt(tag, nameId: nameId) and self.elementsAreOpaque(nameId as GenericInstanceId) 'opaqueElements'
 			return HoldEffect.opaqueElement
 		end 'opaqueElements'
 
@@ -368,7 +368,7 @@ type HoldJudge
 		let tag = try self.valueTags.get(receiver) otherwise return HoldEffect.everything
 		let nameId = try self.valueNameIds.get(receiver) otherwise return HoldEffect.everything
 
-		if not self.signatures.isArrayInstanceAt(tag, nameId: nameId) 'notAnArray'
+		if not self.signatures.isManagedBufferRecordInstanceAt(tag, nameId: nameId) 'notAnArray'
 			return HoldEffect.everything
 		end 'notAnArray'
 
@@ -462,7 +462,7 @@ type HoldJudge
 	end 'noteStructReach'
 
 	function noteInstanceReach(instance GenericInstanceId)
-		if self.signatures.isArrayInstance(instance) 'anArray'
+		if self.signatures.isManagedBufferRecordInstance(instance) 'anArray'
 			if self.elementsMayHoldRecords(instance) 'recordElements'
 				self.noteElementReach(self.signatures.containerElementType(instance))
 			end 'recordElements'
@@ -551,7 +551,7 @@ type HoldJudge
 	end 'elementKeyOfType'
 
 	function instanceRecordKey(instance GenericInstanceId) returns HoldKey
-		if self.signatures.isArrayInstance(instance) 'anArray'
+		if self.signatures.isManagedBufferRecordInstance(instance) 'anArray'
 			return (ArrayRecordKind shl RecordKindShift) or (instance as HoldKey)
 		end 'anArray'
 
@@ -2094,7 +2094,7 @@ type HoldResolver
 			return false
 		end 'unknownArray'
 
-		if not self.judge.signatures.isArrayInstanceAt(tag, nameId: nameId) 'notAnArray'
+		if not self.judge.signatures.isManagedBufferRecordInstanceAt(tag, nameId: nameId) 'notAnArray'
 			self.chainTop = true
 			return false
 		end 'notAnArray'

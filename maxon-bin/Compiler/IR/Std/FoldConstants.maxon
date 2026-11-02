@@ -40,7 +40,7 @@
 //   • **`div`/`mod` — they TRAP.** They are not even `binOp`s: integer division has its own `StdOp.div`/
 //     `StdOp.mod` variants carrying `isPure: false`, because x64 `idiv` faults on a zero divisor and on
 //     `i64.min / -1`. `classifyArithOperands` therefore never offers one as a subject, and the prune
-//     below (`dceRetiredDefs`) retires only `const`s, so neither can be dropped for being unread either.
+//     below (`dceRetiredDefs`) retires no `div` or `mod`, so neither is dropped for being unread.
 //     ⚠ Note that `foldIntDivision` is nonetheless RIGHT about the pair a division can and cannot answer
 //     — `i64.min / -1` has no representable quotient and declines, `i64.min mod -1` is `0` and folds.
 //     This pass rests on that rather than restating it.
@@ -153,10 +153,10 @@ module function foldConstantsInFunc(module StdModule, func IrFunction, branch St
 
 	// The `const`s this pass detached from their readers — the operands of every op it replaced, and the
 	// condition of every branch it made unconditional. Shared with `foldConstOperands` rather than
-	// re-derived: it is the same narrow rule (retire a `const` nothing reads), and the pass that owns it
+	// re-derived: it is the same narrow rule (retire a def nothing reads), and the pass that owns it
 	// states at length why it must not grow into a general DCE.
 	//
-	// ⚠ Its other half — retiring an unreferenced IDENTITY `binOpImm` — is inert here and that is not a
+	// ⚠ Its identity half — retiring an unreferenced IDENTITY `binOpImm` — is inert here and that is not a
 	// coincidence to rely on: `foldConstOperands` is the only producer of an immediate form and it runs
 	// AFTER this pass, so the pipeline reaches this call with none in the module. Should one ever arrive,
 	// dropping it is still correct (it is pure and unread); what would be missing is the SUBSTITUTION

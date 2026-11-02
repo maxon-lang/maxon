@@ -91,7 +91,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | Optimization | State |
 |---|---|
 | Whole-program dead-function elim | ✅ `DeadFunctionElimination.maxon` |
-| Inlining | ◑ `InlineLeaves` — every function called exactly once (any size), then leaves ≤24 ops at every site; one round, scheduled AFTER the managed rewrite (EC17); spliced bodies keep their frame in a trace through `__inlframes` |
+| Inlining | ◑ `InlineLeaves` — every function called exactly once (any size) unless the splice would overrun the register budget at its site or make a lean caller save callee registers on a hot path that avoids it, then leaves ≤24 ops at every site; one round, scheduled AFTER the managed rewrite (EC17); spliced bodies keep their frame in a trace through `__inlframes` |
 | Managed-primitive inlining | ✅ `InlineManagedPrimitives` (EC1) |
 | Const **operand** → immediate | ✅ `FoldConstOperands` |
 | Algebraic identity (`x+0`, `x*1`) | ✅ `FoldConstOperands` move 3 |

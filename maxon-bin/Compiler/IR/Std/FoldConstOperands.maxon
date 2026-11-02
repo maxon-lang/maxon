@@ -26,7 +26,8 @@
 //   3. Replace a `binOpImm` whose immediate is its opcode's IDENTITY ELEMENT — `x * 1`, `x + 0`,
 //      `x - 0`, `x & -1`, `x | 0`, `x ^ 0`, `x shl/shr 0` — by its own operand: every read of the
 //      result is rewritten to read the operand instead.
-//   4. DCE the `const` op left with no remaining reference, and the identity op left with none.
+//   4. DCE the `const` op left with no remaining reference, the identity op left with none, and any
+//      `globalAddr`, `rdataAddr` or `funcAddr` nothing reads.
 //   5. Fuse `(x shl k) or (x shr (64 - k))` into one `rotateLeft`/`rotateRight` (`FuseRotates.maxon`),
 //      which retires the shifts it leaves unread itself.
 //
@@ -35,10 +36,13 @@
 // identity op may go, and the walk is the same walk. It is also where the shape is CREATED — move 2 is
 // what turns `x * <const 1>` into the single op an identity test can recognise without a use count.
 //
-// ⚠ **IT IS NOT A GENERAL DCE AND MUST NOT GROW INTO ONE.** Move 4 retires exactly two kinds of def —
-// a `const` and an identity `binOpImm` — because those are the two THIS pass detached from their
-// readers. An unreferenced `call` is not dead (it may have run for its effects) and an unreferenced
-// `div` is not either (`isPure: false` — it traps); deciding that is another pass's question.
+// ⚠ **IT IS NOT A GENERAL DCE AND MUST NOT GROW INTO ONE.** Move 4 retires exactly three kinds of def —
+// a `const`, an identity `binOpImm` and an address (`globalAddr`, `rdataAddr`, `funcAddr`). The first
+// two are the ones THIS pass detached from their readers; an unread address has no effect, and an
+// unread `funcAddr` is also a static edge that keeps its function in the program until
+// `eliminateDeadFunctions`, which runs after the passes. An unreferenced `call` is not dead (it may have run
+// for its effects) and an unreferenced `div` is not either (`isPure: false` — it traps); deciding that
+// is another pass's question.
 //
 // A const is folded only when it fits the immediate field of the lowered op — see
 // `constFitsBinOpImmediate`, which is the ONE place that per-opcode rule lives. A
@@ -112,16 +116,15 @@ end 'ConstValueMap'
 // would mint and drop a box for every op in the module that is neither a `const` nor an identity, which
 // is almost all of them. ONE roster fills this record in place instead, created once per walk.
 //
-// ⭐ **ONE ROSTER, NOT TWO, AND THAT IS THE POINT RATHER THAN A SIDE EFFECT.** The prune asks BOTH
-// questions of the same op (`retiredDefs` was "unreferenced const OR unreferenced identity", two
-// matches over one union), so the two classifications were already taken together at the one call site
-// that needed both. Merged, a new `StdOp` variant is a compile error in ONE place instead of two, and
-// the two answers cannot disagree about which band a variant falls in.
+// ⭐ **ONE ROSTER, NOT TWO, AND THAT IS THE POINT RATHER THAN A SIDE EFFECT.** The prune asks every
+// question of the same op, so a new `StdOp` variant is a compile error in ONE place, and the answers
+// cannot disagree about which band a variant falls in.
 //
 // It is the shape `collectStdOpUses` uses for the dual question — one exhaustive roster, a caller-owned
 // sink, no allocation per op.
 enum StdFoldableDefKind
-	// Neither a `const` nor an identity `binOpImm`: nothing this pass detaches from a reader or retires.
+	// Not a `const`, an identity `binOpImm` or an address: nothing this pass detaches from a reader or
+	// retires.
 	neither
 
 	// A `const` — `definedId` is its result and `constant` the value it materializes.
@@ -129,6 +132,9 @@ enum StdFoldableDefKind
 
 	// An identity `binOpImm` — `definedId` is its result and `identityOperand` the operand it computes.
 	identityDef
+
+	// A `globalAddr`, `rdataAddr` or `funcAddr` — `definedId` is its result.
+	addressDef
 end 'StdFoldableDefKind'
 
 export type StdFoldableDef
@@ -139,8 +145,8 @@ export type StdFoldableDef
 	// (`StdDefinedValues` states the same rule for the same reason).
 	var kind as StdFoldableDefKind
 
-	// The value the classified op defines — its result. Set by BOTH retirable kinds, which is what lets
-	// the prune ask one question of either.
+	// The value the classified op defines — its result. Set by every retirable kind, which is what lets
+	// the prune ask one question of any.
 	export var definedId as ValueId
 
 	// `constDef` only: the constant the `const` op materializes, and the type it is materialized at.
@@ -158,6 +164,11 @@ export type StdFoldableDef
 	function recordNeither()
 		self.kind = StdFoldableDefKind.neither
 	end 'recordNeither'
+
+	function recordAddress(resultId ValueId)
+		self.kind = StdFoldableDefKind.addressDef
+		self.definedId = resultId
+	end 'recordAddress'
 
 	function recordConst(resultId ValueId, value FullRangeInt, valueType StdType)
 		self.kind = StdFoldableDefKind.constDef
@@ -187,8 +198,8 @@ export type StdFoldableDef
 		return self.kind == StdFoldableDefKind.identityDef
 	end 'isIdentityDef'
 
-	// A def this pass may retire — either kind. The prune's question, asked of `kind` rather than of the
-	// op a second time.
+	// A def this pass may retire — any kind but `neither`. The prune's question, asked of `kind`
+	// rather than of the op a second time.
 	export function isRetirableDef() returns bool
 		return self.kind != StdFoldableDefKind.neither
 	end 'isRetirableDef'
@@ -218,7 +229,6 @@ export function classifyFoldableDef(op StdOp, def StdFoldableDef)
 		param or
 		call or
 		retVoid or
-		globalAddr or
 
 		// ⚠ A load's result is not a constant, however constant the global's initial value in the
 		// `.data` image is: any store since has replaced it, so folding a load into its initializer
@@ -228,11 +238,9 @@ export function classifyFoldableDef(op StdOp, def StdFoldableDef)
 		storeIndirect or
 		osAllocPages or
 		osWriteStdout or
-		rdataAddr or
 		tryCall or
 		errorReturn or
 		osExit or
-		funcAddr or
 		callIndirect or
 		osPanic or
 		osReadClock or
@@ -332,6 +340,9 @@ export function classifyFoldableDef(op StdOp, def StdFoldableDef)
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then def.recordNeither()
+		globalAddr(resultId, _) then def.recordAddress(resultId)
+		rdataAddr(resultId, _) then def.recordAddress(resultId)
+		funcAddr(resultId, _) then def.recordAddress(resultId)
 		binOpImm(resultId, lhs, imm, opcode, _) then def.recordBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode)
 	end 'c'
 end 'classifyFoldableDef'
@@ -708,23 +719,23 @@ function constAsImmediate(constMap ConstValueMap, id ValueId) returns Imm32
 	return constMap.constantOf(id) as Imm32
 end 'constAsImmediate'
 
-// Drop every `const` and identity `binOpImm` in `opIndices` that nothing reads: the rhs `const`s the
-// immediate rewrite took out of their `binOp`/`cmp`, and the identity `binOpImm`s whose reads
-// `substituteIdentityImmediates` moved onto their own operand. Either one still feeding another op or a
-// phi branch edge is kept.
+// Drop every `const`, identity `binOpImm` and address in `opIndices` that nothing reads: the rhs
+// `const`s the immediate rewrite took out of their `binOp`/`cmp`, the identity `binOpImm`s whose reads
+// `substituteIdentityImmediates` moved onto their own operand, and any `globalAddr`, `rdataAddr` or
+// `funcAddr`. A def still feeding another op or a phi branch edge is kept.
 //
 // ⭐ **IT DECIDES WHAT DIES; `removeOpsDefining` PERFORMS THE REMOVAL.** The block-rebuild half is the
 // dialect's, shared with `eliminateCommonSubexpressions`, which dooms an entirely different set for an
 // entirely different reason and would otherwise need a second copy of the identical walk. What stays here is
-// the only part that is this pass's own — WHICH defs are retirable, which is `StdFoldableDef`'s two
+// the only part that is this pass's own — WHICH defs are retirable, which is `StdFoldableDef`'s
 // kinds and a reference test.
 export function dceRetiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
 	removeOpsDefining(module, func: func, doomed: retiredDefs(module, func: func, opIndices: opIndices, def: def))
 end 'dceRetiredDefs'
 
-// The value ids the prune drops: a `const` or an identity `binOpImm` whose result appears in no
-// reference set. ONE classification answers for both kinds — see `StdFoldableDef` — rather than two
-// predicates over two unions, each with its own exhaustive `StdOp` roster.
+// The value ids the prune drops: a `const`, an identity `binOpImm` or an address whose result appears
+// in no reference set. ONE classification answers for every kind — see `StdFoldableDef` — rather than
+// one predicate per kind, each with its own exhaustive `StdOp` roster.
 //
 // ⚠ The reference test is not a formality for the identity kind — it is the whole safety argument for
 // a substitution applied in walk order. See `substituteIdentityImmediates`.

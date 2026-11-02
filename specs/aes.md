@@ -898,3 +898,56 @@ block block true
 ```exitcode
 0
 ```
+
+<!-- test: aes.block-calls-grow-an-output-by-exactly-the-bytes-it-lacks -->
+A block written at index 5 needs the output to reach 21 bytes. An output of 20 bytes is one short and grows to 21; one of 21 holds the block exactly and stays 21; one of 22 holds it with a byte to spare and stays 22. `Aes` (the hardware cipher where the host has one) and `AesBitsliced` answer alike, in both directions.
+```maxon
+function filler(count Count) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for _ in 0 upto count 'eachByte'
+		bytes.push(0x5A)
+	end 'eachByte'
+
+	return bytes
+end 'filler'
+
+function lengthThroughAes(aes Aes, size Count, opening bool) returns Count
+	var output = filler(size)
+
+	if opening 'open'
+		try aes.decryptBlockInto(filler(16), output: output, at: 5) otherwise panic("the block is 16 bytes")
+	end 'open' else 'seal'
+		try aes.encryptBlockInto(filler(16), output: output, at: 5) otherwise panic("the block is 16 bytes")
+	end 'seal'
+
+	return output.count()
+end 'lengthThroughAes'
+
+function lengthThroughBitsliced(cipher AesBitsliced, size Count, direction AesDirection) returns Count
+	var output = filler(size)
+	try cipher.cryptBlockInto(filler(16), output: output, at: 5, direction: direction) otherwise panic("the block is 16 bytes")
+
+	return output.count()
+end 'lengthThroughBitsliced'
+
+function main() returns ExitCode
+	let key = filler(16)
+	let aes = try Aes.create(key) otherwise panic("the key is valid")
+	let software = try AesBitsliced.create(key) otherwise panic("the key is valid")
+
+	for size in 20 to 22 'eachSize'
+		print("{size} {lengthThroughAes(aes, size: size, opening: false)} {lengthThroughAes(aes, size: size, opening: true)} {lengthThroughBitsliced(software, size: size, direction: AesDirection.encrypt)} {lengthThroughBitsliced(software, size: size, direction: AesDirection.decrypt)}\n")
+	end 'eachSize'
+
+	return 0
+end 'main'
+```
+```stdout
+20 21 21 21 21
+21 21 21 21 21
+22 22 22 22 22
+```
+```exitcode
+0
+```

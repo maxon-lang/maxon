@@ -2367,3 +2367,127 @@ end 'main'
 ```maxoncstderr
 error E2010: <fragment>:3:27: Expected 'a type' but got '3'
 ```
+
+## A Fixed Array Beside Counted Records
+
+A `FixedArray` holds scalars only, so a write into one never releases a record, and a read from one is never a record to hold. What these cases pin is that its being an array record does not change the verdict on the records around it: a record read out of an `Array` is still kept alive across the array's overwrite of that slot, whatever fixed arrays are written between the read and the use. Each exits 0, and a leak would exit 101.
+
+<!-- test: a-record-read-from-an-array-survives-its-slots-overwrite-between-fixed-array-writes -->
+`held` is the record in slot 0 of `nodes`. The overwrite of that slot releases the record `nodes` owned, and `held` is read after it between two writes to a fixed array: `7 1 2`.
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Node
+	export var weight as Tally
+
+	static function create(weight Tally) returns Node
+		return Node{weight: weight}
+	end 'create'
+end 'Node'
+
+typealias Nodes = Array with Node
+typealias Marks = FixedArray with 2 Tally
+
+function main() returns ExitCode
+	var nodes = Nodes.create()
+	nodes.push(Node.create(7))
+	var marks = Marks.create()
+	var held = try nodes.get(0) otherwise panic("get")
+	marks.set(0, value: 1)
+	try nodes.set(0, value: Node.create(9)) otherwise panic("set")
+	marks.set(1, value: 2)
+	print("{held.weight} {marks.get(0)} {marks.get(1)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 1 2
+```
+
+<!-- test: a-record-read-through-a-field-survives-its-slots-overwrite-beside-a-fixed-array-field -->
+The same read through a record that holds both containers as fields, so the read is a chain of a field hop and an element hop, and the fixed array it sits beside is a field of the same holder: `7 1 2`.
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Node
+	export var weight as Tally
+
+	static function create(weight Tally) returns Node
+		return Node{weight: weight}
+	end 'create'
+end 'Node'
+
+typealias Nodes = Array with Node
+typealias Marks = FixedArray with 2 Tally
+
+type Ledger
+	export var nodes as Nodes
+	export var marks as Marks
+
+	static function create() returns Ledger
+		return Ledger{nodes: Nodes.create(), marks: Marks.create()}
+	end 'create'
+end 'Ledger'
+
+function main() returns ExitCode
+	var ledger = Ledger.create()
+	ledger.nodes.push(Node.create(7))
+	var held = try ledger.nodes.get(0) otherwise panic("get")
+	ledger.marks.set(0, value: 1)
+	try ledger.nodes.set(0, value: Node.create(9)) otherwise panic("set")
+	ledger.marks.set(1, value: 2)
+	print("{held.weight} {ledger.marks.get(0)} {ledger.marks.get(1)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 1 2
+```
+
+<!-- test: a-generic-fixed-array-slot-write-keeps-the-element-it-replaced -->
+A fixed array over a type parameter has elements the generic body cannot name, so the body is compiled for any element: the slot's old value is read, the slot is overwritten with the replacement, and the old value is returned. At `Int` the swaps answer `0 5`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Ring uses Element
+	typealias Slots = FixedArray with 4 Element
+
+	var slots as Slots
+
+	static function create() returns Self
+		return Self{slots: Slots.create()}
+	end 'create'
+
+	function swapFirst(replacement Element) returns Element
+		var old = slots.get(0)
+		slots.set(0, value: replacement)
+
+		return old
+	end 'swapFirst'
+end 'Ring'
+
+typealias IntRing = Ring with Int
+
+function main() returns ExitCode
+	var ring = IntRing.create()
+	let before = ring.swapFirst(5)
+	let after = ring.swapFirst(8)
+	print("{before} {after}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 5
+```

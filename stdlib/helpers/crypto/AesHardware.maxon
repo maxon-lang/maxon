@@ -1,21 +1,15 @@
 #if arch(x64) or arch(arm64)
-	let aesHardwareBlockBytes = 16
 	let aesHardwareKeyWordShift = 2
-	let aesHardwareRoundsOverKeyWords = 6
 	let aesHardwareScheduleRoundBytes = 32
 	module let aesHardwareFirstByte = 0
-	let aesHardwareBlockShift = 4
-	let aesHardwareNonceBytes = 12
 	let aesHardwareCounterBytes = 4
-	let aesHardwareCounterLimit = 4294967296
 	let aesHardwareWidestGroup = 8
 	let aesHardwareMaskLead = 1
-	let aesHardwareLaneBytes = 8
 
 	// `__Builtins.aesExpandKey` ends the program unless the array holds exactly the encryption keys and
 	// the decryption keys of a 16-, 24- or 32-byte `key`.
 	export function aesHardwareSchedule(key ByteArray) returns ByteArray
-		let rounds = (key.count() shr aesHardwareKeyWordShift) + aesHardwareRoundsOverKeyWords
+		let rounds = (key.count() shr aesHardwareKeyWordShift) + aesRoundsOverKeyWords
 		var schedule = ByteArray.create()
 		schedule.resize((rounds + 1) * aesHardwareScheduleRoundBytes)
 		__Builtins.aesExpandKey(schedule, key)
@@ -23,33 +17,50 @@
 		return schedule
 	end 'aesHardwareSchedule'
 
-	module function aesHardwareCryptInto(schedule ByteArray, block ByteArray, output ByteArray, at ElementIndex, direction AesDirection) throws AesError
-		if block.count() != aesHardwareBlockBytes 'wrongLength'
-			throw AesError.invalidBlockLength
-		end 'wrongLength'
-
+	function aesHardwareCryptRefitted(schedule ByteArray, block ByteArray, output ByteArray, at ElementIndex, direction AesDirection) throws AesError
+		try aesRequireBlock(block)
 		aesHoldBlock(output, at: at)
 
 		match direction 'operation'
 			encrypt then __Builtins.aesEncryptBlock(output, at, schedule, block, aesHardwareFirstByte)
 			decrypt then __Builtins.aesDecryptBlock(output, at, schedule, block, aesHardwareFirstByte)
 		end 'operation'
-	end 'aesHardwareCryptInto'
+	end 'aesHardwareCryptRefitted'
+
+	// The refit condition is spelled in each `*Into`: leaf inlining does not cascade, so one predicate
+	// for the whole condition would be a second flat leaf and add a setcc and a cmp to the hot path.
+	module function aesHardwareEncryptInto(schedule ByteArray, block ByteArray, output ByteArray, at ElementIndex) throws AesError
+		if block.count() != aesBlockBytes or aesOutputIsShort(output, at: at) 'refit'
+			try aesHardwareCryptRefitted(schedule, block: block, output: output, at: at, direction: AesDirection.encrypt)
+			return
+		end 'refit'
+
+		__Builtins.aesEncryptBlock(output, at, schedule, block, aesHardwareFirstByte)
+	end 'aesHardwareEncryptInto'
+
+	module function aesHardwareDecryptInto(schedule ByteArray, block ByteArray, output ByteArray, at ElementIndex) throws AesError
+		if block.count() != aesBlockBytes or aesOutputIsShort(output, at: at) 'refit'
+			try aesHardwareCryptRefitted(schedule, block: block, output: output, at: at, direction: AesDirection.decrypt)
+			return
+		end 'refit'
+
+		__Builtins.aesDecryptBlock(output, at, schedule, block, aesHardwareFirstByte)
+	end 'aesHardwareDecryptInto'
 
 	function aesHardwareCounterBlock(nonce ByteArray, firstCounter AesCounter, streamBlocks Count) returns ByteArray throws AesKeyStreamError
-		if nonce.count() != aesHardwareNonceBytes 'nonceLength'
+		if nonce.count() != aesNonceBytes 'nonceLength'
 			throw AesKeyStreamError.invalidNonceLength
 		end 'nonceLength'
 
 		let first = firstCounter as Count
 
 		// `aesCtrXor` wraps its counter word without a signal, so a stream that would wrap is refused here.
-		if first + streamBlocks > aesHardwareCounterLimit 'overflow'
+		if first + streamBlocks > aesCounterLimit 'overflow'
 			throw AesKeyStreamError.counterOverflow
 		end 'overflow'
 
 		var block = ByteArray.create()
-		block.reserve(aesHardwareBlockBytes)
+		block.reserve(aesBlockBytes)
 		block.append(nonce)
 		let counterWord = first as AesWord
 		__Builtins.appendBigEndian(block, counterWord as OrderedWord, aesHardwareCounterBytes)
@@ -63,7 +74,7 @@
 
 		while group > 0 'eachGroupSize'
 			while done + group <= blocks 'eachGroup'
-				__Builtins.aesCtrXor(buffer, at + (done shl aesHardwareBlockShift), schedule, counterBlock, firstBlock + done, group)
+				__Builtins.aesCtrXor(buffer, at + (done shl aesBlockShift), schedule, counterBlock, firstBlock + done, group)
 				done = done + group
 			end 'eachGroup'
 
@@ -75,7 +86,7 @@
 	// place and cut back to its length: the padding bytes never reach the caller.
 	function aesHardwareXorAppend(output ByteArray, schedule ByteArray, counterBlock ByteArray, firstBlock Count, data ByteArray, blocks Count)
 		let start = output.count()
-		let paddedEnd = start + (blocks shl aesHardwareBlockShift)
+		let paddedEnd = start + (blocks shl aesBlockShift)
 		output.reserve(paddedEnd)
 		output.append(data)
 		output.growFilled(paddedEnd, value: 0)
@@ -84,7 +95,7 @@
 	end 'aesHardwareXorAppend'
 
 	function aesHardwareXorKeyStreamAppend(output ByteArray, schedule ByteArray, nonce ByteArray, counter AesCounter, data ByteArray) throws AesKeyStreamError
-		let blocks = (data.count() + aesHardwareBlockBytes - 1) shr aesHardwareBlockShift
+		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift
 		let counterBlock = try aesHardwareCounterBlock(nonce, firstCounter: counter, streamBlocks: blocks)
 		aesHardwareXorAppend(output, schedule: schedule, counterBlock: counterBlock, firstBlock: 0, data: data, blocks: blocks)
 	end 'aesHardwareXorKeyStreamAppend'
@@ -97,19 +108,19 @@
 	end 'aesHardwareXorKeyStream'
 
 	module function aesHardwareXorKeyStreamPastFirstBlock(schedule ByteArray, nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
-		let blocks = (data.count() + aesHardwareBlockBytes - 1) shr aesHardwareBlockShift
+		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift
 		let counterBlock = try aesHardwareCounterBlock(nonce, firstCounter: counter, streamBlocks: blocks + aesHardwareMaskLead)
 		var mask = ByteArray.create()
-		mask.resize(aesHardwareBlockBytes)
+		mask.resize(aesBlockBytes)
 		aesHardwareCtrWalk(mask, at: 0, schedule: schedule, counterBlock: counterBlock, firstBlock: 0, blocks: aesHardwareMaskLead)
 
 		aesHardwareXorAppend(output, schedule: schedule, counterBlock: counterBlock, firstBlock: aesHardwareMaskLead, data: data, blocks: blocks)
 
-		return (aesHardwareMaskLane(mask, at: aesHardwareFirstByte), aesHardwareMaskLane(mask, at: aesHardwareLaneBytes))
+		return (aesHardwareMaskLane(mask, at: aesHardwareFirstByte), aesHardwareMaskLane(mask, at: aesLaneBytes))
 	end 'aesHardwareXorKeyStreamPastFirstBlock'
 
 	// Little-endian, which is how the bitsliced cipher's lanes read a block; `AesGcm` consumes both alike.
 	function aesHardwareMaskLane(mask ByteArray, at Count) returns AesWord
-		return (try __Builtins.readLittleEndian(mask, at, aesHardwareLaneBytes) otherwise panic("aes: a lane inside the 16-byte mask block is missing")) as AesWord
+		return (try __Builtins.readLittleEndian(mask, at, aesLaneBytes) otherwise panic("aes: a lane inside the 16-byte mask block is missing")) as AesWord
 	end 'aesHardwareMaskLane'
 #endif

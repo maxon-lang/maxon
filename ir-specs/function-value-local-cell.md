@@ -48,21 +48,10 @@ data {
   __mrt_program_started@3 = i8 0
 }
 
-func @add3 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.leaRegRegReg r8, rcx, rax
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.leaRegRdata rax, [rip + __fnrec_add3]
   summed:
     x64.movRegImm32 r8, 0
     x64.popReg rbp
@@ -77,21 +66,10 @@ data {
   __mrt_program_started@16 = i8 0
 }
 
-func @add3 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.leaRegRegReg r8, rcx, rax
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.leaRegRdata rax, [rip + __fnrec_add3]
   summed:
     x64.movRegImm32 r8, 0
     x64.popReg rbp
@@ -104,19 +82,9 @@ data {
   __mrt_program_started@0 = i8 0
 }
 
-func @add3 {
-  entry:
-    arm64.prologue 16
-    arm64.add x0, x0, x1
-    arm64.add x0, x0, x2
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.leaRdata x0, __fnrec_add3
   summed:
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -132,19 +100,9 @@ data {
   __mrt_program_started@24 = i8 0
 }
 
-func @add3 {
-  entry:
-    arm64.prologue 16
-    arm64.add x0, x0, x1
-    arm64.add x0, x0, x2
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.leaRdata x0, __fnrec_add3
   summed:
     arm64.movImm x0, 0
     arm64.epilogue 16

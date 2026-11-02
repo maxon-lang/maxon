@@ -53,43 +53,48 @@ public type Aes
 
 	/// The encryption of one 16-byte block.
 	public function encryptBlock(block ByteArray) returns ByteArray throws AesError
-		return try cryptBlock(block, direction: AesDirection.encrypt)
+		var result = ByteArray.create()
+
+		// Sized here so the hardware entry takes its fit path and not the refit call.
+		aesHoldBlock(result, at: 0)
+		try encryptBlockInto(block, output: result, at: 0)
+
+		return result
 	end 'encryptBlock'
 
 	/// The decryption of one 16-byte block.
 	public function decryptBlock(block ByteArray) returns ByteArray throws AesError
-		return try cryptBlock(block, direction: AesDirection.decrypt)
+		var result = ByteArray.create()
+		aesHoldBlock(result, at: 0)
+		try decryptBlockInto(block, output: result, at: 0)
+
+		return result
 	end 'decryptBlock'
 
 	/// Writes the encryption of one 16-byte `block` into `output` at index `at`, growing `output` to
 	/// `at + 16` bytes, zero-filled, when it is shorter. The other bytes of `output` stay.
 	/// `invalidBlockLength` leaves `output` as it was.
 	public function encryptBlockInto(block ByteArray, output ByteArray, at ElementIndex) throws AesError
-		try cryptBlockInto(block, output: output, at: at, direction: AesDirection.encrypt)
+		match backing 'backing'
+			bitsliced(cipher) then try cipher.cryptBlockInto(block, output: output, at: at, direction: AesDirection.encrypt)
+
+			#if arch(x64) or arch(arm64)
+				hardware(schedule) then try aesHardwareEncryptInto(schedule, block: block, output: output, at: at)
+			#endif
+		end 'backing'
 	end 'encryptBlockInto'
 
 	/// Writes the decryption of one 16-byte `block` into `output` at index `at`, with the growth and
 	/// the error behaviour of `encryptBlockInto`.
 	public function decryptBlockInto(block ByteArray, output ByteArray, at ElementIndex) throws AesError
-		try cryptBlockInto(block, output: output, at: at, direction: AesDirection.decrypt)
-	end 'decryptBlockInto'
-
-	function cryptBlock(block ByteArray, direction AesDirection) returns ByteArray throws AesError
-		var result = ByteArray.create()
-		try cryptBlockInto(block, output: result, at: 0, direction: direction)
-
-		return result
-	end 'cryptBlock'
-
-	function cryptBlockInto(block ByteArray, output ByteArray, at ElementIndex, direction AesDirection) throws AesError
 		match backing 'backing'
-			bitsliced(cipher) then try cipher.cryptBlockInto(block, output: output, at: at, direction: direction)
+			bitsliced(cipher) then try cipher.cryptBlockInto(block, output: output, at: at, direction: AesDirection.decrypt)
 
 			#if arch(x64) or arch(arm64)
-				hardware(schedule) then try aesHardwareCryptInto(schedule, block: block, output: output, at: at, direction: direction)
+				hardware(schedule) then try aesHardwareDecryptInto(schedule, block: block, output: output, at: at)
 			#endif
 		end 'backing'
-	end 'cryptBlockInto'
+	end 'decryptBlockInto'
 
 	/// `data` XORed with the counter-mode key stream of a 12-byte `nonce`, the first block's counter being
 	/// `counter`. Encryption and decryption are the same call.

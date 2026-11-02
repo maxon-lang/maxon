@@ -23,12 +23,12 @@ export enum AesDirection
 	decrypt
 end 'AesDirection'
 
-let aesBlockBytes = 16
-let aesBlockShift = 4
+module let aesBlockBytes = 16
+module let aesBlockShift = 4
 let aesBatchBlocks = 4
 let aesMaskLeadBlocks = 1
 let aesBlockWords = 4
-let aesLaneBytes = 8
+module let aesLaneBytes = 8
 let aesWordBytes = 4
 let aesWordShift = 2
 let aesBitsPerByte = 8
@@ -41,11 +41,11 @@ let aesCounterSwapBits = 24
 let aesShortKeyBytes = 16
 let aesMidKeyBytes = 24
 let aesLongKeyBytes = 32
-let aesRoundsOverKeyWords = 6
+module let aesRoundsOverKeyWords = 6
 let aesLongKeyWords = 8
 let aesLongKeySubSlot = 4
-let aesNonceBytes = 12
-let aesCounterLimit = 4294967296
+module let aesNonceBytes = 12
+module let aesCounterLimit = 4294967296
 
 let aesZeroWord = 0 as AesWord
 let aesByteMask = 0xFF as AesWord
@@ -678,8 +678,18 @@ export function aesRequireKeyLength(key ByteArray) throws AesError
 	end 'keyLength'
 end 'aesRequireKeyLength'
 
+export function aesRequireBlock(block ByteArray) throws AesError
+	if block.count() != aesBlockBytes 'blockLength'
+		throw AesError.invalidBlockLength
+	end 'blockLength'
+end 'aesRequireBlock'
+
+export function aesOutputIsShort(output ByteArray, at ElementIndex) returns bool
+	return output.count() < at + aesBlockBytes
+end 'aesOutputIsShort'
+
 export function aesHoldBlock(output ByteArray, at ElementIndex)
-	if output.count() < at + aesBlockBytes 'short'
+	if aesOutputIsShort(output, at: at) 'short'
 		output.resize(at + aesBlockBytes)
 	end 'short'
 end 'aesHoldBlock'
@@ -706,13 +716,13 @@ export type AesBitsliced
 	end 'create'
 
 	export function cryptBlock(block ByteArray, direction AesDirection) returns ByteArray throws AesError
-		try requireBlock(block)
+		try aesRequireBlock(block)
 
 		return crypt(block, direction: direction)
 	end 'cryptBlock'
 
 	export function cryptBlockInto(block ByteArray, output ByteArray, at ElementIndex, direction AesDirection) throws AesError
-		try requireBlock(block)
+		try aesRequireBlock(block)
 		aesStoreBlock(output, at: at, block: crypt(block, direction: direction))
 	end 'cryptBlockInto'
 
@@ -773,12 +783,6 @@ export type AesBitsliced
 			done = done + aesBatchBlocks
 		end 'eachBatch'
 	end 'xorBatches'
-
-	function requireBlock(block ByteArray) throws AesError
-		if block.count() != aesBlockBytes 'blockLength'
-			throw AesError.invalidBlockLength
-		end 'blockLength'
-	end 'requireBlock'
 
 	function crypt(block ByteArray, direction AesDirection) returns ByteArray
 		var planes = AesPlanes.create()
