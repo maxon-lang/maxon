@@ -63,14 +63,16 @@ gap.** Each case's `<!-- unsupported-targets: -->` marker names the targets that
 Both cases span the four native lanes: every one installs a fault handler, so every one lays
 `mrt_runtime_init`, and `entry-stub-name` is what keeps arm64's `recordChunkLabel` covered through the stub.
 
-⚠ **EVERY CASE BELOW REACHES ITS BODY THROUGH A FUNCTION VALUE, AND THAT IS LOAD-BEARING.** The rule is
-about a body the compiler LAYS DOWN, and a direct call to a one-line function does not guarantee one: `inlineLeaves`
-splices the leaf into `main`, `dfe` drops the uncalled declaration, and nothing is ever laid down under the label.
-Written that way the two refusals below would COMPILE and return 7 — the rule's own correct answer for a body that is
-never emitted — and, worse, the NEGATIVE CONTROL would pass without the layout door ever being asked about its name,
-which is a control standing somewhere its cases do not. Taking the function as a VALUE roots it (`funcAddr` is a
-liveness root) and a call through a value is never inlined, so all three cases put a body under their label and differ
-in exactly one thing: the NAME.
+⚠ **EVERY CASE BELOW REACHES ITS BODY THROUGH A MODULE `var` OF FUNCTION TYPE, AND THAT IS LOAD-BEARING.** The rule is
+about a body the compiler LAYS DOWN, and neither a direct call to a one-line function nor a call through a
+function value held in a local guarantees one: `inlineLeaves` splices the leaf into `main`, a local function value
+whose record is known resolves to a direct call, and `dfe` drops the declaration nothing reaches, so nothing is ever
+laid down under the label. Written that way the refusals below would COMPILE and return 7 — the rule's own correct
+answer for a body that is never emitted — and, worse, the NEGATIVE CONTROL would pass without the layout door ever
+being asked about its name, which is a control standing somewhere its cases do not. A function stored in a module
+`var` is read from storage anything may write, so a call through it is never resolved or inlined and the function's
+`funcAddr` is a liveness root. Every case therefore puts a body under its label and differs from its control in
+exactly one thing: the NAME.
 
 ## Tests
 
@@ -82,18 +84,20 @@ The silent miscompile: with the refusal removed from `recordChunkLabel`, this ex
 **127** instead of **7**, with the build exiting 0. Every native lane lays `mrt_runtime_init` and refuses the declaration alike.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 function mrt_runtime_init() returns Integer
 	return 7
 end 'mrt_runtime_init'
 
+var emitted = mrt_runtime_init as Hook
+
 function main() returns ExitCode
-	let emitted = mrt_runtime_init
 	return emitted() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4015: <fragment>:4:10: declaration of 'mrt_runtime_init' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+error E4015: <fragment>:5:10: declaration of 'mrt_runtime_init' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
 ```
 
 <!-- test: entry-stub-name -->
@@ -111,18 +115,20 @@ label, which is one chunk EARLIER than the guard, so the guard keeps its own mea
 appended in the wrong ORDER) rather than doubling as a collision report.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 function mrt_start() returns Integer
 	return 7
 end 'mrt_start'
 
+var emitted = mrt_start as Hook
+
 function main() returns ExitCode
-	let emitted = mrt_start
 	return emitted() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4015: <fragment>:4:10: declaration of 'mrt_start' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+error E4015: <fragment>:5:10: declaration of 'mrt_start' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
 ```
 
 <!-- test: a-service-program-refuses-the-entry-stub-name-taken-as-a-value -->
@@ -131,6 +137,7 @@ wasm32-wasi lays no chunk under this name and answers E3104 for the `spawn` befo
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -148,15 +155,16 @@ function mrt_start() returns Integer
 	return 7
 end 'mrt_start'
 
+var emitted = mrt_start as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_start
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4015: <fragment>:16:10: declaration of 'mrt_start' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+error E4015: <fragment>:17:10: declaration of 'mrt_start' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
 ```
 
 <!-- test: a-service-program-refuses-the-entry-stub-name-called-directly -->
@@ -203,6 +211,7 @@ x64-windows lays no chunk of this name, and wasm32-wasi answers E3104 for the `s
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -220,15 +229,16 @@ function mrt_preempt_handler() returns Integer
 	return 7
 end 'mrt_preempt_handler'
 
+var emitted = mrt_preempt_handler as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_preempt_handler
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4015: <fragment>:16:10: declaration of 'mrt_preempt_handler' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+error E4015: <fragment>:17:10: declaration of 'mrt_preempt_handler' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
 ```
 
 <!-- test: a-service-program-runs-a-function-named-like-the-other-lanes-preempt-handler -->
@@ -237,6 +247,7 @@ x64-windows lays no chunk named `mrt_preempt_handler`, so the function is the pr
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -254,9 +265,10 @@ function mrt_preempt_handler() returns Integer
 	return 7
 end 'mrt_preempt_handler'
 
+var emitted = mrt_preempt_handler as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_preempt_handler
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
@@ -271,6 +283,7 @@ x64-windows lays no chunk of this name, and wasm32-wasi answers E3104 for the `s
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -288,15 +301,16 @@ function mrt_fault_handler() returns Integer
 	return 7
 end 'mrt_fault_handler'
 
+var emitted = mrt_fault_handler as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_fault_handler
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4015: <fragment>:16:10: declaration of 'mrt_fault_handler' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+error E4015: <fragment>:17:10: declaration of 'mrt_fault_handler' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
 ```
 
 <!-- test: a-service-program-runs-a-function-named-like-the-other-lanes-fault-handler -->
@@ -305,6 +319,7 @@ x64-windows lays no chunk named `mrt_fault_handler`, so the function is the prog
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -322,9 +337,10 @@ function mrt_fault_handler() returns Integer
 	return 7
 end 'mrt_fault_handler'
 
+var emitted = mrt_fault_handler as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_fault_handler
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
@@ -339,6 +355,7 @@ Only x64-windows lays a chunk named `mrt_fault_thunk`; wasm32-wasi answers E3104
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -356,15 +373,16 @@ function mrt_fault_thunk() returns Integer
 	return 7
 end 'mrt_fault_thunk'
 
+var emitted = mrt_fault_thunk as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_fault_thunk
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4015: <fragment>:16:10: declaration of 'mrt_fault_thunk' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+error E4015: <fragment>:17:10: declaration of 'mrt_fault_thunk' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
 ```
 
 <!-- test: a-service-program-runs-a-function-named-like-windows-fault-thunk -->
@@ -373,6 +391,7 @@ Only x64-windows lays a chunk named `mrt_fault_thunk`, so on every other native 
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -390,9 +409,10 @@ function mrt_fault_thunk() returns Integer
 	return 7
 end 'mrt_fault_thunk'
 
+var emitted = mrt_fault_thunk as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_fault_thunk
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
@@ -407,6 +427,7 @@ Only x64-linux lays a chunk named `mrt_rt_sigreturn`; wasm32-wasi answers E3104 
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -424,15 +445,16 @@ function mrt_rt_sigreturn() returns Integer
 	return 7
 end 'mrt_rt_sigreturn'
 
+var emitted = mrt_rt_sigreturn as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_rt_sigreturn
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4015: <fragment>:16:10: declaration of 'mrt_rt_sigreturn' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+error E4015: <fragment>:17:10: declaration of 'mrt_rt_sigreturn' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
 ```
 
 <!-- test: a-service-program-runs-a-function-named-like-x64-linux-sigreturn -->
@@ -441,6 +463,7 @@ Only x64-linux lays a chunk named `mrt_rt_sigreturn`, so on every other native l
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 type Calc
 	var count as Integer
@@ -458,9 +481,10 @@ function mrt_rt_sigreturn() returns Integer
 	return 7
 end 'mrt_rt_sigreturn'
 
+var emitted = mrt_rt_sigreturn as Hook
+
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let emitted = mrt_rt_sigreturn
 	let t = try await h.total() otherwise 0
 	return (emitted() + t) as ExitCode
 end 'main'
@@ -480,13 +504,15 @@ exactly like its two neighbours, is LAID DOWN exactly as they are, and is refuse
 and runs on every target, and this one carries no `unsupported-targets:` marker for that reason.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Hook = function() returns Integer
 
 function mrt_not_a_chunk() returns Integer
 	return 7
 end 'mrt_not_a_chunk'
 
+var emitted = mrt_not_a_chunk as Hook
+
 function main() returns ExitCode
-	let emitted = mrt_not_a_chunk
 	return emitted() as ExitCode
 end 'main'
 ```

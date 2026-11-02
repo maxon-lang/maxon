@@ -547,6 +547,10 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	// (`emitCallIndirect` always `local.set`s it), and `LowerMaxonToStd.indirectResultType` declares that
 	// result an i64 for a void function value — so the thunk must return an i64 to match.
 	var func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: fnRefThunkReturnType(targetReturn), paramCount: thunkParamCount, paramTypes: paramTypes)
+
+	// A panic trace through a function value names this frame between the caller and the target, so a
+	// tail jump must not remove it.
+	func.keepsItsOwnFrame = true
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
