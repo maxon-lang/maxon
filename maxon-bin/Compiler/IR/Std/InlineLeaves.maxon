@@ -2,7 +2,7 @@
 //
 //   • THE LEAF RULE: a direct call to a TINY LEAF function — no call outside a `BlockHeat.cold`
 //     block but the ones its tables resolve (`TableCallProbe`), inside `MaxInlinedLeafOps`, or
-//     `MaxInlinedColdCallLeafOps` when it holds a cold call —
+//     `MaxInlinedColdArmLeafOps` hot and `MaxInlinedLeafColdOps` cold ops when it has a cold arm —
 //     is replaced at EVERY site by a copy of the body (a body that fits only without its parameter
 //     cascades, at every site that declines them — see `MaxInlinedLeafOps`). The call is nearly all of such a function's
 //     cost: MEASURED on the self-compile, `regMaskContains` — `((mask shr regNum) and 1) != 0` plus
@@ -58,11 +58,12 @@
 // body op would then read the CALLER's same-numbered value.
 
 // ⭐ **THE OP BUDGET, AND WHAT IT ADMITS — MEASURED, at this tier, not guessed from the target dump.**
-// Counted over all of a callee's blocks with terminators included and `param` ops excluded (a `param`
-// becomes the call's argument rather than an instruction). The entry param-guard cascades are charged
-// apart (`LeafOpTally`): a site whose arguments prove every guarded parameter in range copies none of
-// them. A body that fits only without its cascades is therefore spliced only at such a site, and stays
-// a call with its cascades everywhere else.
+// Counted over all of a callee's blocks with terminators included and `param` ops excluded (a
+// `param` becomes the call's argument rather than an instruction). The entry param-guard cascades
+// are charged apart (`LeafOpTally`): a site whose arguments prove every guarded parameter in range
+// copies none of them, and the ops of cold blocks are charged apart against their own budget below.
+// A body that fits only without its cascades is therefore spliced only at such a site, and stays a
+// call with its cascades everywhere else.
 //
 // ⭐ **WHAT HOLDS 24 UP IS THE SITE COUNT.** MEASURED on the self-compile: at 24, 3,673 sites inline
 // across 418 eligible callees; at 16, 3,286 sites across 349 callees — 24 buys 387 sites and 69 callees
@@ -86,11 +87,15 @@ let VirtualExitRoot = StdEntryBlockPosition
 
 let ReversedNodeOffset = 1
 
-// The budget for a leaf whose calls all sit in cold blocks, counting every op, cold ones included.
-// A checked get/set's cold slow arm is what pushes a hot accessor helper past `MaxInlinedLeafOps`.
-// Raising `MaxInlinedLeafOps` to match grows code with no speed gain, and leaving cold ops
-// uncounted leaves the cold part of an admitted body unbounded.
-let MaxInlinedColdCallLeafOps = 32 as ElementIndex
+// The budgets for a leaf with a cold arm: its hot ops against `MaxInlinedColdArmLeafOps`, the ops
+// of its cold blocks against `MaxInlinedLeafColdOps`. A checked get/set's cold arms are what push a
+// hot accessor helper past `MaxInlinedLeafOps`. Raising `MaxInlinedLeafOps` to match grows code
+// with no speed gain, and leaving cold ops uncounted leaves the cold part of an admitted body
+// unbounded. `ir-specs/inline-leaves.md`'s `a-checked-accessor-whose-slow-arm-is-cold-is-inlined`
+// splices `putElement`, the checked-set accessor both numbers are sized to, and fails if either is
+// lowered below it.
+let MaxInlinedColdArmLeafOps = 28 as ElementIndex
+let MaxInlinedLeafColdOps = 12 as ElementIndex
 
 // The budget for a witness-slot adapter, which may hold the impl the called-once rule merged
 // into it.
@@ -443,19 +448,26 @@ end 'LeafBodyScan'
 
 type LeafOpTally
 	export var body as ElementIndex
+	export var cold as ElementIndex
 	export var cascade as ElementIndex
 
 	static function create() returns LeafOpTally
-		return Self{body: 0, cascade: 0}
+		return Self{body: 0, cold: 0, cascade: 0}
 	end 'create'
 
-	function charge(cost ElementIndex, inACascade bool)
+	function charge(cost ElementIndex, inACascade bool, inColdBlock bool)
 		if inACascade 'costsOnlyWhereNotDeclined'
 			self.cascade = self.cascade + cost
-		end 'costsOnlyWhereNotDeclined' else 'costsEverySite'
+		end 'costsOnlyWhereNotDeclined' else if inColdBlock 'costsOffTheHotPath'
+			self.cold = self.cold + cost
+		end 'costsOffTheHotPath' else 'costsEverySite'
 			self.body = self.body + cost
 		end 'costsEverySite'
 	end 'charge'
+
+	function total() returns ElementIndex
+		return self.body + self.cold
+	end 'total'
 end 'LeafOpTally'
 
 // ⭐ **EVERY FUNCTION'S VERDICT, COMPUTED ONCE, ON THE PRE-SPLICE BODY.** Recomputing spliceability per
@@ -650,8 +662,10 @@ function leafBodyScanOf(module StdModule, func IrFunction, funcIndex ElementInde
 	return scanLeafBody(module, func: func, meta: meta, byName: byName, reference: reference, probe: probe)
 end 'leafBodyScanOf'
 
-// One candidate body's whole verdict, from ONE walk: the shape both rules refuse, then the leaf rule's
-// own — a call outside a cold block, and the op budget its calls select.
+// One candidate body's whole verdict, from ONE walk: the shape both rules refuse, then the leaf
+// rule's own — a call outside a cold block, and the op budgets: hot ops against
+// `MaxInlinedLeafOps`, or `MaxInlinedColdArmLeafOps` when the body has a cold arm, and cold ops
+// against `MaxInlinedLeafColdOps`.
 //
 // ⚠ **IT WALKS `blockRefs` → `opRefs` + terminator DIRECTLY rather than `IrModule.liveOpIndices`, and
 // that is the same descent** — but the array version MATERIALIZES the index list, and this runs over
@@ -676,17 +690,17 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 	end 'shape'
 
 	var tally = LeafOpTally.create()
-	var holdsColdCall = false
 
 	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
 		let block = module.blockAtPosition(func, position: blockIndex)
 
 		match blockShape(block, blockIndex: blockIndex) 'blockShape'
 			spliceable then break
-			refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
+			refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
 		end 'blockShape'
 
 		let inACascade = blockIsInAnEntryCascade(func, block: block)
+		let offTheHotPath = block.heat == BlockHeat.cold and not probe.isForwarder()
 
 		for opIdx in block.bodyOps() 'eachOp'
 			// Bound ONCE: this runs on every op of every function in the module, and the role is a `match`
@@ -705,36 +719,36 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 
 			match opFit 'fit'
 				fits then break
-				coldCall then holdsColdCall = true
-				refuses then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
+				refuses then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
 			end 'fit'
 
-			tally.charge(countedBodyOps(role), inACascade: inACascade)
+			tally.charge(countedBodyOps(role), inACascade: inACascade, inColdBlock: offTheHotPath)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminated'
-			tally.charge(1, inACascade: inACascade)
+			tally.charge(1, inACascade: inACascade, inColdBlock: offTheHotPath)
 
 			// A terminator that calls refuses the leaf rule whatever its block's heat.
 			match terminatorRole(module.getOp(block.terminatorIndex()), func: func, meta: meta) 'termRole'
 				body then break
 				calling or
-				refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
+				refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
 			end 'termRole'
 		end 'terminated'
 	end 'eachBlock'
 
 	if not probe.settles() and not alwaysSpliced 'hotCallsWithNoTableToResolve'
-		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.body)
+		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
 	end 'hotCallsWithNoTableToResolve'
 
-	let budget = MaxInlinedForwarderOps if probe.isForwarder() else (MaxInlinedColdCallLeafOps if holdsColdCall else MaxInlinedLeafOps)
+	let hotBudget = MaxInlinedColdArmLeafOps if tally.cold > 0 else MaxInlinedLeafOps
+	let budget = MaxInlinedForwarderOps if probe.isForwarder() else hotBudget
 
-	if tally.body > budget and not alwaysSpliced 'tooBig'
-		return LeafBodyScan.create(LeafVerdict.tooManyOps, opCount: tally.body)
+	if (tally.body > budget or tally.cold > MaxInlinedLeafColdOps) and not alwaysSpliced 'tooBig'
+		return LeafBodyScan.create(LeafVerdict.tooManyOps, opCount: tally.total())
 	end 'tooBig'
 
-	var scan = LeafBodyScan.create(LeafVerdict.eligible, opCount: tally.body)
+	var scan = LeafBodyScan.create(LeafVerdict.eligible, opCount: tally.total())
 
 	if probe.reads.count() != 0 'readsTables'
 		scan.tableUses = probe.reads.clone()
@@ -836,7 +850,6 @@ end 'countedBodyOps'
 
 enum LeafOpFit
 	fits
-	coldCall
 	refuses
 end 'LeafOpFit'
 
@@ -848,7 +861,7 @@ end 'LeafOpFit'
 //     resolves. The row's edge is spliced away before this body is copied
 //     anywhere (`spliceAlwaysSplicedCallees`), and the cascade terminates because a cycle among those
 //     edges is refused rather than capped (`AlwaysSplicedPlan`). A cold call is copied verbatim and
-//     puts the body under `MaxInlinedColdCallLeafOps`.
+//     is charged against `MaxInlinedLeafColdOps`.
 //
 // ⛔ `refusing` is the dialect's own `isUnsupportedInInlineBody`, which no row overrides.
 function leafOpFit(role InlineOpRole, op StdOp, module StdModule, block IrBlock, alwaysSpliced bool, byName FunctionNameIndex, reference StdFunctionReference) returns LeafOpFit
@@ -867,7 +880,7 @@ function callFit(op StdOp, module StdModule, block IrBlock, alwaysSpliced bool, 
 	end 'intoARow'
 
 	if block.heat == BlockHeat.cold 'offTheHotPath'
-		return LeafOpFit.coldCall
+		return LeafOpFit.fits
 	end 'offTheHotPath'
 
 	return LeafOpFit.refuses
@@ -1663,7 +1676,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
 
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops, or {MaxInlinedColdCallLeafOps} with a cold call ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {stackGuardRefusals} site(s) refused as a body that needs the green-thread stack guard spliced into a caller that skips it, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead, {tableCallerCount} caller(s) took a body reading a table, {tableRefusals} site(s) refused because a table is not constant there")
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} hot ops ({MaxInlinedColdArmLeafOps} with a cold arm) or {MaxInlinedLeafColdOps} cold ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {stackGuardRefusals} site(s) refused as a body that needs the green-thread stack guard spliced into a caller that skips it, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead, {tableCallerCount} caller(s) took a body reading a table, {tableRefusals} site(s) refused because a table is not constant there")
 	end 'debugging'
 end 'spliceLeaves'
 

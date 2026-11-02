@@ -1801,7 +1801,7 @@ callee it runs a forward dataflow, keyed by managed record VALUE, over the four 
 `ManagedGuardKind` and a length floor `length > K`. A shape guard's proceed arm establishes its
 predicate; a constant-index bound's proceed arm establishes the floor; the success edge of
 `__managed_set` establishes owned, allocated and unshared — a new runtime-stated fact,
-`managedCalleeSuccessProvesShape`, beside `managedCalleeSucceedsOnlyInBounds`: `buildManagedSet`
+`managedCalleeReturnShape`, beside `managedCalleeSucceedsOnlyInBounds`: `buildManagedSet`
 checks its bound first and its error path writes nothing, and `emitCowDetachWhenNeeded` stores nothing
 exactly when the three hold and otherwise makes the record owned and unshared — never the destructor
 predicate, which a managed element's `set` succeeds through; a bounded accessor's success at a `const K`
@@ -1816,9 +1816,9 @@ predicate is established becomes `const 0` through the same rewrite `refineValue
 and the loads and arithmetic that fed it and now feed nothing are retired by a bounded worklist (the
 one place an unread `loadIndirect` is deleted: nobody reads its value, and the dialect's `isPure: false`
 on a load is about moving one across a store, not about executing one). The unswitch chain's own
-`element_destroy@40` test for a writer with no such guard went with this row: `emitElementStoreGuards` omits
-that guard exactly where the lowering stamped the element trivial (`Project.stdOpTrivialElementSites`, the
-record's static instance) and for a `push`, whose slot holds nothing, so the test was vacuous, and it was
+`element_destroy@40` test for a writer with no such guard went with this row: the inlined store guards
+(`emitDetachingStoreGuards`, `emitElementStoreGuards`) omit that guard exactly where the lowering
+stamped the element trivial (`Project.stdOpTrivialElementSites`, the record's static instance) and for a `push`, whose slot holds nothing, so the test was vacuous, and it was
 the one chain test in `carry`'s shape the facts could never fold. The first implementation held the in-state as dense blocks × records columns
 and bent the scale ladder (bytes ×1.8 → ×3.2 per doubling, CPU ×2.2 → ×3.7); the state is now one
 arena of per-block runs of live (record, facts) entries written once on a block's first arrival and only

@@ -6,11 +6,14 @@
 // (`capacity@16 >= 0`), it exists (`buffer@0 != 0`), nobody views it (its refcount word is 0), the
 // element owes no destructor (`element_destroy@40 == 0`) — and a LENGTH FLOOR `length@8 >u K`. The
 // proceed arm of a shape guard establishes its predicate; the proceed arm of a constant-index bound
-// guard establishes its floor; the success edge of a bounded accessor at a constant index establishes
-// that floor (`managedCalleeSucceedsOnlyInBounds`), and the success edge of `__managed_set` the three
-// predicates its copy-on-write detach decides (`managedCalleeSuccessProvesShape`) — both stated by the
-// runtime beside the bodies. Success never proves the destructor predicate: a managed element's `set`
-// succeeds through its destructor.
+// guard establishes its floor; the success edge of a bounded accessor at a constant index
+// establishes that floor (`managedCalleeSucceedsOnlyInBounds`), and the normal return of a writer
+// or a detach establishes the predicates its roster row names (`managedCalleeReturnShape`: for
+// `__managed_set` the success edge, for the plain calls `__managed_set_unchecked` and
+// `__managed_cow_detach` the return) — both stated by the runtime beside the bodies. A return never
+// proves the destructor predicate (a managed element's `set` succeeds through its destructor),
+// except on the success edge of `__managed_index_refused`, which no execution takes and which
+// therefore proves every fact.
 //
 // WHAT KEEPS A FACT is the runtime's to state too: a callee whose header effect is `writesNothing` or
 // `detachesUnlessOwnedUnshared` (a detach only makes a record owned and unshared), and an element store
@@ -38,14 +41,20 @@ let BufferAllocatedFact = 2 as ShapeFactBits
 let BufferUnsharedFact = 4 as ShapeFactBits
 let ElementTrivialFact = 8 as ShapeFactBits
 
-// What a bounded writer's success proves (`managedCalleeSuccessProvesShape`).
+// What the return of a `__managed_set` or a `__managed_set_unchecked` proves
+// (`ownedAllocatedUnshared` in `managedCalleeReturnShape`).
 let WriterSuccessFacts = (BufferOwnedFact or BufferAllocatedFact or BufferUnsharedFact) as ShapeFactBits
+
+let DetachedFacts = (BufferOwnedFact or BufferUnsharedFact) as ShapeFactBits
+
+let EveryShapeFact = (WriterSuccessFacts or ElementTrivialFact) as ShapeFactBits
 
 // `length@8 >= floor` proved for the record; `AnyLengthFloor` proves nothing: every length is.
 module typealias LengthFloor = int(0 to u64.max)
 typealias LengthFloors = Array with LengthFloor
 
 let AnyLengthFloor = 0 as LengthFloor
+let EveryLengthFloor = u64.max as LengthFloor
 let OnePastTheIndex = 1
 
 module typealias RecordSlot = int(0 to u64.max) implements ElementIndex
@@ -315,10 +324,29 @@ function transferCall(module StdModule, op StdOp, analysis EstablishedFunction, 
 		return
 	end 'noStatedEffect'
 
+	let shape = managedCalleeReturnShape(scratch.call.callee)
+	let slot = analysis.records.slot(scratch.call.firstArg)
+
 	if scratch.call.throwsToAFlag() 'mayFail'
-		scratch.success.remember(scratch.call, at: analysis.records.slot(scratch.call.firstArg), above: constantIndexFloor(module, reader: analysis.reader, call: scratch.call, scratch: scratch))
+		scratch.success.remember(scratch.call, at: slot, above: constantIndexFloor(module, reader: analysis.reader, call: scratch.call, scratch: scratch), returning: shape)
+		return
 	end 'mayFail'
+
+	if shape == ManagedReturnShape.neverReturnsNormally 'aReturnFromAnEntryThatNeverReturns'
+		panic("foldEstablishedGuards: '{String.from(scratch.call.callee)}' is a plain call whose roster row says it never returns normally — only a throwing entry's success edge can be dead")
+	end 'aReturnFromAnEntryThatNeverReturns'
+
+	scratch.state.establishRow(slot, proving: factsOfReturn(shape))
 end 'transferCall'
+
+function factsOfReturn(shape ManagedReturnShape) returns ShapeFactBits
+	return match shape 'shape'
+		unchanged gives NoShapeFact
+		ownedUnshared gives DetachedFacts
+		ownedAllocatedUnshared gives WriterSuccessFacts
+		neverReturnsNormally gives EveryShapeFact
+	end 'shape'
+end 'factsOfReturn'
 
 // The floor a bounded accessor's success proves: one past its constant index, when it has one, else
 // nothing.
@@ -537,8 +565,8 @@ module type EdgeFacts
 	end 'establishesFor'
 end 'EdgeFacts'
 
-// The `tryCall` to a bounded accessor the block ran last among its effects: its flag, its record and
-// what its success proves.
+// The `tryCall` to a callee with a stated effect that the block ran last among its effects: its
+// flag, its record and what its success proves.
 module type RememberedSuccess
 	export var remembered = false
 	export var flag = 0 as ValueId
@@ -550,12 +578,12 @@ module type RememberedSuccess
 		return Self{}
 	end 'create'
 
-	function remember(call StdCallOperands, at RecordSlot, above LengthFloor)
+	function remember(call StdCallOperands, at RecordSlot, above LengthFloor, returning ManagedReturnShape)
 		self.remembered = true
 		self.flag = call.errorFlagId
 		self.slot = at
-		self.bits = WriterSuccessFacts if managedCalleeSuccessProvesShape(call.callee) else NoShapeFact
-		self.floor = above
+		self.bits = factsOfReturn(returning)
+		self.floor = EveryLengthFloor if returning == ManagedReturnShape.neverReturnsNormally else above
 	end 'remember'
 
 	function forget()
@@ -665,6 +693,18 @@ module type EstablishedState
 	function rowLiveAt(i ElementIndex) returns RecordSlot
 		return try self.rowLive.get(i) otherwise panic("foldEstablishedGuards: rowLive.get OOB at {i}")
 	end 'rowLiveAt'
+
+	function establishRow(slot RecordSlot, proving ShapeFactBits)
+		if proving == NoShapeFact 'nothingProved'
+			return
+		end 'nothingProved'
+
+		if factIsEmpty(self.rowShapeOf(slot), floor: self.rowFloorOf(slot)) 'notLive'
+			self.rowLive.push(slot)
+		end 'notLive'
+
+		self.writeRow(slot, bits: (self.rowShapeOf(slot) or proving) as ShapeFactBits, floor: self.rowFloorOf(slot))
+	end 'establishRow'
 
 	function writeRow(slot RecordSlot, bits ShapeFactBits, floor LengthFloor)
 		try self.rowShape.set(slot, value: bits) otherwise panic("foldEstablishedGuards: rowShape.set OOB at {slot}")

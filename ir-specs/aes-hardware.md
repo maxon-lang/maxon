@@ -3442,34 +3442,34 @@ func @main {
   __il_body#29:
     arm64.bl __cpufeat_aes_usable
   __il_cont#28:
-    arm64.cbz x0, __il_body#174
-  __il_body#166:
+    arm64.cbz x0, __il_body#175
+  __il_body#167:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 16
     arm64.movImm x0, 0
-    arm64.b.eq scmerge#168
-  andrhs#167:
+    arm64.b.eq scmerge#169
+  andrhs#168:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 24
     arm64.cset x0, ne
-  scmerge#168:
+  scmerge#169:
     arm64.movImm x1, 0
-    arm64.cbz x0, critsplit#202
-  andrhs#169:
+    arm64.cbz x0, critsplit#205
+  andrhs#170:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 32
     arm64.cset x0, ne
-    arm64.b scmerge#170
-  critsplit#202:
+    arm64.b scmerge#171
+  critsplit#205:
     arm64.movRegReg x0, x1
-  scmerge#170:
-    arm64.cbz x0, ifcont#172
-  keyLength#171:
+  scmerge#171:
+    arm64.cbz x0, ifcont#173
+  keyLength#172:
     arm64.movImm x0, 1
-    arm64.b __il_cont#165
-  ifcont#172:
+    arm64.b __il_cont#166
+  ifcont#173:
     arm64.movImm x0, 0
-  __il_cont#165:
+  __il_cont#166:
     arm64.cmp x0, 0
     arm64.b.ne tryerr#2
   __il_body#31:
@@ -3501,33 +3501,33 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x21
     arm64.movRegReg x21, x0
     arm64.b tryok#1
-  __il_body#174:
+  __il_body#175:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 16
     arm64.movImm x0, 0
-    arm64.b.eq scmerge#176
-  andrhs#175:
+    arm64.b.eq scmerge#177
+  andrhs#176:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 24
     arm64.cset x0, ne
-  scmerge#176:
+  scmerge#177:
     arm64.movImm x1, 0
-    arm64.cbz x0, critsplit#204
-  andrhs#177:
+    arm64.cbz x0, critsplit#207
+  andrhs#178:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 32
     arm64.cset x0, ne
-    arm64.b scmerge#178
-  critsplit#204:
+    arm64.b scmerge#179
+  critsplit#207:
     arm64.movRegReg x0, x1
-  scmerge#178:
-    arm64.cbz x0, ifcont#180
-  keyLength#179:
+  scmerge#179:
+    arm64.cbz x0, ifcont#181
+  keyLength#180:
     arm64.movImm x0, 1
-    arm64.b __il_cont#173
-  ifcont#180:
+    arm64.b __il_cont#174
+  ifcont#181:
     arm64.movImm x0, 0
-  __il_cont#173:
+  __il_cont#174:
     arm64.cmp x0, 0
     arm64.b.eq tryok#34
   tryerr#35:
@@ -3542,7 +3542,7 @@ func @main {
   __rc_chk#38:
     arm64.cmp x21, 14
     arm64.b.gt __rc_panic#37
-  __il_body#129:
+  __il_body#130:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.lsr x22, x0, 2
     arm64.add x0, x21, 1
@@ -3555,55 +3555,55 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl Array.reserve
     arm64.movImm x0, 0
-    arm64.b forhdr#106
+    arm64.b forhdr#107
   keyWords:
     arm64.lsl x1, x0, 2
     arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#131
-  __il_body#182:
+    arm64.b.lt __rc_panic#132
+  __il_body#183:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#186
-  __im_bounds#187:
+    arm64.b.hs __im_slow#187
+  __im_bounds#188:
     arm64.sub x2, x2, x1
     arm64.cmp x2, 4
-    arm64.b.lt __im_slow#186
-  __im_load#188:
+    arm64.b.lt __im_slow#187
+  __im_load#189:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
     arm64.cmp x2, 1
-    arm64.b.ne __im_slow#186
-  __im_byte#189:
+    arm64.b.ne __im_slow#187
+  __im_byte#190:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.add x1, x2, x1
     arm64.loadRegBaseDisp.word32 x1, [x1 + 0]
-  __il_cont#181:
+  __il_cont#182:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x24 + 16]
     arm64.cmp x3, 0
-    arm64.b.lt __im_slow#152
-  __im_bounds#153:
+    arm64.b.lt __im_slow#153
+  __im_bounds#154:
     arm64.loadRegBaseDisp.word64 x3, [x24 + 16]
     arm64.cmp x2, x3
-    arm64.b.hs __im_slow#152
-  __im_buffer#154:
+    arm64.b.hs __im_slow#153
+  __im_buffer#155:
     arm64.loadRegBaseDisp.word64 x3, [x24 + 0]
     arm64.cmp x3, 0
-    arm64.b.eq __im_slow#152
-  __im_viewed#155:
+    arm64.b.eq __im_slow#153
+  __im_viewed#156:
     arm64.sub x4, x3, 16
     arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
     arm64.cmp x4, 0
-    arm64.b.ne __im_slow#152
-  __im_store#156:
+    arm64.b.ne __im_slow#153
+  __im_store#157:
     arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x1
     arm64.add x1, x2, 1
     arm64.storeBaseDispReg.word64 [x24 + 8], x1
-  forstep#108:
+  forstep#109:
     arm64.add x0, x0, 1
-  forhdr#106:
+  forhdr#107:
     arm64.cmp x0, x22
     arm64.b.lo keyWords
-  forexit#109:
+  forexit#110:
     arm64.sub x1, x22, 1
     arm64.movImm x16, 18446744073709551615
     arm64.eor x0, x22, x16
@@ -3614,21 +3614,21 @@ func @main {
     arm64.and x2, x2, x1
     arm64.orr x0, x0, x2
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#133
-  __rc_ok#132:
+    arm64.b.lt __rc_panic#134
+  __rc_ok#133:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#158
-  __im_load#159:
+    arm64.b.hs __im_slow#159
+  __im_load#160:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-  tryok#110:
+  tryok#111:
     arm64.movImm x25, 0
     arm64.movImm x26, 0
     arm64.movRegReg x27, x26
     arm64.movRegReg x26, x25
     arm64.movRegReg x25, x22
-    arm64.b forhdr#112
+    arm64.b forhdr#113
   eachWord:
     arm64.cmp x26, 0
     arm64.b.ne ifelse
@@ -3636,95 +3636,95 @@ func @main {
     arm64.leaRdata x1, __barr_rec_28
     arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
     arm64.cmp x27, x2
-    arm64.b.hs __im_slow#143
-  __im_load#144:
+    arm64.b.hs __im_slow#144
+  __im_load#145:
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.loadRegBaseIndexScale.word64 x28, [x1 + x27*8 + 0]
-  __il_body#164:
+  __il_body#165:
     arm64.lsr x1, x0, 8
     arm64.lsl x0, x0, 24
     arm64.orr x0, x1, x0
     arm64.movImm x1, 4294967295
     arm64.and x0, x0, x1
-  __il_cont#163:
+  __il_cont#164:
     arm64.bl aesSubWord
     arm64.eor x0, x0, x28
-    arm64.b ifcont#124
+    arm64.b ifcont#125
   ifelse:
     arm64.cmp x22, 8
     arm64.movImm x1, 0
-    arm64.b.ne scmerge#121
-  andrhs#120:
+    arm64.b.ne scmerge#122
+  andrhs#121:
     arm64.cmp x26, 4
     arm64.cset x1, eq
-  scmerge#121:
-    arm64.cbz x1, ifcont#124
+  scmerge#122:
+    arm64.cbz x1, ifcont#125
   longKey:
     arm64.bl aesSubWord
-  ifcont#124:
+  ifcont#125:
     arm64.sub x1, x25, x22
     arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#135
-  __rc_ok#134:
+    arm64.b.lt __rc_panic#136
+  __rc_ok#135:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#161
-  __im_load#162:
+    arm64.b.hs __im_slow#162
+  __im_load#163:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
-  tryok#125:
+  tryok#126:
     arm64.eor x1, x0, x1
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x24 + 16]
     arm64.cmp x2, 0
-    arm64.b.lt __im_slow#146
-  __im_bounds#147:
+    arm64.b.lt __im_slow#147
+  __im_bounds#148:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 16]
     arm64.cmp x0, x2
-    arm64.b.hs __im_slow#146
-  __im_buffer#148:
+    arm64.b.hs __im_slow#147
+  __im_buffer#149:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 0]
     arm64.cmp x2, 0
-    arm64.b.eq __im_slow#146
-  __im_viewed#149:
+    arm64.b.eq __im_slow#147
+  __im_viewed#150:
     arm64.sub x3, x2, 16
     arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#146
-  __im_store#150:
+    arm64.b.ne __im_slow#147
+  __im_store#151:
     arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
     arm64.add x0, x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 8], x0
-  __im_cont#145:
+  __im_cont#146:
     arm64.add x0, x26, 1
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#137
-  __rc_chk#138:
+    arm64.b.lt __rc_panic#138
+  __rc_chk#139:
     arm64.cmp x0, 8
-    arm64.b.gt __rc_panic#137
-  __rc_ok#136:
+    arm64.b.gt __rc_panic#138
+  __rc_ok#137:
     arm64.cmp x0, x22
-    arm64.b.ne critsplit#197
+    arm64.b.ne critsplit#200
   wrap:
     arm64.movImm x0, 0
     arm64.add x2, x27, 1
     arm64.cmp x2, 0
-    arm64.b.lt __rc_panic#140
-  __rc_chk#141:
+    arm64.b.lt __rc_panic#141
+  __rc_chk#142:
     arm64.cmp x2, 10
-    arm64.b.gt __rc_panic#140
-    arm64.b forstep#114
-  critsplit#197:
+    arm64.b.gt __rc_panic#141
+    arm64.b forstep#115
+  critsplit#200:
     arm64.movRegReg x2, x27
-  forstep#114:
+  forstep#115:
     arm64.add x25, x25, 1
     arm64.movRegReg x26, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x27, x2
-  forhdr#112:
+  forhdr#113:
     arm64.cmp x25, x23
     arm64.b.lo eachWord
-  __il_cont#105:
+  __il_cont#106:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -3745,8 +3745,8 @@ func @main {
   __rc_ok#62:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#81
-  __im_load#82:
+    arm64.b.hs __im_slow#82
+  __im_load#83:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
   tryok#45:
@@ -3754,8 +3754,8 @@ func @main {
   __rc_ok#64:
     arm64.loadRegBaseDisp.word64 x3, [x24 + 8]
     arm64.cmp x2, x3
-    arm64.b.hs __im_slow#84
-  __im_load#85:
+    arm64.b.hs __im_slow#85
+  __im_load#86:
     arm64.loadRegBaseDisp.word64 x3, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x2, [x3 + x2*8 + 0]
   tryok#47:
@@ -3763,8 +3763,8 @@ func @main {
   __rc_ok#66:
     arm64.loadRegBaseDisp.word64 x4, [x24 + 8]
     arm64.cmp x3, x4
-    arm64.b.hs __im_slow#87
-  __im_load#88:
+    arm64.b.hs __im_slow#88
+  __im_load#89:
     arm64.loadRegBaseDisp.word64 x4, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x3, [x4 + x3*8 + 0]
   tryok#49:
@@ -3772,8 +3772,8 @@ func @main {
   __rc_ok#68:
     arm64.loadRegBaseDisp.word64 x4, [x24 + 8]
     arm64.cmp x1, x4
-    arm64.b.hs __im_slow#90
-  __im_load#91:
+    arm64.b.hs __im_slow#91
+  __im_load#92:
     arm64.loadRegBaseDisp.word64 x4, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x4, [x4 + x1*8 + 0]
   tryok#51:
@@ -3782,83 +3782,83 @@ func @main {
     arm64.movRegReg x3, x4
     arm64.bl aesPackColumns
     arm64.movRegReg x27, x0
-    arm64.loadRegBaseDisp.word64 x2, [x27 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x27 + 8]
-    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x27 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x27 + 8]
+    arm64.movImm x2, 0
     arm64.b forhdr#53
   eachSlot:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#71
-  __im_bounds#72:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#71
-  __im_viewed#73:
-    arm64.sub x4, x0, 16
+    arm64.loadRegBaseDisp.word64 x3, [x23 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_missing
+  __im_owned#73:
+    arm64.loadRegBaseDisp.word64 x4, [x23 + 16]
+    arm64.cmp x4, 0
+    arm64.b.lt __im_detach#72
+  __im_viewed#74:
+    arm64.sub x4, x3, 16
     arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
     arm64.cmp x4, 0
-    arm64.b.ne __im_slow#71
-  __im_store#74:
-    arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
+    arm64.b.ne __im_detach#72
+  __im_detached#75:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x0
   __im_cont#70:
-    arm64.add x4, x1, 4
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#76
-  __im_bounds#77:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#76
-  __im_viewed#78:
-    arm64.sub x5, x0, 16
+    arm64.add x3, x2, 4
+    arm64.loadRegBaseDisp.word64 x4, [x23 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_missing
+  __im_owned#78:
+    arm64.loadRegBaseDisp.word64 x5, [x23 + 16]
+    arm64.cmp x5, 0
+    arm64.b.lt __im_detach#77
+  __im_viewed#79:
+    arm64.sub x5, x4, 16
     arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
-    arm64.b.ne __im_slow#76
-  __im_store#79:
-    arm64.storeBaseIndexScaleReg.word64 [x0 + x4*8 + 0], x3
+    arm64.b.ne __im_detach#77
+  __im_detached#80:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x3*8 + 0], x1
   forstep#55:
-    arm64.add x1, x1, 1
+    arm64.add x2, x2, 1
   forhdr#53:
-    arm64.cmp x1, 4
+    arm64.cmp x2, 4
     arm64.b.lt eachSlot
   forexit#56:
     arm64.movRegReg x0, x23
     arm64.bl aesOrtho
-  __il_body#93:
+  __il_body#94:
     arm64.movImm x0, 0
-    arm64.b forhdr#94
+    arm64.b forhdr#95
   eachPlane:
     arm64.loadRegBaseDisp.word64 x1, [x23 + 0]
     arm64.loadRegBaseIndexScale.word64 x1, [x1 + x0*8 + 0]
-  __im_cont#98:
+  __im_cont#99:
     arm64.loadRegBaseDisp.word64 x2, [x22 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x22 + 16]
     arm64.cmp x3, 0
-    arm64.b.lt __im_slow#100
-  __im_bounds#101:
+    arm64.b.lt __im_slow#101
+  __im_bounds#102:
     arm64.loadRegBaseDisp.word64 x3, [x22 + 16]
     arm64.cmp x2, x3
-    arm64.b.hs __im_slow#100
-  __im_buffer#102:
+    arm64.b.hs __im_slow#101
+  __im_buffer#103:
     arm64.loadRegBaseDisp.word64 x3, [x22 + 0]
     arm64.cmp x3, 0
-    arm64.b.eq __im_slow#100
-  __im_viewed#103:
+    arm64.b.eq __im_slow#101
+  __im_viewed#104:
     arm64.sub x4, x3, 16
     arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
     arm64.cmp x4, 0
-    arm64.b.ne __im_slow#100
-  __im_store#104:
+    arm64.b.ne __im_slow#101
+  __im_store#105:
     arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x1
     arm64.add x1, x2, 1
     arm64.storeBaseDispReg.word64 [x22 + 8], x1
-  forstep#96:
+  forstep#97:
     arm64.add x0, x0, 1
-  forhdr#94:
+  forhdr#95:
     arm64.cmp x0, 8
     arm64.b.lo eachPlane
-  __il_cont#92:
+  __il_cont#93:
     arm64.movRegReg x0, x27
     arm64.bl __mm_decref
   forstep#43:
@@ -4000,29 +4000,29 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __im_slow#186:
+  __im_slow#187:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_word_get_le4
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#184
-    arm64.b __il_cont#181
-  __im_slow#152:
+    arm64.b.ne tryerr#185
+    arm64.b __il_cont#182
+  __im_slow#153:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x24
     arm64.bl __managed_push
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b forstep#108
-  __im_slow#158:
+    arm64.b forstep#109
+  __im_slow#159:
     arm64.movRegReg x0, x24
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#111
-    arm64.b tryok#110
-  __im_slow#143:
+    arm64.b.ne tryerr#112
+    arm64.b tryok#111
+  __im_slow#144:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x27
@@ -4030,24 +4030,24 @@ func @main {
     arm64.movRegReg x28, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#118
-    arm64.b __il_body#164
-  __im_slow#161:
+    arm64.b.ne tryerr#119
+    arm64.b __il_body#165
+  __im_slow#162:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x24
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#126
-    arm64.b tryok#125
-  __im_slow#146:
+    arm64.b.ne tryerr#127
+    arm64.b tryok#126
+  __im_slow#147:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x24
     arm64.bl __managed_push
     arm64.loadRegSlot x1, slot1
-    arm64.b __im_cont#145
-  __im_slow#81:
+    arm64.b __im_cont#146
+  __im_slow#82:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x24
     arm64.bl __managed_get
@@ -4055,7 +4055,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#46
     arm64.b tryok#45
-  __im_slow#84:
+  __im_slow#85:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x24
@@ -4067,7 +4067,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#48
     arm64.b tryok#47
-  __im_slow#87:
+  __im_slow#88:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -4081,7 +4081,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#50
     arm64.b tryok#49
-  __im_slow#90:
+  __im_slow#91:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot2, x2
     arm64.storeSlotReg slot3, x3
@@ -4094,35 +4094,39 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#52
     arm64.b tryok#51
-  __im_slow#71:
+  __im_detach#72:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_cow_detach
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegBaseDisp.word64 x3, [x23 + 0]
+    arm64.b __im_detached#75
+  __im_detach#77:
+    arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
     arm64.storeSlotReg slot3, x3
     arm64.movRegReg x0, x23
-    arm64.bl __managed_set_unchecked
+    arm64.bl __managed_cow_detach
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
-    arm64.b __im_cont#70
-  __im_slow#76:
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x4
-    arm64.movRegReg x2, x3
-    arm64.bl __managed_set_unchecked
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.b forstep#55
-  __im_slow#100:
+    arm64.loadRegBaseDisp.word64 x4, [x23 + 0]
+    arm64.b __im_detached#80
+  __im_slow#101:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x22
     arm64.bl __managed_push
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b forstep#96
+    arm64.b forstep#97
   __rc_panic#37:
     arm64.leaRdata x0, __str_blob_81  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
@@ -4139,7 +4143,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#131:
+  __rc_panic#132:
     arm64.leaRdata x0, __str_blob_69  ; "panic at AesBitsliced.maxon:601: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4155,7 +4159,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryerr#184:
+  tryerr#185:
     arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:122: aes: a word inside an array the caller sized is missing\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4171,7 +4175,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#133:
+  __rc_panic#134:
     arm64.leaRdata x0, __str_blob_70  ; "panic at AesBitsliced.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4187,7 +4191,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryerr#111:
+  tryerr#112:
     arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:604: aes: key word index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4203,7 +4207,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryerr#118:
+  tryerr#119:
     arm64.leaRdata x0, __str_blob_29  ; "panic at AesBitsliced.maxon:612: aes: round constant index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4219,7 +4223,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#135:
+  __rc_panic#136:
     arm64.leaRdata x0, __str_blob_71  ; "panic at AesBitsliced.maxon:618: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4235,7 +4239,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryerr#126:
+  tryerr#127:
     arm64.leaRdata x0, __str_blob_30  ; "panic at AesBitsliced.maxon:618: aes: key word index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4251,7 +4255,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#137:
+  __rc_panic#138:
     arm64.leaRdata x0, __str_blob_72  ; "panic at AesBitsliced.maxon:621: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4267,7 +4271,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#140:
+  __rc_panic#141:
     arm64.leaRdata x0, __str_blob_73  ; "panic at AesBitsliced.maxon:625: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4333,6 +4337,22 @@ func @main {
     arm64.ret
   tryerr#52:
     arm64.leaRdata x0, __str_blob_34  ; "panic at AesBitsliced.maxon:649: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __im_missing:
+    arm64.leaRdata x0, __str_blob_102  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -4498,34 +4518,34 @@ func @main {
   __il_body#29:
     arm64.bl __cpufeat_aes_usable
   __il_cont#28:
-    arm64.cbz x0, __il_body#174
-  __il_body#166:
+    arm64.cbz x0, __il_body#175
+  __il_body#167:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 16
     arm64.movImm x0, 0
-    arm64.b.eq scmerge#168
-  andrhs#167:
+    arm64.b.eq scmerge#169
+  andrhs#168:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 24
     arm64.cset x0, ne
-  scmerge#168:
+  scmerge#169:
     arm64.movImm x1, 0
-    arm64.cbz x0, critsplit#202
-  andrhs#169:
+    arm64.cbz x0, critsplit#205
+  andrhs#170:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 32
     arm64.cset x0, ne
-    arm64.b scmerge#170
-  critsplit#202:
+    arm64.b scmerge#171
+  critsplit#205:
     arm64.movRegReg x0, x1
-  scmerge#170:
-    arm64.cbz x0, ifcont#172
-  keyLength#171:
+  scmerge#171:
+    arm64.cbz x0, ifcont#173
+  keyLength#172:
     arm64.movImm x0, 1
-    arm64.b __il_cont#165
-  ifcont#172:
+    arm64.b __il_cont#166
+  ifcont#173:
     arm64.movImm x0, 0
-  __il_cont#165:
+  __il_cont#166:
     arm64.cmp x0, 0
     arm64.b.ne tryerr#2
   __il_body#31:
@@ -4557,33 +4577,33 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x21
     arm64.movRegReg x21, x0
     arm64.b tryok#1
-  __il_body#174:
+  __il_body#175:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 16
     arm64.movImm x0, 0
-    arm64.b.eq scmerge#176
-  andrhs#175:
+    arm64.b.eq scmerge#177
+  andrhs#176:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 24
     arm64.cset x0, ne
-  scmerge#176:
+  scmerge#177:
     arm64.movImm x1, 0
-    arm64.cbz x0, critsplit#204
-  andrhs#177:
+    arm64.cbz x0, critsplit#207
+  andrhs#178:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 32
     arm64.cset x0, ne
-    arm64.b scmerge#178
-  critsplit#204:
+    arm64.b scmerge#179
+  critsplit#207:
     arm64.movRegReg x0, x1
-  scmerge#178:
-    arm64.cbz x0, ifcont#180
-  keyLength#179:
+  scmerge#179:
+    arm64.cbz x0, ifcont#181
+  keyLength#180:
     arm64.movImm x0, 1
-    arm64.b __il_cont#173
-  ifcont#180:
+    arm64.b __il_cont#174
+  ifcont#181:
     arm64.movImm x0, 0
-  __il_cont#173:
+  __il_cont#174:
     arm64.cmp x0, 0
     arm64.b.eq tryok#34
   tryerr#35:
@@ -4598,7 +4618,7 @@ func @main {
   __rc_chk#38:
     arm64.cmp x21, 14
     arm64.b.gt __rc_panic#37
-  __il_body#129:
+  __il_body#130:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.lsr x22, x0, 2
     arm64.add x0, x21, 1
@@ -4611,55 +4631,55 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl Array.reserve
     arm64.movImm x0, 0
-    arm64.b forhdr#106
+    arm64.b forhdr#107
   keyWords:
     arm64.lsl x1, x0, 2
     arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#131
-  __il_body#182:
+    arm64.b.lt __rc_panic#132
+  __il_body#183:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#186
-  __im_bounds#187:
+    arm64.b.hs __im_slow#187
+  __im_bounds#188:
     arm64.sub x2, x2, x1
     arm64.cmp x2, 4
-    arm64.b.lt __im_slow#186
-  __im_load#188:
+    arm64.b.lt __im_slow#187
+  __im_load#189:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
     arm64.cmp x2, 1
-    arm64.b.ne __im_slow#186
-  __im_byte#189:
+    arm64.b.ne __im_slow#187
+  __im_byte#190:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.add x1, x2, x1
     arm64.loadRegBaseDisp.word32 x1, [x1 + 0]
-  __il_cont#181:
+  __il_cont#182:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x24 + 16]
     arm64.cmp x3, 0
-    arm64.b.lt __im_slow#152
-  __im_bounds#153:
+    arm64.b.lt __im_slow#153
+  __im_bounds#154:
     arm64.loadRegBaseDisp.word64 x3, [x24 + 16]
     arm64.cmp x2, x3
-    arm64.b.hs __im_slow#152
-  __im_buffer#154:
+    arm64.b.hs __im_slow#153
+  __im_buffer#155:
     arm64.loadRegBaseDisp.word64 x3, [x24 + 0]
     arm64.cmp x3, 0
-    arm64.b.eq __im_slow#152
-  __im_viewed#155:
+    arm64.b.eq __im_slow#153
+  __im_viewed#156:
     arm64.sub x4, x3, 16
     arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
     arm64.cmp x4, 0
-    arm64.b.ne __im_slow#152
-  __im_store#156:
+    arm64.b.ne __im_slow#153
+  __im_store#157:
     arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x1
     arm64.add x1, x2, 1
     arm64.storeBaseDispReg.word64 [x24 + 8], x1
-  forstep#108:
+  forstep#109:
     arm64.add x0, x0, 1
-  forhdr#106:
+  forhdr#107:
     arm64.cmp x0, x22
     arm64.b.lo keyWords
-  forexit#109:
+  forexit#110:
     arm64.sub x1, x22, 1
     arm64.movImm x16, 18446744073709551615
     arm64.eor x0, x22, x16
@@ -4670,21 +4690,21 @@ func @main {
     arm64.and x2, x2, x1
     arm64.orr x0, x0, x2
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#133
-  __rc_ok#132:
+    arm64.b.lt __rc_panic#134
+  __rc_ok#133:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#158
-  __im_load#159:
+    arm64.b.hs __im_slow#159
+  __im_load#160:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-  tryok#110:
+  tryok#111:
     arm64.movImm x25, 0
     arm64.movImm x26, 0
     arm64.movRegReg x27, x26
     arm64.movRegReg x26, x25
     arm64.movRegReg x25, x22
-    arm64.b forhdr#112
+    arm64.b forhdr#113
   eachWord:
     arm64.cmp x26, 0
     arm64.b.ne ifelse
@@ -4692,95 +4712,95 @@ func @main {
     arm64.leaRdata x1, __barr_rec_28
     arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
     arm64.cmp x27, x2
-    arm64.b.hs __im_slow#143
-  __im_load#144:
+    arm64.b.hs __im_slow#144
+  __im_load#145:
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.loadRegBaseIndexScale.word64 x28, [x1 + x27*8 + 0]
-  __il_body#164:
+  __il_body#165:
     arm64.lsr x1, x0, 8
     arm64.lsl x0, x0, 24
     arm64.orr x0, x1, x0
     arm64.movImm x1, 4294967295
     arm64.and x0, x0, x1
-  __il_cont#163:
+  __il_cont#164:
     arm64.bl aesSubWord
     arm64.eor x0, x0, x28
-    arm64.b ifcont#124
+    arm64.b ifcont#125
   ifelse:
     arm64.cmp x22, 8
     arm64.movImm x1, 0
-    arm64.b.ne scmerge#121
-  andrhs#120:
+    arm64.b.ne scmerge#122
+  andrhs#121:
     arm64.cmp x26, 4
     arm64.cset x1, eq
-  scmerge#121:
-    arm64.cbz x1, ifcont#124
+  scmerge#122:
+    arm64.cbz x1, ifcont#125
   longKey:
     arm64.bl aesSubWord
-  ifcont#124:
+  ifcont#125:
     arm64.sub x1, x25, x22
     arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#135
-  __rc_ok#134:
+    arm64.b.lt __rc_panic#136
+  __rc_ok#135:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#161
-  __im_load#162:
+    arm64.b.hs __im_slow#162
+  __im_load#163:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
-  tryok#125:
+  tryok#126:
     arm64.eor x1, x0, x1
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x24 + 16]
     arm64.cmp x2, 0
-    arm64.b.lt __im_slow#146
-  __im_bounds#147:
+    arm64.b.lt __im_slow#147
+  __im_bounds#148:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 16]
     arm64.cmp x0, x2
-    arm64.b.hs __im_slow#146
-  __im_buffer#148:
+    arm64.b.hs __im_slow#147
+  __im_buffer#149:
     arm64.loadRegBaseDisp.word64 x2, [x24 + 0]
     arm64.cmp x2, 0
-    arm64.b.eq __im_slow#146
-  __im_viewed#149:
+    arm64.b.eq __im_slow#147
+  __im_viewed#150:
     arm64.sub x3, x2, 16
     arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#146
-  __im_store#150:
+    arm64.b.ne __im_slow#147
+  __im_store#151:
     arm64.storeBaseIndexScaleReg.word64 [x2 + x0*8 + 0], x1
     arm64.add x0, x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 8], x0
-  __im_cont#145:
+  __im_cont#146:
     arm64.add x0, x26, 1
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#137
-  __rc_chk#138:
+    arm64.b.lt __rc_panic#138
+  __rc_chk#139:
     arm64.cmp x0, 8
-    arm64.b.gt __rc_panic#137
-  __rc_ok#136:
+    arm64.b.gt __rc_panic#138
+  __rc_ok#137:
     arm64.cmp x0, x22
-    arm64.b.ne critsplit#197
+    arm64.b.ne critsplit#200
   wrap:
     arm64.movImm x0, 0
     arm64.add x2, x27, 1
     arm64.cmp x2, 0
-    arm64.b.lt __rc_panic#140
-  __rc_chk#141:
+    arm64.b.lt __rc_panic#141
+  __rc_chk#142:
     arm64.cmp x2, 10
-    arm64.b.gt __rc_panic#140
-    arm64.b forstep#114
-  critsplit#197:
+    arm64.b.gt __rc_panic#141
+    arm64.b forstep#115
+  critsplit#200:
     arm64.movRegReg x2, x27
-  forstep#114:
+  forstep#115:
     arm64.add x25, x25, 1
     arm64.movRegReg x26, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x27, x2
-  forhdr#112:
+  forhdr#113:
     arm64.cmp x25, x23
     arm64.b.lo eachWord
-  __il_cont#105:
+  __il_cont#106:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -4801,8 +4821,8 @@ func @main {
   __rc_ok#62:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#81
-  __im_load#82:
+    arm64.b.hs __im_slow#82
+  __im_load#83:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
   tryok#45:
@@ -4810,8 +4830,8 @@ func @main {
   __rc_ok#64:
     arm64.loadRegBaseDisp.word64 x3, [x24 + 8]
     arm64.cmp x2, x3
-    arm64.b.hs __im_slow#84
-  __im_load#85:
+    arm64.b.hs __im_slow#85
+  __im_load#86:
     arm64.loadRegBaseDisp.word64 x3, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x2, [x3 + x2*8 + 0]
   tryok#47:
@@ -4819,8 +4839,8 @@ func @main {
   __rc_ok#66:
     arm64.loadRegBaseDisp.word64 x4, [x24 + 8]
     arm64.cmp x3, x4
-    arm64.b.hs __im_slow#87
-  __im_load#88:
+    arm64.b.hs __im_slow#88
+  __im_load#89:
     arm64.loadRegBaseDisp.word64 x4, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x3, [x4 + x3*8 + 0]
   tryok#49:
@@ -4828,8 +4848,8 @@ func @main {
   __rc_ok#68:
     arm64.loadRegBaseDisp.word64 x4, [x24 + 8]
     arm64.cmp x1, x4
-    arm64.b.hs __im_slow#90
-  __im_load#91:
+    arm64.b.hs __im_slow#91
+  __im_load#92:
     arm64.loadRegBaseDisp.word64 x4, [x24 + 0]
     arm64.loadRegBaseIndexScale.word64 x4, [x4 + x1*8 + 0]
   tryok#51:
@@ -4838,83 +4858,83 @@ func @main {
     arm64.movRegReg x3, x4
     arm64.bl aesPackColumns
     arm64.movRegReg x27, x0
-    arm64.loadRegBaseDisp.word64 x2, [x27 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x27 + 8]
-    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x27 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x27 + 8]
+    arm64.movImm x2, 0
     arm64.b forhdr#53
   eachSlot:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#71
-  __im_bounds#72:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#71
-  __im_viewed#73:
-    arm64.sub x4, x0, 16
+    arm64.loadRegBaseDisp.word64 x3, [x23 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_missing
+  __im_owned#73:
+    arm64.loadRegBaseDisp.word64 x4, [x23 + 16]
+    arm64.cmp x4, 0
+    arm64.b.lt __im_detach#72
+  __im_viewed#74:
+    arm64.sub x4, x3, 16
     arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
     arm64.cmp x4, 0
-    arm64.b.ne __im_slow#71
-  __im_store#74:
-    arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
+    arm64.b.ne __im_detach#72
+  __im_detached#75:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x0
   __im_cont#70:
-    arm64.add x4, x1, 4
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#76
-  __im_bounds#77:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#76
-  __im_viewed#78:
-    arm64.sub x5, x0, 16
+    arm64.add x3, x2, 4
+    arm64.loadRegBaseDisp.word64 x4, [x23 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_missing
+  __im_owned#78:
+    arm64.loadRegBaseDisp.word64 x5, [x23 + 16]
+    arm64.cmp x5, 0
+    arm64.b.lt __im_detach#77
+  __im_viewed#79:
+    arm64.sub x5, x4, 16
     arm64.loadRegBaseDisp.word64 x5, [x5 + 8]
     arm64.cmp x5, 0
-    arm64.b.ne __im_slow#76
-  __im_store#79:
-    arm64.storeBaseIndexScaleReg.word64 [x0 + x4*8 + 0], x3
+    arm64.b.ne __im_detach#77
+  __im_detached#80:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x3*8 + 0], x1
   forstep#55:
-    arm64.add x1, x1, 1
+    arm64.add x2, x2, 1
   forhdr#53:
-    arm64.cmp x1, 4
+    arm64.cmp x2, 4
     arm64.b.lt eachSlot
   forexit#56:
     arm64.movRegReg x0, x23
     arm64.bl aesOrtho
-  __il_body#93:
+  __il_body#94:
     arm64.movImm x0, 0
-    arm64.b forhdr#94
+    arm64.b forhdr#95
   eachPlane:
     arm64.loadRegBaseDisp.word64 x1, [x23 + 0]
     arm64.loadRegBaseIndexScale.word64 x1, [x1 + x0*8 + 0]
-  __im_cont#98:
+  __im_cont#99:
     arm64.loadRegBaseDisp.word64 x2, [x22 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x22 + 16]
     arm64.cmp x3, 0
-    arm64.b.lt __im_slow#100
-  __im_bounds#101:
+    arm64.b.lt __im_slow#101
+  __im_bounds#102:
     arm64.loadRegBaseDisp.word64 x3, [x22 + 16]
     arm64.cmp x2, x3
-    arm64.b.hs __im_slow#100
-  __im_buffer#102:
+    arm64.b.hs __im_slow#101
+  __im_buffer#103:
     arm64.loadRegBaseDisp.word64 x3, [x22 + 0]
     arm64.cmp x3, 0
-    arm64.b.eq __im_slow#100
-  __im_viewed#103:
+    arm64.b.eq __im_slow#101
+  __im_viewed#104:
     arm64.sub x4, x3, 16
     arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
     arm64.cmp x4, 0
-    arm64.b.ne __im_slow#100
-  __im_store#104:
+    arm64.b.ne __im_slow#101
+  __im_store#105:
     arm64.storeBaseIndexScaleReg.word64 [x3 + x2*8 + 0], x1
     arm64.add x1, x2, 1
     arm64.storeBaseDispReg.word64 [x22 + 8], x1
-  forstep#96:
+  forstep#97:
     arm64.add x0, x0, 1
-  forhdr#94:
+  forhdr#95:
     arm64.cmp x0, 8
     arm64.b.lo eachPlane
-  __il_cont#92:
+  __il_cont#93:
     arm64.movRegReg x0, x27
     arm64.bl __mm_decref
   forstep#43:
@@ -5056,29 +5076,29 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __im_slow#186:
+  __im_slow#187:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_word_get_le4
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#184
-    arm64.b __il_cont#181
-  __im_slow#152:
+    arm64.b.ne tryerr#185
+    arm64.b __il_cont#182
+  __im_slow#153:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x24
     arm64.bl __managed_push
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b forstep#108
-  __im_slow#158:
+    arm64.b forstep#109
+  __im_slow#159:
     arm64.movRegReg x0, x24
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#111
-    arm64.b tryok#110
-  __im_slow#143:
+    arm64.b.ne tryerr#112
+    arm64.b tryok#111
+  __im_slow#144:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x27
@@ -5086,24 +5106,24 @@ func @main {
     arm64.movRegReg x28, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#118
-    arm64.b __il_body#164
-  __im_slow#161:
+    arm64.b.ne tryerr#119
+    arm64.b __il_body#165
+  __im_slow#162:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x24
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#126
-    arm64.b tryok#125
-  __im_slow#146:
+    arm64.b.ne tryerr#127
+    arm64.b tryok#126
+  __im_slow#147:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x24
     arm64.bl __managed_push
     arm64.loadRegSlot x1, slot1
-    arm64.b __im_cont#145
-  __im_slow#81:
+    arm64.b __im_cont#146
+  __im_slow#82:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x24
     arm64.bl __managed_get
@@ -5111,7 +5131,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#46
     arm64.b tryok#45
-  __im_slow#84:
+  __im_slow#85:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x24
@@ -5123,7 +5143,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#48
     arm64.b tryok#47
-  __im_slow#87:
+  __im_slow#88:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -5137,7 +5157,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#50
     arm64.b tryok#49
-  __im_slow#90:
+  __im_slow#91:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot2, x2
     arm64.storeSlotReg slot3, x3
@@ -5150,35 +5170,39 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#52
     arm64.b tryok#51
-  __im_slow#71:
+  __im_detach#72:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_cow_detach
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegBaseDisp.word64 x3, [x23 + 0]
+    arm64.b __im_detached#75
+  __im_detach#77:
+    arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
     arm64.storeSlotReg slot3, x3
     arm64.movRegReg x0, x23
-    arm64.bl __managed_set_unchecked
+    arm64.bl __managed_cow_detach
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
-    arm64.b __im_cont#70
-  __im_slow#76:
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x4
-    arm64.movRegReg x2, x3
-    arm64.bl __managed_set_unchecked
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.b forstep#55
-  __im_slow#100:
+    arm64.loadRegBaseDisp.word64 x4, [x23 + 0]
+    arm64.b __im_detached#80
+  __im_slow#101:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x22
     arm64.bl __managed_push
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b forstep#96
+    arm64.b forstep#97
   __rc_panic#37:
     arm64.leaRdata x0, __str_blob_81  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
@@ -5195,7 +5219,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#131:
+  __rc_panic#132:
     arm64.leaRdata x0, __str_blob_69  ; "panic at AesBitsliced.maxon:601: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5211,7 +5235,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryerr#184:
+  tryerr#185:
     arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:122: aes: a word inside an array the caller sized is missing\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5227,7 +5251,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#133:
+  __rc_panic#134:
     arm64.leaRdata x0, __str_blob_70  ; "panic at AesBitsliced.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5243,7 +5267,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryerr#111:
+  tryerr#112:
     arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:604: aes: key word index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5259,7 +5283,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryerr#118:
+  tryerr#119:
     arm64.leaRdata x0, __str_blob_29  ; "panic at AesBitsliced.maxon:612: aes: round constant index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5275,7 +5299,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#135:
+  __rc_panic#136:
     arm64.leaRdata x0, __str_blob_71  ; "panic at AesBitsliced.maxon:618: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5291,7 +5315,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryerr#126:
+  tryerr#127:
     arm64.leaRdata x0, __str_blob_30  ; "panic at AesBitsliced.maxon:618: aes: key word index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5307,7 +5331,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#137:
+  __rc_panic#138:
     arm64.leaRdata x0, __str_blob_72  ; "panic at AesBitsliced.maxon:621: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5323,7 +5347,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#140:
+  __rc_panic#141:
     arm64.leaRdata x0, __str_blob_73  ; "panic at AesBitsliced.maxon:625: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -5389,6 +5413,22 @@ func @main {
     arm64.ret
   tryerr#52:
     arm64.leaRdata x0, __str_blob_34  ; "panic at AesBitsliced.maxon:649: aes: key word index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __im_missing:
+    arm64.leaRdata x0, __str_blob_102  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4

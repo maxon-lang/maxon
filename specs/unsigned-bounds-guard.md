@@ -54,8 +54,8 @@ ACCEPTED and rewrites 20 bytes past the parent's allocation.
 no sentinel (`BufferOwnership`'s negative values live in `capacity@16` alone, at a type whose range
 stops at `-1`); every writer of `length@8` publishes a non-negative, the two that take the number
 from the user refusing a negative one first; and the single guard whose limit IS `capacity@16` — the
-inlined `__managed_mem_set` — is emitted BEHIND `emitBufferNotOwned`, which refuses every sentinel
-capacity, so the bound runs on one already proven non-negative.
+inlined `__managed_mem_set` — is emitted after the copy-on-write detach join, and a record past that
+join is owned, so the bound runs on a capacity already proven non-negative.
 
 ### ⛔⛔ WHERE A NEGATIVE INDEX IS *REACHABLE* — THE BUFFER SURFACE, NOT `Array`
 

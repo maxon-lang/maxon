@@ -4939,12 +4939,17 @@ end 'StdShapeMismatch'
 // first's fields out before asking the second.
 export type StdShapeReader
 	var module as StdModule
+	var func as IrFunction
 	export var defs as StdValueDefs
 	export var arith as StdArithOperands
 	export var load as StdLoadOperands
 
+	// Built on the first block-argument question, because it walks every edge of the function.
+	var sources as BlockArgSources
+	var sourcesBuilt as bool
+
 	export static function create(module StdModule, func IrFunction) returns StdShapeReader
-		return Self{module: module, defs: StdValueDefs.build(module, func: func), arith: StdArithOperands.create(), load: StdLoadOperands.create()}
+		return Self{module: module, func: func, defs: StdValueDefs.build(module, func: func), arith: StdArithOperands.create(), load: StdLoadOperands.create(), sources: BlockArgSources.create(), sourcesBuilt: false}
 	end 'create'
 
 	// `StdValueDefs.loadDefining` over this reader's module, filling `load`.
@@ -4968,15 +4973,108 @@ export type StdShapeReader
 		return self.arith.pred == pred and self.arith.imm as FullRangeInt == imm
 	end 'compareImmDefining'
 
-	// The base a field load reads `offset` from: `valueId` must be `loadIndirect(base, offset)`.
+	// The base a field load reads `offset` from: `valueId` must be `loadIndirect(base, offset)`, or a
+	// block argument whose every incoming edge carries such a load off one and the same `base`.
 	export function fieldLoadBase(valueId ValueId, offset ByteOffset) returns ValueId throws StdShapeMismatch
+		if not self.defs.isDefinedByAnOp(valueId) 'aJoinedValue'
+			return try self.joinedFieldLoadBase(valueId, offset: offset)
+		end 'aJoinedValue'
+
 		if not self.loadDefining(valueId) or self.load.offset != offset 'notThatField'
 			throw StdShapeMismatch.notTheShape
 		end 'notThatField'
 
 		return self.load.addrId
 	end 'fieldLoadBase'
+
+	function joinedFieldLoadBase(valueId ValueId, offset ByteOffset) returns ValueId throws StdShapeMismatch
+		if valueId >= self.defs.valueBound() 'outsideTheFunction'
+			throw StdShapeMismatch.notTheShape
+		end 'outsideTheFunction'
+
+		if not self.sourcesBuilt 'firstJoinedQuestion'
+			self.sources = BlockArgSources.build(self.module, func: self.func, valueBound: self.defs.valueBound())
+			self.sourcesBuilt = true
+		end 'firstJoinedQuestion'
+
+		var slot = try self.sources.firstOf(valueId) otherwise throw StdShapeMismatch.notTheShape
+		var base = 0 as ValueId
+		var seen = false
+
+		while true 'eachSource'
+			let source = self.sources.valueAt(slot)
+
+			if not self.defs.isDefinedByAnOp(source) or not self.loadDefining(source) or self.load.offset != offset 'notThatField'
+				throw StdShapeMismatch.notTheShape
+			end 'notThatField'
+
+			if seen and self.load.addrId != base 'anotherRecord'
+				throw StdShapeMismatch.notTheShape
+			end 'anotherRecord'
+
+			base = self.load.addrId
+			seen = true
+			slot = try self.sources.nextOf(slot) otherwise break
+		end 'eachSource'
+
+		return base
+	end 'joinedFieldLoadBase'
 end 'StdShapeReader'
+
+type BlockArgSources
+	var head as OptionalElementIndexColumn
+	var chain as OptionalElementIndexColumn
+	var values as ValueIdArray
+
+	static function create() returns BlockArgSources
+		return Self{head: OptionalElementIndexColumn.create(), chain: OptionalElementIndexColumn.create(), values: ValueIdArray.create()}
+	end 'create'
+
+	static function build(module StdModule, func IrFunction, valueBound ValueId) returns BlockArgSources
+		var sources = Self{head: OptionalElementIndexColumn.absent(valueBound), chain: OptionalElementIndexColumn.create(), values: ValueIdArray.create()}
+		let byId = module.blockIndexById(func)
+
+		for position in 0 upto func.blockRefs.count() 'eachBlock'
+			let block = module.blockAtPosition(func, position: position)
+
+			for edge in block.branchEdges 'eachEdge'
+				let target = module.blockAtPosition(func, position: try byId.get(edge.targetBlockId) otherwise panic("StdShapeReader: an edge names block {edge.targetBlockId}, which is not in the function"))
+
+				for i in 0 upto edge.argIds.count() 'eachArg'
+					let arg = try target.blockArgs.get(i) otherwise panic("StdShapeReader: an edge carries {edge.argIds.count()} value(s) to a block with {target.blockArgs.count()} arg(s)")
+					sources.add(arg.valueId, source: try edge.argIds.get(i) otherwise panic("StdShapeReader: argIds.get OOB at {i} despite the upto bound"))
+				end 'eachArg'
+			end 'eachEdge'
+		end 'eachBlock'
+
+		return sources
+	end 'build'
+
+	function add(argId ValueId, source ValueId)
+		let slot = self.values.count()
+		self.values.push(source)
+
+		if let first = try self.head.get(argId) 'chainedAfterAnother'
+			self.chain.push(first)
+		end 'chainedAfterAnother' else 'theFirstSource'
+			self.chain.pushAbsent()
+		end 'theFirstSource'
+
+		self.head.set(argId, value: slot)
+	end 'add'
+
+	function firstOf(argId ValueId) returns ElementIndex throws AbsentError
+		return try self.head.get(argId)
+	end 'firstOf'
+
+	function nextOf(slot ElementIndex) returns ElementIndex throws AbsentError
+		return try self.chain.get(slot)
+	end 'nextOf'
+
+	function valueAt(slot ElementIndex) returns ValueId
+		return try self.values.get(slot) otherwise panic("StdShapeReader: values.get OOB at {slot}")
+	end 'valueAt'
+end 'BlockArgSources'
 
 // The set of value ids a function's ops READ. Every Std-tier pass that asks "does anything
 // still read this value?" — the const DCE, the dead-block-arg prune, the trivial-block-arg

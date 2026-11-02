@@ -15,7 +15,7 @@
 # (`int(1 to 8)`) ALIAS-NAMED cast over a value the compiler cannot fold, one per int-divide group, ALL
 # IN ONE FUNCTION (`p_divide.maxon` declares exactly one), doubling with `IntDivideBase`. That is not a
 # near-miss of this ladder's shape: **it IS `onefunc`, at n = 32 rising to 1,024.** So `guardSiteAt`,
-# `emitGuardAt`, `emitPanicBlock`, the compare cascade, `splitChainEnd` and the whole guard CHAIN have
+# `emitGuardAt`, `appendPanicBlock`, the compare cascade, `splitChainEnd` and the whole guard CHAIN have
 # been priced by the standing instrument since A1 landed that cast, and a Δ0 there means what a Δ0
 # normally means.
 #

@@ -542,6 +542,12 @@ end 'lastSegment'
 //
 // The stderr line is `.rdata` text, so an abort path allocates nothing — an allocator-failure abort
 // among them.
+//
+// ⚠ The message is filed against the enclosing function's name and registered only while that
+// function survives (`registerReachedRuntimeAbortMessages`), so this is valid only in a
+// compiler-built runtime body. A body that `InlineLeaves` splices into its callers and then removes
+// would leave the copies naming a message nobody registered; a pass that adds a refusal to a
+// function it did not build uses `appendPanicBlock`.
 export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBlock, abort RuntimeAbort, ids ValueMinter)
 	emitAbortDoorCall(module, func: func, block: block, reason: RuntimeAbortReason.abort(abort), ids: ids)
 end 'emitRuntimeAbort'

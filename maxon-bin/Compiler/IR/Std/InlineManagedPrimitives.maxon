@@ -22,19 +22,23 @@
 // (`managed-memory-methods.set-byte-through-a-viewed-owner-detaches-first`). What this pass adds is the
 // ROUTING, never a predicate.
 //
-// ⭐⭐ **THE SLOW ARM IS THE ORIGINAL CALL, MOVED — NOT A RE-IMPLEMENTATION.** Every refusal, every throw,
-// every COW detach, every element destructor and the whole packed/narrow-stride world stay exactly where
-// they are. The pass never DECIDES anything: it emits a chain of preconditions and, on the first one that
-// does not hold, hands control to the untouched call. So the answer this compiler produces is the runtime's
-// answer for every input, and the only thing a fast arm can be wrong about is *taking itself when it should
-// not have* — which is why each precondition below is the runtime's own emitter and nothing else.
+// ⭐⭐ **THE SLOW ARM IS THE ORIGINAL CALL, MOVED — NOT A RE-IMPLEMENTATION.** Every refusal, every
+// throw, every element destructor and the whole packed/narrow-stride world stay exactly where they
+// are. The pass never DECIDES anything: it emits a chain of preconditions and, on the first one
+// that does not hold, hands control to the untouched call. So the answer this compiler produces is
+// the runtime's answer for every input, and the only thing a fast arm can be wrong about is *taking
+// itself when it should not have* — which is why each precondition below is the runtime's own
+// emitter and nothing else.
+//
+// ⭐ **AN ELEMENT STORE DEPARTS FROM THAT, AND `expandElementStore` SAYS HOW.**
 //
 // ⭐ **EVERY PRECONDITION IS PURE AND FAULT-FREE, WHICH IS WHY THEIR ORDER IS FREE — WITH ONE EXCEPTION
 // THAT IS NOT.** The tests are field loads off a record the caller already holds plus compares, so
 // reordering them cannot change what the program does. The exception is `emitIsSharedAllocation`, which
 // reads the allocation HEADER below `buffer@0` — an interior pointer has none, and a null buffer has no
-// address at all — so it is reached only after `emitBufferNotOwned` and the `buffer != 0` test, in exactly
-// `__managed_cow_detach`'s own arm order. That ordering is a REQUIREMENT, not a preference.
+// address at all — so it is reached only after `emitBufferNotOwned` and the `buffer != 0` test: in
+// `__managed_cow_detach`'s own arm order for a push or a word put, and with the `buffer != 0` test
+// first for a store (`AbsentBuffer`). That ordering is a REQUIREMENT, not a preference.
 //
 // ⭐⭐ The width-independent guards come first and the stride fork last, just before the access. Asked once
 // above the fork, the guards are emitted once per site instead of once per width, and the word and byte
@@ -138,6 +142,16 @@ let InlineViewedLabel = b"__im_viewed"
 let InlineStoreLabel = b"__im_store"
 let InlineMoveLabel = b"__im_move"
 
+// An element store's detach: `__im_detach` is the cold block that calls `__managed_cow_detach`,
+// `__im_detached` is where it rejoins the path that needed no copy, and `__im_missing` is the panic
+// for a record that has no buffer under a checked `set` or a proven store, where a non-empty length
+// guarantees one. A `mem_set` sends that record to its bound refusal instead: an unallocated record's
+// capacity is 0, and the runtime refuses such a store as out of range.
+let InlineDetachLabel = b"__im_detach"
+let InlineDetachedLabel = b"__im_detached"
+let InlineMissingLabel = b"__im_missing"
+let MissingBufferPanicText = b"fatal error: an element store found no buffer behind a record that holds elements\n"
+
 // The stride fork's own three: the block that asks the SECOND of `emitStrideDispatch`'s two questions, and
 // the entry of each accepted arm. Named here rather than left to the runtime's `esbyte` default so every
 // block this pass puts inside a user function still reads as this pass's.
@@ -199,10 +213,11 @@ type InlineCarve
 	end 'create'
 end 'InlineCarve'
 
-union StoreBound
-	limitedBy(limitOffset ByteOffset)
+enum StoreBound
+	lengthBounded
+	capacityBounded
 
-	// Drops the index guard only; the ownership guards stay, for the reason `buildManagedSetUnchecked` gives.
+	// Drops the index guard only; the detach stays, for the reason `buildManagedSetUnchecked` gives.
 	proven
 end 'StoreBound'
 
@@ -266,7 +281,7 @@ export function inlineManagedPrimitives(project Project, module StdModule, usesG
 			continue
 		end 'notInTheProgram'
 
-		var inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites)
+		var inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites, globalData: project.globalData)
 		inliner.run()
 		expanded = expanded + inliner.expanded
 	end 'eachFunc'
@@ -310,10 +325,13 @@ type PrimitiveInliner
 	var funcIndex as ElementIndex
 	var origins as ValueOriginTable
 	var freshRecords as FreshRecordSet
+	var globalData as GlobalDataTable
+	var missingBufferRef as ElementIndex
+	var missingBufferMade as bool
 	export var expanded as InlinedSiteCount
 
-	static function create(module StdModule, func IrFunction, usesGreenThreads bool, funcIndex ElementIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet) returns PrimitiveInliner
-		return Self{module: module, func: func, usesGreenThreads: usesGreenThreads, strides: strides, trivialElements: trivialElements, ids: ValueMinter.create(0), seeded: false, seedFloor: 0, funcIndex: funcIndex, origins: origins, freshRecords: FreshRecordSet.create(), expanded: 0}
+	static function create(module StdModule, func IrFunction, usesGreenThreads bool, funcIndex ElementIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet, globalData GlobalDataTable) returns PrimitiveInliner
+		return Self{module: module, func: func, usesGreenThreads: usesGreenThreads, strides: strides, trivialElements: trivialElements, globalData: globalData, ids: ValueMinter.create(0), seeded: false, seedFloor: 0, funcIndex: funcIndex, origins: origins, freshRecords: FreshRecordSet.create(), missingBufferRef: 0, missingBufferMade: false, expanded: 0}
 	end 'create'
 
 	// The function's fresh-ValueId counter, seeded past every id it already uses on first use.
@@ -608,8 +626,9 @@ type PrimitiveInliner
 	// The THROWING ones, reached as an `StdOp.tryCall` over the dual-register `(value, flag)` ABI and
 	// told apart the same way.
 	//
-	// ⭐ `set` and `mem_set` differ in exactly ONE thing — the record field their index is bounded against —
-	// so they share an expander and the difference is this dispatch's `limitOffset` argument and nothing else.
+	// ⭐ `set` and `mem_set` differ in exactly ONE thing — the record field their index is bounded
+	// against, and with it whether the bound falls before the detach or after it (`StoreBound`) — so
+	// they share an expander and the difference is this dispatch's `bound` argument and nothing else.
 	// `guardIndexInRange` is where that field's two answers are stated; ⚖ the capacity bound is a USER
 	// RULING, carried by `ManagedMemSetName`.
 	function expandThrowingCall(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns ElementIndex
@@ -618,11 +637,11 @@ type PrimitiveInliner
 		end 'checkedGet'
 
 		if callee.equals(ManagedSetName) 'set'
-			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId), bound: StoreBound.limitedBy(ManagedRecordLengthOffset))
+			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId), bound: StoreBound.lengthBounded)
 		end 'set'
 
 		if callee.equals(ManagedMemSetName) 'memSet'
-			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId), bound: StoreBound.limitedBy(ManagedRecordCapacityOffset))
+			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId), bound: StoreBound.capacityBounded)
 		end 'memSet'
 
 		if isWordGetCallee(callee) 'wordGet'
@@ -816,7 +835,7 @@ type PrimitiveInliner
 		var move = self.guardCursorInRange(head, source: source, position: target, slow: frame.slow, next: InlineMoveLabel)
 
 		emitStoreField(self.module, block: move, record: cursor, offset: CursorPositionOffset, value: target)
-		self.emitVoidOkExit(move, frame: frame, errorFlagId: ManagedCallFlag.flag(errorFlagId))
+		self.emitVoidOkExit(move, cont: frame.carve.cont, errorFlagId: ManagedCallFlag.flag(errorFlagId))
 
 		return self.finish(frame.carve)
 	end 'expandCursorMove'
@@ -871,6 +890,14 @@ type PrimitiveInliner
 	// (`emitDestroyRejectedElement`). Both are the runtime's, both are gated on this field, and a fast arm
 	// that stored over an occupant would be a leak — measured at exit 101 when that call was missing from
 	// `__managed_set` itself.
+	//
+	// ⭐ **A BUFFER THAT NEEDS A PRIVATE COPY IS NOT A REFUSAL, AND THE SLOW ARM IS THE STORE ONLY WHERE
+	// THE FAST ARM IS NOT.** A cold `__im_detach` block calls `__managed_cow_detach`, as `__managed_set`
+	// does, and rejoins at `__im_detached`, so ONE store follows the join and the stored value has one
+	// consumer (`tests/cli/wasm-fixed-array-stores-take-each-value-once.maxtest` fails on a second).
+	// Where the fast arm does the whole store (`storesOnTheFastArmOnly`: a trivial element at a known
+	// stride) a checked store's slow arm is `__managed_index_refused`, which throws the out-of-bounds
+	// flag and writes nothing, and a proven store has none; every other site keeps the original call.
 	function expandElementStore(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ManagedCallFlag, bound StoreBound) returns ElementIndex
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
@@ -883,26 +910,59 @@ type PrimitiveInliner
 		end 'noSingleOpArmSurvives'
 
 		let trivialElement = self.trivialElements.contains(site)
+		let storesOnTheFastArmOnly = trivialElement and planIsSingleArm(plan)
 
-		// A managed element's every `set` takes the slow arm (`emitElementStoreGuards`), which is then the
-		// common path.
+		if storesOnTheFastArmOnly and bound == StoreBound.proven 'nothingCanRefuse'
+			return self.expandProvenStore(blockRef, pos: pos, arr: arr, index: index, value: value, resultId: resultId, errorFlagId: errorFlagId, stride: singleArmStride(plan))
+		end 'nothingCanRefuse'
+
+		// A managed element's every `set` takes the slow arm (`emitDetachingStoreGuards`), which is then
+		// the common path.
 		let slowHeat = self.slowArmHeat(plan, fastArmServesEveryElement: trivialElement)
-
-		view frame = match errorFlagId 'shape'
-			none gives self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: slowHeat)
-			flag(flagId) gives self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: flagId, slowHeat: slowHeat)
-		end 'shape'
-
-		let guarded = self.emitElementStoreGuards(self.blockAt(blockRef), arr: arr, index: index, bound: bound, slow: frame.slow, occupantOwesNoDrop: trivialElement)
+		view frame = self.openStoreFrame(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: slowHeat, refusalOnly: storesOnTheFastArmOnly)
+		let guarded = self.emitDetachingStoreGuards(self.blockAt(blockRef), arr: arr, index: index, bound: bound, slow: frame.slow, occupantOwesNoDrop: trivialElement)
 
 		for arm in self.openStrideArms(guarded.blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			var armBlock = self.blockAt(arm.blockRef)
 			self.emitSlotStore(armBlock, buffer: guarded.buffer, index: index, value: value, stride: arm.stride)
-			self.emitVoidOkExit(armBlock, frame: frame, errorFlagId: errorFlagId)
+			self.emitVoidOkExit(armBlock, cont: frame.carve.cont, errorFlagId: errorFlagId)
 		end 'eachArm'
 
 		return self.finish(frame.carve)
 	end 'expandElementStore'
+
+	function expandProvenStore(blockRef ElementIndex, pos ElementIndex, arr ValueId, index ValueId, value ValueId, resultId ValueId, errorFlagId ManagedCallFlag, stride SingleOpStride) returns ElementIndex
+		var carve = self.carveContinuation(blockRef, pos: pos)
+		attachBlockArgs(carve.cont, valueIds: carriedResults(resultId, errorFlagId: errorFlagId), argType: StdType.i64)
+
+		let joined = self.emitDetachUnlessOwned(self.blockAt(blockRef), arr: arr, absent: self.missingBufferExit().id)
+		var store = self.blockAt(joined.blockRef)
+		self.emitSlotStore(store, buffer: joined.buffer, index: index, value: value, stride: stride)
+		self.emitVoidOkExit(store, cont: carve.cont, errorFlagId: errorFlagId)
+
+		return self.finish(carve)
+	end 'expandProvenStore'
+
+	function openStoreFrame(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ManagedCallFlag, slowHeat BlockHeat, refusalOnly bool) returns InlineFrame
+		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
+
+		match errorFlagId 'shape'
+			none then self.attachPlainSlowCall(frame, callee: callee, args: args, resultId: resultId)
+			flag(flagId) then self.attachThrowingStoreCall(frame, callee: callee, args: args, resultId: resultId, errorFlagId: flagId, refusalOnly: refusalOnly)
+		end 'shape'
+
+		return frame
+	end 'openStoreFrame'
+
+	function attachThrowingStoreCall(frame InlineFrame, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, refusalOnly bool)
+		if not refusalOnly 'theCallStores'
+			self.attachThrowingSlowCall(frame, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+			return
+		end 'theCallStores'
+
+		let refusedArgs = twoArgs(argAt(args, index: 0, callee: callee), second: argAt(args, index: 1, callee: callee))
+		self.attachThrowingSlowCall(frame, callee: ManagedIndexRefusedName, args: refusedArgs, resultId: resultId, errorFlagId: errorFlagId)
+	end 'attachThrowingStoreCall'
 
 	function expandWordGet(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns ElementIndex
 		let arr = argAt(args, index: 0, callee: callee)
@@ -937,7 +997,7 @@ type PrimitiveInliner
 		let length = emitLoadField(self.module, block: head, record: arr, offset: ManagedRecordLengthOffset, ids: self.valueIds())
 		let spanLessOne = emitConst(self.module, block: head, value: wordByteCount(entry.width) - 1, ids: self.valueIds())
 		let lastIndex = emitBin(self.module, block: head, a: length, b: spanLessOne, opcode: StdBinOpcode.add, ids: self.valueIds())
-		let guarded = self.emitElementStoreGuards(head, arr: arr, index: lastIndex, bound: StoreBound.limitedBy(ManagedRecordCapacityOffset), slow: frame.slow, occupantOwesNoDrop: true)
+		let guarded = self.emitElementStoreGuards(head, arr: arr, index: lastIndex, slow: frame.slow, occupantOwesNoDrop: true)
 		var store = self.guardByteStride(self.blockAt(guarded.blockRef), arr: arr, slow: frame.slow)
 
 		let slot = self.emitSlotAt(store, buffer: guarded.buffer, index: length, stride: SingleOpStride.byte)
@@ -972,18 +1032,18 @@ type PrimitiveInliner
 		end 'o'
 	end 'inOrder'
 
-	function emitVoidOkExit(cur IrBlock, frame InlineFrame, errorFlagId ManagedCallFlag)
+	function emitVoidOkExit(cur IrBlock, cont IrBlock, errorFlagId ManagedCallFlag)
 		// The ok exit of a throwing VOID entry: the placeholder value the ABI never moves, and the flag,
 		// are both `NoErrorFlag` — one `const`, exactly as `emitVoidOkReturn` spells it in the runtime.
 		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
-		self.module.setTerminator(cur, op: StdOp.branch(frame.carve.cont.id))
+		self.module.setTerminator(cur, op: StdOp.branch(cont.id))
 
 		let carried = match errorFlagId 'exit'
 			none gives argsOf(noError)
 			flag gives twoArgs(noError, second: noError)
 		end 'exit'
 
-		attachEdge(cur, targetId: frame.carve.cont.id, argIds: carried)
+		attachEdge(cur, targetId: cont.id, argIds: carried)
 	end 'emitVoidOkExit'
 
 	// ⭐⭐ **THE COW ARMS ARE `__managed_cow_detach`'s OWN THREE ARMS, ASKED IN ITS OWN ORDER, AND ANSWERED
@@ -996,13 +1056,11 @@ type PrimitiveInliner
 	// ⚠ The order of those three is NOT free: `emitIsSharedAllocation` reads the allocation header below
 	// `buffer@0`, which a view's interior pointer does not have and a null buffer does not have either.
 	// This is `buildManagedCowDetach`'s arm order for that reason, not by imitation.
-	function emitElementStoreGuards(cur IrBlock, arr ValueId, index ValueId, bound StoreBound, slow IrBlock, occupantOwesNoDrop bool) returns GuardedBuffer
+	function emitElementStoreGuards(cur IrBlock, arr ValueId, index ValueId, slow IrBlock, occupantOwesNoDrop bool) returns GuardedBuffer
 		var at = cur
 
 		if not occupantOwesNoDrop 'ownershipNotKnownStatically'
-			let destroy = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-			let managed = emitElementIsManaged(self.module, block: at, destroy: destroy, ids: self.valueIds())
-			at = self.guard(at, refused: managed, slow: slow, next: InlineOwnedLabel)
+			at = self.guardManagedElement(at, arr: arr, slow: slow, next: InlineOwnedLabel)
 		end 'ownershipNotKnownStatically'
 
 		// ⛔⛔ **OWNERSHIP IS ASKED BEFORE THE BOUND, AND THAT ORDER IS THE BOUND'S PRECONDITION.** The
@@ -1014,13 +1072,10 @@ type PrimitiveInliner
 		let notOwned = emitBufferNotOwned(self.module, block: at, record: arr, ids: self.valueIds())
 		at = self.guard(at, refused: notOwned, slow: slow, next: InlineBoundsLabel)
 
-		match bound 'bound'
-			limitedBy(limitOffset) then at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: limitOffset, slow: slow, next: InlineBufferLabel)
-			proven then break
-		end 'bound'
+		at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: ManagedRecordCapacityOffset, slow: slow, next: InlineBufferLabel)
 
 		let buffer = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
-		let unallocated = emitCompareWithConstant(self.module, block: at, value: buffer, pred: StdCmpPred.eq, against: NoBufferAllocated, ids: self.valueIds())
+		let unallocated = emitBufferAbsent(self.module, block: at, buffer: buffer, ids: self.valueIds())
 		at = self.guard(at, refused: unallocated, slow: slow, next: InlineViewedLabel)
 
 		let viewed = emitIsSharedAllocation(self.module, block: at, ptr: buffer, ids: self.valueIds())
@@ -1028,6 +1083,77 @@ type PrimitiveInliner
 
 		return GuardedBuffer.create(registeredBlockRef(self.module, func: self.func, block: at), buffer: buffer)
 	end 'emitElementStoreGuards'
+
+	// `set` is bounded before the detach, so a refused store allocates nothing; `mem_set` is bounded
+	// after it, because only a detached record has the non-negative `capacity@16` the unsigned bound
+	// needs (`BoundsCompareOperandType`, part 3).
+	function emitDetachingStoreGuards(cur IrBlock, arr ValueId, index ValueId, bound StoreBound, slow IrBlock, occupantOwesNoDrop bool) returns GuardedBuffer
+		var at = cur
+
+		if not occupantOwesNoDrop 'ownershipNotKnownStatically'
+			at = self.guardManagedElement(at, arr: arr, slow: slow, next: firstQuestionLabel(bound))
+		end 'ownershipNotKnownStatically'
+
+		match bound 'beforeDetach'
+			lengthBounded then at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: slow, next: InlineBufferLabel)
+			capacityBounded or
+			proven then break
+		end 'beforeDetach'
+
+		let absent = match bound 'absentBuffer'
+			capacityBounded gives slow.id
+			lengthBounded or
+			proven gives self.missingBufferExit().id
+		end 'absentBuffer'
+
+		let joined = self.emitDetachUnlessOwned(at, arr: arr, absent: absent)
+		at = self.blockAt(joined.blockRef)
+
+		match bound 'afterDetach'
+			capacityBounded then at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: ManagedRecordCapacityOffset, slow: slow, next: InlineStoreLabel)
+			lengthBounded or
+			proven then break
+		end 'afterDetach'
+
+		return GuardedBuffer.create(registeredBlockRef(self.module, func: self.func, block: at), buffer: joined.buffer)
+	end 'emitDetachingStoreGuards'
+
+	function guardManagedElement(cur IrBlock, arr ValueId, slow IrBlock, next ByteArray) returns IrBlock
+		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+		let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
+
+		return self.guard(cur, refused: managed, slow: slow, next: next)
+	end 'guardManagedElement'
+
+	function emitDetachUnlessOwned(cur IrBlock, arr ValueId, absent BlockId) returns GuardedBuffer
+		var detach = self.module.addBlock(self.func, label: InlineDetachLabel, heat: BlockHeat.cold)
+		var checkBuffer = self.module.addBlock(self.func, label: InlineOwnedLabel, heat: BlockHeat.normal)
+		var checkShared = self.module.addBlock(self.func, label: InlineViewedLabel, heat: BlockHeat.normal)
+		var joined = self.module.addBlock(self.func, label: InlineDetachedLabel, heat: BlockHeat.normal)
+		let joinedRef = registeredBlockRef(self.module, func: self.func, block: joined)
+		let joinedBuffer = self.valueIds().mint()
+
+		let ownBuffer = emitBranchOnDetachNeeded(self.module, entry: cur, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: joined, absent: AbsentBuffer.refusedBy(absent), ids: self.valueIds())
+		attachBlockArgs(joined, valueIds: argsOf(joinedBuffer), argType: StdType.i64)
+		attachEdge(checkShared, targetId: joined.id, argIds: argsOf(ownBuffer))
+
+		emitCowDetach(self.module, block: detach, arr: arr, ids: self.valueIds())
+		let reloaded = emitLoadField(self.module, block: detach, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
+		self.module.setTerminator(detach, op: StdOp.branch(joined.id))
+		attachEdge(detach, targetId: joined.id, argIds: argsOf(reloaded))
+
+		return GuardedBuffer.create(joinedRef, buffer: joinedBuffer)
+	end 'emitDetachUnlessOwned'
+
+	function missingBufferExit() returns IrBlock
+		if not self.missingBufferMade 'firstUse'
+			view exit = appendPanicBlock(self.module, func: self.func, globalData: self.globalData, label: InlineMissingLabel, message: MissingBufferPanicText, ids: self.valueIds())
+			self.missingBufferRef = registeredBlockRef(self.module, func: self.func, block: exit)
+			self.missingBufferMade = true
+		end 'firstUse'
+
+		return self.blockAt(self.missingBufferRef)
+	end 'missingBufferExit'
 
 	function expandPush(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId) returns ElementIndex
 		let arr = argAt(args, index: 0, callee: callee)
@@ -1051,7 +1177,7 @@ type PrimitiveInliner
 
 		// The slot at `length` holds no element, so a push destroys nothing whatever the element type —
 		// `__managed_push` stores there without asking `element_destroy@40`.
-		let guarded = self.emitElementStoreGuards(head, arr: arr, index: length, bound: StoreBound.limitedBy(ManagedRecordCapacityOffset), slow: frame.slow, occupantOwesNoDrop: true)
+		let guarded = self.emitElementStoreGuards(head, arr: arr, index: length, slow: frame.slow, occupantOwesNoDrop: true)
 
 		for arm in self.openStrideArms(guarded.blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitPushArm(self.blockAt(arm.blockRef), arr: arr, buffer: guarded.buffer, length: length, value: value, stride: arm.stride, frame: frame)
@@ -1069,7 +1195,7 @@ type PrimitiveInliner
 		let added = emitConst(self.module, block: cur, value: appended, ids: self.valueIds())
 		let newLength = emitBin(self.module, block: cur, a: length, b: added, opcode: StdBinOpcode.add, ids: self.valueIds())
 		emitStoreField(self.module, block: cur, record: arr, offset: ManagedRecordLengthOffset, value: newLength)
-		self.emitVoidOkExit(cur, frame: frame, errorFlagId: ManagedCallFlag.none)
+		self.emitVoidOkExit(cur, cont: frame.carve.cont, errorFlagId: ManagedCallFlag.none)
 	end 'emitAppendExit'
 
 	function emitSlotStore(cur IrBlock, buffer ValueId, index ValueId, value ValueId, stride SingleOpStride)
@@ -1157,10 +1283,11 @@ type PrimitiveInliner
 	// limit is read from: `length@8` for the `Array` surface's `get`/`set`, `capacity@16` for the buffer's
 	// `mem_set` and for `push`, whose index is `length@8`.
 	//
-	// ⛔ **THAT ONE UNSIGNED COMPARE REQUIRES A NON-NEGATIVE LIMIT, AND `capacity@16` IS THE ONE FIELD THAT
-	// CAN BE NEGATIVE.** `emitElementStoreGuards` therefore emits `emitBufferNotOwned` BEFORE calling this;
-	// the reason is stated there and at `BoundsCompareOperandType`. `expandCheckedGet` needs nothing: its
-	// limit is `length@8`, which carries no sentinel at all.
+	// ⛔ **THAT ONE UNSIGNED COMPARE REQUIRES A NON-NEGATIVE LIMIT, AND `capacity@16` IS THE ONE FIELD
+	// THAT CAN BE NEGATIVE.** `emitElementStoreGuards` therefore emits `emitBufferNotOwned` BEFORE
+	// calling this, and `emitDetachingStoreGuards` bounds a `mem_set` only after
+	// `emitDetachUnlessOwned`; the reason is stated at `BoundsCompareOperandType`. `expandCheckedGet`
+	// needs nothing: its limit is `length@8`, which carries no sentinel at all.
 	//
 	// ⚠ `__managed_mem_set`'s runtime asks the same question as two separate tests (`index < 0`, then
 	// `index >= capacity`, both inside `emitBufferAccessGuard`) rather than through this composition.
@@ -1168,13 +1295,13 @@ type PrimitiveInliner
 	// and asking it once here is the composition that already exists rather than a fourth spelling of
 	// it.
 	//
-	// ⚠ **A NON-OWNED RECORD LEAVES FOR THE SLOW ARM AT `emitBufferNotOwned`, ONE GUARD EARLIER, ON BOTH
-	// BOUNDS.** This test is UNSIGNED, so a sentinel capacity reads as ENORMOUS and admits everything — it
-	// cannot be the one that refuses a non-owned record, and the ownership question is therefore asked first
-	// and answered by the one test that means to ask it. (A SIGNED `index >= capacity` would refuse here
-	// instead, by accident of the encoding: it is TRUE for every non-negative index against a negative
-	// sentinel.) The `set` bound is `length@8`, which a view carries honestly, so THERE the refusal is
-	// `emitBufferNotOwned`'s in any case.
+	// ⚠ **THE OWNERSHIP QUESTION IS ASKED BEFORE A `capacity@16` BOUND, AND ANSWERED BY THE ONE TEST
+	// THAT MEANS TO ASK IT.** This test is UNSIGNED, so a sentinel capacity reads as ENORMOUS and
+	// admits everything — it cannot be the one that refuses a non-owned record. A push sends a
+	// non-owned record to the slow arm at `emitBufferNotOwned`, one guard earlier; a `mem_set`
+	// detaches it first. (A SIGNED `index >= capacity` would refuse here instead, by accident of the
+	// encoding: it is TRUE for every non-negative index against a negative sentinel.) The `set` bound
+	// is `length@8`, which a view carries honestly, so no ownership test stands ahead of it.
 	function guardIndexInRange(cur IrBlock, arr ValueId, index ValueId, limitOffset ByteOffset, slow IrBlock, next ByteArray) returns IrBlock
 		let limit = emitLoadField(self.module, block: cur, record: arr, offset: limitOffset, ids: self.valueIds())
 		let outOfRange = emitIndexOutOfRange(self.module, block: cur, index: index, length: limit, ids: self.valueIds())
@@ -1219,25 +1346,33 @@ type PrimitiveInliner
 	// reader asks `liveOpIndices` rather than scanning the array.
 	function openPlain(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, slowHeat BlockHeat) returns InlineFrame
 		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
-		let slowResult = self.valueIds().mint()
-		self.module.appendOp(frame.slow, op: StdOp.call(slowResult, callee: callee, args: args))
-		self.closeFrame(frame, carried: argsOf(resultId), slowCarried: argsOf(slowResult))
+		self.attachPlainSlowCall(frame, callee: callee, args: args, resultId: resultId)
 
 		return frame
 	end 'openPlain'
+
+	function attachPlainSlowCall(frame InlineFrame, callee ByteArray, args ValueIdArray, resultId ValueId)
+		let slowResult = self.valueIds().mint()
+		self.module.appendOp(frame.slow, op: StdOp.call(slowResult, callee: callee, args: args))
+		self.closeFrame(frame, carried: argsOf(resultId), slowCarried: argsOf(slowResult))
+	end 'attachPlainSlowCall'
 
 	// `openPlain`'s dual-register twin: a `tryCall` defines a VALUE and an ERROR FLAG, so both are minted
 	// fresh on the slow arm and both become continuation block args. It differs from its twin in exactly
 	// that — the op and the arity — which is why the carve and the wiring either side of it are shared.
 	function openThrowing(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, slowHeat BlockHeat) returns InlineFrame
 		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
+		self.attachThrowingSlowCall(frame, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+
+		return frame
+	end 'openThrowing'
+
+	function attachThrowingSlowCall(frame InlineFrame, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId)
 		let slowResult = self.valueIds().mint()
 		let slowFlag = self.valueIds().mint()
 		self.module.appendOp(frame.slow, op: StdOp.tryCall(slowResult, errorFlagId: slowFlag, callee: callee, args: args))
 		self.closeFrame(frame, carried: twoArgs(resultId, second: errorFlagId), slowCarried: twoArgs(slowResult, second: slowFlag))
-
-		return frame
-	end 'openThrowing'
+	end 'attachThrowingSlowCall'
 
 	// The half of an opener that runs BEFORE the call is re-emitted: carve the site block and mint the
 	// block the moved call will live in. The returned frame's `slow` is EMPTY and un-terminated — the
@@ -1365,6 +1500,37 @@ function everyArmIsDead(plan StrideDispatchPlan) returns bool
 		noFastArm gives true
 	end 'plan'
 end 'everyArmIsDead'
+
+function planIsSingleArm(plan StrideDispatchPlan) returns bool
+	return match plan 'plan'
+		singleArm gives true
+		runtimeFork or
+		noFastArm gives false
+	end 'plan'
+end 'planIsSingleArm'
+
+function singleArmStride(plan StrideDispatchPlan) returns SingleOpStride
+	return match plan 'plan'
+		singleArm(stride) gives stride
+		runtimeFork or
+		noFastArm panic("singleArmStride: the plan names no single stride — callers ask `planIsSingleArm` first")
+	end 'plan'
+end 'singleArmStride'
+
+function carriedResults(resultId ValueId, errorFlagId ManagedCallFlag) returns ValueIdArray
+	return match errorFlagId 'shape'
+		none gives argsOf(resultId)
+		flag(flagId) gives twoArgs(resultId, second: flagId)
+	end 'shape'
+end 'carriedResults'
+
+function firstQuestionLabel(bound StoreBound) returns ByteArray
+	return match bound 'bound'
+		lengthBounded gives InlineBoundsLabel
+		capacityBounded or
+		proven gives InlineBufferLabel
+	end 'bound'
+end 'firstQuestionLabel'
 
 // `openStrideArms`' one-arm answer. A free function so that the `match` arm above it stays the single
 // statement a `match` arm is.

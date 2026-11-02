@@ -10,6 +10,11 @@
 // guard's own block, and `unswitchInvariantGuards` hoists it under its premise that nothing in the loop
 // writes the header.
 //
+// A checked store whose fast arm does the whole store calls `__managed_index_refused` on its slow
+// arm instead, and that call has no success edge to read: `managedCalleeSucceedsOnlyInBounds` is
+// false for it, so such a store is not a join in this sense (`foldEstablishedGuards` reads the dead
+// edge instead).
+//
 // It is a file of its own because neither owner can hold it: the inliner emits the shape and does not
 // know what a later pass reads off it, and the runtime states its contract in its own words. This is
 // where the two meet, and the one place a consumer looks.

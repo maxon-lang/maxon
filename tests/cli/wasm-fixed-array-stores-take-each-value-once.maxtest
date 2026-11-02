@@ -1,0 +1,58 @@
+// wasm-fixed-array-stores-take-each-value-once.maxtest - an inlined store at a proven index is one
+// `i64.store` after the guards' join and no `__managed_set_unchecked` call stands beside it, so the
+// stored value has one consumer. A value that also feeds a runtime store call on a slow arm is
+// recomputed on each arm by the compiler wasmtime hands the module to.
+//
+// Built from the checkout, whose `vendor/` holds the tools `wasm-tools print` needs.
+
+let WasmStoreCaseDirName = "wasm-fixed-array-stores-take-each-value-once"
+let WasmStoreOutputStem = "main"
+let StoreWasmExtension = ".wasm"
+let StoringFunctionName = "mixPlanes"
+let WordStoreInstruction = "i64.store"
+let RuntimeStoreCall = "call $__managed_set_unchecked"
+let LineBreak = "\n"
+let StoresInTheProgram = 4
+let StoreProgramSource = "typealias Word = bits(64)\ntypealias Planes = FixedArray with 4 Word\n\nfunction mixPlanes(planes Planes)\n\tlet a = planes.get(0)\n\tlet b = planes.get(1)\n\tlet c = planes.get(2)\n\tlet d = planes.get(3)\n\tlet e = (a shl 3) xor (b shr 5)\n\tlet f = (c shl 7) xor (d shr 11)\n\tlet g = (e shl 13) xor (f shr 17)\n\tlet h = (g shl 19) xor (a shr 23)\n\n\tplanes.set(0, value: e xor h)\n\tplanes.set(1, value: f xor g)\n\tplanes.set(2, value: g xor h)\n\tplanes.set(3, value: h xor f)\nend 'mixPlanes'\n\nfunction main() returns ExitCode\n\tvar planes = Planes.create()\n\tplanes.set(0, value: 1)\n\tplanes.set(1, value: 2)\n\tplanes.set(2, value: 3)\n\tplanes.set(3, value: 4)\n\tmixPlanes(planes)\n\tmixPlanes(planes)\n\n\tif planes.get(0) == 0 'zero'\n\t\tprint(\"zero\\n\")\n\tend 'zero'\n\n\treturn 0\nend 'main'\n"
+
+test 'a wasm store at a proven index consumes its value once and calls no runtime store'
+	let dir = freshCaseDir(WasmStoreCaseDirName)
+	let sourcePath = dir.join(StagedProgramFileName)
+	writeStagedFile(sourcePath, content: StoreProgramSource)
+
+	let outputStem = dir.join(WasmStoreOutputStem)
+	let build = spawnCompiler([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{outputStem.toString()}", WasmTargetOption])
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+	Expect.equal(build.exitCode(), expected: 0, message: "the program did not build for wasm32-wasi. {said}")
+
+	let tool = executableIn(try FilePath.from(WasmToolsDirName) otherwise panic("{WasmToolsDirName} is a spellable path"), stem: WasmToolsStem)
+	let printed = runSystemTool(tool.toString(), arguments: [WasmPrintCommand, "{outputStem.toString()}{StoreWasmExtension}"], what: "printing the module the build wrote")
+
+	let storing = functionText(printed.stdout, name: StoringFunctionName)
+	Expect.equal(occurrences(storing, needle: WordStoreInstruction), expected: StoresInTheProgram, message: "each of the {StoresInTheProgram} stores is one {WordStoreInstruction} after the guards' join. Its text:\n{storing}")
+	Expect.equal(occurrences(storing, needle: RuntimeStoreCall), expected: 0, message: "a stored value is also an operand of a runtime store call beside the store, so the compiler wasmtime hands it to recomputes the value on each arm. Its text:\n{storing}")
+
+	let beforeEachStore = storing.split(WordStoreInstruction)
+
+	for storeIndex in 0 upto StoresInTheProgram 'eachStore'
+		let beforeTheStore = (try beforeEachStore.get(storeIndex) otherwise panic("the function text splits into more than {StoresInTheProgram} pieces")).trim().split(LineBreak)
+		let stored = (try beforeTheStore.get(beforeTheStore.count() - 1) otherwise panic("the text before a store holds a line")).trim()
+		Expect.equal(linesEqualTo(storing, line: stored), expected: 1, message: "the stored value {stored} is read more than once. Its text:\n{storing}")
+	end 'eachStore'
+end 'a wasm store at a proven index consumes its value once and calls no runtime store'
+
+function occurrences(text String, needle String) returns Count
+	return (text.split(needle).count() - 1) as Count
+end 'occurrences'
+
+function linesEqualTo(text String, line String) returns Count
+	var matching = 0 as Count
+
+	for candidate in text.split(LineBreak) 'eachLine'
+		if candidate.trim() == line 'same'
+			matching = matching + 1
+		end 'same'
+	end 'eachLine'
+
+	return matching
+end 'linesEqualTo'

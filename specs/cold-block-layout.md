@@ -42,7 +42,7 @@ exit code cannot see layout, and the layout it describes is visible with `--emit
 
 <!-- test: a-guard-falls-through-to-its-fast-arm -->
 The shape the row was opened for. In `copyTail`'s versioned fast copy each bound check is
-`cmp / jcc aboveEqual, __im_slow` followed physically by its `__im_load` or `__im_store`, and every
+`cmp / jcc aboveEqual, __im_slow` followed physically by its `__im_load`, `__im_store` or `__im_detached`, and every
 `__im_slow` and `tryerr` block of the function sits after its last hot block.
 ```maxon
 typealias Word = int(i64.min to i64.max)

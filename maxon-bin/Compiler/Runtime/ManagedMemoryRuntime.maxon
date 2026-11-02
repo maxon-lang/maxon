@@ -79,9 +79,8 @@
 export let TrivialElementDestroy = 0 as FullRangeInt
 
 // The value `buffer@0` holds when a record has no element buffer at all — an array that never grew. It
-// is the zero `__mm_alloc` leaves the record at, and `__managed_cow_detach`'s `checkShared` arm
-// compares against exactly it.
-export let NoBufferAllocated = 0 as FullRangeInt
+// is the zero `__mm_alloc` leaves the record at, and `emitBufferAbsent` is the one test for it.
+let NoBufferAllocated = 0
 
 // --- Constant array literals over an immortal `.rdata` blob ---
 //
@@ -399,6 +398,7 @@ export let ManagedGetName = b"__managed_get"
 export let ManagedGetUncheckedName = b"__managed_get_unchecked"
 export let ManagedSetName = b"__managed_set"
 export let ManagedSetUncheckedName = b"__managed_set_unchecked"
+export let ManagedIndexRefusedName = b"__managed_index_refused"
 
 // ⭐⭐ **EMPTY A SLOT WITHOUT DESTROYING WHAT WAS IN IT — the write half of a MOVE OUT of a container**.
 // `__managed_vacate(arr, index, read)` stores a zero over slot `index`: no bounds throw, no COW
@@ -957,9 +957,11 @@ end 'isManagedMemoryRuntimeCallee'
 // callee throws": `Parser.dispatchArrayMethod` emits exactly these seven METHODS through its throwing path,
 // and the two lists name the same `Managed*Name` constants so they cannot drift. `slice` throws on
 // an out-of-bounds or inverted range.
-// ⚠ Seven METHODS, NINE CALLEES — `slice` has three entries (plain, managed-element, opaque-element), picked
-// by the element's ownership rather than by anything the author writes. The split is nothing the author
-// spells, and all three carry the SAME `throws` clause.
+// ⚠ Methods and callees are not one to one — `slice` has three entries (plain, managed-element,
+// opaque-element), picked by the element's ownership rather than by anything the author writes, and
+// an inlined checked `set` that finds its index out of range calls `__managed_index_refused` where
+// `__managed_set` would throw. Neither split is something the author spells, and every entry of one
+// method carries the SAME `throws` clause.
 // ⚠ A `FixedArray` `get`/`set` whose index the parser proved inside the size is not on this list: the
 // proof is a fact about the call site, so lowering replaces that call to the shared corpus body with
 // `__managed_get_unchecked` / `__managed_set_unchecked` (`Project.provenFixedArrayAccesses`).
@@ -1015,11 +1017,11 @@ export function cursorSourceMethodName(callee ByteArray) returns ByteArray
 	panic("cursorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `{String.from(ManagedMemoryCursorBuiltinBaseName)}` member — this map is asked ONLY behind `isThrowingCursorRuntimeCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every cursor member `installManagedMemoryRuntime` installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'cursorSourceMethodName'
 
-// ⭐⭐ **THE NINE GENUINE `Array`-SURFACE ACCESSORS, WITHOUT THE BUFFER MEMBERS THE PREDICATE ABOVE COMPOSES IN
+// ⭐⭐ **THE GENUINE `Array`-SURFACE ACCESSORS, WITHOUT THE BUFFER MEMBERS THE PREDICATE ABOVE COMPOSES IN
 // A pure factoring of the union above — it adds no name and removes none — and it exists because
 // **two consumers need the ARRAY half alone**, which ORDERING cannot give them safely.
 //
-// ⚠ `isManagedMemoryMemberCallee`'s seven names are `__managed_`-prefixed and reach the union above by
+// ⚠ `isManagedMemoryMemberCallee`'s names are `__managed_`-prefixed and reach the union above by
 // composition, so a consumer asking "is this an array accessor?" with the WIDE predicate catches every
 // buffer member too — and the two places that must not (`GtRuntime.runtimeCalleeSourceMethod` and
 // `SemanticCheck.throwingRuntimeCalleeMessage`) would then be kept correct only by a comment demanding
@@ -1027,7 +1029,7 @@ end 'cursorSourceMethodName'
 // silently inherits the array family's noun. Asking the NARROW predicate is disjointness **by
 // construction**, so the order of those tests does not matter at all.
 export function isThrowingArrayAccessorCallee(callee ByteArray) returns bool
-	return callee.equals(ManagedGetName) or callee.equals(ManagedSetName) or callee.equals(ManagedFirstName) or callee.equals(ManagedRemoveName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) or isWordGetCallee(callee)
+	return callee.equals(ManagedGetName) or callee.equals(ManagedSetName) or callee.equals(ManagedIndexRefusedName) or callee.equals(ManagedFirstName) or callee.equals(ManagedRemoveName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) or isWordGetCallee(callee)
 end 'isThrowingArrayAccessorCallee'
 
 // The `__ManagedMemory`-specific members, as one list with two readers: `isThrowingManagedMemoryRuntimeCallee` (THAT
@@ -1119,8 +1121,8 @@ end 'managedMemorySourceMethodName'
 // makes `GtRuntime.runtimeCalleeSourceMethod` TOTAL over every throwing runtime callee this compiler emits.**
 //
 // ⚠⚠ **THE FAMILY WORDING IS A CONSUMER'S POLICY, NOT A REASON FOR THE MAP TO BE PARTIAL.** The
-// nine accessors are worded AS A FAMILY by E3057 ("throwing array accessor requires try …"), but
-// this map answers *"what did the author write?"* — a question with an answer for all nine, since
+// accessors are worded AS A FAMILY by E3057 ("throwing array accessor requires try …"), but
+// this map answers *"what did the author write?"* — a question with an answer for every one, since
 // `arr.get(0)` is spelled `get` whoever is asking.
 //
 // ⇒ **The fact lives here; the policy lives in the consumer.** `SemanticCheck.throwingRuntimeCalleeMessage`
@@ -1129,17 +1131,19 @@ end 'managedMemorySourceMethodName'
 // `__managed_slice`) while E3059 — which needs a NOUN, because *"'array accessor' does not return a value"* is
 // not a sentence — gets `set`. Two diagnostics, one spelling, no second list.
 //
-// ⚠ **THE MAP IS MANY-TO-ONE AND THAT IS NOT THE FILE FAMILY'S PROBLEM.** Three callees answer `slice`
-// (`__managed_slice`, plus the managed and opaque element variants), which is fine: the map's key is the CALLEE
-// and every key has exactly one answer. `RuntimeCalleeSourceMethod.sharedByTwoSpellings` exists for the
-// opposite shape — ONE callee two authors could have written — and nothing here needs it,
-// because the three slice entries are picked by the ELEMENT's ownership, which the author never spells.
+// ⚠ **THE MAP IS MANY-TO-ONE AND THAT IS NOT THE FILE FAMILY'S PROBLEM.** Three callees answer
+// `slice` (`__managed_slice`, plus the managed and opaque element variants) and two answer `set`
+// (`__managed_set` and `__managed_index_refused`), which is fine: the map's key is the CALLEE and
+// every key has exactly one answer. `RuntimeCalleeSourceMethod.sharedByTwoSpellings` exists for the
+// opposite shape — ONE callee two authors could have written — and nothing here needs it, because
+// the three slice entries are picked by the ELEMENT's ownership and `__managed_index_refused` by
+// the inliner, and the author spells neither.
 export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(ManagedGetName) 'get'
 		return GetMethod
 	end 'get'
 
-	if callee.equals(ManagedSetName) 'set'
+	if callee.equals(ManagedSetName) or callee.equals(ManagedIndexRefusedName) 'set'
 		return ArraySetMethod
 	end 'set'
 
@@ -1249,6 +1253,7 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	buildManagedGetUnchecked(module)
 
 	buildManagedSet(module)
+	buildManagedIndexRefused(module)
 	buildManagedSetUnchecked(module)
 	buildManagedVacate(module)
 	buildManagedCount(module)
@@ -1966,9 +1971,11 @@ function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock,
 	emitOkReturn(module, block: ok, value: value, ids: ids)
 end 'emitLoadElemAndOkReturn'
 
-// Call `__managed_cow_detach(arr)` unconditionally; mutators go through `emitCowDetachWhenNeeded`. The callee
-// is void, so the minted result is unread; it exists because a `call` op always defines a value.
-function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
+// Call `__managed_cow_detach(arr)` unconditionally; mutators go through `emitCowDetachWhenNeeded`,
+// and `InlineManagedPrimitives` calls it on the cold block it sends `emitBranchOnDetachNeeded`'s
+// `needed` arm to. The callee is void, so the minted result is unread; it exists because a `call`
+// op always defines a value.
+export function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
 	let detached = ids.mint()
 	module.appendOp(block, op: StdOp.call(detached, callee: ManagedCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
@@ -1978,7 +1985,7 @@ function emitCowDetachInto(module StdModule, func IrFunction, entry IrBlock, arr
 	var checkShared = module.addBlock(func, label: "{prefix}dshared".toByteArray(), heat: BlockHeat.normal)
 	var detach = module.addBlock(func, label: "{prefix}ddetach".toByteArray(), heat: BlockHeat.cold)
 
-	emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: continuation, ids: ids)
+	_ = emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: continuation, absent: AbsentBuffer.skipsTheDetach, ids: ids)
 	emitCowDetach(module, block: detach, arr: arr, ids: ids)
 	module.setTerminator(detach, op: StdOp.branch(continuation.id))
 end 'emitCowDetachInto'
@@ -2068,8 +2075,9 @@ end 'ElementSlotOperands'
 // (`emitReallocateToCapacity`) and every record — this one's `ManagedRecordBytes` and any other — is
 // another, so the bytes the store reaches are never a record's. What it CAN write is the buffer's own
 // header, one word below `buffer@0`, if a VARIABLE index were negative: that is why every emitter of
-// the shape bounds the index first (`InlineManagedPrimitives.emitElementStoreGuards` through
-// `emitIndexOutOfRange`, `emitStoreElemAt` behind the entries' own guards), and why a pass resting on
+// the shape bounds the index first (`InlineManagedPrimitives.guardIndexInRange` through
+// `emitIndexOutOfRange`, `emitStoreElemAt` behind the entries' own guards) or stores at an index the
+// parser proved in range (a proven store), and why a pass resting on
 // this fact checks that a bound guard on the same index dominates such a store. A constant
 // displacement is non-negative by construction and reaches nothing below the buffer.
 //
@@ -2948,13 +2956,15 @@ end 'emitElementIsManaged'
 //      own argument rather than inheriting one. `ListRuntime`'s `count@16` is the easy shape: 0 at
 //      create, plus or minus one per link and unlink (`emitListCountDelta`), every unlink already
 //      bounds-checked.
-//   3. **`capacity@16` REACHES ONE OF THESE GUARDS, AND ONLY BEHIND AN OWNERSHIP TEST.**
+//   3. **`capacity@16` REACHES ONE OF THESE GUARDS, AND ONLY ONCE THE RECORD IS KNOWN OWNED.**
 //      `InlineManagedPrimitives.guardIndexInRange` bounds the inlined `__managed_mem_set`'s and
-//      `__managed_push`'s index against `capacity@16` — the one limit here that CAN be a sentinel — so
-//      `emitElementStoreGuards` asks `emitBufferNotOwned` (`capacity < 0`) FIRST and this guard runs on a
-//      capacity already proven non-negative. That ORDER is this precondition, established at the code;
-//      the note there names this one back, and the dependency is written down at both ends because
-//      nothing checks it.
+//      `__managed_push`'s index against `capacity@16` — the one limit here that CAN be a sentinel.
+//      A push asks `emitBufferNotOwned` (`capacity < 0`) FIRST, in `emitElementStoreGuards`; a
+//      `mem_set` bounds only after `emitDetachUnlessOwned`, whose every path to the join has the
+//      record owned, either because it already was or because `__managed_cow_detach` made it so.
+//      This guard then runs on a capacity already proven non-negative. That ORDER is this
+//      precondition, established at the code; the notes there name this one back, and the
+//      dependency is written down at both ends because nothing checks it.
 //
 // ⚠ **A NEW LIMIT MUST BE READ AGAINST THAT LIST**, exactly as a fifth `NotOwnedBufferCapacity` must be read
 // against `BufferOwnership`'s two exceptions. There is no compile error for getting it wrong, and the failure
@@ -2999,21 +3009,24 @@ end 'emitIndexOutOfRange'
 // table does not name — and every callee this runtime does not own — fails closed.
 export enum ManagedHeaderEffect
 	// A pure read of the record and its elements: `buildManagedGet`, `buildManagedGetUnchecked`,
-	// `buildManagedCount`, `buildManagedCapacity`, `buildManagedElementSize`, `buildManagedFirst` and
-	// `buildManagedByteAt`. None stores to the record, and `emitLoadElemAndOkReturn` writes nothing.
+	// `buildManagedCount`, `buildManagedCapacity`, `buildManagedElementSize`, `buildManagedFirst`,
+	// `buildManagedByteAt` and `buildManagedIndexRefused`. None stores to the record, and
+	// `emitLoadElemAndOkReturn` writes nothing.
 	writesNothing
 
 	// An in-place element writer: `buildManagedSet`, `buildManagedSetUnchecked`, `buildManagedMemSet`,
-	// `buildManagedSetByte`, `buildManagedFill` and `buildManagedMemSwap`. Each writes `buffer@0`, `capacity@16`, `parent@32`
-	// and the buffer's refcount word ONLY through `__managed_cow_detach` (`emitCowDetachWhenNeeded`, or the
-	// detach block of `emitBufferAccessGuard`), which returns without a store exactly when
-	// `capacity@16 >= 0`, `buffer@0 != 0` and the buffer's refcount word is 0 — the three arms of
-	// `buildManagedCowDetach`. Every other write is an element slot (`emitStoreElemAt`). The invariant
-	// holds on EVERY path, the out-of-range one included: `mem_set` and `set_byte` detach before their
-	// capacity bound (`emitBufferAccessGuard`), `set` after its length bound, and in each case the
-	// header is written by the detach or not at all. `set` and `mem_set` run an element destructor —
-	// of the rejected value (`emitDestroyRejectedElement`) or the overwritten occupant
-	// (`emitDestroyRangeIfManaged`) — only when `element_destroy@40` is non-zero.
+	// `buildManagedSetByte`, `buildManagedFill` and `buildManagedMemSwap`, and
+	// `buildManagedCowDetach`, the entry the others write through. Each writes `buffer@0`,
+	// `capacity@16`, `parent@32` and the buffer's refcount word ONLY through `__managed_cow_detach`
+	// (`emitCowDetachWhenNeeded`, or the detach block of `emitBufferAccessGuard`), which returns
+	// without a store exactly when `capacity@16 >= 0`, `buffer@0 != 0` and the buffer's refcount word
+	// is 0 — the three arms of `buildManagedCowDetach`. Every other write is an element slot
+	// (`emitStoreElemAt`). The invariant holds on EVERY path, the out-of-range one included: `mem_set`
+	// and `set_byte` detach before their capacity bound (`emitBufferAccessGuard`), `set` after its
+	// length bound, and in each case the header is written by the detach or not at all. `set` and
+	// `mem_set` run an element destructor — of the rejected value (`emitDestroyRejectedElement`) or
+	// the overwritten occupant (`emitDestroyRangeIfManaged`) — only when `element_destroy@40` is
+	// non-zero.
 	detachesUnlessOwnedUnshared
 
 	// Everything else: an entry that grows, shrinks, shares or releases the buffer (`push`, `resize`,
@@ -3022,9 +3035,9 @@ export enum ManagedHeaderEffect
 	unknown
 end 'ManagedHeaderEffect'
 
-// THE ONE ROSTER OF THE ENTRIES WHOSE CONTRACT THIS RUNTIME STATES, by ROLE; the two columns below read
+// THE ONE ROSTER OF THE ENTRIES WHOSE CONTRACT THIS RUNTIME STATES, by ROLE; the columns below read
 // off the role. A name this roster does not place — and every callee this runtime does not own — is
-// `other`, so both columns fail closed.
+// `other`, so every column fails closed.
 enum ManagedCalleeRole
 	// `__managed_get`: a pure read that returns without an error only when its index is below `length@8`.
 	boundedRead
@@ -3038,8 +3051,25 @@ enum ManagedCalleeRole
 
 	// The other in-place writers.
 	inPlaceWriter
+
+	// `__managed_set_unchecked`: an in-place writer at an index the parser proved inside the fixed size.
+	provenWriter
+
+	// `__managed_cow_detach`: gives the record a private writable buffer when it has none and returns.
+	copyOnWriteDetach
+
+	// `__managed_index_refused`: the refusal an inlined checked store makes of an index it has found out of
+	// range. It reads and writes nothing and always returns the out-of-bounds error.
+	storeRefusal
 	other
 end 'ManagedCalleeRole'
+
+export enum ManagedReturnShape
+	unchanged
+	ownedUnshared
+	ownedAllocatedUnshared
+	neverReturnsNormally
+end 'ManagedReturnShape'
 
 function managedCalleeRole(callee ByteArray) returns ManagedCalleeRole
 	if callee.equals(ManagedGetName) 'theCheckedGet'
@@ -3054,9 +3084,21 @@ function managedCalleeRole(callee ByteArray) returns ManagedCalleeRole
 		return ManagedCalleeRole.boundedWriter
 	end 'theCheckedSet'
 
-	if callee.equals(ManagedSetUncheckedName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) 'inPlaceWriter'
+	if callee.equals(ManagedSetUncheckedName) 'theProvenSet'
+		return ManagedCalleeRole.provenWriter
+	end 'theProvenSet'
+
+	if callee.equals(ManagedMemSetName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) 'inPlaceWriter'
 		return ManagedCalleeRole.inPlaceWriter
 	end 'inPlaceWriter'
+
+	if callee.equals(ManagedCowDetachName) 'theDetach'
+		return ManagedCalleeRole.copyOnWriteDetach
+	end 'theDetach'
+
+	if callee.equals(ManagedIndexRefusedName) 'theRefusal'
+		return ManagedCalleeRole.storeRefusal
+	end 'theRefusal'
 
 	return ManagedCalleeRole.other
 end 'managedCalleeRole'
@@ -3065,12 +3107,43 @@ end 'managedCalleeRole'
 export function managedCalleeHeaderEffect(callee ByteArray) returns ManagedHeaderEffect
 	return match managedCalleeRole(callee) 'role'
 		boundedRead or
-		pureRead gives ManagedHeaderEffect.writesNothing
+		pureRead or
+		storeRefusal gives ManagedHeaderEffect.writesNothing
 		boundedWriter or
-		inPlaceWriter gives ManagedHeaderEffect.detachesUnlessOwnedUnshared
+		inPlaceWriter or
+		provenWriter or
+		copyOnWriteDetach gives ManagedHeaderEffect.detachesUnlessOwnedUnshared
 		other gives ManagedHeaderEffect.unknown
 	end 'role'
 end 'managedCalleeHeaderEffect'
+
+// The return column of the roster: what a NORMAL RETURN of the entry leaves true of the record it
+// names — for a throwing entry, a return without an error. `__managed_set` checks its bound first
+// and returns an error without writing, then `emitCowDetachWhenNeeded` runs, which stores nothing
+// exactly when `capacity@16 >= 0`, `buffer@0 != 0` and the buffer's refcount word is 0, and
+// otherwise makes the record owned and unshared with a fresh buffer — so a success leaves all three
+// true, and so does a `__managed_set_unchecked`, whose store goes through the buffer: it is emitted
+// only for a `FixedArray`, which `FixedArray.create` allocates before it sets the length, so its
+// record has a buffer whenever it has an element to store into. The in-place writers bound against
+// the capacity and detach before that bound (`emitBufferAccessGuard`), so their success does not
+// prove `buffer@0 != 0` and they answer `unchanged`. A detach leaves the record owned and unshared
+// and proves nothing about the buffer's presence, because it skips an owner that has none.
+// `__managed_index_refused` never returns without an error, so a return from it is a success no
+// execution takes and `foldEstablishedGuards` credits it with every fact. Nothing else proves
+// `element_destroy@40`: a managed element's `set` succeeds through its destructor. Read by
+// `foldEstablishedGuards`.
+export function managedCalleeReturnShape(callee ByteArray) returns ManagedReturnShape
+	return match managedCalleeRole(callee) 'role'
+		copyOnWriteDetach gives ManagedReturnShape.ownedUnshared
+		boundedWriter or
+		provenWriter gives ManagedReturnShape.ownedAllocatedUnshared
+		storeRefusal gives ManagedReturnShape.neverReturnsNormally
+		boundedRead or
+		pureRead or
+		inPlaceWriter or
+		other gives ManagedReturnShape.unchanged
+	end 'role'
+end 'managedCalleeReturnShape'
 
 // The bound column of the roster: which entries RETURN WITHOUT AN ERROR only when their index argument
 // is below the record's `length@8` — the two element accessors, whose own check is `emitIndexOutOfRange`
@@ -3083,27 +3156,12 @@ export function managedCalleeSucceedsOnlyInBounds(callee ByteArray) returns bool
 		boundedWriter gives true
 		pureRead or
 		inPlaceWriter or
+		provenWriter or
+		copyOnWriteDetach or
+		storeRefusal or
 		other gives false
 	end 'role'
 end 'managedCalleeSucceedsOnlyInBounds'
-
-// The shape column of the roster: which entries RETURN WITHOUT AN ERROR only with the record owned,
-// allocated and unshared. `buildManagedSet` checks its bound first and returns an error without writing,
-// then `emitCowDetachWhenNeeded` runs, which stores nothing exactly when `capacity@16 >= 0`, `buffer@0 != 0`
-// and the buffer's refcount word is 0, and otherwise makes the record owned and unshared with a fresh
-// buffer — so a success leaves all three true. The in-place writers bound against the capacity and
-// detach before that bound (`emitBufferAccessGuard`), so their success does not prove `buffer@0 != 0` by
-// this argument and they answer false. Success proves nothing about `element_destroy@40`: a managed
-// element's `set` succeeds through its destructor. Read by `foldEstablishedGuards`.
-export function managedCalleeSuccessProvesShape(callee ByteArray) returns bool
-	return match managedCalleeRole(callee) 'role'
-		boundedWriter gives true
-		boundedRead or
-		pureRead or
-		inPlaceWriter or
-		other gives false
-	end 'role'
-end 'managedCalleeSuccessProvesShape'
 
 // The guards `InlineManagedPrimitives` asks before an inlined element access, and the bound every
 // checked access asks, each read back off a `condBranch`'s condition. Every kind puts its REFUSAL on
@@ -3112,7 +3170,7 @@ export enum ManagedGuardKind
 	// `emitBufferNotOwned`: `capacity@16 < 0`.
 	bufferNotOwned
 
-	// `InlineManagedPrimitives.emitElementStoreGuards`' null test: `buffer@0 == NoBufferAllocated`.
+	// `emitBufferAbsent`: `buffer@0 == NoBufferAllocated`.
 	bufferUnallocated
 
 	// `emitIsSharedAllocation` over `buffer@0`: the buffer's refcount word is non-zero.
@@ -3546,7 +3604,7 @@ function buildManagedCowDetach(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
 
-	emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: done, ids: ids)
+	_ = emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: done, absent: AbsentBuffer.skipsTheDetach, ids: ids)
 
 	// detach: the ASK is exactly `length` — an array's detach buys NO slack, because growth is
 	// `__managed_grow`/`__managed_grown_cap`'s separate business and a detach that also grew would give this record
@@ -3569,10 +3627,41 @@ function buildManagedCowDetach(module StdModule)
 	module.functions.push(func)
 end 'buildManagedCowDetach'
 
-// `__managed_cow_detach`'s decision, shared with `emitCowDetachInto`, which skips the call only where
-// this sends control to `notNeeded`; a second copy that drifted would let a write go through a shared or
-// `.rdata` buffer.
-function emitBranchOnDetachNeeded(module StdModule, entry IrBlock, checkBuffer IrBlock, checkShared IrBlock, arr ValueId, needed IrBlock, notNeeded IrBlock, ids ValueMinter)
+export union AbsentBuffer
+	skipsTheDetach
+	refusedBy(refusalId BlockId)
+end 'AbsentBuffer'
+
+export function emitBufferAbsent(module StdModule, block IrBlock, buffer ValueId, ids ValueMinter) returns ValueId
+	return emitCompareWithConstant(module, block: block, value: buffer, pred: StdCmpPred.eq, against: NoBufferAllocated, ids: ids)
+end 'emitBufferAbsent'
+
+// `__managed_cow_detach`'s decision, shared with `emitCowDetachInto` and with
+// `InlineManagedPrimitives.emitDetachUnlessOwned`, which skip the call only where this sends
+// control to `notNeeded`; a second copy that drifted would let a write go through a shared or
+// `.rdata` buffer. `AbsentBuffer.skipsTheDetach` is the runtime's own arm order; `refusedBy` asks
+// the buffer test first and sends a record with no buffer to the caller's block.
+//
+// ⚠ The returned buffer is the one loaded before the detach: it is live on the edge out of
+// `checkShared` and stale after a detach, which replaces `buffer@0`, so the `needed` arm reloads
+// it.
+export function emitBranchOnDetachNeeded(module StdModule, entry IrBlock, checkBuffer IrBlock, checkShared IrBlock, arr ValueId, needed IrBlock, notNeeded IrBlock, absent AbsentBuffer, ids ValueMinter) returns ValueId
+	let ownBuf = match absent 'absent'
+		skipsTheDetach gives emitDetachHeadSkippingAbsent(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: needed, notNeeded: notNeeded, ids: ids)
+		refusedBy(refusalId) gives emitDetachHeadRefusingAbsent(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: needed, refusalId: refusalId, ids: ids)
+	end 'absent'
+
+	// checkShared — ARM 2: the buffer is this record's, but is anyone else holding it? `emitIsSharedAllocation`
+	// owns what the count means (`owners - 1`, so sole ownership is 0), and the only thing that can hold a
+	// second reference to an element buffer is a VIEW — so "shared" here reads literally as "someone is
+	// reading these bytes", and the write must go elsewhere.
+	let viewed = emitIsSharedAllocation(module, block: checkShared, ptr: ownBuf, ids: ids)
+	module.setTerminator(checkShared, op: StdOp.condBranch(viewed, thenBlockId: needed.id, elseBlockId: notNeeded.id))
+
+	return ownBuf
+end 'emitBranchOnDetachNeeded'
+
+function emitDetachHeadSkippingAbsent(module StdModule, entry IrBlock, checkBuffer IrBlock, checkShared IrBlock, arr ValueId, needed IrBlock, notNeeded IrBlock, ids ValueMinter) returns ValueId
 	// entry — ARM 1: a buffer that is not this record's must be replaced before any write. Asked FIRST, so
 	// the header read below is only ever reached on a pointer that HAS a header (see the ordering note).
 	let notOwned = emitBufferNotOwned(module, block: entry, record: arr, ids: ids)
@@ -3581,15 +3670,22 @@ function emitBranchOnDetachNeeded(module StdModule, entry IrBlock, checkBuffer I
 	// checkBuffer: an owner with no buffer at all (an array that never grew) has nothing to share and
 	// nothing to write; the mutator that follows will grow it.
 	let ownBuf = emitLoadField(module, block: checkBuffer, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	emitBranchOnCompare(module, block: checkBuffer, value: ownBuf, pred: StdCmpPred.eq, against: NoBufferAllocated, whenTrue: notNeeded, whenFalse: checkShared, ids: ids)
+	let absent = emitBufferAbsent(module, block: checkBuffer, buffer: ownBuf, ids: ids)
+	module.setTerminator(checkBuffer, op: StdOp.condBranch(absent, thenBlockId: notNeeded.id, elseBlockId: checkShared.id))
 
-	// checkShared — ARM 2: the buffer is this record's, but is anyone else holding it? `emitIsSharedAllocation`
-	// owns what the count means (`owners - 1`, so sole ownership is 0), and the only thing that can hold a
-	// second reference to an element buffer is a VIEW — so "shared" here reads literally as "someone is
-	// reading these bytes", and the write must go elsewhere.
-	let viewed = emitIsSharedAllocation(module, block: checkShared, ptr: ownBuf, ids: ids)
-	module.setTerminator(checkShared, op: StdOp.condBranch(viewed, thenBlockId: needed.id, elseBlockId: notNeeded.id))
-end 'emitBranchOnDetachNeeded'
+	return ownBuf
+end 'emitDetachHeadSkippingAbsent'
+
+function emitDetachHeadRefusingAbsent(module StdModule, entry IrBlock, checkBuffer IrBlock, checkShared IrBlock, arr ValueId, needed IrBlock, refusalId BlockId, ids ValueMinter) returns ValueId
+	let ownBuf = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let absent = emitBufferAbsent(module, block: entry, buffer: ownBuf, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(absent, thenBlockId: refusalId, elseBlockId: checkBuffer.id))
+
+	let notOwned = emitBufferNotOwned(module, block: checkBuffer, record: arr, ids: ids)
+	module.setTerminator(checkBuffer, op: StdOp.condBranch(notOwned, thenBlockId: needed.id, elseBlockId: checkShared.id))
+
+	return ownBuf
+end 'emitDetachHeadRefusingAbsent'
 
 // `__managed_grown_cap(current, required) -> newCap` — the growth policy; see the `GrowthThreshold` note
 // above for why it eases. An ask that outruns doubling is taken at face value with no slack.
@@ -3956,6 +4052,18 @@ function buildManagedSet(module StdModule)
 
 	module.functions.push(func)
 end 'buildManagedSet'
+
+function buildManagedIndexRefused(module StdModule)
+	var func = IrFunction.createFromStd(ManagedIndexRefusedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	emitOobReturn(module, block: entry, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedIndexRefused'
 
 // `__managed_set_unchecked(arr, index, value)` — a `FixedArray` `set` at an index the parser proved inside
 // the fixed size, so it has no bound and cannot throw. It still detaches first: a fixed array's buffer may

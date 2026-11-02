@@ -12315,7 +12315,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 48
     x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "a"
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
@@ -12337,23 +12337,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_owned:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow
   __im_bounds:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow
-  __im_buffer:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow
-  __im_viewed:
-    x64.leaRegRegImm32 rcx, rax, -16
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_store
+    x64.jcc above, __im_buffer
   __im_slow:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
@@ -12362,23 +12349,53 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
-  __im_store:
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_missing
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_detach
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -16
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_detach
+  __im_detached:
     x64.storeBaseDispReg.word64 [rax + 8], r8
   tryok:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 32
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_detach:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_cow_detach
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.jmp __im_detached
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at error-ordinal-in-an-emitted-body.test:4: set rejected a valid index\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_missing:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -12548,7 +12565,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 48
     x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "a"
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
@@ -12570,23 +12587,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_owned:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow
   __im_bounds:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow
-  __im_buffer:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow
-  __im_viewed:
-    x64.leaRegRegImm32 rcx, rax, -16
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_store
+    x64.jcc above, __im_buffer
   __im_slow:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
@@ -12595,23 +12599,53 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
-  __im_store:
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_missing
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_detach
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -16
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_detach
+  __im_detached:
     x64.storeBaseDispReg.word64 [rax + 8], r8
   tryok:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 32
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_detach:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_cow_detach
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.jmp __im_detached
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at error-ordinal-in-an-emitted-body.test:4: set rejected a valid index\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_missing:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -12775,9 +12809,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
     arm64.leaRdata x19, __str_rec_3  ; "a"
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
@@ -12800,23 +12834,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow
-  __im_owned:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow
   __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 1
-    arm64.b.ls __im_slow
-  __im_buffer:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow
-  __im_viewed:
-    arm64.sub x1, x0, 16
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.cmp x1, 0
-    arm64.b.eq __im_store
+    arm64.b.hi __im_buffer
   __im_slow:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x19
@@ -12824,24 +12845,52 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b tryok
-  __im_store:
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_missing
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt __im_detach
+  __im_viewed:
+    arm64.sub x1, x0, 16
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_detach
+  __im_detached:
     arm64.storeBaseDispReg.word64 [x0 + 8], x2
   tryok:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
     arm64.ret
+  __im_detach:
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_cow_detach
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.b __im_detached
   tryerr:
     arm64.leaRdata x0, __str_blob_6  ; "panic at error-ordinal-in-an-emitted-body.test:4: set rejected a valid index\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_missing:
+    arm64.leaRdata x0, __str_blob_10  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 
@@ -12995,9 +13044,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
     arm64.leaRdata x19, __str_rec_3  ; "a"
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
@@ -13020,23 +13069,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow
-  __im_owned:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow
   __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 1
-    arm64.b.ls __im_slow
-  __im_buffer:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow
-  __im_viewed:
-    arm64.sub x1, x0, 16
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.cmp x1, 0
-    arm64.b.eq __im_store
+    arm64.b.hi __im_buffer
   __im_slow:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x19
@@ -13044,24 +13080,52 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b tryok
-  __im_store:
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_missing
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt __im_detach
+  __im_viewed:
+    arm64.sub x1, x0, 16
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_detach
+  __im_detached:
     arm64.storeBaseDispReg.word64 [x0 + 8], x2
   tryok:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
     arm64.ret
+  __im_detach:
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_cow_detach
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.b __im_detached
   tryerr:
     arm64.leaRdata x0, __str_blob_6  ; "panic at error-ordinal-in-an-emitted-body.test:4: set rejected a valid index\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_missing:
+    arm64.leaRdata x0, __str_blob_10  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 
@@ -74336,23 +74400,23 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_owned:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow
-  __im_bounds:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow
   __im_buffer:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_detach
   __im_viewed:
     x64.leaRegRegImm32 rcx, rax, -16
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow
+    x64.jcc notEqual, __im_detach
+  __im_detached:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegReg r12, rcx
+    x64.jcc aboveEqual, __im_slow
   __im_store:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
     x64.cmpRegImm32 rcx, 8
@@ -74404,6 +74468,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_detach:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_cow_detach
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jmp __im_detached
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at an-array-move-copies-whole-blocks-in-both-directions.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -74807,23 +74876,23 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_owned:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow
-  __im_bounds:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow
   __im_buffer:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_detach
   __im_viewed:
     x64.leaRegRegImm32 rcx, rax, -16
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow
+    x64.jcc notEqual, __im_detach
+  __im_detached:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegReg r12, rcx
+    x64.jcc aboveEqual, __im_slow
   __im_store:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
     x64.cmpRegImm32 rcx, 8
@@ -74874,6 +74943,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_detach:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_cow_detach
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jmp __im_detached
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at an-array-move-copies-whole-blocks-in-both-directions.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -75271,23 +75345,23 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow
-  __im_owned:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow
-  __im_bounds:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x20, x0
-    arm64.b.hs __im_slow
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.eq __im_slow
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt __im_detach
   __im_viewed:
     arm64.sub x1, x0, 16
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
     arm64.cmp x1, 0
-    arm64.b.ne __im_slow
+    arm64.b.ne __im_detach
+  __im_detached:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.cmp x20, x1
+    arm64.b.hs __im_slow
   __im_store:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
     arm64.cmp x1, 8
@@ -75336,6 +75410,11 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
+  __im_detach:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_cow_detach
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.b __im_detached
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at an-array-move-copies-whole-blocks-in-both-directions.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -75689,23 +75768,23 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow
-  __im_owned:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow
-  __im_bounds:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x20, x0
-    arm64.b.hs __im_slow
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.eq __im_slow
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt __im_detach
   __im_viewed:
     arm64.sub x1, x0, 16
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
     arm64.cmp x1, 0
-    arm64.b.ne __im_slow
+    arm64.b.ne __im_detach
+  __im_detached:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.cmp x20, x1
+    arm64.b.hs __im_slow
   __im_store:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
     arm64.cmp x1, 8
@@ -75754,6 +75833,11 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
+  __im_detach:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_cow_detach
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.b __im_detached
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at an-array-move-copies-whole-blocks-in-both-directions.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

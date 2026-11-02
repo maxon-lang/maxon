@@ -22,8 +22,10 @@ record's (`capacity@16 >= 0`), it exists (`buffer@0 != 0`), nobody views it (the
 - The proceed arm of a shape guard establishes its predicate; the proceed arm of a constant-index bound
   guard `length@8 <=u K` establishes the floor `K`.
 - The success edge of `__managed_set` establishes the first three shape predicates: the runtime states
-  (`managedCalleeSuccessProvesShape`) that its copy-on-write detach runs exactly when one of them fails,
-  that it detaches after its bound, and that its error path writes nothing. Success never proves the
+  (`managedCalleeReturnShape`) that its copy-on-write detach runs exactly when one of them fails,
+  that it detaches after its bound, and that its error path writes nothing. A return from
+  `__managed_set_unchecked` establishes the same three, and a return from `__managed_cow_detach`
+  establishes ownership and the sharing test. Success never proves the
   destructor predicate — a managed element's `set` succeeds through its destructor — so that fact comes
   from its guard alone.
 - The success of `__managed_get` or `__managed_set` at a constant index `K >= 0` establishes the floor
