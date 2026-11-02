@@ -3056,9 +3056,12 @@ export type UseIndex
 		return UseKind.edge if onEdge else UseKind.op
 	end 'useKindAt'
 
-	export function isConstDef(valueId ValueId) returns bool
-		return try self.constDef.get(valueId) otherwise panic("UseIndex.isConstDef: value {valueId} out of range")
-	end 'isConstDef'
+	// True iff `valueId`'s single def is a constant materialization (`movRegImm`, `movRegImm32`,
+	// `arm64MovImm`), so `mov reg, imm` rebuilds it with no register input. The answer is about the
+	// def alone: a phi is false, and an edge-passed constant is true.
+	export function isRebuildableFromImmediate(valueId ValueId) returns bool
+		return try self.constDef.get(valueId) otherwise panic("UseIndex.isRebuildableFromImmediate: value {valueId} out of range")
+	end 'isRebuildableFromImmediate'
 
 	// True iff `valueId` is a block-arg (phi) of any block in the function.
 	export function isPhiValue(valueId ValueId) returns bool

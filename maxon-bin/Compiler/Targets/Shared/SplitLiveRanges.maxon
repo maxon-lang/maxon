@@ -7438,9 +7438,10 @@ function hasStoreAnchor(index UseIndex, valueId ValueId) returns bool
 end 'hasStoreAnchor'
 
 // A value is REMATERIALIZABLE iff its single def is an integer-constant materialization
-// (`movRegImm`/`movRegImm32`). Such a value is re-emitted at each use (never spilled), so —
-// unlike a spill — it needs no depth-0 restriction on its uses; but it must still not be a phi
-// or edge-passed value (those have no op-use site to re-emit before), so those are excluded.
+// (`UseIndex.isRebuildableFromImmediate`). Such a value is re-emitted at each use (never spilled),
+// so — unlike a spill — it needs no depth-0 restriction on its uses; but it must still not be a
+// phi or edge-passed value (those have no op-use site to re-emit before), so those are excluded.
+// The allocator's cold-run rebuild asks only the predicate: it re-defines the register, not a use.
 function isRematerializable(index UseIndex, valueId ValueId) returns bool
 	if index.isPhiValue(valueId) 'phi'
 		return false
@@ -7451,7 +7452,7 @@ function isRematerializable(index UseIndex, valueId ValueId) returns bool
 	end 'edge'
 
 	match index.defKindOf(valueId) 'kind'
-		opDef then return index.isConstDef(valueId)
+		opDef then return index.isRebuildableFromImmediate(valueId)
 		none then return false
 		phiDef then return false
 	end 'kind'
@@ -8608,7 +8609,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, valueId Valu
 			// the one it replaces — x64's `constMaterializationOp` (not a second copy of the 32-vs-64-bit
 			// size choice that can drift from it), or arm64's uniform `arm64MovImm` — selected by the
 			// original def's own kind (`freshConstOp`).
-			spliceOp(module, at: usePos, op: freshConstOp(isArm64Const, freshId: freshId, value: constValue), blockLocal: useBlockLocal, edits: edits)
+			spliceOp(module, at: usePos, op: freshConstOp(isArm64Const, dest: TargetVReg.virtual(freshId), value: constValue), blockLocal: useBlockLocal, edits: edits)
 			rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf, opFacts: opFacts)
 
 			// The re-emitted copy derives from the original constant — record it so a
@@ -8641,8 +8642,10 @@ end 'rematerializeConstant'
 
 // The immediate a constant-materialization def carries, and whether it is the arm64 form. Both come
 // from ONE read of the def, so the re-emit selects the right ISA's const op and its value cannot drift
-// from its kind: x64 `movRegImm`/`movRegImm32` (isArm64 = false), arm64 `arm64MovImm` (true).
-function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineWord, bool)
+// from its kind: x64 `movRegImm`/`movRegImm32` (isArm64 = false), arm64 `arm64MovImm` (true). The
+// splitter reads it to rematerialize at a use, the allocator (`ColdCallBracketPlan.record`) to
+// rebuild a cold run's constant.
+module function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineWord, bool)
 	let op = try module.ops.get(opIdx) otherwise panic("constDefInfo: opIdx not in module.ops")
 	return match op 'k'
 		movRegImm(_, value) gives (value, false)
@@ -8823,11 +8826,10 @@ function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineW
 	end 'k'
 end 'constDefInfo'
 
-// The fresh constant-materialization op to splice at a spilled constant's use — the arm64 form when
-// its def was arm64, else the x64 form (whose builder reselects the 32-vs-64-bit encoding exactly as
-// ISel did). `freshId` is the split-minted value the use is rewritten to.
-function freshConstOp(isArm64 bool, freshId ValueId, value MachineWord) returns TargetOp
-	let dest = TargetVReg.virtual(freshId)
+// The fresh constant-materialization op writing `dest` — the arm64 form when `isArm64`, else the
+// x64 form (whose builder reselects the 32-vs-64-bit encoding exactly as ISel did). `dest` is the
+// split-minted virtual at a rematerialized use, or the physical register of a cold run's rebuild.
+module function freshConstOp(isArm64 bool, dest TargetVReg, value MachineWord) returns TargetOp
 	return TargetOp.arm64MovImm(dest, value: value) if isArm64 else constMaterializationOp(dest, value: value)
 end 'freshConstOp'
 
@@ -9540,7 +9542,7 @@ function verifyUseIndex(index UseIndex, fresh UseIndex, pressure PressureIndex, 
 			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about being a phi")
 		end 'isPhi'
 
-		if index.isConstDef(v) != fresh.isConstDef(v) 'constDef'
+		if index.isRebuildableFromImmediate(v) != fresh.isRebuildableFromImmediate(v) 'constDef'
 			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about being defined by a constant materialization — `isRematerializable` reads it")
 		end 'constDef'
 

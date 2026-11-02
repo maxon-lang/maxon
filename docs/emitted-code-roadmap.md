@@ -105,7 +105,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25, EC27) — intervals, branch refinement, widening, symbolic upper bounds against a hoisted length, the guarded-access join |
 | **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts; pressure-aware since EC28 |
 | **Redundant guard elimination by established facts** | ✅ `FoldEstablishedGuards` (EC31) — a forward dataflow per function over the managed shape predicates and a constant-index length floor; a guard already proved for its record folds |
-| **Cold-call spilling** | ✅ `IrBlock.heat` + `ColdBlockRuns` (EC28) — a call in a cold block does not confine the hot path; save/reload around the cold run |
+| **Cold-call spilling** | ✅ `IrBlock.heat` + `ColdBlockRuns` (EC28) — a call in a cold block does not confine the hot path; save/reload around the cold run, and a register holding a constant is rebuilt from its immediate after the run (`ir-specs/cold-call-rematerialization.md`) |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 and arm64, signed and unsigned; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
 | **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15); `Project.stdOpTrivialElementSites` drops the `@40` guard (A4) |

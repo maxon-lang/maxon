@@ -3935,11 +3935,10 @@ func @main {
     x64.jcc notEqual, tryerr#26
     x64.jmp tryok#25
   __im_detach#41:
-    x64.storeSlotReg slot2, rax
     x64.storeSlotReg slot1, rdx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot2
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot1
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#44
@@ -4217,11 +4216,10 @@ func @main {
     x64.jcc notEqual, tryerr#26
     x64.jmp tryok#25
   __im_detach#41:
-    x64.storeSlotReg slot2, rax
     x64.storeSlotReg slot1, rdx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot2
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot1
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#44
@@ -4499,12 +4497,11 @@ func @main {
     arm64.b.ne tryerr#26
     arm64.b tryok#25
   __im_detach#41:
-    arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
+    arm64.movImm x0, 0
     arm64.loadRegSlot x1, slot1
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b __im_detached#44
@@ -4779,12 +4776,11 @@ func @main {
     arm64.b.ne tryerr#26
     arm64.b tryok#25
   __im_detach#41:
-    arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
+    arm64.movImm x0, 0
     arm64.loadRegSlot x1, slot1
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b __im_detached#44

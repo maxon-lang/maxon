@@ -71,7 +71,7 @@ func @stamp {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 64
+    x64.prologue 48
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.cmpRegImm32 rsi, 0
@@ -117,36 +117,35 @@ func @stamp {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
   tryok:
-    x64.epilogue 64
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   __im_detach:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rdx
-    x64.storeSlotReg slot2, rsi
+    x64.storeSlotReg slot0, rdx
+    x64.storeSlotReg slot1, rsi
     x64.movRegReg rcx, rdx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rdx, slot1
-    x64.loadRegSlot rsi, slot2
+    x64.movRegImm32 rax, 0
+    x64.loadRegSlot rdx, slot0
+    x64.loadRegSlot rsi, slot1
     x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
     x64.jmp __im_detached
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: Range check failed: value outside typealias 'Byte'\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 64
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   __im_missing:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 64
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 64
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
 }
@@ -278,7 +277,7 @@ func @stamp {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 64
+    x64.prologue 48
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.cmpRegImm32 rsi, 0
@@ -324,36 +323,35 @@ func @stamp {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
   tryok:
-    x64.epilogue 64
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   __im_detach:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rdx
-    x64.storeSlotReg slot2, rsi
+    x64.storeSlotReg slot0, rdx
+    x64.storeSlotReg slot1, rsi
     x64.movRegReg rcx, rdx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rdx, slot1
-    x64.loadRegSlot rsi, slot2
+    x64.movRegImm32 rax, 0
+    x64.loadRegSlot rdx, slot0
+    x64.loadRegSlot rsi, slot1
     x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
     x64.jmp __im_detached
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: Range check failed: value outside typealias 'Byte'\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 64
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   __im_missing:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 64
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 64
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
 }
@@ -481,7 +479,7 @@ data {
 
 func @stamp {
   entry:
-    arm64.prologue 48
+    arm64.prologue 32
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.cmp x3, 0
@@ -527,33 +525,32 @@ func @stamp {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
   tryok:
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   __im_detach:
     arm64.storeSlotReg slot0, x1
-    arm64.storeSlotReg slot1, x2
-    arm64.storeSlotReg slot2, x3
+    arm64.storeSlotReg slot1, x3
     arm64.movRegReg x0, x1
     arm64.bl __managed_cow_detach
     arm64.loadRegSlot x1, slot0
-    arm64.loadRegSlot x2, slot1
-    arm64.loadRegSlot x3, slot2
+    arm64.movImm x2, 0
+    arm64.loadRegSlot x3, slot1
     arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
     arm64.b __im_detached
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   __im_missing:
     arm64.leaRdata x0, __str_blob_5  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
     arm64.bl mrt_panic
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
 }
 
@@ -678,7 +675,7 @@ data {
 
 func @stamp {
   entry:
-    arm64.prologue 48
+    arm64.prologue 32
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.cmp x3, 0
@@ -724,33 +721,32 @@ func @stamp {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
   tryok:
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   __im_detach:
     arm64.storeSlotReg slot0, x1
-    arm64.storeSlotReg slot1, x2
-    arm64.storeSlotReg slot2, x3
+    arm64.storeSlotReg slot1, x3
     arm64.movRegReg x0, x1
     arm64.bl __managed_cow_detach
     arm64.loadRegSlot x1, slot0
-    arm64.loadRegSlot x2, slot1
-    arm64.loadRegSlot x3, slot2
+    arm64.movImm x2, 0
+    arm64.loadRegSlot x3, slot1
     arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
     arm64.b __im_detached
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   __im_missing:
     arm64.leaRdata x0, __str_blob_5  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
     arm64.bl mrt_panic
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
 }
 

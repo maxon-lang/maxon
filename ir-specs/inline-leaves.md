@@ -1105,7 +1105,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 48
+    x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -1161,7 +1161,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -1173,17 +1173,16 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp __il_cont#8
   __im_detach:
-    x64.storeSlotReg slot0, rax
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
+    x64.movRegImm32 rax, 1
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#19
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:10: element past the end\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -1192,7 +1191,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -1201,7 +1200,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -1224,7 +1223,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 48
+    x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -1279,7 +1278,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -1291,17 +1290,16 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp __il_cont#8
   __im_detach:
-    x64.storeSlotReg slot0, rax
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
+    x64.movRegImm32 rax, 1
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#19
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:10: element past the end\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -1310,7 +1308,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -1319,7 +1317,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -1339,9 +1337,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -1396,9 +1394,9 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_slow:
     arm64.movRegReg x0, x19
@@ -1407,36 +1405,35 @@ func @main {
     arm64.b.ne tryerr
     arm64.b __il_cont#8
   __im_detach:
-    arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
+    arm64.movImm x0, 1
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.b __im_detached#19
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:10: element past the end\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_missing:
     arm64.leaRdata x0, __str_blob_6  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
 }
 ```
@@ -1450,9 +1447,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -1507,9 +1504,9 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_slow:
     arm64.movRegReg x0, x19
@@ -1518,36 +1515,35 @@ func @main {
     arm64.b.ne tryerr
     arm64.b __il_cont#8
   __im_detach:
-    arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
+    arm64.movImm x0, 1
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.b __im_detached#19
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:10: element past the end\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_missing:
     arm64.leaRdata x0, __str_blob_6  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at a-checked-accessor-whose-slow-arm-is-cold-is-inlined.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
 }
 ```

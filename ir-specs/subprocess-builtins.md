@@ -3293,11 +3293,10 @@ func @main {
     arm64.b __im_cont#220
   __im_detach:
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot56, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x2, slot56
+    arm64.movImm x2, 2
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.b __im_detached
   __im_slow#337:
@@ -3397,19 +3396,19 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
     arm64.movImm x0, 20
     arm64.movImm x5, 0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.movRegReg x1, x5
     arm64.bl __mm_alloc
     arm64.movRegReg x5, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -3417,8 +3416,8 @@ func @main {
     arm64.movRegReg x1, x5
     arm64.bl __uint_to_string
     arm64.movRegReg x6, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -3435,8 +3434,8 @@ func @main {
     arm64.add x11, x0, 57
     arm64.movImm x12, 0
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -3450,8 +3449,8 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x11, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -3462,7 +3461,7 @@ func @main {
     arm64.loadRegSlot x10, slot65
     arm64.add x12, x11, 56
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -3477,7 +3476,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -3490,7 +3489,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x12, x2
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
@@ -3506,7 +3505,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
@@ -3518,7 +3517,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x1, x4
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
     arm64.storeSlotReg slot62, x7
@@ -3533,7 +3532,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
     arm64.loadRegSlot x7, slot62
@@ -3544,7 +3543,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x1, x6
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot63, x8
     arm64.storeSlotReg slot64, x9
@@ -3557,7 +3556,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x8, slot63
     arm64.loadRegSlot x9, slot64
@@ -3612,19 +3611,19 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
     arm64.movImm x0, 20
     arm64.movImm x5, 0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.movRegReg x1, x5
     arm64.bl __mm_alloc
     arm64.movRegReg x5, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -3632,8 +3631,8 @@ func @main {
     arm64.movRegReg x1, x5
     arm64.bl __uint_to_string
     arm64.movRegReg x6, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -3650,8 +3649,8 @@ func @main {
     arm64.add x11, x0, 57
     arm64.movImm x12, 0
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -3665,8 +3664,8 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x11, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -3677,7 +3676,7 @@ func @main {
     arm64.loadRegSlot x10, slot65
     arm64.add x12, x11, 56
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -3692,7 +3691,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -3705,7 +3704,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x12, x2
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
@@ -3721,7 +3720,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
@@ -3733,7 +3732,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x1, x4
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
     arm64.storeSlotReg slot62, x7
@@ -3748,7 +3747,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
     arm64.loadRegSlot x7, slot62
@@ -3759,7 +3758,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x1, x6
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot63, x8
     arm64.storeSlotReg slot64, x9
@@ -3772,7 +3771,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x8, slot63
     arm64.loadRegSlot x9, slot64
@@ -3971,19 +3970,19 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
     arm64.movImm x0, 21
     arm64.movImm x5, 0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.movRegReg x1, x5
     arm64.bl __mm_alloc
     arm64.movRegReg x5, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -3991,8 +3990,8 @@ func @main {
     arm64.movRegReg x1, x5
     arm64.bl __int_to_string
     arm64.movRegReg x6, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -4005,8 +4004,8 @@ func @main {
     arm64.add x9, x0, 57
     arm64.movImm x10, 0
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -4018,8 +4017,8 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x9, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -4028,7 +4027,7 @@ func @main {
     arm64.loadRegSlot x8, slot63
     arm64.add x10, x9, 56
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -4041,7 +4040,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -4052,7 +4051,7 @@ func @main {
     arm64.loadRegSlot x10, slot65
     arm64.add x1, x10, x2
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
@@ -4066,7 +4065,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
@@ -4076,7 +4075,7 @@ func @main {
     arm64.loadRegSlot x10, slot65
     arm64.add x1, x1, x4
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
     arm64.storeSlotReg slot62, x7
@@ -4089,7 +4088,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
     arm64.loadRegSlot x7, slot62
@@ -7078,11 +7077,10 @@ func @main {
     arm64.b __im_cont#220
   __im_detach:
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot56, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x2, slot56
+    arm64.movImm x2, 2
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.b __im_detached
   __im_slow#337:
@@ -7182,19 +7180,19 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
     arm64.movImm x0, 20
     arm64.movImm x5, 0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.movRegReg x1, x5
     arm64.bl __mm_alloc
     arm64.movRegReg x5, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7202,8 +7200,8 @@ func @main {
     arm64.movRegReg x1, x5
     arm64.bl __uint_to_string
     arm64.movRegReg x6, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7220,8 +7218,8 @@ func @main {
     arm64.add x11, x0, 57
     arm64.movImm x12, 0
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7235,8 +7233,8 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x11, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7247,7 +7245,7 @@ func @main {
     arm64.loadRegSlot x10, slot65
     arm64.add x12, x11, 56
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7262,7 +7260,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7275,7 +7273,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x12, x2
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
@@ -7291,7 +7289,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
@@ -7303,7 +7301,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x1, x4
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
     arm64.storeSlotReg slot62, x7
@@ -7318,7 +7316,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
     arm64.loadRegSlot x7, slot62
@@ -7329,7 +7327,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x1, x6
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot63, x8
     arm64.storeSlotReg slot64, x9
@@ -7342,7 +7340,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x8, slot63
     arm64.loadRegSlot x9, slot64
@@ -7397,19 +7395,19 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
     arm64.movImm x0, 20
     arm64.movImm x5, 0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.movRegReg x1, x5
     arm64.bl __mm_alloc
     arm64.movRegReg x5, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7417,8 +7415,8 @@ func @main {
     arm64.movRegReg x1, x5
     arm64.bl __uint_to_string
     arm64.movRegReg x6, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7435,8 +7433,8 @@ func @main {
     arm64.add x11, x0, 57
     arm64.movImm x12, 0
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7450,8 +7448,8 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x11, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7462,7 +7460,7 @@ func @main {
     arm64.loadRegSlot x10, slot65
     arm64.add x12, x11, 56
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7477,7 +7475,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7490,7 +7488,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x12, x2
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
@@ -7506,7 +7504,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
@@ -7518,7 +7516,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x1, x4
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
     arm64.storeSlotReg slot62, x7
@@ -7533,7 +7531,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
     arm64.loadRegSlot x7, slot62
@@ -7544,7 +7542,7 @@ func @main {
     arm64.loadRegSlot x12, slot67
     arm64.add x1, x1, x6
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot63, x8
     arm64.storeSlotReg slot64, x9
@@ -7557,7 +7555,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x8, slot63
     arm64.loadRegSlot x9, slot64
@@ -7756,19 +7754,19 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
     arm64.movImm x0, 21
     arm64.movImm x5, 0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.movRegReg x1, x5
     arm64.bl __mm_alloc
     arm64.movRegReg x5, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7776,8 +7774,8 @@ func @main {
     arm64.movRegReg x1, x5
     arm64.bl __int_to_string
     arm64.movRegReg x6, x0
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7790,8 +7788,8 @@ func @main {
     arm64.add x9, x0, 57
     arm64.movImm x10, 0
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot56, x1
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7803,8 +7801,8 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x9, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x1, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7813,7 +7811,7 @@ func @main {
     arm64.loadRegSlot x8, slot63
     arm64.add x10, x9, 56
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot56, x2
+    arm64.storeSlotReg slot57, x2
     arm64.storeSlotReg slot58, x3
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
@@ -7826,7 +7824,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x2, slot56
+    arm64.loadRegSlot x2, slot57
     arm64.loadRegSlot x3, slot58
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
@@ -7837,7 +7835,7 @@ func @main {
     arm64.loadRegSlot x10, slot65
     arm64.add x1, x10, x2
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot59, x4
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
@@ -7851,7 +7849,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x4, slot59
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
@@ -7861,7 +7859,7 @@ func @main {
     arm64.loadRegSlot x10, slot65
     arm64.add x1, x1, x4
     arm64.storeSlotReg slot55, x0
-    arm64.storeSlotReg slot57, x1
+    arm64.storeSlotReg slot56, x1
     arm64.storeSlotReg slot60, x5
     arm64.storeSlotReg slot61, x6
     arm64.storeSlotReg slot62, x7
@@ -7874,7 +7872,7 @@ func @main {
     arm64.bl __str_copy
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot55
-    arm64.loadRegSlot x1, slot57
+    arm64.loadRegSlot x1, slot56
     arm64.loadRegSlot x5, slot60
     arm64.loadRegSlot x6, slot61
     arm64.loadRegSlot x7, slot62

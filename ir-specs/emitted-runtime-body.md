@@ -46646,11 +46646,10 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#73
   __rl_slow#79:
-    x64.storeSlotReg slot3, rax
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot3
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot2
     x64.jmp __rl_cont#76
   __rl_slow#84:
@@ -47455,11 +47454,10 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#73
   __rl_slow#79:
-    x64.storeSlotReg slot3, rax
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot3
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot2
     x64.jmp __rl_cont#76
   __rl_slow#84:
@@ -48319,13 +48317,12 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.b __rl_cont#73
   __rl_slow#79:
-    arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot1
+    arm64.movImm x0, 0
     arm64.loadRegSlot x2, slot2
     arm64.b __rl_cont#76
   __rl_slow#84:
@@ -49199,13 +49196,12 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.b __rl_cont#73
   __rl_slow#79:
-    arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot1
+    arm64.movImm x0, 0
     arm64.loadRegSlot x2, slot2
     arm64.b __rl_cont#76
   __rl_slow#84:
@@ -50449,11 +50445,10 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#73
   __rl_slow#79:
-    x64.storeSlotReg slot3, rax
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot3
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot2
     x64.jmp __rl_cont#76
   __rl_slow#84:
@@ -51626,11 +51621,10 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#73
   __rl_slow#79:
-    x64.storeSlotReg slot3, rax
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot3
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot2
     x64.jmp __rl_cont#76
   __rl_slow#84:
@@ -52927,13 +52921,12 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.b __rl_cont#73
   __rl_slow#79:
-    arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot1
+    arm64.movImm x0, 0
     arm64.loadRegSlot x2, slot2
     arm64.b __rl_cont#76
   __rl_slow#84:
@@ -54244,13 +54237,12 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.b __rl_cont#73
   __rl_slow#79:
-    arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot1
+    arm64.movImm x0, 0
     arm64.loadRegSlot x2, slot2
     arm64.b __rl_cont#76
   __rl_slow#84:
@@ -65158,11 +65150,10 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#73
   __rl_slow#79:
-    x64.storeSlotReg slot3, rax
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot3
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot2
     x64.jmp __rl_cont#76
   __rl_slow#84:
@@ -66072,11 +66063,10 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#73
   __rl_slow#79:
-    x64.storeSlotReg slot3, rax
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot3
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot2
     x64.jmp __rl_cont#76
   __rl_slow#84:
@@ -67040,13 +67030,12 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.b __rl_cont#73
   __rl_slow#79:
-    arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot1
+    arm64.movImm x0, 0
     arm64.loadRegSlot x2, slot2
     arm64.b __rl_cont#76
   __rl_slow#84:
@@ -68024,13 +68013,12 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.b __rl_cont#73
   __rl_slow#79:
-    arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot1
+    arm64.movImm x0, 0
     arm64.loadRegSlot x2, slot2
     arm64.b __rl_cont#76
   __rl_slow#84:
@@ -71593,11 +71581,10 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#73
   __rl_slow#79:
-    x64.storeSlotReg slot3, rax
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot3
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot2
     x64.jmp __rl_cont#76
   __rl_slow#84:
@@ -72273,11 +72260,10 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#73
   __rl_slow#79:
-    x64.storeSlotReg slot3, rax
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot3
+    x64.movRegImm32 rax, 0
     x64.loadRegSlot rdx, slot2
     x64.jmp __rl_cont#76
   __rl_slow#84:
@@ -73008,13 +72994,12 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.b __rl_cont#73
   __rl_slow#79:
-    arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot1
+    arm64.movImm x0, 0
     arm64.loadRegSlot x2, slot2
     arm64.b __rl_cont#76
   __rl_slow#84:
@@ -73759,13 +73744,12 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.b __rl_cont#73
   __rl_slow#79:
-    arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot1
+    arm64.movImm x0, 0
     arm64.loadRegSlot x2, slot2
     arm64.b __rl_cont#76
   __rl_slow#84:

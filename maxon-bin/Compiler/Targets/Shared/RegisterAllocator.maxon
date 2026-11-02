@@ -115,9 +115,10 @@ export type Allocation
 	end 'noteHolder'
 
 	// Which value occupies `regNum`. Only meaningful for a register the colorer's in-use mask says is
-	// HELD; there is no "unoccupied" answer, and none is needed — BOTH callers read it through that mask.
-	// `valuesHoldingRegisters` masks with `held and classPool`; `StuckValues.record` masks with `A(v)`,
-	// which the exhaustion premise `classPool ⊆ held ∪ forbidden(v)` puts inside `held`.
+	// HELD; there is no "unoccupied" answer, and none is needed — every caller reads it through that
+	// mask. `valuesHoldingRegisters` masks with `held and classPool`; `StuckValues.record` masks with
+	// `A(v)`, which the exhaustion premise `classPool ⊆ held ∪ forbidden(v)` puts inside `held`;
+	// `ColdCallBracketPlan.record` is handed only registers of the in-use mask.
 	export function holderOf(regNum RegNum) returns ValueId
 		return try self.holderOfReg.get(regNum) otherwise panic("Allocation.holderOf: register {regNum} is outside the unified register file")
 	end 'holderOf'
@@ -191,9 +192,19 @@ export type ReuseCopyPlan
 	end 'clear'
 end 'ReuseCopyPlan'
 
+typealias BracketPayloadArray = Array with MachineWord
+
+export enum BracketEntryKind
+	slot
+	immediate
+end 'BracketEntryKind'
+
+typealias BracketEntryKindArray = Array with BracketEntryKind
+
 // ⭐ **THE COLD-RUN BRACKETS ONE COLOURING PASS PLANNED.** In a cold block (`BlockHeat.cold`) no op
 // confines the values live across it (`opClobberMask`); instead every register a value holds across an
-// op that writes it is SAVED before and RELOADED after, and the unit of that is a RUN, not an op:
+// op that writes it is SAVED before and RELOADED after (a constant is REBUILT after instead), and
+// the unit of that is a RUN, not an op:
 //
 //   THE REGION RULE. A run is a maximal sequence of clobbering ops — argument pre-moves, the call, an
 //   `idiv` — closed by the captures that read its call's answer and the spill stores of what they
@@ -211,11 +222,15 @@ end 'ReuseCopyPlan'
 //   such an op — a float negation through an xmm scratch, an arm64 atomic through x16/x17 — keeps its
 //   implicit scratch confining exactly as in a normal block (`coldRunOpKind`).
 //
-// A bracket names REGISTERS, not values: what it preserves is a register's contents over one run,
-// whichever value holds it, so the colorer records the held mask and looks no value up. A save slot is
-// therefore one per register for the whole function — two brackets never overlap (each is its stores,
-// the run, its loads, with nothing of another bracket between), so one slot per register serves every
-// cold run, and the frame grows by at most the register file, never by the number of cold sites.
+// A bracket names REGISTERS: what it preserves is a register's contents over one run, so the
+// colorer records the held mask and `record` reads each register's holder only to choose how its
+// contents come back. A holder that is a constant rebuildable from an immediate
+// (`UseIndex.isRebuildableFromImmediate`) needs no slot: `mov reg, imm` after the run restores
+// exactly the bits the register held, with no store before and no load after. Every other holder
+// gets a save slot, one per register for the whole function — two brackets never overlap (each is
+// its stores, the run, its loads, with nothing of another bracket between), so one slot per
+// register serves every cold run, and the frame grows by at most the register file, never by the
+// number of cold sites.
 //
 // KEYED BY THE RUN'S LAYOUT SEQUENCES like `ReuseCopyPlan` — the first op's for the saves, the last
 // op's for the reloads — but read back with a CURSOR rather than a dense column: the colorer records in
@@ -225,17 +240,23 @@ end 'ReuseCopyPlan'
 // rather than at `beginPass`: most functions never mint one.
 //
 // The rewrite's read (`takeAt`) answers a bool and leaves the taken bracket OPEN for `openEntryCount` /
-// `openRegAt` / `openSlotAt` / `openReloadSeq` rather than returning a union: a payload-bearing union
-// heap-boxes every case including the payload-free one (`CseLookup`), and `takeAt` is asked at every
-// body op of every function.
+// `openRegAt` / `openKindAt` / `openSlotAt` / `openImmediateOpAt` / `openReloadSeq` rather than
+// returning a union: a payload-bearing union heap-boxes every case including the payload-free one
+// (`CseLookup`), and `takeAt` is asked at every body op of every function.
 export type ColdCallBracketPlan
 	var saveSeqs as OpSeqArray
 	var reloadSeqs as OpSeqArray
 
-	// CSR over `regs`/`slots`: bracket k's entries are `[ends[k-1], ends[k])`, the first's from 0.
+	// CSR over `regs`/`kinds`/`payloads`: bracket k's entries are `[ends[k-1], ends[k])`, the first's
+	// from 0. An entry's payload is its `SpillSlot` when its kind is `slot` and the `MachineWord` to
+	// rebuild when it is `immediate`.
 	var ends as ColumnLengthColumn
 	var regs as RegNumColumn
-	var slots as SpillSlotArray
+	var kinds as BracketEntryKindArray
+	var payloads as BracketPayloadArray
+
+	// The ISA of the function's ops, which picks the encoding `openImmediateOpAt` builds.
+	var isArm64 as bool
 
 	// The save slot each register was given this pass, indexed by `RegNum` and meaningful only where
 	// `regHasSlot` holds; both are empty until the pass's first mint.
@@ -246,8 +267,8 @@ export type ColdCallBracketPlan
 	// The rewrite's position in `saveSeqs`: the bracket at `cursor - 1` is the one last taken.
 	var cursor as ElementIndex
 
-	export static function create() returns ColdCallBracketPlan
-		return Self{saveSeqs: OpSeqArray.create(), reloadSeqs: OpSeqArray.create(), ends: ColumnLengthColumn.create(), regs: RegNumColumn.create(), slots: SpillSlotArray.create(), slotOfReg: SpillSlotArray.create(), regHasSlot: BoolArray.create(), nextSlot: 0, cursor: 0}
+	export static function create(isArm64 bool) returns ColdCallBracketPlan
+		return Self{saveSeqs: OpSeqArray.create(), reloadSeqs: OpSeqArray.create(), ends: ColumnLengthColumn.create(), regs: RegNumColumn.create(), kinds: BracketEntryKindArray.create(), payloads: BracketPayloadArray.create(), isArm64: isArm64, slotOfReg: SpillSlotArray.create(), regHasSlot: BoolArray.create(), nextSlot: 0, cursor: 0}
 	end 'create'
 
 	// Forget every bracket and every slot — a pass that ended with a stuck value is discarded whole — and
@@ -258,7 +279,8 @@ export type ColdCallBracketPlan
 		self.reloadSeqs.clear()
 		self.ends.clear()
 		self.regs.clear()
-		self.slots.clear()
+		self.kinds.clear()
+		self.payloads.clear()
 		self.regHasSlot.clear()
 		self.slotOfReg.clear()
 		self.nextSlot = frameSlotCount
@@ -266,9 +288,12 @@ export type ColdCallBracketPlan
 	end 'beginPass'
 
 	// Record the bracket of the run spanning layout sequences `[saveSeq, reloadSeq]`: every register in
-	// `held`. Runs arrive in increasing order and never overlap, which is what the rewrite's cursor rests
-	// on.
-	export function record(saveSeq OpSeq, reloadSeq OpSeq, held RegMask)
+	// `held`, each as one entry whose kind its holder decides. Runs arrive in increasing order and
+	// never overlap, which is what the rewrite's cursor rests on.
+	//
+	// This is the only writer of `regs`, `kinds` and `payloads`; it appends one entry to each per
+	// register, in ascending register order, so the three share the one CSR `ends`.
+	export function record(saveSeq OpSeq, reloadSeq OpSeq, held RegMask, module TargetModule, alloc Allocation, liveness LivenessResult)
 		if self.saveSeqs.count() > 0 and saveSeq <= (try self.reloadSeqs.get(self.reloadSeqs.count() - 1) otherwise panic("ColdCallBracketPlan.record: reloadSeqs.get OOB on the entry just counted")) 'outOfOrder'
 			panic("ColdCallBracketPlan.record: a run starting at sequence {saveSeq} inside or before the run last recorded — the colorer records runs in layout order and they never overlap")
 		end 'outOfOrder'
@@ -283,13 +308,34 @@ export type ColdCallBracketPlan
 
 		while remaining != 0 'eachHeldRegister'
 			let regNum = regMaskLowest(remaining)
-			self.regs.push(regNum)
-			self.slots.push(self.slotFor(regNum))
 			remaining = regMaskRemove(remaining, regNum: regNum)
+			let holder = alloc.holderOf(regNum)
+			self.regs.push(regNum)
+
+			if liveness.useIndex.isRebuildableFromImmediate(holder) 'immediateHolder'
+				requireIntegerRegister(regNum, holder: holder, liveness: liveness)
+				self.kinds.push(BracketEntryKind.immediate)
+				self.payloads.push(self.immediateOf(module, holder: holder, liveness: liveness))
+			end 'immediateHolder' else 'slotHolder'
+				self.kinds.push(BracketEntryKind.slot)
+				self.payloads.push(self.slotFor(regNum) as MachineWord)
+			end 'slotHolder'
 		end 'eachHeldRegister'
 
 		self.ends.push(self.regs.count())
 	end 'record'
+
+	// The rebuild is made by `openImmediateOpAt` in the plan's ISA, so the def's immediate must come
+	// from that ISA's constant op.
+	function immediateOf(module TargetModule, holder ValueId, liveness LivenessResult) returns MachineWord
+		let (value, defIsArm64) = constDefInfo(module, opIdx: liveness.useIndex.requireDefOp(holder))
+
+		if defIsArm64 != self.isArm64 'otherIsa'
+			panic("ColdCallBracketPlan.immediateOf: value {holder} is defined by a constant materialization with arm64={defIsArm64} in a plan made for arm64={self.isArm64} — one function holds one ISA's ops")
+		end 'otherIsa'
+
+		return value
+	end 'immediateOf'
 
 	function slotFor(regNum RegNum) returns SpillSlot
 		if self.regHasSlot.count() == 0 'firstMintOfThisPass'
@@ -354,9 +400,27 @@ export type ColdCallBracketPlan
 		return try self.regs.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openRegAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
 	end 'openRegAt'
 
+	export function openKindAt(entry ElementIndex) returns BracketEntryKind
+		return try self.kinds.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openKindAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
+	end 'openKindAt'
+
 	export function openSlotAt(entry ElementIndex) returns SpillSlot
-		return try self.slots.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openSlotAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
+		match self.openKindAt(entry) 'kind'
+			slot then return self.openPayloadAt(entry) as SpillSlot
+			immediate then panic("ColdCallBracketPlan.openSlotAt: entry {entry} of the open bracket is an immediate, which owns no slot")
+		end 'kind'
 	end 'openSlotAt'
+
+	export function openImmediateOpAt(entry ElementIndex) returns TargetOp
+		match self.openKindAt(entry) 'kind'
+			immediate then return freshConstOp(self.isArm64, dest: TargetVReg.physical(self.openRegAt(entry)), value: self.openPayloadAt(entry))
+			slot then panic("ColdCallBracketPlan.openImmediateOpAt: entry {entry} of the open bracket is a saved register, which holds no immediate")
+		end 'kind'
+	end 'openImmediateOpAt'
+
+	function openPayloadAt(entry ElementIndex) returns MachineWord
+		return try self.payloads.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openPayloadAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
+	end 'openPayloadAt'
 
 	// The bracket `takeAt` last took.
 	function openIndex() returns ElementIndex
@@ -375,6 +439,21 @@ export type ColdCallBracketPlan
 		return try self.ends.get(index) otherwise panic("ColdCallBracketPlan.entryEnd: no bracket {index} of {self.saveSeqs.count()}")
 	end 'entryEnd'
 end 'ColdCallBracketPlan'
+
+// The rebuild is an integer `mov reg, imm` written into the register the holder occupies. Nothing
+// downstream would object to one written into a vector register, so a register outside the integer
+// file, or in a different file from its holder's class, panics here.
+function requireIntegerRegister(regNum RegNum, holder ValueId, liveness LivenessResult)
+	let registerClass = regClassIn(regNum, file: liveness.registerFile)
+
+	if registerClass != liveness.classOf(holder) 'wrongFile'
+		panic("requireIntegerRegister: value {holder} is a {liveness.classOf(holder).name} value held in register {regNum}, which is in the {registerClass.name} file — a rematerialized constant is written into the register its holder occupies")
+	end 'wrongFile'
+
+	if registerClass != RegClass.gpr 'notInteger'
+		panic("requireIntegerRegister: value {holder} is rebuilt from an immediate but register {regNum} is in the {registerClass.name} file — a constant materialization writes an integer register")
+	end 'notInteger'
+end 'requireIntegerRegister'
 
 // The sub-phases the timers + counters attribute time to.
 //
@@ -1265,7 +1344,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 
 	// The save/reload brackets around calls in cold blocks — planned by the colorer, spliced by the
 	// rewrite, sized into the frame below.
-	var brackets = ColdCallBracketPlan.create()
+	var brackets = ColdCallBracketPlan.create(isArm64RegisterFile(file))
 
 	let alloc = colorRepairingConfinements(module, driver: driver, func: func, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, brackets: brackets, costs: costs)
 
@@ -2304,8 +2383,9 @@ end 'colorFunction'
 // At a run's first op, plan the run's bracket (`ColdCallBracketPlan` states the region rule): every
 // register that a value holds at the run's start and that some run op writes while that value is still
 // live — `inUse` less the registers of the values dead by that op. A register is bracketed whichever
-// value holds it, so no value is looked up; a dead phi's register, held for the whole block, is
-// bracketed with the rest, which costs a store and a load in a block that seldom runs.
+// value holds it, and `record` reads the holder only to choose a save or a rebuild; a dead phi's
+// register, held for the whole block, is bracketed with the rest, which costs a store and a load
+// in a block that seldom runs.
 function recordColdRunBracketIfFirst(module TargetModule, ordered OpIndexArray, runs ColdBlockRuns, id ElementIndex, pos ElementIndex, blockBaseSeq OpSeq, inUse RegMask, deaths BlockDeaths, alloc Allocation, liveness LivenessResult, brackets ColdCallBracketPlan, buf OperandList)
 	if pos != runs.firstOf(id) 'notTheFirstOp'
 		return
@@ -2326,7 +2406,7 @@ function recordColdRunBracketIfFirst(module TargetModule, ordered OpIndexArray, 
 		return
 	end 'nothingToPreserve'
 
-	brackets.record(blockBaseSeq + (pos as OpSeq), reloadSeq: blockBaseSeq + (last as OpSeq), held: held)
+	brackets.record(blockBaseSeq + (pos as OpSeq), reloadSeq: blockBaseSeq + (last as OpSeq), held: held, module: module, alloc: alloc, liveness: liveness)
 end 'recordColdRunBracketIfFirst'
 
 // The in-use mask at a block's entry: every non-phi live-in value occupies its

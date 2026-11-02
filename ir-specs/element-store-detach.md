@@ -138,7 +138,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 56
+    x64.prologue 40
     x64.movRegImm32 rax, 4
     x64.leaRegRdata rdx, [rip + __layout_FixedArray_N4_Word]
   __il_body:
@@ -238,7 +238,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -249,33 +249,30 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __im_detach#12:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 1
     x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.jmp __im_detached#15
   __im_detach#17:
-    x64.storeSlotReg slot0, rax
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
+    x64.movRegImm32 rax, 2
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#20
   __im_missing:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -367,7 +364,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 56
+    x64.prologue 40
     x64.movRegImm32 rax, 4
     x64.leaRegRdata rdx, [rip + __layout_FixedArray_N4_Word]
   __il_body:
@@ -467,7 +464,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -478,33 +475,30 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __im_detach#12:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 1
     x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.jmp __im_detached#15
   __im_detach#17:
-    x64.storeSlotReg slot0, rax
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
+    x64.movRegImm32 rax, 2
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.jmp __im_detached#20
   __im_missing:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -586,10 +580,10 @@ func @mix {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x21
-    arm64.storeSlotReg slot3, x20
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
     arm64.movImm x2, 4
     arm64.leaRdata x1, __layout_FixedArray_N4_Word
   __il_body:
@@ -686,47 +680,44 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   ifcont:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   __im_detach#12:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
+    arm64.movImm x0, 0
+    arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b __im_detached#15
   __im_detach#17:
-    arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
+    arm64.movImm x0, 2
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.b __im_detached#20
   __im_missing:
     arm64.leaRdata x0, __str_blob_6  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```
@@ -807,10 +798,10 @@ func @mix {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x21
-    arm64.storeSlotReg slot3, x20
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
     arm64.movImm x2, 4
     arm64.leaRdata x1, __layout_FixedArray_N4_Word
   __il_body:
@@ -907,47 +898,44 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   ifcont:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   __im_detach#12:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
+    arm64.movImm x0, 0
+    arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b __im_detached#15
   __im_detach#17:
-    arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
+    arm64.movImm x0, 2
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.b __im_detached#20
   __im_missing:
     arm64.leaRdata x0, __str_blob_6  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```
@@ -1072,12 +1060,11 @@ func @put {
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
+    x64.movRegImm32 rsi, 7
     x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
     x64.jmp __im_detached#12
   __im_slow#14:
@@ -1350,12 +1337,11 @@ func @put {
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
     x64.callDirect __managed_cow_detach
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
+    x64.movRegImm32 rsi, 7
     x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
     x64.jmp __im_detached#12
   __im_slow#14:
@@ -1622,13 +1608,12 @@ func @put {
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot2, x1
     arm64.storeSlotReg slot1, x2
-    arm64.storeSlotReg slot3, x3
     arm64.bl __managed_cow_detach
     arm64.movRegReg x4, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot2
     arm64.loadRegSlot x2, slot1
-    arm64.loadRegSlot x3, slot3
+    arm64.movImm x3, 7
     arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
     arm64.b __im_detached#12
   __im_slow#14:
@@ -1881,13 +1866,12 @@ func @put {
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot2, x1
     arm64.storeSlotReg slot1, x2
-    arm64.storeSlotReg slot3, x3
     arm64.bl __managed_cow_detach
     arm64.movRegReg x4, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot2
     arm64.loadRegSlot x2, slot1
-    arm64.loadRegSlot x3, slot3
+    arm64.movImm x3, 7
     arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
     arm64.b __im_detached#12
   __im_slow#14:

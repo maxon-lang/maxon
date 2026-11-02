@@ -181,8 +181,9 @@ end 'applyAllocation'
 // capture of the run's call, the move that reads the register the call answers through
 // (`isCaptureMove`). A value live across a cold run may hold one of those registers, and a reload placed
 // before the capture would overwrite the answer; placed after it, every caller-saved register is the hot
-// path's to use. The plan's two sequences per run are the colorer's reading of `ColdBlockRuns`, so the
-// rewrite re-derives no run of its own.
+// path's to use. A register held by a constant has no save and no load: its rebuild (`mov reg,
+// imm`) is placed with the reloads. The plan's two sequences per run are the colorer's reading of
+// `ColdBlockRuns`, so the rewrite re-derives no run of its own.
 function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan)
 	var seq = 0 as OpSeq
 
@@ -254,14 +255,15 @@ function spliceBracketSavesBefore(module TargetModule, brackets ColdCallBracketP
 	return true
 end 'spliceBracketSavesBefore'
 
-// The reloads owed by the open run, spliced right after the op just emitted (at layout sequence `seq`,
-// body position `pos`) when that op is the run's last (`ColdCallBracketPlan.openReloadSeq`). Whether
-// reloads are still owed afterwards.
+// The reloads and constant rebuilds owed by the open run, spliced right after the op just emitted
+// (at layout sequence `seq`, body position `pos`) when that op is the run's last
+// (`ColdCallBracketPlan.openReloadSeq`). Whether reloads are still owed afterwards.
 //
-// THE PREMISE THE PLACEMENT RESTS ON: the run's last op is the last capture of its call or divide, or
-// the spill store of what it captured, so every read of the answer precedes the reloads and nothing after
-// them reads a register they restore. A capture right after the reload point would read a restored
-// register in place of the answer, so the splice refuses one.
+// THE PREMISE THE PLACEMENT RESTS ON: the run's last op is the last capture of its call or divide,
+// or the spill store of what it captured, so every read of the answer precedes the reloads and
+// nothing after them reads a register they restore (a rebuilt constant included). A capture right
+// after the reload point would read a restored register in place of the answer, so the splice
+// refuses one.
 function spliceBracketReloadsAfter(module TargetModule, block IrBlock, brackets ColdCallBracketPlan, seq OpSeq, pos ElementIndex, owesReloads bool, newRefs OpIndexArray) returns bool
 	if not owesReloads or brackets.openReloadSeq() > seq 'notTheRunsEnd'
 		return owesReloads
@@ -281,20 +283,31 @@ enum BracketHalf
 	reload
 end 'BracketHalf'
 
-// One op per register of the open run: its save (`storeSlotReg slot, reg`) or its reload
-// (`loadRegSlot reg, slot`).
+// The save half emits `storeSlotReg slot, reg` per slot entry of the open run; the reload half
+// emits `loadRegSlot reg, slot` per slot entry and the constant's materialization per immediate
+// entry. An immediate entry has no save.
 function appendBracketHalf(module TargetModule, brackets ColdCallBracketPlan, half BracketHalf, newRefs OpIndexArray)
 	for entry in 0 upto brackets.openEntryCount() 'eachRegister'
-		let reg = TargetVReg.physical(brackets.openRegAt(entry))
-		let slot = brackets.openSlotAt(entry)
-		let op = match half 'h'
-			save gives TargetOp.storeSlotReg(slot, srcReg: reg)
-			reload gives TargetOp.loadRegSlot(reg, slot: slot)
+		match half 'h'
+			save then appendBracketSave(module, brackets: brackets, entry: entry, newRefs: newRefs)
+			reload then appendBracketReload(module, brackets: brackets, entry: entry, newRefs: newRefs)
 		end 'h'
-
-		appendAllocatorOp(module, op: op, newRefs: newRefs)
 	end 'eachRegister'
 end 'appendBracketHalf'
+
+function appendBracketSave(module TargetModule, brackets ColdCallBracketPlan, entry ElementIndex, newRefs OpIndexArray)
+	match brackets.openKindAt(entry) 'kind'
+		slot then appendAllocatorOp(module, op: TargetOp.storeSlotReg(brackets.openSlotAt(entry), srcReg: TargetVReg.physical(brackets.openRegAt(entry))), newRefs: newRefs)
+		immediate then return
+	end 'kind'
+end 'appendBracketSave'
+
+function appendBracketReload(module TargetModule, brackets ColdCallBracketPlan, entry ElementIndex, newRefs OpIndexArray)
+	match brackets.openKindAt(entry) 'kind'
+		slot then appendAllocatorOp(module, op: TargetOp.loadRegSlot(TargetVReg.physical(brackets.openRegAt(entry)), slot: brackets.openSlotAt(entry)), newRefs: newRefs)
+		immediate then appendAllocatorOp(module, op: brackets.openImmediateOpAt(entry), newRefs: newRefs)
+	end 'kind'
+end 'appendBracketReload'
 
 // True for a `movRegReg` whose DEST is still virtual and whose SRC is a physical register — the shape of
 // a call-result capture (`virtual(result) ← physical(returnReg)`). Read on the UNCOLORED op, before its

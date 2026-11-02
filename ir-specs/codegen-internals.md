@@ -1942,7 +1942,7 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 56
+    x64.prologue 40
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -1988,7 +1988,7 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2002,12 +2002,11 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp __im_load
   __im_detach:
-    x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
     x64.callDirect __managed_cow_detach
     x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot1
+    x64.movRegImm32 rax, 77
     x64.loadRegSlot r8, slot0
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.jmp __im_detached
@@ -2015,7 +2014,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-cow-mutation-copies-to-heap.test:4: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2023,7 +2022,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2031,7 +2030,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2053,7 +2052,7 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 56
+    x64.prologue 40
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -2098,7 +2097,7 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2112,12 +2111,11 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp __im_load
   __im_detach:
-    x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
     x64.callDirect __managed_cow_detach
     x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot1
+    x64.movRegImm32 rax, 77
     x64.loadRegSlot r8, slot0
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.jmp __im_detached
@@ -2125,7 +2123,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-cow-mutation-copies-to-heap.test:4: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2133,7 +2131,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2141,7 +2139,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2158,8 +2156,8 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -2203,8 +2201,8 @@ func @main {
   __rc_ok:
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_slow:
     arm64.storeSlotReg slot0, x0
@@ -2216,33 +2214,32 @@ func @main {
     arm64.b __im_load
   __im_detach:
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot1
+    arm64.movImm x2, 77
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.b __im_detached
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-cow-mutation-copies-to-heap.test:4: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_missing:
     arm64.leaRdata x0, __str_blob_6  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
 }
 ```
@@ -2260,8 +2257,8 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -2305,8 +2302,8 @@ func @main {
   __rc_ok:
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_slow:
     arm64.storeSlotReg slot0, x0
@@ -2318,33 +2315,32 @@ func @main {
     arm64.b __im_load
   __im_detach:
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot1
+    arm64.movImm x2, 77
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.b __im_detached
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-cow-mutation-copies-to-heap.test:4: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_missing:
     arm64.leaRdata x0, __str_blob_6  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
 }
 ```
@@ -2386,7 +2382,7 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 56
+    x64.prologue 40
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -2461,7 +2457,7 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2475,12 +2471,11 @@ func @main {
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   __im_detach:
-    x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
     x64.callDirect __managed_cow_detach
     x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot1
+    x64.movRegImm32 rax, 10
     x64.loadRegSlot r8, slot0
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.jmp __im_detached#27
@@ -2506,7 +2501,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2514,7 +2509,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2522,7 +2517,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2530,7 +2525,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2538,7 +2533,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at rdata-cow-multiple-mutations.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2560,7 +2555,7 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 56
+    x64.prologue 40
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -2634,7 +2629,7 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2648,12 +2643,11 @@ func @main {
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   __im_detach:
-    x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
     x64.callDirect __managed_cow_detach
     x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot1
+    x64.movRegImm32 rax, 10
     x64.loadRegSlot r8, slot0
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.jmp __im_detached#27
@@ -2679,7 +2673,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2687,7 +2681,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2695,7 +2689,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2703,7 +2697,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2711,7 +2705,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at rdata-cow-multiple-mutations.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2728,8 +2722,8 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -2802,8 +2796,8 @@ func @main {
   __rc_ok:
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_slow#21:
     arm64.storeSlotReg slot0, x0
@@ -2815,11 +2809,10 @@ func @main {
     arm64.b tryok#1
   __im_detach:
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot1
+    arm64.movImm x2, 10
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.b __im_detached#27
   __im_slow#29:
@@ -2842,36 +2835,36 @@ func @main {
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_missing:
     arm64.leaRdata x0, __str_blob_8  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   tryerr#4:
     arm64.leaRdata x0, __str_blob_2  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   tryerr#6:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_5  ; "panic at rdata-cow-multiple-mutations.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
 }
 ```
@@ -2889,8 +2882,8 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -2963,8 +2956,8 @@ func @main {
   __rc_ok:
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_slow#21:
     arm64.storeSlotReg slot0, x0
@@ -2976,11 +2969,10 @@ func @main {
     arm64.b tryok#1
   __im_detach:
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot1
+    arm64.movImm x2, 10
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.b __im_detached#27
   __im_slow#29:
@@ -3003,36 +2995,36 @@ func @main {
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __im_missing:
     arm64.leaRdata x0, __str_blob_8  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   tryerr#4:
     arm64.leaRdata x0, __str_blob_2  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   tryerr#6:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_5  ; "panic at rdata-cow-multiple-mutations.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
 }
 ```
@@ -3292,11 +3284,10 @@ func @main {
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   __im_detach:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot0, rcx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
+    x64.movRegImm32 rax, 42
+    x64.loadRegSlot rcx, slot0
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.jmp __im_detached
   __im_slow#18:
@@ -3402,11 +3393,10 @@ func @main {
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   __im_detach:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot0, rcx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
+    x64.movRegImm32 rax, 42
+    x64.loadRegSlot rcx, slot0
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.jmp __im_detached
   __im_slow#18:
@@ -3504,13 +3494,12 @@ func @main {
     arm64.b.ne tryerr#2
     arm64.b tryok
   __im_detach:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x2
+    arm64.storeSlotReg slot0, x2
     arm64.movRegReg x0, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot1
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x2, slot0
     arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.b __im_detached
   __im_slow#18:
@@ -3606,13 +3595,12 @@ func @main {
     arm64.b.ne tryerr#2
     arm64.b tryok
   __im_detach:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x2
+    arm64.storeSlotReg slot0, x2
     arm64.movRegReg x0, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot1
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x2, slot0
     arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.b __im_detached
   __im_slow#18:
@@ -3737,11 +3725,10 @@ func @main {
     x64.jcc notEqual, tryerr#2
     x64.jmp __il_body
   __im_detach:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot0, rcx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
+    x64.movRegImm32 rax, 99
+    x64.loadRegSlot rcx, slot0
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.jmp __im_detached
   __im_slow#20:
@@ -3847,11 +3834,10 @@ func @main {
     x64.jcc notEqual, tryerr#2
     x64.jmp __il_body
   __im_detach:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot0, rcx
     x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
+    x64.movRegImm32 rax, 99
+    x64.loadRegSlot rcx, slot0
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.jmp __im_detached
   __im_slow#20:
@@ -3949,13 +3935,12 @@ func @main {
     arm64.b.ne tryerr#2
     arm64.b __il_body
   __im_detach:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x2
+    arm64.storeSlotReg slot0, x2
     arm64.movRegReg x0, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot1
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x2, slot0
     arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.b __im_detached
   __im_slow#20:
@@ -4051,13 +4036,12 @@ func @main {
     arm64.b.ne tryerr#2
     arm64.b __il_body
   __im_detach:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x2
+    arm64.storeSlotReg slot0, x2
     arm64.movRegReg x0, x2
     arm64.bl __managed_cow_detach
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot1
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x2, slot0
     arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.b __im_detached
   __im_slow#20:

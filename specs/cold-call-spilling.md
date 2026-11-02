@@ -21,11 +21,13 @@ A call in a `normal` block CONFINES the values live across it: they are coloured
 registers, and x64 has five of them for integers. A call in a `cold` block confines nothing; after
 colouring, every value live across it that sits in a caller-saved register — integer or float, in
 its own class — is saved to a spill slot immediately before the call and reloaded into the same
-register immediately after the call's result captures, inside the cold block. The hot path keeps
-its registers; the cold path pays a store and a load per value, once, when it runs.
+register immediately after the call's result captures, inside the cold block. A value that is an
+integer constant has its register rebuilt by the constant's own instruction after the captures
+(`specs/cold-run-rematerialization.md`). The hot path keeps its registers; the cold path
+pays a store and a load per other value, once, when it runs.
 
 The unit of the bracket is a RUN, not the call: the argument pre-moves, the call and its result
-captures are one region, saved before its first op and reloaded after its last, so a pre-move's own
+captures are one region, saved before its first op and reloaded (or rebuilt) after its last, so a pre-move's own
 write is paid exactly as the call's is and no run op confines. A signed division is a run of the same
 shape without a call: the pre-moves into RAX and RDX, the divide (or, for a constant divisor, the high
 multiply) and the capture of the quotient or remainder, which reads a register that divide wrote. A cold block's runs are computed once,
@@ -60,7 +62,7 @@ FULL pool and is a different mechanism.
 
 ⚠ A green case here proves nothing on its own — the bracket and the confinement compute the same
 thing. The shape shows in the first case's emitted code (`--emit-ir`: no store or reload in the loop
-body; a save/reload pair inside each slow arm), which nothing in the suite pins; what the suite runs are
+body; a save/reload pair inside each slow arm for each live register that holds no constant), which nothing in the suite pins; what the suite runs are
 the CONTROLS, which make a cold arm actually run under values live across it and read those values back
 afterwards. With the reload point re-storing instead of restoring, the cases whose cold arm runs at
 their inputs answer wrong; the ones whose arm never runs (`rotateAll`, the scratch-clobbering and the
@@ -72,7 +74,8 @@ hot-call controls stay green because nothing is bracketed there.
 <!-- test: a-versioned-loop-keeps-its-registers -->
 The shape the row was opened for: two arrays, four accesses and an accumulator in one loop. In
 `rotateAll`'s versioned fast copy the loop body holds no `storeSlotReg` and no `loadRegSlot`; each
-`__im_slow` arm saves the live caller-saved registers before its call and reloads them after.
+`__im_slow` arm saves the live caller-saved registers that hold no constant before its call and
+reloads them after.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
