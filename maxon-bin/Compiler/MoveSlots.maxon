@@ -463,15 +463,20 @@ end 'MoveLedger'
 
 export function sortedUniquePositions(positions MoveSlotIndexColumn) returns MoveSlotIndexColumn
 	positions.sort()
-	var unique = MoveSlotIndexColumn.create()
+	var kept = 0 as ElementIndex
 
-	for position in positions 'eachPosition'
-		if not unique.isEmpty() and (try unique.get(unique.count() - 1) otherwise panic("sortedUniquePositions: unique.get OOB below its own count")) == position 'aRepeat'
+	for read in 0 upto positions.count() 'eachPosition'
+		let position = try positions.get(read) otherwise panic("sortedUniquePositions: positions.get OOB at {read}")
+
+		if kept > 0 and (try positions.get(kept - 1) otherwise panic("sortedUniquePositions: positions.get OOB below the kept count {kept}")) == position 'aRepeat'
 			continue
 		end 'aRepeat'
 
-		unique.push(position)
+		try positions.set(kept, value: position) otherwise panic("sortedUniquePositions: positions.set OOB at {kept}")
+		kept = kept + 1
 	end 'eachPosition'
 
-	return unique
+	positions.truncate(kept)
+
+	return positions
 end 'sortedUniquePositions'

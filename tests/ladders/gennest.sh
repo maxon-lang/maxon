@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # DEPTH of loop NESTING, held independent of program SIZE.
 #
-# The question: `Parser.assignedBindingsIn` scans every token between a loop's header and its
-# `end`, once per loop, to fix the carried-variable set before the body is parsed. A loop
-# NESTED inside another therefore has its tokens scanned again by every enclosing loop, so D
-# nested loops cost O(depth x tokens) in TIME while allocating one small set per loop.
+# The question: `Parser.blockStatementEndIndex` and `Parser.assignedBindingsIn` fix a loop's
+# extent and carried-variable set before the body is parsed, once per loop. A loop NESTED inside
+# another is asked about again by every enclosing loop, so any term that reads the extent costs
+# O(depth x tokens) in TIME across D nested loops while allocating one small set per loop.
 # ScaleCorpus's `loopNest` knob predicted this in writing and predicted the memory-only
 # instrument would read it as linear anyway.
 #

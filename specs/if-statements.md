@@ -427,3 +427,34 @@ end 'main'
 ```maxoncstderr
 error E2008: <fragment>:8:2: Mismatched end label: expected 'nonPositive', got 'negative'
 ```
+
+<!-- test: if-statements.merged-value-written-more-often-than-bindings-in-scope -->
+The two arms assign `level` five times between them with one mutable binding in scope, so there are more writes in the statement than bindings to merge. The merge still carries `level` out of whichever arm ran.
+
+```maxon
+function merged(pick FullRangeInt) returns FullRangeInt
+	var level = 0 as FullRangeInt
+
+	if pick == 1 'high'
+		level = level + 1
+		level = level + 2
+		level = level + 4
+	end 'high' else 'low'
+		level = level + 8
+		level = level + 16
+	end 'low'
+
+	return level
+end 'merged'
+
+function main() returns ExitCode
+	print("{merged(1)} {merged(0)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 24
+```

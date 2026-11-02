@@ -481,3 +481,29 @@ end 'main'
 ```maxoncstderr
 error E2008: <fragment>:6:2: Mismatched end label: expected 'count', got 'loop'
 ```
+
+<!-- test: while-loops.carried-value-written-more-often-than-bindings-in-scope -->
+The loop assigns `total` three times and `step` once, with only two mutable bindings in scope, so there are more writes in the loop than bindings to carry. Both names are still carried round the loop and the sum reads 24.
+
+```maxon
+function main() returns ExitCode
+	var total = 0 as FullRangeInt
+	var step = 0 as FullRangeInt
+
+	while step < 4 'steps'
+		total = total + 1
+		total = total + 2
+		total = total + 3
+		step = step + 1
+	end 'steps'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+24
+```

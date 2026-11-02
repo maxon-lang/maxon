@@ -1,0 +1,72 @@
+typealias WriteGroupByName = Map with ByteArray, CsrIndex
+
+export union WriteSites
+	unbuilt
+	built(index WriteSiteIndex)
+end 'WriteSites'
+
+module let noWriteSites = WriteSites.unbuilt
+
+// The writes of one file's tokens, in token order, with each name's writes grouped: `tokens[site]`
+// is the token a write sits at and `names[site]` the name it writes. `rows` lists a name's sites in
+// that order and `rowTokens` is the token under each entry, so "does this name write inside [start,
+// end)?" is one bisect. `Parser.assignedBindingsIn` asks it per construct, which a rescan of the
+// construct's tokens would make quadratic in nesting. `Parser.buildWriteSiteIndex` decides what
+// counts as a write.
+export type WriteSiteIndex
+	let tokens as TokenIndexArray
+	let names as NameRoster
+	let groupByName as WriteGroupByName
+	let rows as CsrGraph
+	let rowTokens as TokenIndexArray
+
+	export static function build(tokens TokenIndexArray, names NameRoster) returns WriteSiteIndex
+		var groupByName = WriteGroupByName.create()
+		var groupOfSite = CsrColumn.create()
+		var siteOrdinals = CsrColumn.create()
+
+		for site in 0 upto names.count() 'eachSite'
+			let name = try names.get(site) otherwise panic("WriteSiteIndex.build: names.get OOB at {site}")
+
+			if let known = try groupByName.get(name) 'knownName'
+				groupOfSite.push(known)
+			end 'knownName' else 'freshName'
+				let fresh = groupByName.count() as CsrIndex
+				groupByName.upsert(name, value: fresh)
+				groupOfSite.push(fresh)
+			end 'freshName'
+
+			siteOrdinals.push(site as CsrIndex)
+		end 'eachSite'
+
+		let rows = buildCsr(groupOfSite, to: siteOrdinals, nodeCount: groupByName.count() as CsrIndex)
+		var rowTokens = TokenIndexArray.create()
+
+		for ordinal in rows.list 'eachRowEntry'
+			rowTokens.push(try tokens.get(ordinal) otherwise panic("WriteSiteIndex.build: tokens.get OOB at {ordinal}"))
+		end 'eachRowEntry'
+
+		return Self{tokens: tokens, names: names, groupByName: groupByName, rows: rows, rowTokens: rowTokens}
+	end 'build'
+
+	export function firstSiteAtOrAfter(token ElementIndex) returns ElementIndex
+		return firstTokenAtOrAfter(self.tokens, from: 0, past: self.tokens.count(), token: token)
+	end 'firstSiteAtOrAfter'
+
+	export function nameAt(site ElementIndex) returns ByteArray
+		return try self.names.get(site) otherwise panic("WriteSiteIndex.nameAt: names.get OOB at {site}")
+	end 'nameAt'
+
+	export function writesNameWithin(name ByteArray, start ElementIndex, endIndex ElementIndex) returns bool
+		let group = try self.groupByName.get(name) otherwise return false
+		let first = try self.rows.start.get(group) otherwise panic("WriteSiteIndex.writesNameWithin: rows.start.get OOB at {group}")
+		let past = first + self.rows.degree(group)
+		let site = firstTokenAtOrAfter(self.rowTokens, from: first, past: past, token: start)
+
+		if site >= past 'noneAtOrAfterStart'
+			return false
+		end 'noneAtOrAfterStart'
+
+		return (try self.rowTokens.get(site) otherwise panic("WriteSiteIndex.writesNameWithin: rowTokens.get OOB at {site}")) < endIndex
+	end 'writesNameWithin'
+end 'WriteSiteIndex'

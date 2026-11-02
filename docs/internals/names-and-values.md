@@ -13,11 +13,11 @@ value its initializer produced (`Scope.declareValueBinding`). There are no `varD
 ops, so `let x = 42` emits no op at all, and an IR pass cannot see a binding. Facts about bindings that a
 later check needs, such as the borrow checker's, must therefore be recorded by the parser.
 
-A loop header's phis (block arguments) are minted before the loop body is parsed. The parser first scans the
-loop's tokens for the bindings it assigns (`assignedBindingsIn`), mints one phi for each, and records each
-binding's value from before the loop so the entry edge can pass it.
+A loop header's phis (block arguments) are minted before the loop body is parsed. The parser first finds the
+bindings the loop's tokens assign (`assignedBindingsIn`, which reads an index of the file's writes), mints one
+phi for each, and records each binding's value from before the loop so the entry edge can pass it.
 
-That scan over-approximates: an inner `var` shadowing an outer name looks like an assignment to it. A surplus
+That lookup over-approximates: an inner `var` shadowing an outer name looks like an assignment to it. A surplus
 phi is safe and a missing one would be a miscompile, so the parser errs towards surplus, and two Std passes
 remove it:
 

@@ -1,0 +1,131 @@
+typealias DoorNodeColumn = Array with ElementIndex
+
+enum DoorNodeKind
+	empty
+	door
+	joined
+end 'DoorNodeKind'
+
+typealias DoorNodeKindColumn = Array with DoorNodeKind
+
+export enum DoorRead
+	nextRead
+	laterIteration
+end 'DoorRead'
+
+let EmptyListOnlyNodeCount = 1
+let NoDoorSlot = 0
+
+// The doors (`MoveSite`s) a binding was handed to and has not been read since, for one function: a
+// persistent DAG whose node is one door over a pending node, or the join of two nodes. Nodes are
+// never edited, so an index a `MoveMark` captured keeps naming the list it captured.
+// `NoMoveSiteList` names the empty list.
+//
+// A node is spent once every door under it has been read, and a spent node counts as the empty
+// list: `after` and `union` drop it and `settle` skips it, so a join is O(1) and each node is
+// walked once. That is sound because `MoveSite.noteRead` and `noteReadInALaterIteration` do nothing
+// once `readAfter` is set, and nothing else sets or clears it, so a door read on one path is read
+// on every path that shares it.
+export type MoveSiteLists
+	var doors = MoveSiteArray.create()
+	var kinds = DoorNodeKindColumn.create()
+	var doorAt = DoorNodeColumn.create()
+	var firstChild = DoorNodeColumn.create()
+	var secondChild = DoorNodeColumn.create()
+	var spent = BoolArray.create()
+
+	export static function create() returns MoveSiteLists
+		var lists = Self{}
+		_ = lists.pushNode(DoorNodeKind.empty, door: NoDoorSlot, left: NoMoveSiteList, right: NoMoveSiteList, allRead: true)
+
+		return lists
+	end 'create'
+
+	export function reset()
+		self.doors.clear()
+		self.kinds.truncate(EmptyListOnlyNodeCount)
+		self.doorAt.truncate(EmptyListOnlyNodeCount)
+		self.firstChild.truncate(EmptyListOnlyNodeCount)
+		self.secondChild.truncate(EmptyListOnlyNodeCount)
+		self.spent.truncate(EmptyListOnlyNodeCount)
+	end 'reset'
+
+	function pushNode(kind DoorNodeKind, door ElementIndex, left ElementIndex, right ElementIndex, allRead bool) returns ElementIndex
+		self.kinds.push(kind)
+		self.doorAt.push(door)
+		self.firstChild.push(left)
+		self.secondChild.push(right)
+		self.spent.push(allRead)
+
+		return (self.spent.count() - 1) as ElementIndex
+	end 'pushNode'
+
+	function isSpent(node ElementIndex) returns bool
+		return try self.spent.get(node) otherwise panic("MoveSiteLists: node {node} is past the {self.spent.count()} the parser holds — a binding's index outlived the function that minted it")
+	end 'isSpent'
+
+	function unspent(node ElementIndex) returns ElementIndex
+		if self.isSpent(node) 'everyDoorWasRead'
+			return NoMoveSiteList
+		end 'everyDoorWasRead'
+
+		return node
+	end 'unspent'
+
+	export function after(door MoveSite, pending ElementIndex) returns ElementIndex
+		self.doors.push(door)
+
+		return self.pushNode(DoorNodeKind.door, door: (self.doors.count() - 1) as ElementIndex, left: self.unspent(pending), right: NoMoveSiteList, allRead: false)
+	end 'after'
+
+	export function union(a ElementIndex, b ElementIndex) returns ElementIndex
+		let onFirst = self.unspent(a)
+		let onSecond = self.unspent(b)
+
+		if onFirst == onSecond or onSecond == NoMoveSiteList 'onlyFirst'
+			return onFirst
+		end 'onlyFirst'
+
+		if onFirst == NoMoveSiteList 'onlySecond'
+			return onSecond
+		end 'onlySecond'
+
+		return self.pushNode(DoorNodeKind.joined, door: NoDoorSlot, left: onFirst, right: onSecond, allRead: false)
+	end 'union'
+
+	export function settle(node ElementIndex, atLine LineNumber, atColumn ColumnNumber, kind DoorRead)
+		var pending = DoorNodeColumn.create()
+		pending.push(node)
+
+		while not pending.isEmpty() 'eachNode'
+			let current = try pending.pop() otherwise panic("MoveSiteLists.settle: the node stack was emptied under its own guard")
+
+			if self.isSpent(current) 'alreadyRead'
+				continue
+			end 'alreadyRead'
+
+			try self.spent.set(current, value: true) otherwise panic("MoveSiteLists.settle: spent.set OOB at {current}")
+
+			let nodeKind = try self.kinds.get(current) otherwise panic("MoveSiteLists.settle: kinds.get OOB at {current}")
+
+			match nodeKind 'which'
+				door then self.readDoorAt(current, atLine: atLine, atColumn: atColumn, kind: kind)
+				empty or
+				joined then break
+			end 'which'
+
+			pending.push(try self.firstChild.get(current) otherwise panic("MoveSiteLists.settle: firstChild.get OOB at {current}"))
+			pending.push(try self.secondChild.get(current) otherwise panic("MoveSiteLists.settle: secondChild.get OOB at {current}"))
+		end 'eachNode'
+	end 'settle'
+
+	function readDoorAt(node ElementIndex, atLine LineNumber, atColumn ColumnNumber, kind DoorRead)
+		let doorIndex = try self.doorAt.get(node) otherwise panic("MoveSiteLists.readDoorAt: doorAt.get OOB at {node}")
+		var door = try self.doors.get(doorIndex) otherwise panic("MoveSiteLists.readDoorAt: doors.get OOB at {doorIndex}")
+
+		match kind 'which'
+			nextRead then door.noteRead(atLine, atColumn: atColumn)
+			laterIteration then door.noteReadInALaterIteration(atLine, atColumn: atColumn)
+		end 'which'
+	end 'readDoorAt'
+end 'MoveSiteLists'

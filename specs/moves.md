@@ -1180,3 +1180,88 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:23:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
+
+<!-- test: moves.error.a-door-read-on-one-branch-is-reported-at-that-read-once -->
+A `var` handed to a `sole` parameter is read first inside one branch only. The report points at that read, the read after the join is a second use of the same moved name and adds no report of its own, and the arm that never read the name does not hide the door from the join.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+typealias Sink = function(b sole Box)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var kept = Boxes.create()
+
+function stash(b Box)
+	kept.push(b)
+end 'stash'
+
+function feed(sink Sink, branch Count) returns Count
+	var b = Box.create(1)
+	sink((b))
+
+	if branch == 0 'readHere'
+		print("{b.n}\n")
+	end 'readHere'
+
+	return b.n
+end 'feed'
+
+function main() returns ExitCode
+	let n = feed(stash, branch: 1)
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:25:11: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: moves.error.a-door-on-one-branch-is-seen-by-the-read-after-the-join -->
+The door sits in one arm of an `if` and the other arm never touches the name, so the join carries the door from one edge and nothing from the other; the first read after the join is where the move is observed.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+typealias Sink = function(b sole Box)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var kept = Boxes.create()
+
+function stash(b Box)
+	kept.push(b)
+end 'stash'
+
+function feed(sink Sink, branch Count) returns Count
+	var b = Box.create(1)
+
+	if branch == 0 'handOver'
+		sink((b))
+	end 'handOver'
+
+	return b.n
+end 'feed'
+
+function main() returns ExitCode
+	let n = feed(stash, branch: 1)
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:27:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+```

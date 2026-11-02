@@ -3845,3 +3845,29 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:21:19: Unsupported: parameter 'amount' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
 ```
+
+<!-- test: error.constants-initialized-by-a-match-are-each-refused -->
+A `match` expression is not a constant expression, so a constant whose initializer holds one is refused, and every such constant in the file is reported, the second as well as the first.
+
+```maxon
+let first = (match 2 'pickFirst'
+	1 gives 10
+	2 gives 20
+	default gives 0
+end 'pickFirst')
+
+let second = (match 3 'pickSecond'
+	1 gives 11
+	3 gives 33
+	default gives 0
+end 'pickSecond')
+
+function main() returns ExitCode
+	print("{first} {second}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:2:13: Global initializer for 'first' is not a constant expression: '(match 2 'pickFirst'newline 1 gives 10newline 2 gives 20newline default gives 0newline end 'pickFirst')' cannot be evaluated at compile time
+error E2045: <fragment>:8:14: Global initializer for 'second' is not a constant expression: '(match 3 'pickSecond'newline 1 gives 11newline 3 gives 33newline default gives 0newline end 'pickSecond')' cannot be evaluated at compile time
+```

@@ -2249,3 +2249,17 @@ Stage A of the Verona plan (directory-scoped top-level names, minted `<dir>~Name
 ### Result — 2026-11-02, a returned parameter is borrowed, retain/release pairs are cancelled, and runtime bodies tail-call
 
 `borrowReturnedParameters` and `cancelRetainRelease` (item 15 of `docs/refcount-optimization-roadmap.md`), the `__managed_decref`/`__mm_decref` split into a lean hot path and a guarded `__managed_release`/`__mm_release`, and tail jumps for the compiler's own runtime bodies (`Targets/Shared/TailCalls.maxon`: x64 `jmp`, arm64 `b`, wasm `return_call`). On x64, the AES benchmark's `block-128-into` goes from 17.2 to 11.5 ns per call (0.699 of the control compiler's), and `block-128` reads 0.988 of it. The self-compile is 0.9% faster. The `inlineLeaves` phase, which now holds the two passes, costs 20 to 25% more and grows linearly: `tests/ladders/genreturnedparams.sh` (`straight` and `joins`) puts N retain/release pairs, N bypasses and N image-fork diamonds in one function.
+
+### Result — 2026-11-02, the parser's if/else handling is linear in the number of blocks and arms
+
+Two superlinear terms in the parser's `if`/`else` handling. The doors a binding awaits a read of were copied and re-deduplicated at every join, Θ(N³) over N `if`/`else` blocks; they are now a persistent DAG with a spent memo (`Compiler/MoveSiteLists.maxon`), so a join is O(1). Every arm of an `else if` chain rescanned the rest of the chain for its end and for the names it writes, Θ(N²); the chain's end is now computed once and handed down, and `assignedBindingsIn` reads a per-file index of the writes (`Compiler/WriteSiteIndex.maxon`), taking the cheaper of enumerating the writes in the extent and bisecting each mutable binding.
+
+Measured on `tests/ladders/genifchain.sh <N> managed|arms|scalar`, `phase:parse` in G ticks at N = 8000, control compiler → this tree:
+
+| shape | G ticks | allocations |
+|---|---:|---:|
+| `managed` (sequential joins) | 205 → 4.1 | 6.33 M → 6.19 M |
+| `arms` (`else if` chain) | 309 → 3.0 | 69.1 M → 4.9 M |
+| `scalar` (control) | 2.4 → 2.4 | 3.62 M → 3.61 M |
+
+The allocations above the N = 1 floor double exactly per doubling of N in `managed` and `arms`. The self-compile costs +0.77% CPU (210.65 → 212.27 G ticks, mean of 3 interleaved runs).

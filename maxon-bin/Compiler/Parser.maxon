@@ -12888,13 +12888,6 @@ function exitTerminatorOp(kind ExitKind, carried ValueIdArray) returns MaxonOp
 	end 'kind'
 end 'exitTerminatorOp'
 
-// The door lists of a function no binding has waited on yet: the empty one, at `NoMoveSiteList`.
-function freshMoveSiteLists() returns MoveSiteLists
-	var lists = MoveSiteLists.create()
-	lists.push(MoveSiteArray.create())
-	return lists
-end 'freshMoveSiteLists'
-
 // What `Parser.valueIsBoxedUnion` found a `named` type to be.
 export enum BoxedUnionAnswer
 	unasked
@@ -12977,49 +12970,7 @@ type MoveMark
 	end 'awaitingAt'
 end 'MoveMark'
 
-export typealias MoveSiteLists = Array with MoveSiteArray
 typealias LiteralCommaCount = int(0 to u32.max)
-
-// The doors on either of two paths, each once, as the index of their list in `lists` — a new one only when the
-// two differ and neither is empty.
-function unionMoveSiteLists(lists MoveSiteLists, a ElementIndex, b ElementIndex) returns ElementIndex
-	if a == b or a == NoMoveSiteList 'onlyB'
-		return b
-	end 'onlyB'
-
-	if b == NoMoveSiteList 'onlyA'
-		return a
-	end 'onlyA'
-
-	var joined = MoveSiteArray.create()
-
-	for site in moveSiteListAt(lists, index: a) 'eachOfA'
-		joined.push(site)
-	end 'eachOfA'
-
-	for site in moveSiteListAt(lists, index: b) 'eachOfB'
-		if not moveSiteListHolds(joined, site: site) 'new'
-			joined.push(site)
-		end 'new'
-	end 'eachOfB'
-
-	lists.push(joined)
-	return (lists.count() - 1) as ElementIndex
-end 'unionMoveSiteLists'
-
-function moveSiteListAt(lists MoveSiteLists, index ElementIndex) returns MoveSiteArray
-	return try lists.get(index) otherwise panic("moveSiteListAt: list {index} is past the {lists.count()} the parser holds — a binding's index outlived the function that minted it")
-end 'moveSiteListAt'
-
-function moveSiteListHolds(list MoveSiteArray, site MoveSite) returns bool
-	for held in list 'eachHeld'
-		if held is site 'same'
-			return true
-		end 'same'
-	end 'eachHeld'
-
-	return false
-end 'moveSiteListHolds'
 
 // ⭐⭐ **ONE CONSUME OF ONE GREEN THREAD — the fact E3142 is decided from, and the fact a branch rewinds.**
 //
@@ -13183,7 +13134,7 @@ function orMoveMarks(a MoveMark, b MoveMark, lists MoveSiteLists, ledger MoveLed
 	for position in differing 'each'
 		moved.push(a.movedAt(position) or b.movedAt(position))
 		values.push(b.valueAt(position))
-		awaiting.push(unionMoveSiteLists(lists, a: a.awaitingAt(position), b: b.awaitingAt(position)))
+		awaiting.push(lists.union(a.awaitingAt(position), b: b.awaitingAt(position)))
 	end 'each'
 
 	// The consume half unions the same way, and PASSES `b`'s list THROUGH when the arm consumed nothing —
@@ -13635,10 +13586,6 @@ end 'InnermostMutableVar'
 
 export typealias MutableVarShadowColumn = Array with InnermostMutableVar
 
-// A construct's carried positions, kept ASCENDING and duplicate-free — the working set
-// `assignedBindingsIn` builds and then reads the bindings off.
-typealias MutableVarPositionArray = Array with ElementIndex
-
 // ⭐ **THE INVERSE OF `mutableVars`: name → the position of the INNERMOST binding with that name.**
 // Keyed by the identifier's raw source slice, which is how every other name lookup in the parser is
 // keyed (`ByteArray` hashes and compares by content — see Token.value).
@@ -13653,34 +13600,6 @@ function innermostMutableVarIn(byName MutableVarPositionByName, name ByteArray) 
 	let position = try byName.get(name) otherwise return InnermostMutableVar.none
 	return InnermostMutableVar.at(position)
 end 'innermostMutableVarIn'
-
-// Insert `position` into an ASCENDING, duplicate-free list, and say whether it was new. Binary
-// search rather than an append-then-sort, because the list is the construct's carried set: a
-// handful of entries on real code (never more than two across the whole scale corpus), so the
-// shift costs less than a sort's setup would, and building it ordered is what lets the caller
-// hand back `mutableVars` declaration order without a second pass.
-function insertCarriedPosition(positions MutableVarPositionArray, position ElementIndex) returns bool
-	var lo = 0 as Count
-	var hi = positions.count()
-
-	while lo < hi 'bisect'
-		let mid = lo + (hi - lo) / 2
-		let atMid = try positions.get(mid) otherwise panic("insertCarriedPosition: positions.get OOB at {mid} of {positions.count()}")
-
-		if atMid == position 'alreadyCarried'
-			return false
-		end 'alreadyCarried'
-
-		if atMid < position 'above'
-			lo = mid + 1
-		end 'above' else 'below'
-			hi = mid
-		end 'below'
-	end 'bisect'
-
-	positions.insert(lo, value: position)
-	return true
-end 'insertCarriedPosition'
 
 // A dense per-TOKEN column of token indices — `Parser.blockExtentEnds`, which answers "where does the block
 // opened here close?" in one array read. Flat and dense for the reason `SourceRangeTable`'s columns are: a
@@ -13708,26 +13627,35 @@ let sharedEmptyDeclaredNameKeywords = TokenIndexArray.create()
 // ⚡ The `count()` read is the whole cost for very nearly every file: neither list has an entry unless the
 // file actually spells the shape it records.
 function ascendingTokenIndexHolds(column TokenIndexArray, index ElementIndex) returns bool
-	var lo = 0 as Count
-	var hi = column.count()
+	let at = firstTokenAtOrAfter(column, from: 0, past: column.count(), token: index)
 
-	while lo < hi 'bisect'
-		let mid = lo + (hi - lo) / 2
-		let atMid = try column.get(mid) otherwise panic("ascendingTokenIndexHolds: get OOB at {mid} of {column.count()}")
+	if at >= column.count() 'nothingAtOrAfter'
+		return false
+	end 'nothingAtOrAfter'
 
-		if atMid == index 'hit'
-			return true
-		end 'hit'
+	return (try column.get(at) otherwise panic("ascendingTokenIndexHolds: get OOB at {at} of {column.count()}")) == index
+end 'ascendingTokenIndexHolds'
 
-		if atMid < index 'above'
-			lo = mid + 1
-		end 'above' else 'below'
-			hi = mid
-		end 'below'
+// The first entry of `column` within `[from, past)` that is `token` or later, or `past` when none
+// is. Every bisect over an ascending token-index column reads through it, so the bounds live in one
+// place.
+module function firstTokenAtOrAfter(column TokenIndexArray, from ElementIndex, past ElementIndex, token ElementIndex) returns ElementIndex
+	var low = from
+	var high = past
+
+	while low < high 'bisect'
+		let middle = low + (high - low) / 2
+		let atMiddle = try column.get(middle) otherwise panic("firstTokenAtOrAfter: get OOB at {middle} of {column.count()}")
+
+		if atMiddle < token 'below'
+			low = middle + 1
+		end 'below' else 'atOrAbove'
+			high = middle
+		end 'atOrAbove'
 	end 'bisect'
 
-	return false
-end 'ascendingTokenIndexHolds'
+	return low
+end 'firstTokenAtOrAfter'
 
 // The INITIAL `Parser.blockKeywordNames`. It has no `is`-identity gate of its own because it is filled by
 // `buildBlockExtentIndex` in the SAME pass as `blockExtentEnds`, whose anchor above is the gate: one walk
@@ -17680,8 +17608,8 @@ export type ParserAnchors
 	// The answers of a parser that has asked `valueIsBoxedUnion` none.
 	export var boxedUnionAnswers as BoxedUnionAnswerArray
 
-	// The door lists of a parser before a binding of its first body waits on a door — not even the empty list, which
-	// only `moveSiteListsForWrite` hands out.
+	// The door lists of a parser before a binding of its first body waits on a door: shared across
+	// parsers, so only read. `moveSiteListsForWrite` hands out the first one that is written.
 	export var moveSiteLists as MoveSiteLists
 
 	// `Parser.mutableVarShadowed` of a function that has declared no `var` yet; `pushMutableVar` replaces it.
@@ -19280,6 +19208,10 @@ export type Parser
 	var adoptedExtents as BlockExtents
 	var blockExtentsBuilt as bool
 
+	// Built from `tokens` on the first `assignedBindingsIn`. It stays valid because `tokens` is a
+	// `let` that nothing writes into after the parser is created.
+	var writeSites as WriteSites
+
 	let job as ParseJob
 
 	var constLetCast = ConstLetCastRecord.none
@@ -19312,8 +19244,9 @@ export type Parser
 	// across a closure body, because neither changes what a literal's bytes are.
 	var singleByteGraphemeLiterals as SingleByteGraphemeTable
 
-	// Every list of doors a binding of the function being parsed has waited on (`VarInfo.awaitingMoveReads`), the
-	// first the empty one. Per top-level function, and kept across a closure body, whose reads of the enclosing
+	// Every list of doors a binding of the function being parsed has waited on
+	// (`VarInfo.awaitingMoveReads`), as nodes of one `MoveSiteLists`; `NoMoveSiteList` is its empty
+	// list. Per top-level function, and kept across a closure body, whose reads of the enclosing
 	// function's bindings index it too. The shared one until a binding first waits on a door.
 	var moveSiteLists as MoveSiteLists
 
@@ -20033,6 +19966,7 @@ export type Parser
 			blockExtentEnds: TokenIndexArray.create(),
 			adoptedExtents: anchors.noBlockExtents,
 			blockExtentsBuilt: false,
+			writeSites: noWriteSites,
 			declaredNameKeywords: TokenIndexArray.create(),
 			blockKeywordNames: TokenIndexArray.create(),
 			job: job,
@@ -33203,7 +33137,7 @@ export type Parser
 	// that fits is `Map with ByteArray,`
 	// ByteArray` (symbol ⇒ the earlier test's prose) answers membership AND hands back the prose the
 	// message must name, in one O(1) `get`. It exists and this very file uses the shape
-	// (`MutableVarPositionByName`, `Parser.maxon:9295`). ⇒ **If t ever stops being a handful — a generated
+	// (`MutableVarPositionByName`). ⇒ **If t ever stops being a handful — a generated
 	// test file would do it — that Map is the change, and nothing here argues against it.**
 	function requireUnmintedTestName(symbol ByteArray, nameTok Token) throws SourceParseError
 		for minted in self.mintedTests 'eachMintedTest'
@@ -38088,26 +38022,19 @@ export type Parser
 		self.awaitReadAfterDoor(binding, site: site)
 	end 'noteKeptArgumentSite'
 
-	// The binding's pending doors, with `site` among them. A fresh list, since a `MoveMark` may hold the one it
-	// replaces — of the same sites, which the function's own list shares, so the read that follows fills them in.
+	// The binding's pending doors, with `site` among them. A new node over the binding's current one,
+	// since a `MoveMark` may hold the current one — of the same sites, which the function's own list
+	// shares, so the read that follows fills them in.
 	function awaitReadAfterDoor(binding VarInfo, site MoveSite)
 		var lists = self.moveSiteListsForWrite()
-		var awaiting = MoveSiteArray.create()
-
-		for pending in moveSiteListAt(lists, index: binding.awaitingMoveReads) 'eachPending'
-			awaiting.push(pending)
-		end 'eachPending'
-
-		awaiting.push(site)
-		lists.push(awaiting)
-		binding.awaitingMoveReads = (lists.count() - 1) as ElementIndex
+		binding.awaitingMoveReads = lists.after(site, pending: binding.awaitingMoveReads)
 		binding.noteWritten(self.bodyState.moveLedger)
 	end 'awaitReadAfterDoor'
 
 	// COPY-ON-WRITE off `ParserAnchors.moveSiteLists`.
 	function moveSiteListsForWrite() returns MoveSiteLists
 		if self.moveSiteLists is self.anchors.moveSiteLists 'stillShared'
-			self.moveSiteLists = freshMoveSiteLists()
+			self.moveSiteLists = MoveSiteLists.create()
 		end 'stillShared'
 
 		return self.moveSiteLists
@@ -38115,11 +38042,7 @@ export type Parser
 
 	// This read is the first after every door the binding is waiting on.
 	function noteReadAfterDoors(binding VarInfo, nameTok Token)
-		for i in 0 upto moveSiteListAt(self.moveSiteLists, index: binding.awaitingMoveReads).count() 'eachPending'
-			var pending = try moveSiteListAt(self.moveSiteLists, index: binding.awaitingMoveReads).get(i) otherwise panic("noteReadAfterDoors: the pending list is shorter than its own count at {i}")
-			pending.noteRead(nameTok.line, atColumn: nameTok.column)
-		end 'eachPending'
-
+		self.moveSiteLists.settle(binding.awaitingMoveReads, atLine: nameTok.line, atColumn: nameTok.column, kind: DoorRead.nextRead)
 		binding.awaitingMoveReads = NoMoveSiteList
 		binding.noteWritten(self.bodyState.moveLedger)
 	end 'noteReadAfterDoors'
@@ -41194,7 +41117,7 @@ export type Parser
 		self.declaringWitnessParamCount = witnessParamCount
 
 		if self.moveSiteLists is not self.anchors.moveSiteLists 'someBindingWaited'
-			self.moveSiteLists.truncate(1)
+			self.moveSiteLists.reset()
 		end 'someBindingWaited'
 	end 'beginDeclaredBody'
 
@@ -48296,7 +48219,7 @@ export type Parser
 		var awaiting = NoMoveSiteList
 
 		for edge in edges 'joinAwaiting'
-			awaiting = unionMoveSiteLists(self.moveSiteLists, a: awaiting, b: edge.mark.awaitingAt(position))
+			awaiting = self.moveSiteLists.union(awaiting, b: edge.mark.awaitingAt(position))
 		end 'joinAwaiting'
 
 		binding.awaitingMoveReads = awaiting
@@ -51005,6 +50928,15 @@ export type Parser
 	// `assignedBindingsIn` (not bound at entry), which keeps `entryVals` / `thenVals` /
 	// `elseVals` positionally aligned with `assignedBindings`.
 	function parseIfStatement(func IrFunction, block IrBlock) returns IrBlock throws SourceParseError
+		let ifEnd = self.blockStatementEndIndex(self.pos, continuesAtElse: true)
+		return try self.parseIfWithin(func, block: block, ifEnd: ifEnd)
+	end 'parseIfStatement'
+
+	// `ifEnd` is the final `end` of the whole `else if` chain, which every arm shares. Only the
+	// outermost `if` scans for it; each `else if` arm is handed it, because a scan per arm re-reads
+	// the rest of the chain, so the chain's cost grows with the square of its length.
+	// `assertScanAligned` checks it at every level.
+	function parseIfWithin(func IrFunction, block IrBlock, ifEnd ElementIndex) returns IrBlock throws SourceParseError
 		let ifIndex = self.pos
 		let ifTok = try self.consume(TokenKind.if)
 
@@ -51012,7 +50944,6 @@ export type Parser
 		// every `else`/`else if` branch, through the final `end`), before a single op is
 		// emitted. Every snapshot below is positional over THIS list, so the per-branch cost
 		// is O(assigned), not O(vars in scope). `ifEnd` also feeds the drift guard.
-		let ifEnd = self.blockStatementEndIndex(ifIndex, continuesAtElse: true)
 		var assignedBindings = self.assignedBindingsIn(ifIndex, endIndex: ifEnd)
 
 		// `if let x = try …` / `if var x = try …` — the success binder, read off the tokens BEFORE the
@@ -51119,7 +51050,7 @@ export type Parser
 		self.mintElseArmPoint(elseBlock, funcName: func.name, ifTok: ifTok, elseTok: elseTok, written: elseWrittenInSource)
 
 		let elseStart = self.pos
-		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock, cond: cond, ifTok: ifTok)
+		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock, cond: cond, ifTok: ifTok, ifEnd: ifEnd)
 		var deferred = self.deferredProvenanceOf(func)
 		deferred.noteExclusiveArms(thenStart, thenEnd: thenStop, elseStart: elseStart, elseEnd: self.pos)
 		self.noteArmLeavingTheFunction(func, block: elseEnd, start: elseStart, finish: self.pos)
@@ -51128,7 +51059,7 @@ export type Parser
 		var cont = self.finalizeIfElse(func, entry: entry, cond: ifConditionTest(cond), ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, bindings: assignedBindings, thenVals: thenVals, elseVals: elseVals, thenMoveMark: thenMoveMark, elseMoveMark: elseMoveMark)
 		self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
 		return cont
-	end 'parseIfStatement'
+	end 'parseIfWithin'
 
 	// ⭐⭐ **E3087 — `if x.contains(k)` FOLLOWED BY `try x.get(k)` IS TWO LOOKUPS WHERE ONE WILL DO.** The
 	// membership test and the value read probe the same table for the same key, so the pattern is refused and
@@ -51407,14 +51338,14 @@ export type Parser
 	// Parse an `else` branch into `elseBlock`. A PLAIN condition's else is exactly what it always was — the
 	// `else` keyword and then a body. A CATCHING condition's else is the try's ERROR EDGE, which owns the
 	// caught error whether or not an `else` was written, so it routes to its own opener.
-	function parseElseBody(func IrFunction, elseBlock IrBlock, cond IfCondition, ifTok Token) returns IrBlock throws SourceParseError
+	function parseElseBody(func IrFunction, elseBlock IrBlock, cond IfCondition, ifTok Token, ifEnd ElementIndex) returns IrBlock throws SourceParseError
 		match cond 'shape'
 			plain then break
-			tryCatch(_, _, _, flag, errorType, form, join) then return try self.parseCatchingElseBody(func, elseBlock: elseBlock, flag: flag, errorType: errorType, form: form, join: join, ifTok: ifTok)
+			tryCatch(_, _, _, flag, errorType, form, join) then return try self.parseCatchingElseBody(func, elseBlock: elseBlock, flag: flag, errorType: errorType, form: form, join: join, ifTok: ifTok, ifEnd: ifEnd)
 		end 'shape'
 
 		try self.consume(TokenKind.else)
-		return try self.parseElseBranchBody(func, elseBlock: elseBlock)
+		return try self.parseElseBranchBody(func, elseBlock: elseBlock, ifEnd: ifEnd)
 	end 'parseElseBody'
 
 	// The else branch's BODY, once its `else` (and, for a catching `if`, any `(e)` binder) has been
@@ -51426,9 +51357,9 @@ export type Parser
 	// The `else if` form opens NO scope frame of its own: its condition is evaluated in the ENCLOSING scope
 	// (it is not inside any block), and each of the nested if's own branches opens a frame when it is
 	// parsed. Only the plain `else 'label'` form is a block body.
-	function parseElseBranchBody(func IrFunction, elseBlock IrBlock) returns IrBlock throws SourceParseError
+	function parseElseBranchBody(func IrFunction, elseBlock IrBlock, ifEnd ElementIndex) returns IrBlock throws SourceParseError
 		if self.at(TokenKind.if) 'elseIf'
-			return try self.parseIfStatement(func, block: elseBlock)
+			return try self.parseIfWithin(func, block: elseBlock, ifEnd: ifEnd)
 		end 'elseIf'
 
 		let elseLabelTok = try self.consume(TokenKind.charLiteral)
@@ -51445,7 +51376,7 @@ export type Parser
 	// ⭐ **IT RUNS EVEN WHEN NO `else` IS WRITTEN**, because the error edge exists either way and a caught box
 	// has to die on it. With nothing written the branch is empty: the release is all it holds and it falls
 	// straight through to the merge, carrying the entry values the caller already restored.
-	function parseCatchingElseBody(func IrFunction, elseBlock IrBlock, flag ValueId, errorType MaxonType, form CaughtErrorForm, join SentLegJoin, ifTok Token) returns IrBlock throws SourceParseError
+	function parseCatchingElseBody(func IrFunction, elseBlock IrBlock, flag ValueId, errorType MaxonType, form CaughtErrorForm, join SentLegJoin, ifTok Token, ifEnd ElementIndex) returns IrBlock throws SourceParseError
 		let elseWritten = self.at(TokenKind.else)
 		let ownedFloor = self.bodyState.ownedBindings.count()
 		self.bodyState.scope.pushScope()
@@ -51473,7 +51404,7 @@ export type Parser
 		var elseEnd = self.bodyState.currentBlock
 
 		if elseWritten 'writtenBody'
-			elseEnd = try self.parseElseBranchBody(func, elseBlock: elseEnd)
+			elseEnd = try self.parseElseBranchBody(func, elseBlock: elseEnd, ifEnd: ifEnd)
 		end 'writtenBody'
 
 		self.bodyState.scope.popScope()
@@ -54122,18 +54053,9 @@ export type Parser
 	// never returns to 0, so neither the `depth == 0` test nor `elseFollowsEnd` could have fired there, and
 	// the pair contributes net zero to the depth on the way through.
 	//
-	// Walking IN is what made this scan cost `O(depth × tokens)`: a construct nested D deep had its tokens
-	// re-walked by all D scans enclosing it. MEASURED on `tests/ladders/gennest.sh`, which holds
-	// `depth × stmtsPerLevel` fixed so the program barely changes size while the nesting doubles: at a
-	// constant 1024 statements `phase:parse` CPU climbed ×1.20 ×1.33 ×1.50 ×1.74 per depth doubling, and
-	// with this skip it climbs ×1.11 ×1.20 ×1.39 ×1.40 — HALF the depth term, to the tick. The other half
-	// is `assignedBindingsIn`, whose own scan still walks token by token and so still re-reads a nested
-	// construct's tokens once per enclosing construct. ⚠ **THAT HALF IS STILL THERE.** Inverting it — a
-	// per-file `name → ascending assignment sites` index with a binary-searched `isAssignedIn` predicate —
-	// was measured at `phase:parse` ×3.5 on the corpus only while a Θ(bindings × constructs) walk multiplied its
-	// per-test constant (rung 5: 10.0G → 34.5G CPU ticks), so that measurement does not apply to the scan as it
-	// is, and whether inverting it pays is open; the scan is bounded by nesting DEPTH, which `LoopNestBase` doubles and
-	// `gennest.sh` isolates.
+	// Walking IN would cost `O(depth × tokens)`: a construct nested D deep would have its tokens
+	// re-walked by all D scans enclosing it. `tests/ladders/gennest.sh` holds `depth × stmtsPerLevel`
+	// fixed so the program barely changes size while the nesting doubles, which isolates that term.
 	function blockStatementEndIndex(startIndex ElementIndex, continuesAtElse bool) returns ElementIndex
 		self.buildBlockExtentIndex()
 
@@ -55514,10 +55436,7 @@ export type Parser
 
 		let read = try scan.headerReadOf(headerValue) otherwise return
 
-		for i in 0 upto moveSiteListAt(self.moveSiteLists, index: back.awaitingAt(position)).count() 'eachSite'
-			var site = try moveSiteListAt(self.moveSiteLists, index: back.awaitingAt(position)).get(i) otherwise panic("noteMoveSitesReadInALaterIteration: the site list is shorter than its own count at {i}")
-			site.noteReadInALaterIteration(read.line, atColumn: read.column)
-		end 'eachSite'
+		self.moveSiteLists.settle(back.awaitingAt(position), atLine: read.line, atColumn: read.column, kind: DoorRead.laterIteration)
 	end 'noteMoveSitesReadInALaterIteration'
 
 	function settleBackEdgeConsumes(scan LoopMoveScan) throws SourceParseError
@@ -55566,7 +55485,7 @@ export type Parser
 			var waiting = mark.awaitingAt(position)
 
 			for back in scan.backEdges 'eachBackEdge'
-				waiting = unionMoveSiteLists(self.moveSiteLists, a: waiting, b: back.mark.awaitingAt(position))
+				waiting = self.moveSiteLists.union(waiting, b: back.mark.awaitingAt(position))
 			end 'eachBackEdge'
 
 			awaiting.push(waiting)
@@ -55828,10 +55747,11 @@ export type Parser
 	// two phis of one `if` and move codegen — the scale corpus's rotating write set proves it
 	// (`w5 = …; w0 = …` assigns in the order 5, 0 but must merge in the order 0, 5).
 	//
-	// THE ONE TOKEN SCAN, shared by `if`, `match`, `while` and `for`. A reassignment is the ONLY way
-	// a `var` already in scope changes value, and its syntax is exactly `identifier =`
-	// (parseStatement's two-token lookahead). `==` is a single `equalsEquals` token, so a comparison
-	// cannot be mistaken for one.
+	// THE ONE INDEX OF WRITES (`writeSiteIndex`), shared by `if`, `match`, `while`, `for` and `try`. A
+	// reassignment is the ONLY way a `var` already in scope changes value, and `buildWriteSiteIndex`
+	// lists its spellings: `identifier =` (parseStatement's two-token lookahead), a deferred
+	// `self.<field> =`, and a tuple assignment's bare targets. `==` is a single `equalsEquals` token,
+	// so a comparison cannot be mistaken for one.
 	//
 	// It OVER-approximates, and every case where it does is harmless because a surplus carried
 	// binding is harmless while a missing one is a miscompile:
@@ -55847,10 +55767,10 @@ export type Parser
 	// mutable, or not bound at entry (a branch-local `var`), is in no `mutableVars` entry and is
 	// correctly absent.
 	//
-	// ⚠ THIS SCAN IS EXHAUSTIVE ONLY BECAUSE PARAMETERS ARE IMMUTABLE. Everything below reads
-	// TOKENS, so it can only ever find a write that IS tokens — `identifier =`. A `var` parameter is
-	// written by `mutate(p)` at the call site, leaving no `=` in this loop at all: the scan would
-	// return without `p`, a loop header would mint no phi, and `p` would reset to its entry value
+	// ⚠ THIS SCAN IS EXHAUSTIVE ONLY BECAUSE PARAMETERS ARE IMMUTABLE. The index is built from
+	// TOKENS, so it can only ever hold a write that IS tokens — `identifier =`. A `var` parameter is
+	// written by `mutate(p)` at the call site, leaving no `=` in this loop at all: the index would
+	// hold no write of `p`, a loop header would mint no phi, and `p` would reset to its entry value
 	// every iteration. Silent, and invisible to the drift panic that guards this scan's OTHER
 	// assumption (the construct's extent), because the extent would be right.
 	//
@@ -55860,69 +55780,48 @@ export type Parser
 	// against: a per-parameter feature stops reading that constant, and the guard goes quiet
 	// exactly when it is needed.
 	//
-	// ⭐ **IT COSTS O(tokens in the extent), NOT O(vars in scope), AND THAT IS THE WHOLE POINT.** Building
-	// a `Set` of the assigned NAMES and testing it once per mutable binding in scope is
-	// Θ(bindings × constructs) probes — quadratic in a program that grows both, and invisible to the
-	// memory columns because a probe allocates nothing: 39,400,068 probes across 18,571 constructs at
-	// scale rung 5, ×3.99 per doubling, against a carried set never bigger than TWO. Asking the inverse
-	// index per assigned NAME instead makes the whole thing linear (see `MutableVarPositionByName`).
+	// ⭐ **TWO ROUTES TO THE SAME ANSWER, AND THE CHEAPER ONE IS TAKEN.** With fewer writes in the
+	// extent than mutable bindings in scope, the writes are enumerated and each name is chased to its
+	// bindings (`collectCarriedPositions`); otherwise each binding's own writes are bisected against
+	// the extent. So a construct costs min(writes in the extent, bindings × log writes). Either route
+	// alone is quadratic in some program: probing every binding at every construct is Θ(bindings ×
+	// constructs), and enumerating the extent at every construct re-reads the nested ones. A probe
+	// allocates nothing, so the first never shows in the memory columns.
 	//
-	// ⚠ **AND THE ANSWER MUST STILL COME BACK IN `mutableVars` DECLARATION ORDER.** That order is
-	// load-bearing: the phis a merge mints follow it, so token/assignment order would permute two
-	// phis of one `if` and MOVE CODEGEN — the scale corpus's rotating write set proves it
-	// (`w5 = …; w0 = …` assigns in the order 5, 0 but must merge in the order 0, 5). Ascending
-	// POSITION is that order, which is why the positions are collected ascending rather than sorted
-	// afterwards (see `collectCarriedPositions`).
+	// With no mutable binding in scope the answer is empty at once, which is every top-level
+	// initializer. Both routes return ascending position, which is the declaration order above: the
+	// enumerating route sorts what it collected, and the probing route walks `mutableVars` in order.
 	function assignedBindingsIn(startIndex ElementIndex, endIndex ElementIndex) returns VarInfoArray
-		var positions = MutableVarPositionArray.create()
-		var i = startIndex
+		if endIndex < startIndex 'invertedExtent'
+			panic("assignedBindingsIn: the extent ends at token {endIndex}, before it starts at token {startIndex}")
+		end 'invertedExtent'
 
-		while i < endIndex 'scan'
-			if self.assignsAt(i) 'assignment'
-				self.collectCarriedPositions(positions, name: self.tokenAt(i).value)
-			end 'assignment'
+		let mutableCount = self.bodyState.mutableVars.count()
 
-			// ⭐⭐ **A TUPLE ASSIGNMENT'S BARE TARGETS ARE WRITES THIS SCAN CANNOT SEE AS `identifier =`.**
-			// `(a, b) = step(a)` writes both names and neither is followed by an `=` — `a` is followed by a
-			// comma and `b` by a `)`. Left out, a loop carrying either would mint no header phi and the name
-			// would reset to its entry value every trip: silent, and exactly the miscompile this function's
-			// header calls out as the one direction it may not err in.
-			//
-			// ⚠ **BOTH HALVES GO THROUGH THE SHARED READERS — the SPAN through `tupleAssignEqualsIn` and WHICH
-			// TOKENS IN IT ARE TARGETS through `tupleAssignTargetIndices`.** Re-deriving the second half inline
-			// ("every identifier in the span") is the copy that gets taught a new target shape last: teach the
-			// grammar a target that is not a bare identifier and the parse learns it while this scan does not,
-			// dropping a header phi with no diagnostic anywhere.
-			//
-			// Only REBINDING targets are collected — a `let`/`var` target declares a name the loop header
-			// cannot be carrying, and `_` writes nothing. A DECLARING destructure (`let (x, y) = t`) never
-			// reaches here at all: `tupleAssignEqualsIn` refuses a `(` that follows the keyword, at the
-			// grammar rather than here.
-			// ⚠ The `!= i` guard is not a readability nicety: `tupleAssignTargetIndices` ALLOCATES its answer,
-			// and this loop visits every token of every construct extent in the program. Called unguarded it
-			// would mint an empty array per token — see this header's own note on the Θ(bindings × constructs)
-			// probe this scan avoids for exactly that kind of cost.
-			// ⭐⭐ **A DEFERRED FIELD'S WRITE IS `self . <name> =`, WHICH THIS SCAN CANNOT SEE AS `identifier =`
-			// EITHER.** It reassigns the hidden slot `parseNascentSelfAssignment` holds the field in, and a
-			// branch that writes one must carry it exactly as a branch writing a `var` does. Left out, the two
-			// arms of an `if` mint no header phi and the merge reads a value neither arm defines — MEASURED:
-			// `seedInUse: value 3 is live-in to block 0 but was never colored`.
-			if self.nascentSelfAssignmentAt(i) 'aDeferredFieldWrite'
-				self.collectCarriedPositions(positions, name: nascentSelfSlotName(self.tokenAt(i + 2).value))
-			end 'aDeferredFieldWrite'
+		if mutableCount == 0 'nothingToCarry'
+			return VarInfoArray.create()
+		end 'nothingToCarry'
 
-			let equalsIndex = tupleAssignEqualsIn(self.tokens, open: i)
+		let index = self.writeSiteIndex()
+		let firstSite = index.firstSiteAtOrAfter(startIndex)
+		let pastSite = index.firstSiteAtOrAfter(endIndex)
+		var positions = MoveSlotIndexColumn.create()
 
-			if equalsIndex != i 'aTupleAssignmentOpensHere'
-				for nameIndex in self.tupleAssignTargetIndices(i, equalsIndex: equalsIndex) 'eachTarget'
-					if tupleAssignTargetRebinds(self.tupleAssignTargetAt(nameIndex)) 'rebindingTarget'
-						self.collectCarriedPositions(positions, name: self.tokenAt(nameIndex).value)
-					end 'rebindingTarget'
-				end 'eachTarget'
-			end 'aTupleAssignmentOpensHere'
+		if pastSite - firstSite <= mutableCount 'fewerWritesThanBindings'
+			for site in firstSite upto pastSite 'eachWrite'
+				self.collectCarriedPositions(positions, name: index.nameAt(site))
+			end 'eachWrite'
 
-			i = i + 1
-		end 'scan'
+			positions = sortedUniquePositions(positions)
+		end 'fewerWritesThanBindings' else 'fewerBindingsThanWrites'
+			for position in 0 upto mutableCount 'eachBinding'
+				view binding = try self.bodyState.mutableVars.get(position) otherwise panic("assignedBindingsIn: mutableVars.get OOB at {position}")
+
+				if index.writesNameWithin(binding.name, start: startIndex, endIndex: endIndex) 'writtenInTheExtent'
+					positions.push(position)
+				end 'writtenInTheExtent'
+			end 'eachBinding'
+		end 'fewerBindingsThanWrites'
 
 		var bindings = VarInfoArray.create()
 
@@ -55934,13 +55833,65 @@ export type Parser
 		return bindings
 	end 'assignedBindingsIn'
 
-	// Add every mutable binding named `name` to `positions` — the innermost one and each entry it
-	// SHADOWS, which is exactly the set a walk of `mutableVars` testing `name` would have found.
+	function writeSiteIndex() returns WriteSiteIndex
+		match self.writeSites 'state'
+			unbuilt then break
+			built(index) then return index
+		end 'state'
+
+		let fresh = self.buildWriteSiteIndex()
+		self.writeSites = WriteSites.built(fresh)
+		return fresh
+	end 'writeSiteIndex'
+
+	// Every write in the file, one site per written name, tested independently at each token. Beside
+	// `identifier =` there are two writes that spelling does not match: a deferred field's
+	// `self.<name> =`, which reassigns the hidden slot `parseNascentSelfAssignment` holds the field
+	// in, and the bare targets of a tuple assignment, `(a, b) = step(a)`, where no target is followed
+	// by `=`. ⚠ Leaving either out drops a loop header phi or a merge phi without a diagnostic: the
+	// loop resets the name to its entry value every trip, or the merge reads a value neither arm
+	// defines.
 	//
-	// The walk stops at the first position already present, and that is sound rather than an
-	// optimization: a position only ever enters `positions` through this routine, which inserts the
-	// whole chain below it in the same call, so a chain whose head is present is present entire.
-	function collectCarriedPositions(positions MutableVarPositionArray, name ByteArray)
+	// The tuple span comes from `tupleAssignEqualsIn` and its targets from `tupleAssignTargetIndices`,
+	// the readers the parse itself uses, so a new target shape is taught to both at once. Only
+	// rebinding targets are writes: a declaring target names a binding no construct can carry, and `_`
+	// writes nothing. The `!= i` test keeps `tupleAssignTargetIndices`, which allocates, off every
+	// token that opens no tuple assignment.
+	function buildWriteSiteIndex() returns WriteSiteIndex
+		var sites = TokenIndexArray.create()
+		var names = NameRoster.create()
+		let count = self.tokens.count()
+		var i = 0 as ElementIndex
+
+		while i < count 'scan'
+			if self.assignsAt(i) 'assignment'
+				sites.push(i)
+				names.push(self.tokenAt(i).value)
+			end 'assignment'
+
+			if self.nascentSelfAssignmentAt(i) 'aDeferredFieldWrite'
+				sites.push(i)
+				names.push(nascentSelfSlotName(self.tokenAt(i + 2).value))
+			end 'aDeferredFieldWrite'
+
+			let equalsIndex = tupleAssignEqualsIn(self.tokens, open: i)
+
+			if equalsIndex != i 'aTupleAssignmentOpensHere'
+				for nameIndex in self.tupleAssignTargetIndices(i, equalsIndex: equalsIndex) 'eachTarget'
+					if tupleAssignTargetRebinds(self.tupleAssignTargetAt(nameIndex)) 'rebindingTarget'
+						sites.push(i)
+						names.push(self.tokenAt(nameIndex).value)
+					end 'rebindingTarget'
+				end 'eachTarget'
+			end 'aTupleAssignmentOpensHere'
+
+			i = i + 1
+		end 'scan'
+
+		return WriteSiteIndex.build(sites, names: names)
+	end 'buildWriteSiteIndex'
+
+	function collectCarriedPositions(positions MoveSlotIndexColumn, name ByteArray)
 		var link = self.innermostMutableVar(name)
 		var walking = true
 
@@ -55952,10 +55903,8 @@ export type Parser
 		end 'chain'
 	end 'collectCarriedPositions'
 
-	function carryAndFollowShadow(positions MutableVarPositionArray, position ElementIndex) returns InnermostMutableVar
-		if not insertCarriedPosition(positions, position: position) 'chainAlreadyCollected'
-			return InnermostMutableVar.none
-		end 'chainAlreadyCollected'
+	function carryAndFollowShadow(positions MoveSlotIndexColumn, position ElementIndex) returns InnermostMutableVar
+		positions.push(position)
 
 		return try self.bodyState.mutableVarShadowed.get(position) otherwise panic("collectCarriedPositions: position {position} is off the end of a {self.bodyState.mutableVarShadowed.count()}-deep shadow column")
 	end 'carryAndFollowShadow'
@@ -99946,7 +99895,7 @@ export type Parser
 	end 'at'
 
 	// The kind of the token at an ABSOLUTE index. The cursor-independent read the token-extent
-	// scans need — `blockStatementEndIndex`, `assignedBindingsIn` and `opensBlockAt` all walk the
+	// scans need — `blockStatementEndIndex`, `buildWriteSiteIndex` and `opensBlockAt` all walk the
 	// token array without moving `pos`.
 	function kindAt(index ElementIndex) returns TokenKind
 		if index >= self.tokens.count() 'pastEnd'
@@ -99999,7 +99948,7 @@ export type Parser
 	// of these on purpose.** Two callers ask it and they must never disagree:
 	//
 	//   • `parseStatement`, deciding that this statement IS a reassignment, and
-	//   • `assignedBindingsIn`, deciding which vars a loop CARRIES A PHI FOR.
+	//   • `buildWriteSiteIndex`, whose writes decide which vars a loop CARRIES A PHI FOR.
 	//
 	// Written down twice, a new write form (a compound assignment, a store through a field) taught
 	// to the dispatcher and not to the scan would compile: the statement would assign the var, the
@@ -101972,7 +101921,7 @@ export type Parser
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
 	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)
 	// needs to see the `=` without committing to consuming the identifier first — and it is
-	// the same question `assignedBindingsIn` asks of every token in a loop's extent, which is why
+	// the same question `buildWriteSiteIndex` asks of every token in the file, which is why
 	// both read it through `kindAt` and the past-the-end rule lives in exactly one place.
 	function peekKind() returns TokenKind
 		return self.kindAt(self.pos + 1)
