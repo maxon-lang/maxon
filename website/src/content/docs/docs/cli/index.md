@@ -1016,8 +1016,10 @@ baseline went unused.
 
 **The front-end pool.** `front end: <W> worker(s) over <P> processor(s), <n> file(s), <n> adopted` sizes
 the pool that lexed and parsed the files no memo held. `adopted` counts the workers handed the signature
-index before they parse: a warm compile of a one-file program adopts at most one. A compiler
-whose runtime keeps that work on the compiling thread prints `front end: serial, in process, <n> file(s)`.
+index before they parse: a warm compile of a one-file program adopts at most one. The next line,
+`front end index copy: <n> allocations`, is the allocation count of one worker's private clone of that
+index, the cost each adopting worker adds. A compiler whose runtime keeps that work on the compiling
+thread prints `front end: serial, in process, <n> file(s)`.
 
 **The census by tag.** [`--census-by-tag`](#maxon-build) adds a third table under the residency one: the
 live heap at each phase boundary broken down by the type each allocation was tagged with. It prints the

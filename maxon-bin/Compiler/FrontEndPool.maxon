@@ -172,7 +172,7 @@ export type FrontEndWorker
 		return FrontEndReply.create(self.state.ran(job))
 	end 'run'
 
-	export function adopt(declarations SettledDeclarationsCell, template ProgramSignatures)
+	export function adopt(declarations SettledDeclarationsCell, template IndexTemplateCell)
 		self.state.hold(ProgramSignatures.adopting(declarations, template: template))
 	end 'adopt'
 
@@ -273,7 +273,7 @@ end 'FrontEndDrainInput'
 
 type WorkerHandoff
 	export let declarations as SettledDeclarationsCell
-	export let template as ProgramSignatures
+	export let template as IndexTemplateCell
 
 	// The revision the template's live keys are at. A fold after `holdBaseline` moves the baseline
 	// past it, so a worker adopting later starts here and `refreshLiveKeys` brings it up to date;
@@ -317,6 +317,7 @@ module type FrontEndPool
 	// By worker slot: whether that worker holds a copy of `baseline`.
 	var adopted as BoolArray
 	var adoptions as ElementIndex
+	var indexCopyAllocations as AllocCount
 	var baselineRevision as LiveKeysRevision
 	var heldRevisions as LiveKeysRevisionArray
 
@@ -325,7 +326,7 @@ module type FrontEndPool
 	var parsed as bool
 
 	module static function create() returns FrontEndPool
-		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), handoffs: WorkerHandoffArray.create(), adopted: BoolArray.create(), adoptions: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
+		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), handoffs: WorkerHandoffArray.create(), adopted: BoolArray.create(), adoptions: 0, indexCopyAllocations: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
 	end 'create'
 
 	// ⭐ **EVERY FILE WHOSE RESOLVED STREAM NO MEMO HOLDS, LEXED AND FILTERED ON THE WORKERS**, then landed through
@@ -418,6 +419,7 @@ module type FrontEndPool
 
 			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 				logCompilerDebugSettled("{sizing.line(PoolKind.frontEnd)}, {self.adoptions} adopted")
+				logCompilerDebugSettled("front end index copy: {self.indexCopyAllocations} allocations")
 			end 'debugging'
 		end 'onTheWorkers' else 'inProcess'
 			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
@@ -476,7 +478,13 @@ module type FrontEndPool
 		self.adopted.refill(self.workers.count(), value: false)
 
 		if FrontEndPool.RuntimeMovesSharedRecords 'onTheWorkers'
-			self.handoffs.push(WorkerHandoff.of(signatures, os: os))
+			let handoff = WorkerHandoff.of(signatures, os: os)
+
+			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'measuringACopy'
+				self.indexCopyAllocations = handoff.template.current().signatures.copyAllocations()
+			end 'measuringACopy'
+
+			self.handoffs.push(handoff)
 		end 'onTheWorkers'
 	end 'holdBaseline'
 
@@ -494,7 +502,7 @@ module type FrontEndPool
 		var worker = self.workerAt(workerSlot)
 
 		// Temporaries, so the send moves them: the handles are the worker's alone, and the declarations
-		// they name are shared.
+		// and the template they name are shared.
 		try worker.adopt(handoff.declarations.clone(), template: handoff.template.clone()) otherwise panic("{workerRefusedSendMessage("FrontEndPool.requireAdopted", subject: "the worker in slot {workerSlot}")}")
 		self.adoptions = self.adoptions + 1
 		try self.adopted.set(workerSlot, value: true) otherwise panic("FrontEndPool.requireAdopted: adopted.set OOB at {workerSlot} below count {self.adopted.count()}")

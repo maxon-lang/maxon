@@ -16387,6 +16387,18 @@ end 'SettledDeclarationsBox'
 
 export typealias SettledDeclarationsCell = SharedValue with SettledDeclarationsBox
 
+// A shared cell, so each worker clones the template on its own thread (`ProgramSignatures.adopting`);
+// a plain record would be deep-cloned by the sending thread once per worker.
+export type IndexTemplate
+	export let signatures as ProgramSignatures
+
+	export static function create(signatures ProgramSignatures) returns Self
+		return Self{signatures: signatures}
+	end 'create'
+end 'IndexTemplate'
+
+export typealias IndexTemplateCell = SharedValue with IndexTemplate
+
 typealias SettledCellArray = Array with SettledDeclarationsCell
 
 typealias StructSlotMap = Map with (ByteArray, ElementIndex)
@@ -41790,14 +41802,28 @@ export type ProgramSignatures
 
 	// The view cache is released first: the synthesized deep clone copies it too, and every worker
 	// clones this template.
-	export function workerTemplate(os Os) returns ProgramSignatures
+	export function workerTemplate(os Os) returns IndexTemplateCell
 		self.releaseTypeNameViews()
 
-		return ProgramSignatures.reassembled(self, own: SettledDeclarations.create(os), shared: SettledDeclarations.unused(), readsPublishedView: false).clone()
+		return IndexTemplateCell.create(IndexTemplate.create(ProgramSignatures.reassembled(self, own: SettledDeclarations.create(os), shared: SettledDeclarations.unused(), readsPublishedView: false).clone()))
 	end 'workerTemplate'
 
-	export static function adopting(declarations SettledDeclarationsCell, template ProgramSignatures) returns ProgramSignatures
-		return Self.reassembled(template, own: template.ownSettled, shared: declarations.current().declarations, readsPublishedView: true)
+	// Meant for a worker template, whose view cache is already released, so the count is what an
+	// adopting worker's clone costs. `FrontEndPool.holdBaseline` logs it, and
+	// `front-end-copies-do-not-grow-with-workers` bounds the pool's growth against it.
+	export function copyAllocations() returns AllocCount
+		let before = HeapStats.allocationsMade()
+		var copy = self.clone()
+		let made = HeapStats.allocationsMade() - before
+		copy.releaseTypeNameViews()
+
+		return made as AllocCount
+	end 'copyAllocations'
+
+	export static function adopting(declarations SettledDeclarationsCell, template IndexTemplateCell) returns ProgramSignatures
+		let copy = template.current().signatures.clone()
+
+		return Self.reassembled(copy, own: copy.ownSettled, shared: declarations.current().declarations, readsPublishedView: true)
 	end 'adopting'
 
 	static function reassembled(template ProgramSignatures, own SettledDeclarations, shared SettledDeclarations, readsPublishedView bool) returns ProgramSignatures
