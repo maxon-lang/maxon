@@ -176,7 +176,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session, defines: defines, productVersion: productVersion)
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session, defines: defines, productVersion: productVersion, tallied: allocationsByTag, tallyPhases: allocationsPhase)
 	project.openPhaseSpans = spans
 	project.asyncTrace = asyncTrace
 	project.poisonFreed = poisonFreed
@@ -194,19 +194,11 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// cost into the `unattributed` row of every trend datapoint recorded from then on. A harness that wants
 	// the TSV's residency columns asks for `--log=compiler:debug` as well.
 	project.censusByTag = censusByTag
-	project.censusPhase = censusPhase
 	project.samplesResidency = censusByTag or compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug)
 
 	if censusByTag 'sizeTheTagTable'
-		project.memory.enableTagCensus()
+		project.memory.enableTagCensus(censusPhase)
 	end 'sizeTheTagTable'
-
-	project.allocationsByTag = allocationsByTag
-	project.allocationsPhase = allocationsPhase
-
-	if allocationsByTag 'sizeTheAllocationTally'
-		project.memory.enableAllocTally()
-	end 'sizeTheAllocationTally'
 
 	// EXCLUDING the runtime tier's own bracket, which `loadLibrarySources` opened inside this one: a phase
 	// that absorbs a neighbour's cost is the defect CompileTimings exists to prevent, and the rows must
@@ -795,9 +787,13 @@ end 'writeTargetIr'
 //
 // File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create()) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
 	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
+
+	if tallied 'tallied'
+		armAllocTally(project, phases: tallyPhases)
+	end 'tallied'
 
 	if rootIsUnder(project, libraryRoot: project.runtimeDir, cwd: Directory.currentPath()) 'aRuntimeTierRoot'
 		throw CompileError.runtimeTierIsNotAProgram(project.rootPath)
@@ -826,6 +822,14 @@ export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdl
 
 	return project
 end 'loadProject'
+
+// Armed here because the project exists only now, after `compileMeasured` opened the `load`
+// bracket: the tally enters `load` as already open, and what was allocated before this call is
+// `elsewhere`.
+function armAllocTally(project Project, phases TagCensusPhases)
+	project.allocationsByTag = true
+	project.memory.enableAllocTally(phases, within: CompilePhase.load)
+end 'armAllocTally'
 
 export enum LibraryLoad
 	included

@@ -1471,7 +1471,50 @@ export function stagedProgramMetrics(dir FilePath, name String, source String, d
 	return fileText(dir.join(metricsFileName))
 end 'stagedProgramMetrics'
 
-export function metricsCell(table String, kind String, name String, field MetricsField) returns ReportedTally
+let MetricsPhaseTagSeparator = "/"
+
+module let LexPhaseName = "lex"
+module let ParsePhaseName = "parse"
+module let ResolveTypesPhaseName = "resolveTypes"
+module let ChurnRowKind = "churn"
+module let TagRowKind = "tag"
+module let PhaseRowKind = "phase"
+
+typealias MetricsRowArray = Array with MetricsRow
+
+type MetricsRow
+	export let kind as String
+	export let name as String
+	export let line as String
+	export let cells as StringArray
+
+	static function create(line String) returns MetricsRow
+		let cells = line.split(MetricsFieldSeparator)
+
+		if cells.count() != MetricsFieldCount 'malformed'
+			panic("CliHarness: the gate could not run - a metrics row carries {cells.count()} fields rather than {MetricsFieldCount}: {line}")
+		end 'malformed'
+
+		let kind = try cells.get(MetricsKindField as ElementIndex) otherwise panic("CliHarness: kind field OOB after the field count was checked")
+		let name = try cells.get(MetricsNameField as ElementIndex) otherwise panic("CliHarness: name field OOB after the field count was checked")
+
+		return Self{kind: kind, name: name, line: line, cells: cells}
+	end 'create'
+
+	function phase() returns String
+		return try self.name.split(MetricsPhaseTagSeparator).get(0) otherwise panic("CliHarness: a split always yields a first piece")
+	end 'phase'
+
+	function tally(field MetricsField) returns ReportedTally
+		let cell = try self.cells.get(field as ElementIndex) otherwise panic("CliHarness: field {field} OOB after the field count was checked")
+
+		return try reportedTally(cell) otherwise panic("CliHarness: the gate could not run - field {field} of the `{self.kind}` row named `{self.name}` states no count: {self.line}")
+	end 'tally'
+end 'MetricsRow'
+
+function metricsRowsOf(table String) returns MetricsRowArray
+	var rows = MetricsRowArray.create()
+
 	for row in table.split(MetricsRowSeparator) 'eachRow'
 		let line = row.trimEnd()
 
@@ -1479,25 +1522,64 @@ export function metricsCell(table String, kind String, name String, field Metric
 			continue
 		end 'notARow'
 
-		let fields = line.split(MetricsFieldSeparator)
+		rows.push(MetricsRow.create(line))
+	end 'eachRow'
 
-		if fields.count() != MetricsFieldCount 'malformed'
-			panic("CliHarness: the gate could not run - a metrics row carries {fields.count()} fields rather than {MetricsFieldCount}: {line}")
-		end 'malformed'
+	return rows
+end 'metricsRowsOf'
 
-		let rowKind = try fields.get(MetricsKindField as ElementIndex) otherwise panic("CliHarness: kind field OOB after the field count was checked")
-		let rowName = try fields.get(MetricsNameField as ElementIndex) otherwise panic("CliHarness: name field OOB after the field count was checked")
-
-		if rowKind != kind or rowName != name 'namesAnother'
-			continue
-		end 'namesAnother'
-
-		let cell = try fields.get(field as ElementIndex) otherwise panic("CliHarness: field {field} OOB after the field count was checked")
-		return try reportedTally(cell) otherwise panic("CliHarness: the gate could not run - field {field} of the `{kind}` row named `{name}` states no count: {line}")
+export function metricsCell(table String, kind String, name String, field MetricsField) returns ReportedTally
+	for row in metricsRowsOf(table) 'eachRow'
+		if row.kind == kind and row.name == name 'theRow'
+			return row.tally(field)
+		end 'theRow'
 	end 'eachRow'
 
 	panic("CliHarness: the gate could not run - the metrics table carries no `{kind}` row named `{name}`, so it was never measured. The table was: {table}")
 end 'metricsCell'
+
+export function metricsAllocsOfPhase(table String, kind String, phase String) returns ReportedTally
+	return metricsAllocsByPhase(table, kind: kind, phase: phase, inThePhase: true)
+end 'metricsAllocsOfPhase'
+
+export function metricsAllocsOutsidePhase(table String, kind String, phase String) returns ReportedTally
+	return metricsAllocsByPhase(table, kind: kind, phase: phase, inThePhase: false)
+end 'metricsAllocsOutsidePhase'
+
+export function metricsPhasesOf(table String, kind String) returns StringArray
+	var phases = StringArray.create()
+
+	for row in metricsRowsOf(table) 'eachRow'
+		if row.kind == kind and not phases.contains(row.phase()) 'aNewPhase'
+			phases.push(row.phase())
+		end 'aNewPhase'
+	end 'eachRow'
+
+	return phases
+end 'metricsPhasesOf'
+
+function metricsAllocsByPhase(table String, kind String, phase String, inThePhase bool) returns ReportedTally
+	var total = 0 as ReportedTally
+
+	for row in metricsRowsOf(table) 'eachRow'
+		if row.kind == kind and (row.phase() == phase) == inThePhase 'counted'
+			total = total + row.tally(MetricsAllocsField)
+		end 'counted'
+	end 'eachRow'
+
+	return total
+end 'metricsAllocsByPhase'
+
+export function phaseTopLine(phase String) returns String
+	return "\n  {phase}: "
+end 'phaseTopLine'
+
+export function observedBuild(dir FilePath, flag String, metrics String) returns CollectedOutput throws TestFailure
+	let ran = spawnCompiler([BuildCommandWord, AppDirName, DebugLogFlag, flag, "{MetricsOptionPrefix}{metrics}"], staged: dir)
+	try Expect.equal(ran.exitCode(), expected: 0, message: "a one-file directory did not build under {flag}. It wrote to stderr: {ran.stderr}")
+
+	return ran
+end 'observedBuild'
 
 export enum ErrorPathExit
 	propagatingTry

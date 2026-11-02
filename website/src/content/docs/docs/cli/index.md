@@ -390,8 +390,8 @@ uses it.
 | `--debugstream` | Emit the shared-memory debug-stream producer that `maxon monitor` reads, with the memory manager's events. Also enables the `__DebugStream` builtin; without the flag its calls emit nothing. Refused on a target without shared memory and an uptime clock. |
 | `--async-trace` | Write the green-thread trace to stderr as the program runs: one line per spawn, sleep, I/O wait, resume and await. See [Debugging and Profiling](/docs/cli/debugging/). |
 | `--poison-freed` | Fill each freed managed box with `0x3F`, from its payload to the end of its slot, so a read after free returns 63, or a pointer of `0x3F3F3F3F3F3F3F3F` that faults when dereferenced. A box above 32 KiB goes back to the operating system whole and is not filled. |
-| `--census-by-tag`, `--census-by-tag=<phase>` | Census the *live* heap by allocation tag at every compile phase boundary — which types the bytes still held at that point belong to, rather than how many bytes the phase asked for. Naming a phase censuses that phase alone, which is what a large compile can afford. It samples residency whether or not `--log=compiler:debug` is given, and writes a `tag` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `livebytes` are the slots live at that boundary and their bytes; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so the census is by *size class* instead and says so in its headline. See [Logging](#logging). |
-| `--allocations-by-tag`, `--allocations-by-tag=<phase>` | Tally every allocation the compile *asks for* by allocation tag and by phase — churn rather than a level, so a phase that allocates a million short-lived boxes shows them here and in no other table. Naming a phase tallies that phase alone. It writes a `churn` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `bytes` are the allocations the phase made and the bytes they asked for; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so nothing is tallied and the report says so. See [Logging](#logging). |
+| `--census-by-tag`, `--census-by-tag=<phase>` | Census the *live* heap by allocation tag at every compile phase boundary — which types the bytes still held at that point belong to, rather than how many bytes the phase asked for. Naming a phase censuses that phase alone and prints that phase's table, which is what a large compile can afford. It samples residency whether or not `--log=compiler:debug` is given, and writes a `tag` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `livebytes` are the slots live at that boundary and their bytes; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so the census is by *size class* instead and says so in its headline. See [Logging](#logging). |
+| `--allocations-by-tag`, `--allocations-by-tag=<phase>` | Tally every allocation the compile *asks for* by allocation tag and by phase — churn rather than a level, so a phase that allocates a million short-lived boxes shows them here and in no other table. Naming a phase tallies that phase alone. It writes a `churn` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `bytes` are the allocations the phase made and the bytes they asked for; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so every allocation is counted under `(untagged)` and the report says so. See [Logging](#logging). |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
 | `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. Each row's first field is its kind: `phase`, `regalloc`, `total`, `unattributed`, `upkeep`, `code`, `tag` when `--census-by-tag` is given, and `churn` when `--allocations-by-tag` is. `upkeep` is the time and memory spent refreshing the records of the locks the compile holds, once every 5 s; the memory columns of `total` and `unattributed` exclude it, so two compiles of one program report the same memory however long each ran. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary. The TSV's five residency columns are filled only when it or `--census-by-tag` is given; on their own they are zero. |
 
@@ -1018,34 +1018,53 @@ baseline went unused.
 the pool that lexed and parsed the files no memo held. `adopted` counts the workers handed the signature
 index before they parse: a warm compile of a one-file program adopts at most one. The next line,
 `front end index copy: <n> allocations`, is the allocation count of one worker's private clone of that
-index, the cost each adopting worker adds. A compiler whose runtime keeps that work on the compiling
-thread prints `front end: serial, in process, <n> file(s)`.
+index, the cost each adopting worker adds. A compile that keeps that work on the compiling thread prints
+`front end: serial, in process, <n> file(s) — <reason>`. The work stays there when the compiler's runtime
+cannot move a shared-record graph between threads, and under [`--allocations-by-tag`](#maxon-build), whose
+tally attributes each stage to the thread that runs it.
 
 **The census by tag.** [`--census-by-tag`](#maxon-build) adds a third table under the residency one: the
 live heap at each phase boundary broken down by the type each allocation was tagged with. It prints the
 top five buckets for every phase sampled, then the whole table for the phase whose *live* level was
-highest, and closes with three lines that bound what the table can be trusted to say — the OS-direct
-mappings and allocator overhead no row counts, how many live slots carry no box header (those are
-attributed by whatever their first word holds, so they land in `(unattributable)` or in a bucket that is
-not theirs), and a self-check comparing the buckets' sum and the tally's own walk against
-`slabLiveBytes`. A tag past the end of the table is `(overflow)`, and bucket 0, which no type's tag
-occupies, is `(untagged)`.
+highest (or for the named phase, when one is named), and closes with three lines that bound what the table
+can be trusted to say — the OS-direct mappings and allocator overhead no row counts, how many live slots
+carry no box header (those are attributed by whatever their first word holds, so they land in
+`(unattributable)` or in a bucket that is not theirs), and a self-check comparing the buckets' sum and the
+tally's own walk against `slabLiveBytes`. A tag past the end of the table is `(overflow)`, and bucket 0,
+which no type's tag occupies, is `(untagged)`.
+
+The census samples the heap once per boundary: `lex` and `directives` at the end of the front end's lexing
+drain, from one walk of the heap, and `parse` at the end of its parse drain. A phase that runs on the
+Std-pass or backend worker pools (`isel` and `encode` inside `regalloc`, the Std passes inside
+`stdFanOut`) has no boundary of its own, because the work of concurrent workers cannot be told apart.
+Naming one yields a report that says so and names the driver phase to name instead.
 
 Without `--log=compiler:debug` the flag still samples, but the numbers go only to `--metrics=<path>`.
 
 ```bash
 maxon build app.maxon --log=compiler:debug --census-by-tag
-maxon build app.maxon --log=compiler:debug --census-by-tag=codegen   # one phase, on a large compile
+maxon build app.maxon --log=compiler:debug --census-by-tag=regalloc  # one phase, on a large compile
 ```
 
 **The allocations by tag.** [`--allocations-by-tag`](#maxon-build) answers the other question: not what
 the heap is *holding* at a boundary but what the phase *asked for* between two of them, which is the
 figure an allocation that is freed before the boundary appears in at all. It prints the top five buckets
-for every phase, then the whole table for the phase that allocated most, and closes with a self-check —
-the buckets summed over every phase against the run's own allocation total at the last boundary. The two
-are equal, exactly: the first phase sampled absorbs everything allocated before it, so the sum
-telescopes, and it does so when one phase is named too. A compiler built without `--debugstream` carries
-no tags, so nothing is tallied and the headline says so.
+for every phase, then the whole table for the phase that allocated most, and closes with a self-check:
+
+```text
+Σ over the sampled phases and buckets = <X> (and <N> more outside the phases sampled), the run's own allocation total at the last boundary = <Z> — equal
+```
+
+Each interval between two phase boundaries is credited to the innermost phase open across it, so a phase
+that excludes a nested one (`load` and `loadRuntime`) owns only its own allocations. Allocations made
+between phases, and those of every phase the run did not name, are the `<N>` outside the phases sampled,
+and the two sides are equal exactly. The tally is armed inside `loadProject`, so `load` is credited from
+there and the moments before count as outside. The front end runs serially on the compiling thread, so
+`lex`, `directives` and `parse` are tallied like any other phase. A phase that runs on the Std-pass or
+backend worker pools (`isel` and `encode` inside `regalloc`, the Std passes inside `stdFanOut`) cannot be
+named: the report says so and names the driver phase to name instead. A compiler built without
+`--debugstream` carries no tags, so every allocation is counted under `(untagged)`, per phase, and the
+headline says so.
 
 ```bash
 maxon build app.maxon --log=compiler:debug --allocations-by-tag

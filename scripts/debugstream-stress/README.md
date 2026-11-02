@@ -12,6 +12,22 @@ bash scripts/debugstream-stress/validate.sh
 Exits `0` iff every check passes. Takes ~1 minute. Override the compiler with
 `MAXON=/path/to/maxon.exe` and the producer-pacing band with `PACINGS="80000 120000"`.
 
+## Allocation reports on a traced compiler
+
+```
+bash scripts/debugstream-stress/tag-reports.sh
+```
+
+`tag-reports.sh` builds a `--debugstream` compiler, compiles a one-file program with
+`--allocations-by-tag`, `--allocations-by-tag=parse` and `--census-by-tag=parse`, and checks that the
+`--metrics` rows carry real tag names and that the allocation self-check reads `equal` over a non-zero
+total. Only a traced compiler carries tags, so the untraced compiler the test corpus builds cannot
+catch a report that names none. CI runs it on every native lane. Exits `0` iff every check passes.
+
+Override the compiler that builds the traced one with `MAXON=/path/to/maxon.exe`. `TAG_REPORTS_TREE`
+names the tree the traced compiler is built from and run in (default: this repository); its `temp/tag-reports/`
+holds the build for the length of the run.
+
 ## The race
 
 `__ds_reserve` publishes an entry — header written, `write_cursor` advanced, ring lock released —

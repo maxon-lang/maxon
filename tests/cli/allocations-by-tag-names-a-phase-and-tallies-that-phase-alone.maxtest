@@ -1,0 +1,64 @@
+let AllocationsByTagNamesAPhaseCaseDirName = "allocations-by-tag-names-a-phase"
+
+let EveryPhaseMetricsFile = "every-phase.tsv"
+let ParseMetricsFile = "parse.tsv"
+let ResolveTypesMetricsFile = "resolve-types.tsv"
+
+let SelfCheckAgrees = " — equal"
+let SelfCheckDisagrees = "NOT equal"
+let OutsideTheRowsClause = " more outside the phases sampled)"
+let BracketDivisor = 50
+let BracketFloor = 64
+let NamedRunDivisor = 50
+let NamedRunFloor = 32
+
+test 'a named phase is tallied by tag, and that phase alone'
+	requireHeldOutsideCheckout(AllocationsByTagNamesAPhaseCaseDirName, check: NamedPhaseIsTalliedAlone.create())
+end 'a named phase is tallied by tag, and that phase alone'
+
+type NamedPhaseIsTalliedAlone implements OutsideCheckoutCase
+	static function create() returns NamedPhaseIsTalliedAlone
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagingDir(dir.join(AppDirName).toString())
+
+		writeStagedFile(app.join("{MainSourceStem}{MaxonSourceSuffix}"), content: MainSource)
+
+		let warm = spawnCompiler([BuildCommandWord, AppDirName], staged: dir)
+		try Expect.equal(warm.exitCode(), expected: 0, message: "a one-file directory did not build. It wrote to stderr: {warm.stderr}")
+
+		let everyPhase = try observedBuild(dir, flag: AllocationsByTagFlag, metrics: EveryPhaseMetricsFile)
+		let everyPhaseTable = fileText(dir.join(EveryPhaseMetricsFile))
+		try Expect.isTrue(metricsAllocsOfPhase(everyPhaseTable, kind: ChurnRowKind, phase: LexPhaseName) > 0, message: "{AllocationsByTagFlag} reported no churn for the {LexPhaseName} phase, which lexes the program. It wrote to stderr: {everyPhase.stderr}")
+		try Expect.isTrue(metricsAllocsOfPhase(everyPhaseTable, kind: ChurnRowKind, phase: ParsePhaseName) > 0, message: "{AllocationsByTagFlag} reported no churn for the {ParsePhaseName} phase, which parses the program. It wrote to stderr: {everyPhase.stderr}")
+		try Expect.isTrue(everyPhase.stderr.contains(SelfCheckAgrees), message: "{AllocationsByTagFlag} printed a self-check that does not agree with itself. It wrote to stderr: {everyPhase.stderr}")
+
+		for phase in metricsPhasesOf(everyPhaseTable, kind: ChurnRowKind) 'eachTalliedPhase'
+			let churn = metricsAllocsOfPhase(everyPhaseTable, kind: ChurnRowKind, phase: phase)
+			let allocated = metricsCell(everyPhaseTable, kind: PhaseRowKind, name: phase, field: MetricsAllocsField)
+			try Expect.isTrue(churn <= allocated + allocated / BracketDivisor + BracketFloor, message: "{AllocationsByTagFlag} tallied {churn} boxes to {phase}, whose bracket allocated {allocated} in all: the tally credits the phase what was allocated outside its bracket. It wrote to stderr: {everyPhase.stderr}")
+		end 'eachTalliedPhase'
+
+		let parse = try observedBuild(dir, flag: "{AllocationsByTagFlag}={ParsePhaseName}", metrics: ParseMetricsFile)
+		let parseTable = fileText(dir.join(ParseMetricsFile))
+		try Expect.equal(metricsAllocsOutsidePhase(parseTable, kind: ChurnRowKind, phase: ParsePhaseName), expected: 0, message: "{AllocationsByTagFlag}={ParsePhaseName} wrote churn rows for a phase other than {ParsePhaseName}. It wrote to stderr: {parse.stderr}")
+		try Expect.isTrue(parse.stderr.contains(phaseTopLine(ParsePhaseName)), message: "{AllocationsByTagFlag}={ParsePhaseName} printed no {ParsePhaseName} line under {DebugLogFlag}. It wrote to stderr: {parse.stderr}")
+		try Expect.isTrue(parse.stderr.contains(OutsideTheRowsClause), message: "{AllocationsByTagFlag}={ParsePhaseName} did not account for the allocations of the phases it did not name. It wrote to stderr: {parse.stderr}")
+		try Expect.isFalse(parse.stderr.contains(SelfCheckDisagrees), message: "{AllocationsByTagFlag}={ParsePhaseName} printed a self-check that disagrees with itself. It wrote to stderr: {parse.stderr}")
+		try requireNamedRunMatchesEveryPhaseRun(parseTable, everyPhaseTable: everyPhaseTable, phase: ParsePhaseName, said: parse.stderr)
+
+		let resolveTypes = try observedBuild(dir, flag: "{AllocationsByTagFlag}={ResolveTypesPhaseName}", metrics: ResolveTypesMetricsFile)
+		try requireNamedRunMatchesEveryPhaseRun(fileText(dir.join(ResolveTypesMetricsFile)), everyPhaseTable: everyPhaseTable, phase: ResolveTypesPhaseName, said: resolveTypes.stderr)
+	end 'requireHeldIn'
+end 'NamedPhaseIsTalliedAlone'
+
+function requireNamedRunMatchesEveryPhaseRun(namedTable String, everyPhaseTable String, phase String, said String) throws TestFailure
+	let named = metricsAllocsOfPhase(namedTable, kind: ChurnRowKind, phase: phase)
+	let inEveryPhaseRun = metricsAllocsOfPhase(everyPhaseTable, kind: ChurnRowKind, phase: phase)
+	let difference = named - inEveryPhaseRun if named > inEveryPhaseRun else inEveryPhaseRun - named
+
+	try Expect.isTrue(named > 0, message: "{AllocationsByTagFlag}={phase} wrote no churn row for the {phase} phase. It wrote to stderr: {said}")
+	try Expect.isTrue(difference <= inEveryPhaseRun / NamedRunDivisor + NamedRunFloor, message: "{AllocationsByTagFlag}={phase} tallied {named} allocations to {phase}, where the run naming every phase tallied {inEveryPhaseRun}: a named phase owes the same bracket. It wrote to stderr: {said}")
+end 'requireNamedRunMatchesEveryPhaseRun'

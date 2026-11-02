@@ -2,7 +2,8 @@
 //
 // ⚠ A run under `MAXON_MAX_PROCS=1` is THIS pool with one worker in it, not a serial fallback, which is what
 // makes the pinned and the default lane one code path and their outputs comparable at all. A binary whose runtime
-// cannot move what a worker answers (`RuntimeMovesSharedRecords`) does the same worker's work on this thread.
+// cannot move what a worker answers (`RuntimeMovesSharedRecords`), and a compile tallying
+// allocations by tag, do the same worker's work on this thread (`FrontEndPlacement`).
 //
 // ⭐⭐ **WHAT MAKES A PARSE SAFE ON A WORKER IS A PRIVATE INDEX.** A parse reads the whole program's
 // signature index and writes into it while it runs (`ProgramSignatures.openParseBand`), so every
@@ -67,6 +68,38 @@ function compilePhaseOfStage(stage FrontEndStage) returns CompilePhase
 		parse gives CompilePhase.parse
 	end 'phase'
 end 'compilePhaseOfStage'
+
+enum FrontEndDrainKind
+	lexing
+	parsing
+end 'FrontEndDrainKind'
+
+// A lexing drain runs `lex` and `directives` for a file back to back, so the two stages end
+// together and are sampled and folded as one.
+function drainOfStage(stage FrontEndStage) returns FrontEndDrainKind
+	return match stage 'stage'
+		lex or
+		directives gives FrontEndDrainKind.lexing
+		parse gives FrontEndDrainKind.parsing
+	end 'stage'
+end 'drainOfStage'
+
+// Where a drain's jobs run. `inProcessForTally` exists because the tally reads process-wide
+// counters, which concurrent workers all step, so a stage's allocations are separable only when jobs
+// run one at a time. `inProcessForRuntime` wins when both apply.
+enum FrontEndPlacement
+	onWorkers
+	inProcessForRuntime
+	inProcessForTally
+end 'FrontEndPlacement'
+
+function inProcessReasonText(placement FrontEndPlacement) returns String
+	return match placement 'placement'
+		onWorkers panic("inProcessReasonText: the front end runs on its worker pool, so there is no reason it runs in process")
+		inProcessForRuntime gives "this binary's runtime cannot move a shared-record graph"
+		inProcessForTally gives "the allocation tally attributes each stage to the thread that runs it"
+	end 'placement'
+end 'inProcessReasonText'
 
 // What one file's lex answers: the raw stream and the `#if`-resolved one, or the refusal that stopped either.
 export union LexOutcome
@@ -197,7 +230,7 @@ end 'FrontEndWorker'
 // ⛔ **A TYPE OF ITS OWN, BECAUSE THE IN-PROCESS FRONT END MUST CALL NO MESSAGE.** A message's body walks what
 // crosses with it even when it is called directly, and a binary whose runtime cannot move a shared-record graph
 // aborts that walk (`FrontEndPool.RuntimeMovesSharedRecords`).
-type FrontEndWorkerState
+type FrontEndWorkerState implements PhaseEdges
 	var keywords as KeywordTable
 	var facts as ConditionFacts
 	var ownIndex as HeldIndexArray
@@ -231,30 +264,44 @@ type FrontEndWorkerState
 		var work = try job.holder.pop() otherwise panic("FrontEndWorkerState.ran: the job carried no work — `FrontEndJob` pushes exactly one")
 
 		match work 'work'
-			lex(content) then return FrontEndOutcome.lexed(self.lexed(content))
+			lex(content) then return FrontEndOutcome.lexed(self.lexed(content, edges: self))
 			parse(parseJob, tokens, overrides) then return FrontEndOutcome.parsed(self.parsed(parseJob, tokens: tokens, overrides: overrides))
 		end 'work'
 	end 'ran'
 
-	function lexed(content String) returns LexOutcome
+	// Each stage reports its end to `edges` right after its cost is recorded, failing or not, so the
+	// tally's intervals partition the lex. The first edge closes the gap before the lex into
+	// `frontEndPool`.
+	function lexed(content String, edges PhaseEdges) returns LexOutcome
+		edges.settleTo(CompilePhase.frontEndPool)
 		self.probe.reopenCounters()
 
 		let tokens = try tokenize(content, keywords: self.keywords) otherwise (lexErr) 'lexFail'
 			self.costs.record(FrontEndStage.lex.ordinal, probe: self.probe)
+			edges.settleTo(CompilePhase.lex)
 			return LexOutcome.lexFailed(lexErr)
 		end 'lexFail'
 
 		self.costs.record(FrontEndStage.lex.ordinal, probe: self.probe)
+		edges.settleTo(CompilePhase.lex)
 		self.probe.reopenCounters()
 
 		let active = try filterConditionalTokens(tokens, facts: self.facts) otherwise (directiveErr) 'directiveFail'
 			self.costs.record(FrontEndStage.directives.ordinal, probe: self.probe)
+			edges.settleTo(CompilePhase.directives)
 			return LexOutcome.directiveFailed(tokens, error: directiveErr)
 		end 'directiveFail'
 
 		self.costs.record(FrontEndStage.directives.ordinal, probe: self.probe)
+		edges.settleTo(CompilePhase.directives)
 		return LexOutcome.lexed(tokens, active: active)
 	end 'lexed'
+
+	// No edges to report: only the allocation tally watches them, and it is never handed a pooled
+	// worker.
+	export function settleTo(phase CompilePhase)
+		return
+	end 'settleTo'
 
 	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable) returns FileParseOutcome
 		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.parsed: a parse reached a worker holding no index — the pool hands every worker its baseline before the first parse it dispatches")
@@ -269,6 +316,13 @@ end 'FrontEndWorkerState'
 union FrontEndDrainInput
 	lexing(project Project)
 	parsing(queries ParseQueryArray)
+
+	function kind() returns FrontEndDrainKind
+		return match self 'input'
+			lexing gives FrontEndDrainKind.lexing
+			parsing gives FrontEndDrainKind.parsing
+		end 'input'
+	end 'kind'
 end 'FrontEndDrainInput'
 
 type WorkerHandoff
@@ -329,6 +383,47 @@ module type FrontEndPool
 		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), handoffs: WorkerHandoffArray.create(), adopted: BoolArray.create(), adoptions: 0, indexCopyAllocations: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
 	end 'create'
 
+	static function placement(project Project) returns FrontEndPlacement
+		if not FrontEndPool.RuntimeMovesSharedRecords 'runtimeCannot'
+			return FrontEndPlacement.inProcessForRuntime
+		end 'runtimeCannot'
+
+		if project.allocationsByTag 'tallying'
+			return FrontEndPlacement.inProcessForTally
+		end 'tallying'
+
+		return FrontEndPlacement.onWorkers
+	end 'placement'
+
+	function noteDrain(kind FrontEndDrainKind)
+		match kind 'kind'
+			lexing then self.lexed = true
+			parsing then self.parsed = true
+		end 'kind'
+	end 'noteDrain'
+
+	function hasDrained(kind FrontEndDrainKind) returns bool
+		return match kind 'kind'
+			lexing gives self.lexed
+			parsing gives self.parsed
+		end 'kind'
+	end 'hasDrained'
+
+	function sampleLevelsAfter(project Project, kind FrontEndDrainKind)
+		if not project.samplesResidency 'nothingSampled'
+			return
+		end 'nothingSampled'
+
+		var sharing = false
+
+		for stage in FrontEndStage.allCases 'eachStage'
+			if drainOfStage(stage) == kind 'thisDrain'
+				recordPhaseLevels(project, phase: compilePhaseOfStage(stage), sharing: sharing)
+				sharing = true
+			end 'thisDrain'
+		end 'eachStage'
+	end 'sampleLevelsAfter'
+
 	// ⭐ **EVERY FILE WHOSE RESOLVED STREAM NO MEMO HOLDS, LEXED AND FILTERED ON THE WORKERS**, then landed through
 	// `queryActiveTokens` in source-path order — so the token queries the signature sweep asks next are all hits.
 	module function lexEveryFile(project Project) throws CompileError
@@ -351,7 +446,7 @@ module type FrontEndPool
 		end 'everyStreamIsHeld'
 
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.frontEndPool)
-		self.lexed = true
+		self.noteDrain(FrontEndDrainKind.lexing)
 
 		var outcomes = FrontEndOutcomeArray.create()
 		var slots = LandingSlots.create(project.db.sourcePaths.count())
@@ -362,6 +457,7 @@ module type FrontEndPool
 		end 'landInSourcePathOrder'
 
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
+		self.sampleLevelsAfter(project, kind: FrontEndDrainKind.lexing)
 	end 'lexEveryFile'
 
 	// ⭐ **EVERY FILE'S PARSE, IN SOURCE-PATH ORDER** — the memoized ones from the memo, the rest parsed on the
@@ -386,15 +482,39 @@ module type FrontEndPool
 		end 'everyParseIsMemoized'
 
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.frontEndPool)
-		self.holdBaseline(signatures, os: project.target.os)
+		self.holdBaseline(signatures, project: project)
 		try requireStillWanted(project)
-		self.parsed = true
+		self.noteDrain(FrontEndDrainKind.parsing)
 		try self.drainEveryJob(project, input: FrontEndDrainInput.parsing(queries), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
 
 		var artifacts = landParses(project, queries: queries, outcomes: outcomes, slots: slots)
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
+		self.sampleLevelsAfter(project, kind: FrontEndDrainKind.parsing)
 		return artifacts
 	end 'parseEveryFile'
+
+	function reportWorkerPool(filesDispatched ElementIndex)
+		let sizing = PoolSizing.forJobs(filesDispatched)
+
+		// The reported count is derived, while `tests/parallelCompile/` reads the line back as an
+		// observation of the pool that ran; without this, that case would compare the rule with itself.
+		// Equality holds by construction — `requireWorkers` grows the pool to `min(P, filesDispatched)` on
+		// every drain and `min` is monotone in a maximum — so this catches a future divergence loudly.
+		if sizing.workerCount != self.workers.count() 'theReportedPoolIsNotTheOneThatRan'
+			panic("FrontEndPool.close: the pool holds {self.workers.count()} worker(s) where min(P, {filesDispatched}) is {sizing.workerCount} — `requireWorkers` grows it to that size on every drain, so a difference is a pool the reported line does not describe")
+		end 'theReportedPoolIsNotTheOneThatRan'
+
+		if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+			logCompilerDebugSettled("{sizing.line(PoolKind.frontEnd)}, {self.adoptions} adopted")
+			logCompilerDebugSettled("front end index copy: {self.indexCopyAllocations} allocations")
+		end 'debugging'
+	end 'reportWorkerPool'
+
+	function reportInProcess(filesDispatched ElementIndex, placement FrontEndPlacement)
+		if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+			logCompilerDebugSettled("front end: serial, in process, {filesDispatched} file(s) — {inProcessReasonText(placement)}")
+		end 'debugging'
+	end 'reportInProcess'
 
 	// Fold every worker's costs into the stages' rows, report the pool once, and retire the workers to
 	// `project.retiredWorkers` (see `RetiredWorkers`).
@@ -406,26 +526,13 @@ module type FrontEndPool
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.frontEndPool)
 		let filesDispatched = self.mostFilesDispatched
 
-		if FrontEndPool.RuntimeMovesSharedRecords 'onTheWorkers'
-			let sizing = PoolSizing.forJobs(filesDispatched)
+		let placement = FrontEndPool.placement(project)
 
-			// The reported count is derived, while `tests/parallelCompile/` reads the line back as an
-			// observation of the pool that ran; without this, that case would compare the rule with itself.
-			// Equality holds by construction — `requireWorkers` grows the pool to `min(P, filesDispatched)` on
-			// every drain and `min` is monotone in a maximum — so this catches a future divergence loudly.
-			if sizing.workerCount != self.workers.count() 'theReportedPoolIsNotTheOneThatRan'
-				panic("FrontEndPool.close: the pool holds {self.workers.count()} worker(s) where min(P, {filesDispatched}) is {sizing.workerCount} — `requireWorkers` grows it to that size on every drain, so a difference is a pool the reported line does not describe")
-			end 'theReportedPoolIsNotTheOneThatRan'
-
-			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-				logCompilerDebugSettled("{sizing.line(PoolKind.frontEnd)}, {self.adoptions} adopted")
-				logCompilerDebugSettled("front end index copy: {self.indexCopyAllocations} allocations")
-			end 'debugging'
-		end 'onTheWorkers' else 'inProcess'
-			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-				logCompilerDebugSettled("front end: serial, in process, {filesDispatched} file(s) — this binary's runtime cannot move a shared-record graph")
-			end 'debugging'
-		end 'inProcess'
+		match placement 'placement'
+			onWorkers then self.reportWorkerPool(filesDispatched)
+			inProcessForRuntime or
+			inProcessForTally then self.reportInProcess(filesDispatched, placement: placement)
+		end 'placement'
 
 		for slot in 0 upto self.workers.count() 'eachReport'
 			var worker = try self.workers.get(slot) otherwise panic("FrontEndPool.close: workers.get OOB at {slot} below count {self.workers.count()}")
@@ -463,7 +570,7 @@ module type FrontEndPool
 	//
 	// The handoff is taken while `signatures` is at its settled baseline: the fold restores it before
 	// it parses, and a drain writes nothing into it.
-	function holdBaseline(signatures ProgramSignatures, os Os)
+	function holdBaseline(signatures ProgramSignatures, project Project)
 		if let held = try self.baseline.get(0) 'held'
 			if held is signatures 'theSameIndex'
 				self.baselineRevision = signatures.liveKeysRevision()
@@ -477,16 +584,22 @@ module type FrontEndPool
 		self.baselineRevision = signatures.liveKeysRevision()
 		self.adopted.refill(self.workers.count(), value: false)
 
-		if FrontEndPool.RuntimeMovesSharedRecords 'onTheWorkers'
-			let handoff = WorkerHandoff.of(signatures, os: os)
-
-			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'measuringACopy'
-				self.indexCopyAllocations = handoff.template.current().signatures.copyAllocations()
-			end 'measuringACopy'
-
-			self.handoffs.push(handoff)
-		end 'onTheWorkers'
+		match FrontEndPool.placement(project) 'placement'
+			onWorkers then self.pushHandoff(signatures, os: project.target.os)
+			inProcessForRuntime or
+			inProcessForTally then break
+		end 'placement'
 	end 'holdBaseline'
+
+	function pushHandoff(signatures ProgramSignatures, os Os)
+		let handoff = WorkerHandoff.of(signatures, os: os)
+
+		if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'measuringACopy'
+			self.indexCopyAllocations = handoff.template.current().signatures.copyAllocations()
+		end 'measuringACopy'
+
+		self.handoffs.push(handoff)
+	end 'pushHandoff'
 
 	// The worker clones its index on its own thread (`FrontEndWorker.adopt`); this thread hands over
 	// two handles, so no worker's first parse waits behind another worker's copy.
@@ -531,13 +644,17 @@ module type FrontEndPool
 	function drainEveryJob(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
 		self.mostFilesDispatched = files.count() if files.count() > self.mostFilesDispatched else self.mostFilesDispatched
 
-		if FrontEndPool.RuntimeMovesSharedRecords 'onTheWorkers'
-			self.requireWorkers(project, filesDispatched: files.count())
-			try self.drain(project, input: input, files: files, sizes: sizes, workerCount: self.drainWorkerCount(input, sizes: sizes), outcomes: outcomes, slots: slots)
-		end 'onTheWorkers' else 'inProcess'
-			try self.drainInProcess(project, input: input, files: files, outcomes: outcomes, slots: slots)
-		end 'inProcess'
+		match FrontEndPool.placement(project) 'placement'
+			onWorkers then try self.drainOnWorkers(project, input: input, files: files, sizes: sizes, outcomes: outcomes, slots: slots)
+			inProcessForRuntime or
+			inProcessForTally then try self.drainInProcess(project, input: input, files: files, outcomes: outcomes, slots: slots)
+		end 'placement'
 	end 'drainEveryJob'
+
+	function drainOnWorkers(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
+		self.requireWorkers(project, filesDispatched: files.count())
+		try self.drain(project, input: input, files: files, sizes: sizes, workerCount: self.drainWorkerCount(input, sizes: sizes), outcomes: outcomes, slots: slots)
+	end 'drainOnWorkers'
 
 	function drainWorkerCount(input FrontEndDrainInput, sizes PoolJobSizeArray) returns PoolSize
 		return match input 'input'
@@ -556,8 +673,8 @@ module type FrontEndPool
 			let fileIndex = fileOfJob(files, job: job)
 
 			var outcome = match input 'input'
-				lexing(sources) gives worker.ran(FrontEndJob.lexing(sourceTextAt(sources, fileIndex: fileIndex)))
-				parsing(queries) gives worker.ran(FrontEndJob.parsing(queryAt(queries, fileIndex: fileIndex)))
+				lexing(sources) gives lexInProcess(project, worker: worker, content: sourceTextAt(sources, fileIndex: fileIndex))
+				parsing(queries) gives parseInProcess(project, worker: worker, query: queryAt(queries, fileIndex: fileIndex))
 			end 'input'
 
 			landOutcome(outcome, fileIndex: fileIndex, outcomes: outcomes, slots: slots)
@@ -630,20 +747,35 @@ module type FrontEndPool
 
 	function foldCosts(project Project, costs PoolPhaseCosts)
 		for stage in FrontEndStage.allCases 'eachStage'
-			if self.ranOnTheWorkers(stage) 'thisStageRan'
+			if self.hasDrained(drainOfStage(stage)) 'thisStageRan'
 				foldPoolPhaseDelta(project, phase: compilePhaseOfStage(stage), driver: CompilePhase.frontEndPool, delta: costs.accumulated(stage.ordinal))
 			end 'thisStageRan'
 		end 'eachStage'
 	end 'foldCosts'
-
-	function ranOnTheWorkers(stage FrontEndStage) returns bool
-		return match stage 'stage'
-			lex or
-			directives gives self.lexed
-			parse gives self.parsed
-		end 'stage'
-	end 'ranOnTheWorkers'
 end 'FrontEndPool'
+
+function lexInProcess(project Project, worker FrontEndWorkerState, content String) returns FrontEndOutcome
+	if project.allocationsByTag 'tallied'
+		return FrontEndOutcome.lexed(worker.lexed(content, edges: project.memory.allocTally))
+	end 'tallied'
+
+	return worker.ran(FrontEndJob.lexing(content))
+end 'lexInProcess'
+
+function parseInProcess(project Project, worker FrontEndWorkerState, query ParseQuery) returns FrontEndOutcome
+	var job = FrontEndJob.parsing(query)
+
+	if not project.allocationsByTag 'untallied'
+		return worker.ran(job)
+	end 'untallied'
+
+	project.memory.allocTally.settleTo(CompilePhase.frontEndPool)
+
+	var outcome = worker.ran(job)
+	project.memory.allocTally.settleTo(CompilePhase.parse)
+
+	return outcome
+end 'parseInProcess'
 
 function sourcePathAt(project Project, fileIndex ElementIndex) returns FilePath
 	return try project.db.sourcePaths.get(fileIndex) otherwise panic("FrontEndPool: file {fileIndex} is not below project.db.sourcePaths.count() {project.db.sourcePaths.count()}")

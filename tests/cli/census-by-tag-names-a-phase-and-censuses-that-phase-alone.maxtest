@@ -1,0 +1,39 @@
+let CensusByTagNamesAPhaseCaseDirName = "census-by-tag-names-a-phase"
+
+let CensusEveryPhaseMetricsFile = "every-phase.tsv"
+let CensusParseMetricsFile = "parse.tsv"
+
+let CensusParseTable = "the whole table at parse, "
+let CensusNotCensused = "was not censused"
+
+test 'a named front-end phase is censused by tag, and that phase alone'
+	requireHeldOutsideCheckout(CensusByTagNamesAPhaseCaseDirName, check: NamedFrontEndPhaseIsCensusedAlone.create())
+end 'a named front-end phase is censused by tag, and that phase alone'
+
+type NamedFrontEndPhaseIsCensusedAlone implements OutsideCheckoutCase
+	static function create() returns NamedFrontEndPhaseIsCensusedAlone
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagingDir(dir.join(AppDirName).toString())
+
+		writeStagedFile(app.join("{MainSourceStem}{MaxonSourceSuffix}"), content: MainSource)
+
+		let warm = spawnCompiler([BuildCommandWord, AppDirName], staged: dir)
+		try Expect.equal(warm.exitCode(), expected: 0, message: "a one-file directory did not build. It wrote to stderr: {warm.stderr}")
+
+		let everyPhase = try observedBuild(dir, flag: CensusByTagFlag, metrics: CensusEveryPhaseMetricsFile)
+		let everyPhaseTable = fileText(dir.join(CensusEveryPhaseMetricsFile))
+		try Expect.isTrue(metricsAllocsOfPhase(everyPhaseTable, kind: TagRowKind, phase: LexPhaseName) > 0, message: "{CensusByTagFlag} reported no live slots at the {LexPhaseName} phase, which lexes the program. It wrote to stderr: {everyPhase.stderr}")
+		try Expect.isTrue(metricsAllocsOfPhase(everyPhaseTable, kind: TagRowKind, phase: ParsePhaseName) > 0, message: "{CensusByTagFlag} reported no live slots at the {ParsePhaseName} phase, which parses the program. It wrote to stderr: {everyPhase.stderr}")
+
+		let parse = try observedBuild(dir, flag: "{CensusByTagFlag}={ParsePhaseName}", metrics: CensusParseMetricsFile)
+		let parseTable = fileText(dir.join(CensusParseMetricsFile))
+		try Expect.isTrue(metricsAllocsOfPhase(parseTable, kind: TagRowKind, phase: ParsePhaseName) > 0, message: "{CensusByTagFlag}={ParsePhaseName} wrote no `{TagRowKind}` row for the {ParsePhaseName} phase. It wrote to stderr: {parse.stderr}")
+		try Expect.equal(metricsAllocsOutsidePhase(parseTable, kind: TagRowKind, phase: ParsePhaseName), expected: 0, message: "{CensusByTagFlag}={ParsePhaseName} wrote `{TagRowKind}` rows for a phase other than {ParsePhaseName}. It wrote to stderr: {parse.stderr}")
+		try Expect.isTrue(parse.stderr.contains(phaseTopLine(ParsePhaseName)), message: "{CensusByTagFlag}={ParsePhaseName} printed no {ParsePhaseName} line under {DebugLogFlag}. It wrote to stderr: {parse.stderr}")
+		try Expect.isTrue(parse.stderr.contains(CensusParseTable), message: "{CensusByTagFlag}={ParsePhaseName} printed no table for the {ParsePhaseName} phase. It wrote to stderr: {parse.stderr}")
+		try Expect.isFalse(parse.stderr.contains(CensusNotCensused), message: "{CensusByTagFlag}={ParsePhaseName} said a phase was not censused, where the phase it names was. It wrote to stderr: {parse.stderr}")
+	end 'requireHeldIn'
+end 'NamedFrontEndPhaseIsCensusedAlone'

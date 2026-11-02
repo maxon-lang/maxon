@@ -157,6 +157,11 @@ export type PhaseProbe
 	// reopen.
 	let opensSpan as bool
 
+	// The allocation tally's innermost bracket when this one opened, which closing it restores. Only
+	// meaningful under `--allocations-by-tag`.
+	export var outerOpen as bool
+	export var outer as CompilePhase
+
 	// Open a bracket, and open the matching TRACE SPAN.
 	//
 	// The span and the counters are opened by the SAME call for the same reason time and memory
@@ -201,7 +206,7 @@ export type PhaseProbe
 	end 'beginProcessWideCounters'
 
 	static function openOn(source CounterSource, opensSpan bool) returns PhaseProbe
-		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan}
+		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan, outerOpen: false, outer: CompilePhase.load}
 		probe.readCounters()
 		return probe
 	end 'openOn'
@@ -236,7 +241,21 @@ export type PhaseProbe
 	// Open a bracket around a pipeline phase. The name comes from the phase, so the span the
 	// trace shows and the row the timing table shows can never disagree about which phase it is.
 	export static function beginPhase(project Project, phase CompilePhase) returns PhaseProbe
-		return Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans)
+		if not project.allocationsByTag 'untallied'
+			return Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans)
+		end 'untallied'
+
+		project.memory.allocTally.settleInnermost()
+
+		let outerOpen = project.memory.allocTally.open
+		let outer = project.memory.allocTally.innermost
+		project.memory.allocTally.enter(phase)
+
+		var probe = Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans)
+		probe.outerOpen = outerOpen
+		probe.outer = outer
+
+		return probe
 	end 'beginPhase'
 
 	// Close the bracket.
@@ -309,7 +328,7 @@ end 'heapBytesOf'
 // closes no span because its brackets open none.
 
 export function recordPhase(project Project, phase CompilePhase, probe PhaseProbe)
-	recordPhaseDelta(project, phase: phase, delta: probe.elapsed())
+	recordPhaseDelta(project, phase: phase, delta: probe.elapsed(), probe: probe)
 end 'recordPhase'
 
 // ⭐ **THE SAME, MINUS A PHASE THAT ALREADY RAN INSIDE THIS BRACKET** — for the one shape a main-thread
@@ -325,29 +344,24 @@ export function recordPhaseExcluding(project Project, phase CompilePhase, probe 
 	let innerCost = project.timings.costOf(inner)
 	let innerMemory = project.memory.deltaOf(inner)
 	let innerDelta = PhaseDelta.create(innerCost.nanos, cpuTicks: innerCost.cpuTicks, allocs: innerMemory.allocs, frees: innerMemory.frees, bytes: innerMemory.bytes)
-	recordPhaseDelta(project, phase: phase, delta: probe.elapsed().minus(innerDelta))
+	recordPhaseDelta(project, phase: phase, delta: probe.elapsed().minus(innerDelta), probe: probe)
 end 'recordPhaseExcluding'
 
-function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
+function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta, probe PhaseProbe)
 	project.timings.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
-
-	// Read after the delta rather than inside the bracket: the census costs time proportional to the heap,
-	// which inside the bracket is billed to the phase it is measuring.
-	if project.samplesResidency 'census'
-		project.memory.recordResidency(phase, reading: PhaseResidency.sample())
-
-		if project.censusByTag and tagCensusCovers(project.censusPhase, phase: phase) 'byTag'
-			project.memory.recordTagCensus(phase)
-		end 'byTag'
-	end 'census'
 
 	// Outside the residency gate on purpose: reading 2048 counter pairs costs nothing proportional to the
 	// heap, so the tally owes none of the census's sampling. Folded under that gate, a build asking only
 	// for the tally would sample no phase and report an empty table rather than saying anything.
-	if project.allocationsByTag and tagCensusCovers(project.allocationsPhase, phase: phase) 'churn'
-		project.memory.recordAllocTally(phase)
+	if project.allocationsByTag 'churn'
+		project.memory.allocTally.settleTo(phase)
+		project.memory.allocTally.leave(probe.outerOpen, outer: probe.outer)
 	end 'churn'
+
+	// Read after the delta rather than inside the bracket: the census costs time proportional to the heap,
+	// which inside the bracket is billed to the phase it is measuring.
+	recordPhaseLevels(project, phase: phase, sharing: false)
 
 	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans)
 
@@ -361,12 +375,19 @@ function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	project.session.treeLock.touch()
 end 'recordPhaseDelta'
 
-function tagCensusCovers(wanted TagCensusPhases, phase CompilePhase) returns bool
-	return match wanted 'wanted'
-		everyPhase gives true
-		only(named) gives named == phase
-	end 'wanted'
-end 'tagCensusCovers'
+// Samples the live heap at the end of `phase`: residency, and the tag census when it is requested.
+// The front end's stages close no bracket of their own, so `FrontEndPool` calls this at the end of
+// each drain. `sharing` is true when the previous call sampled the very same heap, so the census
+// reuses its walk.
+module function recordPhaseLevels(project Project, phase CompilePhase, sharing bool)
+	if project.samplesResidency 'census'
+		project.memory.recordResidency(phase, reading: PhaseResidency.sample())
+
+		if project.censusByTag 'byTag'
+			project.memory.recordTagCensus(phase, sharing: sharing)
+		end 'byTag'
+	end 'census'
+end 'recordPhaseLevels'
 
 // Close the innermost open span, which must be `name`. ONE door for both writers above, so the stack and
 // the trace cannot be updated by two statements that could drift.

@@ -267,6 +267,7 @@ let TagCensusOverflowLabel = "(overflow)"
 let TagCensusUntaggedLabel = "(untagged)"
 let TagCensusNothingLive = "nothing live"
 let AllocTallyNothingAllocated = "nothing allocated"
+let AllocTallyNothingAllocatedReason = "no sampled phase allocated anything, so there is no table to print"
 let TagCensusUntaggedBucket = 0
 
 let TagCensusTagColumnTitle = "tag"
@@ -305,6 +306,20 @@ end 'tagCensusSlotOf'
 export union TagCensusPhases
 	everyPhase
 	only(phase CompilePhase)
+
+	export function covers(phase CompilePhase) returns bool
+		return match self 'wanted'
+			everyPhase gives true
+			only(named) gives named == phase
+		end 'wanted'
+	end 'covers'
+
+	export function namedOr(fallback CompilePhase) returns CompilePhase
+		return match self 'wanted'
+			everyPhase gives fallback
+			only(named) gives named
+		end 'wanted'
+	end 'namedOr'
 end 'TagCensusPhases'
 
 function heapCensusModeForThisBuild() returns HeapCensusMode
@@ -428,18 +443,21 @@ end 'TagBucketColumns'
 
 export type PhaseTagCensusColumns
 	export var enabled as bool
+	export var requested as TagCensusPhases
 	export var buckets as TagBucketColumns
 	export var liveBytes as PhaseColumnArray
 	export var rawLiveSlots as PhaseColumnArray
 	export var tallyBytes as PhaseColumnArray
 	export var scratch as PhaseTagCensus
+	var scratchIsCurrent as bool
 
 	export static function off() returns PhaseTagCensusColumns
-		return Self{enabled: false, buckets: TagBucketColumns.off(), liveBytes: PhaseColumnArray.create(), rawLiveSlots: PhaseColumnArray.create(), tallyBytes: PhaseColumnArray.create(), scratch: PhaseTagCensus.empty()}
+		return Self{enabled: false, requested: TagCensusPhases.everyPhase, buckets: TagBucketColumns.off(), liveBytes: PhaseColumnArray.create(), rawLiveSlots: PhaseColumnArray.create(), tallyBytes: PhaseColumnArray.create(), scratch: PhaseTagCensus.empty(), scratchIsCurrent: false}
 	end 'off'
 
-	export function enable(phaseCount PhaseIndex, tallyMode TagCensusMode)
+	export function enable(phaseCount PhaseIndex, tallyMode TagCensusMode, wanted TagCensusPhases)
 		self.enabled = true
+		self.requested = wanted
 		self.buckets.size(phaseCount, tallyMode: tallyMode)
 		self.liveBytes = phaseColumn(phaseCount)
 		self.rawLiveSlots = phaseColumn(phaseCount)
@@ -447,9 +465,24 @@ export type PhaseTagCensusColumns
 		self.scratch = PhaseTagCensus.sized()
 	end 'enable'
 
-	export function takeAt(index PhaseIndex)
-		self.scratch.take()
-		self.keepIfHighest(index, reading: self.scratch)
+	// `sharing` marks a reading taken at the same instant as the previous call's (`lex` and
+	// `directives` end together), so one heap walk serves both; a walk costs time proportional to the
+	// live heap.
+	export function takeAt(phase CompilePhase, sharing bool)
+		if not sharing 'aNewReading'
+			self.scratchIsCurrent = false
+		end 'aNewReading'
+
+		if not self.requested.covers(phase) 'notNamed'
+			return
+		end 'notNamed'
+
+		if not self.scratchIsCurrent 'walkTheHeap'
+			self.scratch.take()
+			self.scratchIsCurrent = true
+		end 'walkTheHeap'
+
+		self.keepIfHighest(phase.ordinal as PhaseIndex, reading: self.scratch)
 	end 'takeAt'
 
 	// ⚠ A phase that ran twice keeps ONE whole sampling — the one with the highest live level — and never
@@ -503,6 +536,14 @@ export type PhaseAllocTally
 	export function take()
 		self.runTotal = HeapStats.allocationsMade() as AllocCount
 
+		// Without tags the per-tag counters answer 0, so the whole total is counted under the untagged
+		// bucket.
+		if tagCensusModeForThisBuild() != SlabCensusTagMode 'noTagsToSplitBy'
+			writeColumn(self.counts, index: TagCensusUntaggedBucket as ElementIndex, value: self.runTotal as ColumnCell)
+			writeColumn(self.bytes, index: TagCensusUntaggedBucket as ElementIndex, value: HeapStats.bytesAllocated() as ColumnCell)
+			return
+		end 'noTagsToSplitBy'
+
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
 			writeColumn(self.counts, index: bucket as ElementIndex, value: HeapStats.allocationsTagged(bucket as HeapBucketIndex) as ColumnCell)
 			writeColumn(self.bytes, index: bucket as ElementIndex, value: HeapStats.bytesTagged(bucket as HeapBucketIndex) as ColumnCell)
@@ -510,46 +551,104 @@ export type PhaseAllocTally
 	end 'take'
 end 'PhaseAllocTally'
 
-export type PhaseAllocTallyColumns
+let OutsideEveryPhase = 0
+
+// The boundaries a front-end stage reports as it runs: `settleTo(phase)` hands `phase` every
+// allocation made since the previous boundary. A worker the tally is not watching implements it as a
+// no-op.
+export interface PhaseEdges
+	function settleTo(phase CompilePhase)
+end 'PhaseEdges'
+
+// Event driven: each interval between two boundaries is credited to the innermost bracket open
+// across it (`beginPhase` opens one, `recordPhaseDelta` closes it), so a phase that excludes a
+// nested one (`load` and `loadRuntime`) owns exactly its own share. An interval no requested phase
+// owns goes to `elsewhere`, which keeps the buckets' sum plus `elsewhere` equal to the run's total
+// whichever phase is named. A phase that ran twice owes the sum of both visits.
+export type PhaseAllocTallyColumns implements PhaseEdges
 	export var enabled as bool
+	export var requested as TagCensusPhases
 	export var buckets as TagBucketColumns
-	export var previous as PhaseAllocTally
-	export var scratch as PhaseAllocTally
+	var previous as PhaseAllocTally
+	var scratch as PhaseAllocTally
 	export var runTotal as AllocCount
 
+	// Allocations credited to no requested phase: made between brackets, or inside a phase other than
+	// the one named.
+	export var elsewhere as AllocCount
+
+	// Whether a bracket is open, and the innermost one; `innermost` means nothing while `open` is
+	// false.
+	export var open as bool
+	export var innermost as CompilePhase
+
 	export static function off() returns PhaseAllocTallyColumns
-		return Self{enabled: false, buckets: TagBucketColumns.off(), previous: PhaseAllocTally.empty(), scratch: PhaseAllocTally.empty(), runTotal: 0}
+		return Self{enabled: false, requested: TagCensusPhases.everyPhase, buckets: TagBucketColumns.off(), previous: PhaseAllocTally.empty(), scratch: PhaseAllocTally.empty(), runTotal: 0, elsewhere: 0, open: false, innermost: CompilePhase.load}
 	end 'off'
 
-	export function enable(phaseCount PhaseIndex)
+	export function enable(phaseCount PhaseIndex, wanted TagCensusPhases, within CompilePhase)
 		self.enabled = true
+		self.requested = wanted
 		self.buckets.size(phaseCount, tallyMode: tagCensusModeForThisBuild())
 		self.previous = PhaseAllocTally.sized()
 		self.scratch = PhaseAllocTally.sized()
+		self.settleOutside()
+		self.enter(within)
 	end 'enable'
 
-	// Each phase's cells are the rise since the previous boundary, folded ADDITIVELY where the census keeps
-	// one whole sampling: a count over an interval is not a level, so a phase entered twice owes the sum of
-	// both visits and a highest-wins fold would drop one. `previous` starts at zeros, so the first sampled
-	// phase absorbs everything allocated before its boundary and Σ over the sampled phases telescopes
-	// EXACTLY to the run's own total at the last one — which is what the report's self-check asserts, and
-	// what makes it hold when a single phase is named as well.
-	export function takeAt(index PhaseIndex)
+	export function enter(phase CompilePhase)
+		self.open = true
+		self.innermost = phase
+	end 'enter'
+
+	export function leave(outerOpen bool, outer CompilePhase)
+		self.open = outerOpen
+		self.innermost = outer
+	end 'leave'
+
+	export function settleInnermost()
+		if not self.open 'betweenPhases'
+			self.settleOutside()
+			return
+		end 'betweenPhases'
+
+		self.settleTo(self.innermost)
+	end 'settleInnermost'
+
+	// Credits everything allocated since the previous reading to `phase`, or to `elsewhere` when the
+	// run named another phase.
+	export function settleTo(phase CompilePhase)
+		self.advance(phase.ordinal as PhaseIndex, owned: self.requested.covers(phase))
+	end 'settleTo'
+
+	// Closes an interval no phase owns: allocations made between brackets.
+	export function settleOutside()
+		self.advance(OutsideEveryPhase, owned: false)
+	end 'settleOutside'
+
+	function advance(row PhaseIndex, owned bool)
 		self.scratch.take()
+		self.runTotal = self.scratch.runTotal
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
 			let read = bucket as ElementIndex
-			let nowCount = readColumn(self.scratch.counts, index: read)
-			let nowBytes = readColumn(self.scratch.bytes, index: read)
+			let countCell = readColumn(self.scratch.counts, index: read) - readColumn(self.previous.counts, index: read)
+			let bytesCell = readColumn(self.scratch.bytes, index: read) - readColumn(self.previous.bytes, index: read)
 
-			self.buckets.addToBucket(index, bucket: bucket, countCell: nowCount - readColumn(self.previous.counts, index: read), bytesCell: nowBytes - readColumn(self.previous.bytes, index: read))
-			writeColumn(self.previous.counts, index: read, value: nowCount)
-			writeColumn(self.previous.bytes, index: read, value: nowBytes)
+			if owned 'named'
+				self.buckets.addToBucket(row, bucket: bucket, countCell: countCell, bytesCell: bytesCell)
+			end 'named' else 'elsewhere'
+				self.elsewhere = self.elsewhere + (countCell as AllocCount)
+			end 'elsewhere'
+
+			writeColumn(self.previous.counts, index: read, value: readColumn(self.scratch.counts, index: read))
+			writeColumn(self.previous.bytes, index: read, value: readColumn(self.scratch.bytes, index: read))
 		end 'eachBucket'
 
-		self.runTotal = self.scratch.runTotal
-		self.buckets.markSampled(index)
-	end 'takeAt'
+		if owned 'named'
+			self.buckets.markSampled(row)
+		end 'named'
+	end 'advance'
 end 'PhaseAllocTallyColumns'
 
 // Per-compile memory attribution, owned by `Project` beside `timings` — for the same
@@ -596,21 +695,17 @@ export type CompileMemory
 		return self.residency.at(phase.ordinal as PhaseIndex)
 	end 'residencyOf'
 
-	export function enableTagCensus()
-		self.tagCensus.enable(CompilePhase.allCases.count() as PhaseIndex, tallyMode: tagCensusModeForThisBuild())
+	export function enableTagCensus(requested TagCensusPhases)
+		self.tagCensus.enable(CompilePhase.allCases.count() as PhaseIndex, tallyMode: tagCensusModeForThisBuild(), wanted: requested)
 	end 'enableTagCensus'
 
-	export function recordTagCensus(phase CompilePhase)
-		self.tagCensus.takeAt(phase.ordinal as PhaseIndex)
+	export function recordTagCensus(phase CompilePhase, sharing bool)
+		self.tagCensus.takeAt(phase, sharing: sharing)
 	end 'recordTagCensus'
 
-	export function enableAllocTally()
-		self.allocTally.enable(CompilePhase.allCases.count() as PhaseIndex)
+	export function enableAllocTally(requested TagCensusPhases, within CompilePhase)
+		self.allocTally.enable(CompilePhase.allCases.count() as PhaseIndex, wanted: requested, within: within)
 	end 'enableAllocTally'
-
-	export function recordAllocTally(phase CompilePhase)
-		self.allocTally.takeAt(phase.ordinal as PhaseIndex)
-	end 'recordAllocTally'
 
 	export function deltaOf(phase CompilePhase) returns PhaseDelta
 		let allocs = self.columns.allocsAt(phase.ordinal as PhaseIndex)
@@ -714,14 +809,14 @@ export function compileMemoryReport(memory CompileMemory, timings CompileTimings
 	msg.append(memoryRow("{MemRowIndent}TOTAL", delta: total))
 	msg.append(memoryRow("{MemRowIndent}attributed", delta: memory.attributed(poolRows)))
 	msg.append(memoryRow("{MemRowIndent}unattributed", delta: memory.unattributed(poolRows)))
-	msg.append(compileResidencyReport(memory))
-	msg.append(allocTallyReport(memory))
+	msg.append(compileResidencyReport(memory, timings: timings))
+	msg.append(allocTallyReport(memory, timings: timings))
 	return msg.build()
 end 'compileMemoryReport'
 
 // Empty for a build that did not sample, rather than a table of zeroes that reads as an allocation-free
 // compile.
-function compileResidencyReport(memory CompileMemory) returns String
+function compileResidencyReport(memory CompileMemory, timings CompileTimings) returns String
 	var peak = PhaseResidency.zero()
 	var peakCommittedPhase = ""
 	var peakLivePhase = CompilePhase.load
@@ -755,7 +850,7 @@ function compileResidencyReport(memory CompileMemory) returns String
 	msg.append(horizontalRule(ResidencyRuleWidth))
 	msg.append(residencyRow("{MemRowIndent}PEAK committed", reading: peak))
 	msg.append("{MemRowIndent}peak committed {peak.committedBytes} at {peakCommittedPhase}; peak live {memory.residencyOf(peakLivePhase).liveBytes} at {peakLivePhase.name}; held-not-live {peak.committedBytes - peak.liveBytes}\n")
-	msg.append(tagCensusReport(memory, peakLivePhase: peakLivePhase))
+	msg.append(tagCensusReport(memory, peakLivePhase: peakLivePhase, timings: timings))
 	return msg.build()
 end 'compileResidencyReport'
 
@@ -771,7 +866,7 @@ end 'TagCensusRow'
 
 typealias TagCensusRowArray = Array with TagCensusRow
 
-function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase) returns String
+function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase, timings CompileTimings) returns String
 	let census = memory.tagCensus
 
 	if not census.enabled 'notRequested'
@@ -780,6 +875,7 @@ function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase) retur
 
 	let names = census.buckets.names
 	let style = tagCensusRowStyle(census.buckets.mode)
+	let tablePhase = census.requested.namedOr(peakLivePhase)
 	var msg = StringBuilder.create()
 
 	msg.append("\n{tagCensusHeadline(census.buckets.mode)}\n")
@@ -788,34 +884,34 @@ function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase) retur
 		msg.append("{MemRowIndent}this binary carries no interned-name table, so every bucket is shown as `tag=<n>` — the same table `maxon monitor` reads to name a traced allocation\n")
 	end 'noNameTable'
 
-	let peakSampled = census.buckets.sampledAt(peakLivePhase.ordinal as PhaseIndex)
+	let peakSampled = census.buckets.sampledAt(tablePhase.ordinal as PhaseIndex)
 	var peakRows = TagCensusRowArray.create()
 
 	if peakSampled 'rankThePeakOnce'
-		peakRows = tagRowsRanked(census.buckets, index: peakLivePhase.ordinal as PhaseIndex, wholeTable: true, style: style)
+		peakRows = tagRowsRanked(census.buckets, index: tablePhase.ordinal as PhaseIndex, wholeTable: true, style: style)
 	end 'rankThePeakOnce'
 
-	msg.append(tagPhaseTopLines(census.buckets, style: style, peakPhase: peakLivePhase, peakRows: peakRows, peakRanked: peakSampled))
+	msg.append(tagPhaseTopLines(census.buckets, style: style, peakPhase: tablePhase, peakRows: peakRows, peakRanked: peakSampled))
 
 	if not peakSampled 'peakNeverSampled'
-		msg.append("{MemRowIndent}the peak-live phase {peakLivePhase.name} was not censused, so there is no table to print for it\n")
+		msg.append("{MemRowIndent}{tablePhase.name} was not censused, so there is no table to print for it: {namedPhaseNeverSampledReason(tablePhase, timings: timings)}\n")
 		return msg.build()
 	end 'peakNeverSampled'
 
-	msg.append("{MemRowIndent}the whole table at {peakLivePhase.name}, the peak-LIVE phase\n")
+	msg.append("{MemRowIndent}the whole table at {tablePhase.name}, {"the peak-LIVE phase" if tablePhase == peakLivePhase else "the named phase"}\n")
 	msg.append(tagTableBlock(peakRows, style: style, names: names, columnTitle: tagCensusColumnTitle(census.buckets.mode), countTitle: TagCensusLiveColumnTitle))
-	msg.append(tagCensusOwnRowText(census, index: peakLivePhase.ordinal as PhaseIndex, bucket: SlabCensusImplausibleBucket, names: names))
-	msg.append(tagCensusOwnRowText(census, index: peakLivePhase.ordinal as PhaseIndex, bucket: SlabCensusOverflowBucket, names: names))
+	msg.append(tagCensusOwnRowText(census, index: tablePhase.ordinal as PhaseIndex, bucket: SlabCensusImplausibleBucket, names: names))
+	msg.append(tagCensusOwnRowText(census, index: tablePhase.ordinal as PhaseIndex, bucket: SlabCensusOverflowBucket, names: names))
 	msg.append(horizontalRule(TagCensusRuleWidth))
 
-	let committed = memory.residencyOf(peakLivePhase).committedBytes
+	let committed = memory.residencyOf(tablePhase).committedBytes
 	msg.append("{MemRowIndent}os-direct: no row above counts a mapping the slab did not serve — committed {committed} bytes at this phase INCLUDES the OS-direct road's live mappings and the allocator's own overhead\n")
-	msg.append("{MemRowIndent}{census.rawLiveSlotsAt(peakLivePhase.ordinal as PhaseIndex)} live slots carry no box header — the rows above attribute each of them by whatever its first word holds, so they land in {TagCensusUnattributableLabel} or in a tag bucket that is not theirs\n")
-	msg.append("{MemRowIndent}{tagCensusSelfCheck(census.buckets.totalBytesAt(peakLivePhase.ordinal as PhaseIndex), tallyBytes: census.tallyBytesAt(peakLivePhase.ordinal as PhaseIndex), liveBytes: census.liveBytesAt(peakLivePhase.ordinal as PhaseIndex))}\n")
+	msg.append("{MemRowIndent}{census.rawLiveSlotsAt(tablePhase.ordinal as PhaseIndex)} live slots carry no box header — the rows above attribute each of them by whatever its first word holds, so they land in {TagCensusUnattributableLabel} or in a tag bucket that is not theirs\n")
+	msg.append("{MemRowIndent}{tagCensusSelfCheck(census.buckets.totalBytesAt(tablePhase.ordinal as PhaseIndex), tallyBytes: census.tallyBytesAt(tablePhase.ordinal as PhaseIndex), liveBytes: census.liveBytesAt(tablePhase.ordinal as PhaseIndex))}\n")
 	return msg.build()
 end 'tagCensusReport'
 
-function allocTallyReport(memory CompileMemory) returns String
+function allocTallyReport(memory CompileMemory, timings CompileTimings) returns String
 	let tally = memory.allocTally
 
 	if not tally.enabled 'notRequested'
@@ -824,10 +920,6 @@ function allocTallyReport(memory CompileMemory) returns String
 
 	var msg = StringBuilder.create()
 	msg.append("\n{allocTallyHeadline(tally.buckets.mode)}\n")
-
-	if tally.buckets.mode != SlabCensusTagMode 'noTagsToSplitBy'
-		return msg.build()
-	end 'noTagsToSplitBy'
 
 	let names = tally.buckets.names
 	let style = allocTallyRowStyle()
@@ -859,29 +951,57 @@ function allocTallyReport(memory CompileMemory) returns String
 	msg.append(tagPhaseTopLines(tally.buckets, style: style, peakPhase: peakPhase, peakRows: peakRows, peakRanked: peakRanked))
 
 	if not peakRanked 'nothingWasTallied'
-		msg.append("{MemRowIndent}no sampled phase allocated anything, so there is no table to print\n")
-		msg.append("{MemRowIndent}{allocTallySelfCheck(bucketed, runTotal: tally.runTotal)}\n")
+		msg.append("{MemRowIndent}{allocTallyNothingReason(tally, timings: timings)}\n")
+		msg.append("{MemRowIndent}{allocTallySelfCheck(bucketed, elsewhere: tally.elsewhere, runTotal: tally.runTotal)}\n")
 		return msg.build()
 	end 'nothingWasTallied'
 
 	msg.append("{MemRowIndent}the whole table at {peakPhase.name}, the phase that allocated MOST\n")
 	msg.append(tagTableBlock(peakRows, style: style, names: names, columnTitle: TagCensusTagColumnTitle, countTitle: AllocTallyAllocationsColumnTitle))
 	msg.append(horizontalRule(TagCensusRuleWidth))
-	msg.append("{MemRowIndent}{allocTallySelfCheck(bucketed, runTotal: tally.runTotal)}\n")
+	msg.append("{MemRowIndent}{allocTallySelfCheck(bucketed, elsewhere: tally.elsewhere, runTotal: tally.runTotal)}\n")
 	return msg.build()
 end 'allocTallyReport'
+
+function allocTallyNothingReason(tally PhaseAllocTallyColumns, timings CompileTimings) returns String
+	let target = tally.requested.namedOr(CompilePhase.load)
+
+	if tally.buckets.sampledAt(target.ordinal as PhaseIndex) 'sampledButSilent'
+		return AllocTallyNothingAllocatedReason
+	end 'sampledButSilent'
+
+	return namedPhaseNeverSampledReason(target, timings: timings)
+end 'allocTallyNothingReason'
+
+function namedPhaseNeverSampledReason(named CompilePhase, timings CompileTimings) returns String
+	for driver in CompilePhase.allCases 'eachDriver'
+		if timings.isPoolBreakdownOf(named, driver: driver) 'ranOnAPool'
+			return "{named.name} ran on a worker pool inside {driver.name}, where the work of concurrent workers cannot be told apart, so it is never a boundary to sample at — name {driver.name} to cover the pool"
+		end 'ranOnAPool'
+	end 'eachDriver'
+
+	return "{named.name} closed no phase bracket in this compile, so there is nothing to sample for it"
+end 'namedPhaseNeverSampledReason'
 
 function allocTallyHeadline(mode TagCensusMode) returns String
 	if mode == SlabCensusTagMode 'byTag'
 		return "allocations by tag — every allocation this compile ASKED FOR, by tag and by phase"
 	end 'byTag'
 
-	return "allocations by tag — this compiler carries no tags, so nothing was tallied ({DebugStreamFlag} is what mints them)"
+	return "allocations by tag — this compiler carries no tags, so every allocation is counted under {TagCensusUntaggedLabel} ({DebugStreamFlag} is what mints them)"
 end 'allocTallyHeadline'
 
-function allocTallySelfCheck(bucketed AllocCount, runTotal AllocCount) returns String
-	return "Σ over the sampled phases and buckets = {bucketed}, the run's own allocation total at the last boundary = {runTotal}{allocTallyAgreement(bucketed, runTotal: runTotal)}"
+function allocTallySelfCheck(bucketed AllocCount, elsewhere AllocCount, runTotal AllocCount) returns String
+	return "Σ over the sampled phases and buckets = {bucketed}{allocTallyElsewhere(elsewhere)}, the run's own allocation total at the last boundary = {runTotal}{allocTallyAgreement(bucketed + elsewhere, runTotal: runTotal)}"
 end 'allocTallySelfCheck'
+
+function allocTallyElsewhere(elsewhere AllocCount) returns String
+	if elsewhere == 0 'nothingElsewhere'
+		return ""
+	end 'nothingElsewhere'
+
+	return " (and {elsewhere} more outside the phases sampled)"
+end 'allocTallyElsewhere'
 
 function allocTallyAgreement(bucketed AllocCount, runTotal AllocCount) returns String
 	if bucketed == runTotal 'agrees'

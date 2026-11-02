@@ -66,6 +66,7 @@ on:
       - 'scripts/fixpoint.sh'
       - 'scripts/lib/**'
       - 'scripts/multicore-stress/**'
+      - 'scripts/debugstream-stress/**'
       - 'scripts/library-cache/**'
       - 'scripts/seed-shim/**'
       - 'scripts/targets/**'
@@ -286,6 +287,13 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         timeout-minutes: 10
         run: bash scripts/multicore-stress/compile-all.sh
+
+      # Tags exist only in a `--debugstream` compiler. This builds one and fails when an allocation
+      # report names no real tag.
+      - name: Allocation reports name tags on a traced compiler
+        if: steps.seed.outputs.seeded == 'yes'
+        timeout-minutes: 20
+        run: bash scripts/debugstream-stress/tag-reports.sh
 
       - name: Every stdlib function compiles for every target
         if: steps.seed.outputs.seeded == 'yes'
