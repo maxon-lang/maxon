@@ -305,6 +305,7 @@ export function isCaptureMove(op TargetOp) returns bool
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc or
 		movRegImm or
@@ -367,6 +368,7 @@ export function isCaptureMove(op TargetOp) returns bool
 		movqXmmGpr or
 		negF64RegReg gives false
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or
@@ -537,6 +539,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc or
 		movRegImm or
@@ -604,6 +607,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so the arm64 band — arm64's
 		// own ALU / control / call ops — is never a register-to-register move, hence never a self-move.
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or
@@ -1012,7 +1016,8 @@ function retargetTerminatorOp(module TargetModule, opIdx ElementIndex, oldTarget
 
 	match op 'term'
 		jmp(target) then return retargetJmp(module, opIdx: opIdx, target: target, oldTarget: oldTarget, newTarget: newTarget)
-		ret then return false
+		ret or
+		tailJmp then return false
 		prologue or
 		epilogue then panic("retargetTerminatorOp: pred terminator is a frame op")
 		jcc then panic("retargetTerminatorOp: jcc reached as a terminator")
@@ -1080,7 +1085,8 @@ function retargetTerminatorOp(module TargetModule, opIdx ElementIndex, oldTarget
 		// The arm64 band: `arm64Branch` is the unconditional terminator (retargeted like `jmp`);
 		// `arm64Ret` is the ret terminator (like x64 `ret`). Everything else — the conditional
 		// branches, ALU, frame, call ops — is not a terminator here.
-		arm64Ret then return false
+		arm64Ret or
+		arm64TailBranch then return false
 		arm64Branch(target) then return retargetArm64Branch(module, opIdx: opIdx, target: target, oldTarget: oldTarget, newTarget: newTarget)
 		arm64CondBranch or
 		arm64Cbz or

@@ -1,0 +1,100 @@
+module type ValueFlow
+	export let feeder as ValueId
+	export let carrier as ValueId
+
+	static function create(feeder ValueId, carrier ValueId) returns Self
+		return Self{feeder: feeder, carrier: carrier}
+	end 'create'
+end 'ValueFlow'
+
+module typealias ValueFlowArray = Array with ValueFlow
+
+module enum ReturnExits
+	everyExit
+	reachableExits
+end 'ReturnExits'
+
+module function valueFlowsOf(module StdModule, func IrFunction) returns ValueFlowArray
+	var flows = ValueFlowArray.create()
+	let positionById = module.blockIndexById(func)
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for edge in block.branchEdges 'eachEdge'
+			let position = try positionById.get(edge.targetBlockId) otherwise panic("valueFlowsOf: an edge names block {edge.targetBlockId}, which the function does not hold")
+			let target = module.blockAtPosition(func, position: position)
+
+			for (iter, feeder) in edge.argIds.withIterator() 'eachArg'
+				let slot = try target.blockArgs.get(iter.index()) otherwise panic("valueFlowsOf: an edge passes argument {iter.index()} to block {edge.targetBlockId}, which declares {target.blockArgs.count()}")
+				flows.push(ValueFlow.create(feeder, carrier: slot.valueId))
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+
+	return flows
+end 'valueFlowsOf'
+
+module function valuesFeeding(flows ValueFlowArray, seeds BoolArray) returns BoolArray
+	var fromCarrier = CsrColumn.create()
+	var toFeeder = CsrColumn.create()
+
+	for flow in flows 'eachFlow'
+		fromCarrier.push(flow.carrier as CsrIndex)
+		toFeeder.push(flow.feeder as CsrIndex)
+	end 'eachFlow'
+
+	return reverseReachabilityMark(buildCsr(fromCarrier, to: toFeeder, nodeCount: seeds.count() as CsrIndex), seeds: seeds)
+end 'valuesFeeding'
+
+module function isMarked(column BoolArray, v ValueId) returns bool
+	return try column.get(v) otherwise panic("isMarked: value {v} is outside the {column.count()} the function defines")
+end 'isMarked'
+
+module function markValue(column BoolArray, v ValueId)
+	try column.set(v, value: true) otherwise panic("markValue: value {v} is outside the {column.count()} the function defines")
+end 'markValue'
+
+module function returnedValuesOf(module StdModule, func IrFunction, exits ReturnExits) returns ValueIdArray
+	var returned = ValueIdArray.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		view block = module.getBlock(blockRef)
+
+		if exits == ReturnExits.reachableExits and blockAborts(module, block: block) 'neverReturns'
+			continue
+		end 'neverReturns'
+
+		for opIdx in block.bodyOps() 'eachBodyOp'
+			noteReturnedOperand(module.getOp(opIdx), into: returned)
+		end 'eachBodyOp'
+
+		if block.hasTerminatorOp() 'hasExit'
+			noteReturnedOperand(module.getOp(block.terminatorIndex()), into: returned)
+		end 'hasExit'
+	end 'eachBlock'
+
+	return returned
+end 'returnedValuesOf'
+
+export function noteReturnedOperand(op StdOp, into ValueIdArray)
+	if op.rawValue.role != OpRole.ret 'notAReturn'
+		return
+	end 'notAReturn'
+
+	match op 'op'
+		ret(retValId) then into.push(retValId)
+		retVoid then break
+		default panic("noteReturnedOperand: `role: ret` but neither `ret` nor `retVoid` — StdOpMeta's role and this match have come apart")
+	end 'op'
+end 'noteReturnedOperand'
+
+function blockAborts(module StdModule, block IrBlock) returns bool
+	for opIdx in block.bodyOps() 'eachOp'
+		if module.getOp(opIdx).rawValue.role == OpRole.diverging 'neverComesBack'
+			return true
+		end 'neverComesBack'
+	end 'eachOp'
+
+	return false
+end 'blockAborts'

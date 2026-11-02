@@ -1,0 +1,71 @@
+// One walk over a function's body ops that lists every one-argument retain door call. The counts
+// let a pass skip a function that has no retain to move or no release to pair.
+module type RetainSite
+	export let blockRef as ElementIndex
+	export let blockId as BlockId
+	export let position as ElementIndex
+	export let opIdx as ElementIndex
+	export let door as OwnershipDoor
+	export let operand as ValueId
+	export let resultId as ValueId
+
+	static function create(blockRef ElementIndex, blockId BlockId, position ElementIndex, opIdx ElementIndex, door OwnershipDoor, operand ValueId, resultId ValueId) returns Self
+		return Self{blockRef: blockRef, blockId: blockId, position: position, opIdx: opIdx, door: door, operand: operand, resultId: resultId}
+	end 'create'
+end 'RetainSite'
+
+module typealias RetainSiteArray = Array with RetainSite
+
+module type RetainCensus
+	export var sites as RetainSiteArray
+	export var fusableReleases as ElementIndex
+	export var handsBackSites as ElementIndex
+	var call as StdCallOperands
+
+	module static function create() returns Self
+		return Self{sites: RetainSiteArray.create(), fusableReleases: 0, handsBackSites: 0, call: StdCallOperands.create()}
+	end 'create'
+
+	module function fill(module StdModule, func IrFunction)
+		self.sites.clear()
+		self.fusableReleases = 0
+		self.handsBackSites = 0
+
+		for blockRef in func.blockRefs 'eachBlock'
+			view block = module.getBlock(blockRef)
+			var position = 0 as ElementIndex
+
+			for opIdx in block.bodyOps() 'eachOp'
+				classifyCallOperands(module.getOp(opIdx), call: self.call)
+				self.note(blockRef, blockId: block.id, position: position, opIdx: opIdx)
+				position = position + 1
+			end 'eachOp'
+		end 'eachBlock'
+	end 'fill'
+
+	function note(blockRef ElementIndex, blockId BlockId, position ElementIndex, opIdx ElementIndex)
+		if not self.call.isPlainOneArgumentCall() 'notAOneArgumentDoor'
+			return
+		end 'notAOneArgumentDoor'
+
+		let door = try ownershipDoorNamed(self.call.callee) otherwise return
+
+		if doorRole(door) == DoorRole.release 'aRelease'
+			if doorFusesInPlace(door) 'aFusableRelease'
+				self.fusableReleases = self.fusableReleases + 1
+			end 'aFusableRelease'
+
+			return
+		end 'aRelease'
+
+		self.sites.push(RetainSite.create(blockRef, blockId: blockId, position: position, opIdx: opIdx, door: door, operand: self.call.firstArg, resultId: self.call.resultId))
+
+		if doorHandsBack(door) != DoorHandsBack.nothing and doorFusesInPlace(door) 'aValueRetain'
+			self.handsBackSites = self.handsBackSites + 1
+		end 'aValueRetain'
+	end 'note'
+end 'RetainCensus'
+
+module function stdOpLeavesTheCountAlone(op StdOp) returns bool
+	return op.rawValue.isPure and op.rawValue.role == OpRole.plain
+end 'stdOpLeavesTheCountAlone'

@@ -1056,9 +1056,10 @@ export type StdToX64Lowering
 	// Does this module carry the green-thread scheduler? The syscall bracket rides it exactly as the arm64
 	// isel's does — a program with no scheduler has no machine to announce anything to.
 	let usesGt as bool
+	var tailCalls as TailCalls
 
 	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToX64Lowering
-		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockRoster.create(), scaledIndexFolds: ScaledIndexFolds.create(), displacedAddressFolds: DisplacedAddressFolds.create(), memoryDestinationFolds: MemoryDestinationFolds.create(), valueDefs: StdValueDefs.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
+		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockRoster.create(), scaledIndexFolds: ScaledIndexFolds.create(), displacedAddressFolds: DisplacedAddressFolds.create(), memoryDestinationFolds: MemoryDestinationFolds.create(), valueDefs: StdValueDefs.create(), abi: abi, usesGt: usesGt, tailCalls: TailCalls.none(), fresh: ValueMinter.create(0)}
 	end 'create'
 
 	// ⭐ **ONE UNIT THROUGH THE WHOLE CONVERSION**: the skeleton, the function's blocks, and its class
@@ -1066,7 +1067,7 @@ export type StdToX64Lowering
 	// because the caller sends them home in a reply, and a reply may reach nothing this scratch still holds.
 	// The empties left behind are the next unit's: a unit starts on the module and log the last one left
 	// (or `create` made), so the two are allocated once per unit.
-	export function lowerUnit(unitModule StdModule) returns LoweredUnit
+	export function lowerUnit(unitModule StdModule, permitsTailCalls bool) returns LoweredUnit
 		// ⭐ **THE STD COLUMN CAME OUT EVEN, ASKED HERE BECAUSE THIS IS WHERE THAT MODULE STOPS BEING
 		// APPENDED TO.** It is the one tier whose column nothing else counts: the walk below reads it BY
 		// INDEX, so a pass that pushed onto `ops` without recording leaves it short and every span from that
@@ -1075,6 +1076,7 @@ export type StdToX64Lowering
 		unitModule.spans.requireParallelTo(stdOpCount, what: "at the Std tier's end")
 
 		self.stdModule = unitModule
+		self.tailCalls = TailCalls.forFunction(unitModule, func: unitModule.getFunc(UnitFunctionIndex), permitted: permitsTailCalls)
 
 		// The Target module carries spans exactly when the Std module it lowers from does. Armed BEFORE the
 		// skeleton, because `prepareSkeleton` is the first thing that can append.
@@ -1396,6 +1398,8 @@ export type StdToX64Lowering
 			view srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("StdToX64Lowering: blockRef from srcFunc.blockRefs not in stdModule.blocks")
 			var dstBlock = try self.targetModule.blocks.get(blockRef) otherwise panic("StdToX64Lowering: targetModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
 
+			self.tailCalls.probe(self.stdModule, srcFunc: srcFunc, block: srcBlock, abi: self.abi, registerCapacity: x64RegisterArgCapacity(), target: self.target, usesGt: self.usesGt)
+
 			for opIdx in srcBlock.bodyOps() 'eachOp'
 				view stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("StdToX64Lowering: opIdx from srcBlock.bodyOps() not in stdModule.ops")
 				let opOutgoing = self.stdOpOutgoingArgBytes(stdOp)
@@ -1407,6 +1411,12 @@ export type StdToX64Lowering
 				// The Target ops this one call appends inherit the Std op's span. Set here rather than
 				// threaded, for the reason `DebugSpanColumn` gives: this file appends from hundreds of sites.
 				self.targetModule.spans.current = self.stdModule.spans.at(opIdx)
+
+				if self.tailCalls.found and opIdx == self.tailCalls.opIdx 'theTailCall'
+					self.emitCallArgMoves(self.tailCalls.callee.clone(), args: self.tailCalls.args.clone(), dstBlock: dstBlock)
+					continue
+				end 'theTailCall'
+
 				self.lowerBodyOp(stdOp, dstBlock: dstBlock, returnType: srcFunc.returnType, paramFloatMask: paramFloatMask)
 			end 'eachOp'
 
@@ -1414,7 +1424,12 @@ export type StdToX64Lowering
 				let termIdx = srcBlock.terminatorIndex()
 				var termOp = try self.stdModule.ops.get(termIdx) otherwise panic("StdToX64Lowering: terminatorIndex not in stdModule.ops")
 				self.targetModule.spans.current = self.stdModule.spans.at(termIdx)
-				self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType, blockRef: blockRef)
+
+				if self.tailCalls.found 'jumpToTheCallee'
+					self.targetModule.setTerminator(dstBlock, op: TargetOp.tailJmp(self.tailCalls.callee.clone()))
+				end 'jumpToTheCallee' else 'returnNormally'
+					self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType, blockRef: blockRef)
+				end 'returnNormally'
 			end 'hasTerm'
 		end 'eachBlock'
 
@@ -2709,7 +2724,7 @@ export type StdToX64Lowering
 	// Lower `osPanic <label>` (a range-check violation) to `mrt_panic`, which reads the baked
 	// `panic at …` line, prints it plus a symbolized backtrace, and exits — the message address in RCX,
 	// then the call. A `callDirect` (not `iatCall`) because `mrt_panic` is one of the program's own
-	// `.text` runtime chunks, resolved by the intra-`.text` call fixup. `functionMakesCall` sees the
+	// `.text` runtime chunks, resolved by the intra-`.text` call fixup. `functionCalleeReach` sees the
 	// `callDirect` and reserves the shadow space it needs. RCX is written and immediately consumed, so no
 	// intervening op can clobber it.
 	//

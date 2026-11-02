@@ -85,14 +85,8 @@ function everyParamPosition() returns ParamPositionMask
 	return every
 end 'everyParamPosition'
 
-// `__retain_type_param` answers a fresh clone for a byte record; naming its operand's origin anyway
-// over-approximates sharing, which can only make a verdict less pure.
-function retainsItsOperand(callee ByteArray) returns bool
-	return callee.equals(MmRetainName) or callee.equals(ManagedRetainName) or callee.equals(StrRetainName) or callee.equals(RetainTypeParamName)
-end 'retainsItsOperand'
-
 function releasesElementsOf(callee ByteArray) returns bool
-	return bytesStartWith(callee, prefix: DestructorPrefix) or callee.equals(ManagedDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ManagedCursorDecrefName) or receiverWritingRuntimeCallee(callee)
+	return calleeReleasesOwnedElements(callee) or receiverWritingRuntimeCallee(callee)
 end 'releasesElementsOf'
 
 function parameterOrigin(position ParamCount) returns ValueOriginCode
@@ -786,7 +780,7 @@ type ValueOrigins
 	end 'convertDeep'
 
 	function callResultOrigin(callee ByteArray, args ValueIdArray) returns ValueOriginCode
-		if retainsItsOperand(callee) 'aSecondNameForTheOperand'
+		if calleeHandsBackItsRetainedOperand(callee) 'aSecondNameForTheOperand'
 			return self.raw(try args.get(0) otherwise return OriginUnknown)
 		end 'aSecondNameForTheOperand'
 
@@ -1467,7 +1461,7 @@ type EffectSummaryBuilder
 	end 'taintArguments'
 
 	function taintCall(origins ValueOrigins, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster)
-		if retainsItsOperand(callee) and originIsLocal(origins.originOf(result)) 'aSecondNameForARecordOfThisBody'
+		if calleeHandsBackItsRetainedOperand(callee) and originIsLocal(origins.originOf(result)) 'aSecondNameForARecordOfThisBody'
 			origins.unify(result, b: try args.get(0) otherwise panic("EffectSummaryBuilder.taintCall: '{String.from(callee)}' retains an operand but the call carries none"))
 			return
 		end 'aSecondNameForARecordOfThisBody'

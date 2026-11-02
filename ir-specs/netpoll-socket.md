@@ -813,12 +813,10 @@ func @__np_pd_mark_timed_out {
     x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     x64.movRegImm32 rdx, 54
     x64.movRegImm32 rax, 104
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
     x64.epilogue 56
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __rt_abort
   __rl_slow#6:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rax
@@ -1558,12 +1556,10 @@ func @__np_pd_mark_timed_out {
     x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     x64.movRegImm32 rdx, 54
     x64.movRegImm32 rax, 104
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
     x64.epilogue 56
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __rt_abort
   __rl_slow#6:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rax
@@ -2342,11 +2338,9 @@ func @__np_pd_mark_timed_out {
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
     arm64.movImm x2, 104
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.tailBranch __rt_abort
   __rl_slow#6:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
@@ -3137,11 +3131,9 @@ func @__np_pd_mark_timed_out {
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
     arm64.movImm x2, 104
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.tailBranch __rt_abort
   __rl_slow#6:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1

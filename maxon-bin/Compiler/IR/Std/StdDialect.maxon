@@ -1709,7 +1709,7 @@ export union StdOp
 	// violation there dies with an exit code and no message). It is spelled as a dedicated op rather than
 	// an `StdOp.call` because `mrt_panic` is a hand-assembled runtime chunk with NO Std function, so the
 	// callee-argument-class lookup a normal `call` performs has nothing to resolve against — exactly why
-	// `osExit`/`osAllocPages` are their own ops too. `isCall: true` so `functionMakesCall` reserves the
+	// `osExit`/`osAllocPages` are their own ops too. `isCall: true` so `functionCalleeReach` reserves the
 	// shadow space the call needs; it defines no value and never returns.
 	//
 	// Its `category: system` places it logically,
@@ -2682,7 +2682,7 @@ export union StdOp
 	// ⭐ **`isCall: false`, and that is not an oversight about a macro-op that contains branches.** The ladder
 	// is INLINE code: it calls nothing, and it destroys a FIXED FOUR-REGISTER set, declared at each of the two
 	// `TargetOp` macro-ops' `implicitDefs` — not the caller-saved half. `isCall`'s live reader is
-	// `functionMakesCall`, which decides whether a function needs a frame at all; a `true` here would give
+	// `functionCalleeReach`, which decides whether a function needs a frame at all; a `true` here would give
 	// every heap-touching runtime body a prologue it does not need. `isMemory`/`isStore` are the true facts:
 	// it writes memory, so it must order against every load and store around it.
 	memFill(destId ValueId, byteCountId ValueId, value FullRangeInt) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
@@ -3128,11 +3128,12 @@ export union StdOp
 	//
 	// `isCall: false` is the whole design, and it is why a `mrt_cov_hit(siteId)` runtime call is
 	// refused.
-	// A call at every statement head makes `functionMakesCall` true for every leaf, so `computeFrameBytes`
-	// gives every leaf shadow space and an outgoing-argument region, every statement becomes a full
-	// call-clobber barrier spilling every live value across it, and `inlineLeaves` is left with an empty
-	// eligible set. A build you instrument would then be a different SHAPE of program from the one you ship,
-	// and the numbers would be about that other program.
+	// A call at every statement head makes `functionCalleeReach` answer `makesCall` for every leaf, so
+	// `computeFrameBytes` gives every leaf shadow space and an outgoing-argument region, every
+	// statement becomes a full call-clobber barrier spilling every live value across it, and
+	// `inlineLeaves` is left with an empty eligible set. A build you instrument would then be a
+	// different SHAPE of program from the one you ship, and the numbers would be about that other
+	// program.
 	//
 	// ⭐ **`clobbersFlags: true` BECAUSE the compiler FUSES A COMPARE ACROSS OPS** (`StdToX64Conversion`'s
 	// `compareFusion`). A counter sits at a block head, which is exactly where it can land between a fused
@@ -4457,7 +4458,7 @@ module enum StdCallShape
 	throwingCall
 end 'StdCallShape'
 
-module type StdCallOperands
+export type StdCallOperands
 	var shape as StdCallShape
 	export var resultId as ValueId
 
@@ -4477,18 +4478,22 @@ module type StdCallOperands
 	// index there, which is what a bound-relating reader looks up.
 	export var secondArg as ValueId
 
-	module static function create() returns StdCallOperands
+	export static function create() returns StdCallOperands
 		return Self{shape: StdCallShape.other, resultId: 0, errorFlagId: 0, callee: ByteArray.create(), argCount: 0, firstArg: 0, secondArg: 0}
 	end 'create'
 
-	module function namesACallee() returns bool
+	export function namesACallee() returns bool
 		return self.shape != StdCallShape.other
 	end 'namesACallee'
 
 	// Whether the call is a `tryCall`, whose `errorFlagId` is meaningful.
-	module function throwsToAFlag() returns bool
+	export function throwsToAFlag() returns bool
 		return self.shape == StdCallShape.throwingCall
 	end 'throwsToAFlag'
+
+	export function isPlainOneArgumentCall() returns bool
+		return self.shape == StdCallShape.directCall and self.argCount == 1
+	end 'isPlainOneArgumentCall'
 
 	function recordOther()
 		self.shape = StdCallShape.other
@@ -4522,7 +4527,7 @@ module type StdCallOperands
 	end 'takeCallee'
 end 'StdCallOperands'
 
-module function classifyCallOperands(op StdOp, call StdCallOperands)
+export function classifyCallOperands(op StdOp, call StdCallOperands)
 	match op 'c'
 		const or
 		binOp or

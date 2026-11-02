@@ -1,0 +1,416 @@
+// A function whose every returned value is a retain of the same value parameter returns that
+// parameter itself, and each direct call site takes the retain, where `cancelRetainRelease` can
+// pair it with the release of the value the call replaces. `specs/returned-parameters.md` and
+// `ir-specs/returned-parameters.md` pin the behaviour and the emitted code.
+//
+// The premise is that the function never releases or consumes the returned parameter, so the
+// record is alive for the whole body and the caller's reference stands in for the one the retain
+// would have made (`consumesAParameter`, `parameterIsReleased`).
+//
+// A candidate is dropped when something can reach it other than by a direct non-throwing call that
+// passes the parameter: a compiler-internal callee, an address-taken function (its `__fnref_`
+// thunk included), a `tryCall` site, a site with too few arguments. Those callers expect a counted
+// record.
+type ReturnedParameter
+	export let funcIndex as ElementIndex
+	export let position as ParamCount
+	export let retainDoor as OwnershipDoor
+	export let leaves as ValueIdArray
+	export var kept as bool
+
+	static function create(funcIndex ElementIndex, position ParamCount, retainDoor OwnershipDoor, leaves ValueIdArray) returns Self
+		return Self{funcIndex: funcIndex, position: position, retainDoor: retainDoor, leaves: leaves, kept: true}
+	end 'create'
+end 'ReturnedParameter'
+
+typealias ReturnedParameterArray = Array with ReturnedParameter
+typealias CandidateIndexByFunction = Map with (ElementIndex, ElementIndex)
+
+union ReturnedParameterVerdict
+	notBorrowed
+	borrows(found ReturnedParameter)
+end 'ReturnedParameterVerdict'
+
+type ReturnedParameterSite
+	export let funcIndex as ElementIndex
+	export let blockRef as ElementIndex
+	export let position as ElementIndex
+	export let opIdx as ElementIndex
+	export let resultId as ValueId
+	export let argId as ValueId
+	export let candidate as ElementIndex
+
+	static function create(funcIndex ElementIndex, blockRef ElementIndex, position ElementIndex, opIdx ElementIndex, resultId ValueId, argId ValueId, candidate ElementIndex) returns Self
+		return Self{funcIndex: funcIndex, blockRef: blockRef, position: position, opIdx: opIdx, resultId: resultId, argId: argId, candidate: candidate}
+	end 'create'
+end 'ReturnedParameterSite'
+
+typealias ReturnedParameterSiteArray = Array with ReturnedParameterSite
+
+export function borrowReturnedParameters(project Project, module StdModule, signatures ProgramSignatures)
+	var candidates = collectReturnedParameters(module, signatures: signatures)
+
+	if candidates.isEmpty() 'nothingReturnsAParameter'
+		return
+	end 'nothingReturnsAParameter'
+
+	refuseUnsafeCandidates(project, module: module, candidates: candidates)
+	let byCallee = candidateIndexByName(module, candidates: candidates)
+
+	if byCallee.count() == 0 'everyCandidateRefused'
+		return
+	end 'everyCandidateRefused'
+
+	let sites = collectBorrowedReturnSites(module, candidates: candidates, byCallee: byCallee)
+	rewriteFunctions(module, candidates: candidates, sites: sites)
+end 'borrowReturnedParameters'
+
+function collectReturnedParameters(module StdModule, signatures ProgramSignatures) returns ReturnedParameterArray
+	var candidates = ReturnedParameterArray.create()
+	var census = RetainCensus.create()
+	var call = StdCallOperands.create()
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		view func = module.getFunc(funcIndex)
+
+		if not returnsARecordByValue(func) or consumesAParameter(signatures, func: func) 'notThisShape'
+			continue
+		end 'notThisShape'
+
+		census.fill(module, func: func)
+
+		if census.handsBackSites == 0 'noRetainToMove'
+			continue
+		end 'noRetainToMove'
+
+		match analyseReturnedParameter(module, func: func, funcIndex: funcIndex, call: call) 'verdict'
+			notBorrowed then continue
+			borrows(found) then candidates.push(found)
+		end 'verdict'
+	end 'eachFunc'
+
+	return candidates
+end 'collectReturnedParameters'
+
+function returnsARecordByValue(func IrFunction) returns bool
+	if func.blockRefs.count() == 0 or func.bodySplicedAway or irFunctionUsesSecondaryReturnSlot(func) 'notALiveSingleRegisterReturn'
+		return false
+	end 'notALiveSingleRegisterReturn'
+
+	return match func.returnType 'declared'
+		void gives false
+		value gives true
+	end 'declared'
+end 'returnsARecordByValue'
+
+function consumesAParameter(signatures ProgramSignatures, func IrFunction) returns bool
+	return match signatures.consumeOf(func.name) 'consume'
+		borrowsAll gives false
+		consumes(info) gives not info.isEmpty()
+	end 'consume'
+end 'consumesAParameter'
+
+function analyseReturnedParameter(module StdModule, func IrFunction, funcIndex ElementIndex, call StdCallOperands) returns ReturnedParameterVerdict
+	let returned = returnedValuesOf(module, func: func, exits: ReturnExits.reachableExits)
+
+	if returned.isEmpty() 'neverReturns'
+		return ReturnedParameterVerdict.notBorrowed
+	end 'neverReturns'
+
+	let defs = StdValueDefs.build(module, func: func)
+	let bound = defs.valueBound()
+	let flows = valueFlowsOf(module, func: func)
+	var seeds = BoolArray.create()
+	seeds.growFilled(bound, value: false)
+	var carriers = BoolArray.create()
+	carriers.growFilled(bound, value: false)
+
+	for flow in flows 'eachFlow'
+		markValue(carriers, v: flow.carrier)
+	end 'eachFlow'
+
+	for value in returned 'eachReturned'
+		markValue(seeds, v: value)
+	end 'eachReturned'
+
+	let wanted = valuesFeeding(flows, seeds: seeds)
+
+	if anEdgeCarriesAWantedValueElsewhere(flows, wanted: wanted) or anyOpOtherThanAReturnReads(module, func: func, wanted: wanted) 'theValueIsUsedForSomethingElse'
+		return ReturnedParameterVerdict.notBorrowed
+	end 'theValueIsUsedForSomethingElse'
+
+	return judgeLeaves(module, func: func, funcIndex: funcIndex, defs: defs, wanted: wanted, carriers: carriers, call: call)
+end 'analyseReturnedParameter'
+
+function anEdgeCarriesAWantedValueElsewhere(flows ValueFlowArray, wanted BoolArray) returns bool
+	for flow in flows 'eachFlow'
+		if isMarked(wanted, v: flow.feeder) and not isMarked(wanted, v: flow.carrier) 'leaksOut'
+			return true
+		end 'leaksOut'
+	end 'eachFlow'
+
+	return false
+end 'anEdgeCarriesAWantedValueElsewhere'
+
+function anyOpOtherThanAReturnReads(module StdModule, func IrFunction, wanted BoolArray) returns bool
+	var reads = StdValueUseSet.createRecordingIds()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		view block = module.getBlock(blockRef)
+
+		for opIdx in block.bodyOps() 'eachBodyOp'
+			if opReadsAWantedValue(module.getOp(opIdx), wanted: wanted, reads: reads) 'readElsewhere'
+				return true
+			end 'readElsewhere'
+		end 'eachBodyOp'
+
+		if block.hasTerminatorOp() and opReadsAWantedValue(module.getOp(block.terminatorIndex()), wanted: wanted, reads: reads) 'theExitReadsIt'
+			return true
+		end 'theExitReadsIt'
+	end 'eachBlock'
+
+	return false
+end 'anyOpOtherThanAReturnReads'
+
+function opReadsAWantedValue(op StdOp, wanted BoolArray, reads StdValueUseSet) returns bool
+	if op.rawValue.role == OpRole.ret 'aReturn'
+		return false
+	end 'aReturn'
+
+	reads.clear()
+	collectStdOpUses(op, referenced: reads)
+
+	for position in 0 upto reads.insertedIdCount() 'eachUse'
+		if isMarked(wanted, v: reads.insertedIdAt(position)) 'readElsewhere'
+			return true
+		end 'readElsewhere'
+	end 'eachUse'
+
+	return false
+end 'opReadsAWantedValue'
+
+function judgeLeaves(module StdModule, func IrFunction, funcIndex ElementIndex, defs StdValueDefs, wanted BoolArray, carriers BoolArray, call StdCallOperands) returns ReturnedParameterVerdict
+	var leaves = ValueIdArray.create()
+	var retainDoor = OwnershipDoor.managedRetain
+	var position = 0 as ParamCount
+
+	for value in 0 upto defs.valueBound() 'eachValue'
+		if not isMarked(wanted, v: value) or isMarked(carriers, v: value) 'notALeaf'
+			continue
+		end 'notALeaf'
+
+		if not defs.isDefinedByAnOp(value) 'notDefinedByAnOp'
+			return ReturnedParameterVerdict.notBorrowed
+		end 'notDefinedByAnOp'
+
+		classifyCallOperands(module.getOp(defs.definingOp(value)), call: call)
+
+		if not call.isPlainOneArgumentCall() or not argumentIsAValueParameter(func, argument: call.firstArg) 'notARetainOfAParameter'
+			return ReturnedParameterVerdict.notBorrowed
+		end 'notARetainOfAParameter'
+
+		let door = try ownershipDoorNamed(call.callee) otherwise return ReturnedParameterVerdict.notBorrowed
+
+		if doorRole(door) != DoorRole.retain or doorHandsBack(door) == DoorHandsBack.nothing or not doorFusesInPlace(door) 'notAValueRetain'
+			return ReturnedParameterVerdict.notBorrowed
+		end 'notAValueRetain'
+
+		let leafPosition = paramPositionOfValueId(call.firstArg)
+
+		if leaves.count() == 0 'theFirstLeaf'
+			position = leafPosition
+			retainDoor = door
+		end 'theFirstLeaf' else if leafPosition != position or door != retainDoor 'aDifferentParameterOrRetain'
+			return ReturnedParameterVerdict.notBorrowed
+		end 'aDifferentParameterOrRetain'
+
+		leaves.push(value)
+	end 'eachValue'
+
+	if leaves.count() == 0 or parameterIsReleased(module, func: func, parameter: valueIdAtParamPosition(position), call: call) 'noRetainReachesAReturnOrTheCalleeDropsTheParameter'
+		return ReturnedParameterVerdict.notBorrowed
+	end 'noRetainReachesAReturnOrTheCalleeDropsTheParameter'
+
+	return ReturnedParameterVerdict.borrows(ReturnedParameter.create(funcIndex, position: position, retainDoor: retainDoor, leaves: leaves))
+end 'judgeLeaves'
+
+function parameterIsReleased(module StdModule, func IrFunction, parameter ValueId, call StdCallOperands) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		view block = module.getBlock(blockRef)
+
+		for opIdx in block.bodyOps() 'eachOp'
+			classifyCallOperands(module.getOp(opIdx), call: call)
+
+			if call.namesACallee() and call.argCount != 0 and call.firstArg == parameter and releasesItsOperandCallee(call.callee) 'droppedHere'
+				return true
+			end 'droppedHere'
+		end 'eachOp'
+	end 'eachBlock'
+
+	return false
+end 'parameterIsReleased'
+
+function argumentIsAValueParameter(func IrFunction, argument ValueId) returns bool
+	if argument >= func.paramCount as ValueId 'notAParameter'
+		return false
+	end 'notAParameter'
+
+	return not maskHasParam(func.reassignedParamMask, param: paramPositionOfValueId(argument))
+end 'argumentIsAValueParameter'
+
+function refuseUnsafeCandidates(project Project, module StdModule, candidates ReturnedParameterArray)
+	let addressTaken = collectAddressTakenFunctions(project, module: module)
+
+	for index in 0 upto candidates.count() 'eachCandidate'
+		var candidate = try candidates.get(index) otherwise panic("refuseUnsafeCandidates: candidates.get OOB at {index}")
+		let name = module.getFunc(candidate.funcIndex).name
+
+		if isCompilerInternalCallee(name) or addressTaken.contains(name) or addressTaken.contains(fnRefThunkName(name)) 'reachedOtherwiseThanByACall'
+			candidate.kept = false
+		end 'reachedOtherwiseThanByACall'
+	end 'eachCandidate'
+end 'refuseUnsafeCandidates'
+
+function candidateIndexByName(module StdModule, candidates ReturnedParameterArray) returns FuncIndexByName
+	var byCallee = FuncIndexByName.create()
+
+	for index in 0 upto candidates.count() 'eachCandidate'
+		let candidate = try candidates.get(index) otherwise panic("candidateIndexByName: candidates.get OOB at {index}")
+
+		if candidate.kept 'stillCandidate'
+			byCallee.upsert(module.getFunc(candidate.funcIndex).name, value: index)
+		end 'stillCandidate'
+	end 'eachCandidate'
+
+	return byCallee
+end 'candidateIndexByName'
+
+function collectBorrowedReturnSites(module StdModule, candidates ReturnedParameterArray, byCallee FuncIndexByName) returns ReturnedParameterSiteArray
+	var sites = ReturnedParameterSiteArray.create()
+	var call = StdCallOperands.create()
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIndex)
+
+		for blockRef in func.blockRefs 'eachBlock'
+			view block = module.getBlock(blockRef)
+			var position = 0 as ElementIndex
+
+			for opIdx in block.bodyOps() 'eachOp'
+				classifyCallOperands(module.getOp(opIdx), call: call)
+
+				if call.namesACallee() and byCallee.contains(call.callee) 'callsACandidate'
+					noteBorrowedReturnSite(module, sites: sites, candidates: candidates, byCallee: byCallee, call: call, funcIndex: funcIndex, blockRef: blockRef, position: position, opIdx: opIdx)
+				end 'callsACandidate'
+
+				position = position + 1
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return sites
+end 'collectBorrowedReturnSites'
+
+function noteBorrowedReturnSite(module StdModule, sites ReturnedParameterSiteArray, candidates ReturnedParameterArray, byCallee FuncIndexByName, call StdCallOperands, funcIndex ElementIndex, blockRef ElementIndex, position ElementIndex, opIdx ElementIndex)
+	let index = try byCallee.get(call.callee) otherwise panic("noteBorrowedReturnSite: byCallee.contains held for '{String.from(call.callee)}' a line ago")
+	var candidate = try candidates.get(index) otherwise panic("noteBorrowedReturnSite: candidates.get OOB at {index}")
+
+	match module.getOp(opIdx) 'call'
+		call(resultId, _, args) then noteDirectCall(sites, candidate: candidate, index: index, funcIndex: funcIndex, blockRef: blockRef, position: position, opIdx: opIdx, resultId: resultId, args: args)
+		tryCall then candidate.kept = false
+		default panic("noteBorrowedReturnSite: StdCallOperands named a callee on an op that is neither `call` nor `tryCall`")
+	end 'call'
+end 'noteBorrowedReturnSite'
+
+function noteDirectCall(sites ReturnedParameterSiteArray, candidate ReturnedParameter, index ElementIndex, funcIndex ElementIndex, blockRef ElementIndex, position ElementIndex, opIdx ElementIndex, resultId ValueId, args ValueIdArray)
+	let argument = try args.get(candidate.position) otherwise 'tooFewArguments'
+		candidate.kept = false
+		return
+	end 'tooFewArguments'
+
+	sites.push(ReturnedParameterSite.create(funcIndex, blockRef: blockRef, position: position, opIdx: opIdx, resultId: resultId, argId: argument, candidate: index))
+end 'noteDirectCall'
+
+function rewriteFunctions(module StdModule, candidates ReturnedParameterArray, sites ReturnedParameterSiteArray)
+	var ownerOf = CandidateIndexByFunction.create()
+
+	for index in 0 upto candidates.count() 'eachCandidate'
+		let candidate = try candidates.get(index) otherwise panic("rewriteFunctions: candidates.get OOB at {index}")
+
+		if candidate.kept 'stillCandidate'
+			ownerOf.upsert(candidate.funcIndex, value: index)
+		end 'stillCandidate'
+	end 'eachCandidate'
+
+	var next = 0 as ElementIndex
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let first = next
+
+		while next < sites.count() and (try sites.get(next) otherwise panic("rewriteFunctions: sites.get OOB at {next}")).funcIndex == funcIndex 'thisFunctionsSites'
+			next = next + 1
+		end 'thisFunctionsSites'
+
+		if first == next and not ownerOf.contains(funcIndex) 'nothingToDoHere'
+			continue
+		end 'nothingToDoHere'
+
+		rewriteFunction(module, funcIndex: funcIndex, candidates: candidates, sites: sites, first: first, stop: next, ownerOf: ownerOf)
+	end 'eachFunc'
+end 'rewriteFunctions'
+
+function rewriteFunction(module StdModule, funcIndex ElementIndex, candidates ReturnedParameterArray, sites ReturnedParameterSiteArray, first ElementIndex, stop ElementIndex, ownerOf CandidateIndexByFunction)
+	var func = module.getFunc(funcIndex)
+	let bound = nextFreeValueId(module, func: func)
+	var minter = ValueMinter.resuming(bound)
+	var subst = ValueIdArray.create()
+
+	for id in 0 upto bound 'identity'
+		subst.push(id)
+	end 'identity'
+
+	var changed = false
+
+	for offset in 0 upto stop - first 'eachSiteFromTheLast'
+		let site = try sites.get(stop - 1 - offset) otherwise panic("rewriteFunction: sites.get OOB at {stop - 1 - offset}")
+		let candidate = try candidates.get(site.candidate) otherwise panic("rewriteFunction: candidates.get OOB at {site.candidate}")
+
+		if not candidate.kept 'refusedAfterTheScan'
+			continue
+		end 'refusedAfterTheScan'
+
+		let retained = insertRetainAfter(module, site: site, retainDoor: candidate.retainDoor, minter: minter)
+		try subst.set(site.resultId, value: retained) otherwise panic("rewriteFunction: subst.set OOB at {site.resultId} of the {bound} values the function defined")
+		changed = true
+	end 'eachSiteFromTheLast'
+
+	var doomed = StdValueUseSet.create()
+
+	if let ownerIndex = try ownerOf.get(funcIndex) 'returnsAParameter'
+		let owner = try candidates.get(ownerIndex) otherwise panic("rewriteFunction: candidates.get OOB at {ownerIndex}")
+
+		for leaf in owner.leaves 'eachLeaf'
+			try subst.set(leaf, value: valueIdAtParamPosition(owner.position)) otherwise panic("rewriteFunction: subst.set OOB at leaf {leaf}")
+			doomed.insert(leaf)
+		end 'eachLeaf'
+
+		changed = true
+	end 'returnsAParameter'
+
+	if not changed 'nothingRewritten'
+		return
+	end 'nothingRewritten'
+
+	substituteValuesInFunc(module, func: func, subst: subst)
+	removeOpsDefining(module, func: func, doomed: doomed)
+end 'rewriteFunction'
+
+function insertRetainAfter(module StdModule, site ReturnedParameterSite, retainDoor OwnershipDoor, minter ValueMinter) returns ValueId
+	module.spans.current = module.spans.at(site.opIdx)
+
+	let retained = minter.mint()
+	let retainOp = module.pushDetachedOp(StdOp.call(retained, callee: ownershipDoorName(retainDoor), args: argsOf(site.argId)))
+	var block = module.getBlock(site.blockRef)
+	block.insertBodyOp(site.position + 1, opIdx: retainOp)
+	return retained
+end 'insertRetainAfter'

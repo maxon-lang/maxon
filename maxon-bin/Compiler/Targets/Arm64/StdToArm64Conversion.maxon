@@ -449,20 +449,22 @@ export type StdToArm64Lowering
 	// syscall bracket (`lowerBodyOp`). A program with no scheduler has no machine to announce itself to and
 	// no processor to lose, so its lowering is byte-identical to what it would be without this door.
 	let usesGt as bool
+	var tailCalls as TailCalls
 
 	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToArm64Lowering
-		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), displacedAddressFolds: DisplacedAddressFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
+		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), displacedAddressFolds: DisplacedAddressFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), abi: abi, usesGt: usesGt, tailCalls: TailCalls.none(), fresh: ValueMinter.create(0)}
 	end 'create'
 
 	// One unit through the whole conversion — x64's twin, and for its stated reasons: the Std column is
 	// checked where that module stops being appended to, the lowered module and request log are handed
 	// over with the fields reset, since the caller sends them home in a reply, and a unit starts on the
 	// empties the last one left.
-	export function lowerUnit(unitModule StdModule) returns LoweredUnit
+	export function lowerUnit(unitModule StdModule, permitsTailCalls bool) returns LoweredUnit
 		let stdOpCount = unitModule.ops.count()
 		unitModule.spans.requireParallelTo(stdOpCount, what: "at the Std tier's end")
 
 		self.stdModule = unitModule
+		self.tailCalls = TailCalls.forFunction(unitModule, func: unitModule.getFunc(UnitFunctionIndex), permitted: permitsTailCalls)
 		self.targetModule.spans.armed = unitModule.spans.armed
 		self.prepareSkeleton()
 		self.lowerFunction(UnitFunctionIndex)
@@ -545,7 +547,7 @@ export type StdToArm64Lowering
 		// file mints new blocks during the walk (the divide-by-zero split that once did is gone — `a / 0`
 		// is a bare `sdiv` now). So `blockRefs` is fixed across the walk and iterating it directly is safe.
 		for blockRef in srcFunc.blockRefs 'eachBlock'
-			let blockOutgoing = self.lowerOneBlock(blockRef, returnType: returnType, paramFloatMask: paramFloatMask)
+			let blockOutgoing = self.lowerOneBlock(blockRef, srcFunc: srcFunc, returnType: returnType, paramFloatMask: paramFloatMask)
 
 			if blockOutgoing > outgoingArgBytes 'largerArgRegion'
 				outgoingArgBytes = blockOutgoing
@@ -575,9 +577,11 @@ export type StdToArm64Lowering
 	// outgoing stack-argument region any of its calls needs. The terminator's phi edges were copied onto
 	// that block by `prepareSkeleton` and stay there — nothing splits the block, so there is no
 	// continuation to move them to.
-	function lowerOneBlock(blockRef ElementIndex, returnType StdReturnType, paramFloatMask ArgFloatMask) returns StackSize
+	function lowerOneBlock(blockRef ElementIndex, srcFunc IrFunction, returnType StdReturnType, paramFloatMask ArgFloatMask) returns StackSize
 		let opCount = self.stdBlockOpCount(blockRef)
 		var outgoingArgBytes = 0 as StackSize
+		view srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerOneBlock: blockRef {blockRef} not in stdModule.blocks")
+		self.tailCalls.probe(self.stdModule, srcFunc: srcFunc, block: srcBlock, abi: self.abi, registerCapacity: arm64RegisterArgCapacity(), target: self.target, usesGt: self.usesGt)
 
 		for i in 0 upto opCount 'eachOp'
 			view stdOp = self.stdBlockOpAt(blockRef, index: i)
@@ -589,13 +593,24 @@ export type StdToArm64Lowering
 
 			// The Target ops this one call appends inherit the Std op's span — x64's twin, same reason.
 			self.targetModule.spans.current = self.stdModule.spans.at(self.stdBlockOpIndexAt(blockRef, index: i))
+
+			if self.tailCalls.found and self.stdBlockOpIndexAt(blockRef, index: i) == self.tailCalls.opIdx 'theTailCall'
+				self.emitCallArgMoves(self.tailCalls.callee.clone(), args: self.tailCalls.args.clone(), dstRef: blockRef)
+				continue
+			end 'theTailCall'
+
 			self.lowerBodyOp(stdOp, dstRef: blockRef, returnType: returnType, paramFloatMask: paramFloatMask)
 		end 'eachOp'
 
 		if self.stdBlockHasTerminator(blockRef) 'hasTerm'
 			var termOp = self.stdBlockTerminator(blockRef)
 			self.targetModule.spans.current = self.stdModule.spans.at(self.stdBlockTerminatorIndex(blockRef))
-			self.lowerTerminatorOp(termOp, dstRef: blockRef, returnType: returnType)
+
+			if self.tailCalls.found 'branchToTheCallee'
+				self.emitTerminator(blockRef, op: TargetOp.arm64TailBranch(self.tailCalls.callee.clone()))
+			end 'branchToTheCallee' else 'returnNormally'
+				self.lowerTerminatorOp(termOp, dstRef: blockRef, returnType: returnType)
+			end 'returnNormally'
 		end 'hasTerm'
 
 		return outgoingArgBytes
@@ -2111,8 +2126,7 @@ export type StdToArm64Lowering
 
 	// Lower `osPanic <label>` — a violated range guard, or a user `panic("…")` — to `mrt_panic`,
 	// which prints the baked `panic at …` line plus a symbolized backtrace and exits `PanicExitCode`. The
-	// message address goes in x0 (AAPCS64's first argument) and the `bl` follows; `functionMakesCall`
-	// sees the branch-with-link and frames the caller accordingly.
+	// message address goes in x0 (AAPCS64's first argument) and the `bl` follows.
 	//
 	// ⭐ NO OS SPLIT HERE, exactly as x64's `lowerPanic` has none: x0 is not an OS fact, and the ONE
 	// genuine per-OS difference — how the process finally exits — lives INSIDE the chunk, where

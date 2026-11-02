@@ -434,6 +434,7 @@ export let ManagedFirstName = b"__managed_first"
 export let ManagedClearName = b"__managed_clear"
 export let ManagedRemoveName = b"__managed_remove"
 export let ManagedDecrefName = b"__managed_decref"
+let ManagedReleaseName = b"__managed_release"
 
 // The whole-array copy operations. `slice` is THROWING (bounds/inverted-range → `ArrayError`),
 // `clone`/`append` are not. `slice`/`clone` return an array that BEHAVES as an independent copy but is an
@@ -1267,7 +1268,8 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	buildArrayHash(module, name: ManagedHashName, element: ArrayHashElement.integerValue)
 	buildArrayHash(module, name: ManagedFloatHashName, element: ArrayHashElement.floatBits)
 	buildArrayEquals(module, name: ManagedEqName)
-	buildManagedDecref(module)
+	buildCountedDecref(module, name: ManagedDecrefName, releaseCallee: ManagedReleaseName, shape: DecrefRecordShape.bufferRecord)
+	buildManagedRelease(module)
 
 	// The `__ManagedMemory` members with a runtime of their own — part of the all-or-nothing
 	// `usesManagedMemory` install for the reason the header gives: `__`-prefixed functions are
@@ -4400,9 +4402,9 @@ end 'buildManagedIncref'
 // that has an immortal member, read by `ProgramSignatures.retainCalleeOf`.
 export function managedRecordRetainCallee(result RetainResult) returns ByteArray
 	return match result 'shape'
-		discarded gives ManagedIncrefName
+		discarded gives ownershipDoorName(OwnershipDoor.managedIncref)
 		freshName or
-		sharedRead gives ManagedRetainName
+		sharedRead gives ownershipDoorName(OwnershipDoor.managedRetain)
 	end 'shape'
 end 'managedRecordRetainCallee'
 
@@ -5695,29 +5697,14 @@ function emitMemoryThrow(module StdModule, block IrBlock, flag FullRangeInt, ids
 	emitErrorReturn(module, block: block, flag: flag, ids: ids)
 end 'emitMemoryThrow'
 
-// ⭐⭐ **`__managed_decref(record)` — ONE FEWER OWNER OF A BUFFER RECORD, AND ITS FIRST QUESTION IS WHETHER
-// THE RECORD IS COUNTABLE AT ALL.** An `ImmortalRecordCapacity` record is a String literal's or a
-// module-level byte-array constant's: it and its blob are both `.rdata`, which the PE writer maps READ-ONLY,
-// so the refcount read-modify-write below is an access violation rather than a miscount — and there is
-// nothing to reclaim in any case, because nothing was ever allocated. It leaves untouched.
-//
-// ⚠ **THIS IS THE DUAL OF `StringRuntime.__str_bytes_view`'s IMMORTAL ARM AND THE TWO MUST MOVE
-// TOGETHER**: that one hands the record back UNCOUNTED, and this one is what makes an uncounted hand-back
-// balanced. A guard in only one of them is either a fault or a count that never comes back down.
-//
-// ⚠ **IT IS NOT `emitBufferNotOwned`'s `capacity < 0`, AND MUST NOT BECOME IT.** That question is about the
-// BUFFER; this one is about the RECORD, and an inline String, a view and a byte-string literal all answer
-// "not mine" about their buffer while sitting in an ordinary `__mm_alloc` box that must be freed. This is
-// the one provenance whose RECORD is image data, so it is the one value compared against.
-function buildManagedDecref(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+// The last owner's half of `__managed_decref`: destroys the live managed elements `[0, length)`,
+// then releases the buffer and frees the record. A function of its own so the lean decref carries
+// no stack guard; the element walk recurses as deep as the data does, so this one does.
+function buildManagedRelease(module StdModule)
+	var func = IrFunction.createFromStd(ManagedReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
-	var immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
-	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
-	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 	var releaseBuf = module.addBlock(func, label: b"relbuf", heat: BlockHeat.normal)
 	var baseJoin = module.addBlock(func, label: b"basejoin", heat: BlockHeat.normal)
 	var freeRec = module.addBlock(func, label: b"freerec", heat: BlockHeat.normal)
@@ -5725,20 +5712,11 @@ function buildManagedDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let record = 0
 
-	let isImmortal = emitRecordIsImmortal(module, block: entry, record: record, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: countable.id))
-	module.setTerminator(immortal, op: StdOp.retVoid)
-
-	emitRefcountCheckToLastOwner(module, func: func, entry: countable, lower: lower, record: record, lastOwner: release, ids: ids)
-
-	// release: destroy the live managed elements `[0, length)` before the buffer goes (the shared gate skips a
-	// trivial-element array). An array that never allocated a buffer has length 0, so the walk is empty and
-	// needs no separate guard.
-	let buffer = emitLoadField(module, block: release, record: record, offset: ManagedRecordBufferOffset, ids: ids)
-	let length = emitLoadField(module, block: release, record: record, offset: ManagedRecordLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: release, record: record, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let start = emitConst(module, block: release, value: 0, ids: ids)
-	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: release, record: record, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
+	let buffer = emitLoadField(module, block: entry, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: record, offset: ManagedRecordLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, record: record, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let start = emitConst(module, block: entry, value: 0, ids: ids)
+	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: record, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
 	module.setTerminator(afterWalk, op: StdOp.branch(releaseBuf.id))
 
 	let base = emitOwedAllocationBase(module, func: func, cur: releaseBuf, join: baseJoin, record: record, ids: ids)
@@ -5750,7 +5728,7 @@ function buildManagedDecref(module StdModule)
 	module.setTerminator(freeRec, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildManagedDecref'
+end 'buildManagedRelease'
 
 // --- The MANAGED-element deep-clone copies ---
 

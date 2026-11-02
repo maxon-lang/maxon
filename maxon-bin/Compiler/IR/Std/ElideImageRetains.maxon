@@ -9,17 +9,6 @@ end 'ImageRetain'
 
 typealias ImageRetainArray = Array with ImageRetain
 
-type ValueFlow
-	export let feeder as ValueId
-	export let carrier as ValueId
-
-	static function create(feeder ValueId, carrier ValueId) returns Self
-		return Self{feeder: feeder, carrier: carrier}
-	end 'create'
-end 'ValueFlow'
-
-typealias ValueFlowArray = Array with ValueFlow
-
 // `__managed_retain` of an rdata image record hands back a writable copy, because image memory is
 // read-only. A copy whose every use, through block arguments included, is a decref or a length load
 // is never written, so the image itself serves (`__managed_decref` skips an immortal record); any
@@ -27,15 +16,17 @@ typealias ValueFlowArray = Array with ValueFlow
 export function elideImageRetains(project Project, module StdModule)
 	var liveOps = OpIndexArray.create()
 	var call = StdCallOperands.create()
+	var census = RetainCensus.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		elideInFunction(project, module: module, func: module.getFunc(funcIndex), liveOps: liveOps, call: call)
+		elideInFunction(project, module: module, func: module.getFunc(funcIndex), liveOps: liveOps, call: call, census: census)
 	end 'eachFunc'
 end 'elideImageRetains'
 
-function elideInFunction(project Project, module StdModule, func IrFunction, liveOps OpIndexArray, call StdCallOperands)
+function elideInFunction(project Project, module StdModule, func IrFunction, liveOps OpIndexArray, call StdCallOperands, census RetainCensus)
+	census.fill(module, func: func)
 	module.collectLiveOpIndices(func, into: liveOps)
-	let retains = recordRetainsIn(module, liveOps: liveOps, call: call)
+	let retains = recordRetainsIn(census)
 
 	if retains.isEmpty() 'noRecordIsRetained'
 		return
@@ -65,18 +56,14 @@ function elideInFunction(project Project, module StdModule, func IrFunction, liv
 	applyElisions(module, func: func, bound: bound, images: images, escaped: escaped)
 end 'elideInFunction'
 
-function recordRetainsIn(module StdModule, liveOps OpIndexArray, call StdCallOperands) returns ImageRetainArray
+function recordRetainsIn(census RetainCensus) returns ImageRetainArray
 	var retains = ImageRetainArray.create()
 
-	for opIdx in liveOps 'eachOp'
-		classifyCallOperands(module.getOp(opIdx), call: call)
-
-		if not isOneArgumentCallTo(call, callee: ManagedRetainName) 'notARecordRetain'
-			continue
-		end 'notARecordRetain'
-
-		retains.push(ImageRetain.create(call.resultId, source: call.firstArg))
-	end 'eachOp'
+	for site in census.sites 'eachSite'
+		if site.door == OwnershipDoor.managedRetain 'aRecordRetain'
+			retains.push(ImageRetain.create(site.resultId, source: site.operand))
+		end 'aRecordRetain'
+	end 'eachSite'
 
 	return retains
 end 'recordRetainsIn'
@@ -102,27 +89,6 @@ function imageRetainsAmong(project Project, module StdModule, retains ImageRetai
 
 	return images
 end 'imageRetainsAmong'
-
-function valueFlowsOf(module StdModule, func IrFunction) returns ValueFlowArray
-	var flows = ValueFlowArray.create()
-	let positionById = module.blockIndexById(func)
-
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = module.getBlock(blockRef)
-
-		for edge in block.branchEdges 'eachEdge'
-			let position = try positionById.get(edge.targetBlockId) otherwise panic("valueFlowsOf: an edge names block {edge.targetBlockId}, which the function does not hold")
-			let target = module.blockAtPosition(func, position: position)
-
-			for (iter, feeder) in edge.argIds.withIterator() 'eachArg'
-				let slot = try target.blockArgs.get(iter.index()) otherwise panic("valueFlowsOf: an edge passes argument {iter.index()} to block {edge.targetBlockId}, which declares {target.blockArgs.count()}")
-				flows.push(ValueFlow.create(feeder, carrier: slot.valueId))
-			end 'eachArg'
-		end 'eachEdge'
-	end 'eachBlock'
-
-	return flows
-end 'valueFlowsOf'
 
 function spreadForward(flows ValueFlowArray, tracked BoolArray)
 	var grew = true
@@ -181,17 +147,13 @@ end 'markEscapes'
 function opOnlyDropsOrMeasures(op StdOp, call StdCallOperands, load StdLoadOperands, tracked BoolArray) returns bool
 	classifyCallOperands(op, call: call)
 
-	if isOneArgumentCallTo(call, callee: ManagedDecrefName) 'aDrop'
+	if call.isPlainOneArgumentCall() and calleeIsDoor(call.callee, door: OwnershipDoor.managedDecref) 'aDrop'
 		return isMarked(tracked, v: call.firstArg)
 	end 'aDrop'
 
 	classifyLoadOperands(op, load: load)
 	return load.isLoad() and load.offset == ManagedRecordLengthOffset and isMarked(tracked, v: load.addrId)
 end 'opOnlyDropsOrMeasures'
-
-function isOneArgumentCallTo(call StdCallOperands, callee ByteArray) returns bool
-	return call.namesACallee() and not call.throwsToAFlag() and call.argCount == 1 and call.callee.equals(callee)
-end 'isOneArgumentCallTo'
 
 function applyElisions(module StdModule, func IrFunction, bound ValueId, images ImageRetainArray, escaped BoolArray)
 	var subst = ValueIdArray.create()
@@ -218,11 +180,3 @@ function applyElisions(module StdModule, func IrFunction, bound ValueId, images 
 	substituteValuesInFunc(module, func: func, subst: subst)
 	removeOpsDefining(module, func: func, doomed: elided)
 end 'applyElisions'
-
-function isMarked(column BoolArray, v ValueId) returns bool
-	return try column.get(v) otherwise panic("isMarked: value {v} is outside the {column.count()} the function defines")
-end 'isMarked'
-
-function markValue(column BoolArray, v ValueId)
-	try column.set(v, value: true) otherwise panic("markValue: value {v} is outside the {column.count()} the function defines")
-end 'markValue'

@@ -1931,8 +1931,10 @@ function opControlRole(op TargetOp) returns OpControlRole
 		arm64Cbz or
 		arm64Cbnz gives OpControlRole.condBranch
 		ret or
+		tailJmp or
 		jmp or
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		x64JumpTable or
 		arm64JumpTable gives OpControlRole.blockEnd
@@ -1946,6 +1948,7 @@ export union TerminatorExit
 	none
 	blockId(id BlockId)
 	returns
+	tailJumps
 	table(defaultTarget BlockId, caseTargets BlockIdArray)
 end 'TerminatorExit'
 
@@ -1961,6 +1964,8 @@ export function terminatorExitOf(module TargetModule, block IrBlock) returns Ter
 		arm64Branch(target) then return TerminatorExit.blockId(target)
 		ret or
 		arm64Ret then return TerminatorExit.returns
+		tailJmp or
+		arm64TailBranch then return TerminatorExit.tailJumps
 		prologue or
 		epilogue then panic("terminatorExitOf: block '{String.from(block.label)}' terminator is a frame op, not a branch/return")
 		jcc then panic("terminatorExitOf: block '{String.from(block.label)}' has a `jcc` as its terminator — it must be a body op paired with a `jmp` terminator")
@@ -2123,17 +2128,21 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 	return match terminatorExitOf(module, block: block) 'check'
 		none or
 		returns or
+		tailJumps or
 		table gives false
 		blockId gives true
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
+// A tail jump counts: it leaves the function, so the frame passes mirror their epilogue before it
+// exactly as before a `ret`.
 export function terminatorReturns(module TargetModule, block IrBlock) returns bool
 	return match terminatorExitOf(module, block: block) 'check'
 		none or
 		blockId or
 		table gives false
-		returns gives true
+		returns or
+		tailJumps gives true
 	end 'check'
 end 'terminatorReturns'
 
@@ -2152,7 +2161,8 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 
 	match terminatorExitOf(module, block: block) 'exit'
 		none or
-		returns then break
+		returns or
+		tailJumps then break
 		blockId(target) then out.push(target)
 		table(defaultTarget, caseTargets) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 	end 'exit'
@@ -4818,6 +4828,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			prologue or
 			epilogue or
 			ret or
+			tailJmp or
 			jmp or
 			jcc or
 			movRegImm or
@@ -4880,6 +4891,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			movqXmmGpr or
 			negF64RegReg or
 			arm64Ret or
+			arm64TailBranch or
 			arm64Branch or
 			arm64CondBranch or
 			arm64Cbz or
@@ -6206,6 +6218,7 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc or
 		movRegImm or
@@ -6267,6 +6280,7 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		movqXmmGpr or
 		negF64RegReg or
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or

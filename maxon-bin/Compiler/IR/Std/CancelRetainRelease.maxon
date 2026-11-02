@@ -1,0 +1,584 @@
+// Cancels a retain against the release of the same record, or of the record the retain handed back,
+// when only ops that leave the count alone lie between them. The window follows unconditional
+// branches and crosses at most one join.
+//
+// Across the join the other predecessors still owe the release, so it moves to the join's front and
+// the retaining predecessor is retargeted past it.
+//
+// An immortal image record: a buffer retain hands back a writable clone of it, so a cancelled
+// retain whose result outlives the window cannot alias its operand. It becomes a fork on
+// `emitRecordIsImmortal`: `__managed_clone` on the immortal arm, the operand itself on the other.
+typealias PredecessorCounts = Array with ElementIndex
+typealias ConsumedOpSet = Set with ElementIndex
+typealias VacatedOpSet = Set with ElementIndex
+typealias VacatedBlockSet = Set with ElementIndex
+
+let BlockKeyShift = 32 as ElementIndex
+
+enum WindowEnd
+	foundRelease
+	leavesByBranch
+	blocked
+end 'WindowEnd'
+
+enum SweepVerdict
+	settled
+	runAgain
+end 'SweepVerdict'
+
+type FusionPartner
+	export var door as OwnershipDoor
+	export var operand as ValueId
+	export var resultId as ValueId
+	export var retainBlockRef as ElementIndex
+	export var retainBlockId as BlockId
+	export var retainPosition as ElementIndex
+	export var retainOpIdx as ElementIndex
+	export var releaseBlockId as BlockId
+	export var releaseOpIdx as ElementIndex
+	export var releaseResultId as ValueId
+	export var releasesTheRetained as bool
+	export var joinBlockId as BlockId
+	export var incomingBlockId as BlockId
+	export var crossesAJoin as bool
+
+	static function create() returns Self
+		return Self{door: OwnershipDoor.managedRetain, operand: 0, resultId: 0, retainBlockRef: 0, retainBlockId: 0, retainPosition: 0, retainOpIdx: 0, releaseBlockId: 0, releaseOpIdx: 0, releaseResultId: 0, releasesTheRetained: false, joinBlockId: 0, incomingBlockId: 0, crossesAJoin: false}
+	end 'create'
+
+	function handsTheRecordBack() returns bool
+		return doorHandsBack(self.door) != DoorHandsBack.nothing
+	end 'handsTheRecordBack'
+
+	function forksOnAnImmortalRecord() returns bool
+		return doorHandsBack(self.door) == DoorHandsBack.operandOrClone
+	end 'forksOnAnImmortalRecord'
+end 'FusionPartner'
+
+type FusionState
+	export var func as IrFunction
+	export var ready as bool
+	export var refPlusOneById as ValueIdArray
+	export var predecessors as PredecessorCounts
+	export var minter as ValueMinter
+	export var subst as ValueIdArray
+	export var substChanged as bool
+	export var doomed as StdValueUseSet
+	export var consumed as ConsumedOpSet
+	export var vacated as VacatedOpSet
+	export var vacatedBlocks as VacatedBlockSet
+	export var call as StdCallOperands
+	export var branch as StdBranchOperands
+	export var def as StdDefinedValues
+	export var partner as FusionPartner
+	export var knownBlockRefs as ElementIndex
+	export var changed as bool
+	export var skippedAsMoved as bool
+
+	static function create(func IrFunction) returns Self
+		return Self{func: func, ready: false, refPlusOneById: ValueIdArray.create(), predecessors: PredecessorCounts.create(), minter: ValueMinter.resuming(0), subst: ValueIdArray.create(), substChanged: false, doomed: StdValueUseSet.create(), consumed: ConsumedOpSet.create(), vacated: VacatedOpSet.create(), vacatedBlocks: VacatedBlockSet.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), partner: FusionPartner.create(), knownBlockRefs: 0, changed: false, skippedAsMoved: false}
+	end 'create'
+
+	function ensureReady(module StdModule)
+		if self.ready 'alreadyBuilt'
+			return
+		end 'alreadyBuilt'
+
+		let bound = nextFreeValueId(module, func: self.func)
+		self.minter = ValueMinter.resuming(bound)
+
+		for id in 0 upto bound 'identity'
+			self.subst.push(id)
+		end 'identity'
+
+		self.refPlusOneById = buildBlockIdIndex(module, func: self.func)
+		self.knownBlockRefs = self.func.blockRefs.count()
+		self.countPredecessors(module)
+		self.ready = true
+	end 'ensureReady'
+
+	function countPredecessors(module StdModule)
+		self.predecessors.growFilled(self.func.nextBlockId as ElementIndex, value: 0)
+		var successors = BlockIdArray.create()
+
+		for blockRef in self.func.blockRefs 'eachBlock'
+			successors.clear()
+			collectStdBlockSuccessorIds(module, block: module.getBlock(blockRef), out: successors)
+
+			for successor in successors 'eachSuccessor'
+				self.addPredecessors(successor, count: 1)
+			end 'eachSuccessor'
+		end 'eachBlock'
+	end 'countPredecessors'
+
+	function addPredecessors(id BlockId, count ElementIndex)
+		let current = try self.predecessors.get(id) otherwise panic("FusionState.addPredecessors: block {id} is outside the function's block ids")
+		try self.predecessors.set(id, value: current + count) otherwise panic("FusionState.addPredecessors: predecessors.set OOB at {id}")
+	end 'addPredecessors'
+
+	function dropPredecessor(id BlockId)
+		let current = try self.predecessors.get(id) otherwise panic("FusionState.dropPredecessor: block {id} is outside the function's block ids")
+		try self.predecessors.set(id, value: current - 1) otherwise panic("FusionState.dropPredecessor: predecessors.set OOB at {id}")
+	end 'dropPredecessor'
+
+	function predecessorCount(id BlockId) returns ElementIndex
+		return try self.predecessors.get(id) otherwise panic("FusionState.predecessorCount: block {id} is outside the function's block ids")
+	end 'predecessorCount'
+
+	function blockOf(module StdModule, id BlockId) returns IrBlock
+		self.ensureReady(module)
+		return blockById(module, refByBlockId: self.refPlusOneById, id: id, from: b"cancelRetainRelease")
+	end 'blockOf'
+
+	function registerBlocks(module StdModule)
+		self.predecessors.growFilled(self.func.nextBlockId as ElementIndex, value: 0)
+		self.refPlusOneById.growFilled(self.func.nextBlockId as ElementIndex, value: 0)
+
+		for position in self.knownBlockRefs upto self.func.blockRefs.count() 'eachNewBlock'
+			let blockRef = try self.func.blockRefs.get(position) otherwise panic("FusionState.registerBlocks: blockRefs.get OOB at {position}")
+			try self.refPlusOneById.set(module.getBlock(blockRef).id, value: blockRef + 1) otherwise panic("FusionState.registerBlocks: refPlusOneById.set OOB")
+		end 'eachNewBlock'
+
+		self.knownBlockRefs = self.func.blockRefs.count()
+	end 'registerBlocks'
+
+	function substitute(from ValueId, to ValueId)
+		try self.subst.set(from, value: to) otherwise panic("FusionState.substitute: subst.set OOB at {from}")
+		self.substChanged = true
+	end 'substitute'
+
+	function vacate(blockId BlockId, opIdx ElementIndex)
+		self.vacated.insert(opKeyOf(blockId, opIdx: opIdx))
+		self.vacatedBlocks.insert(blockId as ElementIndex)
+	end 'vacate'
+
+	function isVacated(blockId BlockId, opIdx ElementIndex) returns bool
+		return self.vacated.contains(opKeyOf(blockId, opIdx: opIdx))
+	end 'isVacated'
+end 'FusionState'
+
+function opKeyOf(blockId BlockId, opIdx ElementIndex) returns ElementIndex
+	return ((blockId as ElementIndex) shl BlockKeyShift) or opIdx
+end 'opKeyOf'
+
+export function cancelRetainRelease(module StdModule)
+	var census = RetainCensus.create()
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		var func = module.getFunc(funcIndex)
+
+		if func.blockRefs.count() == 0 or func.bodySplicedAway 'nothingToCancel'
+			continue
+		end 'nothingToCancel'
+
+		var verdict = SweepVerdict.runAgain
+
+		while verdict == SweepVerdict.runAgain 'untilNothingMoved'
+			census.fill(module, func: func)
+
+			if census.sites.isEmpty() or census.fusableReleases == 0 'nothingToPair'
+				break
+			end 'nothingToPair'
+
+			verdict = cancelOneSweep(module, func: func, census: census)
+		end 'untilNothingMoved'
+	end 'eachFunc'
+end 'cancelRetainRelease'
+
+function cancelOneSweep(module StdModule, func IrFunction, census RetainCensus) returns SweepVerdict
+	var state = FusionState.create(func)
+
+	for offset in 0 upto census.sites.count() 'eachSiteFromTheLast'
+		let site = try census.sites.get(census.sites.count() - 1 - offset) otherwise panic("cancelOneSweep: sites.get OOB at {census.sites.count() - 1 - offset}")
+
+		if doorFusesInPlace(site.door) 'aFusableFamily'
+			cancelSite(module, state: state, site: site)
+		end 'aFusableFamily'
+	end 'eachSiteFromTheLast'
+
+	if state.changed 'something'
+		finishSweep(module, state: state)
+	end 'something'
+
+	return SweepVerdict.runAgain if state.changed and state.skippedAsMoved else SweepVerdict.settled
+end 'cancelOneSweep'
+
+function finishSweep(module StdModule, state FusionState)
+	applyVacated(module, state: state)
+
+	if state.substChanged 'somethingToSubstitute'
+		resolveSubstitutionChains(state.subst)
+		substituteValuesInFunc(module, func: state.func, subst: state.subst)
+	end 'somethingToSubstitute'
+
+	removeOpsDefining(module, func: state.func, doomed: state.doomed)
+end 'finishSweep'
+
+function applyVacated(module StdModule, state FusionState)
+	if state.vacatedBlocks.count() == 0 'nothingVacated'
+		return
+	end 'nothingVacated'
+
+	for blockRef in state.func.blockRefs 'eachBlock'
+		var block = module.getBlock(blockRef)
+
+		if not state.vacatedBlocks.contains(block.id as ElementIndex) 'untouched'
+			continue
+		end 'untouched'
+
+		var kept = OpIndexArray.create()
+
+		for opIdx in block.bodyOps() 'eachOp'
+			if not state.isVacated(block.id, opIdx: opIdx) 'stays'
+				kept.push(opIdx)
+			end 'stays'
+		end 'eachOp'
+
+		block.replaceBodyOps(kept)
+	end 'eachBlock'
+end 'applyVacated'
+
+function resolveSubstitutionChains(subst ValueIdArray)
+	for id in 0 upto subst.count() 'eachValue'
+		var root = id as ValueId
+
+		while (try subst.get(root) otherwise panic("resolveSubstitutionChains: subst.get OOB at {root}")) != root 'findTheRoot'
+			root = try subst.get(root) otherwise panic("resolveSubstitutionChains: subst.get OOB at {root}")
+		end 'findTheRoot'
+
+		var cursor = id as ValueId
+
+		while cursor != root 'compressThePath'
+			let next = try subst.get(cursor) otherwise panic("resolveSubstitutionChains: subst.get OOB at {cursor}")
+			try subst.set(cursor, value: root) otherwise panic("resolveSubstitutionChains: subst.set OOB at {cursor}")
+			cursor = next
+		end 'compressThePath'
+	end 'eachValue'
+end 'resolveSubstitutionChains'
+
+function cancelSite(module StdModule, state FusionState, site RetainSite)
+	if state.consumed.contains(site.opIdx) 'alreadyCancelled'
+		return
+	end 'alreadyCancelled'
+
+	view block = module.getBlock(site.blockRef)
+	let there = try block.bodyOpAt(site.position) otherwise 'movedByAnEarlierCancellation'
+		state.skippedAsMoved = true
+		return
+	end 'movedByAnEarlierCancellation'
+
+	if there != site.opIdx 'displaced'
+		state.skippedAsMoved = true
+		return
+	end 'displaced'
+
+	state.partner.door = site.door
+	state.partner.operand = site.operand
+	state.partner.resultId = site.resultId
+	state.partner.retainBlockRef = site.blockRef
+	state.partner.retainBlockId = site.blockId
+	state.partner.retainPosition = site.position
+	state.partner.retainOpIdx = site.opIdx
+	state.partner.crossesAJoin = false
+	state.partner.releasesTheRetained = false
+
+	if not findReleasePartner(module, state: state) 'noReleaseToCancelWith'
+		return
+	end 'noReleaseToCancelWith'
+
+	state.ensureReady(module)
+	module.spans.current = module.spans.at(site.opIdx)
+
+	if state.partner.crossesAJoin 'bypassTheRelease'
+		bypassJoin(module, state: state)
+	end 'bypassTheRelease' else 'deleteTheRelease'
+		state.doomed.insert(state.partner.releaseResultId)
+		state.consumed.insert(state.partner.releaseOpIdx)
+	end 'deleteTheRelease'
+
+	retireRetain(module, state: state)
+	state.changed = true
+end 'cancelSite'
+
+function findReleasePartner(module StdModule, state FusionState) returns bool
+	view first = module.getBlock(state.partner.retainBlockRef)
+
+	match scanWindow(module, block: first, from: state.partner.retainPosition + 1, state: state) 'firstWindow'
+		blocked then return false
+		foundRelease then return true
+		leavesByBranch then break
+	end 'firstWindow'
+
+	if not first.hasTerminatorOp() 'noExit'
+		return false
+	end 'noExit'
+
+	return walkTheStraightPath(module, state: state, startId: first.id)
+end 'findReleasePartner'
+
+function walkTheStraightPath(module StdModule, state FusionState, startId BlockId) returns bool
+	var currentId = startId
+	var visited = 0 as ElementIndex
+
+	while true 'walkThePath'
+		view current = state.blockOf(module, id: currentId)
+
+		if not current.hasTerminatorOp() 'noExit'
+			return false
+		end 'noExit'
+
+		classifyBranch(module.getOp(current.terminatorIndex()), out: state.branch)
+
+		if not state.branch.isBranch() or visited >= state.predecessors.count() 'notAStraightPath'
+			return false
+		end 'notAStraightPath'
+
+		let nextId = state.branch.targetBlockId
+
+		if nextId == state.partner.retainBlockId 'aCycle'
+			return false
+		end 'aCycle'
+
+		let predecessors = state.predecessorCount(nextId)
+		view next = state.blockOf(module, id: nextId)
+
+		if predecessors == 0 or blockTakesValueAsArgument(next, value: state.partner.operand) 'notDominatedByTheOperand'
+			return false
+		end 'notDominatedByTheOperand'
+
+		if predecessors > 1 'aJoin'
+			if state.partner.crossesAJoin 'aSecondJoin'
+				return false
+			end 'aSecondJoin'
+
+			state.partner.crossesAJoin = true
+			state.partner.joinBlockId = nextId
+			state.partner.incomingBlockId = currentId
+		end 'aJoin'
+
+		match scanWindow(module, block: next, from: 0, state: state) 'window'
+			blocked then return false
+			foundRelease then return not (state.partner.releasesTheRetained and state.partner.crossesAJoin)
+			leavesByBranch then break
+		end 'window'
+
+		currentId = nextId
+		visited = visited + 1
+	end 'walkThePath'
+
+	panic("walkTheStraightPath: the walk over a path left its loop without an answer")
+end 'walkTheStraightPath'
+
+function blockTakesValueAsArgument(block IrBlock, value ValueId) returns bool
+	for arg in block.blockArgs 'eachArg'
+		if arg.valueId == value 'defined'
+			return true
+		end 'defined'
+	end 'eachArg'
+
+	return false
+end 'blockTakesValueAsArgument'
+
+function scanWindow(module StdModule, block IrBlock, from ElementIndex, state FusionState) returns WindowEnd
+	for position in from upto block.bodyOpCount() 'eachOp'
+		let opIdx = try block.bodyOpAt(position) otherwise panic("scanWindow: bodyOpAt OOB at {position}")
+
+		if state.consumed.contains(opIdx) or state.isVacated(block.id, opIdx: opIdx) 'alreadyCancelled'
+			continue
+		end 'alreadyCancelled'
+
+		let op = module.getOp(opIdx)
+		classifyCallOperands(op, call: state.call)
+
+		if releasesThePair(state.call, partner: state.partner) 'theRelease'
+			state.partner.releaseBlockId = block.id
+			state.partner.releaseOpIdx = opIdx
+			state.partner.releaseResultId = state.call.resultId
+			state.partner.releasesTheRetained = state.partner.handsTheRecordBack() and state.call.firstArg == state.partner.resultId
+			return WindowEnd.foundRelease
+		end 'theRelease'
+
+		stdOpDefinedValue(op, def: state.def)
+
+		if not state.def.definesNothing() and (state.def.first == state.partner.operand or (state.def.definesPair() and state.def.second == state.partner.operand)) 'redefinesTheOperand'
+			return WindowEnd.blocked
+		end 'redefinesTheOperand'
+
+		if not stdOpLeavesTheCountAlone(op) 'observesOrDrops'
+			return WindowEnd.blocked
+		end 'observesOrDrops'
+	end 'eachOp'
+
+	return WindowEnd.leavesByBranch
+end 'scanWindow'
+
+function releasesThePair(call StdCallOperands, partner FusionPartner) returns bool
+	if not call.isPlainOneArgumentCall() 'notAOneArgumentCall'
+		return false
+	end 'notAOneArgumentCall'
+
+	let door = try ownershipDoorNamed(call.callee) otherwise return false
+
+	if not doorReleasesWhatRetains(door, retain: partner.door) 'notThisFamilysRelease'
+		return false
+	end 'notThisFamilysRelease'
+
+	return call.firstArg == partner.operand or (partner.handsTheRecordBack() and call.firstArg == partner.resultId)
+end 'releasesThePair'
+
+function retireRetain(module StdModule, state FusionState)
+	state.consumed.insert(state.partner.retainOpIdx)
+
+	if state.partner.forksOnAnImmortalRecord() and not state.partner.releasesTheRetained 'adoptsOrCopies'
+		adoptInPlace(module, state: state)
+		return
+	end 'adoptsOrCopies'
+
+	if state.partner.handsTheRecordBack() 'handsTheRecordBack'
+		state.substitute(state.partner.resultId, to: state.partner.operand)
+	end 'handsTheRecordBack'
+
+	state.doomed.insert(state.partner.resultId)
+end 'retireRetain'
+
+function adoptInPlace(module StdModule, state FusionState)
+	if doorFamily(state.partner.door) != DoorFamily.buffer 'noCloneEntry'
+		panic("adoptInPlace: only a buffer record forks on an immortal record through `__managed_clone`")
+	end 'noCloneEntry'
+
+	let headId = state.partner.retainBlockId
+	var tail = splitBlockInPlace(module, func: state.func, head: state.blockOf(module, id: headId), position: state.partner.retainPosition + 1, label: b"adopted")
+	var cold = module.addBlock(state.func, label: b"adoptclone", heat: BlockHeat.cold, inlineSite: tail.inlineSite)
+	state.registerBlocks(module)
+
+	var head = state.blockOf(module, id: headId)
+	let dropped = try head.popBodyOp() otherwise panic("adoptInPlace: the head of a split holds the retain it was split after")
+
+	if dropped != state.partner.retainOpIdx 'notTheRetain'
+		panic("adoptInPlace: the op split off the end of the head is op {dropped}, not the retain {state.partner.retainOpIdx}")
+	end 'notTheRetain'
+
+	let operand = state.partner.operand
+	let isImmortal = emitRecordIsImmortal(module, block: head, record: operand, ids: state.minter)
+	let cloned = state.minter.mint()
+	module.appendOp(cold, op: StdOp.call(cloned, callee: ManagedCloneName, args: argsOf(operand)))
+	module.setTerminator(cold, op: StdOp.branch(tail.id))
+	cold.branchEdges = edgeCarrying(tail.id, value: cloned)
+	module.setTerminator(head, op: StdOp.condBranch(isImmortal, thenBlockId: cold.id, elseBlockId: tail.id))
+	head.branchEdges = edgeCarrying(tail.id, value: operand)
+	tail.blockArgs.push(IrBlockArg.create(state.partner.resultId, argType: StdType.i64))
+	state.addPredecessors(tail.id, count: 2)
+	state.addPredecessors(cold.id, count: 1)
+end 'adoptInPlace'
+
+function edgeCarrying(target BlockId, value ValueId) returns BranchEdgeArray
+	var edges = BranchEdgeArray.create()
+	edges.push(BranchEdge.create(target, argIds: argsOf(value)))
+	return edges
+end 'edgeCarrying'
+
+function bypassJoin(module StdModule, state FusionState)
+	let joinId = state.partner.joinBlockId
+	moveReleaseToTheFrontOf(module, state: state, joinId: joinId)
+	view join = state.blockOf(module, id: joinId)
+	classifyBranch(module.getOp(join.terminatorIndex()), out: state.branch)
+
+	if join.bodyOpCount() == 1 and state.branch.isBranch() 'onlyTheReleaseRemains'
+		retargetPastTheRelease(module, state: state, join: join, target: state.branch.targetBlockId)
+		return
+	end 'onlyTheReleaseRemains'
+
+	splitAfterTheRelease(module, state: state, joinId: joinId)
+end 'bypassJoin'
+
+function moveReleaseToTheFrontOf(module StdModule, state FusionState, joinId BlockId)
+	var releaseBlock = state.blockOf(module, id: state.partner.releaseBlockId)
+
+	if releaseBlock.id == joinId 'insideTheJoin'
+		var kept = OpIndexArray.create()
+
+		for candidate in releaseBlock.bodyOps() 'eachOp'
+			if candidate != state.partner.releaseOpIdx 'stays'
+				kept.push(candidate)
+			end 'stays'
+		end 'eachOp'
+
+		releaseBlock.replaceBodyOps(kept)
+	end 'insideTheJoin' else 'beyondTheJoin'
+		state.vacate(releaseBlock.id, opIdx: state.partner.releaseOpIdx)
+	end 'beyondTheJoin'
+
+	var join = state.blockOf(module, id: joinId)
+	join.insertBodyOp(0, opIdx: state.partner.releaseOpIdx)
+end 'moveReleaseToTheFrontOf'
+
+function retargetPastTheRelease(module StdModule, state FusionState, join IrBlock, target BlockId)
+	var incoming = state.blockOf(module, id: state.partner.incomingBlockId)
+	view targetBlock = state.blockOf(module, id: target)
+	view passedToTarget = edgeArgsTo(join, targetId: target, takesArgs: targetBlock.blockArgs.count() != 0)
+	view passedToJoin = edgeArgsTo(incoming, targetId: join.id, takesArgs: join.blockArgs.count() != 0)
+	var mapped = ValueIdArray.create()
+
+	for passed in passedToTarget 'eachPassedArg'
+		mapped.push(argumentOrItself(join, value: passed, supplied: passedToJoin))
+	end 'eachPassedArg'
+
+	try module.ops.set(incoming.terminatorIndex(), value: StdOp.branch(target)) otherwise panic("retargetPastTheRelease: ops.set OOB at the terminator of block {incoming.id}")
+	incoming.branchEdges = edgesRetargeted(incoming.branchEdges, from: join.id, to: target, args: mapped)
+	state.dropPredecessor(join.id)
+	state.addPredecessors(target, count: 1)
+end 'retargetPastTheRelease'
+
+function splitAfterTheRelease(module StdModule, state FusionState, joinId BlockId)
+	var tail = splitBlockInPlace(module, func: state.func, head: state.blockOf(module, id: joinId), position: 1, label: b"bypassed")
+	state.registerBlocks(module)
+
+	var join = state.blockOf(module, id: joinId)
+	var incoming = state.blockOf(module, id: state.partner.incomingBlockId)
+	var originalArgs = join.blockArgs
+	var freshArgs = IrBlockArgArray.create()
+	var passed = ValueIdArray.create()
+
+	for arg in originalArgs 'eachArg'
+		let id = state.minter.mint()
+		freshArgs.push(IrBlockArg.create(id, argType: arg.argType, returnRole: arg.returnRole))
+		passed.push(id)
+	end 'eachArg'
+
+	view passedToJoin = edgeArgsTo(incoming, targetId: joinId, takesArgs: originalArgs.count() != 0)
+	tail.blockArgs = originalArgs
+	join.blockArgs = freshArgs
+	module.setTerminator(join, op: StdOp.branch(tail.id))
+	join.branchEdges = BranchEdgeArray.create()
+
+	if passed.count() > 0 'theJoinCarriesArgs'
+		join.branchEdges.push(BranchEdge.create(tail.id, argIds: passed))
+	end 'theJoinCarriesArgs'
+
+	try module.ops.set(incoming.terminatorIndex(), value: StdOp.branch(tail.id)) otherwise panic("splitAfterTheRelease: ops.set OOB at the terminator of block {incoming.id}")
+	incoming.branchEdges = edgesRetargeted(incoming.branchEdges, from: joinId, to: tail.id, args: passedToJoin.clone())
+	state.dropPredecessor(joinId)
+	state.addPredecessors(tail.id, count: 2)
+end 'splitAfterTheRelease'
+
+function argumentOrItself(join IrBlock, value ValueId, supplied ValueIdArray) returns ValueId
+	for slot in 0 upto join.blockArgs.count() 'eachArg'
+		let arg = try join.blockArgs.get(slot) otherwise panic("argumentOrItself: blockArgs.get OOB at {slot}")
+
+		if arg.valueId == value 'suppliedByThePredecessor'
+			return try supplied.get(slot) otherwise panic("argumentOrItself: the predecessor supplies {supplied.count()} arg(s) but slot {slot} is one of the join's")
+		end 'suppliedByThePredecessor'
+	end 'eachArg'
+
+	return value
+end 'argumentOrItself'
+
+function edgesRetargeted(edges BranchEdgeArray, from BlockId, to BlockId, args ValueIdArray) returns BranchEdgeArray
+	var retargeted = edgesWithoutTarget(edges, droppedTarget: from)
+
+	if args.count() > 0 'theNewEdgeCarriesArgs'
+		retargeted.push(BranchEdge.create(to, argIds: args))
+	end 'theNewEdgeCarriesArgs'
+
+	return retargeted
+end 'edgesRetargeted'

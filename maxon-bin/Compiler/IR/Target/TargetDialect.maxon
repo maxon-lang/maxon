@@ -442,6 +442,8 @@ export union TargetOp
 	// `x64ReturnScratchMask()` by `assertEncoderScratchMasks`.
 	ret(transfer ReturnTransfer) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x100, implicitDefs: 0x1}
 
+	tailJmp(let targetName ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+
 	// Unconditional near jump to a block (`jmp rel32`, 0xE9). `targetBlockId` names a
 	// function-local block; emitFunctionChunk resolves it to a chunk-local rel32 (a
 	// function's blocks are contiguous, so intra-function jumps never cross a chunk
@@ -1095,6 +1097,8 @@ export union TargetOp
 	// `mov x0, retval; ret`). The target-dispatched counterpart of the x64 `ret`'s R8 (0x100).
 	arm64Ret(transfer ReturnTransfer) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0}
 
+	arm64TailBranch(let targetName ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+
 	// Unconditional branch `b` to a function-local block.
 	arm64Branch(targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
@@ -1538,7 +1542,7 @@ export union TargetOp
 	// (`sweepEstablishedRegisters` deliberately does not end one at a mere read). It has no explicit virtual
 	// operand for `forbidOperandsFromImplicit` to constrain, so an `implicitUses` here would be inert.
 	//
-	// `isCall: false` — nothing is called; `functionMakesCall` must not be told a heap-touching runtime body
+	// `isCall: false` — nothing is called; `functionCalleeReach` must not be told a heap-touching runtime body
 	// needs a frame it does not. `isMemory`/`isStore` are true: it writes the region.
 	//
 	// ⭐ `fillByte` is the Std op's CONSTANT, carried through UNCHANGED — the byte, never the broadcast. All
@@ -1834,7 +1838,7 @@ export union TargetOp
 	// arm64's allocatable pool, so the mask would document the encoder and cost x64 two registers. For the
 	// same reason it is NOT registered in `assertArm64EncoderScratchMasks`.
 	//
-	// ⭐ `isCall: false` keeps every leaf a leaf: `functionMakesCall` reads exactly this bit, and a `true`
+	// ⭐ `isCall: false` keeps every leaf a leaf: `functionCalleeReach` reads exactly this bit, and a `true`
 	// here would give every instrumented leaf shadow space, an outgoing-argument region and a call-clobber
 	// barrier at every statement.
 	covInc(pointId CovPointId) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}

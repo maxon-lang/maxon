@@ -2298,6 +2298,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		prologue(stackSize) then encodePrologue(code, stackSize: stackSize, probeScratchIsFree: true)
 		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
 		ret(transfer) then encodeReturnTransfer(code, transfer: transfer)
+		tailJmp(targetName) then encodeJmpDirect(code, callFixups: callFixups, targetName: targetName)
 		jmp(targetBlockId) then encodeJmp(code, rel32Fixups: rel32Fixups, targetBlockId: targetBlockId)
 		jcc(cond, targetBlockId) then encodeJcc(code, rel32Fixups: rel32Fixups, cond: cond, targetBlockId: targetBlockId)
 		movRegImm(dest, value) then encodeMovRegImm64(code, dest: resolveGpr(dest), value: value)
@@ -2445,6 +2446,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
 		// exhaustiveness forced this arm; a panic keeps the ISA boundary loud.
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or
@@ -2711,6 +2713,7 @@ end 'BranchWindowRole'
 function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 	return match op 'role'
 		ret or
+		tailJmp or
 		jmp gives BranchWindowRole.jump
 		jcc gives BranchWindowRole.condBranch
 		callDirect or
@@ -2778,6 +2781,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		movqXmmGpr or
 		negF64RegReg or
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or
@@ -3016,12 +3020,13 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 	let spillBaseDisp = spillSlotBaseDisp(frame, func: func)
 
 	// The green-thread stack guard, emitted before `push rbp` in the entry block of a function that
-	// reserves a frame, so a thread whose stack would overflow grows and relocates it first. The
-	// exemption is `skipsGreenThreadStackGuard`, asked of the function's provenance and never its
-	// name; a `__destruct_<T>` cascade is scaffolding and still needs the guard (see that predicate).
-	// The guard is bytes, not a TargetOp, so the printed Target IR omits it.
+	// reserves a frame or reaches a callee, so a thread whose stack would overflow grows and
+	// relocates it first. The exemption is `skipsGreenThreadStackGuard`, asked of the function's
+	// provenance and never its name; a `__destruct_<T>` cascade is scaffolding and still needs the
+	// guard (see that predicate). The guard is bytes, not a TargetOp, so the printed Target IR omits
+	// it.
 	let mightGuard = usesGt and not encoding.skipsStackGuard
-	let emitGuard = mightGuard and frame.frameBytes > 0
+	let emitGuard = mightGuard and (frame.frameBytes > 0 or frame.calleeReach != CalleeReach.none)
 	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 

@@ -7689,13 +7689,9 @@ func @__mm_free {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.leaRegRegImm32 rcx, rcx, -16
-    x64.callDirect __slab_free_tracked
-    x64.movRegReg rax, r8
-    x64.epilogue 32
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_free_tracked
 }
 
 func @__slab_alloc_tracked {
@@ -7927,10 +7923,9 @@ func @__slab_alloc_tracked {
     x64.jcc equal, __rl_outermost
     x64.jmp __rl_nested
   osdirect:
-    x64.callDirect __slab_alloc_tracked_oversize
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_alloc_tracked_oversize
   pop#22:
     x64.leaRegRdata rcx, [rip + __abort_msg_86]  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
     x64.movRegImm32 rdx, 60
@@ -8297,11 +8292,9 @@ func @__slab_free_tracked {
     x64.jcc equal, routed
     x64.jmp relistret
   osdirect:
-    x64.callDirect __slab_free_tracked_oversize
-    x64.movRegReg rax, r8
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_free_tracked_oversize
   rawdone:
     x64.epilogue 96
     x64.popReg rbp
@@ -8314,11 +8307,9 @@ func @__slab_free_tracked {
     x64.leaRegRdata rcx, [rip + __abort_msg_89]  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
     x64.movRegImm32 rdx, 53
     x64.movRegImm32 rax, 89
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __rt_abort
 }
 ```
 
@@ -8394,13 +8385,9 @@ func @__mm_free {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.leaRegRegImm32 rcx, rcx, -16
-    x64.callDirect __slab_free_tracked
-    x64.movRegReg rax, r8
-    x64.epilogue 32
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_free_tracked
 }
 
 func @__slab_alloc_tracked {
@@ -8632,10 +8619,9 @@ func @__slab_alloc_tracked {
     x64.jcc equal, __rl_outermost
     x64.jmp __rl_nested
   osdirect:
-    x64.callDirect __slab_alloc_tracked_oversize
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_alloc_tracked_oversize
   pop#22:
     x64.leaRegRdata rcx, [rip + __abort_msg_86]  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
     x64.movRegImm32 rdx, 60
@@ -9002,11 +8988,9 @@ func @__slab_free_tracked {
     x64.jcc equal, routed
     x64.jmp relistret
   osdirect:
-    x64.callDirect __slab_free_tracked_oversize
-    x64.movRegReg rax, r8
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_free_tracked_oversize
   rawdone:
     x64.epilogue 96
     x64.popReg rbp
@@ -9019,11 +9003,9 @@ func @__slab_free_tracked {
     x64.leaRegRdata rcx, [rip + __abort_msg_89]  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
     x64.movRegImm32 rdx, 53
     x64.movRegImm32 rax, 89
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __rt_abort
 }
 ```
 
@@ -9090,10 +9072,8 @@ func @__mm_free {
   entry:
     arm64.prologue 16
     arm64.sub x0, x0, 16
-    arm64.bl __slab_free_tracked
-    arm64.movRegReg x1, x0
     arm64.epilogue 16
-    arm64.ret
+    arm64.tailBranch __slab_free_tracked
 }
 
 func @__slab_alloc_tracked {
@@ -9340,9 +9320,8 @@ func @__slab_alloc_tracked {
     arm64.b.eq __rl_outermost
     arm64.b __rl_nested
   osdirect:
-    arm64.bl __slab_alloc_tracked_oversize
     arm64.epilogue 64
-    arm64.ret
+    arm64.tailBranch __slab_alloc_tracked_oversize
   pop#22:
     arm64.leaRdata x0, __abort_msg_86  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
     arm64.movImm x1, 60
@@ -9736,10 +9715,8 @@ func @__slab_free_tracked {
     arm64.b.eq routed
     arm64.b relistret
   osdirect:
-    arm64.bl __slab_free_tracked_oversize
-    arm64.movRegReg x1, x0
     arm64.epilogue 80
-    arm64.ret
+    arm64.tailBranch __slab_free_tracked_oversize
   rawdone:
     arm64.epilogue 80
     arm64.ret
@@ -9750,10 +9727,8 @@ func @__slab_free_tracked {
     arm64.leaRdata x0, __abort_msg_89  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
     arm64.movImm x1, 53
     arm64.movImm x2, 89
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
     arm64.epilogue 80
-    arm64.ret
+    arm64.tailBranch __rt_abort
 }
 ```
 
@@ -9823,10 +9798,8 @@ func @__mm_free {
   entry:
     arm64.prologue 16
     arm64.sub x0, x0, 16
-    arm64.bl __slab_free_tracked
-    arm64.movRegReg x1, x0
     arm64.epilogue 16
-    arm64.ret
+    arm64.tailBranch __slab_free_tracked
 }
 
 func @__slab_alloc_tracked {
@@ -10073,9 +10046,8 @@ func @__slab_alloc_tracked {
     arm64.b.eq __rl_outermost
     arm64.b __rl_nested
   osdirect:
-    arm64.bl __slab_alloc_tracked_oversize
     arm64.epilogue 64
-    arm64.ret
+    arm64.tailBranch __slab_alloc_tracked_oversize
   pop#22:
     arm64.leaRdata x0, __abort_msg_86  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
     arm64.movImm x1, 60
@@ -10469,10 +10441,8 @@ func @__slab_free_tracked {
     arm64.b.eq routed
     arm64.b relistret
   osdirect:
-    arm64.bl __slab_free_tracked_oversize
-    arm64.movRegReg x1, x0
     arm64.epilogue 80
-    arm64.ret
+    arm64.tailBranch __slab_free_tracked_oversize
   rawdone:
     arm64.epilogue 80
     arm64.ret
@@ -10483,10 +10453,8 @@ func @__slab_free_tracked {
     arm64.leaRdata x0, __abort_msg_89  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
     arm64.movImm x1, 53
     arm64.movImm x2, 89
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
     arm64.epilogue 80
-    arm64.ret
+    arm64.tailBranch __rt_abort
 }
 ```
 
@@ -10569,13 +10537,9 @@ func @__mm_free {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.leaRegRegImm32 rcx, rcx, -16
-    x64.callDirect __slab_free_box
-    x64.movRegReg rax, r8
-    x64.epilogue 32
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_free_box
 }
 
 func @__slab_free_box {
@@ -10942,11 +10906,9 @@ func @__slab_free_box {
     x64.jmp relistret
   osdirect:
     x64.movRegReg rcx, rsi
-    x64.callDirect __slab_free_tracked_oversize
-    x64.movRegReg rax, r8
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_free_tracked_oversize
   rawdone:
     x64.epilogue 96
     x64.popReg rbp
@@ -10959,11 +10921,9 @@ func @__slab_free_box {
     x64.leaRegRdata rcx, [rip + __abort_msg_89]  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
     x64.movRegImm32 rdx, 53
     x64.movRegImm32 rax, 89
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __rt_abort
 }
 ```
 
@@ -11021,13 +10981,9 @@ func @__mm_free {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.leaRegRegImm32 rcx, rcx, -16
-    x64.callDirect __slab_free_box
-    x64.movRegReg rax, r8
-    x64.epilogue 32
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_free_box
 }
 
 func @__slab_free_box {
@@ -11394,11 +11350,9 @@ func @__slab_free_box {
     x64.jmp relistret
   osdirect:
     x64.movRegReg rcx, rsi
-    x64.callDirect __slab_free_tracked_oversize
-    x64.movRegReg rax, r8
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __slab_free_tracked_oversize
   rawdone:
     x64.epilogue 96
     x64.popReg rbp
@@ -11411,11 +11365,9 @@ func @__slab_free_box {
     x64.leaRegRdata rcx, [rip + __abort_msg_89]  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
     x64.movRegImm32 rdx, 53
     x64.movRegImm32 rax, 89
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
     x64.epilogue 96
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __rt_abort
 }
 ```
 
@@ -11467,10 +11419,8 @@ func @__mm_free {
   entry:
     arm64.prologue 16
     arm64.sub x0, x0, 16
-    arm64.bl __slab_free_box
-    arm64.movRegReg x1, x0
     arm64.epilogue 16
-    arm64.ret
+    arm64.tailBranch __slab_free_box
 }
 
 func @__slab_free_box {
@@ -11856,10 +11806,8 @@ func @__slab_free_box {
     arm64.b relistret
   osdirect:
     arm64.movRegReg x0, x4
-    arm64.bl __slab_free_tracked_oversize
-    arm64.movRegReg x1, x0
     arm64.epilogue 80
-    arm64.ret
+    arm64.tailBranch __slab_free_tracked_oversize
   rawdone:
     arm64.epilogue 80
     arm64.ret
@@ -11870,10 +11818,8 @@ func @__slab_free_box {
     arm64.leaRdata x0, __abort_msg_89  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
     arm64.movImm x1, 53
     arm64.movImm x2, 89
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
     arm64.epilogue 80
-    arm64.ret
+    arm64.tailBranch __rt_abort
 }
 ```
 
@@ -11928,10 +11874,8 @@ func @__mm_free {
   entry:
     arm64.prologue 16
     arm64.sub x0, x0, 16
-    arm64.bl __slab_free_box
-    arm64.movRegReg x1, x0
     arm64.epilogue 16
-    arm64.ret
+    arm64.tailBranch __slab_free_box
 }
 
 func @__slab_free_box {
@@ -12317,10 +12261,8 @@ func @__slab_free_box {
     arm64.b relistret
   osdirect:
     arm64.movRegReg x0, x4
-    arm64.bl __slab_free_tracked_oversize
-    arm64.movRegReg x1, x0
     arm64.epilogue 80
-    arm64.ret
+    arm64.tailBranch __slab_free_tracked_oversize
   rawdone:
     arm64.epilogue 80
     arm64.ret
@@ -12331,10 +12273,8 @@ func @__slab_free_box {
     arm64.leaRdata x0, __abort_msg_89  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
     arm64.movImm x1, 53
     arm64.movImm x2, 89
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
     arm64.epilogue 80
-    arm64.ret
+    arm64.tailBranch __rt_abort
 }
 ```
 
@@ -57457,13 +57397,11 @@ func @__mbox_service_exit {
     x64.callDirect __slab_free
   exitdone:
     x64.movRegReg rcx, r12
-    x64.callDirect __gt_owner_done
-    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __gt_owner_done
 }
 ```
 ```TargetIr:x64-linux
@@ -57849,13 +57787,11 @@ func @__mbox_service_exit {
     x64.callDirect __slab_free
   exitdone:
     x64.movRegReg rcx, r12
-    x64.callDirect __gt_owner_done
-    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __gt_owner_done
 }
 ```
 ```TargetIr:arm64-macos
@@ -58220,12 +58156,10 @@ func @__mbox_service_exit {
     arm64.bl __slab_free
   exitdone:
     arm64.movRegReg x0, x20
-    arm64.bl __gt_owner_done
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.tailBranch __gt_owner_done
 }
 ```
 ```TargetIr:arm64-linux
@@ -58599,12 +58533,10 @@ func @__mbox_service_exit {
     arm64.bl __slab_free
   exitdone:
     arm64.movRegReg x0, x20
-    arm64.bl __gt_owner_done
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.tailBranch __gt_owner_done
 }
 ```
 
@@ -76347,15 +76279,13 @@ func @__managed_grow {
     x64.leaRegRdata rcx, [rip + __abort_msg_71]  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
     x64.movRegImm32 rdx, 54
     x64.movRegImm32 rax, 71
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
     x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __rt_abort
 }
 
 func @__managed_mem_grow {
@@ -76714,15 +76644,13 @@ func @__managed_grow {
     x64.leaRegRdata rcx, [rip + __abort_msg_71]  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
     x64.movRegImm32 rdx, 54
     x64.movRegImm32 rax, 71
-    x64.callDirect __rt_abort
-    x64.movRegReg rax, r8
     x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.tailJmp __rt_abort
 }
 
 func @__managed_mem_grow {
@@ -77065,14 +76993,12 @@ func @__managed_grow {
     arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
     arm64.movImm x1, 54
     arm64.movImm x2, 71
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.tailBranch __rt_abort
 }
 
 func @__managed_mem_grow {
@@ -77406,14 +77332,12 @@ func @__managed_grow {
     arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
     arm64.movImm x1, 54
     arm64.movImm x2, 71
-    arm64.bl __rt_abort
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.tailBranch __rt_abort
 }
 
 func @__managed_mem_grow {

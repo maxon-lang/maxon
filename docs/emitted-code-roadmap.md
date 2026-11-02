@@ -113,7 +113,8 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | mem2reg / SROA | **n/a — see below** |
 | Escape analysis → stack | ✅ `PromoteStackRecords` |
 | Monomorphization | ⛔ **ruled against** (user, EC1) |
-| Refcount pair elimination | ⛔ different model — static ownership |
+| Refcount pair elimination | ◑ `CancelRetainRelease` — a retain and the release of the same buffer or box record on a path of unconditional branches crossing at most one join; `BorrowedParameterReturns` moves a returned parameter's retain to the call sites. Everywhere else the model is static ownership, decided in the parser |
+| Tail calls | ◑ `TailCalls` — the compiler's own runtime bodies only (`permitsTailCalls`): x64 `jmp`, arm64 `b`, wasm `return_call`; a function whose only calls are tail calls reserves no call frame on x64; user code keeps every frame |
 | Register allocator | ✅ linear SSA-chordal + Hall condition |
 | **Coalescing-driven operand commute** | ❌ |
 | **Instruction scheduling** | ❌ |
@@ -133,7 +134,8 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 - **Monomorphization** — ⚖ user ruling 2026-08-25 (`EC1`): keep ONE shared generic body. The answer to
   the generic-`Array` cost is inlining the primitives' fast paths, which `EC1` did.
 - **A dominator-based refcount-pair canceller** — ownership is decided statically in the parser, so the
-  equivalent work is **not emitting the pair**, which is the open row `EC2`.
+  equivalent work is **omitting the pair**, which is the open row `EC2`. `CancelRetainRelease`
+  cancels only the pairs on a path of unconditional branches that crosses at most one join.
 
 ## THE ANCHOR — one 3-line loop, and every missing pass visible at once
 

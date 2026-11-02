@@ -1,0 +1,120 @@
+// A block whose last body op is a direct call, and whose terminator returns that call's result or
+// nothing, can leave by jumping to the callee. The backends replace the call and the return with
+// a tail jump: x64 `jmp`, arm64 `b`, wasm `return_call`.
+//
+// Only a function `permitsTailCalls` admits is asked. A tail jump removes its caller's frame, so
+// user code never gets one: backtraces, panic traces and the debugger keep every user frame.
+export type TailCalls
+	export var found as bool
+	export var opIdx as ElementIndex
+	export var callee as ByteArray
+	export var args as ValueIdArray
+	var safe as bool
+	var scratch as StdCallOperands
+	var returnsTheCallResult as bool
+
+	export static function none() returns Self
+		return Self{found: false, opIdx: 0, callee: ByteArray.create(), args: ValueIdArray.create(), safe: false, scratch: StdCallOperands.create(), returnsTheCallResult: false}
+	end 'none'
+
+	export static function forFunction(module StdModule, func IrFunction, permitted bool) returns Self
+		var tailCalls = Self.none()
+		tailCalls.safe = permitted and functionKeepsNoFrameAddressLive(module, func: func)
+		return tailCalls
+	end 'forFunction'
+
+	export function probe(module StdModule, srcFunc IrFunction, block IrBlock, abi CalleeAbiTable, registerCapacity RegisterArgCapacity, target Target, usesGt bool)
+		self.found = false
+
+		if stdReturnTypeIsFloat(srcFunc.returnType) or unitReturnTransfer(module) != ReturnTransfer.returnInstruction 'notEligible'
+			return
+		end 'notEligible'
+
+		self.recognizeTailShape(module, srcFunc: srcFunc, block: block)
+
+		if not self.found 'notATailShape'
+			return
+		end 'notATailShape'
+
+		if opTakesSyscallBracket(module.getOp(self.opIdx), target: target, usesGt: usesGt) or not abi.describes(self.callee) 'notADirectCallToAFunction'
+			self.found = false
+			return
+		end 'notADirectCallToAFunction'
+
+		if self.returnsTheCallResult and calleeResultClass(abi, callee: self.callee) != RegClass.gpr 'resultOutsideTheReturnRegister'
+			self.found = false
+			return
+		end 'resultOutsideTheReturnRegister'
+
+		if self.args.count() as ParamCount > registerCapacity as ParamCount or calleeArgFloatMask(abi, callee: self.callee, argCount: self.args.count() as ParamCount, registerCapacity: registerCapacity) != 0 'argumentsNeedMoreThanRegisters'
+			self.found = false
+		end 'argumentsNeedMoreThanRegisters'
+	end 'probe'
+
+	export function probeForWasm(module StdModule, srcFunc IrFunction, block IrBlock)
+		self.found = false
+		self.recognizeTailShape(module, srcFunc: srcFunc, block: block)
+	end 'probeForWasm'
+
+	function recognizeTailShape(module StdModule, srcFunc IrFunction, block IrBlock)
+		if not self.safe or not block.hasTerminatorOp() or block.bodyOpCount() == 0 'notEligible'
+			return
+		end 'notEligible'
+
+		let terminator = module.getOp(block.terminatorIndex())
+
+		// A function with a secondary return slot never matches: every one leaves through `errorReturn`,
+		// whose role is not `ret`.
+		if terminator.rawValue.role != OpRole.ret 'notAReturn'
+			return
+		end 'notAReturn'
+
+		let lastIdx = try block.bodyOpAt(block.bodyOpCount() - 1) otherwise panic("TailCalls.recognizeTailShape: bodyOpAt OOB on a non-empty block")
+		let lastOp = module.getOp(lastIdx)
+		classifyCallOperands(lastOp, call: self.scratch)
+
+		if not self.scratch.namesACallee() or self.scratch.throwsToAFlag() 'notADirectCall'
+			return
+		end 'notADirectCall'
+
+		var returned = ValueIdArray.create()
+		noteReturnedOperand(terminator, into: returned)
+
+		if returned.count() == 0 and not stdReturnTypeIsVoid(srcFunc.returnType) 'aVoidReturnFromAValueFunction'
+			return
+		end 'aVoidReturnFromAValueFunction'
+
+		if returned.count() == 1 and (stdReturnTypeIsVoid(srcFunc.returnType) or (try returned.get(0) otherwise panic("TailCalls.recognizeTailShape: returned.get(0) on a one-element list")) != self.scratch.resultId) 'notTheCallsResult'
+			return
+		end 'notTheCallsResult'
+
+		self.found = true
+		self.opIdx = lastIdx
+		self.callee = self.scratch.callee.clone()
+		self.args = tailCallArguments(lastOp)
+		self.returnsTheCallResult = returned.count() == 1
+	end 'recognizeTailShape'
+end 'TailCalls'
+
+// A tail jump frees the frame before the callee runs, so a body holding a frame address
+// (`stackRecordAddr`, one of the `isUnsupportedInInlineBody` ops) never tail-jumps.
+function functionKeepsNoFrameAddressLive(module StdModule, func IrFunction) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		view block = module.getBlock(blockRef)
+
+		for opIdx in block.bodyOps() 'eachOp'
+			if module.getOp(opIdx).rawValue.isUnsupportedInInlineBody 'mayHoldAFrameAddress'
+				return false
+			end 'mayHoldAFrameAddress'
+		end 'eachOp'
+	end 'eachBlock'
+
+	return true
+end 'functionKeepsNoFrameAddressLive'
+
+function tailCallArguments(op StdOp) returns ValueIdArray
+	match op 'call'
+		call(_, _, args) then return args.clone()
+		default panic("tailCallArguments: StdCallOperands named a direct call on an op that is not a `call`")
+	end 'call'
+end 'tailCallArguments'

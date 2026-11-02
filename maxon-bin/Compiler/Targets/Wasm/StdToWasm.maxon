@@ -296,7 +296,7 @@ let WasmRegionAlignment = 8
 // model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, releasesRegistry bool, funcNames FunctionNameIndex, entryFunction ByteArray, roster ShadowSpellingRoster) returns ByteArray
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, releasesRegistry bool, funcNames FunctionNameIndex, entryFunction ByteArray, roster ShadowSpellingRoster, runtimeTier FunctionNameSet) returns ByteArray
 	var calleeParamTypes = buildCalleeParamTypesMap(funcNames)
 
 	var builder = WasmModuleBuilder.create()
@@ -359,7 +359,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 		displacedAddressFolds.foldInFunction(module, func: func, reach: DisplacementReach.anyImm32)
 		let funcIdx = (WasmImportCount + iter.index()) as Wasm32Index
 		let firstPosition = (wasmFirstInlinePosition(funcNames) + inlinePositions.count()) as Wasm32Index
-		var emitter = WasmFuncEmitter.create(module, func: func, funcIdx: funcIdx, frames: frames, firstPosition: firstPosition, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, scratchFrameBase: scratchFrames.baseOf(iter.index()), funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
+		var emitter = WasmFuncEmitter.create(module, func: func, funcIdx: funcIdx, frames: frames, firstPosition: firstPosition, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, scratchFrameBase: scratchFrames.baseOf(iter.index()), funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx, permitsTailCalls: permitsTailCalls(func, runtimeTier: runtimeTier))
 		emitter.emit()
 
 		for position in emitter.inlinePositionLines() 'eachPosition'
@@ -2022,8 +2022,9 @@ type WasmFuncEmitter
 	var slotOffsetLocal as Wasm32Index
 	var positions as WasmInlinePositions
 	var currentSite as InlineSiteRef
+	var tail as TailCalls
 
-	static function create(module StdModule, func IrFunction, funcIdx Wasm32Index, frames WasmFrameStack, firstPosition Wasm32Index, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, scratchFrameBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
+	static function create(module StdModule, func IrFunction, funcIdx Wasm32Index, frames WasmFrameStack, firstPosition Wasm32Index, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, scratchFrameBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap, permitsTailCalls bool) returns WasmFuncEmitter
 		var valtypes = buildValtypeTable(module, func: func, funcNames: funcNames)
 		let plan = WasmFlowPlan.build(module, func: func)
 		let flowBlockCount = func.blockRefs.count() if plan.flow == WasmControlFlow.structured else 0
@@ -2052,7 +2053,8 @@ type WasmFuncEmitter
 			savedDepthLocal: valtypes.count() as Wasm32Index,
 			slotOffsetLocal: 0,
 			positions: WasmInlinePositions.startingAt(firstPosition),
-			currentSite: InlineSiteRef.none
+			currentSite: InlineSiteRef.none,
+			tail: TailCalls.forFunction(module, func: func, permitted: permitsTailCalls)
 		}
 
 		emitter.buildLocalDeclarations()
@@ -2159,7 +2161,14 @@ type WasmFuncEmitter
 		view block = self.module.blockAtPosition(self.func, position: position)
 		self.currentSite = copiedInlineSite(block.inlineSite)
 
+		let endsInATailCall = self.blockEndsInATailCall(block)
+
 		for opIdx in block.bodyOps() 'eachOp'
+			if endsInATailCall and opIdx == self.tail.opIdx 'theTailCall'
+				self.emitTailCall(self.tail.callee, args: self.tail.args)
+				return
+			end 'theTailCall'
+
 			self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitBlockCode: opIdx {opIdx} not in module.ops"))
 		end 'eachOp'
 
@@ -3354,6 +3363,18 @@ type WasmFuncEmitter
 	// capture differs (a plain call reads one value or none; a `tryCall` reads the value AND the error
 	// flag off the callee's multi-value return), so both share this.
 	function emitCallArgsAndCall(callee ByteArray, args ValueIdArray)
+		let funcIdx = self.pushCallArguments(callee, args: args)
+		self.recordFramePosition()
+		self.body.call(funcIdx)
+	end 'emitCallArgsAndCall'
+
+	function emitTailCall(callee ByteArray, args ValueIdArray)
+		let funcIdx = self.pushCallArguments(callee, args: args)
+		self.leaveFrame()
+		self.body.returnCall(funcIdx)
+	end 'emitTailCall'
+
+	function pushCallArguments(callee ByteArray, args ValueIdArray) returns Wasm32Index
 		view paramTypes = try self.calleeParamTypes.get(callee) otherwise panic("emitCall: no param types for callee '{String.from(callee)}'")
 
 		for argIdx in 0 upto args.count() 'eachArg'
@@ -3363,10 +3384,19 @@ type WasmFuncEmitter
 			coerceOnStack(self.body, from: getValtype(self.valtypes, v: arg), to: paramVt)
 		end 'eachArg'
 
-		let funcIdx = try wasmFuncIdxOf(self.funcNames, callee: callee) otherwise panic("emitCall: no wasm function index for callee '{String.from(callee)}'")
-		self.recordFramePosition()
-		self.body.call(funcIdx)
-	end 'emitCallArgsAndCall'
+		return try wasmFuncIdxOf(self.funcNames, callee: callee) otherwise panic("emitCall: no wasm function index for callee '{String.from(callee)}'")
+	end 'pushCallArguments'
+
+	function blockEndsInATailCall(block IrBlock) returns bool
+		self.tail.probeForWasm(self.module, srcFunc: self.func, block: block)
+
+		if not self.tail.found 'noTailShape'
+			return false
+		end 'noTailShape'
+
+		view callee = try self.funcNames.funcNamed(self.tail.callee) otherwise panic("blockEndsInATailCall: no function named '{String.from(self.tail.callee)}'")
+		return not irFunctionUsesSecondaryReturnSlot(self.func) and not irFunctionUsesSecondaryReturnSlot(callee) and funcResultValTypes(self.func.returnType).equals(funcResultValTypes(callee.returnType))
+	end 'blockEndsInATailCall'
 
 	function tracksInlinePositions() returns bool
 		return self.recordsFrame and self.func.inlineSites.count() != 0
@@ -3621,16 +3651,19 @@ type WasmFuncEmitter
 		self.emitReturn()
 	end 'emitErrorReturn'
 
-	// The one exit that pops the frame stack of a recording function, taken by the value, void and error
-	// returns (a `throw` is a return in this ABI). A path with no return ends in `unreachable`, so no
-	// frame is left behind.
+	// The exit taken by the value, void and error returns (a `throw` is a return in this ABI); a tail
+	// call pops the frame stack through `leaveFrame` too. A path with no return ends in
+	// `unreachable`, so no frame is left behind.
 	function emitReturn()
+		self.leaveFrame()
+		self.body.returnOp()
+	end 'emitReturn'
+
+	function leaveFrame()
 		if self.recordsFrame 'popFrame'
 			emitFramePop(self.body, frames: self.frames, savedDepthLocal: self.savedDepthLocal)
 		end 'popFrame'
-
-		self.body.returnOp()
-	end 'emitReturn'
+	end 'leaveFrame'
 
 	// `osExit(code)` — the process-exit primitive a `panic(...)` ends on (LowerMaxonToStd.lowerPanic-
 	// Abort). Hand the code to the `exit-with-code` import (func idx 0), wrapped to the i32 the import

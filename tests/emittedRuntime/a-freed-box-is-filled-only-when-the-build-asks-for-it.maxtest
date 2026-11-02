@@ -5,6 +5,7 @@ let FreedBoxDoorName = "__slab_free_box"
 let PlainFreeName = "__slab_free_tracked"
 
 let BranchLinkPrefix = "arm64.bl "
+let TailBranchPrefix = "arm64.tailBranch "
 let FillMnemonic = "arm64.arm64MemFill 0x3f"
 let AbsentFunctionPhrase = "this program contains nothing named "
 
@@ -26,11 +27,11 @@ function noteUnpoisoned(findings StringArray, staged FilePath, target String)
 	let label = "{AFreedBoxIsFilledOnlyWhenTheBuildAsksForItCaseLabel}-default"
 	let body = functionBody(irLines(buildStagedProgram(staged, caseLabel: label, target: target, functionName: BoxFreeName)), functionName: BoxFreeName, target: target)
 
-	if bodyLineCount(body, startingWith: BranchLinkPrefix, containing: "", endingWith: " {PlainFreeName}") != 1 'noPlainFree'
+	if callsOrTailBranchesTo(body, name: PlainFreeName) != 1 'noPlainFree'
 		findings.push("on {target}, a default build's `{BoxFreeName}` does not call `{PlainFreeName}` exactly once")
 	end 'noPlainFree'
 
-	if bodyLineCount(body, startingWith: BranchLinkPrefix, containing: "", endingWith: " {FreedBoxDoorName}") != 0 'callsTheFillingDoor'
+	if callsOrTailBranchesTo(body, name: FreedBoxDoorName) != 0 'callsTheFillingDoor'
 		findings.push("on {target}, a default build's `{BoxFreeName}` calls `{FreedBoxDoorName}`, which fills the freed box")
 	end 'callsTheFillingDoor'
 
@@ -53,7 +54,7 @@ function notePoisoned(findings StringArray, staged FilePath, target String)
 	let freeBody = functionBody(lines, functionName: BoxFreeName, target: target)
 	let doorBody = functionBody(lines, functionName: FreedBoxDoorName, target: target)
 
-	if bodyLineCount(freeBody, startingWith: BranchLinkPrefix, containing: "", endingWith: " {FreedBoxDoorName}") != 1 'noFillingDoor'
+	if callsOrTailBranchesTo(freeBody, name: FreedBoxDoorName) != 1 'noFillingDoor'
 		findings.push("on {target}, a {PoisonFreedOption} build's `{BoxFreeName}` does not call `{FreedBoxDoorName}` exactly once")
 	end 'noFillingDoor'
 
@@ -61,3 +62,7 @@ function notePoisoned(findings StringArray, staged FilePath, target String)
 		findings.push("on {target}, a {PoisonFreedOption} build's `{FreedBoxDoorName}` does not hold exactly one `{FillMnemonic}`")
 	end 'noFill'
 end 'notePoisoned'
+
+function callsOrTailBranchesTo(body StringArray, name String) returns LineTally
+	return bodyLineCount(body, startingWith: BranchLinkPrefix, containing: "", endingWith: " {name}") + bodyLineCount(body, startingWith: TailBranchPrefix, containing: "", endingWith: " {name}")
+end 'callsOrTailBranchesTo'

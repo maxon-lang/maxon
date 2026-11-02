@@ -466,7 +466,7 @@ end 'refuseAddressTakenCandidates'
 //     reason. A plain function's record names its `__fnref_<name>` thunk rather than itself, and
 //     that thunk does not exist yet at this point in the pipeline, so a candidate asks about BOTH
 //     spellings of its own name.
-function collectAddressTakenFunctions(project Project, module StdModule) returns FnRefThunkSet
+module function collectAddressTakenFunctions(project Project, module StdModule) returns FnRefThunkSet
 	var taken = FnRefThunkSet.create()
 
 	// ⚠ HOISTED, because this walk is WHOLE-MODULE: `liveOpIndices` mints a fresh column per call, which
@@ -897,7 +897,7 @@ end 'isCandidateCallee'
 // BRANCH EDGE is read once. A read the classifier has no arm for lands in `other`, which refuses the
 // value, so an op variant appended tomorrow costs a missed rewrite and never a wrong one.
 function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexArray, byName FunctionNameIndex, onTheConvention BoolArray, consts ConstValueMap) returns FunctionTupleFlow
-	let returned = returnedValuesOf(module, liveOps: liveOps)
+	let returned = returnedValuesOf(module, func: func, exits: ReturnExits.everyExit)
 	var flow = FunctionTupleFlow.create(nextFreeValueId(module, func: func), exitChains: module.exitChainsOf(func, returned: returned))
 
 	// ⚠ THE RETURNED VALUES FIRST, AND SEPARATELY. A `const` gets a row only where a `ret` already named it
@@ -951,28 +951,6 @@ function trackReturnedValue(retValId ValueId, flow FunctionTupleFlow)
 		end 'eachWebBlock'
 	end 'aSharedReturn'
 end 'trackReturnedValue'
-
-function returnedValuesOf(module StdModule, liveOps OpIndexArray) returns ValueIdArray
-	var returned = ValueIdArray.create()
-
-	for opIdx in liveOps 'eachOp'
-		noteReturnedOperand(try module.ops.get(opIdx) otherwise panic("returnedValuesOf: live op index {opIdx} not in module.ops"), into: returned)
-	end 'eachOp'
-
-	return returned
-end 'returnedValuesOf'
-
-function noteReturnedOperand(op StdOp, into ValueIdArray)
-	if op.rawValue.role != OpRole.ret 'notAReturn'
-		return
-	end 'notAReturn'
-
-	match op 'op'
-		ret(retValId) then into.push(retValId)
-		retVoid then break
-		default panic("noteReturnedOperand: `role: ret` but neither `ret` nor `retVoid` — StdOpMeta's role and this match have come apart")
-	end 'op'
-end 'noteReturnedOperand'
 
 // Stamp where a tracked value came from, and give a row to the call results a rewrite could name.
 function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow, consts ConstValueMap)
@@ -1538,7 +1516,7 @@ function collectRetVerdicts(module StdModule, flows FunctionTupleFlowSlotArray, 
 		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise panic("collectRetVerdicts: function {funcIndex} is a candidate and so was analysed — `analyseAffectedFunctions` analyses every candidate")
 		let func = module.getFunc(funcIndex)
 
-		for retValId in returnedValuesOf(module, liveOps: module.liveOpIndices(func)) 'eachReturn'
+		for retValId in returnedValuesOf(module, func: func, exits: ReturnExits.everyExit) 'eachReturn'
 			for value in flow.exitValuesOf(retValId) 'eachExitValue'
 				verdicts.push(ValueTupleRetVerdict.create(funcIndex, kind: retKindOf(flow, retValId: value)))
 			end 'eachExitValue'
@@ -2114,7 +2092,7 @@ function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow Funct
 	var subst = ValueIdArray.create()
 	var doomed = DoomedOpSet.create()
 
-	for retValId in returnedValuesOf(module, liveOps: liveOps) 'eachChainReturn'
+	for retValId in returnedValuesOf(module, func: func, exits: ReturnExits.everyExit) 'eachChainReturn'
 		widenTheExitChain(retValId, flow: flow, plan: plan)
 	end 'eachChainReturn'
 

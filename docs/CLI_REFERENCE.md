@@ -2564,6 +2564,10 @@ wasmtime run -S cli-exit-with-code=y app.wasm
 
 Without `-S cli-exit-with-code=y`, wasmtime refuses to start the component.
 
+A module that contains a tail-jumped runtime routine, which is any program that uses arrays or boxes,
+needs a runtime with the WebAssembly tail-call proposal (`return_call`) enabled. The vendored wasmtime 44
+enables it by default; `wasmtime -W tail-call=n` refuses the module.
+
 Building a component needs two tools the compiler calls: `wasm-tools`, and the WASI WIT package. The
 compiler looks for them as `vendor/wasm-tools/` and `vendor/wasi-wit/` in the working directory and the
 nine directories above it. A Maxon source checkout stages them with `scripts/fetch-vendor.sh`; an

@@ -139,8 +139,8 @@ source" or "not parsed from source":
 - `TargetPrinter.isRuntimeFunction` treats tier membership as a disjunct of its own, beside the
   `__`/`mrt_` band of compiler-built bodies. It decides the green-thread stack guard
   (`skipsGreenThreadStackGuard`, read by both native backends' function emitters),
-  `FunctionCodeChunk.asyncPreemptible`, `compilerScaffolding`, and
-  `InlineLeaves.splicingWouldWidenTheSafePoint`. Keyed on the band alone,
+  `FunctionCodeChunk.asyncPreemptible`, `compilerScaffolding`, the tail-call permit
+  (`permitsTailCalls`) and `InlineLeaves.splicingWouldWidenTheSafePoint`. Keyed on the band alone,
   `maxon_force_segfault` would carry a stack guard and be marked preemptible.
 - `InlineLeaves.roundAdmitsCallee` admits only tier bodies into the band round that splices them into
   builder-emitted callers.
@@ -334,7 +334,8 @@ body is E3157.
 
 - **`__Raw.ownFrame()`** sets `IrFunction.keepsItsOwnFrame`, which `InlineLeaves.functionShape` refuses to
   splice. Without it a tier body small enough to inline is spliced into its callers and swept, and an entry
-  whose product is its frame disappears. `__parallel_boundary` and `maxon_force_segfault` declare it.
+  whose product is its frame disappears. `permitsTailCalls` also refuses it, so none of its calls becomes
+  a tail jump that removes the frame. `__parallel_boundary` and `maxon_force_segfault` declare it.
   `ir-specs/builtins-parallel-boundary.md`'s `checkpoint-body-is-runtime-source` renders the checkpoint body;
   a ```` ```RequiredRuntime ```` block keeps a body un-inlined for its own compile, so what guards the rule
   is the `call __parallel_boundary` in every other `TargetIr` pin that reaches it.

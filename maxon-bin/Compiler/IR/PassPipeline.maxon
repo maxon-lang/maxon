@@ -106,6 +106,11 @@ export union PassKind
 	noteFoldedRecords
 	elideImageRetains
 
+	// Moves a returned parameter's retain out to the call sites. It runs before `cancelRetainRelease`,
+	// which pairs those call-site retains with the release of the value each call replaces.
+	borrowReturnedParameters
+	cancelRetainRelease
+
 	// Phase 3.5: Std → Std machine-form rewrites.
 	//
 	// `pruneDeadBlockArgs` deletes the loop-header phis nothing ever reads — a var the loop
@@ -315,6 +320,8 @@ function classifyPass(pass PassKind) returns PassClassification
 		inlineLeaves gives PassClassification.wholeModule
 		noteFoldedRecords gives PassClassification.wholeModule
 		elideImageRetains gives PassClassification.wholeModule
+		borrowReturnedParameters gives PassClassification.wholeModule
+		cancelRetainRelease gives PassClassification.wholeModule
 		pruneDeadBlockArgs gives PassClassification.perFunction
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstants gives PassClassification.perFunction
@@ -426,7 +433,9 @@ module function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		inlineManagedPrimitives gives CompilePhase.inlineManagedPrimitives
 		inlineLeaves or
 		noteFoldedRecords or
-		elideImageRetains gives CompilePhase.inlineLeaves
+		elideImageRetains or
+		borrowReturnedParameters or
+		cancelRetainRelease gives CompilePhase.inlineLeaves
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstants gives CompilePhase.foldConstants
@@ -460,6 +469,8 @@ function passKindToString(pass PassKind) returns String
 		inlineLeaves gives "inlineLeaves"
 		noteFoldedRecords gives "noteFoldedRecords"
 		elideImageRetains gives "elideImageRetains"
+		borrowReturnedParameters gives "borrowReturnedParameters"
+		cancelRetainRelease gives "cancelRetainRelease"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstants gives "foldConstants"
@@ -546,6 +557,8 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.inlineLeaves)
 	passes.push(PassKind.noteFoldedRecords)
 	passes.push(PassKind.elideImageRetains)
+	passes.push(PassKind.borrowReturnedParameters)
+	passes.push(PassKind.cancelRetainRelease)
 
 	var members = StdFanOutStepArray.create()
 	members.push(StdFanOutStep.pruneDeadBlockArgs)
@@ -845,6 +858,8 @@ export type PassPipeline
 			inlineLeaves then inlineLeaves(self.project, module: self.stdModule, round: SpliceRound.everyCaller)
 			noteFoldedRecords then noteFoldedRecords(self.stdModule)
 			elideImageRetains then elideImageRetains(self.project, module: self.stdModule)
+			borrowReturnedParameters then borrowReturnedParameters(self.project, module: self.stdModule, signatures: self.signatures)
+			cancelRetainRelease then cancelRetainRelease(self.stdModule)
 
 			// Over the whole module, which is everything that EXISTS at this point: the runtime band is
 			// appended below the pipeline, and `Compiler.compileToCodeResult` runs `strengthReduceDivision`

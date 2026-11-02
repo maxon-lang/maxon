@@ -303,6 +303,8 @@ end 'main'
 
 The compiler tracks call-return temps as such. When the caller assigns the return value to a named variable, that origin is what makes the incref unnecessary -- the callee already allocated at rc=1, so the reference passes directly without an extra retain.
 
+A function whose every return hands back the same parameter returns that parameter **borrowed**. The callee emits no retain, and each direct call site retains the result, so the caller owns what it receives exactly as it does for any other return. The compiler returns a parameter borrowed when the function releases and consumes nothing of it and every use of the function is a direct call that passes it; a `throws` function and a function reached through a function value keep returning a counted reference. A `var` rebound through such a call (`last = step(last)`) then retains and releases the record it already holds, and the compiler cancels that pair.
+
 ### Function Parameters
 
 Function parameters are **not owned** by the callee. The caller retains ownership and is responsible for the parameter's lifetime, so a parameter is skipped during scope-end cleanup:
@@ -344,7 +346,7 @@ A field held at an INTERFACE type is deep-copied too: the copy goes through a cl
 The compiler inserts scope-end cleanup at every scope exit point (block end, break, continue, return, throw). What it carries is:
 
 - the managed variables declared in this scope, which are decref'd
-- the variables to skip (the return value, and parameters, which the caller owns)
+- the variables to skip (the return value, and parameters, which the caller owns; a returned parameter is [returned borrowed](#return))
 
 A value moved in a `match` arm that ends `and fallthrough` is released on the fallen-into arm's own
 dispatch edge, where the move never ran.
@@ -471,3 +473,4 @@ All managed (heap-allocated) variables are **zero-initialized** at function entr
 4. Reference cycles are impossible -- they are compile-time errors.
 5. Every scope exit path decrefs all in-scope managed variables (except returned/kept values and parameters).
 6. The global `__mm_alloc_count` tracks live allocations and is checked at exit for leaks.
+7. A function that returns one of its parameters returns it borrowed; every call site retains the result, so the caller always owns what a call returns.

@@ -428,10 +428,10 @@ module function unitLoweringFor(target Target, abi CalleeAbiTable, usesGt bool) 
 	end 'cpu'
 end 'unitLoweringFor'
 
-function lowerUnitWith(lowering UnitLowering, unitModule StdModule) returns LoweredUnit
+function lowerUnitWith(lowering UnitLowering, unitModule StdModule, permitsTailCalls bool) returns LoweredUnit
 	return match lowering 'isa'
-		x64(isel) gives isel.lowerUnit(unitModule)
-		arm64(isel) gives isel.lowerUnit(unitModule)
+		x64(isel) gives isel.lowerUnit(unitModule, permitsTailCalls: permitsTailCalls)
+		arm64(isel) gives isel.lowerUnit(unitModule, permitsTailCalls: permitsTailCalls)
 	end 'isa'
 end 'lowerUnitWith'
 
@@ -441,9 +441,9 @@ end 'lowerUnitWith'
 // would make the two runs disagree, which the re-run can only report as a nondeterminism in the allocator.
 // The isel's bracket is closed into the caller's `iselCost`; the split's goes into `costs` under its own
 // sub-phase.
-module function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, target Target, costs PoolPhaseCosts, iselCost PhaseDelta) returns LoweredUnit
+module function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, permitsTailCalls bool, target Target, costs PoolPhaseCosts, iselCost PhaseDelta) returns LoweredUnit
 	let iselProbe = PhaseProbe.beginCounters()
-	var lowered = lowerUnitWith(lowering, unitModule: unitModule)
+	var lowered = lowerUnitWith(lowering, unitModule: unitModule, permitsTailCalls: permitsTailCalls)
 	iselProbe.elapsedInto(iselCost)
 
 	let edgeProbe = PhaseProbe.beginCounters()
@@ -510,7 +510,7 @@ export type BackendWorker
 		var iselCost = PhaseDelta.zero()
 
 		// A `var`: the allocator rewrites its module and function in place.
-		var lowered = lowerAndSplitUnit(self.lowering(), unitModule: body.unitModule, target: self.target, costs: costs, iselCost: iselCost)
+		var lowered = lowerAndSplitUnit(self.lowering(), unitModule: body.unitModule, permitsTailCalls: body.encoding.permitsTailCalls, target: self.target, costs: costs, iselCost: iselCost)
 		var unitFunc = lowered.targetModule.getFunc(UnitFunctionIndex)
 		var counters = RegAllocCounters.create()
 		var facts = RegAllocFacts.create()

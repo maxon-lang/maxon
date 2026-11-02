@@ -147,6 +147,7 @@ let opBrIf = 0x0D
 let opBrTable = 0x0E
 let opReturn = 0x0F
 let opCall = 0x10
+let opReturnCall = 0x12
 let opCallIndirect = 0x11
 let opDrop = 0x1A
 
@@ -443,6 +444,13 @@ export type WasmBody
 		self.buf.push(opCall)
 		writeUleb128(self.buf, value: funcIdx)
 	end 'call'
+
+	// `return_call` belongs to the WebAssembly tail-call proposal: a module holding one needs a
+	// runtime with it enabled (`CLI_REFERENCE.md`, "Running a `wasm32-wasi` program").
+	export function returnCall(funcIdx Wasm32Index)
+		self.buf.push(opReturnCall)
+		writeUleb128(self.buf, value: funcIdx)
+	end 'returnCall'
 
 	// `call_indirect (type typeIdx) (table 0)` — a call THROUGH a funcref table entry. It pops
 	// the i32 table index from the top of the stack, then the arguments below it, and CHECKS the referenced

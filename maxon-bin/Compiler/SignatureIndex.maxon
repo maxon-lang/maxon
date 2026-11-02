@@ -3262,10 +3262,10 @@ end 'ExistentialOwnershipProtocol'
 function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns OwnershipCallee
 	match protocol 'protocol'
 		byteRecord then return OwnershipCallee.named(StrCloneName)
-		aggregate then return OwnershipCallee.named(MmRetainName)
+		aggregate then return OwnershipCallee.named(ownershipDoorName(OwnershipDoor.boxRetain))
 
 		// The one arm whose answer is neither a copy nor a plain incref: see the case's own note.
-		bufferRecord then return OwnershipCallee.named(ManagedRetainName)
+		bufferRecord then return OwnershipCallee.named(ownershipDoorName(OwnershipDoor.managedRetain))
 		sharedValue then return OwnershipCallee.named(SharedValueBoxRetainName)
 
 		// A green thread is never co-owned — see the arm's own note.
@@ -6498,9 +6498,9 @@ end 'RetainResult'
 // A plain managed box has one entry per shape, because `__mm_incref` returns nothing.
 function plainBoxRetainCallee(result RetainResult) returns ByteArray
 	return match result 'shape'
-		discarded gives MmIncrefName
+		discarded gives ownershipDoorName(OwnershipDoor.boxIncref)
 		freshName or
-		sharedRead gives MmRetainName
+		sharedRead gives ownershipDoorName(OwnershipDoor.boxRetain)
 	end 'shape'
 end 'plainBoxRetainCallee'
 

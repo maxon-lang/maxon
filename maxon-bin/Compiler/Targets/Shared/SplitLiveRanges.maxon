@@ -7465,6 +7465,7 @@ module function opIsConstMaterialization(module TargetModule, opIdx ElementIndex
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc gives false
 		movRegReg or
@@ -7555,6 +7556,7 @@ module function opIsConstMaterialization(module TargetModule, opIdx ElementIndex
 		// register (or is control/frame/call), so it is not rematerializable, for the same reason the
 		// x64 ALU band above is not.
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or
@@ -8649,6 +8651,7 @@ function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineW
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc panic("constDefInfo: def is not a constant materialization")
 		movRegReg or
@@ -8710,6 +8713,7 @@ function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineW
 		movqXmmGpr or
 		negF64RegReg panic("constDefInfo: def is not a constant materialization")
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or
@@ -8907,6 +8911,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc then return op
 		movRegImm(dest, value) then return TargetOp.movRegImm(substituteVReg(dest, from: from, to: to), value: value)
@@ -9003,6 +9008,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// fields (block ids, immediates, names, cond codes) pass through; register-free control/frame/call
 		// ops pass through whole.
 		arm64Ret then return op
+		arm64TailBranch then return op
 		arm64Branch then return op
 		arm64CondBranch then return op
 		arm64Cbz(reg, targetBlockId) then return TargetOp.arm64Cbz(substituteVReg(reg, from: from, to: to), targetBlockId: targetBlockId)

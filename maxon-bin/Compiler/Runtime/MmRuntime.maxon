@@ -526,7 +526,7 @@ let RuntimeCallPrefix = b"__mm_"
 // ⭐ **IS THIS CALLEE A HEAP-RUNTIME ENTRY POINT?** The `__mm_`-only test that decides whether the
 // program carries the ALLOCATOR + the leak check. It is DELIBERATELY narrower than
 // `isCompilerInternalCallee` (below): a call to any `__mm_*` entry point implies the whole heap
-// runtime (`__mm_alloc` calls `__slab_alloc_tracked`, `__mm_decref` calls `__mm_free`, the leak check reads
+// runtime (`__mm_alloc` calls `__slab_alloc_tracked`, `__mm_decref` reaches `__mm_free` through `__mm_release`, the leak check reads
 // the counter the others maintain), while a `__print_string`/`__str_eq` call implies NEITHER — a
 // print-only program must not drag in the heap floor or the leak gate.
 //
@@ -753,7 +753,7 @@ end 'ValueMinter'
 // among the rest is free.
 //
 // ⚠ `__mm_incref` IS CONDITIONAL, not in the unconditional list. Every function above has a caller in
-// every heap-using program (a drop calls `__mm_decref`, which calls `__mm_free`; the exit path calls the
+// every heap-using program (a drop calls `__mm_decref`, which reaches `__mm_free` through `__mm_release`; the exit path calls the
 // leak check), so installing them together costs nothing dead. `__mm_incref` does NOT: a heap program
 // that never takes a SECOND owner never references it, and it would be 31 unreachable bytes there. It now
 // has TWO consumers — the managed-memory runtime's zero-copy view (`usesManagedMemory`) and the parser's `try … otherwise`
@@ -774,7 +774,7 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage, target Ta
 	let model = machineModel(target)
 
 	buildMmAlloc(module)
-	buildMmDecref(module)
+	buildCountedDecref(module, name: MmDecrefName, releaseCallee: MmReleaseName, shape: DecrefRecordShape.box)
 	buildMmRelease(module)
 	buildMmFree(module)
 	buildMmLeakCheck(module, usage: usage)
@@ -2643,27 +2643,68 @@ function buildMmIsNull(module StdModule)
 	module.functions.push(func)
 end 'buildMmIsNull'
 
-// `__mm_decref(ptr)` — one fewer owner; at the last, `__mm_release` runs the header's
-// `destructor@0` and frees the box. The refcount read-modify-write is the shared
-// `emitRefcountCheckToLastOwner`.
-function buildMmDecref(module StdModule)
-	var func = IrFunction.createFromStd(MmDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+// `bufferRecord` is `__managed_decref`'s: a record in image memory is skipped before the count is
+// touched. `box` is `__mm_decref`'s, which has no image form.
+export enum DecrefRecordShape
+	box
+	bufferRecord
+end 'DecrefRecordShape'
+
+// `__mm_decref(ptr)` and `__managed_decref(record)` — one fewer owner. The refcount
+// read-modify-write is the shared `emitRefcountCheckToLastOwner`; the last owner is handed to
+// `releaseCallee` (`__mm_release`, which runs the header's `destructor@0` and frees the box, or
+// `__managed_release`), the half that carries the stack guard. This body has no guard, and its call
+// to `releaseCallee` is a tail call.
+export function buildCountedDecref(module StdModule, name ByteArray, releaseCallee ByteArray, shape DecrefRecordShape)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 1)
-	let ptr = 0
+	let record = 0
 
-	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: ptr, lastOwner: release, ids: ids)
+	var countable = countableEntryOf(module, func: func, entry: entry, record: record, shape: shape, ids: ids)
 
-	module.appendOp(release, op: StdOp.call(ids.mint(), callee: MmReleaseName, args: argsOf(ptr)))
+	emitRefcountCheckToLastOwner(module, func: func, entry: countable, lower: lower, record: record, lastOwner: release, ids: ids)
+
+	module.appendOp(release, op: StdOp.call(ids.mint(), callee: releaseCallee, args: argsOf(record)))
 	module.setTerminator(release, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildMmDecref'
+end 'buildCountedDecref'
+
+function countableEntryOf(module StdModule, func IrFunction, entry IrBlock, record ValueId, shape DecrefRecordShape, ids ValueMinter) returns IrBlock
+	return match shape 'shape'
+		box gives entry
+		bufferRecord gives emitImmortalRecordExit(module, func: func, entry: entry, record: record, ids: ids)
+	end 'shape'
+end 'countableEntryOf'
+
+// ⭐⭐ **A BUFFER RECORD'S FIRST QUESTION IS WHETHER IT IS COUNTABLE AT ALL.** An `ImmortalRecordCapacity`
+// record is a String literal's or a module-level byte-array constant's: it and its blob are both `.rdata`,
+// which the PE writer maps READ-ONLY, so the refcount read-modify-write is an access violation rather than
+// a miscount — and there is nothing to reclaim in any case, because nothing was ever allocated. It leaves
+// untouched.
+//
+// ⚠ **THIS IS THE DUAL OF `StringRuntime.__str_bytes_view`'s IMMORTAL ARM AND THE TWO MUST MOVE
+// TOGETHER**: that one hands the record back UNCOUNTED, and this one is what makes an uncounted hand-back
+// balanced. A guard in only one of them is either a fault or a count that never comes back down.
+//
+// ⚠ **IT IS NOT `emitBufferNotOwned`'s `capacity < 0`, AND MUST NOT BECOME IT.** That question is about the
+// BUFFER; this one is about the RECORD, and an inline String, a view and a byte-string literal all answer
+// "not mine" about their buffer while sitting in an ordinary `__mm_alloc` box that must be freed. This is
+// the one provenance whose RECORD is image data, so it is the one value compared against.
+function emitImmortalRecordExit(module StdModule, func IrFunction, entry IrBlock, record ValueId, ids ValueMinter) returns IrBlock
+	var countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
+	var immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
+	let isImmortal = emitRecordIsImmortal(module, block: entry, record: record, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: countable.id))
+	module.setTerminator(immortal, op: StdOp.retVoid)
+	return countable
+end 'emitImmortalRecordExit'
 
 // The last owner's half of `__mm_decref`, a function of its own so it carries a stack guard: a
 // destructor releases what its record holds, which recurses as deep as the data does, and an

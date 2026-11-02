@@ -154,9 +154,9 @@ export function insertFrameForFunction(module TargetModule, func IrFunction) ret
 	let coloured = colouredPhysicalRegs(module, func: func)
 	let usedCallee = usedRegsFrom(calleeSavedOrder, coloured: coloured)
 	let usedXmm = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured)
-	let makesCall = functionMakesCall(module, func: func)
+	let reach = functionCalleeReach(module, func: func)
 	let pushCount = usedCallee.count() as RegCount
-	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount, xmmSaveCount: usedXmm.count() as RegCount)
+	let frameBytes = computeFrameBytes(func, makesCall: reach == CalleeReach.makesCall, pushCount: pushCount, xmmSaveCount: usedXmm.count() as RegCount)
 
 	// The callee-saved XMM slots sit directly above the allocator's own spill slots, on the same grid.
 	let xmmBaseSlot = func.stackSize / SpillSlotBytes
@@ -177,7 +177,7 @@ export function insertFrameForFunction(module TargetModule, func IrFunction) ret
 		end 'returnBlock'
 	end 'eachBlock'
 
-	return X64PrologueFrame.create(pushCount, laysFramePointer: true, frameBytes: frameBytes, makesCall: makesCall)
+	return X64PrologueFrame.create(pushCount, laysFramePointer: true, frameBytes: frameBytes, calleeReach: reach)
 end 'insertFrameForFunction'
 
 // What a function's prologue lays below the return address: `push rbp` when it lays one, the callee-saved
@@ -186,10 +186,10 @@ export type X64PrologueFrame
 	export let pushCount as RegCount
 	export let laysFramePointer as bool
 	export var frameBytes as StackSize
-	export let makesCall as bool
+	export let calleeReach as CalleeReach
 
-	export static function create(pushCount RegCount, laysFramePointer bool, frameBytes StackSize, makesCall bool) returns X64PrologueFrame
-		return Self{pushCount: pushCount, laysFramePointer: laysFramePointer, frameBytes: frameBytes, makesCall: makesCall}
+	export static function create(pushCount RegCount, laysFramePointer bool, frameBytes StackSize, calleeReach CalleeReach) returns X64PrologueFrame
+		return Self{pushCount: pushCount, laysFramePointer: laysFramePointer, frameBytes: frameBytes, calleeReach: calleeReach}
 	end 'create'
 
 	export function callStackBytes() returns StackSize
@@ -218,6 +218,7 @@ export function x64PrologueFrameOf(module TargetModule, func IrFunction) returns
 			prologue(stackSize) then frameBytes = stackSize
 			epilogue or
 			ret or
+			tailJmp or
 			jmp or
 			jcc or
 			movRegImm or
@@ -280,6 +281,7 @@ export function x64PrologueFrameOf(module TargetModule, func IrFunction) returns
 			movqXmmGpr or
 			negF64RegReg or
 			arm64Ret or
+			arm64TailBranch or
 			arm64Branch or
 			arm64CondBranch or
 			arm64Cbz or
@@ -371,7 +373,7 @@ export function x64PrologueFrameOf(module TargetModule, func IrFunction) returns
 		end 'frameOp'
 	end 'eachOp'
 
-	return X64PrologueFrame.create(regMaskPopcount(pushed and calleeSavedMask()), laysFramePointer: regMaskContains(pushed, regNum: X64Register.rbp.rawValue), frameBytes: frameBytes, makesCall: functionMakesCall(module, func: func))
+	return X64PrologueFrame.create(regMaskPopcount(pushed and calleeSavedMask()), laysFramePointer: regMaskContains(pushed, regNum: X64Register.rbp.rawValue), frameBytes: frameBytes, calleeReach: functionCalleeReach(module, func: func))
 end 'x64PrologueFrameOf'
 
 // The bytes to reserve with `sub rsp, N`.
@@ -423,7 +425,7 @@ end 'computeFrameBytes'
 // the shadow-space-vs-slot ordering is decided; `computeFrameBytes` reserves exactly enough
 // (`stackSize + outgoingArgSize + ShadowSpaceBytes`) for a caller to hold both.
 export function spillSlotBaseDisp(frame X64PrologueFrame, func IrFunction) returns StackSize
-	if frame.makesCall 'caller'
+	if frame.calleeReach == CalleeReach.makesCall 'caller'
 		return ShadowSpaceBytes + func.outgoingArgSize
 	end 'caller'
 
@@ -554,30 +556,43 @@ function prependOp(module TargetModule, block IrBlock, op TargetOp)
 	block.insertBodyOp(0, opIdx: opIdx)
 end 'prependOp'
 
-// True when the function makes a call — the frame trigger that forces 16-byte alignment
-// + shadow space even for a leaf-caller with no locals. `isCall` is read straight off
-// each op's TargetOpMeta backing.
-function functionMakesCall(module TargetModule, func IrFunction) returns bool
+// How a function reaches other code. `tailJumpOnly` jumps to its callee after the epilogue has
+// restored rsp, so its frame is sized as a leaf's; its callee still runs beneath the stack guard
+// this function carries, which is why the guard reads `calleeReach` and not `frameBytes` alone.
+export enum CalleeReach
+	none
+	tailJumpOnly
+	makesCall
+end 'CalleeReach'
+
+// A call anywhere in the body, `isCall` read straight off each op's TargetOpMeta, is `makesCall`;
+// that is the frame trigger that forces 16-byte alignment and shadow space even for a caller with
+// no locals.
+function functionCalleeReach(module TargetModule, func IrFunction) returns CalleeReach
+	var reach = CalleeReach.none
+
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("functionMakesCall: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("functionCalleeReach: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.bodyOps() 'eachOp'
 			if opAtIsCall(module, opIdx: opIdx) 'call'
-				return true
+				return CalleeReach.makesCall
 			end 'call'
 		end 'eachOp'
 
-		if block.hasTerminatorOp() 'hasTerm'
-			if opAtIsCall(module, opIdx: block.terminatorIndex()) 'callTerm'
-				return true
-			end 'callTerm'
-		end 'hasTerm'
+		match terminatorExitOf(module, block: block) 'exit'
+			tailJumps then reach = CalleeReach.tailJumpOnly
+			none or
+			blockId or
+			returns or
+			table then break
+		end 'exit'
 	end 'eachBlock'
 
-	return false
-end 'functionMakesCall'
+	return reach
+end 'functionCalleeReach'
 
 function opAtIsCall(module TargetModule, opIdx ElementIndex) returns bool
-	let op = try module.ops.get(opIdx) otherwise panic("functionMakesCall: opIdx {opIdx} not in module.ops")
+	let op = try module.ops.get(opIdx) otherwise panic("functionCalleeReach: opIdx {opIdx} not in module.ops")
 	return op.rawValue.isCall
 end 'opAtIsCall'

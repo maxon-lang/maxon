@@ -528,9 +528,9 @@ end 'requireEveryNameRendered'
 // True for the functions the compiler synthesizes rather than a source file declares — the entry
 // stub `mrt_start`, the emitted `__` runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …), the
 // `__fnref_` thunks, `__module_init`/`__module_cleanup` — and for every `runtime/` tier body.
-// One predicate with three readers, so they cannot drift: the Target IR render
-// (`isSuppliedFunction`), the green-thread stack guard exemption (`skipsGreenThreadStackGuard`),
-// and both backends' `FunctionCodeChunk.compilerScaffolding`.
+// One predicate read by the Target IR render (`isSuppliedFunction`), the green-thread stack guard
+// exemption (`skipsGreenThreadStackGuard`), the tail-call permit (`permitsTailCalls`) and both
+// backends' `FunctionCodeChunk.compilerScaffolding`, so they cannot drift.
 //
 // The name shape alone is a reachable SIGSEGV, and `sourceFilePath` is the clause that closes it.
 // `stdlib/Builtins.maxon` may declare `__`-prefixed names and user code may call them, so on the
@@ -569,6 +569,13 @@ export function isRuntimeFunction(func IrFunction, runtimeTier FunctionNameSet) 
 	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and func.isCompilerBuilt()
 end 'isRuntimeFunction'
 
+// A tail jump removes its caller's frame, so only the compiler's own runtime bodies get one: user
+// code keeps every frame for backtraces, panic traces and the debugger. A body that
+// `keepsItsOwnFrame` is the frame those read, so it keeps it too.
+export function permitsTailCalls(func IrFunction, runtimeTier FunctionNameSet) returns bool
+	return isRuntimeFunction(func, runtimeTier: runtimeTier) and not func.keepsItsOwnFrame
+end 'permitsTailCalls'
+
 // ⭐⭐ **EVERYTHING A PROGRAM WAS SUPPLIED WITH RATHER THAN WROTE — the ONE rule the render, the skip
 // and the refusal all read** (see `printTargetModule`). Two disjoint provenances, one question:
 //
@@ -578,7 +585,7 @@ end 'isRuntimeFunction'
 //     across every program that uses the same corner of it.
 //
 // ⚠ **IT IS NOT `isRuntimeFunction` WIDENED, and the two must not be merged.** `isRuntimeFunction` has
-// a SECOND reader with an entirely different question — `skipsGreenThreadStackGuard`, which asks
+// other readers with an entirely different question — `skipsGreenThreadStackGuard`, which asks
 // whether a frame may skip the stack-growth check — and a stdlib function is an ordinary frame a green
 // thread runs and MUST grow for. Folding the library into that predicate would hand `String.trim` the
 // scheduler's exemption, which is the exact class of defect (a safety exemption keyed on the wrong
@@ -783,6 +790,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc or
 		movRegImm or
@@ -868,6 +876,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		x64AluBaseDispReg or
 		x64AluBaseDispImm32 gives false
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or
@@ -987,6 +996,8 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		epilogue(stackSize) gives "epilogue {stackSize}"
 		ret(transfer) gives returnMnemonic(transfer)
 		arm64Ret(transfer) gives returnMnemonic(transfer)
+		tailJmp(targetName) gives "tailJmp {String.from(targetName)}"
+		arm64TailBranch(targetName) gives "tailBranch {String.from(targetName)}"
 		jmp(targetBlockId) gives "jmp {blockPrintName(targetBlockId, names: names)}"
 		jcc(cond, targetBlockId) gives "jcc {condCodeName(cond)}, {blockPrintName(targetBlockId, names: names)}"
 		movRegImm(dest, value) gives "movRegImm {vregName(dest)}, {value}"

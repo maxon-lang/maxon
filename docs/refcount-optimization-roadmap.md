@@ -962,6 +962,41 @@ empty (no field-decref chain to the Token).
   `aliasFromStoreGlobal` / `storeAliasGlobal` in a first pass, then do
   the site-collection pass using the global maps for dual-indexing.
 
+### 15. Retain/release fusion across a returned parameter and one join (IMPLEMENTED)
+
+> Landed 2026-11-02 as the Std passes `borrowReturnedParameters`
+> (`BorrowedParameterReturns.maxon`) and `cancelRetainRelease`
+> (`CancelRetainRelease.maxon`), run in that order after `elideImageRetains`.
+> `Runtime/OwnershipDoors.maxon` is the one table of the runtime's retain
+> and release entries that both read.
+
+**Pattern.** `last = step(last)` where `step` returns its parameter: the
+callee retains the parameter it returns, and the caller releases the value
+the call replaces. Both operate on the same record, so the net change in
+the count is nothing.
+
+**What the passes do.**
+
+1. `borrowReturnedParameters` rewrites a function whose every returned
+   value is a retain of one value parameter to return the parameter itself,
+   and inserts the retain after each direct call. The function releases and
+   consumes nothing of that parameter, and every use of the function is a
+   direct, non-throwing call that passes it.
+2. `cancelRetainRelease` cancels a retain against the release of the same
+   record (or of the record the retain handed back) when only ops that
+   leave the count alone lie between them on a path of unconditional
+   branches crossing at most one join. Across the join the release moves to
+   the join's front and the retaining predecessor branches past it.
+3. A buffer retain of an immortal image record hands back a writable clone,
+   so a cancelled retain whose result survives the window becomes a fork on
+   the record's immortality: `__managed_clone` on the immortal arm, the
+   operand itself on the other.
+
+**Pinned by** `specs/returned-parameters.md` (nothing observable changes)
+and `ir-specs/returned-parameters.md` (the emitted code);
+`tests/ladders/genreturnedparams.sh` is the scale ladder. The measured
+effect is in [optimization-log.md](optimization-log.md).
+
 ## Infrastructure wish list
 
 Several of the optimizations above share prerequisites. Building them in

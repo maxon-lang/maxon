@@ -45,8 +45,9 @@ export type BackendUnitBody
 	// same order.
 	export var debugValues as DebugValueRoster
 
-	// The encoder's questions a worker cannot ask: the unit's function carries no inline sites, and
-	// the runtime tier and the span table are the `Project`'s.
+	// The encoder's and the isel's questions a worker cannot ask: the unit's function carries no
+	// inline sites, provenance or `keepsItsOwnFrame` (`permitsTailCalls`), and the runtime tier and
+	// the span table are the `Project`'s.
 	export var encoding as FunctionEncodingFacts
 
 	export static function extract(module StdModule, func IrFunction, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns BackendUnitBody
@@ -111,6 +112,7 @@ export type FunctionEncodingFacts
 	export var lines as SpanLineTable
 	export var compilerScaffolding as bool
 	export let skipsStackGuard as bool
+	export let permitsTailCalls as bool
 	export var pinsItsThread as bool
 
 	export static function of(func IrFunction, blocks IrBlockArray, spans DebugSpanColumn, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionEncodingFacts
@@ -132,7 +134,7 @@ export type FunctionEncodingFacts
 			lines = SpanLineTable.covering(wanted, table: spanTable)
 		end 'carriesLines'
 
-		return Self{siteCount: func.inlineSites.count(), siteCallSpans: siteCallSpans, siteParentKeys: siteParentKeys, lines: lines, compilerScaffolding: isRuntimeFunction(func, runtimeTier: runtimeTier), skipsStackGuard: skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier), pinsItsThread: func.pinsItsThread}
+		return Self{siteCount: func.inlineSites.count(), siteCallSpans: siteCallSpans, siteParentKeys: siteParentKeys, lines: lines, compilerScaffolding: isRuntimeFunction(func, runtimeTier: runtimeTier), skipsStackGuard: skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier), permitsTailCalls: permitsTailCalls(func, runtimeTier: runtimeTier), pinsItsThread: func.pinsItsThread}
 	end 'of'
 
 	export function callerOfSite(index ElementIndex) returns (SpanId, InlineSiteRef)

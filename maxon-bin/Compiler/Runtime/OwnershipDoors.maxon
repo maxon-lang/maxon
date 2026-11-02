@@ -1,0 +1,228 @@
+// The one table of the runtime's retain and release entries: each door's role, record family,
+// whether it hands its operand back, and whether it releases the elements the record owns. Readers
+// ask here instead of comparing callee names, so a runtime entry is described once.
+export enum OwnershipDoor
+	managedRetain
+	managedIncref
+	boxRetain
+	boxIncref
+	stringRetain
+	typeParamRetain
+	managedDecref
+	boxDecref
+	stringDecref
+	cursorDecref
+	listDecref
+	listNodeDecref
+	destructor
+end 'OwnershipDoor'
+
+export enum DoorFamily
+	buffer
+	box
+	string
+	typeParam
+	cursor
+	list
+	listNode
+end 'DoorFamily'
+
+export enum DoorRole
+	retain
+	release
+end 'DoorRole'
+
+export enum DoorHandsBack
+	nothing
+	operand
+	operandOrClone
+end 'DoorHandsBack'
+
+export enum NotAnOwnershipDoor implements Error
+	someOtherCallee
+end 'NotAnOwnershipDoor'
+
+export function ownershipDoorNamed(callee ByteArray) returns OwnershipDoor throws NotAnOwnershipDoor
+	if not wearsTheCompilerInternalPrefix(callee) 'notReserved'
+		throw NotAnOwnershipDoor.someOtherCallee
+	end 'notReserved'
+
+	if bytesStartWith(callee, prefix: DestructorPrefix) 'aTypeDestructor'
+		return OwnershipDoor.destructor
+	end 'aTypeDestructor'
+
+	if callee.equals(ManagedRetainName) 'managedRetain'
+		return OwnershipDoor.managedRetain
+	end 'managedRetain'
+
+	if callee.equals(ManagedIncrefName) 'managedIncref'
+		return OwnershipDoor.managedIncref
+	end 'managedIncref'
+
+	if callee.equals(MmRetainName) 'boxRetain'
+		return OwnershipDoor.boxRetain
+	end 'boxRetain'
+
+	if callee.equals(MmIncrefName) 'boxIncref'
+		return OwnershipDoor.boxIncref
+	end 'boxIncref'
+
+	if callee.equals(StrRetainName) 'stringRetain'
+		return OwnershipDoor.stringRetain
+	end 'stringRetain'
+
+	if callee.equals(RetainTypeParamName) 'typeParamRetain'
+		return OwnershipDoor.typeParamRetain
+	end 'typeParamRetain'
+
+	if callee.equals(ManagedDecrefName) 'managedDecref'
+		return OwnershipDoor.managedDecref
+	end 'managedDecref'
+
+	if callee.equals(MmDecrefName) 'boxDecref'
+		return OwnershipDoor.boxDecref
+	end 'boxDecref'
+
+	if callee.equals(StrDecrefName) 'stringDecref'
+		return OwnershipDoor.stringDecref
+	end 'stringDecref'
+
+	if callee.equals(ManagedCursorDecrefName) 'cursorDecref'
+		return OwnershipDoor.cursorDecref
+	end 'cursorDecref'
+
+	if callee.equals(ListDecrefName) 'listDecref'
+		return OwnershipDoor.listDecref
+	end 'listDecref'
+
+	if callee.equals(ListNodeDecrefName) 'listNodeDecref'
+		return OwnershipDoor.listNodeDecref
+	end 'listNodeDecref'
+
+	throw NotAnOwnershipDoor.someOtherCallee
+end 'ownershipDoorNamed'
+
+export function calleeIsDoor(callee ByteArray, door OwnershipDoor) returns bool
+	return door == (try ownershipDoorNamed(callee) otherwise return false)
+end 'calleeIsDoor'
+
+export function ownershipDoorName(door OwnershipDoor) returns ByteArray
+	match door 'door'
+		managedRetain then return ManagedRetainName
+		managedIncref then return ManagedIncrefName
+		boxRetain then return MmRetainName
+		boxIncref then return MmIncrefName
+		stringRetain then return StrRetainName
+		typeParamRetain then return RetainTypeParamName
+		managedDecref then return ManagedDecrefName
+		boxDecref then return MmDecrefName
+		stringDecref then return StrDecrefName
+		cursorDecref then return ManagedCursorDecrefName
+		listDecref then return ListDecrefName
+		listNodeDecref then return ListNodeDecrefName
+		destructor then panic("ownershipDoorName: a destructor is named per type (`__destruct_<T>`), so no one name stands for it")
+	end 'door'
+end 'ownershipDoorName'
+
+export function doorRole(door OwnershipDoor) returns DoorRole
+	return match door 'door'
+		managedRetain or
+		managedIncref or
+		boxRetain or
+		boxIncref or
+		stringRetain or
+		typeParamRetain gives DoorRole.retain
+		managedDecref or
+		boxDecref or
+		stringDecref or
+		cursorDecref or
+		listDecref or
+		listNodeDecref or
+		destructor gives DoorRole.release
+	end 'door'
+end 'doorRole'
+
+export function doorFamily(door OwnershipDoor) returns DoorFamily
+	return match door 'door'
+		managedRetain or
+		managedIncref or
+		managedDecref gives DoorFamily.buffer
+		boxRetain or
+		boxIncref or
+		boxDecref or
+		destructor gives DoorFamily.box
+		stringRetain or
+		stringDecref gives DoorFamily.string
+		typeParamRetain gives DoorFamily.typeParam
+		cursorDecref gives DoorFamily.cursor
+		listDecref gives DoorFamily.list
+		listNodeDecref gives DoorFamily.listNode
+	end 'door'
+end 'doorFamily'
+
+export function doorFusesInPlace(door OwnershipDoor) returns bool
+	return match doorFamily(door) 'family'
+		buffer or
+		box gives true
+		string or
+		typeParam or
+		cursor or
+		list or
+		listNode gives false
+	end 'family'
+end 'doorFusesInPlace'
+
+export function doorReleasesWhatRetains(release OwnershipDoor, retain OwnershipDoor) returns bool
+	return doorRole(release) == DoorRole.release and doorFamily(release) == doorFamily(retain)
+end 'doorReleasesWhatRetains'
+
+export function doorHandsBack(door OwnershipDoor) returns DoorHandsBack
+	return match door 'door'
+		managedRetain or
+		stringRetain or
+		typeParamRetain gives DoorHandsBack.operandOrClone
+		boxRetain gives DoorHandsBack.operand
+		managedIncref or
+		boxIncref or
+		managedDecref or
+		boxDecref or
+		stringDecref or
+		cursorDecref or
+		listDecref or
+		listNodeDecref or
+		destructor gives DoorHandsBack.nothing
+	end 'door'
+end 'doorHandsBack'
+
+function doorReleasesOwnedElements(door OwnershipDoor) returns bool
+	return match door 'door'
+		managedDecref or
+		cursorDecref or
+		listDecref or
+		listNodeDecref or
+		destructor gives true
+		managedRetain or
+		managedIncref or
+		boxRetain or
+		boxIncref or
+		stringRetain or
+		typeParamRetain or
+		boxDecref or
+		stringDecref gives false
+	end 'door'
+end 'doorReleasesOwnedElements'
+
+export function calleeHandsBackItsRetainedOperand(callee ByteArray) returns bool
+	let door = try ownershipDoorNamed(callee) otherwise return false
+	return doorRole(door) == DoorRole.retain and doorHandsBack(door) != DoorHandsBack.nothing
+end 'calleeHandsBackItsRetainedOperand'
+
+export function calleeReleasesOwnedElements(callee ByteArray) returns bool
+	let door = try ownershipDoorNamed(callee) otherwise return false
+	return doorReleasesOwnedElements(door)
+end 'calleeReleasesOwnedElements'
+
+export function releasesItsOperandCallee(callee ByteArray) returns bool
+	let door = try ownershipDoorNamed(callee) otherwise return false
+	return doorRole(door) == DoorRole.release
+end 'releasesItsOperandCallee'

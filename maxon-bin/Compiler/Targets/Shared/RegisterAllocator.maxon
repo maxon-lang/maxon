@@ -1160,7 +1160,7 @@ module function refuseForRegisterPressure(project Project, stdModule StdModule, 
 	var body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex), runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
 	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 	var iselCost = PhaseDelta.zero()
-	var lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, target: target, costs: costs, iselCost: iselCost)
+	var lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, permitsTailCalls: body.encoding.permitsTailCalls, target: target, costs: costs, iselCost: iselCost)
 	try refuseLoweredUnit(project, lowered: lowered, authorFilePath: stdModule.getFunc(funcIndex).sourceFilePath, funcIndex: funcIndex, hasAuthor: body.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, costs: costs)
 end 'refuseForRegisterPressure'
 
@@ -2005,6 +2005,7 @@ function collectOpHints(op TargetOp, heat BlockHeat, hints ColorHints)
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc or
 		movRegImm or
@@ -2066,6 +2067,7 @@ function collectOpHints(op TargetOp, heat BlockHeat, hints ColorHints)
 		movqXmmGpr or
 		negF64RegReg or
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Cbz or
@@ -3105,6 +3107,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		prologue or
 		epilogue or
 		ret or
+		tailJmp or
 		jmp or
 		jcc or
 		xchgRegReg or
@@ -3114,6 +3117,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		pushReg or
 		popReg or
 		arm64Ret or
+		arm64TailBranch or
 		arm64Branch or
 		arm64CondBranch or
 		arm64Prologue or
