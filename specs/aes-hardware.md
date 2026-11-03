@@ -1147,9 +1147,9 @@ function flipped(sealed ByteArray, at Count) returns ByteArray
 end 'flipped'
 
 function refuses(aead AesGcm, nonce ByteArray, sealed ByteArray, additional ByteArray) returns bool
-	_ = try aead.open(nonce, sealed: sealed, additionalData: additional) otherwise return true
+	let opened = try aead.open(nonce, sealed: sealed, additionalData: additional) otherwise return true
 
-	return false
+	return opened.count() > sealed.count()
 end 'refuses'
 
 function mismatches(keyBytes Count) returns (Count, Count, Count)

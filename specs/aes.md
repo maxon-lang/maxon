@@ -951,3 +951,57 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: aes.a-discarded-block-or-key-stream-result-is-refused-on-every-target -->
+`Aes.encryptBlock`, `Aes.decryptBlock` and `Aes.xorKeyStream` write only the array they create, so they are pure on every
+target, the hardware ones included: discarding a result is E3064 whether the host has AES instructions or not.
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create()
+	key.resize(16)
+	var nonce = ByteArray.create()
+	nonce.resize(12)
+	let aes = try Aes.create(key) otherwise panic("the key is valid")
+	_ = try aes.encryptBlock(key) otherwise panic("the block is 16 bytes")
+	_ = try aes.decryptBlock(key) otherwise panic("the block is 16 bytes")
+	_ = try aes.xorKeyStream(nonce, counter: 1, data: key) otherwise panic("the nonce is 12 bytes")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: <fragment>:8:2: result of pure function 'Aes.encryptBlock' must be used
+error E3064: <fragment>:9:2: result of pure function 'Aes.decryptBlock' must be used
+error E3064: <fragment>:10:2: result of pure function 'Aes.xorKeyStream' must be used
+```
+
+<!-- test: aes.a-call-that-writes-a-caller-buffer-stays-impure-on-every-target -->
+`Aes.encryptBlockInto` writes the array its caller hands it, so a function that passes its own `output` parameter on is
+impure on every target: discarding that function's result with `_ =` is not E3064, whether the host has AES instructions
+or not.
+```maxon
+function encryptedCount(aes Aes, block ByteArray, output ByteArray) returns Count
+	try aes.encryptBlockInto(block, output: output, at: 0) otherwise panic("the block is 16 bytes")
+
+	return output.count()
+end 'encryptedCount'
+
+function main() returns ExitCode
+	var key = ByteArray.create()
+	key.resize(16)
+	var block = ByteArray.create()
+	block.resize(16)
+	var output = ByteArray.create()
+	let aes = try Aes.create(key) otherwise panic("the key is valid")
+	_ = encryptedCount(aes, block: block, output: output)
+	print("{try output.get(0) otherwise 0}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+102
+```
+```exitcode
+0
+```

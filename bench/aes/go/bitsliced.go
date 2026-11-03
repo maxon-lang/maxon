@@ -9,34 +9,28 @@ import (
 	"encoding/binary"
 )
 
-type planes = [8]uint64
+type roundKeys = [120]uint64
+type keyWords = [60]uint64
 
 const (
 	m1 = 0x5555555555555555
 	m2 = 0x3333333333333333
 	m4 = 0x0F0F0F0F0F0F0F0F
 
-	byteLaneMask   = 0x00FF00FF00FF00FF
-	rowLaneMask    = 0x0000FFFF0000FFFF
-	secondByteMask = 0xFF00
-	wordMask       = 0xFFFFFFFF
-	rowMask        = 0xFFFF
-	byteMask       = 0xFF
-	row1Nibble0    = 0x00000000000F0000
-	row1Nibble3    = 0x00000000F0000000
-	row1First3     = 0x000000000FFF0000
-	row1Last3      = 0x00000000FFF00000
-	row2LowPair    = 0x000000FF00000000
-	row2HighPair   = 0x0000FF0000000000
-	row3Nibble0    = 0x000F000000000000
-	row3Nibble3    = 0xF000000000000000
-	row3First3     = 0x0FFF000000000000
-	row3Last3      = 0xFFF0000000000000
+	byteLaneMask      = 0x00FF00FF00FF00FF
+	rowLaneMask       = 0x0000FFFF0000FFFF
+	secondByteMask    = 0xFF00
+	wordMask          = 0xFFFFFFFF
+	byteMask          = 0xFF
+	byteBits          = 0x0101010101010101
+	wordBits0         = 0x01010101
+	topRowsLowBytes   = 0x00FF00FF00000000
+	rotatedDownNibble = 0xFFF00000FFF00000
+	wrappedUpNibble   = 0x000F0000000F0000
 
 	blockBytes      = 16
 	laneBytes       = 8
 	batchBlocks     = 4
-	rowWrapBits     = 12
 	counterSwapBits = 24
 	wordBytes       = 4
 	ghashWordBytes  = 8
@@ -45,6 +39,7 @@ const (
 	counterLimit    = 1 << 32
 	maxPlaintext    = 68719476704
 	bitsPerByte     = 8
+	planeCount      = 8
 	tagMaskCounter  = 1
 	maskLeadBlocks  = 1
 )
@@ -105,28 +100,6 @@ func readOrderedWord(src []byte, off, width, limit int, bigEndian bool) uint64 {
 
 var rcon = []uint64{0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36}
 
-func swapPlanes(p *planes, lo, hi int, mask uint64, stride uint) {
-	a, b := p[lo], p[hi]
-	upper := mask << stride
-	p[lo] = (a & mask) | ((b & mask) << stride)
-	p[hi] = ((a & upper) >> stride) | (b & upper)
-}
-
-func ortho(p *planes) {
-	swapPlanes(p, 0, 1, m1, 1)
-	swapPlanes(p, 2, 3, m1, 1)
-	swapPlanes(p, 4, 5, m1, 1)
-	swapPlanes(p, 6, 7, m1, 1)
-	swapPlanes(p, 0, 2, m2, 2)
-	swapPlanes(p, 1, 3, m2, 2)
-	swapPlanes(p, 4, 6, m2, 2)
-	swapPlanes(p, 5, 7, m2, 2)
-	swapPlanes(p, 0, 4, m4, 4)
-	swapPlanes(p, 1, 5, m4, 4)
-	swapPlanes(p, 2, 6, m4, 4)
-	swapPlanes(p, 3, 7, m4, 4)
-}
-
 func spreadBytes(column uint64) uint64 {
 	halves := (column | (column << 16)) & rowLaneMask
 	return (halves | (halves << 8)) & byteLaneMask
@@ -136,101 +109,200 @@ func interleave(even, odd uint64) uint64 {
 	return spreadBytes(even) | (spreadBytes(odd) << 8)
 }
 
-func deinterleave(spread uint64, parity uint) uint64 {
-	bytes := (spread >> (parity * 8)) & byteLaneMask
+func gather(spread uint64) uint64 {
+	bytes := spread & byteLaneMask
 	halves := (bytes | (bytes >> 8)) & rowLaneMask
 	return (halves | (halves >> 16)) & wordMask
 }
 
-func packColumns(c0, c1, c2, c3 uint64) (uint64, uint64) {
-	return interleave(c0, c2), interleave(c1, c3)
+func lane(low, high uint64) uint64 {
+	return gather(low) | (gather(high) << 32)
 }
 
 func aesReadWord(src []byte, at int) uint64 {
 	return uint64(binary.LittleEndian.Uint32(src[at:]))
 }
 
-func packBlock(src []byte, off int) (uint64, uint64) {
-	c0 := aesReadWord(src, off)
-	c1 := aesReadWord(src, off+wordBytes)
-	c2 := aesReadWord(src, off+2*wordBytes)
-	c3 := aesReadWord(src, off+3*wordBytes)
-	return packColumns(c0, c1, c2, c3)
+func counterWord(counter uint64) uint64 {
+	low := counter & wordMask
+	return ((low & byteMask) << counterSwapBits) | ((low & secondByteMask) << 8) | ((low >> 8) & secondByteMask) | (low >> counterSwapBits)
 }
 
-func appendBlock(out []byte, low, high uint64) []byte {
-	out = binary.LittleEndian.AppendUint32(out, uint32(deinterleave(low, 0)))
-	out = binary.LittleEndian.AppendUint32(out, uint32(deinterleave(high, 0)))
-	out = binary.LittleEndian.AppendUint32(out, uint32(deinterleave(low, 1)))
-	out = binary.LittleEndian.AppendUint32(out, uint32(deinterleave(high, 1)))
-	return out
+func counterBlock(nonceMid, counter uint64) uint64 {
+	return nonceMid | (spreadBytes(counterWord(counter)) << 8)
 }
 
-func loadBatch(p *planes, src []byte, blocks int) {
-	for slot := 0; slot < 4; slot++ {
-		var lo, hi uint64
-		if slot < blocks {
-			lo, hi = packBlock(src, slot*16)
-		}
-		p[slot] = lo
-		p[slot+4] = hi
-	}
-	ortho(p)
+func rotateNibblesDown(word uint64) uint64 {
+	return (word & rowLaneMask) | ((word & rotatedDownNibble) >> 4) | ((word & wrappedUpNibble) << 12)
 }
 
-func storeBatch(p *planes, out []byte, blocks int) []byte {
-	ortho(p)
-	for slot := 0; slot < 4; slot++ {
-		if slot < blocks {
-			out = appendBlock(out, p[slot], p[slot+4])
-		}
-	}
-	return out
-}
-
-func swapRow2(word uint64) uint64 {
-	return ((word & row2HighPair) >> 8) | ((word & row2LowPair) << 8)
+func swapTopRowBytes(word uint64) uint64 {
+	moved := (word ^ (word >> 8)) & topRowsLowBytes
+	return word ^ moved ^ (moved << 8)
 }
 
 func shiftRowsWord(word uint64) uint64 {
-	row1 := ((word & row1Last3) >> 4) | ((word & row1Nibble0) << rowWrapBits)
-	row2 := swapRow2(word)
-	row3 := ((word & row3Nibble3) >> rowWrapBits) | ((word & row3First3) << 4)
-	return (word & rowMask) | row1 | row2 | row3
+	return swapTopRowBytes(rotateNibblesDown(word))
 }
 
-func shiftRows(p *planes) {
-	p[0] = shiftRowsWord(p[0])
-	p[1] = shiftRowsWord(p[1])
-	p[2] = shiftRowsWord(p[2])
-	p[3] = shiftRowsWord(p[3])
-	p[4] = shiftRowsWord(p[4])
-	p[5] = shiftRowsWord(p[5])
-	p[6] = shiftRowsWord(p[6])
-	p[7] = shiftRowsWord(p[7])
+func rowsUp(word uint64) uint64 { return (word >> 16) | (word << 48) }
+
+func halfSwap(word uint64) uint64 { return (word << 32) | (word >> 32) }
+
+func rotateWord(w uint64) uint64 { return ((w >> 8) | (w << 24)) & 0xFFFFFFFF }
+
+func keyPlane(low, high uint64, plane uint) uint64 {
+	lowBits := (low >> plane) & byteBits
+	highBits := (high >> plane) & byteBits
+	return (lowBits * 15) | (highBits * 240)
 }
 
-func rowsUp(w uint64) uint64   { return (w >> 16) | (w << 48) }
-func halfSwap(w uint64) uint64 { return (w << 32) | (w >> 32) }
+type state struct{ q0, q1, q2, q3, q4, q5, q6, q7 uint64 }
 
-func mixColumns(p *planes) {
-	p0, p1, p2, p3, p4, p5, p6, p7 := p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]
-	r0, r1, r2, r3 := rowsUp(p0), rowsUp(p1), rowsUp(p2), rowsUp(p3)
-	r4, r5, r6, r7 := rowsUp(p4), rowsUp(p5), rowsUp(p6), rowsUp(p7)
-	t0, t1, t2, t3 := p0^r0, p1^r1, p2^r2, p3^r3
-	t4, t5, t6, t7 := p4^r4, p5^r5, p6^r6, p7^r7
-	p[0] = t7 ^ r0 ^ halfSwap(t0)
-	p[1] = t0 ^ t7 ^ r1 ^ halfSwap(t1)
-	p[2] = t1 ^ r2 ^ halfSwap(t2)
-	p[3] = t2 ^ t7 ^ r3 ^ halfSwap(t3)
-	p[4] = t3 ^ t7 ^ r4 ^ halfSwap(t4)
-	p[5] = t4 ^ r5 ^ halfSwap(t5)
-	p[6] = t5 ^ r6 ^ halfSwap(t6)
-	p[7] = t6 ^ r7 ^ halfSwap(t7)
+func (s *state) ortho() {
+	a0, a1, a2, a3, a4, a5, a6, a7 := s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7
+
+	moved := ((a0 >> 1) ^ a1) & m1
+	a0 ^= moved << 1
+	a1 ^= moved
+	moved = ((a2 >> 1) ^ a3) & m1
+	a2 ^= moved << 1
+	a3 ^= moved
+	moved = ((a4 >> 1) ^ a5) & m1
+	a4 ^= moved << 1
+	a5 ^= moved
+	moved = ((a6 >> 1) ^ a7) & m1
+	a6 ^= moved << 1
+	a7 ^= moved
+
+	moved = ((a0 >> 2) ^ a2) & m2
+	a0 ^= moved << 2
+	a2 ^= moved
+	moved = ((a1 >> 2) ^ a3) & m2
+	a1 ^= moved << 2
+	a3 ^= moved
+	moved = ((a4 >> 2) ^ a6) & m2
+	a4 ^= moved << 2
+	a6 ^= moved
+	moved = ((a5 >> 2) ^ a7) & m2
+	a5 ^= moved << 2
+	a7 ^= moved
+
+	moved = ((a0 >> 4) ^ a4) & m4
+	a0 ^= moved << 4
+	a4 ^= moved
+	moved = ((a1 >> 4) ^ a5) & m4
+	a1 ^= moved << 4
+	a5 ^= moved
+	moved = ((a2 >> 4) ^ a6) & m4
+	a2 ^= moved << 4
+	a6 ^= moved
+	moved = ((a3 >> 4) ^ a7) & m4
+	a3 ^= moved << 4
+	a7 ^= moved
+
+	s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7 = a0, a1, a2, a3, a4, a5, a6, a7
 }
 
-func subBytes(p *planes) {
-	x7, x6, x5, x4, x3, x2, x1, x0 := p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]
+func (s *state) loadBlock(src []byte) {
+	c0 := aesReadWord(src, 0)
+	c1 := aesReadWord(src, wordBytes)
+	c2 := aesReadWord(src, 2*wordBytes)
+	c3 := aesReadWord(src, 3*wordBytes)
+	s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7 = interleave(c0, c2), 0, 0, 0, interleave(c1, c3), 0, 0, 0
+	s.ortho()
+}
+
+func (s *state) loadCounters(nonceLow, nonceMid, firstCounter uint64) {
+	s.q0 = nonceLow
+	s.q1 = nonceLow
+	s.q2 = nonceLow
+	s.q3 = nonceLow
+	s.q4 = counterBlock(nonceMid, firstCounter)
+	s.q5 = counterBlock(nonceMid, firstCounter+1)
+	s.q6 = counterBlock(nonceMid, firstCounter+2)
+	s.q7 = counterBlock(nonceMid, firstCounter+3)
+	s.ortho()
+}
+
+func (s *state) firstLane() uint64 {
+	return lane(s.q0, s.q4)
+}
+
+func (s *state) secondLane() uint64 {
+	return lane(s.q0>>8, s.q4>>8)
+}
+
+func (s *state) xorBatch(output, data []byte, at int) []byte {
+	output = xorSlot(output, data, at, s.q0, s.q4)
+	output = xorSlot(output, data, at+blockBytes, s.q1, s.q5)
+	output = xorSlot(output, data, at+2*blockBytes, s.q2, s.q6)
+	return xorSlot(output, data, at+3*blockBytes, s.q3, s.q7)
+}
+
+func (s *state) xorBatchPastMask(output, data []byte) []byte {
+	output = xorSlot(output, data, 0, s.q1, s.q5)
+	output = xorSlot(output, data, blockBytes, s.q2, s.q6)
+	return xorSlot(output, data, 2*blockBytes, s.q3, s.q7)
+}
+
+func (s *state) shiftRows() {
+	s.q0 = shiftRowsWord(s.q0)
+	s.q1 = shiftRowsWord(s.q1)
+	s.q2 = shiftRowsWord(s.q2)
+	s.q3 = shiftRowsWord(s.q3)
+	s.q4 = shiftRowsWord(s.q4)
+	s.q5 = shiftRowsWord(s.q5)
+	s.q6 = shiftRowsWord(s.q6)
+	s.q7 = shiftRowsWord(s.q7)
+}
+
+func (s *state) shiftMixAddKey(keys *roundKeys, round int) {
+	base := round * planeCount
+	p7 := shiftRowsWord(s.q7)
+	r7 := rowsUp(p7)
+	t7 := p7 ^ r7
+
+	p0 := shiftRowsWord(s.q0)
+	r0 := rowsUp(p0)
+	t0 := p0 ^ r0
+	s.q0 = t7 ^ r0 ^ halfSwap(t0) ^ keys[base]
+
+	p1 := shiftRowsWord(s.q1)
+	r1 := rowsUp(p1)
+	t1 := p1 ^ r1
+	s.q1 = t0 ^ t7 ^ r1 ^ halfSwap(t1) ^ keys[base+1]
+
+	p2 := shiftRowsWord(s.q2)
+	r2 := rowsUp(p2)
+	t2 := p2 ^ r2
+	s.q2 = t1 ^ r2 ^ halfSwap(t2) ^ keys[base+2]
+
+	p3 := shiftRowsWord(s.q3)
+	r3 := rowsUp(p3)
+	t3 := p3 ^ r3
+	s.q3 = t2 ^ t7 ^ r3 ^ halfSwap(t3) ^ keys[base+3]
+
+	p4 := shiftRowsWord(s.q4)
+	r4 := rowsUp(p4)
+	t4 := p4 ^ r4
+	s.q4 = t3 ^ t7 ^ r4 ^ halfSwap(t4) ^ keys[base+4]
+
+	p5 := shiftRowsWord(s.q5)
+	r5 := rowsUp(p5)
+	t5 := p5 ^ r5
+	s.q5 = t4 ^ r5 ^ halfSwap(t5) ^ keys[base+5]
+
+	p6 := shiftRowsWord(s.q6)
+	r6 := rowsUp(p6)
+	t6 := p6 ^ r6
+	s.q6 = t5 ^ r6 ^ halfSwap(t6) ^ keys[base+6]
+
+	s.q7 = t6 ^ r7 ^ halfSwap(t7) ^ keys[base+7]
+}
+
+func (s *state) subBytes() {
+	x7, x6, x5, x4, x3, x2, x1, x0 := s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7
 
 	y14 := x3 ^ x5
 	y13 := x0 ^ x6
@@ -353,165 +425,43 @@ func subBytes(p *planes) {
 	s1 := t64 ^ ^s3
 	s2 := t55 ^ ^t67
 
-	p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7] = s7, s6, s5, s4, s3, s2, s1, s0
+	s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7 = s7, s6, s5, s4, s3, s2, s1, s0
 }
 
-func addRoundKey(p *planes, keys []uint64, round int) {
-	base := round * 8
-	for i := range p {
-		p[i] ^= keys[base+i]
-	}
+func (s *state) addRoundKey(keys *roundKeys, round int) {
+	base := round * planeCount
+	s.q0 ^= keys[base]
+	s.q1 ^= keys[base+1]
+	s.q2 ^= keys[base+2]
+	s.q3 ^= keys[base+3]
+	s.q4 ^= keys[base+4]
+	s.q5 ^= keys[base+5]
+	s.q6 ^= keys[base+6]
+	s.q7 ^= keys[base+7]
 }
 
-func encryptPlanes(p *planes, keys []uint64, rounds int) {
-	addRoundKey(p, keys, 0)
+func (s *state) encrypt(keys *roundKeys, rounds int) {
+	s.addRoundKey(keys, 0)
 	for round := 1; round < rounds; round++ {
-		subBytes(p)
-		shiftRows(p)
-		mixColumns(p)
-		addRoundKey(p, keys, round)
+		s.subBytes()
+		s.shiftMixAddKey(keys, round)
 	}
-	subBytes(p)
-	shiftRows(p)
-	addRoundKey(p, keys, rounds)
+	s.subBytes()
+	s.shiftRows()
+	s.addRoundKey(keys, rounds)
 }
 
-func subWord(w uint64) uint64 {
-	var p planes
-	p[0] = w
-	ortho(&p)
-	subBytes(&p)
-	ortho(&p)
-	return p[0] & 0xFFFFFFFF
-}
-
-func rotateWord(w uint64) uint64 { return ((w >> 8) | (w << 24)) & 0xFFFFFFFF }
-
-func keySchedule(key []byte, rounds int) []uint64 {
-	keyWords := len(key) / 4
-	total := (rounds + 1) * 4
-	words := make([]uint64, 0, total)
-	for i := 0; i < keyWords; i++ {
-		words = append(words, aesReadWord(key, i*wordBytes))
-	}
-	previous := words[keyWords-1]
-	slot, constant := 0, 0
-	for i := keyWords; i < total; i++ {
-		word := previous
-		if slot == 0 {
-			word = subWord(rotateWord(previous)) ^ rcon[constant]
-		} else if keyWords == 8 && slot == 4 {
-			word = subWord(previous)
-		}
-		previous = word ^ words[i-keyWords]
-		words = append(words, previous)
-		slot++
-		if slot == keyWords {
-			slot = 0
-			constant++
-		}
-	}
-	return words
-}
-
-type BitslicedAes struct {
-	keys   []uint64
-	rounds int
-}
-
-func NewBitslicedAes(key []byte) *BitslicedAes {
-	rounds := len(key)/4 + 6
-	words := keySchedule(key, rounds)
-	keys := make([]uint64, 0, (rounds+1)*8)
-	var p planes
-	for round := 0; round <= rounds; round++ {
-		b := round * 4
-		lo, hi := packColumns(words[b], words[b+1], words[b+2], words[b+3])
-		for slot := 0; slot < 4; slot++ {
-			p[slot] = lo
-			p[slot+4] = hi
-		}
-		ortho(&p)
-		keys = append(keys, p[:]...)
-	}
-	return &BitslicedAes{keys, rounds}
-}
-
-func (a *BitslicedAes) EncryptBlock(block []byte) []byte {
-	if len(block) != blockBytes {
-		panic("bitsliced aes: a block is 16 bytes")
-	}
-	var p planes
-	out := make([]byte, 0, 16)
-	loadBatch(&p, block, 1)
-	encryptPlanes(&p, a.keys, a.rounds)
-	return storeBatch(&p, out, 1)
-}
-
-func (a *BitslicedAes) XorKeyStream(nonce []byte, counter uint32, data []byte) []byte {
-	blocks := (len(data) + 15) >> 4
-	firstBlock := int(counter)
-	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, blocks)
-	var p planes
-	output := make([]byte, 0, len(data))
-	return a.xorBatches(&p, nonceLow, nonceMid, firstBlock, blocks, 0, data, output, 0)
-}
-
-func (a *BitslicedAes) XorKeyStreamPastFirstBlock(nonce []byte, counter uint32, data, output []byte) ([]byte, uint64, uint64) {
-	streamBlocks := ((len(data) + 15) >> 4) + maskLeadBlocks
-	firstBlock := int(counter)
-	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, streamBlocks)
-	var p planes
-	a.encryptCounters(&p, nonceLow, nonceMid, uint64(firstBlock))
-	output = xorBatchPastMask(output, data, &p)
-	firstLane, secondLane := blockLanes(&p, 0)
-	output = a.xorBatches(&p, nonceLow, nonceMid, firstBlock, streamBlocks, maskLeadBlocks, data, output, batchBlocks)
-	return output, firstLane, secondLane
-}
-
-func streamNonceWords(nonce []byte, firstCounter, streamBlocks int) (uint64, uint64) {
-	if len(nonce) != nonceBytes {
-		panic("bitsliced aes: a nonce is 12 bytes")
-	}
-	if firstCounter+streamBlocks > counterLimit {
-		panic("bitsliced aes: the block counter overflows")
-	}
-	return interleave(aesReadWord(nonce, 0), aesReadWord(nonce, 2*wordBytes)), aesReadWord(nonce, wordBytes)
-}
-
-func (a *BitslicedAes) encryptCounters(p *planes, nonceLow, nonceMid, counter uint64) {
-	loadCounters(p, nonceLow, nonceMid, counter)
-	encryptPlanes(p, a.keys, a.rounds)
-}
-
-func (a *BitslicedAes) xorBatches(p *planes, nonceLow, nonceMid uint64, firstCounter, streamBlocks, lead int, data, output []byte, startBlock int) []byte {
-	for done := startBlock; done < streamBlocks; done += batchBlocks {
-		a.encryptCounters(p, nonceLow, nonceMid, uint64(firstCounter)+uint64(done))
-		output = xorBatch(output, data, p, (done-lead)<<4)
-	}
-	return output
-}
-
-func counterWord(counter uint64) uint64 {
-	low := counter & wordMask
-	return ((low & byteMask) << counterSwapBits) | ((low & secondByteMask) << 8) | ((low >> 8) & secondByteMask) | (low >> counterSwapBits)
-}
-
-func loadCounters(p *planes, nonceLow, nonceMid, firstCounter uint64) {
-	for slot := 0; slot < batchBlocks; slot++ {
-		p[slot] = nonceLow
-		p[slot+batchBlocks] = interleave(nonceMid, counterWord(firstCounter+uint64(slot)))
-	}
-	ortho(p)
-}
-
-func slotLane(p *planes, slot int, parity uint) uint64 {
-	low, high := p[slot], p[slot+batchBlocks]
-	return deinterleave(low, parity) | (deinterleave(high, parity) << 32)
-}
-
-func blockLanes(p *planes, slot int) (uint64, uint64) {
-	return slotLane(p, slot, 0), slotLane(p, slot, 1)
+func (s *state) subWord(word uint64) uint64 {
+	s.q0 = word & wordBits0
+	s.q1 = (word >> 1) & wordBits0
+	s.q2 = (word >> 2) & wordBits0
+	s.q3 = (word >> 3) & wordBits0
+	s.q4 = (word >> 4) & wordBits0
+	s.q5 = (word >> 5) & wordBits0
+	s.q6 = (word >> 6) & wordBits0
+	s.q7 = (word >> 7) & wordBits0
+	s.subBytes()
+	return (s.q0 & wordBits0) | ((s.q1 & wordBits0) << 1) | ((s.q2 & wordBits0) << 2) | ((s.q3 & wordBits0) << 3) | ((s.q4 & wordBits0) << 4) | ((s.q5 & wordBits0) << 5) | ((s.q6 & wordBits0) << 6) | ((s.q7 & wordBits0) << 7)
 }
 
 func xorLane(output, data []byte, at int, lane uint64) []byte {
@@ -528,23 +478,134 @@ func xorLane(output, data []byte, at int, lane uint64) []byte {
 	return output
 }
 
-func xorSlot(output, data []byte, p *planes, slot, at int) []byte {
-	output = xorLane(output, data, at, slotLane(p, slot, 0))
-	return xorLane(output, data, at+laneBytes, slotLane(p, slot, 1))
+func xorSlot(output, data []byte, at int, low, high uint64) []byte {
+	output = xorLane(output, data, at, lane(low, high))
+	return xorLane(output, data, at+laneBytes, lane(low>>8, high>>8))
 }
 
-func xorBatch(output, data []byte, p *planes, off int) []byte {
-	ortho(p)
-	for slot := 0; slot < batchBlocks; slot++ {
-		output = xorSlot(output, data, p, slot, off+slot*blockBytes)
+type keyExpansion struct {
+	words    keyWords
+	sbox     state
+	previous uint64
+	slot     int
+	constant int
+}
+
+func newKeyExpansion(key []byte) *keyExpansion {
+	var e keyExpansion
+	nk := len(key) / 4
+	for i := 0; i < nk; i++ {
+		e.words[i] = aesReadWord(key, i*wordBytes)
 	}
-	return output
+	e.previous = e.words[nk-1]
+	return &e
 }
 
-func xorBatchPastMask(output, data []byte, p *planes) []byte {
-	ortho(p)
-	for slot := maskLeadBlocks; slot < batchBlocks; slot++ {
-		output = xorSlot(output, data, p, slot, (slot-maskLeadBlocks)*blockBytes)
+func (e *keyExpansion) advance(index, nk int) {
+	word := e.previous
+	if e.slot == 0 {
+		word = e.sbox.subWord(rotateWord(e.previous)) ^ rcon[e.constant]
+	} else if nk == 8 && e.slot == 4 {
+		word = e.sbox.subWord(e.previous)
+	}
+	e.previous = word ^ e.words[index-nk]
+	e.words[index] = e.previous
+	e.slot++
+	if e.slot == nk {
+		e.slot = 0
+		e.constant++
+	}
+}
+
+func (e *keyExpansion) roundKeys(rounds int) *roundKeys {
+	var keys roundKeys
+	for round := 0; round <= rounds; round++ {
+		wordBase := round * 4
+		keyBase := round * planeCount
+		low := interleave(e.words[wordBase], e.words[wordBase+2])
+		high := interleave(e.words[wordBase+1], e.words[wordBase+3])
+		for plane := 0; plane < planeCount; plane++ {
+			keys[keyBase+plane] = keyPlane(low, high, uint(plane))
+		}
+	}
+	return &keys
+}
+
+func expandKey(key []byte, rounds int) *roundKeys {
+	nk := len(key) / 4
+	total := (rounds + 1) * 4
+	e := newKeyExpansion(key)
+	for i := nk; i < total; i++ {
+		e.advance(i, nk)
+	}
+	return e.roundKeys(rounds)
+}
+
+type BitslicedAes struct {
+	keys   *roundKeys
+	rounds int
+}
+
+func NewBitslicedAes(key []byte) *BitslicedAes {
+	rounds := len(key)/4 + 6
+	return &BitslicedAes{expandKey(key, rounds), rounds}
+}
+
+func (a *BitslicedAes) EncryptBlock(block []byte) []byte {
+	if len(block) != blockBytes {
+		panic("bitsliced aes: a block is 16 bytes")
+	}
+	var s state
+	s.loadBlock(block)
+	s.encrypt(a.keys, a.rounds)
+	s.ortho()
+	out := make([]byte, 0, blockBytes)
+	out = binary.LittleEndian.AppendUint64(out, s.firstLane())
+	return binary.LittleEndian.AppendUint64(out, s.secondLane())
+}
+
+func (a *BitslicedAes) XorKeyStream(nonce []byte, counter uint32, data []byte) []byte {
+	blocks := (len(data) + 15) >> 4
+	firstBlock := int(counter)
+	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, blocks)
+	var s state
+	output := make([]byte, 0, len(data))
+	return a.xorBatches(&s, nonceLow, nonceMid, firstBlock, blocks, 0, data, output, 0)
+}
+
+func (a *BitslicedAes) XorKeyStreamPastFirstBlock(nonce []byte, counter uint32, data, output []byte) ([]byte, uint64, uint64) {
+	streamBlocks := ((len(data) + 15) >> 4) + maskLeadBlocks
+	firstBlock := int(counter)
+	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, streamBlocks)
+	var s state
+	a.encryptCounters(&s, nonceLow, nonceMid, uint64(firstBlock))
+	s.ortho()
+	output = s.xorBatchPastMask(output, data)
+	firstLane, secondLane := s.firstLane(), s.secondLane()
+	output = a.xorBatches(&s, nonceLow, nonceMid, firstBlock, streamBlocks, maskLeadBlocks, data, output, batchBlocks)
+	return output, firstLane, secondLane
+}
+
+func streamNonceWords(nonce []byte, firstCounter, streamBlocks int) (uint64, uint64) {
+	if len(nonce) != nonceBytes {
+		panic("bitsliced aes: a nonce is 12 bytes")
+	}
+	if firstCounter+streamBlocks > counterLimit {
+		panic("bitsliced aes: the block counter overflows")
+	}
+	return interleave(aesReadWord(nonce, 0), aesReadWord(nonce, 2*wordBytes)), interleave(aesReadWord(nonce, wordBytes), 0)
+}
+
+func (a *BitslicedAes) encryptCounters(s *state, nonceLow, nonceMid, counter uint64) {
+	s.loadCounters(nonceLow, nonceMid, counter)
+	s.encrypt(a.keys, a.rounds)
+}
+
+func (a *BitslicedAes) xorBatches(s *state, nonceLow, nonceMid uint64, firstCounter, streamBlocks, lead int, data, output []byte, startBlock int) []byte {
+	for done := startBlock; done < streamBlocks; done += batchBlocks {
+		a.encryptCounters(s, nonceLow, nonceMid, uint64(firstCounter)+uint64(done))
+		s.ortho()
+		output = s.xorBatch(output, data, (done-lead)<<4)
 	}
 	return output
 }

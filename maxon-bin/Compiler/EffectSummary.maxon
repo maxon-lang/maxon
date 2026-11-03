@@ -1540,10 +1540,10 @@ type EffectSummaryBuilder
 	end 'taintResult'
 
 	function taintStoredOperands(origins ValueOrigins, func IrFunction, callee ByteArray, args ValueIdArray)
-		let receiver = try args.get(0) otherwise panic("EffectSummaryBuilder.taintStoredOperands: '{String.from(callee)}' carries no receiver")
+		let receiver = try args.get(writtenOperandOf(callee)) otherwise panic("EffectSummaryBuilder.taintStoredOperands: '{String.from(callee)}' carries no receiver")
 		let shape = runtimeCalleeStoreShape(callee)
 
-		if not originIsLocal(origins.originOf(receiver)) or not shapeStoresInto(shape, receiverIndex: 0) 'storesNothingIntoARecordOfThisBody'
+		if not originIsLocal(origins.originOf(receiver)) or not shapeStoresInto(shape, receiverIndex: writtenOperandOf(callee)) 'storesNothingIntoARecordOfThisBody'
 			return
 		end 'storesNothingIntoARecordOfThisBody'
 
@@ -1672,10 +1672,10 @@ type EffectSummaryBuilder
 	end 'noteImport'
 
 	function noteStoredOperands(node ElementIndex, callee ByteArray, args ValueIdArray, func IrFunction)
-		let receiver = self.facts.originOf(try args.get(0) otherwise panic("EffectSummaryBuilder.noteStoredOperands: '{String.from(callee)}' carries no receiver"))
+		let receiver = self.facts.originOf(try args.get(writtenOperandOf(callee)) otherwise panic("EffectSummaryBuilder.noteStoredOperands: '{String.from(callee)}' carries no receiver"))
 		let shape = runtimeCalleeStoreShape(callee)
 
-		if not originNamesAParameter(receiver) or not shapeStoresInto(shape, receiverIndex: 0) 'storesNothingIntoAParameter'
+		if not originNamesAParameter(receiver) or not shapeStoresInto(shape, receiverIndex: writtenOperandOf(callee)) 'storesNothingIntoAParameter'
 			return
 		end 'storesNothingIntoAParameter'
 
@@ -1775,7 +1775,7 @@ type EffectSummaryBuilder
 		end 'opaque'
 
 		if receiverWritingRuntimeCallee(callee) 'writesOnlyItsReceiver'
-			self.noteWrite(node, target: self.facts.originOf(try args.get(0) otherwise panic("EffectSummaryBuilder.walkCall: '{String.from(callee)}' writes its receiver but the call carries no argument")))
+			self.noteWrite(node, target: self.facts.originOf(try args.get(writtenOperandOf(callee)) otherwise panic("EffectSummaryBuilder.walkCall: '{String.from(callee)}' writes its receiver but the call carries no argument")))
 
 			if movesANodeOutOfItsChainCallee(callee) 'writesTheOldChain'
 				self.noteWriteToWholeGraph(node, target: self.facts.originOf(try args.get(1) otherwise panic("EffectSummaryBuilder.walkCall: '{String.from(callee)}' moves a node but the call carries none")))

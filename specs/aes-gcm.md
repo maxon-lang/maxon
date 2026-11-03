@@ -1364,3 +1364,25 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: aes-gcm.a-discarded-seal-or-open-result-is-refused-on-every-target -->
+`AesGcm.seal` and `AesGcm.open` write only the array they create, so they are pure on every target, the hardware ones
+included: discarding a result is E3064 whether the host has AES instructions or not.
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create()
+	key.resize(16)
+	var nonce = ByteArray.create()
+	nonce.resize(12)
+	let aead = try AesGcm.create(key) otherwise panic("the key is valid")
+	let sealed = try aead.seal(nonce, plaintext: key, additionalData: key) otherwise panic("the inputs are valid")
+	_ = try aead.seal(nonce, plaintext: key, additionalData: key) otherwise panic("the inputs are valid")
+	_ = try aead.open(nonce, sealed: sealed, additionalData: key) otherwise panic("the tag is genuine")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: <fragment>:9:2: result of pure function 'AesGcm.seal' must be used
+error E3064: <fragment>:10:2: result of pure function 'AesGcm.open' must be used
+```

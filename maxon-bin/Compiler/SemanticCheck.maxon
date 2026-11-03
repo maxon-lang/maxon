@@ -4236,7 +4236,7 @@ module function runtimeCalleeStoreShape(callee ByteArray) returns RuntimeStoreSh
 		return RuntimeStoreShape.intoAnyOperand
 	end 'noRosterEntryWearsThisShape'
 
-	if effectFreeRuntimeCallee(callee) or takesRecordsOutCallee(callee) or copiesItsSourceCallee(callee) 'storesNothingItWasHanded'
+	if effectFreeRuntimeCallee(callee) or takesRecordsOutCallee(callee) or copiesItsSourceCallee(callee) or isHardwareAesRuntimeCallee(callee) 'storesNothingItWasHanded'
 		return RuntimeStoreShape.nothing
 	end 'storesNothingItWasHanded'
 
@@ -4342,6 +4342,19 @@ module function rawResourceWritingCallee(callee ByteArray) returns bool
 	return isProfileRuntimeCallee(callee) or isDebugHostRuntimeCallee(callee)
 end 'rawResourceWritingCallee'
 
+// The operand a call to a runtime callee writes: its receiver, or for a hardware AES callee the operand
+// `AesWrittenOperandPosition` names, which is where the parser notes write-blame. `EffectSummary` asks
+// here so that both agree.
+module function writtenOperandOf(callee ByteArray) returns ParamCount
+	if isHardwareAesRuntimeCallee(callee) 'aesCipher'
+		return AesWrittenOperandPosition as ParamCount
+	end 'aesCipher'
+
+	return ReceiverParamPosition
+end 'writtenOperandOf'
+
+// The hardware AES callees are on this roster so that `Aes` and `AesGcm` calls, which write only an array
+// of their own, are as pure on a target with AES instructions as the software cipher is on the others.
 module function receiverWritingRuntimeCallee(callee ByteArray) returns bool
 	return match arrayMutationOf(callee) 'mutation'
 		pushesAnElement or
@@ -4350,7 +4363,7 @@ module function receiverWritingRuntimeCallee(callee ByteArray) returns bool
 		removesElements or
 		writesRawElements or
 		movesLayout gives true
-		notOne gives listMutatorCallee(callee) or callee.equals(ListRemoveNodeName) or callee.equals(ListDetachNodeName) or callee.equals(ListClearName)
+		notOne gives listMutatorCallee(callee) or callee.equals(ListRemoveNodeName) or callee.equals(ListDetachNodeName) or callee.equals(ListClearName) or isHardwareAesRuntimeCallee(callee)
 	end 'mutation'
 end 'receiverWritingRuntimeCallee'
 

@@ -450,7 +450,8 @@ for any other. `seal` accepts up to 2^36 − 32 bytes of plaintext, the most its
 covers. The AES block, counter-mode and Galois-mode (GHASH) operations run on AES-NI on x64 (with PCLMULQDQ, SSSE3 and SSE4.1)
 and on the ARMv8 Crypto extension on arm64 (with PMULL) when the CPU provides them, and on a
 constant-time software cipher otherwise, including on `wasm32-wasi`; on either path the time taken does
-not depend on the key or the data.
+not depend on the key or the data. `seal` and `open` are pure calls on every target: discarding the result with `_ =`
+is E3064, and for `open` the result is also the authentication check.
 
 `sealInto(output ByteArray, at ElementIndex, nonce ByteArray, plaintext ByteArray, additionalData ByteArray)`
 writes what `seal` returns into `output` from index `at`, an array the caller owns and may reuse from one call
@@ -477,6 +478,9 @@ on either path the time taken is independent of the key and the data.
 
 The `Into` forms reuse an array the caller owns: they grow `output` to `at + 16` bytes, zero-filled, when it is
 shorter, keep the bytes outside the block, and leave `output` as it was when they throw.
+
+`encryptBlock`, `decryptBlock` and `xorKeyStream` are pure calls on every target: discarding the result with `_ =` is
+E3064. The `Into` forms write the caller's array.
 
 `AesCounter` is the 32-bit big-endian block counter of counter mode, `int(0 to u32.max)`.
 `AesKeyStreamError` has two cases: `invalidNonceLength` for a nonce of a size other than 12 bytes, and `counterOverflow`

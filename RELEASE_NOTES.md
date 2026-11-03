@@ -338,6 +338,10 @@ release's version as its heading when the release is cut.
   escapes, where the specifier left it plain: `{`/`}` are `\{`/`\}` in a `String`, control characters are
   `\uXXXX`, and a width pads the quoted text (`{name:8q}`).
   Fix: drop `:q` where the plain text is wanted.
+- `Aes.encryptBlock`, `Aes.decryptBlock`, `Aes.xorKeyStream`, `AesGcm.seal` and `AesGcm.open` are pure calls
+  on every target, so discarding a result with `_ =` is E3064.
+  Fix: use the result. For `AesGcm.open` that means acting on the plain text or on the failure, since the call
+  is also the authentication check.
 
 ## 0.5.0 — 2026-10-08
 
