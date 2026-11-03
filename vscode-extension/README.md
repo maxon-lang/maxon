@@ -65,7 +65,9 @@ The extension looks in this order:
 5. The build in the checkout the extension itself is part of, when you run the extension from source.
 
 If none of those finds one, it offers **Install**, which runs the installer for your account, and
-**Locate…**, which lets you pick a compiler you already have.
+**Locate…**, which lets you pick a compiler you already have. When `claude` is on `PATH`, **Install**
+first asks whether to install Claude Code's `maxon-lsp` plugin too, which gives Claude Code the
+language server.
 
 The language server is the compiler it finds, run as `maxon lsp-server`. The extension searches again
 each time the server restarts, when a workspace folder is added or removed, and when

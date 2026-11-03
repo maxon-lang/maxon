@@ -21,6 +21,7 @@ import {
 	LookupNotice,
 	watchedCompilers
 } from './compilerLocator';
+import { claudePluginFlag, ClaudePluginChoice, ClaudePluginName, firstRunnable } from './installerOptions';
 import { log, initLogger } from './logger';
 import { RestartCoordinator, systemTimers } from './restartCoordinator';
 import { CompilerExplorerViewProvider } from './compilerExplorerPanel';
@@ -53,6 +54,8 @@ interface ProjectLoadingParams {
 const loadingProjectRoots = new Set<string>();
 
 const isWindows = os.platform() === 'win32';
+const CompilerCommand = 'maxon';
+const ClaudeCommand = 'claude';
 
 export function getClient(): LanguageClient | undefined {
 	return state?.client;
@@ -356,7 +359,7 @@ function searchFor(ctx: vscode.ExtensionContext): CompilerSearch {
 		extensionCheckout: path.join(ctx.extensionPath, '..'),
 		installRoot: installRoot(),
 		binaryName: compilerBinaryName,
-		findOnPath,
+		findOnPath: () => findOnPath(CompilerCommand),
 		isExecutable: isExecutableFile,
 		isCheckout: isMaxonCheckout
 	};
@@ -408,19 +411,32 @@ function installRoot(): string {
 	return process.env.MAXON_INSTALL || path.join(os.homedir(), '.maxon');
 }
 
-/** `maxon` on PATH, or '' — asked of the OS rather than by walking PATH ourselves. */
-async function findOnPath(): Promise<string> {
+/** `command` on PATH, or '' — asked of the OS rather than by walking PATH ourselves. */
+async function findOnPath(command: string): Promise<string> {
 	const probe = isWindows ? 'where' : 'which';
 	return new Promise(resolve => {
-		cp.execFile(probe, ['maxon'], (err, stdout) => {
+		cp.execFile(probe, [command], (err, stdout) => {
 			if (err) {
 				resolve('');
 				return;
 			}
-			const first = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0] ?? '';
-			resolve(first);
+			resolve(firstRunnable(stdout, isWindows) ?? '');
 		});
 	});
+}
+
+async function chooseClaudePlugin(): Promise<ClaudePluginChoice> {
+	if (!await findOnPath(ClaudeCommand)) {
+		return 'skip';
+	}
+
+	const InstallPlugin = 'Install Plugin';
+	const answer = await vscode.window.showInformationMessage(
+		`Claude Code is installed. Also install its ${ClaudePluginName} plugin, which gives it the Maxon language server?`,
+		{ modal: true },
+		InstallPlugin
+	);
+	return answer === InstallPlugin ? 'install' : 'skip';
 }
 
 /**
@@ -441,9 +457,10 @@ async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
 	);
 
 	if (choice === Install) {
+		const claudePlugin = await chooseClaudePlugin();
 		const ok = await vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title: 'Installing Maxon…' },
-			() => runInstaller()
+			() => runInstaller(claudePlugin)
 		);
 		const found = await findCompiler(ctx);
 		if (found) {
@@ -478,10 +495,11 @@ const INSTALL_SH = 'https://maxon.dev/install.sh';
 const INSTALL_PS1 = 'https://maxon.dev/install.ps1';
 
 /** Run the platform's install script, streaming its output to the log. True when it reports success. */
-async function runInstaller(): Promise<boolean> {
+async function runInstaller(claudePlugin: ClaudePluginChoice): Promise<boolean> {
+	const pluginFlag = claudePluginFlag(isWindows, claudePlugin);
 	if (isWindows) {
 		// The script-block form, because `irm | iex` leaves the exit code at 0 whatever happened.
-		const command = `& ([scriptblock]::Create((irm ${INSTALL_PS1}))); exit $LASTEXITCODE`;
+		const command = `& ([scriptblock]::Create((irm ${INSTALL_PS1}))) ${pluginFlag}; exit $LASTEXITCODE`;
 		return (await runLogged('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command])) === 0;
 	}
 
@@ -497,7 +515,7 @@ async function runInstaller(): Promise<boolean> {
 			resolve(stdout);
 		});
 	});
-	return script !== '' && (await runLogged('/bin/sh', ['-s'], script)) === 0;
+	return script !== '' && (await runLogged('/bin/sh', ['-s', '--', pluginFlag], script)) === 0;
 }
 
 function runLogged(command: string, args: string[], stdin?: string): Promise<number> {

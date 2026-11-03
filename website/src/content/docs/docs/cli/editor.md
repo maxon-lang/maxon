@@ -32,7 +32,8 @@ Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sourc
 5. `maxon-bin/.maxon/maxon` in the checkout the extension itself is part of, when it runs from source.
 
 If none is found, the extension offers to **Install** Maxon with the install script or to **Locate…** a
-compiler, which it saves to `maxon.serverPath`. The extension searches again each time the language
+compiler, which it saves to `maxon.serverPath`. When `claude` is on `PATH`, **Install** first asks
+whether to install the [Claude Code plugin](#claude-code) too, and passes the answer to the script. The extension searches again each time the language
 server restarts, when a workspace folder is added or removed, and when `maxon.serverPath` changes. When
 the compiler in use, or the build of any open checkout, changes on disk (for example after an upgrade
 or a rebuild), the extension restarts the language server. Language server errors are written to the
