@@ -2111,7 +2111,7 @@ points=1000 worker=42
 ## Editor Support
 
 Maxon's editor support is the compiler itself: `maxon lsp-server` is a Language Server Protocol server,
-and the VS Code extension runs it.
+and the VS Code extension and the Claude Code plugin run it.
 
 ### VS Code
 
@@ -2197,6 +2197,19 @@ Explorer and the spec suite mark every requested test with a refusal that names 
 answers every launch with that refusal; and the compiler comes from the user's `maxon.serverPath`,
 `PATH` or the install, with a checkout's own build and a workspace's `maxon.serverPath` passed over.
 Trusting the workspace tells the running language server and searches for the compiler again.
+
+### Claude Code
+
+The **maxon-lsp** plugin gives Claude Code's `LSP` tool the language server, so an agent gets
+diagnostics after each edit, hover, go-to-definition and find-references in Maxon documents. Install it
+from Claude Code:
+
+```
+/plugin install maxon-lsp --marketplace maxon-lang/maxon
+```
+
+The plugin runs `maxon lsp-server` from `PATH`, for `.maxon`, `.maxproj`, `.maxtasks`, `.maxtest` and
+`.test` files. The MCP tools are configured separately (see [MCP Server](#mcp-server)).
 
 ### `maxon lsp-server`
 

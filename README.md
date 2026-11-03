@@ -78,6 +78,8 @@ statically-typed, compiled language:
 - **Model Context Protocol (MCP)** — `maxon mcp-server`, for AI coding agent tool integration.
 - **Debug Adapter (DAP)** — `maxon dap-server`, the debugger an editor drives (every native target).
 - **VS Code extension** — syntax highlighting, language features and debugging.
+- **Claude Code plugin** — the language server for Claude Code's `LSP` tool:
+  `/plugin install maxon-lsp --marketplace maxon-lang/maxon`.
 
 ## Install
 
