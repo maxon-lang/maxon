@@ -12385,3 +12385,707 @@ func @main {
     arm64.ret
 }
 ```
+<!-- test: a-small-pair-returning-leaf-is-spliced-into-a-loop -->
+`stir` builds a pair of words, has two call sites, and holds no call but the allocation of its two-word box. That box is the pair the value-tuple pass keeps out of memory, so it does not make `stir` a non-leaf: both sites are spliced, the pair flows as two plain values, and the pin holds no `callDirect stir` and no `__mm_alloc` in `main`.
+```maxon
+typealias Word = bits(64)
+typealias WordPair = (Word, Word)
+
+function stir(a Word, b Word) returns WordPair
+	return ((a shl 3) xor (b shr 5), (b shl 7) xor (a shr 2))
+end 'stir'
+
+function main() returns ExitCode
+	var lo = 1 as Word
+	var hi = 2 as Word
+
+	for _ in 0 upto 1000 'rounds'
+		let (x, y) = stir(lo, b: hi)
+		lo = y
+		hi = x
+	end 'rounds'
+
+	let (p, q) = stir(hi, b: lo)
+
+	return ((p xor q) and 127) as ExitCode
+end 'main'
+```
+```exitcode
+93
+```
+```TargetIr:x64-windows
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+  __mrt_program_started@11 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.jmp forhdr
+  __il_body#7:
+    x64.movRegReg rsi, rax
+    x64.shlRegImm8 rsi, rax, 3
+    x64.movRegReg rdi, rcx
+    x64.shrRegImm8 rdi, rcx, 5
+    x64.xorRegReg rsi, rsi, rdi
+    x64.shlRegImm8 rcx, rcx, 7
+    x64.shrRegImm8 rax, rax, 2
+    x64.xorRegReg rcx, rcx, rax
+  forstep:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rsi
+  forhdr:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc less, __il_body#7
+  __il_body#9:
+    x64.movRegReg rdx, rcx
+    x64.shlRegImm8 rdx, rcx, 3
+    x64.movRegReg rsi, rax
+    x64.shrRegImm8 rsi, rax, 5
+    x64.xorRegReg rdx, rdx, rsi
+    x64.shlRegImm8 rax, rax, 7
+    x64.shrRegImm8 rcx, rcx, 2
+    x64.xorRegReg rax, rax, rcx
+  __il_cont:
+    x64.xorRegReg rdx, rdx, rax
+    x64.movRegReg r8, rdx
+    x64.andRegImm32 r8, rdx, 127
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.jmp forhdr
+  __il_body#7:
+    x64.movRegReg rsi, rax
+    x64.shlRegImm8 rsi, rax, 3
+    x64.movRegReg rdi, rcx
+    x64.shrRegImm8 rdi, rcx, 5
+    x64.xorRegReg rsi, rsi, rdi
+    x64.shlRegImm8 rcx, rcx, 7
+    x64.shrRegImm8 rax, rax, 2
+    x64.xorRegReg rcx, rcx, rax
+  forstep:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rsi
+  forhdr:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc less, __il_body#7
+  __il_body#9:
+    x64.movRegReg rdx, rcx
+    x64.shlRegImm8 rdx, rcx, 3
+    x64.movRegReg rsi, rax
+    x64.shrRegImm8 rsi, rax, 5
+    x64.xorRegReg rdx, rdx, rsi
+    x64.shlRegImm8 rax, rax, 7
+    x64.shrRegImm8 rcx, rcx, 2
+    x64.xorRegReg rax, rax, rcx
+  __il_cont:
+    x64.xorRegReg rdx, rdx, rax
+    x64.movRegReg r8, rdx
+    x64.andRegImm32 r8, rdx, 127
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_state@0 = i64 0
+  __mrt_program_started@8 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.movImm x2, 0
+    arm64.b forhdr
+  __il_body#7:
+    arm64.lsl x3, x0, 3
+    arm64.lsr x4, x1, 5
+    arm64.eor x3, x3, x4
+    arm64.lsl x1, x1, 7
+    arm64.lsr x0, x0, 2
+    arm64.eor x0, x1, x0
+  forstep:
+    arm64.add x2, x2, 1
+    arm64.movRegReg x1, x3
+  forhdr:
+    arm64.cmp x2, 1000
+    arm64.b.lt __il_body#7
+  __il_body#9:
+    arm64.lsl x2, x1, 3
+    arm64.lsr x3, x0, 5
+    arm64.eor x2, x2, x3
+    arm64.lsl x0, x0, 7
+    arm64.lsr x1, x1, 2
+    arm64.eor x0, x0, x1
+  __il_cont:
+    arm64.eor x0, x2, x0
+    arm64.and x0, x0, 127
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.movImm x2, 0
+    arm64.b forhdr
+  __il_body#7:
+    arm64.lsl x3, x0, 3
+    arm64.lsr x4, x1, 5
+    arm64.eor x3, x3, x4
+    arm64.lsl x1, x1, 7
+    arm64.lsr x0, x0, 2
+    arm64.eor x0, x1, x0
+  forstep:
+    arm64.add x2, x2, 1
+    arm64.movRegReg x1, x3
+  forhdr:
+    arm64.cmp x2, 1000
+    arm64.b.lt __il_body#7
+  __il_body#9:
+    arm64.lsl x2, x1, 3
+    arm64.lsr x3, x0, 5
+    arm64.eor x2, x2, x3
+    arm64.lsl x0, x0, 7
+    arm64.lsr x1, x1, 2
+    arm64.eor x0, x0, x1
+  __il_cont:
+    arm64.eor x0, x2, x0
+    arm64.and x0, x0, 127
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+<!-- test: a-leaf-whose-body-only-calls-other-leaves-is-spliced -->
+`shiftRows` only wraps two leaves and `shiftTwice` only wraps `shiftRows`. Splicing the innermost leaves into `shiftRows` leaves it call-free, so it is a leaf in the next follow-up round and is spliced into `shiftTwice`, which is a leaf one round after. The pin holds no `callDirect` in `main`.
+```maxon
+typealias Word = bits(64)
+
+function rotateDown(x Word) returns Word
+	return (x shr 4) or (x shl 60)
+end 'rotateDown'
+
+function swapHalves(x Word) returns Word
+	return (x shl 32) or (x shr 32)
+end 'swapHalves'
+
+function shiftRows(x Word) returns Word
+	return swapHalves(rotateDown(x))
+end 'shiftRows'
+
+function shiftTwice(x Word) returns Word
+	return shiftRows(shiftRows(x))
+end 'shiftTwice'
+
+function main() returns ExitCode
+	var acc = 1 as Word
+
+	for _ in 0 upto 1000 'rounds'
+		acc = shiftTwice(acc + 3) xor rotateDown(acc) xor swapHalves(acc + 5) xor shiftRows(acc)
+	end 'rounds'
+
+	return (acc and 127) as ExitCode
+end 'main'
+```
+```exitcode
+74
+```
+```TargetIr:x64-windows
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr
+  rounds:
+    x64.leaRegRegImm32 rdx, rax, 3
+  __il_body#16:
+    x64.rolRegImm8 rdx, rdx, 60
+  __il_body#17:
+    x64.rolRegImm8 rdx, rdx, 32
+  __il_body#21:
+    x64.rolRegImm8 rdx, rdx, 60
+  __il_body#22:
+    x64.rolRegImm8 rdx, rdx, 32
+  __il_body#9:
+    x64.movRegReg rsi, rax
+    x64.rolRegImm8 rsi, rax, 60
+  __il_cont#8:
+    x64.xorRegReg rdx, rdx, rsi
+    x64.leaRegRegImm32 rax, rax, 5
+  __il_body#10:
+    x64.rolRegImm8 rax, rax, 32
+  __il_cont#7:
+    x64.xorRegReg rdx, rdx, rax
+  __il_body#28:
+    x64.rolRegImm8 rsi, rsi, 32
+  __il_cont#23:
+    x64.xorRegReg rdx, rdx, rsi
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rax, rdx
+  forhdr:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg r8, rax
+    x64.andRegImm32 r8, rax, 127
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr
+  rounds:
+    x64.leaRegRegImm32 rdx, rax, 3
+  __il_body#16:
+    x64.rolRegImm8 rdx, rdx, 60
+  __il_body#17:
+    x64.rolRegImm8 rdx, rdx, 32
+  __il_body#21:
+    x64.rolRegImm8 rdx, rdx, 60
+  __il_body#22:
+    x64.rolRegImm8 rdx, rdx, 32
+  __il_body#9:
+    x64.movRegReg rsi, rax
+    x64.rolRegImm8 rsi, rax, 60
+  __il_cont#8:
+    x64.xorRegReg rdx, rdx, rsi
+    x64.leaRegRegImm32 rax, rax, 5
+  __il_body#10:
+    x64.rolRegImm8 rax, rax, 32
+  __il_cont#7:
+    x64.xorRegReg rdx, rdx, rax
+  __il_body#28:
+    x64.rolRegImm8 rsi, rsi, 32
+  __il_cont#23:
+    x64.xorRegReg rdx, rdx, rsi
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rax, rdx
+  forhdr:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg r8, rax
+    x64.andRegImm32 r8, rax, 127
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  rounds:
+    arm64.add x2, x0, 3
+  __il_body#16:
+    arm64.ror x2, x2, 4
+  __il_body#17:
+    arm64.ror x2, x2, 32
+  __il_body#21:
+    arm64.ror x2, x2, 4
+  __il_body#22:
+    arm64.ror x2, x2, 32
+  __il_body#9:
+    arm64.ror x3, x0, 4
+  __il_cont#8:
+    arm64.eor x2, x2, x3
+    arm64.add x0, x0, 5
+  __il_body#10:
+    arm64.ror x0, x0, 32
+  __il_cont#7:
+    arm64.eor x0, x2, x0
+  __il_body#28:
+    arm64.ror x2, x3, 32
+  __il_cont#23:
+    arm64.eor x0, x0, x2
+  forstep:
+    arm64.add x1, x1, 1
+  forhdr:
+    arm64.cmp x1, 1000
+    arm64.b.lt rounds
+  forexit:
+    arm64.and x0, x0, 127
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  rounds:
+    arm64.add x2, x0, 3
+  __il_body#16:
+    arm64.ror x2, x2, 4
+  __il_body#17:
+    arm64.ror x2, x2, 32
+  __il_body#21:
+    arm64.ror x2, x2, 4
+  __il_body#22:
+    arm64.ror x2, x2, 32
+  __il_body#9:
+    arm64.ror x3, x0, 4
+  __il_cont#8:
+    arm64.eor x2, x2, x3
+    arm64.add x0, x0, 5
+  __il_body#10:
+    arm64.ror x0, x0, 32
+  __il_cont#7:
+    arm64.eor x0, x2, x0
+  __il_body#28:
+    arm64.ror x2, x3, 32
+  __il_cont#23:
+    arm64.eor x0, x0, x2
+  forstep:
+    arm64.add x1, x1, 1
+  forhdr:
+    arm64.cmp x1, 1000
+    arm64.b.lt rounds
+  forexit:
+    arm64.and x0, x0, 127
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+<!-- test: a-pair-leaf-with-two-returns-keeps-its-register-convention -->
+`pick` builds its pair on two exits. Spliced, the two boxes would meet at the continuation's block argument, which `ValueTupleReturn` cannot take, and `main` would be left with an allocation per site. The leaf rule admits a pair's box only from a leaf that returns at one exit, so `pick` stays a call, returns its pair in the two return registers, and the pin holds no `__mm_alloc` in `main`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerPair = (Integer, Integer)
+
+function pick(flag Integer, a Integer, b Integer) returns IntegerPair
+	if flag > 0 'first'
+		return (a + 1, b)
+	end 'first'
+
+	return (b, a + 2)
+end 'pick'
+
+function main() returns ExitCode
+	var lo = 1 as Integer
+	var hi = 2 as Integer
+
+	for step in 0 upto 100 'rounds'
+		let (x, y) = pick(step - 50, a: lo, b: hi)
+		lo = y
+		hi = x
+	end 'rounds'
+
+	let (p, q) = pick(lo, a: hi, b: lo)
+
+	return ((p + q) and 127) as ExitCode
+end 'main'
+```
+```exitcode
+27
+```
+```TargetIr:x64-windows
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+  __mrt_program_started@11 = i8 0
+}
+
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc lessEqual, ifcont
+  first:
+    x64.leaRegRegImm32 r8, rdx, 1
+    x64.movRegReg r10, rax
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 r10, rdx, 2
+    x64.movRegReg r8, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rsi, 2
+    x64.movRegImm32 rbx, 0
+    x64.jmp forhdr
+  rounds:
+    x64.leaRegRegImm32 rcx, rbx, -50
+    x64.movRegReg rdx, rax
+    x64.movRegReg rax, rsi
+    x64.callDirect pick
+  forstep:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rax, r10
+    x64.movRegReg rsi, r8
+  forhdr:
+    x64.cmpRegImm32 rbx, 100
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect pick
+    x64.leaRegRegReg r8, r8, r10
+    x64.andRegImm32 r8, r8, 127
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc lessEqual, ifcont
+  first:
+    x64.leaRegRegImm32 r8, rdx, 1
+    x64.movRegReg r10, rax
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 r10, rdx, 2
+    x64.movRegReg r8, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rsi, 2
+    x64.movRegImm32 rbx, 0
+    x64.jmp forhdr
+  rounds:
+    x64.leaRegRegImm32 rcx, rbx, -50
+    x64.movRegReg rdx, rax
+    x64.movRegReg rax, rsi
+    x64.callDirect pick
+  forstep:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rax, r10
+    x64.movRegReg rsi, r8
+  forhdr:
+    x64.cmpRegImm32 rbx, 100
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect pick
+    x64.leaRegRegReg r8, r8, r10
+    x64.andRegImm32 r8, r8, 127
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_state@0 = i64 0
+  __mrt_program_started@8 = i8 0
+}
+
+func @pick {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.le ifcont
+  first:
+    arm64.add x0, x1, 1
+    arm64.movRegReg x9, x2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.add x9, x1, 2
+    arm64.movRegReg x0, x2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x2, 1
+    arm64.movImm x3, 2
+    arm64.movImm x19, 0
+    arm64.b forhdr
+  rounds:
+    arm64.sub x0, x19, 50
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.bl pick
+  forstep:
+    arm64.add x19, x19, 1
+    arm64.movRegReg x2, x9
+    arm64.movRegReg x3, x0
+  forhdr:
+    arm64.cmp x19, 100
+    arm64.b.lt rounds
+  forexit:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x1, x3
+    arm64.bl pick
+    arm64.add x0, x0, x9
+    arm64.and x0, x0, 127
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @pick {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.le ifcont
+  first:
+    arm64.add x0, x1, 1
+    arm64.movRegReg x9, x2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.add x9, x1, 2
+    arm64.movRegReg x0, x2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x2, 1
+    arm64.movImm x3, 2
+    arm64.movImm x19, 0
+    arm64.b forhdr
+  rounds:
+    arm64.sub x0, x19, 50
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.bl pick
+  forstep:
+    arm64.add x19, x19, 1
+    arm64.movRegReg x2, x9
+    arm64.movRegReg x3, x0
+  forhdr:
+    arm64.cmp x19, 100
+    arm64.b.lt rounds
+  forexit:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x1, x3
+    arm64.bl pick
+    arm64.add x0, x0, x9
+    arm64.and x0, x0, 127
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+```

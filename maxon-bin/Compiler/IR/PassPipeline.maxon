@@ -95,10 +95,11 @@ export union PassKind
 	// ⛔ **A SECOND ROUND IS NOT HOW THAT IS DONE.** Running the leaf
 	// rule again after the managed rewrite buys the same callees AND a cascade nothing asked for:
 	// eligibility recomputed on an already-spliced module admits a caller that became call-free BY being
-	// inlined into, which `LeafPlan`'s header refuses on purpose and which
-	// `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins. That would need suppressing
-	// machinery; the ordering above needs none, and one round stays one round. The pass's own bounded
-	// exception, along calls a table devirtualization produced, is `InlineLeaves.followTableChains`.
+	// inlined into. The pass takes that only for the flippable callers its first walk watched
+	// (`InlineLeaves.followPromotedLeaves`), pinned by
+	// `inline-leaves.a-function-whose-calls-are-all-spliced-away-is-a-leaf-in-the-next-round`,
+	// and along calls a table devirtualization produced (`InlineLeaves.followTableChains`). Widening
+	// that would need suppressing machinery; the ordering above needs none.
 	//
 	// `promoteStackRecords` runs last, so no `stackRecordAddr` exists here (which is what its
 	// `isUnsupportedInInlineBody` would otherwise refuse a callee for).

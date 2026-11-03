@@ -24,11 +24,12 @@
 // function. That is what lets a panic block be COPIED like any other block: a panic raised inside a spliced
 // body prints `in <callee>` then `in <caller>`, at every nesting level, exactly as the call did.
 //
-// ONE ROUND PER PAIR: the called-once rule is applied to each callee once, in waves that splice a callee
-// only after every called-once callee inside it; the leaf rule then decides eligibility on the bodies as
-// they stand and splices every admitted site outside the eligible leaves themselves
-// (`admittedBodyStaysAsMeasured`). Neither cascades further, except along the calls a table
-// devirtualization produced (`followTableChains`).
+// The called-once rule is applied to each callee once, in waves that splice a callee only after
+// every called-once callee inside it; the leaf rule then decides eligibility on the bodies as they
+// stand and splices every admitted site outside the eligible leaves themselves
+// (`keepsItsMeasuredBody`). Neither cascades further, except along the calls a table
+// devirtualization produced (`followTableChains`) and into a function whose only refusal was a
+// direct call to a module function, once those calls are spliced away (`followPromotedLeaves`).
 //
 // ⭐⭐ **THE PASS RUNS TWICE OVER ONE MODULE AND THE TWO RUNS PARTITION THE PAIRS** — the pipeline's over
 // every caller, the band's over the callers `Compiler.compileToCodeResult` appended below the pipeline.
@@ -94,7 +95,7 @@ let ReversedNodeOffset = 1
 // unbounded. `ir-specs/inline-leaves.md`'s `a-checked-accessor-whose-slow-arm-is-cold-is-inlined`
 // splices `putElement`, the checked-set accessor both numbers are sized to, and fails if either is
 // lowered below it.
-let MaxInlinedColdArmLeafOps = 28 as ElementIndex
+export let MaxInlinedColdArmLeafOps = 28 as ElementIndex
 let MaxInlinedLeafColdOps = 12 as ElementIndex
 
 // The budget for a witness-slot adapter, which may hold the impl the called-once rule merged
@@ -116,7 +117,7 @@ let InlineBodyLabel = b"__il_body"
 
 typealias SiteCount = int(0 to u64.max)
 typealias SiteCountArray = Array with SiteCount
-typealias CutOffCallerSet = Set with ElementIndex
+typealias FuncIndexSet = Set with ElementIndex
 
 // How many parameter cascades one callee carries — its arity at most, and one in nearly every case.
 typealias GuardCount = int(0 to u64.max)
@@ -129,11 +130,11 @@ typealias GuardCount = int(0 to u64.max)
 // because a call from a band body into a tier body is a pair the first run structurally could not hold an
 // opinion about: the caller did not exist yet.
 //
-// ⛔ **THE SECOND RUN MUST NOT RE-DECIDE A PAIR THE FIRST ONE DECIDED**, which is what `ONE ROUND` in this
-// file's header means and what `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins: eligibility
-// recomputed on an already-spliced module admits a caller that became call-free BY being inlined into.
-// Scoping the second run to the band's own callers is what keeps one round one round — a band function has
-// had none, a pipeline function has had exactly one.
+// ⛔ **THE SECOND RUN MUST NOT RE-DECIDE A PAIR THE FIRST ONE DECIDED**: eligibility recomputed on
+// an already-spliced module admits a caller that became call-free BY being inlined into, a cascade
+// `followPromotedLeaves` takes only for the flippable ones, at the sites it watched. Scoping the
+// second run to the band's own callers keeps each pair with one run — a band function has had none,
+// a pipeline function has had exactly one.
 export union SpliceRound
 	// The pipeline's run: every caller in the module.
 	everyCaller
@@ -441,6 +442,10 @@ type LeafBodyScan
 	export var convention = ReturnConvention.neither
 	export var tableUses = TableUseArray.create()
 
+	// A `notALeaf` whose only refusal is a direct call to a module function and whose body is inside
+	// every budget: it is a leaf in a follow-up round if splicing removes those calls.
+	export var flippable = false
+
 	static function create(verdict LeafVerdict, opCount ElementIndex) returns LeafBodyScan
 		return Self{verdict: verdict, opCount: opCount}
 	end 'create'
@@ -476,9 +481,10 @@ end 'LeafOpTally'
 //
 // ⭐⭐ **PRE-SPLICE IS ALSO THE SEMANTICS, NOT MERELY THE SCHEDULE.** Because the verdicts are all taken
 // before the first splice, a caller that BECOMES call-free by being inlined into does not become a leaf
-// in this compile. That is the "one round, no cascade" rule; the one later copy into a caller is
-// `followTableChains`, which follows only calls a table devirtualization produced, for at most
-// `MaxChainRounds` rounds.
+// in that walk. Two follow-ups revisit it: `followTableChains`, which follows only calls a table
+// devirtualization produced, for at most `MaxChainRounds` rounds, and `followPromotedLeaves`,
+// which re-scans the `flippable` functions (those whose only refusal was a direct call to a module
+// function) for at most `MaxLeafFollowRounds` rounds.
 type LeafPlan
 	var verdicts as LeafVerdictArray
 	var conventions as ConventionArray
@@ -489,10 +495,13 @@ type LeafPlan
 	var valueBounds as ValueIdArray
 	var blockCounts as BlockPositionColumn
 
-	// The same membership as `verdicts == eligible`, in the shape `ValueOriginTable.indexRowsOfFunctions`
-	// takes. Built in the same walk rather than derived later, so the two cannot disagree about which
-	// callees' origin rows are indexed.
-	export var eligibleFuncs as BoolArray
+	// The functions whose origin rows a splice may re-file, in the shape
+	// `ValueOriginTable.indexRowsOfFunctions` takes: every eligible callee, and every flippable one,
+	// whose rows a follow-up round needs once it is eligible. Built in the same walk as the verdicts
+	// rather than derived later, so the two cannot disagree.
+	export var rowIndexedFuncs as BoolArray
+
+	var flippableFuncs as BoolArray
 
 	// A callee a site can refuse for size — `tooManyOps`, or eligible only where its entry cascades are
 	// declined — whose ops, cascades included, fit `ReportedLargerLeafBudget`. A BIT rather than the op
@@ -510,8 +519,10 @@ type LeafPlan
 		valueBounds.resize(funcCount)
 		var blockCounts = BlockPositionColumn.create()
 		blockCounts.resize(funcCount)
-		var eligibleFuncs = BoolArray.create()
-		eligibleFuncs.resize(funcCount)
+		var rowIndexedFuncs = BoolArray.create()
+		rowIndexedFuncs.resize(funcCount)
+		var flippableFuncs = BoolArray.create()
+		flippableFuncs.resize(funcCount)
 		var withinLargerBudget = BoolArray.create()
 		withinLargerBudget.resize(funcCount)
 		var reliesOnDeclinedCascades = BoolArray.create()
@@ -521,7 +532,8 @@ type LeafPlan
 			conventions: ConventionArray.create(),
 			valueBounds: valueBounds,
 			blockCounts: blockCounts,
-			eligibleFuncs: eligibleFuncs,
+			rowIndexedFuncs: rowIndexedFuncs,
+			flippableFuncs: flippableFuncs,
 			withinLargerBudget: withinLargerBudget,
 			reliesOnDeclinedCascades: reliesOnDeclinedCascades,
 			eligibleCount: 0,
@@ -543,16 +555,40 @@ type LeafPlan
 		self.verdicts.push(scan.verdict)
 		self.conventions.push(scan.convention)
 
+		self.recordVerdict(funcIndex, scan: scan, module: module, func: func)
+	end 'record'
+
+	function rescan(funcIndex ElementIndex, scan LeafBodyScan, module StdModule, func IrFunction)
+		try self.verdicts.set(funcIndex, value: scan.verdict) otherwise panic("LeafPlan.rescan: verdicts.set OOB at {funcIndex}")
+		try self.conventions.set(funcIndex, value: scan.convention) otherwise panic("LeafPlan.rescan: conventions.set OOB at {funcIndex}")
+		try self.flippableFuncs.set(funcIndex, value: false) otherwise panic("LeafPlan.rescan: flippableFuncs.set OOB at {funcIndex}")
+		self.recordVerdict(funcIndex, scan: scan, module: module, func: func)
+	end 'rescan'
+
+	function recordVerdict(funcIndex ElementIndex, scan LeafBodyScan, module StdModule, func IrFunction)
 		match scan.verdict 'tally'
 			eligible then self.recordEligible(funcIndex, scan: scan, module: module, func: func)
 			tooManyOps then self.recordTooManyOps(funcIndex, opCount: scan.opCount)
-			notALeaf then break
+			notALeaf then self.recordNotALeaf(funcIndex, scan: scan)
 		end 'tally'
-	end 'record'
+	end 'recordVerdict'
+
+	function recordNotALeaf(funcIndex ElementIndex, scan LeafBodyScan)
+		if not scan.flippable 'staysACaller'
+			return
+		end 'staysACaller'
+
+		try self.flippableFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordNotALeaf: flippableFuncs.set OOB at {funcIndex}")
+		try self.rowIndexedFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordNotALeaf: rowIndexedFuncs.set OOB at {funcIndex}")
+	end 'recordNotALeaf'
+
+	function isFlippable(funcIndex ElementIndex) returns bool
+		return try self.flippableFuncs.get(funcIndex) otherwise panic("LeafPlan.isFlippable: function index {funcIndex} is outside the {self.flippableFuncs.count()}-function module this plan was built over")
+	end 'isFlippable'
 
 	function recordEligible(funcIndex ElementIndex, scan LeafBodyScan, module StdModule, func IrFunction)
 		self.eligibleCount = self.eligibleCount + 1
-		try self.eligibleFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: eligibleFuncs.set OOB at {funcIndex}")
+		try self.rowIndexedFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: rowIndexedFuncs.set OOB at {funcIndex}")
 		self.measure(funcIndex, module: module, func: func)
 
 		if scan.tableUses.count() != 0 'readsTables'
@@ -628,7 +664,7 @@ end 'LeafPlan'
 function buildLeafPlan(project Project, module StdModule, namedByIrRequest BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
 	var plan = LeafPlan.create(module.funcCount())
 	var reference = StdFunctionReference.create()
-	var probe = TableCallProbe.create()
+	var probe = TableCallProbe.create(project)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		view func = module.getFunc(funcIndex)
@@ -690,6 +726,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 	end 'shape'
 
 	var tally = LeafOpTally.create()
+	var blockedByCalls = false
 
 	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
 		let block = module.blockAtPosition(func, position: blockIndex)
@@ -717,12 +754,21 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 				opFit = LeafOpFit.fits
 			end 'aCallTheTablesResolve'
 
+			if opFit == LeafOpFit.refuses and role == InlineOpRole.calling and not alwaysSpliced and not probe.isForwarder() and calledModuleFunction(op, byName: byName, reference: reference) 'aCallASpliceCouldRemove'
+				blockedByCalls = true
+				opFit = LeafOpFit.fits
+			end 'aCallASpliceCouldRemove'
+
 			match opFit 'fit'
 				fits then break
 				refuses then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
 			end 'fit'
 
 			tally.charge(countedBodyOps(role), inACascade: inACascade, inColdBlock: offTheHotPath)
+
+			if blockedByCalls and (tally.body > MaxInlinedColdArmLeafOps or tally.cold > MaxInlinedLeafColdOps) 'pastEveryBudgetWithCallsStanding'
+				return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
+			end 'pastEveryBudgetWithCallsStanding'
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminated'
@@ -737,11 +783,18 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 		end 'terminated'
 	end 'eachBlock'
 
+	let hotBudget = MaxInlinedColdArmLeafOps if tally.cold > 0 else MaxInlinedLeafOps
+
+	if blockedByCalls 'callsStand'
+		var blocked = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
+		blocked.flippable = tally.body <= hotBudget and tally.cold <= MaxInlinedLeafColdOps and probe.settles()
+		return blocked
+	end 'callsStand'
+
 	if not probe.settles() and not alwaysSpliced 'hotCallsWithNoTableToResolve'
 		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
 	end 'hotCallsWithNoTableToResolve'
 
-	let hotBudget = MaxInlinedColdArmLeafOps if tally.cold > 0 else MaxInlinedLeafOps
 	let budget = MaxInlinedForwarderOps if probe.isForwarder() else hotBudget
 
 	if (tally.body > budget or tally.cold > MaxInlinedLeafColdOps) and not alwaysSpliced 'tooBig'
@@ -891,15 +944,19 @@ end 'callFit'
 // a second one here — a `callIndirect` and a witness call name no callee and answer `false` — neither is
 // a site this pass rewrites; a `tryCall` answers like a `call`.
 function callIsIntoAnAlwaysSplicedBody(op StdOp, module StdModule, byName FunctionNameIndex, reference StdFunctionReference) returns bool
+	return calledModuleFunction(op, byName: byName, reference: reference) and module.getFunc(reference.funcIndex).mustBeSplicedAtEverySite
+end 'callIsIntoAnAlwaysSplicedBody'
+
+function calledModuleFunction(op StdOp, byName FunctionNameIndex, reference StdFunctionReference) returns bool
 	stdFunctionReferenceOf(op, byName: byName.byName, into: reference)
 
 	return match reference.kind 'reference'
 		none or
 		otherReference gives false
 		directCall or
-		directTryCall gives module.getFunc(reference.funcIndex).mustBeSplicedAtEverySite
+		directTryCall gives true
 	end 'reference'
-end 'callIsIntoAnAlwaysSplicedBody'
+end 'calledModuleFunction'
 
 union SiteResults
 	value(resultId ValueId)
@@ -1063,6 +1120,37 @@ function splicingWouldWidenTheSafePoint(callee IrFunction, caller IrFunction, ru
 	return skipsGreenThreadStackGuard(callee, runtimeTier: runtimeTier) and not skipsGreenThreadStackGuard(caller, runtimeTier: runtimeTier)
 end 'splicingWouldWidenTheSafePoint'
 
+type DistinctFuncList
+	export var members as FuncIndexArray
+	var noted as FuncIndexSet
+	var everNoted as FuncIndexSet
+
+	static function create() returns DistinctFuncList
+		return Self{members: FuncIndexArray.create(), noted: FuncIndexSet.create(), everNoted: FuncIndexSet.create()}
+	end 'create'
+
+	function note(funcIndex ElementIndex)
+		if self.noted.contains(funcIndex) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.noted.insert(funcIndex)
+		self.everNoted.insert(funcIndex)
+		self.members.push(funcIndex)
+	end 'note'
+
+	function take() returns FuncIndexArray
+		var taken = self.members
+		self.members = FuncIndexArray.create()
+		self.noted = FuncIndexSet.create()
+		return taken
+	end 'take'
+
+	function distinctCount() returns ElementIndex
+		return self.everNoted.count() as ElementIndex
+	end 'distinctCount'
+end 'DistinctFuncList'
+
 // The site census, accumulated across every caller — the pass's report. Site counts, not callee counts:
 // the plan already carries the callee tallies, and a callee refused at 16 ops that nothing calls costs
 // nothing.
@@ -1084,45 +1172,62 @@ type InlineLeafStats
 	// compile being asked about rather than be re-derived from a corpus later.
 	export var declinedParamGuards as SiteCount
 	export var sitesRefusedByTables as SiteCount
-	export var tableCallers as FuncIndexArray
-	var tableCallersNoted as CutOffCallerSet
-	var callersCutOffFromAContinuation as FuncIndexArray
-	var callersCutOffNoted as CutOffCallerSet
+	export var tableCallers as DistinctFuncList
+	export var callersCutOffFromAContinuation as DistinctFuncList
+	export var touchedCallers as DistinctFuncList
+	var watchedCallers as FuncIndexArray
+	var watchedCallees as FuncIndexArray
+	var watchedOps as OpIndexArray
+	export var followUpRounds as ElementIndex
+	export var promotedLeaves as ElementIndex
+	export var followUpRoundsExhausted = false
 
 	static function create() returns InlineLeafStats
-		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, sitesRefusedByStackGuard: 0, sitesRefusedByReturnConvention: 0, declinedParamGuards: 0, sitesRefusedByTables: 0, tableCallers: FuncIndexArray.create(), tableCallersNoted: CutOffCallerSet.create(), callersCutOffFromAContinuation: FuncIndexArray.create(), callersCutOffNoted: CutOffCallerSet.create()}
+		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, sitesRefusedByStackGuard: 0, sitesRefusedByReturnConvention: 0, declinedParamGuards: 0, sitesRefusedByTables: 0, tableCallers: DistinctFuncList.create(), callersCutOffFromAContinuation: DistinctFuncList.create(), touchedCallers: DistinctFuncList.create(), watchedCallers: FuncIndexArray.create(), watchedCallees: FuncIndexArray.create(), watchedOps: OpIndexArray.create(), followUpRounds: 0, promotedLeaves: 0}
 	end 'create'
 
-	function noteCallerCutOffFromAContinuation(funcIndex ElementIndex)
-		if self.callersCutOffNoted.contains(funcIndex) 'alreadyNoted'
-			return
-		end 'alreadyNoted'
+	function notePromotedLeaves(count ElementIndex)
+		self.followUpRounds = self.followUpRounds + 1
+		self.promotedLeaves = self.promotedLeaves + count
+	end 'notePromotedLeaves'
 
-		self.callersCutOffNoted.insert(funcIndex)
-		self.callersCutOffFromAContinuation.push(funcIndex)
-	end 'noteCallerCutOffFromAContinuation'
+	function noteWatchedSite(callerIndex ElementIndex, calleeIndex ElementIndex, opIdx ElementIndex)
+		self.watchedCallers.push(callerIndex)
+		self.watchedCallees.push(calleeIndex)
+		self.watchedOps.push(opIdx)
+	end 'noteWatchedSite'
+
+	function watchedSitesOf(promoted FuncIndexArray) returns IndexGroupMap
+		var isPromoted = FuncIndexSet.create()
+
+		for calleeIndex in promoted 'eachPromoted'
+			isPromoted.insert(calleeIndex)
+		end 'eachPromoted'
+
+		var sitesByCaller = IndexGroupMap.create()
+
+		for site in 0 upto self.watchedCallers.count() 'eachWatchedSite'
+			let calleeIndex = try self.watchedCallees.get(site) otherwise panic("InlineLeafStats.watchedSitesOf: watchedCallees.get OOB at {site}")
+
+			if isPromoted.contains(calleeIndex) 'aPromotedCallee'
+				let callerIndex = try self.watchedCallers.get(site) otherwise panic("InlineLeafStats.watchedSitesOf: watchedCallers.get OOB at {site}")
+				let opIdx = try self.watchedOps.get(site) otherwise panic("InlineLeafStats.watchedSitesOf: watchedOps.get OOB at {site}")
+				appendToGroup(sitesByCaller, key: callerIndex, member: opIdx)
+			end 'aPromotedCallee'
+		end 'eachWatchedSite'
+
+		return sitesByCaller
+	end 'watchedSitesOf'
 
 	// A splice of a callee that never returns leaves the caller's continuation unreachable, and left
 	// in place its uses sit before their defs after RPO layout, which the register allocator refuses.
 	// Run once, at the end of the pass: `CallerSiteFacts` hold block positions that a mid-wave drop
 	// would shift.
 	function dropWhatNoPathReaches(module StdModule)
-		for funcIndex in self.callersCutOffFromAContinuation 'eachCaller'
+		for funcIndex in self.callersCutOffFromAContinuation.take() 'eachCaller'
 			dropUnreachableBlocks(module, func: module.getFunc(funcIndex))
 		end 'eachCaller'
-
-		self.callersCutOffFromAContinuation = FuncIndexArray.create()
-		self.callersCutOffNoted = CutOffCallerSet.create()
 	end 'dropWhatNoPathReaches'
-
-	function noteCallerReceivedTables(funcIndex ElementIndex)
-		if self.tableCallersNoted.contains(funcIndex) 'alreadyNoted'
-			return
-		end 'alreadyNoted'
-
-		self.tableCallersNoted.insert(funcIndex)
-		self.tableCallers.push(funcIndex)
-	end 'noteCallerReceivedTables'
 
 	function noteTableRefusal()
 		self.sitesRefusedByTables = self.sitesRefusedByTables + 1
@@ -1385,8 +1490,9 @@ end 'AlwaysSplicedCycle'
 // hold no helpers at all — a builder composes its emitters freely and pays nothing for it, and that parity
 // is what the row exists to restore.
 //
-// ⛔⛔ **IT IS ONE OF THIS PASS'S TWO EXCEPTIONS TO "ONE ROUND, NO CASCADE"**; the other is
-// `followTableChains`, bounded by `MaxChainRounds`. What bounds this one is a DAG. The
+// ⛔⛔ **IT IS ONE OF THIS PASS'S EXCEPTIONS TO THE PRE-SPLICE VERDICT**; the others are
+// `followTableChains`, bounded by `MaxChainRounds`, and `followPromotedLeaves`, bounded by
+// `MaxLeafFollowRounds`. What bounds this one is a DAG. The
 // depth is the length of a chain of DECLARED rows rather than anything a program controls, and a CYCLE is
 // refused where it is met rather than capped at a depth: a cap splices some levels, leaves a call standing
 // at the boundary and reports nothing, which is the silent wrong answer this row exists to make impossible.
@@ -1589,7 +1695,7 @@ function spliceAlwaysSplicedCallees(project Project, module StdModule, byName Fu
 			continue
 		end 'leftAsWritten'
 
-		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(funcIndex), funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
+		var splicer = leafSplicer(project, module: module, byName: byName, funcIndex: funcIndex, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta)
 		splicer.run()
 		plan.measure(funcIndex, module: module, func: module.getFunc(funcIndex))
 		try closedToTheCallerWalk.set(funcIndex, value: true) otherwise panic("spliceAlwaysSplicedCallees: closedToTheCallerWalk.set OOB at {funcIndex}")
@@ -1617,10 +1723,10 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	// any splice, because the order is about the bodies AS WRITTEN.
 	let always = AlwaysSplicedPlan.of(module, byName: byName)
 
-	// Built ONCE, over the eligible callees alone — see `ValueOriginTable.indexRowsOfFunctions` for why
-	// the alternative (`lookup` per copied value) is a quadratic against a table with one row per
-	// value-producing op in the program.
-	var origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount())
+	// Built ONCE, over the eligible and flippable callees alone — see
+	// `ValueOriginTable.indexRowsOfFunctions` for why the alternative (`lookup` per copied value) is a
+	// quadratic against a table with one row per value-producing op in the program.
+	var origins = project.valueOrigins.indexRowsOfFunctions(plan.rowIndexedFuncs, funcCount: module.funcCount())
 	var stats = InlineLeafStats.create()
 	var admission = SpliceAdmission.leaves(plan)
 
@@ -1633,33 +1739,10 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	// ⭐ **THE ROUND'S CALLERS, NOT THE MODULE'S** — a pipeline function's sites were offered to the
 	// first run and are not offered again (`SpliceRound`).
 	for funcIndex in firstCallerOf(round) upto module.funcCount() 'eachFunc'
-		var func = module.getFunc(funcIndex)
-
-		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
-		// `insertRangeChecks` and `inlineManagedPrimitives` skip on. Here it is purely cost:
-		// `eliminateDeadFunctions` drops the function before isel either way, and this pass registers no
-		// `.rdata`, so skipping leaves the rendered Target IR unchanged.
-		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
-			continue
-		end 'notInTheProgram'
-
-		// The row's own cascade above either spliced its sites or deliberately left them; either way this
-		// walk must not touch it (`spliceAlwaysSplicedCallees`).
-		if isClosedToTheCallerWalk(closedToTheCallerWalk, funcIndex: funcIndex) 'theCascadeOwnsIt'
-			continue
-		end 'theCascadeOwnsIt'
-
-		// An eligible leaf's own sites stay calls: a cold call into another leaf spliced here would grow
-		// a body `LeafPlan.measure` already took, and every later copy of it fails `buildValueColumn`.
-		if plan.keepsItsMeasuredBody(funcIndex) 'admittedBodyStaysAsMeasured'
-			continue
-		end 'admittedBodyStaysAsMeasured'
-
-		var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
-		splicer.run()
+		_ = spliceCaller(project, module: module, byName: byName, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, funcIndex: funcIndex, offer: SiteOffer.everySite, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta)
 	end 'eachFunc'
 
-	followTableChains(project, module: module, byName: byName, plan: plan, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta)
+	followPromotedLeaves(project, module: module, byName: byName, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
 	stats.dropWhatNoPathReaches(module)
 	let inlined = stats.inlinedSites
 	let eligible = plan.eligibleCount
@@ -1671,25 +1754,128 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let conventionRefusals = stats.sitesRefusedByReturnConvention
 	let declinedGuards = stats.declinedParamGuards
 	let calleesSizeRefused = plan.tooManyOpsCount
-	let tableCallerCount = stats.tableCallers.count()
+	let tableCallerCount = stats.tableCallers.distinctCount()
 	let tableRefusals = stats.sitesRefusedByTables
+	let followUpRounds = stats.followUpRounds
+	let promotedLeaves = stats.promotedLeaves
+	let followUpExhausted = stats.followUpRoundsExhausted
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
 
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} hot ops ({MaxInlinedColdArmLeafOps} with a cold arm) or {MaxInlinedLeafColdOps} cold ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {stackGuardRefusals} site(s) refused as a body that needs the green-thread stack guard spliced into a caller that skips it, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead, {tableCallerCount} caller(s) took a body reading a table, {tableRefusals} site(s) refused because a table is not constant there")
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} hot ops ({MaxInlinedColdArmLeafOps} with a cold arm) or {MaxInlinedLeafColdOps} cold ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {stackGuardRefusals} site(s) refused as a body that needs the green-thread stack guard spliced into a caller that skips it, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead, {tableCallerCount} caller(s) took a body reading a table, {tableRefusals} site(s) refused because a table is not constant there, {promotedLeaves} callee(s) became leaves by their calls being spliced over {followUpRounds} follow-up round(s), bound of {MaxLeafFollowRounds} exhausted with work left: {followUpExhausted}")
 	end 'debugging'
 end 'spliceLeaves'
+
+function leafSplicer(project Project, module StdModule, byName FunctionNameIndex, funcIndex ElementIndex, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo) returns SiteSplicer
+	return SiteSplicer.create(project, module: module, func: module.getFunc(funcIndex), funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
+end 'leafSplicer'
+
+function callerAcceptsSplices(project Project, module StdModule, plan LeafPlan, closedToTheCallerWalk BoolArray, funcIndex ElementIndex) returns bool
+	if project.libraryFacts.bodyIsSwept(module.getFunc(funcIndex).name) 'notInTheProgram'
+		return false
+	end 'notInTheProgram'
+
+	if isClosedToTheCallerWalk(closedToTheCallerWalk, funcIndex: funcIndex) 'theCascadeOwnsIt'
+		return false
+	end 'theCascadeOwnsIt'
+
+	return not plan.keepsItsMeasuredBody(funcIndex)
+end 'callerAcceptsSplices'
+
+union SiteOffer
+	everySite
+	only(ops OfferedOpSet)
+end 'SiteOffer'
+
+union CallerSplice
+	refused
+	spliced(splicer SiteSplicer)
+end 'CallerSplice'
+
+function spliceCaller(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk BoolArray, funcIndex ElementIndex, offer SiteOffer, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo) returns CallerSplice
+	if not callerAcceptsSplices(project, module: module, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, funcIndex: funcIndex) 'notACallerToSpliceInto'
+		return CallerSplice.refused
+	end 'notACallerToSpliceInto'
+
+	var splicer = leafSplicer(project, module: module, byName: byName, funcIndex: funcIndex, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta)
+
+	match offer 'offer'
+		everySite then break
+		only(ops) then splicer.restrictTo(ops)
+	end 'offer'
+
+	splicer.run()
+	return CallerSplice.spliced(splicer)
+end 'spliceCaller'
+
+// A watched site is an op index, and it stays meaningful because `module.ops` only grows during
+// the pass: the index is either still the call or an op no block holds. A promotion still pending
+// when this bound ends the loop leaves its calls standing and sets `followUpRoundsExhausted`.
+let MaxLeafFollowRounds = 8 as ElementIndex
+
+function followPromotedLeaves(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk BoolArray, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
+	var reference = StdFunctionReference.create()
+	var probe = TableCallProbe.create(project)
+
+	for _ in 0 upto MaxLeafFollowRounds 'eachRound'
+		followTableChains(project, module: module, byName: byName, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, callers: stats.tableCallers.take(), admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta)
+		var promoted = FuncIndexArray.create()
+
+		for touchedIndex in stats.touchedCallers.take() 'eachTouchedCaller'
+			if not plan.isFlippable(touchedIndex) 'notWaitingOnItsCalls'
+				continue
+			end 'notWaitingOnItsCalls'
+
+			view func = module.getFunc(touchedIndex)
+			let scan = leafBodyScanOf(module, func: func, funcIndex: touchedIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier, meta: meta, byName: byName, reference: reference, probe: probe)
+			let nowEligible = scan.verdict == LeafVerdict.eligible
+			plan.rescan(touchedIndex, scan: scan, module: module, func: func)
+
+			if nowEligible 'nowALeaf'
+				promoted.push(touchedIndex)
+			end 'nowALeaf'
+		end 'eachTouchedCaller'
+
+		if promoted.count() == 0 'settled'
+			return
+		end 'settled'
+
+		stats.notePromotedLeaves(promoted.count())
+
+		if plan.readsAnyTable() 'tablesToResolve'
+			plan.slots.ensureBuilt(project.globalData)
+		end 'tablesToResolve'
+
+		for (callerIndex, sites) in stats.watchedSitesOf(promoted) 'eachCallerOfAPromotedLeaf'
+			var offered = OfferedOpSet.create()
+
+			for opIdx in sites 'eachWatchedSite'
+				offered.insert(opIdx)
+			end 'eachWatchedSite'
+
+			_ = spliceCaller(project, module: module, byName: byName, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, funcIndex: callerIndex, offer: SiteOffer.only(offered), admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta)
+		end 'eachCallerOfAPromotedLeaf'
+	end 'eachRound'
+
+	var promotedLeafPending = false
+
+	for touchedIndex in stats.touchedCallers.members 'eachUnreadCaller'
+		promotedLeafPending = promotedLeafPending or plan.isFlippable(touchedIndex)
+	end 'eachUnreadCaller'
+
+	stats.followUpRoundsExhausted = promotedLeafPending
+end 'followPromotedLeaves'
 
 let MaxChainRounds = 8 as ElementIndex
 
 // A copied body's devirtualized call can name another table-reading leaf, so each round splices
 // only the ops the previous one rewrote or appended. A caller `keepsItsMeasuredBody` is skipped:
 // every later copy of a grown body fails `buildValueColumn`.
-function followTableChains(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo)
-	for callerIndex in stats.tableCallers 'eachCaller'
-		if plan.keepsItsMeasuredBody(callerIndex) 'admittedBodyStaysAsMeasured'
+function followTableChains(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk BoolArray, callers FuncIndexArray, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo)
+	for callerIndex in callers 'eachCaller'
+		if not callerAcceptsSplices(project, module: module, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, funcIndex: callerIndex) 'notACallerToSpliceInto'
 			continue
-		end 'admittedBodyStaysAsMeasured'
+		end 'notACallerToSpliceInto'
 
 		var func = module.getFunc(callerIndex)
 		var offered = OfferedOpSet.create()
@@ -1705,10 +1891,10 @@ function followTableChains(project Project, module StdModule, byName FunctionNam
 				break
 			end 'nothingToFollow'
 
-			var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: callerIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
-			splicer.restrictTo(offered)
-			splicer.run()
-			offered = splicer.appendedOps()
+			match spliceCaller(project, module: module, byName: byName, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, funcIndex: callerIndex, offer: SiteOffer.only(offered), admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta) 'chainSplice'
+				refused then panic("followTableChains: '{String.from(func.name)}' accepted a chain round and refused the next")
+				spliced(splicer) then offered = splicer.appendedOps()
+			end 'chainSplice'
 		end 'eachRound'
 
 		if offered.count() != 0 'roundsExhausted'
@@ -1717,6 +1903,8 @@ function followTableChains(project Project, module StdModule, byName FunctionNam
 
 		dropDeadPureOps(module, func: func)
 	end 'eachCaller'
+
+	_ = stats.tableCallers.take()
 end 'followTableChains'
 
 // ⛔⛔ **THE ROW'S PROMISE, ASKED OF THE FINISHED MODULE — AND THAT PLACEMENT IS THE WHOLE OF WHAT MAKES
@@ -2868,7 +3056,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 	// refill — one of each for the whole pass rather than one per function measured.
 	var liveness = StdLiveness.create()
 	var across = StdValueUseSet.createRecordingIds()
-	var calls = CallProbe.create(funcCount, byName: byName, meta: meta, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier)
+	var calls = CallProbe.create(project, funcCount: funcCount, byName: byName, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
 
 	while remaining > 0 'eachWave'
 		if ready.count() == 0 'onlyCyclesLeft'
@@ -3147,7 +3335,7 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 	return retiring.count()
 end 'spliceWave'
 
-typealias IndexGroupMap = Map with (ElementIndex, FuncIndexArray)
+typealias IndexGroupMap = Map with (ElementIndex, Array with ElementIndex)
 
 typealias SiteIndexMap = Map with (ElementIndex, ElementIndex)
 
@@ -3262,7 +3450,7 @@ type CallProbe
 	var inlinable as BoolArray
 	var lean as BoolArray
 
-	static function create(funcCount ElementIndex, byName FunctionNameIndex, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound, runtimeTier FunctionNameSet) returns CallProbe
+	static function create(project Project, funcCount ElementIndex, byName FunctionNameIndex, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound) returns CallProbe
 		var decided = BoolArray.create()
 		decided.resize(funcCount)
 		var inlinable = BoolArray.create()
@@ -3270,7 +3458,7 @@ type CallProbe
 		var lean = BoolArray.create()
 		lean.resize(funcCount)
 
-		return Self{meta: meta, byName: byName, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: runtimeTier, reference: StdFunctionReference.create(), tables: TableCallProbe.create(), decided: decided, inlinable: inlinable, lean: lean}
+		return Self{meta: meta, byName: byName, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier, reference: StdFunctionReference.create(), tables: TableCallProbe.create(project), decided: decided, inlinable: inlinable, lean: lean}
 	end 'create'
 
 	// The called-once rule runs before the leaf rule, so a direct call the leaf rule will splice is not a
@@ -3282,14 +3470,11 @@ type CallProbe
 			return false
 		end 'notACall'
 
-		stdFunctionReferenceOf(op, byName: self.byName.byName, into: self.reference)
+		if not calledModuleFunction(op, byName: self.byName, reference: self.reference) 'noModuleCallee'
+			return true
+		end 'noModuleCallee'
 
-		match self.reference.kind 'reference'
-			directCall or
-			directTryCall then return not self.leafRuleSplices(module, funcIndex: self.reference.funcIndex)
-			none then return true
-			otherReference then panic("CallProbe.opStaysACall: a `calling` op named a function as a value, which only a `funcAddr` does")
-		end 'reference'
+		return not self.leafRuleSplices(module, funcIndex: self.reference.funcIndex)
 	end 'opStaysACall'
 
 	function leafRuleSplices(module StdModule, funcIndex ElementIndex) returns bool
@@ -3584,7 +3769,8 @@ type SiteSplicer
 	var tableArith as StdArithOperands
 	var restricted as bool
 	var offered as OfferedOpSet
-	var appended as OfferedOpSet
+	var appendedFirsts as OpIndexArray
+	var appendedBounds as OpIndexArray
 
 	// The def enumerator's sink, the op cloner and the variant memo, shared by every function's splices:
 	// this type is constructed per function.
@@ -3618,7 +3804,8 @@ type SiteSplicer
 			tableArith: StdArithOperands.create(),
 			restricted: false,
 			offered: OfferedOpSet.create(),
-			appended: OfferedOpSet.create(),
+			appendedFirsts: OpIndexArray.create(),
+			appendedBounds: OpIndexArray.create(),
 			def: def,
 			cloner: cloner,
 			meta: meta
@@ -3657,10 +3844,11 @@ type SiteSplicer
 	// ⭐ **THE BOUND IS SNAPSHOTTED, AND THAT IS WHAT KEEPS THIS LOOP OFF ITS OWN OUTPUT — and, unlike
 	// `InlineManagedPrimitives`, nothing is revisited at all.** A splice appends two kinds of block. A
 	// COPIED body under the leaf rule may hold calls in cold blocks, and the snapshot is what leaves
-	// them calls (one round); under the called-once rule every called-once callee inside it was spliced
-	// in an earlier wave. A CONTINUATION holds ops of the ORIGINAL block, every site in which
-	// `inlineSitesIn` has already collected before it split anything. So one pass over the original blocks IS the whole walk — no worklist, no
-	// "already expanded" marker column, and no chain to follow.
+	// them calls (`watchCopiedCalls` notes the flippable ones); under the called-once rule every
+	// called-once callee inside it was spliced in an earlier wave. A CONTINUATION holds ops of the
+	// ORIGINAL block, every site in which `inlineSitesIn` has already collected before it split
+	// anything. So one pass over the original blocks IS the whole walk — no worklist, no "already
+	// expanded" marker column, and no chain to follow.
 	export function run()
 		let originalBlockCount = self.func.blockRefs.count()
 
@@ -3668,6 +3856,8 @@ type SiteSplicer
 			let blockRef = try self.func.blockRefs.get(i) otherwise panic("SiteSplicer.run: blockRefs.get OOB at {i} despite the snapshot bound")
 			self.inlineSitesIn(blockRef)
 		end 'eachBlock'
+
+		self.watchCopiedCalls()
 	end 'run'
 
 	// ⭐⭐ **ONE BLOCK, ONE FORWARD WALK, THEN A BACKWARD SPLIT PER SITE — never carve-then-rewalk.**
@@ -4000,18 +4190,24 @@ type SiteSplicer
 		end 'selfCall'
 
 		match self.admission 'rule'
-			leaves(plan) then self.considerLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args, shape: shape)
+			leaves(plan) then self.considerLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args, shape: shape, opRef: opRef)
 			calledOnce(wave) then self.considerCalledOnceSite(pos, calleeIndex: calleeIndex, wave: wave)
 		end 'rule'
 	end 'considerSite'
 
-	function considerLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray, shape SiteShape)
+	function considerLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray, shape SiteShape, opRef ElementIndex)
 		match plan.verdictOf(calleeIndex) 'verdict'
 			eligible then self.considerEligibleLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args, shape: shape)
 			tooManyOps then self.stats.noteSizeRefusal(plan.isWithinLargerBudget(calleeIndex))
-			notALeaf then break
+			notALeaf then self.watchIfFlippable(calleeIndex, plan: plan, opRef: opRef)
 		end 'verdict'
 	end 'considerLeafSite'
+
+	function watchIfFlippable(calleeIndex ElementIndex, plan LeafPlan, opRef ElementIndex)
+		if plan.isFlippable(calleeIndex) 'mayBecomeALeaf'
+			self.stats.noteWatchedSite(self.funcIndex, calleeIndex: calleeIndex, opIdx: opRef)
+		end 'mayBecomeALeaf'
+	end 'watchIfFlippable'
 
 	function considerEligibleLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray, shape SiteShape)
 		if not conventionServesSite(plan.conventionOf(calleeIndex), site: shape) 'readsAnotherConvention'
@@ -4050,8 +4246,43 @@ type SiteSplicer
 	end 'restrictTo'
 
 	module function appendedOps() returns OfferedOpSet
-		return self.appended
+		var ops = OfferedOpSet.create()
+
+		for range in 0 upto self.appendedFirsts.count() 'eachAppendedRange'
+			let first = try self.appendedFirsts.get(range) otherwise panic("SiteSplicer.appendedOps: appendedFirsts.get OOB at {range}")
+			let bound = try self.appendedBounds.get(range) otherwise panic("SiteSplicer.appendedOps: appendedBounds.get OOB at {range}")
+
+			for opIdx in first upto bound 'eachAppendedOp'
+				ops.insert(opIdx)
+			end 'eachAppendedOp'
+		end 'eachAppendedRange'
+
+		return ops
 	end 'appendedOps'
+
+	function watchCopiedCalls()
+		match self.admission 'rule'
+			leaves(plan) then self.watchFlippableCallsAmongCopies(plan)
+			calledOnce then break
+		end 'rule'
+	end 'watchCopiedCalls'
+
+	function watchFlippableCallsAmongCopies(plan LeafPlan)
+		var reference = StdFunctionReference.create()
+
+		for range in 0 upto self.appendedFirsts.count() 'eachAppendedRange'
+			let first = try self.appendedFirsts.get(range) otherwise panic("SiteSplicer.watchFlippableCallsAmongCopies: appendedFirsts.get OOB at {range}")
+			let bound = try self.appendedBounds.get(range) otherwise panic("SiteSplicer.watchFlippableCallsAmongCopies: appendedBounds.get OOB at {range}")
+
+			for opIdx in first upto bound 'eachAppendedOp'
+				view op = self.module.getOp(opIdx)
+
+				if self.meta.holdsACall(op) and calledModuleFunction(op, byName: self.byName, reference: reference) and plan.isFlippable(reference.funcIndex) 'aCopiedCallThatMayBecomeSplicable'
+					self.stats.noteWatchedSite(self.funcIndex, calleeIndex: reference.funcIndex, opIdx: opIdx)
+				end 'aCopiedCallThatMayBecomeSplicable'
+			end 'eachAppendedOp'
+		end 'eachAppendedRange'
+	end 'watchFlippableCallsAmongCopies'
 
 	// The leaf rule's half of `splicingWouldWidenTheSafePoint`. Asked per SITE rather than per callee: one
 	// eligible leaf is spliced at every site it has, and its callers need not agree about provenance.
@@ -4245,6 +4476,11 @@ type SiteSplicer
 		var pred = self.blockAt(predRef)
 		pred.truncateBodyOps(tail)
 		self.stats.noteInlined()
+
+		match self.admission 'rule'
+			leaves then self.stats.touchedCallers.note(self.funcIndex)
+			calledOnce then break
+		end 'rule'
 	end 'spliceCallAtTailOf'
 
 	// The backstop the two non-`call` arms above share — ONE site, because they say one thing: the split
@@ -4281,7 +4517,7 @@ type SiteSplicer
 		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst, shape: shapeOfSite(results))
 
 		if not self.aReturnReachesTheContinuation 'theCalleeNeverReturns'
-			self.stats.noteCallerCutOffFromAContinuation(self.funcIndex)
+			self.stats.callersCutOffFromAContinuation.note(self.funcIndex)
 		end 'theCalleeNeverReturns'
 
 		for local in calleeFunc.debugLocals 'eachCalleeBinding'
@@ -4303,16 +4539,11 @@ type SiteSplicer
 
 	function noteChainOutcome(calleeIndex ElementIndex, opsBefore ElementIndex)
 		if self.calleeReadsTables(calleeIndex) 'aTableBodyWasCopied'
-			self.stats.noteCallerReceivedTables(self.funcIndex)
+			self.stats.tableCallers.note(self.funcIndex)
 		end 'aTableBodyWasCopied'
 
-		if not self.restricted 'notAChainRound'
-			return
-		end 'notAChainRound'
-
-		for opIdx in opsBefore upto self.module.opCount() 'eachAppendedOp'
-			self.appended.insert(opIdx)
-		end 'eachAppendedOp'
+		self.appendedFirsts.push(opsBefore)
+		self.appendedBounds.push(self.module.opCount())
 	end 'noteChainOutcome'
 
 	function calleeReadsTables(calleeIndex ElementIndex) returns bool

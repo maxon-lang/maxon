@@ -59,8 +59,8 @@ builder never paid.
   either — so a panic inside a copy prints the caller's frame on a target without them;
 - the leaf rule's refusal of a call outside a cold block for ONE edge: a call into another body that
   declares the row.
-  Those are spliced away callees-first, before either body is copied anywhere. It is this pass's only
-  exception to ONE ROUND, NO CASCADE, and it is bounded by the graph of declared rows being a DAG.
+  Those are spliced away callees-first, before either body is copied anywhere, which is bounded by the
+  graph of declared rows being a DAG.
 
 **What it may never waive** is every judgement about what inlining would BREAK, and each still refuses:
 `splicingWouldWidenTheSafePoint`, a by-reference parameter, the green-thread stack guard, `ownFrame` (a
@@ -93,13 +93,12 @@ a call outside a cold block, so no such body is one this pass would have accepte
 `__managed_*` calls all sit in cold blocks can be a leaf before that pass runs, and its expansion can
 grow the body past the 32-op budget.
 
-⚠ **IT IS AN ORDER AND NOT A SECOND ROUND.** A second round would admit the cascade the next paragraph refuses on purpose.
-
-**ONE ROUND, NO CASCADE.** Eligibility is decided on the pre-splice body, so a caller that becomes
-call-free BY being inlined into does not become eligible in the same compile. That is what bounds the
-work at one copy per site and keeps a chain of helpers from pulling a large body through three of them.
-An eligible leaf's own call sites stay calls, so every copy of it is the body its eligibility was
-measured on.
+**FOLLOW-UP ROUNDS, BOUNDED.** Eligibility is first decided on the pre-splice body. A function whose only
+refusal was a direct call to another module function is re-measured after its calls have been spliced,
+and if it now fits it becomes a leaf in the next round and is spliced at the call sites the first walk
+recorded — at most `MaxLeafFollowRounds` rounds. The budget is applied to the grown body, so a chain of
+helpers can never pull a body larger than one leaf through it, and an eligible leaf is never spliced
+into, so every copy of it is the body its eligibility was measured on.
 
 ### ⭐ THE PANIC RULE — how a ranged-parameter leaf is inlined without moving a stack trace
 
@@ -531,9 +530,10 @@ typealias Real = float(f64.min to f64.max)
 42
 ```
 
-<!-- test: a-leaf-called-from-a-leaf-is-not-cascaded -->
-`inner` is a leaf and is spliced into `outer`. `outer` had a call when eligibility was decided, so it
-is not a leaf and `main`'s call to it stands — one round, no cascade.
+<!-- test: a-function-whose-calls-are-all-spliced-away-is-a-leaf-in-the-next-round -->
+`inner` is a leaf and is spliced into `outer`. `outer` held a call when eligibility was first decided, and
+holds none once `inner` is spliced into it, so a follow-up round takes it for a leaf and splices it into
+`main` too.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -643,6 +643,79 @@ Stack trace:
   in clampPct
   in main
   in mrt_start
+```
+
+<!-- test: a-panic-inside-a-body-spliced-twice-names-every-frame -->
+`clampPct` is a leaf spliced into `doubled`; `doubled` then holds no call, is taken for a leaf in the next round and is spliced into `main`'s two sites. The `Percent` guard of `clampPct` fires in the twice-spliced copy, and the trace still names `clampPct`, `doubled` and `main`, exactly as the calls did.
+
+```maxon
+typealias Percent = int(0 to 100)
+
+function clampPct(x Percent) returns Percent
+	return x
+end 'clampPct'
+
+function doubled(x Percent) returns Percent
+	return clampPct(x + x)
+end 'doubled'
+
+function main() returns ExitCode
+	let values = [20 as Percent, 30 as Percent, 60 as Percent]
+	var last = 0 as Percent
+
+	for v in values 'each'
+		last = doubled(v)
+	end 'each'
+
+	let again = doubled(last)
+
+	return again as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-panic-inside-a-body-spliced-twice-names-every-frame.test:4: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in clampPct
+  in doubled
+  in main
+  in mrt_start
+```
+
+<!-- test: a-pair-leaf-with-two-returns-gives-the-same-pair-through-either-exit -->
+`pick` returns a pair on two exits. Its pair must come back the same through either one, whether `pick` is a call or is spliced.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerPair = (Integer, Integer)
+
+function pick(flag Integer, a Integer, b Integer) returns IntegerPair
+	if flag > 0 'first'
+		return (a + 1, b)
+	end 'first'
+
+	return (b, a + 2)
+end 'pick'
+
+function main() returns ExitCode
+	var lo = 1 as Integer
+	var hi = 2 as Integer
+
+	for step in 0 upto 100 'rounds'
+		let (x, y) = pick(step - 50, a: lo, b: hi)
+		lo = y
+		hi = x
+	end 'rounds'
+
+	let (p, q) = pick(lo, a: hi, b: lo)
+
+	return ((p + q) and 127) as ExitCode
+end 'main'
+```
+```exitcode
+27
 ```
 
 <!-- test: error.an-inlined-element-of-a-let-literal-outside-the-callee-range-is-refused -->

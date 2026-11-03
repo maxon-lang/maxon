@@ -186,6 +186,7 @@ module type TableUse
 end 'TableUse'
 
 module type TableCallProbe
+	var project as Project
 	var call as StdCallOperands
 	var witness as StdWitnessOperands
 	var arith as StdArithOperands
@@ -194,10 +195,15 @@ module type TableCallProbe
 	var forwarder as bool
 	var forwardedCalls as ElementIndex
 	var allocations as ElementIndex
+	var admitsPairBoxes as bool
+	var pairBoxesKnown as bool
+	var allocationSizes as ConstValueMap
+	var allocationSizesBuilt as bool
+	var liveOps as OpIndexArray
 	export var reads as TableUseArray
 
-	module static function create() returns TableCallProbe
-		return Self{call: StdCallOperands.create(), witness: StdWitnessOperands.create(), arith: StdArithOperands.create(), defs: StdValueDefs.create(), defsBuilt: false, forwarder: false, forwardedCalls: 0, allocations: 0, reads: TableUseArray.create()}
+	module static function create(project Project) returns TableCallProbe
+		return Self{project: project, call: StdCallOperands.create(), witness: StdWitnessOperands.create(), arith: StdArithOperands.create(), defs: StdValueDefs.create(), defsBuilt: false, forwarder: false, forwardedCalls: 0, allocations: 0, admitsPairBoxes: false, pairBoxesKnown: false, allocationSizes: ConstValueMap.create(), allocationSizesBuilt: false, liveOps: OpIndexArray.create(), reads: TableUseArray.create()}
 	end 'create'
 
 	module function begin(func IrFunction)
@@ -205,6 +211,8 @@ module type TableCallProbe
 		self.forwarder = isWitnessSlotAdapterName(func.name)
 		self.forwardedCalls = 0
 		self.allocations = 0
+		self.pairBoxesKnown = false
+		self.allocationSizesBuilt = false
 		self.reads = TableUseArray.create()
 	end 'begin'
 
@@ -245,6 +253,10 @@ module type TableCallProbe
 		end 'notAPlainCall'
 
 		if self.call.callee.equals(MmAllocName) 'anAllocation'
+			if self.allocatesAPairBox(module, func: func) 'aPairBox'
+				return true
+			end 'aPairBox'
+
 			self.allocations = self.allocations + 1
 			return true
 		end 'anAllocation'
@@ -255,6 +267,29 @@ module type TableCallProbe
 
 		return false
 	end 'admitsHotCall'
+
+	// A two-word box is the pair `ValueTupleReturn` runs later and deletes once the pair is
+	// destructured, so the leaf is not refused for it. A second return exit makes the pair a
+	// block-arg merge, which that pass cannot take; splicing such a leaf would turn a register return
+	// into heap boxes.
+	function allocatesAPairBox(module StdModule, func IrFunction) returns bool
+		if not self.pairBoxesKnown 'pairBoxesUnasked'
+			self.admitsPairBoxes = declaresValueTupleReturn(self.project, func: func) and returnedValuesOf(module, func: func, exits: ReturnExits.reachableExits).count() == 1
+			self.pairBoxesKnown = true
+		end 'pairBoxesUnasked'
+
+		if not self.admitsPairBoxes 'notAValueTupleLeaf'
+			return false
+		end 'notAValueTupleLeaf'
+
+		if not self.allocationSizesBuilt 'sizesUnread'
+			module.collectLiveOpIndices(func, into: self.liveOps)
+			self.allocationSizes = constantsFeedingAllocations(module, liveOps: self.liveOps)
+			self.allocationSizesBuilt = true
+		end 'sizesUnread'
+
+		return isATwoWordTrivialBox(self.call.callee, argCount: self.call.argCount, sizeId: self.call.firstArg, destructorId: self.call.secondArg, consts: self.allocationSizes)
+	end 'allocatesAPairBox'
 
 	function noteWitnessDispatch(func IrFunction) returns bool
 		if self.witness.witnessAddr >= valueIdAtParamPosition(func.paramCount) 'notAParameter'

@@ -2186,8 +2186,12 @@ func @main {
     arm64.storeSlotReg slot7, x19
     arm64.movRegReg x0, x20
     arm64.bl __destruct_CharacterSet
-    arm64.movRegReg x0, x19
-    arm64.bl String.isEmpty
+  __il_body#548:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_cont#547:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#545:
     arm64.cbz x0, __il_body#507
   empty#163:
     arm64.movImm x20, 4
@@ -2411,7 +2415,7 @@ func @main {
     arm64.cmp x28, 0
     arm64.cset x0, hi
   scmerge#179:
-    arm64.cbz x0, critsplit#551
+    arm64.cbz x0, critsplit#563
   hasScheme:
     arm64.movRegReg x0, x22
     arm64.bl urlIsAlpha
@@ -2492,12 +2496,12 @@ func @main {
     arm64.cset x0, eq
   scmerge#264:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#563
+    arm64.cbnz x0, critsplit#575
   orrhs#265:
     arm64.cmp x22, 46
     arm64.cset x0, eq
     arm64.b scmerge#266
-  critsplit#563:
+  critsplit#575:
     arm64.movRegReg x0, x1
   scmerge#266:
     arm64.cbz x0, ifcont#268
@@ -2627,7 +2631,7 @@ func @main {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x24
     arm64.b ifcont#197
-  critsplit#551:
+  critsplit#563:
     arm64.loadRegSlot x22, slot20
     arm64.loadRegSlot x0, slot24
     arm64.movRegReg x25, x22
@@ -2635,19 +2639,19 @@ func @main {
     arm64.storeSlotReg slot9, x0
     arm64.add x0, x25, 1
     arm64.cmp x0, x20
-    arm64.b.hs critsplit#552
+    arm64.b.hs critsplit#564
   checkAuth:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x25
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 47
-    arm64.b.ne critsplit#553
+    arm64.b.ne critsplit#565
   slash1:
     arm64.add x1, x25, 1
     arm64.movRegReg x0, x19
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 47
-    arm64.b.ne critsplit#554
+    arm64.b.ne critsplit#566
   slash2:
     arm64.add x22, x25, 2
     arm64.movImm x0, 1
@@ -2666,7 +2670,7 @@ func @main {
     arm64.bl urlFirstOfBytes
     arm64.movRegReg x19, x0
     arm64.cmp x19, x20
-    arm64.b.hs critsplit#555
+    arm64.b.hs critsplit#567
   hasUserinfo:
     arm64.movImm x23, 1
     arm64.movRegReg x0, x21
@@ -2691,7 +2695,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x19
     arm64.b ifcont#204
-  critsplit#555:
+  critsplit#567:
     arm64.loadRegSlot x0, slot10
     arm64.loadRegSlot x1, slot28
     arm64.movRegReg x2, x22
@@ -2700,7 +2704,7 @@ func @main {
     arm64.storeSlotReg slot12, x0
     arm64.storeSlotReg slot4, x1
     arm64.cmp x2, x20
-    arm64.b.hs critsplit#556
+    arm64.b.hs critsplit#568
   hasHostChars:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x2
@@ -2714,9 +2718,12 @@ func @main {
     arm64.bl String.init
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot27, x19
-  __il_body#326:
-    arm64.movRegReg x0, x19
-    arm64.bl String.isEmpty
+  __il_body#552:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_cont#551:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#549:
     arm64.cbz x0, __il_body#367
   noHost:
     arm64.movImm x19, 2
@@ -2770,9 +2777,12 @@ func @main {
     arm64.movRegReg x2, x20
     arm64.bl String.slice
     arm64.movRegReg x19, x0
-  __il_body#407:
-    arm64.movRegReg x0, x19
-    arm64.bl String.isEmpty
+  __il_body#556:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_cont#555:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#553:
     arm64.cbz x0, ifcont#409
   empty#408:
     arm64.movImm x22, 2
@@ -2783,12 +2793,12 @@ func @main {
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 118
     arm64.movImm x1, 1
-    arm64.b.eq critsplit#568
+    arm64.b.eq critsplit#580
   orrhs#410:
     arm64.cmp x0, 86
     arm64.cset x0, eq
     arm64.b scmerge#411
-  critsplit#568:
+  critsplit#580:
     arm64.movRegReg x0, x1
   scmerge#411:
     arm64.cbz x0, __il_body#443
@@ -2909,14 +2919,14 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x22 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#569
+    arm64.b.eq critsplit#581
   __im_empty#464:
     arm64.cmp x25, 0
     arm64.b.eq __im_slow#462
-  critsplit#570:
+  critsplit#582:
     arm64.movRegReg x9, x0
     arm64.b __im_cont#461
-  critsplit#569:
+  critsplit#581:
     arm64.movRegReg x9, x0
   __im_cont#461:
     arm64.cmp x9, 0
@@ -2934,14 +2944,14 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x22 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#571
+    arm64.b.eq critsplit#583
   __im_empty#468:
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#466
-  critsplit#572:
+  critsplit#584:
     arm64.movRegReg x9, x1
     arm64.b __im_cont#465
-  critsplit#571:
+  critsplit#583:
     arm64.movRegReg x9, x1
   __im_cont#465:
     arm64.cmp x9, 0
@@ -3363,7 +3373,7 @@ func @main {
   exitterminal#168:
     arm64.movImm x19, 0
     arm64.cmp x0, 0
-    arm64.b.eq critsplit#549
+    arm64.b.eq critsplit#561
   tryerr#122:
     arm64.movImm x0, 3
     arm64.movImm x19, 0
@@ -3404,7 +3414,7 @@ func @main {
     arm64.movRegReg x2, x19
     arm64.b ifcont#219
   matchdead:
-  critsplit#556:
+  critsplit#568:
     arm64.loadRegSlot x0, slot6
     arm64.loadRegSlot x1, slot13
     arm64.loadRegSlot x2, slot14
@@ -3416,7 +3426,7 @@ func @main {
     arm64.loadRegSlot x5, slot4
     arm64.loadRegSlot x6, slot12
     arm64.b ifcont#221
-  critsplit#554:
+  critsplit#566:
     arm64.loadRegSlot x0, slot6
     arm64.loadRegSlot x1, slot8
     arm64.loadRegSlot x2, slot10
@@ -3431,7 +3441,7 @@ func @main {
     arm64.movRegReg x0, x4
     arm64.movRegReg x4, x25
     arm64.b ifcont#221
-  critsplit#553:
+  critsplit#565:
     arm64.loadRegSlot x0, slot6
     arm64.loadRegSlot x1, slot8
     arm64.loadRegSlot x2, slot10
@@ -3454,7 +3464,7 @@ func @main {
     arm64.movRegReg x25, x5
     arm64.movRegReg x26, x2
     arm64.b ifcont#222
-  critsplit#552:
+  critsplit#564:
     arm64.loadRegSlot x19, slot6
     arm64.loadRegSlot x20, slot8
     arm64.loadRegSlot x22, slot10
@@ -3475,7 +3485,7 @@ func @main {
     arm64.bl urlFirstOfBytes
     arm64.movRegReg x27, x0
     arm64.cmp x27, x19
-    arm64.b.ls critsplit#557
+    arm64.b.ls critsplit#569
   hasPath:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
@@ -3495,19 +3505,19 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.b ifcont#226
-  critsplit#557:
+  critsplit#569:
     arm64.loadRegSlot x19, slot11
     arm64.movRegReg x28, x19
   ifcont#226:
     arm64.loadRegSlot x0, slot5
     arm64.cmp x27, x0
-    arm64.b.hs critsplit#558
+    arm64.b.hs critsplit#570
   checkQuery:
     arm64.loadRegSlot x0, slot7
     arm64.movRegReg x1, x27
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 63
-    arm64.b.ne critsplit#559
+    arm64.b.ne critsplit#571
   questionMark:
     arm64.movImm x0, 1
     arm64.storeSlotReg slot16, x0
@@ -3540,7 +3550,7 @@ func @main {
     arm64.movRegReg x2, x0
     arm64.movRegReg x0, x27
     arm64.b ifcont#231
-  critsplit#559:
+  critsplit#571:
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot17
     arm64.movRegReg x2, x0
@@ -3550,7 +3560,7 @@ func @main {
     arm64.movRegReg x19, x1
     arm64.movRegReg x27, x0
     arm64.b ifcont#232
-  critsplit#558:
+  critsplit#570:
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x19, slot17
     arm64.movRegReg x2, x0
@@ -3559,13 +3569,13 @@ func @main {
     arm64.storeSlotReg slot25, x2
     arm64.loadRegSlot x0, slot5
     arm64.cmp x19, x0
-    arm64.b.hs critsplit#560
+    arm64.b.hs critsplit#572
   checkFragment:
     arm64.loadRegSlot x0, slot7
     arm64.movRegReg x1, x19
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 35
-    arm64.b.ne critsplit#561
+    arm64.b.ne critsplit#573
   hashMark:
     arm64.movImm x0, 1
     arm64.storeSlotReg slot15, x0
@@ -3590,14 +3600,14 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x21
     arm64.b ifcont#237
-  critsplit#561:
+  critsplit#573:
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x1, slot19
     arm64.xchgRegReg x0, x1
   ifcont#237:
     arm64.movRegReg x19, x0
     arm64.b ifcont#238
-  critsplit#560:
+  critsplit#572:
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x19, slot19
     arm64.movRegReg x1, x0
@@ -3663,7 +3673,7 @@ func @main {
     arm64.loadRegSlot x0, slot7
     arm64.bl __str_decref
     arm64.b tryok#121
-  critsplit#549:
+  critsplit#561:
     arm64.movRegReg x21, x19
   tryok#121:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
@@ -3850,7 +3860,7 @@ func @main {
   whilehdr#54:
     arm64.cmp x22, x20
     arm64.b.lo scan#55
-  critsplit#545:
+  critsplit#557:
     arm64.movRegReg x0, x21
   whileexit#56:
     arm64.eor x0, x0, 1
@@ -3957,12 +3967,12 @@ func @main {
     arm64.bl __managed_capacity
     arm64.cmp x0, 0
     arm64.movImm x1, 1
-    arm64.b.lt critsplit#548
+    arm64.b.lt critsplit#560
   __rc_ok#115:
     arm64.cmp x24, x0
     arm64.cset x0, hi
     arm64.b scmerge#110
-  critsplit#548:
+  critsplit#560:
     arm64.movRegReg x0, x1
   scmerge#110:
     arm64.cbz x0, __il_cont#105
@@ -4969,8 +4979,12 @@ func @main {
     arm64.storeSlotReg slot7, x19
     arm64.movRegReg x0, x20
     arm64.bl __destruct_CharacterSet
-    arm64.movRegReg x0, x19
-    arm64.bl String.isEmpty
+  __il_body#548:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_cont#547:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#545:
     arm64.cbz x0, __il_body#507
   empty#163:
     arm64.movImm x20, 4
@@ -5194,7 +5208,7 @@ func @main {
     arm64.cmp x28, 0
     arm64.cset x0, hi
   scmerge#179:
-    arm64.cbz x0, critsplit#551
+    arm64.cbz x0, critsplit#563
   hasScheme:
     arm64.movRegReg x0, x22
     arm64.bl urlIsAlpha
@@ -5275,12 +5289,12 @@ func @main {
     arm64.cset x0, eq
   scmerge#264:
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#563
+    arm64.cbnz x0, critsplit#575
   orrhs#265:
     arm64.cmp x22, 46
     arm64.cset x0, eq
     arm64.b scmerge#266
-  critsplit#563:
+  critsplit#575:
     arm64.movRegReg x0, x1
   scmerge#266:
     arm64.cbz x0, ifcont#268
@@ -5410,7 +5424,7 @@ func @main {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x24
     arm64.b ifcont#197
-  critsplit#551:
+  critsplit#563:
     arm64.loadRegSlot x22, slot20
     arm64.loadRegSlot x0, slot24
     arm64.movRegReg x25, x22
@@ -5418,19 +5432,19 @@ func @main {
     arm64.storeSlotReg slot9, x0
     arm64.add x0, x25, 1
     arm64.cmp x0, x20
-    arm64.b.hs critsplit#552
+    arm64.b.hs critsplit#564
   checkAuth:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x25
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 47
-    arm64.b.ne critsplit#553
+    arm64.b.ne critsplit#565
   slash1:
     arm64.add x1, x25, 1
     arm64.movRegReg x0, x19
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 47
-    arm64.b.ne critsplit#554
+    arm64.b.ne critsplit#566
   slash2:
     arm64.add x22, x25, 2
     arm64.movImm x0, 1
@@ -5449,7 +5463,7 @@ func @main {
     arm64.bl urlFirstOfBytes
     arm64.movRegReg x19, x0
     arm64.cmp x19, x20
-    arm64.b.hs critsplit#555
+    arm64.b.hs critsplit#567
   hasUserinfo:
     arm64.movImm x23, 1
     arm64.movRegReg x0, x21
@@ -5474,7 +5488,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x19
     arm64.b ifcont#204
-  critsplit#555:
+  critsplit#567:
     arm64.loadRegSlot x0, slot10
     arm64.loadRegSlot x1, slot28
     arm64.movRegReg x2, x22
@@ -5483,7 +5497,7 @@ func @main {
     arm64.storeSlotReg slot12, x0
     arm64.storeSlotReg slot4, x1
     arm64.cmp x2, x20
-    arm64.b.hs critsplit#556
+    arm64.b.hs critsplit#568
   hasHostChars:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x2
@@ -5497,9 +5511,12 @@ func @main {
     arm64.bl String.init
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot27, x19
-  __il_body#326:
-    arm64.movRegReg x0, x19
-    arm64.bl String.isEmpty
+  __il_body#552:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_cont#551:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#549:
     arm64.cbz x0, __il_body#367
   noHost:
     arm64.movImm x19, 2
@@ -5553,9 +5570,12 @@ func @main {
     arm64.movRegReg x2, x20
     arm64.bl String.slice
     arm64.movRegReg x19, x0
-  __il_body#407:
-    arm64.movRegReg x0, x19
-    arm64.bl String.isEmpty
+  __il_body#556:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_cont#555:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#553:
     arm64.cbz x0, ifcont#409
   empty#408:
     arm64.movImm x22, 2
@@ -5566,12 +5586,12 @@ func @main {
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 118
     arm64.movImm x1, 1
-    arm64.b.eq critsplit#568
+    arm64.b.eq critsplit#580
   orrhs#410:
     arm64.cmp x0, 86
     arm64.cset x0, eq
     arm64.b scmerge#411
-  critsplit#568:
+  critsplit#580:
     arm64.movRegReg x0, x1
   scmerge#411:
     arm64.cbz x0, __il_body#443
@@ -5692,14 +5712,14 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x22 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#569
+    arm64.b.eq critsplit#581
   __im_empty#464:
     arm64.cmp x25, 0
     arm64.b.eq __im_slow#462
-  critsplit#570:
+  critsplit#582:
     arm64.movRegReg x9, x0
     arm64.b __im_cont#461
-  critsplit#569:
+  critsplit#581:
     arm64.movRegReg x9, x0
   __im_cont#461:
     arm64.cmp x9, 0
@@ -5717,14 +5737,14 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x22 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#571
+    arm64.b.eq critsplit#583
   __im_empty#468:
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#466
-  critsplit#572:
+  critsplit#584:
     arm64.movRegReg x9, x1
     arm64.b __im_cont#465
-  critsplit#571:
+  critsplit#583:
     arm64.movRegReg x9, x1
   __im_cont#465:
     arm64.cmp x9, 0
@@ -6146,7 +6166,7 @@ func @main {
   exitterminal#168:
     arm64.movImm x19, 0
     arm64.cmp x0, 0
-    arm64.b.eq critsplit#549
+    arm64.b.eq critsplit#561
   tryerr#122:
     arm64.movImm x0, 3
     arm64.movImm x19, 0
@@ -6187,7 +6207,7 @@ func @main {
     arm64.movRegReg x2, x19
     arm64.b ifcont#219
   matchdead:
-  critsplit#556:
+  critsplit#568:
     arm64.loadRegSlot x0, slot6
     arm64.loadRegSlot x1, slot13
     arm64.loadRegSlot x2, slot14
@@ -6199,7 +6219,7 @@ func @main {
     arm64.loadRegSlot x5, slot4
     arm64.loadRegSlot x6, slot12
     arm64.b ifcont#221
-  critsplit#554:
+  critsplit#566:
     arm64.loadRegSlot x0, slot6
     arm64.loadRegSlot x1, slot8
     arm64.loadRegSlot x2, slot10
@@ -6214,7 +6234,7 @@ func @main {
     arm64.movRegReg x0, x4
     arm64.movRegReg x4, x25
     arm64.b ifcont#221
-  critsplit#553:
+  critsplit#565:
     arm64.loadRegSlot x0, slot6
     arm64.loadRegSlot x1, slot8
     arm64.loadRegSlot x2, slot10
@@ -6237,7 +6257,7 @@ func @main {
     arm64.movRegReg x25, x5
     arm64.movRegReg x26, x2
     arm64.b ifcont#222
-  critsplit#552:
+  critsplit#564:
     arm64.loadRegSlot x19, slot6
     arm64.loadRegSlot x20, slot8
     arm64.loadRegSlot x22, slot10
@@ -6258,7 +6278,7 @@ func @main {
     arm64.bl urlFirstOfBytes
     arm64.movRegReg x27, x0
     arm64.cmp x27, x19
-    arm64.b.ls critsplit#557
+    arm64.b.ls critsplit#569
   hasPath:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
@@ -6278,19 +6298,19 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.b ifcont#226
-  critsplit#557:
+  critsplit#569:
     arm64.loadRegSlot x19, slot11
     arm64.movRegReg x28, x19
   ifcont#226:
     arm64.loadRegSlot x0, slot5
     arm64.cmp x27, x0
-    arm64.b.hs critsplit#558
+    arm64.b.hs critsplit#570
   checkQuery:
     arm64.loadRegSlot x0, slot7
     arm64.movRegReg x1, x27
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 63
-    arm64.b.ne critsplit#559
+    arm64.b.ne critsplit#571
   questionMark:
     arm64.movImm x0, 1
     arm64.storeSlotReg slot16, x0
@@ -6323,7 +6343,7 @@ func @main {
     arm64.movRegReg x2, x0
     arm64.movRegReg x0, x27
     arm64.b ifcont#231
-  critsplit#559:
+  critsplit#571:
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot17
     arm64.movRegReg x2, x0
@@ -6333,7 +6353,7 @@ func @main {
     arm64.movRegReg x19, x1
     arm64.movRegReg x27, x0
     arm64.b ifcont#232
-  critsplit#558:
+  critsplit#570:
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x19, slot17
     arm64.movRegReg x2, x0
@@ -6342,13 +6362,13 @@ func @main {
     arm64.storeSlotReg slot25, x2
     arm64.loadRegSlot x0, slot5
     arm64.cmp x19, x0
-    arm64.b.hs critsplit#560
+    arm64.b.hs critsplit#572
   checkFragment:
     arm64.loadRegSlot x0, slot7
     arm64.movRegReg x1, x19
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 35
-    arm64.b.ne critsplit#561
+    arm64.b.ne critsplit#573
   hashMark:
     arm64.movImm x0, 1
     arm64.storeSlotReg slot15, x0
@@ -6373,14 +6393,14 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x21
     arm64.b ifcont#237
-  critsplit#561:
+  critsplit#573:
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x1, slot19
     arm64.xchgRegReg x0, x1
   ifcont#237:
     arm64.movRegReg x19, x0
     arm64.b ifcont#238
-  critsplit#560:
+  critsplit#572:
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x19, slot19
     arm64.movRegReg x1, x0
@@ -6446,7 +6466,7 @@ func @main {
     arm64.loadRegSlot x0, slot7
     arm64.bl __str_decref
     arm64.b tryok#121
-  critsplit#549:
+  critsplit#561:
     arm64.movRegReg x21, x19
   tryok#121:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
@@ -6633,7 +6653,7 @@ func @main {
   whilehdr#54:
     arm64.cmp x22, x20
     arm64.b.lo scan#55
-  critsplit#545:
+  critsplit#557:
     arm64.movRegReg x0, x21
   whileexit#56:
     arm64.eor x0, x0, 1
@@ -6740,12 +6760,12 @@ func @main {
     arm64.bl __managed_capacity
     arm64.cmp x0, 0
     arm64.movImm x1, 1
-    arm64.b.lt critsplit#548
+    arm64.b.lt critsplit#560
   __rc_ok#115:
     arm64.cmp x24, x0
     arm64.cset x0, hi
     arm64.b scmerge#110
-  critsplit#548:
+  critsplit#560:
     arm64.movRegReg x0, x1
   scmerge#110:
     arm64.cbz x0, __il_cont#105

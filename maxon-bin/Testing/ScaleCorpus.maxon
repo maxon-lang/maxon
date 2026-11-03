@@ -38,9 +38,9 @@
 //   1. A LOOP-CARRIED `var`. Its value at the top of the loop is a phi of its initializer and
 //      whatever the body last wrote, so it is not a constant — and the compiler has no SCCP to prove
 //      otherwise. `scaleSeed` is one, and it is where every rung's data originates.
-//   2. A CALL RESULT. The compiler has no inliner and no interprocedural constant propagation, so a
-//      function's return value is opaque at the call site no matter how trivial the callee. Every
-//      generated function therefore takes its seed as a PARAMETER and derives everything from it.
+//   2. A CALL RESULT. The compiler has no interprocedural constant propagation, so a function's
+//      return value is opaque at a call that stands. Every generated function therefore takes its
+//      seed as a PARAMETER and derives everything from it.
 //
 // The runner does not take this on trust. `assertCorpusCompiled` (below) re-verifies it on every
 // single ladder, and a corpus that folded flat is a BROKEN RUN — the one thing this instrument
@@ -1666,11 +1666,6 @@ end 'pruneRungSubtree'
 let SeedName = "scaleSeed"
 let OpaqueCalleeName = "scaleOpaque"
 
-// The BODY half of the opaque callee — see `seedSource`, which carries the argument for why the knob is
-// two functions rather than one. Named beside its wrapper so a rename cannot leave one of the pair
-// behind, exactly as the wrapper is named beside the generator that emits it.
-let OpaqueCoreCalleeName = "scaleOpaqueCore"
-
 // THE ORIGIN OF EVERY VALUE IN THE CORPUS, and the reason none of it folds away.
 //
 // `acc` is a loop-carried `var`: at the top of the loop it is a phi of its initializer and what the
@@ -1731,37 +1726,25 @@ function seedSource() returns String
 	out.append("end '{SeedName}'\n")
 	out.append("\n")
 
-	// ⭐⭐ **TWO LEVELS, AND THE OUTER ONE EXISTS ONLY TO KEEP THE CALL.** `scaleOpaque` is what every
-	// pressured and float-spill loop calls ACROSS its live accumulators, and that call IS the knob — it
-	// is what forces the spills the splitter is measured on. A single-level `scaleOpaque` is a tiny LEAF
-	// (a branch and two returns, no call at all), so `inlineLeaves` splices it into every one of those
-	// loops and the pressure it was there to create disappears — the ladder would go on reporting a
-	// spill knob that does not spill — this file's own founding defect, arriving for an
-	// INLINER instead of for a DCE.
-	//
-	// The cure keeps the knob honest without adding one: `scaleOpaque` CALLS `scaleOpaqueCore`, which
-	// carries the branchy body, so `scaleOpaque`'s own body holds a call and is not a leaf under the
-	// eligibility rule (which is decided PRE-SPLICE — one round, no cascade). `scaleOpaqueCore` IS a
-	// leaf and is spliced into `scaleOpaque`, which is what keeps the inliner itself MEASURED by this
-	// ladder rather than merely dodged by it.
-	//
-	// ⚠ **A CASCADING INLINER WOULD FLATTEN THIS AGAIN, and the fix then is not another wrapper.** Once
-	// `scaleOpaqueCore` is inlined, `scaleOpaque` is call-free; a second round would make it a leaf and
-	// splice it into the loops after all. A cascading inliner means re-deriving this knob, and the
-	// honest shape then is a callee the inliner must refuse for a reason a cascade cannot dissolve (past
-	// the op budget, or holding a store and a panic) — not a deeper stack of levels.
-	out.append(exportedFunctionHeader(OpaqueCoreCalleeName, parameters: "a {ScaleIntAlias}"))
-	out.append("\tif a > {OpaqueBigThreshold} 'big'\n")
-	out.append("\t\treturn a - {OpaqueBigThreshold}\n")
-	out.append("\tend 'big'\n")
-	out.append("\treturn a + 1\n")
-	out.append("end '{OpaqueCoreCalleeName}'\n")
-	out.append("\n")
-
-	// The wrapper every pressured loop actually calls — see the note above for why it delegates rather
-	// than carrying the body. `opaqueCalleeValue` tracks the pair's answer, which is the CORE's.
+	// ⭐⭐ **`scaleOpaque` IS WHAT EVERY PRESSURED AND FLOAT-SPILL LOOP CALLS ACROSS ITS LIVE
+	// ACCUMULATORS, AND THAT CALL IS THE KNOB** — it forces the spills the splitter is measured on. A
+	// body the inliner can splice, directly or once its own calls are spliced away, removes the call
+	// and the pressure with it. The body is therefore past the inliner's largest hot budget by
+	// construction: one add-and-subtract pair per op of `MaxInlinedColdArmLeafOps`, on a
+	// parameter-derived value. A pass that folds `t + k - k` shrinks it back under the budget and the
+	// knob stops spilling.
 	out.append(driverHeader(OpaqueCalleeName))
-	out.append("\treturn {OpaqueCoreCalleeName}(a)\n")
+	out.append("\tvar t = a\n")
+
+	for step in 1 upto MaxInlinedColdArmLeafOps + 1 'eachPaddingStep'
+		out.append("\tt = t + {step}\n")
+		out.append("\tt = t - {step}\n")
+	end 'eachPaddingStep'
+
+	out.append("\tif t > {OpaqueBigThreshold} 'big'\n")
+	out.append("\t\treturn t - {OpaqueBigThreshold}\n")
+	out.append("\tend 'big'\n")
+	out.append("\treturn t + 1\n")
 	out.append("end '{OpaqueCalleeName}'\n")
 	return out.build()
 end 'seedSource'
@@ -1770,9 +1753,8 @@ end 'seedSource'
 // takes by comparing against it, and the two must be the same number.
 let OpaqueBigThreshold = 100
 
-// What `scaleOpaque` hands back for `argument` — the tracked twin of the two-arm body `scaleOpaqueCore`
-// carries, and the ONE place a caller's expectation of it is derived. It tracks the PAIR: the wrapper
-// returns its core's answer unchanged, so one tracker serves both and there is nothing extra to predict.
+// What `scaleOpaque` hands back for `argument` — the tracked twin of the two-arm body it carries,
+// and the ONE place a caller's expectation of it is derived.
 //
 // ⚠ `scaleOpaque` is NOT a driver and deliberately does NOT witness itself: `main` never threads it, and
 // a self-witnessing callee would have to return its ARGUMENT, which is the one thing its two callers

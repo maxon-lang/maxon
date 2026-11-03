@@ -91,7 +91,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | Optimization | State |
 |---|---|
 | Whole-program dead-function elim | ✅ `DeadFunctionElimination.maxon` |
-| Inlining | ◑ `InlineLeaves` — every function called exactly once (any size) unless the splice would overrun the register budget at its site or make a lean caller save callee registers on a hot path that avoids it, then leaves ≤24 ops at every site; one round, scheduled AFTER the managed rewrite (EC17); spliced bodies keep their frame in a trace through `__inlframes` |
+| Inlining | ◑ `InlineLeaves` — every function called exactly once (any size) unless the splice would overrun the register budget at its site or make a lean caller save callee registers on a hot path that avoids it, then leaves ≤24 ops at every site, then bounded follow-up rounds for a function whose only refusal was a direct call to a module function and a leaf whose only allocation is its pair box; scheduled AFTER the managed rewrite (EC17); spliced bodies keep their frame in a trace through `__inlframes` |
 | Managed-primitive inlining | ✅ `InlineManagedPrimitives` (EC1) |
 | Const **operand** → immediate | ✅ `FoldConstOperands` |
 | Algebraic identity (`x+0`, `x*1`) | ✅ `FoldConstOperands` move 3 |
@@ -891,8 +891,9 @@ its own suppression machinery:
   this splice moved, which re-inlining would loop on"*; within one round the snapshot bound prevents it,
   across two rounds nothing does.)
 - **It opens a cascade level.** Eligibility recomputed on an already-spliced module admits a caller that
-  became call-free BY being inlined into — exactly what `LeafPlan`'s *"ONE ROUND, NO CASCADE"* rule
-  refuses on purpose, and what `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins.
+  became call-free BY being inlined into. `InlineLeaves` takes that only for the callers its first walk
+  watched, in at most `MaxLeafFollowRounds` rounds
+  (`inline-leaves.a-function-whose-calls-are-all-spliced-away-is-a-leaf-in-the-next-round` pins it).
 
 ⭐ **AND THE REORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE — A PROOF, NOT A MEASUREMENT.**
 `inlineManagedPrimitives` rewrites only bodies that hold a `__managed_*` CALL; a leaf holds **no

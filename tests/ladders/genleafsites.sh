@@ -5,10 +5,10 @@
 #     program it inlines nothing in?
 #
 # `ScaleCorpus` cannot answer either, and — as with `genmanagedsites.sh`, which this is modelled on —
-# the reason is structural rather than a knob set too low. The corpus's inlinable leaves are
-# `scaleOpaqueCore` (called once, from `scaleOpaque`) and `callChain`'s link 0 (called once, from link
-# 1); its many-functions knob doubles how many SITES exist and can never raise how many share ONE
-# BLOCK, which is the only axis the splice's split cost has.
+# the reason is structural rather than a knob set too low. The corpus's inlinable leaf is
+# `callChain`'s link 0 (called once, from link 1); its many-functions knob doubles how many SITES
+# exist and can never raise how many share ONE BLOCK, which is the only axis the splice's split cost
+# has.
 #
 # ⭐ **THE PRODUCT TERM THIS EXISTS TO REFUTE.** `LeafInliner.inlineSitesIn` claims linearity in K by
 # splitting a block's K sites in REVERSE order: the k-th split moves only the ops between site k and
@@ -27,12 +27,12 @@
 #                            THE CONTROL. Same sites, same splices, same copied bodies; only the
 #                            per-block concentration differs. If `onefunc` bends and `spread` does not,
 #                            the bend is the split's product term and not the per-site cost.
-#            `nosites`     — the same <n> calls with the callee made NON-INLINABLE by a `throws`
-#                            clause, which also makes every site a `tryCall` the pass never rewrites.
-#                            THE SCAN AXIS: what the pass costs for merely WALKING a program it inlines
-#                            nothing in. This is the mode that catches a union boxed per op —
-#                            `genmanagedsites.sh nosites` found exactly that in `inlineManagedPrimitives`
-#                            (2 allocations and 64 bytes per Std op in the program).
+#            `nosites`     — the same <n> calls with the callee made `throws`, so every site is a
+#                            `tryCall`. Meant as THE SCAN AXIS, the cost of WALKING a program the
+#                            pass inlines nothing in (the shape that caught a union boxed per op in
+#                            `genmanagedsites.sh nosites`: 2 allocations and 64 bytes per Std op).
+#                            ⚠ Its `--log=ir:debug` census reads the same inlined-site count as
+#                            `onefunc` (173 at n=128, 301 at n=256), so it isolates no walk.
 #            `guardone`    — `onefunc` with a `regMaskContains`-shaped leaf: an `int(0 to 63)` parameter,
 #                            so `insertRangeChecks` gives the callee an entry guard whose PANIC block the
 #                            splice drops and redirects. THE SLOW-ARM AXIS: one extra block, one extra
@@ -40,9 +40,10 @@
 #            `guardspread` — the same guarded sites at one per block. The control for `guardone`.
 #            `pressure`    — ⭐⭐ NOT A LADDER FOR THIS PASS AT ALL. <n> cross-call values all live in
 #                            ONE block (`genwidelive.sh sum`'s shape, the splitter's Θ(N)×Θ(N) region),
-#                            with the opaque callee made STRUCTURALLY NON-INLINABLE — it is a wrapper
-#                            over a `throws` body, so it holds a `tryCall` and `scanLeafBody` reads it
-#                            as `notALeaf`. ZERO splices happen anywhere in the program.
+#                            with the opaque callee made STRUCTURALLY NON-INLINABLE — its body is
+#                            past `MaxInlinedColdArmLeafOps`, which no cascade of splices can
+#                            dissolve. The generated functions hold no splice site; the census still
+#                            counts sites outside them (45 without follow-up rounds, 60 with them).
 #                            ⇒ **THE A/B CONTROL FOR THE COMPILER'S OWN EMITTED CODE.** Two compilers
 #                            that differ by this pass get a BIT-IDENTICAL `regalloc` input from it
 #                            (assert it: their `regalloc` ALLOCATION counts must match to the digit),
@@ -67,7 +68,8 @@
 #
 # and confirm the sites were really taken with `--log=ir:debug`, which prints the pass's own census
 # (`inlineLeaves: N site(s) inlined, …`). ⚠ **A ladder whose site count is not what <n> says measures
-# nothing** — `nosites` must read 0 and `onefunc` must read <n>.
+# nothing** — `onefunc` must read <n> more than the program's own fixed share of sites (45 on a
+# compiler without follow-up rounds, 60 with them, at both rungs measured).
 #
 # ⚠ **READ THE ALLOCATION AND BYTE COLUMNS — they are exact and bit-reproducible, so a ratio off them
 # is a datapoint on the first run.** And because the ladder DOUBLES, the RATIO between consecutive <n>
@@ -105,6 +107,15 @@ rm -f "$OUT"/*.maxon
 # redirects to a slow arm.
 GUARD_ALIAS="LeafReg"
 
+LEAF_SOURCE="$(cd "$(dirname "$0")/../.." && pwd)/maxon-bin/Compiler/IR/Std/InlineLeaves.maxon"
+WIDE_MASK=134217727
+OPAQUE_PADDING_PAIRS="$(sed -n 's/^export let MaxInlinedColdArmLeafOps = \([0-9][0-9]*\).*/\1/p' "$LEAF_SOURCE")"
+
+if [ -z "$OPAQUE_PADDING_PAIRS" ]; then
+	echo "genleafsites.sh: $LEAF_SOURCE no longer declares 'export let MaxInlinedColdArmLeafOps = <n>'" >&2
+	exit 2
+fi
+
 {
 	echo "// Generated by genleafsites.sh — $MODE ladder, n=$N."
 	if [ "$MODE" != "pressure" ]; then
@@ -118,16 +129,14 @@ GUARD_ALIAS="LeafReg"
 		echo "end 'leafPure'"
 		;;
 	nosites)
-		# ⚠ THE CALLEE IS REFUSED BY ITS SIGNATURE, NOT BY ITS SIZE — a `throws` body exits through
-		# `errorReturn`, which `scanLeafBody` reads as `notALeaf`, and its call sites are `tryCall`s
-		# `collectSites` does not even look at. Same op count, same site count, same walk; zero splices.
+		# The callee is `throws`, so its sites are `tryCall`s. `--log=ir:debug` reports the same
+		# inlined-site count here as for `onefunc`.
 		#
 		# ⛔⛔ **AND ONE SEEDED SITE, WHICH IS WHAT MAKES THIS MODE MEASURE THE WALK AT ALL.**
 		# `inlineWithNameIndex` RETURNS after `buildLeafPlan` when the module holds no eligible callee
 		# (`nothingToInline`), so a ladder with zero of them measures the plan walk and never reaches
 		# `collectSites` — the per-block scan that runs on every real program. `leafSeed`, called once
-		# from `main`, keeps `eligibleCount` at 1 so the whole pass runs while <n> moves only ops the
-		# pass inlines nothing at.
+		# from `main`, keeps `eligibleCount` above 0 so the whole pass runs.
 		echo "function leafSeed(a LadderInt) returns LadderInt"
 		echo "	return a + 1"
 		echo "end 'leafSeed'"
@@ -142,22 +151,19 @@ GUARD_ALIAS="LeafReg"
 		echo "end 'leafPure'"
 		;;
 	pressure)
-		# The opaque call the N live values are held across. `scaleOpaque` holds a `tryCall`, so
-		# `leafOpRole` reads it as `calling` and `scanLeafBody` refuses it; `widePure` exits through
-		# `errorReturn` and is refused for that. Neither is ever spliced, and no other function here is a
-		# leaf — so the pass reports 0 sites and regalloc sees the same program from either compiler.
-		echo "typealias WideNum = int(0 to 100000000)"
-		echo "enum WideErr"
-		echo "	never"
-		echo "end 'WideErr'"
-		echo "function widePure(x WideNum) returns WideNum throws WideErr"
-		echo "	if x > 99999999 'never'"
-		echo "		throw WideErr.never"
-		echo "	end 'never'"
-		echo "	return x"
-		echo "end 'widePure'"
+		# The opaque call the N live values are held across. `scaleOpaque` is past the inliner's largest
+		# hot budget (one add-and-subtract pair per op of `MaxInlinedColdArmLeafOps`), so it is never a
+		# leaf and never becomes one, so its calls stay in `leafMany` and `regalloc`'s allocation counts
+		# match from either compiler.
+		echo "typealias WideNum = int(0 to $WIDE_MASK)"
+		echo "typealias PaddedNum = int(i64.min to i64.max)"
 		echo "function scaleOpaque(x WideNum) returns WideNum"
-		echo "	return try widePure(x) otherwise 0"
+		echo "	var t = x as PaddedNum"
+		for ((i = 1; i <= OPAQUE_PADDING_PAIRS; i++)); do
+			echo "	t = t + $i"
+			echo "	t = t - $i"
+		done
+		echo "	return (t and $WIDE_MASK) as WideNum"
 		echo "end 'scaleOpaque'"
 		;;
 	guardone|guardspread)

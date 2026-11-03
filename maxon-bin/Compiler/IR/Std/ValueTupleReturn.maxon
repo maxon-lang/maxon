@@ -65,9 +65,10 @@
 // alias), and while the call-site test above refuses every site that observes it, widening this pass to
 // user records is a different change with a different acceptance.
 //
-// ⭐ **THE THIRD SHAPE IS BOTH ENDS IN ONE FRAME.** A called-once callee is spliced into its caller
-// (`InlineLeaves`), so a fresh pair the callee minted and the loads-then-drop the caller did are now one
-// function's ops with no call between them: `__mm_alloc`, the two half stores, whole-slot loads of the
+// ⭐ **THE THIRD SHAPE IS BOTH ENDS IN ONE FRAME.** A called-once callee, or a leaf with one return
+// exit whose only allocation is its pair box, is spliced into its caller (`InlineLeaves`), so a
+// fresh pair the callee minted and the loads-then-drop the caller did are now one function's ops
+// with no call between them: `__mm_alloc`, the two half stores, whole-slot loads of the
 // halves, and its drops — trivial `__mm_decref`s, or `__destruct_<T>` cascades when an element is
 // managed. Nothing else sees the box, so it is deleted outright and every load reads the STORED value
 // — the same ownership argument as the fresh literal, with no register to cross. A trivial drop goes
@@ -420,7 +421,7 @@ function collectCandidates(project Project, module StdModule) returns BoolArray
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
-		candidates.push(returnsATupleRecord(project, func: func) and not throwsClauseIsThrowing(func.throwsTypeName))
+		candidates.push(declaresValueTupleReturn(project, func: func))
 	end 'eachFunc'
 
 	if not anyCandidate(candidates) 'noTupleReturningFunction'
@@ -617,6 +618,12 @@ function noteAddressTakenByOp(op StdOp, taken FnRefThunkSet)
 	end 'op'
 end 'noteAddressTakenByOp'
 
+// The functions this pass may give a register return. `TableCallProbe.allocatesAPairBox` asks the
+// same question, so `InlineLeaves` admits a pair box only where this pass can later rewrite it.
+module function declaresValueTupleReturn(project Project, func IrFunction) returns bool
+	return returnsATupleRecord(project, func: func) and not throwsClauseIsThrowing(func.throwsTypeName)
+end 'declaresValueTupleReturn'
+
 // Is this function's declared return a TUPLE record? A tuple is a synthesized struct, so it arrives as a
 // `structRef` at a `__Tuple…` name (`ProgramSignatures.internTupleType`). A name the project's interner
 // cannot resolve is not one this pass may reason about.
@@ -667,7 +674,7 @@ end 'analyseAffectedFunctions'
 
 // The constants a function's `__mm_alloc` calls read — the size and the destructor — and nothing else:
 // most functions allocate nothing, and those pay one scan and no map.
-function constantsFeedingAllocations(module StdModule, liveOps OpIndexArray) returns ConstValueMap
+module function constantsFeedingAllocations(module StdModule, liveOps OpIndexArray) returns ConstValueMap
 	var consts = ConstValueMap.create()
 	var call = StdCallOperands.create()
 
@@ -721,7 +728,7 @@ end 'allocatesATwoWordTrivialBox'
 // An `__mm_alloc` of exactly two machine words with the trivial destructor — the box a frame-local pair
 // lives in. The destructor matters here because the frame-local rewrite deletes the drop that would have
 // run it.
-function isATwoWordTrivialBox(callee ByteArray, argCount ParamCount, sizeId ValueId, destructorId ValueId, consts ConstValueMap) returns bool
+module function isATwoWordTrivialBox(callee ByteArray, argCount ParamCount, sizeId ValueId, destructorId ValueId, consts ConstValueMap) returns bool
 	if not callee.equals(MmAllocName) or argCount < MmAllocBaseArgCount 'notAnAllocation'
 		return false
 	end 'notAnAllocation'
