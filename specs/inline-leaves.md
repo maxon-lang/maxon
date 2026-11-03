@@ -16,7 +16,10 @@ A callee is eligible when ALL of the following hold — computed ONCE per callee
 stands BEFORE any splice, and memoised:
 
 - its body contains **no call outside a cold block** (`call`, `tryCall`, `callIndirect`, `witnessCall`,
-  `witnessTryCall`), and no terminator that calls. A cold block is one reached only when a guard
+  `witnessTryCall`), and no terminator that calls — except that a **wrapper**, a body whose only such
+  calls go to callees that stand (too large to splice, or settled as not a leaf), is eligible, and is
+  spliced at a site only where the caller's frame and register pressure allow (`judgeSites`, shared with
+  the called-once rule). A cold block is one reached only when a guard
   refuses, such as the slow arm `inlineManagedPrimitives` leaves in a checked `get` or `set`; its calls
   are copied verbatim, as the called-once rule copies every call. A retain, a release and a scope drop
   are parser-emitted calls, so the same rule covers them;
@@ -94,7 +97,8 @@ a call outside a cold block, so no such body is one this pass would have accepte
 grow the body past the 32-op budget.
 
 **FOLLOW-UP ROUNDS, BOUNDED.** Eligibility is first decided on the pre-splice body. A function whose only
-refusal was a direct call to another module function is re-measured after its calls have been spliced,
+refusal was a direct call to another module function is re-measured once its calls have been spliced or
+are known to stand,
 and if it now fits it becomes a leaf in the next round and is spliced at the call sites the first walk
 recorded — at most `MaxLeafFollowRounds` rounds. The budget is applied to the grown body, so a chain of
 helpers can never pull a body larger than one leaf through it, and an eligible leaf is never spliced

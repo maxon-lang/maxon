@@ -119,6 +119,23 @@ func lane(low, high uint64) uint64 {
 	return gather(low) | (gather(high) << 32)
 }
 
+func slotLanes(low, high uint64) (uint64, uint64) {
+	return lane(low, high), lane(low>>8, high>>8)
+}
+
+func packColumns(c0, c1, c2, c3 uint64) (uint64, uint64) {
+	return interleave(c0, c2), interleave(c1, c3)
+}
+
+func deltaSwap(near, far, mask uint64, distance uint) (uint64, uint64) {
+	moved := ((near >> distance) ^ far) & mask
+	return near ^ (moved << distance), far ^ moved
+}
+
+func blockCount(byteCount int) int {
+	return (byteCount + blockBytes - 1) >> 4
+}
+
 func aesReadWord(src []byte, at int) uint64 {
 	return uint64(binary.LittleEndian.Uint32(src[at:]))
 }
@@ -130,15 +147,6 @@ func counterWord(counter uint64) uint64 {
 
 func counterBlock(nonceMid, counter uint64) uint64 {
 	return nonceMid | (spreadBytes(counterWord(counter)) << 8)
-}
-
-func deltaSwap(near, far, mask uint64, distance uint) (uint64, uint64) {
-	moved := ((near >> distance) ^ far) & mask
-	return near ^ (moved << distance), far ^ moved
-}
-
-func blockCount(byteCount int) int {
-	return (byteCount + blockBytes - 1) >> 4
 }
 
 func rotateNibblesDown(word uint64) uint64 {
@@ -190,11 +198,8 @@ func (s *state) ortho() {
 }
 
 func (s *state) loadBlock(src []byte) {
-	c0 := aesReadWord(src, 0)
-	c1 := aesReadWord(src, wordBytes)
-	c2 := aesReadWord(src, 2*wordBytes)
-	c3 := aesReadWord(src, 3*wordBytes)
-	s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7 = interleave(c0, c2), 0, 0, 0, interleave(c1, c3), 0, 0, 0
+	low, high := packColumns(aesReadWord(src, 0), aesReadWord(src, wordBytes), aesReadWord(src, 2*wordBytes), aesReadWord(src, 3*wordBytes))
+	s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7 = low, 0, 0, 0, high, 0, 0, 0
 	s.ortho()
 }
 
@@ -210,12 +215,8 @@ func (s *state) loadCounters(nonceLow, nonceMid, firstCounter uint64) {
 	s.ortho()
 }
 
-func (s *state) firstLane() uint64 {
-	return lane(s.q0, s.q4)
-}
-
-func (s *state) secondLane() uint64 {
-	return lane(s.q0>>8, s.q4>>8)
+func (s *state) lanes() (uint64, uint64) {
+	return slotLanes(s.q0, s.q4)
 }
 
 func (s *state) xorBatch(output, data []byte, at int) []byte {
@@ -464,8 +465,9 @@ func xorLane(output, data []byte, at int, lane uint64) []byte {
 }
 
 func xorSlot(output, data []byte, at int, low, high uint64) []byte {
-	output = xorLane(output, data, at, lane(low, high))
-	return xorLane(output, data, at+laneBytes, lane(low>>8, high>>8))
+	firstLane, secondLane := slotLanes(low, high)
+	output = xorLane(output, data, at, firstLane)
+	return xorLane(output, data, at+laneBytes, secondLane)
 }
 
 type keyExpansion struct {
@@ -507,8 +509,7 @@ func (e *keyExpansion) roundKeys(rounds int) *roundKeys {
 	for round := 0; round <= rounds; round++ {
 		wordBase := round * 4
 		keyBase := round * planeCount
-		low := interleave(e.words[wordBase], e.words[wordBase+2])
-		high := interleave(e.words[wordBase+1], e.words[wordBase+3])
+		low, high := packColumns(e.words[wordBase], e.words[wordBase+1], e.words[wordBase+2], e.words[wordBase+3])
 		for plane := 0; plane < planeCount; plane++ {
 			keys[keyBase+plane] = keyPlane(low, high, uint(plane))
 		}
@@ -545,8 +546,9 @@ func (a *BitslicedAes) EncryptBlock(block []byte) []byte {
 	s.encrypt(a.keys, a.rounds)
 	s.ortho()
 	out := make([]byte, 0, blockBytes)
-	out = binary.LittleEndian.AppendUint64(out, s.firstLane())
-	return binary.LittleEndian.AppendUint64(out, s.secondLane())
+	firstLane, secondLane := s.lanes()
+	out = binary.LittleEndian.AppendUint64(out, firstLane)
+	return binary.LittleEndian.AppendUint64(out, secondLane)
 }
 
 func (a *BitslicedAes) XorKeyStream(nonce []byte, counter uint32, data []byte) []byte {
@@ -566,7 +568,7 @@ func (a *BitslicedAes) XorKeyStreamPastFirstBlock(nonce []byte, counter uint32, 
 	a.encryptCounters(&s, nonceLow, nonceMid, uint64(firstBlock))
 	s.ortho()
 	output = s.xorBatchPastMask(output, data)
-	firstLane, secondLane := s.firstLane(), s.secondLane()
+	firstLane, secondLane := s.lanes()
 	output = a.xorBatches(&s, nonceLow, nonceMid, firstBlock, streamBlocks, maskLeadBlocks, data, output, batchBlocks)
 	return output, firstLane, secondLane
 }
@@ -578,7 +580,7 @@ func streamNonceWords(nonce []byte, firstCounter, streamBlocks int) (uint64, uin
 	if firstCounter+streamBlocks > counterLimit {
 		panic("bitsliced aes: the block counter overflows")
 	}
-	return interleave(aesReadWord(nonce, 0), aesReadWord(nonce, 2*wordBytes)), interleave(aesReadWord(nonce, wordBytes), 0)
+	return packColumns(aesReadWord(nonce, 0), aesReadWord(nonce, wordBytes), aesReadWord(nonce, 2*wordBytes), 0)
 }
 
 func (a *BitslicedAes) encryptCounters(s *state, nonceLow, nonceMid, counter uint64) {

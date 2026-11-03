@@ -9427,3 +9427,2136 @@ func @WithIterIterator.current {
     arm64.ret
 }
 ```
+
+<!-- test: a-pair-from-a-function-holding-standing-calls-returns-in-registers -->
+`twin` returns a pair built from two calls to `churn`, which is far past the leaf budget and stays a call, so `twin` is no leaf and is not spliced. It still returns its pair in the two return registers: the pin holds no `__mm_alloc` in `twin`, and the loop in `main` reads both halves out of the registers. `checkedTwin` forwards `twin`'s pair out of a throwing return, which cannot ride registers, so the record is built there from the two registers it receives and `twin` is not held to the heap convention for it.
+```maxon
+typealias Word = bits(64)
+typealias WordPair = (Word, Word)
+
+enum PairError implements Error
+	tooBig
+end 'PairError'
+
+function churn(x Word) returns Word
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function twin(a Word, b Word) returns WordPair
+	let first = churn(a) xor ((a shl 3) + (b shr 5)) xor ((a shr 7) + (b shl 11)) xor ((a shl 13) + (b shr 17))
+	let second = churn(b shr 8) xor ((b shl 3) + (a shr 5)) xor ((b shr 7) + (a shl 11)) xor ((b shl 13) + (a shr 17))
+
+	return (first, second)
+end 'twin'
+
+function checkedTwin(a Word, b Word) returns WordPair throws PairError
+	if a == 77 or b == 78 or a == 79 or b == 80 or a == 81 or b == 82 'tooBig'
+		throw PairError.tooBig
+	end 'tooBig'
+
+	return twin(a, b: b)
+end 'checkedTwin'
+
+function main() returns ExitCode
+	var lo = 1 as Word
+	var hi = 2 as Word
+
+	for _ in 0 upto 1000 'rounds'
+		let (x, y) = twin(lo, b: hi)
+		lo = y
+		hi = x
+	end 'rounds'
+
+	let (p, q) = try checkedTwin(hi, b: lo) otherwise panic("unreachable")
+	let (r, s) = try checkedTwin(lo, b: hi) otherwise panic("unreachable")
+
+	return ((p xor q xor r xor s) and 127) as ExitCode
+end 'main'
+```
+```exitcode
+63
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @twin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 3
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, rbx
+    x64.shrRegImm8 rax, rbx, 7
+    x64.movRegReg rcx, r12
+    x64.shlRegImm8 rcx, r12, 11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 13
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 17
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg r13, r8
+    x64.xorRegReg r13, r8, rax
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 8
+    x64.callDirect churn
+    x64.movRegReg rax, r12
+    x64.shlRegImm8 rax, r12, 3
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, r12
+    x64.shrRegImm8 rax, r12, 7
+    x64.movRegReg rcx, rbx
+    x64.shlRegImm8 rcx, rbx, 11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.shlRegImm8 r12, r12, 13
+    x64.shrRegImm8 rbx, rbx, 17
+    x64.leaRegRegReg rax, r12, rbx
+    x64.movRegReg r10, r8
+    x64.xorRegReg r10, r8, rax
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @checkedTwin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 77
+    x64.movRegImm32 rax, 1
+    x64.jcc equal, scmerge#2
+  orrhs#1:
+    x64.cmpRegImm32 rdx, 78
+    x64.setccReg equal, rax
+  scmerge#2:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#14
+  orrhs#3:
+    x64.cmpRegImm32 rcx, 79
+    x64.setccReg equal, rax
+    x64.jmp scmerge#4
+  critsplit#14:
+    x64.movRegReg rax, rsi
+  scmerge#4:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#15
+  orrhs#5:
+    x64.cmpRegImm32 rdx, 80
+    x64.setccReg equal, rax
+    x64.jmp scmerge#6
+  critsplit#15:
+    x64.movRegReg rax, rsi
+  scmerge#6:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#16
+  orrhs#7:
+    x64.cmpRegImm32 rcx, 81
+    x64.setccReg equal, rax
+    x64.jmp scmerge#8
+  critsplit#16:
+    x64.movRegReg rax, rsi
+  scmerge#8:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#17
+  orrhs#9:
+    x64.cmpRegImm32 rdx, 82
+    x64.setccReg equal, rax
+    x64.jmp scmerge#10
+  critsplit#17:
+    x64.movRegReg rax, rsi
+  scmerge#10:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  tooBig:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.callDirect twin
+    x64.movRegReg rbx, r8
+    x64.movRegReg r12, r10
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  rounds:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect twin
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg rbx, r10
+    x64.movRegReg r12, r8
+  forhdr:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect checkedTwin
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+  tryok#5:
+    x64.loadRegBaseDisp.word64 r14, [r13 + 0]
+    x64.loadRegBaseDisp.word64 r15, [r13 + 8]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect checkedTwin
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  tryok#7:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.xorRegReg r14, r14, r15
+    x64.xorRegReg r14, r14, rax
+    x64.xorRegReg r14, r14, rcx
+    x64.andRegImm32 r14, r14, 127
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  exitdrop:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+  exitterminal:
+    x64.movRegReg r8, r14
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-pair-from-a-function-holding-standing-calls-returns-in-registers.test:50: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-pair-from-a-function-holding-standing-calls-returns-in-registers.test:51: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @twin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 3
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, rbx
+    x64.shrRegImm8 rax, rbx, 7
+    x64.movRegReg rcx, r12
+    x64.shlRegImm8 rcx, r12, 11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 13
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 17
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg r13, r8
+    x64.xorRegReg r13, r8, rax
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 8
+    x64.callDirect churn
+    x64.movRegReg rax, r12
+    x64.shlRegImm8 rax, r12, 3
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, r12
+    x64.shrRegImm8 rax, r12, 7
+    x64.movRegReg rcx, rbx
+    x64.shlRegImm8 rcx, rbx, 11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.shlRegImm8 r12, r12, 13
+    x64.shrRegImm8 rbx, rbx, 17
+    x64.leaRegRegReg rax, r12, rbx
+    x64.movRegReg r10, r8
+    x64.xorRegReg r10, r8, rax
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @checkedTwin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 77
+    x64.movRegImm32 rax, 1
+    x64.jcc equal, scmerge#2
+  orrhs#1:
+    x64.cmpRegImm32 rdx, 78
+    x64.setccReg equal, rax
+  scmerge#2:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#14
+  orrhs#3:
+    x64.cmpRegImm32 rcx, 79
+    x64.setccReg equal, rax
+    x64.jmp scmerge#4
+  critsplit#14:
+    x64.movRegReg rax, rsi
+  scmerge#4:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#15
+  orrhs#5:
+    x64.cmpRegImm32 rdx, 80
+    x64.setccReg equal, rax
+    x64.jmp scmerge#6
+  critsplit#15:
+    x64.movRegReg rax, rsi
+  scmerge#6:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#16
+  orrhs#7:
+    x64.cmpRegImm32 rcx, 81
+    x64.setccReg equal, rax
+    x64.jmp scmerge#8
+  critsplit#16:
+    x64.movRegReg rax, rsi
+  scmerge#8:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#17
+  orrhs#9:
+    x64.cmpRegImm32 rdx, 82
+    x64.setccReg equal, rax
+    x64.jmp scmerge#10
+  critsplit#17:
+    x64.movRegReg rax, rsi
+  scmerge#10:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  tooBig:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.callDirect twin
+    x64.movRegReg rbx, r8
+    x64.movRegReg r12, r10
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  rounds:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect twin
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg rbx, r10
+    x64.movRegReg r12, r8
+  forhdr:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect checkedTwin
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+  tryok#5:
+    x64.loadRegBaseDisp.word64 r14, [r13 + 0]
+    x64.loadRegBaseDisp.word64 r15, [r13 + 8]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect checkedTwin
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  tryok#7:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.xorRegReg r14, r14, r15
+    x64.xorRegReg r14, r14, rax
+    x64.xorRegReg r14, r14, rcx
+    x64.andRegImm32 r14, r14, 127
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  exitdrop:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+  exitterminal:
+    x64.movRegReg r8, r14
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-pair-from-a-function-holding-standing-calls-returns-in-registers.test:50: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-pair-from-a-function-holding-standing-calls-returns-in-registers.test:51: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @twin {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.lsl x1, x19, 3
+    arm64.lsr x2, x20, 5
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x19, 7
+    arm64.lsl x2, x20, 11
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x19, 13
+    arm64.lsr x2, x20, 17
+    arm64.add x1, x1, x2
+    arm64.eor x21, x0, x1
+    arm64.lsr x0, x20, 8
+    arm64.bl churn
+    arm64.lsl x1, x20, 3
+    arm64.lsr x2, x19, 5
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x20, 7
+    arm64.lsl x2, x19, 11
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x20, 13
+    arm64.lsr x2, x19, 17
+    arm64.add x1, x1, x2
+    arm64.eor x9, x0, x1
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @checkedTwin {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 77
+    arm64.movImm x2, 1
+    arm64.b.eq scmerge#2
+  orrhs#1:
+    arm64.cmp x1, 78
+    arm64.cset x2, eq
+  scmerge#2:
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit#14
+  orrhs#3:
+    arm64.cmp x0, 79
+    arm64.cset x2, eq
+    arm64.b scmerge#4
+  critsplit#14:
+    arm64.movRegReg x2, x3
+  scmerge#4:
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit#15
+  orrhs#5:
+    arm64.cmp x1, 80
+    arm64.cset x2, eq
+    arm64.b scmerge#6
+  critsplit#15:
+    arm64.movRegReg x2, x3
+  scmerge#6:
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit#16
+  orrhs#7:
+    arm64.cmp x0, 81
+    arm64.cset x2, eq
+    arm64.b scmerge#8
+  critsplit#16:
+    arm64.movRegReg x2, x3
+  scmerge#8:
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit#17
+  orrhs#9:
+    arm64.cmp x1, 82
+    arm64.cset x2, eq
+    arm64.b scmerge#10
+  critsplit#17:
+    arm64.movRegReg x2, x3
+  scmerge#10:
+    arm64.cbz x2, ifcont
+  tooBig:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.bl twin
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x9
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  rounds:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl twin
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x19, x9
+    arm64.movRegReg x20, x0
+  forhdr:
+    arm64.cmp x21, 1000
+    arm64.b.lt rounds
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl checkedTwin
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+  tryok#5:
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl checkedTwin
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#8
+  tryok#7:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.eor x3, x22, x23
+    arm64.eor x1, x3, x1
+    arm64.eor x1, x1, x2
+    arm64.and x19, x1, 127
+    arm64.bl __mm_decref
+  exitdrop:
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+  exitterminal:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-pair-from-a-function-holding-standing-calls-returns-in-registers.test:50: unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-pair-from-a-function-holding-standing-calls-returns-in-registers.test:51: unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @twin {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.lsl x1, x19, 3
+    arm64.lsr x2, x20, 5
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x19, 7
+    arm64.lsl x2, x20, 11
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x19, 13
+    arm64.lsr x2, x20, 17
+    arm64.add x1, x1, x2
+    arm64.eor x21, x0, x1
+    arm64.lsr x0, x20, 8
+    arm64.bl churn
+    arm64.lsl x1, x20, 3
+    arm64.lsr x2, x19, 5
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x20, 7
+    arm64.lsl x2, x19, 11
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x20, 13
+    arm64.lsr x2, x19, 17
+    arm64.add x1, x1, x2
+    arm64.eor x9, x0, x1
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @checkedTwin {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 77
+    arm64.movImm x2, 1
+    arm64.b.eq scmerge#2
+  orrhs#1:
+    arm64.cmp x1, 78
+    arm64.cset x2, eq
+  scmerge#2:
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit#14
+  orrhs#3:
+    arm64.cmp x0, 79
+    arm64.cset x2, eq
+    arm64.b scmerge#4
+  critsplit#14:
+    arm64.movRegReg x2, x3
+  scmerge#4:
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit#15
+  orrhs#5:
+    arm64.cmp x1, 80
+    arm64.cset x2, eq
+    arm64.b scmerge#6
+  critsplit#15:
+    arm64.movRegReg x2, x3
+  scmerge#6:
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit#16
+  orrhs#7:
+    arm64.cmp x0, 81
+    arm64.cset x2, eq
+    arm64.b scmerge#8
+  critsplit#16:
+    arm64.movRegReg x2, x3
+  scmerge#8:
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit#17
+  orrhs#9:
+    arm64.cmp x1, 82
+    arm64.cset x2, eq
+    arm64.b scmerge#10
+  critsplit#17:
+    arm64.movRegReg x2, x3
+  scmerge#10:
+    arm64.cbz x2, ifcont
+  tooBig:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.bl twin
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x9
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  rounds:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl twin
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x19, x9
+    arm64.movRegReg x20, x0
+  forhdr:
+    arm64.cmp x21, 1000
+    arm64.b.lt rounds
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl checkedTwin
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+  tryok#5:
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl checkedTwin
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#8
+  tryok#7:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.eor x3, x22, x23
+    arm64.eor x1, x3, x1
+    arm64.eor x1, x1, x2
+    arm64.and x19, x1, 127
+    arm64.bl __mm_decref
+  exitdrop:
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+  exitterminal:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-pair-from-a-function-holding-standing-calls-returns-in-registers.test:50: unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-pair-from-a-function-holding-standing-calls-returns-in-registers.test:51: unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+```
+
+<!-- test: a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record -->
+`twin` is called from `checkedTwin` alone, and `checkedTwin` forwards the pair out of a throwing return, which cannot ride registers. The one site of `twin` would build a record from the two registers it receives, so nothing is gained by taking registers out of `twin`: the pin holds the `__mm_alloc` and the two half stores in `twin`, and none in `checkedTwin`.
+```maxon
+typealias Word = bits(64)
+typealias WordPair = (Word, Word)
+
+enum PairError implements Error
+	tooBig
+end 'PairError'
+
+function churn(x Word) returns Word
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function twin(a Word, b Word) returns WordPair
+	let first = churn(a) xor ((a shl 3) + (b shr 5)) xor ((a shr 7) + (b shl 11)) xor ((a shl 13) + (b shr 17))
+	let second = churn(b shr 8) xor ((b shl 3) + (a shr 5)) xor ((b shr 7) + (a shl 11)) xor ((b shl 13) + (a shr 17))
+
+	return (first, second)
+end 'twin'
+
+function checkedTwin(a Word, b Word) returns WordPair throws PairError
+	if a == 77 or b == 78 or a == 79 or b == 80 or a == 81 or b == 82 'tooBig'
+		throw PairError.tooBig
+	end 'tooBig'
+
+	if a == 5 'swapped'
+		return twin(b, b: a)
+	end 'swapped'
+
+	return twin(a, b: b)
+end 'checkedTwin'
+
+function main() returns ExitCode
+	var lo = 1 as Word
+	var hi = 2 as Word
+
+	for _ in 0 upto 1000 'rounds'
+		let (x, y) = try checkedTwin(lo, b: hi) otherwise panic("unreachable")
+		lo = y
+		hi = x
+	end 'rounds'
+
+	let (p, q) = try checkedTwin(hi, b: lo) otherwise panic("unreachable")
+
+	return ((lo xor hi xor p xor q) and 127) as ExitCode
+end 'main'
+```
+```exitcode
+102
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @twin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 3
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, rbx
+    x64.shrRegImm8 rax, rbx, 7
+    x64.movRegReg rcx, r12
+    x64.shlRegImm8 rcx, r12, 11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 13
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 17
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg r13, r8
+    x64.xorRegReg r13, r8, rax
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 8
+    x64.callDirect churn
+    x64.movRegReg rax, r12
+    x64.shlRegImm8 rax, r12, 3
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, r12
+    x64.shrRegImm8 rax, r12, 7
+    x64.movRegReg rcx, rbx
+    x64.shlRegImm8 rcx, rbx, 11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.shlRegImm8 r12, r12, 13
+    x64.shrRegImm8 rbx, rbx, 17
+    x64.leaRegRegReg rax, r12, rbx
+    x64.movRegReg rbx, r8
+    x64.xorRegReg rbx, r8, rax
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r13
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @checkedTwin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rax, 77
+    x64.movRegImm32 rcx, 1
+    x64.jcc equal, scmerge#2
+  orrhs#1:
+    x64.cmpRegImm32 rdx, 78
+    x64.setccReg equal, rcx
+  scmerge#2:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#16
+  orrhs#3:
+    x64.cmpRegImm32 rax, 79
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#4
+  critsplit#16:
+    x64.movRegReg rcx, rsi
+  scmerge#4:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#17
+  orrhs#5:
+    x64.cmpRegImm32 rdx, 80
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#6
+  critsplit#17:
+    x64.movRegReg rcx, rsi
+  scmerge#6:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#18
+  orrhs#7:
+    x64.cmpRegImm32 rax, 81
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#8
+  critsplit#18:
+    x64.movRegReg rcx, rsi
+  scmerge#8:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#19
+  orrhs#9:
+    x64.cmpRegImm32 rdx, 82
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#10
+  critsplit#19:
+    x64.movRegReg rcx, rsi
+  scmerge#10:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont#12
+  tooBig:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc notEqual, ifcont#14
+  swapped:
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect twin
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.movRegReg rcx, rax
+    x64.callDirect twin
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  rounds:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect checkedTwin
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+  tryok#5:
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect checkedTwin
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  tryok#7:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.xorRegReg rbx, rbx, r12
+    x64.xorRegReg rbx, rbx, rax
+    x64.xorRegReg rbx, rbx, rcx
+    x64.andRegImm32 rbx, rbx, 127
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record.test:49: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record.test:54: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @twin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 3
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, rbx
+    x64.shrRegImm8 rax, rbx, 7
+    x64.movRegReg rcx, r12
+    x64.shlRegImm8 rcx, r12, 11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 13
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 17
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg r13, r8
+    x64.xorRegReg r13, r8, rax
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 8
+    x64.callDirect churn
+    x64.movRegReg rax, r12
+    x64.shlRegImm8 rax, r12, 3
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.movRegReg rax, r12
+    x64.shrRegImm8 rax, r12, 7
+    x64.movRegReg rcx, rbx
+    x64.shlRegImm8 rcx, rbx, 11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.xorRegReg r8, r8, rax
+    x64.shlRegImm8 r12, r12, 13
+    x64.shrRegImm8 rbx, rbx, 17
+    x64.leaRegRegReg rax, r12, rbx
+    x64.movRegReg rbx, r8
+    x64.xorRegReg rbx, r8, rax
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r13
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @checkedTwin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rax, 77
+    x64.movRegImm32 rcx, 1
+    x64.jcc equal, scmerge#2
+  orrhs#1:
+    x64.cmpRegImm32 rdx, 78
+    x64.setccReg equal, rcx
+  scmerge#2:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#16
+  orrhs#3:
+    x64.cmpRegImm32 rax, 79
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#4
+  critsplit#16:
+    x64.movRegReg rcx, rsi
+  scmerge#4:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#17
+  orrhs#5:
+    x64.cmpRegImm32 rdx, 80
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#6
+  critsplit#17:
+    x64.movRegReg rcx, rsi
+  scmerge#6:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#18
+  orrhs#7:
+    x64.cmpRegImm32 rax, 81
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#8
+  critsplit#18:
+    x64.movRegReg rcx, rsi
+  scmerge#8:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#19
+  orrhs#9:
+    x64.cmpRegImm32 rdx, 82
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#10
+  critsplit#19:
+    x64.movRegReg rcx, rsi
+  scmerge#10:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont#12
+  tooBig:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc notEqual, ifcont#14
+  swapped:
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect twin
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.movRegReg rcx, rax
+    x64.callDirect twin
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  rounds:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect checkedTwin
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+  tryok#5:
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect checkedTwin
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  tryok#7:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.xorRegReg rbx, rbx, r12
+    x64.xorRegReg rbx, rbx, rax
+    x64.xorRegReg rbx, rbx, rcx
+    x64.andRegImm32 rbx, rbx, 127
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record.test:49: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record.test:54: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @twin {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.lsl x1, x19, 3
+    arm64.lsr x2, x20, 5
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x19, 7
+    arm64.lsl x2, x20, 11
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x19, 13
+    arm64.lsr x2, x20, 17
+    arm64.add x1, x1, x2
+    arm64.eor x21, x0, x1
+    arm64.lsr x0, x20, 8
+    arm64.bl churn
+    arm64.lsl x1, x20, 3
+    arm64.lsr x2, x19, 5
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x20, 7
+    arm64.lsl x2, x19, 11
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x20, 13
+    arm64.lsr x2, x19, 17
+    arm64.add x1, x1, x2
+    arm64.eor x19, x0, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @checkedTwin {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x2, x0
+    arm64.cmp x2, 77
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge#2
+  orrhs#1:
+    arm64.cmp x1, 78
+    arm64.cset x0, eq
+  scmerge#2:
+    arm64.movImm x3, 1
+    arm64.cbnz x0, critsplit#16
+  orrhs#3:
+    arm64.cmp x2, 79
+    arm64.cset x0, eq
+    arm64.b scmerge#4
+  critsplit#16:
+    arm64.movRegReg x0, x3
+  scmerge#4:
+    arm64.movImm x3, 1
+    arm64.cbnz x0, critsplit#17
+  orrhs#5:
+    arm64.cmp x1, 80
+    arm64.cset x0, eq
+    arm64.b scmerge#6
+  critsplit#17:
+    arm64.movRegReg x0, x3
+  scmerge#6:
+    arm64.movImm x3, 1
+    arm64.cbnz x0, critsplit#18
+  orrhs#7:
+    arm64.cmp x2, 81
+    arm64.cset x0, eq
+    arm64.b scmerge#8
+  critsplit#18:
+    arm64.movRegReg x0, x3
+  scmerge#8:
+    arm64.movImm x3, 1
+    arm64.cbnz x0, critsplit#19
+  orrhs#9:
+    arm64.cmp x1, 82
+    arm64.cset x0, eq
+    arm64.b scmerge#10
+  critsplit#19:
+    arm64.movRegReg x0, x3
+  scmerge#10:
+    arm64.cbz x0, ifcont#12
+  tooBig:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#12:
+    arm64.cmp x2, 5
+    arm64.b.ne ifcont#14
+  swapped:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl twin
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#14:
+    arm64.movRegReg x0, x2
+    arm64.bl twin
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  rounds:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl checkedTwin
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+  tryok#5:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.bl __mm_decref
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.cmp x21, 1000
+    arm64.b.lt rounds
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl checkedTwin
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#8
+  tryok#7:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.eor x3, x19, x20
+    arm64.eor x1, x3, x1
+    arm64.eor x1, x1, x2
+    arm64.and x19, x1, 127
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record.test:49: unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record.test:54: unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @twin {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.lsl x1, x19, 3
+    arm64.lsr x2, x20, 5
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x19, 7
+    arm64.lsl x2, x20, 11
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x19, 13
+    arm64.lsr x2, x20, 17
+    arm64.add x1, x1, x2
+    arm64.eor x21, x0, x1
+    arm64.lsr x0, x20, 8
+    arm64.bl churn
+    arm64.lsl x1, x20, 3
+    arm64.lsr x2, x19, 5
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x20, 7
+    arm64.lsl x2, x19, 11
+    arm64.add x1, x1, x2
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x20, 13
+    arm64.lsr x2, x19, 17
+    arm64.add x1, x1, x2
+    arm64.eor x19, x0, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @checkedTwin {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x2, x0
+    arm64.cmp x2, 77
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge#2
+  orrhs#1:
+    arm64.cmp x1, 78
+    arm64.cset x0, eq
+  scmerge#2:
+    arm64.movImm x3, 1
+    arm64.cbnz x0, critsplit#16
+  orrhs#3:
+    arm64.cmp x2, 79
+    arm64.cset x0, eq
+    arm64.b scmerge#4
+  critsplit#16:
+    arm64.movRegReg x0, x3
+  scmerge#4:
+    arm64.movImm x3, 1
+    arm64.cbnz x0, critsplit#17
+  orrhs#5:
+    arm64.cmp x1, 80
+    arm64.cset x0, eq
+    arm64.b scmerge#6
+  critsplit#17:
+    arm64.movRegReg x0, x3
+  scmerge#6:
+    arm64.movImm x3, 1
+    arm64.cbnz x0, critsplit#18
+  orrhs#7:
+    arm64.cmp x2, 81
+    arm64.cset x0, eq
+    arm64.b scmerge#8
+  critsplit#18:
+    arm64.movRegReg x0, x3
+  scmerge#8:
+    arm64.movImm x3, 1
+    arm64.cbnz x0, critsplit#19
+  orrhs#9:
+    arm64.cmp x1, 82
+    arm64.cset x0, eq
+    arm64.b scmerge#10
+  critsplit#19:
+    arm64.movRegReg x0, x3
+  scmerge#10:
+    arm64.cbz x0, ifcont#12
+  tooBig:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#12:
+    arm64.cmp x2, 5
+    arm64.b.ne ifcont#14
+  swapped:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl twin
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#14:
+    arm64.movRegReg x0, x2
+    arm64.bl twin
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  rounds:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl checkedTwin
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+  tryok#5:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.bl __mm_decref
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.cmp x21, 1000
+    arm64.b.lt rounds
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl checkedTwin
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#8
+  tryok#7:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.eor x3, x19, x20
+    arm64.eor x1, x3, x1
+    arm64.eor x1, x1, x2
+    arm64.and x19, x1, 127
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record.test:49: unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-pair-whose-only-caller-is-a-throwing-forwarder-keeps-its-heap-record.test:54: unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```

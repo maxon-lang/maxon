@@ -8,7 +8,6 @@
 // An immortal image record: a buffer retain hands back a writable clone of it, so a cancelled
 // retain whose result outlives the window cannot alias its operand. It becomes a fork on
 // `emitRecordIsImmortal`: `__managed_clone` on the immortal arm, the operand itself on the other.
-typealias PredecessorCounts = Array with ElementIndex
 typealias ConsumedOpSet = Set with ElementIndex
 typealias VacatedOpSet = Set with ElementIndex
 typealias VacatedBlockSet = Set with ElementIndex
@@ -93,23 +92,9 @@ type FusionState
 
 		self.refPlusOneById = buildBlockIdIndex(module, func: self.func)
 		self.knownBlockRefs = self.func.blockRefs.count()
-		self.countPredecessors(module)
+		self.predecessors = stdPredecessorCounts(module, func: self.func)
 		self.ready = true
 	end 'ensureReady'
-
-	function countPredecessors(module StdModule)
-		self.predecessors.growFilled(self.func.nextBlockId as ElementIndex, value: 0)
-		var successors = BlockIdArray.create()
-
-		for blockRef in self.func.blockRefs 'eachBlock'
-			successors.clear()
-			collectStdBlockSuccessorIds(module, block: module.getBlock(blockRef), out: successors)
-
-			for successor in successors 'eachSuccessor'
-				self.addPredecessors(successor, count: 1)
-			end 'eachSuccessor'
-		end 'eachBlock'
-	end 'countPredecessors'
 
 	function addPredecessors(id BlockId, count ElementIndex)
 		let current = try self.predecessors.get(id) otherwise panic("FusionState.addPredecessors: block {id} is outside the function's block ids")

@@ -97,6 +97,14 @@ function aesLane(low AesWord, high AesWord) returns AesWord
 	return aesGather(low) or (aesGather(high) shl aesHalfBits)
 end 'aesLane'
 
+function aesSlotLanes(low AesWord, high AesWord) returns AesPair
+	return (aesLane(low, high: high), aesLane(low shr aesBitsPerByte, high: high shr aesBitsPerByte))
+end 'aesSlotLanes'
+
+function aesPackColumns(c0 AesWord, c1 AesWord, c2 AesWord, c3 AesWord) returns AesPair
+	return (aesInterleave(c0, odd: c2), aesInterleave(c1, odd: c3))
+end 'aesPackColumns'
+
 function aesDeltaSwap(near AesWord, far AesWord, mask AesWord, distance AesSwapDistance) returns AesPair
 	let moved = ((near shr distance) xor far) and mask
 
@@ -121,6 +129,10 @@ function aesCounterBlock(nonceMid AesWord, counter Count) returns AesWord
 	return nonceMid or (aesSpreadBytes(aesCounterWord(counter)) shl aesBitsPerByte)
 end 'aesCounterBlock'
 
+function aesRotateNibblesDown(word AesWord) returns AesWord
+	return (word and aesRowLaneMask) or ((word and aesRotatedDownNibbles) shr 4) or ((word and aesWrappedUpNibbles) shl 12)
+end 'aesRotateNibblesDown'
+
 function aesRotateNibblesUp(word AesWord) returns AesWord
 	return (word and aesRowLaneMask) or ((word and aesRotatedUpNibbles) shl 4) or ((word and aesWrappedDownNibbles) shr 12)
 end 'aesRotateNibblesUp'
@@ -133,16 +145,11 @@ end 'aesSwapTopRowBytes'
 
 // ShiftRows in two stages, with no loop and no variable shift: rows 1 and 3 rotate by one nibble, then
 // the bytes of rows 2 and 3 swap, which rotates them by two more. Rows 1, 2 and 3 end up rotated by 1, 2
-// and 3. Both stages are in this body because, split into two helpers, the spliced body measures past
-// the leaf budget and every call stays on the round path.
+// and 3.
 function aesShiftRowsWord(word AesWord) returns AesWord
-	let rotated = (word and aesRowLaneMask) or ((word and aesRotatedDownNibbles) shr 4) or ((word and aesWrappedUpNibbles) shl 12)
-	let moved = (rotated xor (rotated shr aesBitsPerByte)) and aesTopRowsLowBytes
-
-	return rotated xor moved xor (moved shl aesBitsPerByte)
+	return aesSwapTopRowBytes(aesRotateNibblesDown(word))
 end 'aesShiftRowsWord'
 
-// Composes the stage helpers: decrypt is not a performance target, so it does not need the flat body.
 function aesInvShiftRowsWord(word AesWord) returns AesWord
 	return aesSwapTopRowBytes(aesRotateNibblesUp(word))
 end 'aesInvShiftRowsWord'
@@ -225,16 +232,13 @@ type AesState
 	end 'ortho'
 
 	function loadBlock(source ByteArray)
-		let c0 = aesReadWord(source, at: 0)
-		let c1 = aesReadWord(source, at: aesWordBytes)
-		let c2 = aesReadWord(source, at: 2 * aesWordBytes)
-		let c3 = aesReadWord(source, at: 3 * aesWordBytes)
+		let (low, high) = aesPackColumns(aesReadWord(source, at: 0), c1: aesReadWord(source, at: aesWordBytes), c2: aesReadWord(source, at: 2 * aesWordBytes), c3: aesReadWord(source, at: 3 * aesWordBytes))
 
-		self.q0 = aesInterleave(c0, odd: c2)
+		self.q0 = low
 		self.q1 = 0
 		self.q2 = 0
 		self.q3 = 0
-		self.q4 = aesInterleave(c1, odd: c3)
+		self.q4 = high
 		self.q5 = 0
 		self.q6 = 0
 		self.q7 = 0
@@ -255,15 +259,9 @@ type AesState
 		self.ortho()
 	end 'loadCounters'
 
-	// Two functions rather than one returning a pair: a pair helper over `aesLane`, which is past the
-	// leaf budget, stays a call and returns its pair through the heap on the per-block path.
-	function firstLane() returns AesWord
-		return aesLane(self.q0, high: self.q4)
-	end 'firstLane'
-
-	function secondLane() returns AesWord
-		return aesLane(self.q0 shr aesBitsPerByte, high: self.q4 shr aesBitsPerByte)
-	end 'secondLane'
+	function lanes() returns AesPair
+		return aesSlotLanes(self.q0, high: self.q4)
+	end 'lanes'
 
 	function xorBatch(output ByteArray, data ByteArray, at ElementIndex)
 		aesXorSlot(output, data: data, at: at, low: self.q0, high: self.q4)
@@ -665,8 +663,10 @@ function aesXorLane(output ByteArray, data ByteArray, at ElementIndex, lane AesW
 end 'aesXorLane'
 
 function aesXorSlot(output ByteArray, data ByteArray, at ElementIndex, low AesWord, high AesWord)
-	aesXorLane(output, data: data, at: at, lane: aesLane(low, high: high))
-	aesXorLane(output, data: data, at: at + aesLaneBytes, lane: aesLane(low shr aesBitsPerByte, high: high shr aesBitsPerByte))
+	let (firstLane, secondLane) = aesSlotLanes(low, high: high)
+
+	aesXorLane(output, data: data, at: at, lane: firstLane)
+	aesXorLane(output, data: data, at: at + aesLaneBytes, lane: secondLane)
 end 'aesXorSlot'
 
 function aesSetLane(output ByteArray, at ElementIndex, lane AesWord)
@@ -726,8 +726,7 @@ type AesKeyExpansion
 			let roundIndex = round as AesRoundIndex
 			let wordBase = roundIndex * aesBlockWords
 			let keyBase = roundIndex * aesPlaneCount
-			let low = aesInterleave(self.words.get(wordBase), odd: self.words.get(wordBase + 2))
-			let high = aesInterleave(self.words.get(wordBase + 1), odd: self.words.get(wordBase + 3))
+			let (low, high) = aesPackColumns(self.words.get(wordBase), c1: self.words.get(wordBase + 1), c2: self.words.get(wordBase + 2), c3: self.words.get(wordBase + 3))
 
 			for plane in 0 upto aesPlaneCount 'eachPlane'
 				keys.set(keyBase + plane, value: aesKeyPlane(low, high: high, plane: plane))
@@ -796,11 +795,11 @@ export type AesBitsliced
 	export function cryptBlock(block ByteArray, direction AesDirection) returns ByteArray throws AesError
 		try aesRequireBlock(block)
 
-		let state = crypted(block, direction: direction)
+		let (firstLane, secondLane) = crypted(block, direction: direction).lanes()
 		var output = ByteArray.create()
 		output.reserve(aesBlockBytes)
-		__Builtins.appendLittleEndian(output, state.firstLane() as OrderedWord, aesLaneBytes)
-		__Builtins.appendLittleEndian(output, state.secondLane() as OrderedWord, aesLaneBytes)
+		__Builtins.appendLittleEndian(output, firstLane as OrderedWord, aesLaneBytes)
+		__Builtins.appendLittleEndian(output, secondLane as OrderedWord, aesLaneBytes)
 
 		return output
 	end 'cryptBlock'
@@ -808,10 +807,10 @@ export type AesBitsliced
 	export function cryptBlockInto(block ByteArray, output ByteArray, at ElementIndex, direction AesDirection) throws AesError
 		try aesRequireBlock(block)
 
-		let state = crypted(block, direction: direction)
+		let (firstLane, secondLane) = crypted(block, direction: direction).lanes()
 		aesHoldBlock(output, at: at)
-		aesSetLane(output, at: at, lane: state.firstLane())
-		aesSetLane(output, at: at + aesLaneBytes, lane: state.secondLane())
+		aesSetLane(output, at: at, lane: firstLane)
+		aesSetLane(output, at: at + aesLaneBytes, lane: secondLane)
 	end 'cryptBlockInto'
 
 	export function xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
@@ -838,7 +837,7 @@ export type AesBitsliced
 		state.ortho()
 		state.xorBatchPastMask(output, data: data)
 
-		let firstBlockLanes = (state.firstLane(), state.secondLane())
+		let firstBlockLanes = state.lanes()
 		xorBatches(state, nonceLow: nonceLow, nonceMid: nonceMid, firstCounter: firstBlock, streamBlocks: streamBlocks, lead: aesMaskLeadBlocks, data: data, output: output, startBlock: aesBatchBlocks)
 
 		return firstBlockLanes
@@ -853,9 +852,7 @@ export type AesBitsliced
 			throw AesKeyStreamError.counterOverflow
 		end 'overflow'
 
-		let nonceLow = aesInterleave(aesReadWord(nonce, at: 0), odd: aesReadWord(nonce, at: 2 * aesWordBytes))
-
-		return (nonceLow, aesInterleave(aesReadWord(nonce, at: aesWordBytes), odd: 0))
+		return aesPackColumns(aesReadWord(nonce, at: 0), c1: aesReadWord(nonce, at: aesWordBytes), c2: aesReadWord(nonce, at: 2 * aesWordBytes), c3: 0)
 	end 'streamNonceWords'
 
 	function encryptCounters(state AesState, nonceLow AesWord, nonceMid AesWord, counter Count)

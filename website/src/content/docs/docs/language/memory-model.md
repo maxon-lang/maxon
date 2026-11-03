@@ -52,8 +52,9 @@ Three mechanisms carry this:
   [inline packed record](/docs/language/composite-types/#inline-packed-records) — are plain values. Assigning one copies it.
 - **Records** — values of a `type`, tuples, unions with payloads, strings, arrays and other collections —
   live on the heap. A variable holds a **reference** to its record. A two-element tuple of register-wide
-  elements returned from a function is the one exception: it comes back in the two return registers and no
-  record is built (see [Memory Semantics](/docs/language/composite-types/#memory-semantics) under Tuples).
+  elements returned from a function is the one exception: it comes back in the two return registers, and
+  a call site builds a record only when it needs one (see [Memory Semantics](/docs/language/composite-types/#memory-semantics) under
+  Tuples).
 
 ### Reference-by-Default Assignment
 

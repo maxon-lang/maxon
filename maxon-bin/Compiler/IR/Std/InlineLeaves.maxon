@@ -8,6 +8,9 @@
 //     cost: MEASURED on the self-compile, `regMaskContains` — `((mask shr regNum) and 1) != 0` plus
 //     its entry guard — was 21% of the profile's self time from 14 static sites, because the body is
 //     smaller than the protocol around it (the argument moves, the `call`, the frame, the `ret`).
+//   • THE WRAPPER RULE: a function inside the leaf budget whose only blockers are STANDING calls
+//     is spliced per site where the caller's frame and register pressure allow it (`LeafPlan`
+//     defines a standing call and a wrapper).
 //   • THE CALLED-ONCE RULE: a function with exactly one direct site (`call` or `tryCall`) in the whole program is spliced
 //     into its caller whatever its body holds — loops, stores, panics, `div`/`mod`, calls of every kind.
 //     The call was the function's only reason to exist as a frame, and the body moves rather than
@@ -29,7 +32,8 @@
 // stand and splices every admitted site outside the eligible leaves themselves
 // (`keepsItsMeasuredBody`). Neither cascades further, except along the calls a table
 // devirtualization produced (`followTableChains`) and into a function whose only refusal was a
-// direct call to a module function, once those calls are spliced away (`followPromotedLeaves`).
+// direct call to a module function, once those calls are spliced away or known to stand
+// (`followPromotedLeaves`).
 //
 // ⭐⭐ **THE PASS RUNS TWICE OVER ONE MODULE AND THE TWO RUNS PARTITION THE PAIRS** — the pipeline's over
 // every caller, the band's over the callers `Compiler.compileToCodeResult` appended below the pipeline.
@@ -65,6 +69,11 @@
 // copies none of them, and the ops of cold blocks are charged apart against their own budget below.
 // A body that fits only without its cascades is therefore spliced only at such a site, and stays a
 // call with its cascades everywhere else.
+//
+// An unconditional jump to a block with exactly one entering edge (the function entry counts one more)
+// is not charged: the spliced body keeps that block as its own for its inline site, and `BranchCleanup`
+// elides a jump to the next block in layout. A jump into a cold block is never elided, so it is charged
+// (`FallThroughJoins`).
 //
 // ⭐ **WHAT HOLDS 24 UP IS THE SITE COUNT.** MEASURED on the self-compile: at 24, 3,673 sites inline
 // across 418 eligible callees; at 16, 3,286 sites across 349 callees — 24 buys 387 sites and 69 callees
@@ -422,14 +431,21 @@ enum LeafVerdict
 	tooManyOps
 
 	// Everything else, and the list is the whole eligibility rule read backwards: a call outside a
-	// cold block other than the hot calls `TableCallProbe` admits, a calling terminator, an
-	// `isUnsupportedInInlineBody` op, a by-reference parameter, a body carrying the green-thread stack
-	// guard unless it is a witness-slot adapter, an entry block carrying phis, a block still in
-	// `Terminator.unset` (a body the lowering never emitted), or no body at all.
+	// cold block other than the hot calls `TableCallProbe` admits and a wrapper's standing calls, a
+	// calling terminator, an `isUnsupportedInInlineBody` op, a by-reference parameter, a body carrying
+	// the green-thread stack guard unless it is a witness-slot adapter, an entry block carrying phis, a
+	// block still in `Terminator.unset` (a body the lowering never emitted), or no body at all.
 	notALeaf
 end 'LeafVerdict'
 
 typealias LeafVerdictArray = Array with LeafVerdict
+
+union WaitingOn
+	nothing
+	call(calleeIndex ElementIndex)
+end 'WaitingOn'
+
+typealias WaitingOnArray = Array with WaitingOn
 
 // What one scan of a candidate body found. A record rather than two out-params because the verdict is a
 // JOIN of several facts and the budget question needs the op count even when the answer is `eligible`.
@@ -443,13 +459,25 @@ type LeafBodyScan
 	export var tableUses = TableUseArray.create()
 
 	// A `notALeaf` whose only refusal is a direct call to a module function and whose body is inside
-	// every budget: it is a leaf in a follow-up round if splicing removes those calls.
+	// every budget: it is a leaf in a follow-up round if splicing removes those calls, and a wrapper once
+	// every one of them stands.
 	export var flippable = false
+
+	export var wrapper = false
+	export var waiting = WaitingOn.nothing
 
 	static function create(verdict LeafVerdict, opCount ElementIndex) returns LeafBodyScan
 		return Self{verdict: verdict, opCount: opCount}
 	end 'create'
 end 'LeafBodyScan'
+
+enum ChargeBucket
+	cascade
+	cold
+	body
+end 'ChargeBucket'
+
+typealias ChargeBucketArray = Array with ChargeBucket
 
 type LeafOpTally
 	export var body as ElementIndex
@@ -460,20 +488,111 @@ type LeafOpTally
 		return Self{body: 0, cold: 0, cascade: 0}
 	end 'create'
 
-	function charge(cost ElementIndex, inACascade bool, inColdBlock bool)
+	static function bucketOf(inACascade bool, inColdBlock bool) returns ChargeBucket
 		if inACascade 'costsOnlyWhereNotDeclined'
-			self.cascade = self.cascade + cost
-		end 'costsOnlyWhereNotDeclined' else if inColdBlock 'costsOffTheHotPath'
-			self.cold = self.cold + cost
-		end 'costsOffTheHotPath' else 'costsEverySite'
-			self.body = self.body + cost
-		end 'costsEverySite'
+			return ChargeBucket.cascade
+		end 'costsOnlyWhereNotDeclined'
+
+		if inColdBlock 'costsOffTheHotPath'
+			return ChargeBucket.cold
+		end 'costsOffTheHotPath'
+
+		return ChargeBucket.body
+	end 'bucketOf'
+
+	function charge(cost ElementIndex, bucket ChargeBucket)
+		match bucket 'bucket'
+			cascade then self.cascade = self.cascade + cost
+			cold then self.cold = self.cold + cost
+			body then self.body = self.body + cost
+		end 'bucket'
 	end 'charge'
+
+	function discharge(cost ElementIndex, bucket ChargeBucket)
+		match bucket 'bucket'
+			cascade then self.cascade = self.cascade - cost
+			cold then self.cold = self.cold - cost
+			body then self.body = self.body - cost
+		end 'bucket'
+	end 'discharge'
 
 	function total() returns ElementIndex
 		return self.body + self.cold
 	end 'total'
 end 'LeafOpTally'
+
+type FallThroughJoins
+	var entries as PredecessorCounts
+	var branch as StdBranchOperands
+	var refPlusOneById as ValueIdArray
+	var entryId as BlockId
+	var pendingTargets as BlockIdArray
+	var pendingBuckets as ChargeBucketArray
+	var resolved as bool
+
+	static function create() returns FallThroughJoins
+		return Self{entries: PredecessorCounts.create(), branch: StdBranchOperands.create(), refPlusOneById: ValueIdArray.create(), entryId: 0, pendingTargets: BlockIdArray.create(), pendingBuckets: ChargeBucketArray.create(), resolved: false}
+	end 'create'
+
+	function begin()
+		self.resolved = false
+		self.pendingTargets.clear()
+		self.pendingBuckets.clear()
+	end 'begin'
+
+	function chargeTerminator(module StdModule, block IrBlock, tally LeafOpTally, bucket ChargeBucket)
+		classifyBranch(module.getOp(block.terminatorIndex()), out: self.branch)
+
+		if not self.branch.isBranch() 'notAnUnconditionalJump'
+			tally.charge(1, bucket: bucket)
+			return
+		end 'notAnUnconditionalJump'
+
+		let target = self.branch.targetBlockId
+
+		if self.resolved 'countsKnown'
+			tally.charge(0 if self.elides(module, target: target) else 1, bucket: bucket)
+			return
+		end 'countsKnown'
+
+		tally.charge(1, bucket: bucket)
+		self.pendingTargets.push(target)
+		self.pendingBuckets.push(bucket)
+	end 'chargeTerminator'
+
+	function resolve(module StdModule, func IrFunction, tally LeafOpTally)
+		if self.resolved 'alreadyExact'
+			return
+		end 'alreadyExact'
+
+		self.entries = stdPredecessorCounts(module, func: func)
+		self.refPlusOneById = buildBlockIdIndex(module, func: func)
+		self.entryId = module.blockAtPosition(func, position: StdEntryBlockPosition).id
+		self.resolved = true
+
+		for index in 0 upto self.pendingTargets.count() 'eachPendingJump'
+			let target = try self.pendingTargets.get(index) otherwise panic("FallThroughJoins.resolve: pendingTargets.get OOB at {index}")
+
+			if self.elides(module, target: target) 'fallsThrough'
+				tally.discharge(1, bucket: try self.pendingBuckets.get(index) otherwise panic("FallThroughJoins.resolve: pendingBuckets.get OOB at {index}"))
+			end 'fallsThrough'
+		end 'eachPendingJump'
+
+		self.pendingTargets.clear()
+		self.pendingBuckets.clear()
+	end 'resolve'
+
+	function elides(module StdModule, target BlockId) returns bool
+		let seen = try self.entries.get(target) otherwise panic("FallThroughJoins.elides: entries.get OOB at {target} in a function of {self.entries.count()} block id(s)")
+		let entered = seen + (1 if target == self.entryId else 0)
+
+		if entered != 1 'joinsOrLoops'
+			return false
+		end 'joinsOrLoops'
+
+		return blockById(module, refByBlockId: self.refPlusOneById, id: target, from: b"inlineLeaves").heat != BlockHeat.cold
+	end 'elides'
+end 'FallThroughJoins'
 
 // ⭐ **EVERY FUNCTION'S VERDICT, COMPUTED ONCE, ON THE PRE-SPLICE BODY.** Recomputing spliceability per
 // SITE is `callSites × calleeSize`; here the scan is one walk of the module and every site is a column
@@ -485,6 +604,11 @@ end 'LeafOpTally'
 // devirtualization produced, for at most `MaxChainRounds` rounds, and `followPromotedLeaves`,
 // which re-scans the `flippable` functions (those whose only refusal was a direct call to a module
 // function) for at most `MaxLeafFollowRounds` rounds.
+//
+// A WRAPPER is an eligible function whose only blockers are standing calls. A call stands when its callee
+// is `tooManyOps` or a `notALeaf` that is not flippable, and that verdict never reverts.
+// `settleFlippable` is the one place a flippable function is rescanned; `buildLeafPlan` settles the
+// wrappers once before any splice, and `SiteSplicer.judgeWrapperSites` judges their sites.
 type LeafPlan
 	var verdicts as LeafVerdictArray
 	var conventions as ConventionArray
@@ -513,8 +637,13 @@ type LeafPlan
 	export var tooManyOpsWithinLargerBudget as ElementIndex
 	var tableUsesByCallee as TableUsesByCallee
 	export var slots as RdataSlotIndex
+	var wrapperFuncs as BoolArray
+	export var wrapperCount as ElementIndex
+	var refusedWrapperFuncs as BoolArray
+	var waitings as WaitingOnArray
+	export var gate as WrapperGate
 
-	static function create(funcCount ElementIndex) returns LeafPlan
+	static function create(funcCount ElementIndex, gate WrapperGate) returns LeafPlan
 		var valueBounds = ValueIdArray.create()
 		valueBounds.resize(funcCount)
 		var blockCounts = BlockPositionColumn.create()
@@ -527,6 +656,10 @@ type LeafPlan
 		withinLargerBudget.resize(funcCount)
 		var reliesOnDeclinedCascades = BoolArray.create()
 		reliesOnDeclinedCascades.resize(funcCount)
+		var wrapperFuncs = BoolArray.create()
+		wrapperFuncs.resize(funcCount)
+		var refusedWrapperFuncs = BoolArray.create()
+		refusedWrapperFuncs.resize(funcCount)
 		return Self{
 			verdicts: LeafVerdictArray.create(),
 			conventions: ConventionArray.create(),
@@ -536,6 +669,11 @@ type LeafPlan
 			flippableFuncs: flippableFuncs,
 			withinLargerBudget: withinLargerBudget,
 			reliesOnDeclinedCascades: reliesOnDeclinedCascades,
+			wrapperFuncs: wrapperFuncs,
+			wrapperCount: 0,
+			refusedWrapperFuncs: refusedWrapperFuncs,
+			waitings: WaitingOnArray.create(),
+			gate: gate,
 			eligibleCount: 0,
 			tooManyOpsCount: 0,
 			tooManyOpsWithinLargerBudget: 0,
@@ -554,6 +692,7 @@ type LeafPlan
 
 		self.verdicts.push(scan.verdict)
 		self.conventions.push(scan.convention)
+		self.waitings.push(scan.waiting)
 
 		self.recordVerdict(funcIndex, scan: scan, module: module, func: func)
 	end 'record'
@@ -561,9 +700,43 @@ type LeafPlan
 	function rescan(funcIndex ElementIndex, scan LeafBodyScan, module StdModule, func IrFunction)
 		try self.verdicts.set(funcIndex, value: scan.verdict) otherwise panic("LeafPlan.rescan: verdicts.set OOB at {funcIndex}")
 		try self.conventions.set(funcIndex, value: scan.convention) otherwise panic("LeafPlan.rescan: conventions.set OOB at {funcIndex}")
+		try self.waitings.set(funcIndex, value: scan.waiting) otherwise panic("LeafPlan.rescan: waitings.set OOB at {funcIndex}")
 		try self.flippableFuncs.set(funcIndex, value: false) otherwise panic("LeafPlan.rescan: flippableFuncs.set OOB at {funcIndex}")
+		try self.refusedWrapperFuncs.set(funcIndex, value: false) otherwise panic("LeafPlan.rescan: refusedWrapperFuncs.set OOB at {funcIndex}")
 		self.recordVerdict(funcIndex, scan: scan, module: module, func: func)
 	end 'rescan'
+
+	function refuseWrapper(funcIndex ElementIndex)
+		try self.refusedWrapperFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.refuseWrapper: refusedWrapperFuncs.set OOB at {funcIndex}")
+	end 'refuseWrapper'
+
+	function refusedWrapperCount() returns ElementIndex
+		var count = 0 as ElementIndex
+
+		for refused in self.refusedWrapperFuncs 'eachFunc'
+			if refused 'aRefusedWrapper'
+				count = count + 1
+			end 'aRefusedWrapper'
+		end 'eachFunc'
+
+		return count
+	end 'refusedWrapperCount'
+
+	// Settled means a rescan would find what the last one did: a refused wrapper until its body is touched
+	// (`rescan` clears the refusal), a flippable function while the first callee it waits on still does not
+	// stand. That holds because "does not stand" only ever turns into "stands".
+	function isSettled(funcIndex ElementIndex) returns bool
+		let refused = try self.refusedWrapperFuncs.get(funcIndex) otherwise panic("LeafPlan.isSettled: refusedWrapperFuncs.get OOB at {funcIndex}")
+
+		if refused 'refused'
+			return true
+		end 'refused'
+
+		return match try self.waitings.get(funcIndex) otherwise panic("LeafPlan.isSettled: waitings.get OOB at {funcIndex}") 'waiting'
+			nothing gives false
+			call(calleeIndex) gives not self.callStays(calleeIndex)
+		end 'waiting'
+	end 'isSettled'
 
 	function recordVerdict(funcIndex ElementIndex, scan LeafBodyScan, module StdModule, func IrFunction)
 		match scan.verdict 'tally'
@@ -586,10 +759,27 @@ type LeafPlan
 		return try self.flippableFuncs.get(funcIndex) otherwise panic("LeafPlan.isFlippable: function index {funcIndex} is outside the {self.flippableFuncs.count()}-function module this plan was built over")
 	end 'isFlippable'
 
+	function isWrapper(funcIndex ElementIndex) returns bool
+		return try self.wrapperFuncs.get(funcIndex) otherwise panic("LeafPlan.isWrapper: function index {funcIndex} is outside the {self.wrapperFuncs.count()}-function module this plan was built over")
+	end 'isWrapper'
+
+	function callStays(funcIndex ElementIndex) returns bool
+		return match self.verdictOf(funcIndex) 'verdict'
+			tooManyOps gives true
+			notALeaf gives not self.isFlippable(funcIndex)
+			eligible gives false
+		end 'verdict'
+	end 'callStays'
+
 	function recordEligible(funcIndex ElementIndex, scan LeafBodyScan, module StdModule, func IrFunction)
 		self.eligibleCount = self.eligibleCount + 1
 		try self.rowIndexedFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: rowIndexedFuncs.set OOB at {funcIndex}")
 		self.measure(funcIndex, module: module, func: func)
+
+		if scan.wrapper 'holdsStandingCalls'
+			self.wrapperCount = self.wrapperCount + 1
+			try self.wrapperFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: wrapperFuncs.set OOB at {funcIndex}")
+		end 'holdsStandingCalls'
 
 		if scan.tableUses.count() != 0 'readsTables'
 			self.tableUsesByCallee.upsert(funcIndex, value: scan.tableUses)
@@ -662,9 +852,11 @@ type LeafPlan
 end 'LeafPlan'
 
 function buildLeafPlan(project Project, module StdModule, namedByIrRequest BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
-	var plan = LeafPlan.create(module.funcCount())
+	var gate = WrapperGate.create(project, funcCount: module.funcCount(), byName: byName, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
+	var plan = LeafPlan.create(module.funcCount(), gate: gate)
 	var reference = StdFunctionReference.create()
 	var probe = TableCallProbe.create(project)
+	var joins = FallThroughJoins.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		view func = module.getFunc(funcIndex)
@@ -682,24 +874,80 @@ function buildLeafPlan(project Project, module StdModule, namedByIrRequest BoolA
 		// Splicing every site of a leaf a ```RequiredRuntime block names would drop the body that block
 		// asks the printer for; a callee this round does not admit is not a leaf here either
 		// (`roundAdmitsCallee`).
-		let scan = leafBodyScanOf(module, func: func, funcIndex: funcIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: runtimeTier, meta: meta, byName: byName, reference: reference, probe: probe)
+		let scan = leafBodyScanOf(module, func: func, funcIndex: funcIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: runtimeTier, meta: meta, byName: byName, reference: reference, probe: probe, joins: joins, standing: StandingCallees.unknown)
 
 		plan.record(funcIndex, scan: scan, module: module, func: func)
 	end 'eachFunc'
 
+	_ = promoteWrappers(module, byName: byName, plan: plan, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: runtimeTier, meta: meta, reference: reference, probe: probe, joins: joins)
+
+	for funcIndex in 0 upto module.funcCount() 'eachVerdict'
+		if plan.verdictOf(funcIndex) == LeafVerdict.eligible and not plan.isWrapper(funcIndex) 'aCallFreeLeaf'
+			plan.gate.calls.noteSplicedLeaf(funcIndex)
+		end 'aCallFreeLeaf'
+	end 'eachVerdict'
+
 	return plan
 end 'buildLeafPlan'
 
-function leafBodyScanOf(module StdModule, func IrFunction, funcIndex ElementIndex, namedByIrRequest BoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference, probe TableCallProbe) returns LeafBodyScan
+function promoteWrappers(module StdModule, byName FunctionNameIndex, plan LeafPlan, namedByIrRequest BoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins) returns FuncIndexArray
+	var promoted = FuncIndexArray.create()
+
+	for funcIndex in 0 upto module.funcCount() 'eachFlippableFunc'
+		if not plan.isFlippable(funcIndex) or plan.isSettled(funcIndex) 'notWaitingOnItsCalls'
+			continue
+		end 'notWaitingOnItsCalls'
+
+		if settleFlippable(module, byName: byName, plan: plan, funcIndex: funcIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: runtimeTier, meta: meta, reference: reference, probe: probe, joins: joins) 'aWrapper'
+			promoted.push(funcIndex)
+		end 'aWrapper'
+	end 'eachFlippableFunc'
+
+	return promoted
+end 'promoteWrappers'
+
+function settleFlippable(module StdModule, byName FunctionNameIndex, plan LeafPlan, funcIndex ElementIndex, namedByIrRequest BoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins) returns bool
+	view func = module.getFunc(funcIndex)
+	var scan = leafBodyScanOf(module, func: func, funcIndex: funcIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: runtimeTier, meta: meta, byName: byName, reference: reference, probe: probe, joins: joins, standing: StandingCallees.known(plan))
+	let refused = scan.wrapper and not plan.gate.canHoldItsValues(module, func: func)
+
+	if refused 'neverFits'
+		scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: scan.opCount)
+		scan.flippable = true
+	end 'neverFits'
+
+	plan.rescan(funcIndex, scan: scan, module: module, func: func)
+
+	if refused 'recordRefusal'
+		plan.refuseWrapper(funcIndex)
+	end 'recordRefusal'
+
+	return scan.verdict == LeafVerdict.eligible
+end 'settleFlippable'
+
+union StandingCallees
+	unknown
+	known(plan LeafPlan)
+end 'StandingCallees'
+
+function calleeStands(standing StandingCallees, calleeIndex ElementIndex) returns bool
+	return match standing 'standing'
+		unknown gives false
+		known(plan) gives plan.callStays(calleeIndex)
+	end 'standing'
+end 'calleeStands'
+
+function leafBodyScanOf(module StdModule, func IrFunction, funcIndex ElementIndex, namedByIrRequest BoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins, standing StandingCallees) returns LeafBodyScan
 	if isIrRequested(namedByIrRequest, funcIndex: funcIndex) or not roundAdmitsCallee(round, callee: func, runtimeTier: runtimeTier) 'declined'
 		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
 	end 'declined'
 
-	return scanLeafBody(module, func: func, meta: meta, byName: byName, reference: reference, probe: probe)
+	return scanLeafBody(module, func: func, meta: meta, byName: byName, reference: reference, probe: probe, joins: joins, standing: standing)
 end 'leafBodyScanOf'
 
 // One candidate body's whole verdict, from ONE walk: the shape both rules refuse, then the leaf
-// rule's own — a call outside a cold block, and the op budgets: hot ops against
+// rule's own — a call outside a cold block (a standing call, once `standing` knows the plan, makes the
+// body a wrapper instead), and the op budgets: hot ops against
 // `MaxInlinedLeafOps`, or `MaxInlinedColdArmLeafOps` when the body has a cold arm, and cold ops
 // against `MaxInlinedLeafColdOps`.
 //
@@ -714,11 +962,12 @@ end 'leafBodyScanOf'
 // helpers below are shared with `scanSpliceableShape`, which asks them of a called-once candidate and
 // nothing else. A leaf scan RETURNS at the first hot-path call its tables cannot resolve — the
 // commonest op there is — where the shape scan has to read the whole body for its refusal reason.
-function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference, probe TableCallProbe) returns LeafBodyScan
+function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins, standing StandingCallees) returns LeafBodyScan
 	// The row's cost rules are waived here and nowhere else in this scan — see `callFit` and the
 	// budget below.
 	let alwaysSpliced = func.mustBeSplicedAtEverySite
 	probe.begin(func)
+	joins.begin()
 
 	match functionShape(func, frameGuardAdmitted: probe.isForwarder()) 'shape'
 		spliceable then break
@@ -727,6 +976,8 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 
 	var tally = LeafOpTally.create()
 	var blockedByCalls = false
+	var everyCallStands = true
+	var waiting = WaitingOn.nothing
 
 	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
 		let block = module.blockAtPosition(func, position: blockIndex)
@@ -736,8 +987,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 			refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
 		end 'blockShape'
 
-		let inACascade = blockIsInAnEntryCascade(func, block: block)
-		let offTheHotPath = block.heat == BlockHeat.cold and not probe.isForwarder()
+		let bucket = LeafOpTally.bucketOf(blockIsInAnEntryCascade(func, block: block), inColdBlock: block.heat == BlockHeat.cold and not probe.isForwarder())
 
 		for opIdx in block.bodyOps() 'eachOp'
 			// Bound ONCE: this runs on every op of every function in the module, and the role is a `match`
@@ -756,6 +1006,16 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 
 			if opFit == LeafOpFit.refuses and role == InlineOpRole.calling and not alwaysSpliced and not probe.isForwarder() and calledModuleFunction(op, byName: byName, reference: reference) 'aCallASpliceCouldRemove'
 				blockedByCalls = true
+				let stands = calleeStands(standing, calleeIndex: reference.funcIndex)
+				everyCallStands = everyCallStands and stands
+
+				if not stands 'aCallThatMayGo'
+					match waiting 'firstOne'
+						nothing then waiting = WaitingOn.call(reference.funcIndex)
+						call then break
+					end 'firstOne'
+				end 'aCallThatMayGo'
+
 				opFit = LeafOpFit.fits
 			end 'aCallASpliceCouldRemove'
 
@@ -764,15 +1024,19 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 				refuses then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
 			end 'fit'
 
-			tally.charge(countedBodyOps(role), inACascade: inACascade, inColdBlock: offTheHotPath)
+			tally.charge(countedBodyOps(role), bucket: bucket)
 
-			if blockedByCalls and (tally.body > MaxInlinedColdArmLeafOps or tally.cold > MaxInlinedLeafColdOps) 'pastEveryBudgetWithCallsStanding'
-				return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
-			end 'pastEveryBudgetWithCallsStanding'
+			if blockedByCalls and pastEveryBudget(tally) 'maybePastEveryBudgetWithCallsStanding'
+				joins.resolve(module, func: func, tally: tally)
+
+				if pastEveryBudget(tally) 'pastEveryBudgetWithCallsStanding'
+					return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
+				end 'pastEveryBudgetWithCallsStanding'
+			end 'maybePastEveryBudgetWithCallsStanding'
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminated'
-			tally.charge(1, inACascade: inACascade, inColdBlock: offTheHotPath)
+			joins.chargeTerminator(module, block: block, tally: tally, bucket: bucket)
 
 			// A terminator that calls refuses the leaf rule whatever its block's heat.
 			match terminatorRole(module.getOp(block.terminatorIndex()), func: func, meta: meta) 'termRole'
@@ -783,11 +1047,18 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 		end 'terminated'
 	end 'eachBlock'
 
+	if tally.body + tally.cascade > MaxInlinedLeafOps or tally.cold > MaxInlinedLeafColdOps 'nearABudget'
+		joins.resolve(module, func: func, tally: tally)
+	end 'nearABudget'
+
 	let hotBudget = MaxInlinedColdArmLeafOps if tally.cold > 0 else MaxInlinedLeafOps
 
-	if blockedByCalls 'callsStand'
+	let withinEveryBudget = tally.body <= hotBudget and tally.cold <= MaxInlinedLeafColdOps and probe.settles()
+
+	if blockedByCalls and not (everyCallStands and withinEveryBudget) 'callsStand'
 		var blocked = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: tally.total())
-		blocked.flippable = tally.body <= hotBudget and tally.cold <= MaxInlinedLeafColdOps and probe.settles()
+		blocked.flippable = withinEveryBudget
+		blocked.waiting = waiting
 		return blocked
 	end 'callsStand'
 
@@ -810,8 +1081,13 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 	scan.cascadeOpCount = tally.cascade
 	scan.reliesOnDeclinedCascades = tally.body + tally.cascade > budget and not alwaysSpliced
 	scan.convention = returnConventionOf(module, func: func, meta: meta)
+	scan.wrapper = blockedByCalls
 	return scan
 end 'scanLeafBody'
+
+function pastEveryBudget(tally LeafOpTally) returns bool
+	return tally.body > MaxInlinedColdArmLeafOps or tally.cold > MaxInlinedLeafColdOps
+end 'pastEveryBudget'
 
 enum ReturnConvention
 	neither
@@ -1172,6 +1448,11 @@ type InlineLeafStats
 	// compile being asked about rather than be re-derived from a corpus later.
 	export var declinedParamGuards as SiteCount
 	export var sitesRefusedByTables as SiteCount
+	export var sitesRefusedByWrapperFrame as SiteCount
+	export var sitesRefusedByWrapperPressure as SiteCount
+	export var wrapperCallersJudged as SiteCount
+	export var wrapperSitesJudged as SiteCount
+	export var wrapperSitesAdmitted as SiteCount
 	export var tableCallers as DistinctFuncList
 	export var callersCutOffFromAContinuation as DistinctFuncList
 	export var touchedCallers as DistinctFuncList
@@ -1183,7 +1464,7 @@ type InlineLeafStats
 	export var followUpRoundsExhausted = false
 
 	static function create() returns InlineLeafStats
-		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, sitesRefusedByStackGuard: 0, sitesRefusedByReturnConvention: 0, declinedParamGuards: 0, sitesRefusedByTables: 0, tableCallers: DistinctFuncList.create(), callersCutOffFromAContinuation: DistinctFuncList.create(), touchedCallers: DistinctFuncList.create(), watchedCallers: FuncIndexArray.create(), watchedCallees: FuncIndexArray.create(), watchedOps: OpIndexArray.create(), followUpRounds: 0, promotedLeaves: 0}
+		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, sitesRefusedByStackGuard: 0, sitesRefusedByReturnConvention: 0, declinedParamGuards: 0, sitesRefusedByTables: 0, sitesRefusedByWrapperFrame: 0, sitesRefusedByWrapperPressure: 0, wrapperCallersJudged: 0, wrapperSitesJudged: 0, wrapperSitesAdmitted: 0, tableCallers: DistinctFuncList.create(), callersCutOffFromAContinuation: DistinctFuncList.create(), touchedCallers: DistinctFuncList.create(), watchedCallers: FuncIndexArray.create(), watchedCallees: FuncIndexArray.create(), watchedOps: OpIndexArray.create(), followUpRounds: 0, promotedLeaves: 0}
 	end 'create'
 
 	function notePromotedLeaves(count ElementIndex)
@@ -1228,6 +1509,23 @@ type InlineLeafStats
 			dropUnreachableBlocks(module, func: module.getFunc(funcIndex))
 		end 'eachCaller'
 	end 'dropWhatNoPathReaches'
+
+	function noteWrapperFrameRefusal()
+		self.sitesRefusedByWrapperFrame = self.sitesRefusedByWrapperFrame + 1
+	end 'noteWrapperFrameRefusal'
+
+	function noteWrapperPressureRefusal()
+		self.sitesRefusedByWrapperPressure = self.sitesRefusedByWrapperPressure + 1
+	end 'noteWrapperPressureRefusal'
+
+	function noteWrapperSitesJudged(count SiteCount)
+		self.wrapperCallersJudged = self.wrapperCallersJudged + 1
+		self.wrapperSitesJudged = self.wrapperSitesJudged + count
+	end 'noteWrapperSitesJudged'
+
+	function noteWrapperSiteAdmitted()
+		self.wrapperSitesAdmitted = self.wrapperSitesAdmitted + 1
+	end 'noteWrapperSiteAdmitted'
 
 	function noteTableRefusal()
 		self.sitesRefusedByTables = self.sitesRefusedByTables + 1
@@ -1756,13 +2054,20 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let calleesSizeRefused = plan.tooManyOpsCount
 	let tableCallerCount = stats.tableCallers.distinctCount()
 	let tableRefusals = stats.sitesRefusedByTables
+	let wrapperCount = plan.wrapperCount
+	let wrappersRefused = plan.refusedWrapperCount()
+	let wrapperCallersJudged = stats.wrapperCallersJudged
+	let wrapperSitesJudged = stats.wrapperSitesJudged
+	let wrapperSitesAdmitted = stats.wrapperSitesAdmitted
+	let wrapperFrameRefusals = stats.sitesRefusedByWrapperFrame
+	let wrapperPressureRefusals = stats.sitesRefusedByWrapperPressure
 	let followUpRounds = stats.followUpRounds
 	let promotedLeaves = stats.promotedLeaves
 	let followUpExhausted = stats.followUpRoundsExhausted
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
 
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} hot ops ({MaxInlinedColdArmLeafOps} with a cold arm) or {MaxInlinedLeafColdOps} cold ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {stackGuardRefusals} site(s) refused as a body that needs the green-thread stack guard spliced into a caller that skips it, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead, {tableCallerCount} caller(s) took a body reading a table, {tableRefusals} site(s) refused because a table is not constant there, {promotedLeaves} callee(s) became leaves by their calls being spliced over {followUpRounds} follow-up round(s), bound of {MaxLeafFollowRounds} exhausted with work left: {followUpExhausted}")
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} hot ops ({MaxInlinedColdArmLeafOps} with a cold arm) or {MaxInlinedLeafColdOps} cold ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {stackGuardRefusals} site(s) refused as a body that needs the green-thread stack guard spliced into a caller that skips it, {conventionRefusals} site(s) refused for reading a different return convention than the callee writes, {declinedGuards} spliced parameter cascade(s) declined as provably dead, {tableCallerCount} caller(s) took a body reading a table, {tableRefusals} site(s) refused because a table is not constant there, {wrapperCount} callee(s) are wrappers over standing calls ({wrappersRefused} more are refused outright: their own busiest point is past the register budget) judged at {wrapperSitesJudged} site(s) in {wrapperCallersJudged} caller(s), of which {wrapperSitesAdmitted} site(s) are spliced and {wrapperFrameRefusals} site(s) would widen a lean caller frame and {wrapperPressureRefusals} site(s) are over the register budget, {promotedLeaves} callee(s) became leaves by their calls being spliced over {followUpRounds} follow-up round(s), bound of {MaxLeafFollowRounds} exhausted with work left: {followUpExhausted}")
 	end 'debugging'
 end 'spliceLeaves'
 
@@ -1816,25 +2121,32 @@ let MaxLeafFollowRounds = 8 as ElementIndex
 function followPromotedLeaves(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk BoolArray, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
 	var reference = StdFunctionReference.create()
 	var probe = TableCallProbe.create(project)
+	var joins = FallThroughJoins.create()
 
 	for _ in 0 upto MaxLeafFollowRounds 'eachRound'
 		followTableChains(project, module: module, byName: byName, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, callers: stats.tableCallers.take(), admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta)
 		var promoted = FuncIndexArray.create()
+		var rescannedAny = false
 
 		for touchedIndex in stats.touchedCallers.take() 'eachTouchedCaller'
 			if not plan.isFlippable(touchedIndex) 'notWaitingOnItsCalls'
 				continue
 			end 'notWaitingOnItsCalls'
 
-			view func = module.getFunc(touchedIndex)
-			let scan = leafBodyScanOf(module, func: func, funcIndex: touchedIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier, meta: meta, byName: byName, reference: reference, probe: probe)
-			let nowEligible = scan.verdict == LeafVerdict.eligible
-			plan.rescan(touchedIndex, scan: scan, module: module, func: func)
+			rescannedAny = true
 
-			if nowEligible 'nowALeaf'
+			if settleFlippable(module, byName: byName, plan: plan, funcIndex: touchedIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier, meta: meta, reference: reference, probe: probe, joins: joins) 'nowALeaf'
 				promoted.push(touchedIndex)
+
+				if not plan.isWrapper(touchedIndex) 'callFree'
+					plan.gate.calls.noteSplicedLeaf(touchedIndex)
+				end 'callFree'
 			end 'nowALeaf'
 		end 'eachTouchedCaller'
+
+		if rescannedAny 'someCalleeSettled'
+			promoted.append(promoteWrappers(module, byName: byName, plan: plan, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier, meta: meta, reference: reference, probe: probe, joins: joins))
+		end 'someCalleeSettled'
 
 		if promoted.count() == 0 'settled'
 			return
@@ -1860,7 +2172,7 @@ function followPromotedLeaves(project Project, module StdModule, byName Function
 	var promotedLeafPending = false
 
 	for touchedIndex in stats.touchedCallers.members 'eachUnreadCaller'
-		promotedLeafPending = promotedLeafPending or plan.isFlippable(touchedIndex)
+		promotedLeafPending = promotedLeafPending or (plan.isFlippable(touchedIndex) and not plan.isSettled(touchedIndex))
 	end 'eachUnreadCaller'
 
 	stats.followUpRoundsExhausted = promotedLeafPending
@@ -2470,7 +2782,7 @@ type CallerSiteFacts
 
 		match budget 'b'
 			unbounded then break
-			registers(count) then collectRegisterFacts(module, func: func, callerIndex: callerIndex, sites: sites, calleesOfCallers: calleesOfCallers, cap: count, valueBound: valueBound, liveness: liveness, calls: calls)
+			registers(count) then collectRegisterFacts(module, func: func, callerIndex: callerIndex, sites: sites, cap: count, valueBound: valueBound, frameMatters: true, liveness: liveness, calls: calls)
 		end 'b'
 
 		return Self{sites: sites, siteIndexOfCallee: siteIndexOfCallee, sitesAtBlock: sitesAtBlock, ids: ValueMinter.resuming(valueBound)}
@@ -2482,7 +2794,7 @@ type CallerSiteFacts
 	end 'siteOf'
 end 'CallerSiteFacts'
 
-function collectRegisterFacts(module StdModule, func IrFunction, callerIndex ElementIndex, sites SiteAcrossArray, calleesOfCallers CsrGraph, cap RegCount, valueBound ValueId, liveness StdLiveness, calls CallProbe)
+function collectRegisterFacts(module StdModule, func IrFunction, callerIndex ElementIndex, sites SiteAcrossArray, cap RegCount, valueBound ValueId, frameMatters bool, liveness StdLiveness, calls CallProbe)
 	var cuts = AcrossCutArray.create()
 
 	for site in sites 'eachSite'
@@ -2490,7 +2802,7 @@ function collectRegisterFacts(module StdModule, func IrFunction, callerIndex Ele
 	end 'eachSite'
 
 	SiteAcrossCensus.collect(module, func: func, cuts: cuts, cap: cap, valueBound: valueBound, liveness: liveness)
-	calls.recordFrameFacts(module, func: func, callerIndex: callerIndex, sites: sites, calleesOfCallers: calleesOfCallers, liveness: liveness)
+	calls.recordFrameFacts(module, func: func, callerIndex: callerIndex, sites: sites, frameMatters: frameMatters, liveness: liveness)
 end 'collectRegisterFacts'
 
 // Caller -> its site facts, filled the first wave the caller is spliced into.
@@ -3243,50 +3555,33 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 
 	for (callerIndex, callees) in calleesByCaller 'eachCaller'
 		view caller = module.getFunc(callerIndex)
-		view facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness, calls: calls)
+		var facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness, calls: calls)
 		var admittedAny = false
+		var sites = SiteAcrossArray.create()
+		var valueBounds = ValueIdArray.create()
+		var calleeHolds = BoolArray.create()
 
-		var planned = CalleeFrameArray.create()
+		for calleeIndex in callees 'eachCandidate'
+			view callee = module.getFunc(calleeIndex)
+			sites.push(facts.siteOf(calleeIndex, callee: callee))
+			valueBounds.push(calleeValueBound(callerFacts, module: module, callee: callee, calleeIndex: calleeIndex))
+			calleeHolds.push(calls.callerFrameIsLean(callerIndex) and calls.calleeHoldsRegisters(module, calleeIndex: calleeIndex, liveness: liveness))
+		end 'eachCandidate'
 
-		for calleeIndex in callees 'eachPlan'
-			planned.push(calls.frameOf(module, facts: facts, callerIndex: callerIndex, callee: module.getFunc(calleeIndex), calleeIndex: calleeIndex, liveness: liveness))
-		end 'eachPlan'
+		let verdicts = judgeSites(module, budget: budget, callerIndex: callerIndex, sites: sites, valueBounds: valueBounds, calleeHolds: calleeHolds, across: across, liveness: liveness, calls: calls)
 
-		// Fillers go first: once one is admitted the caller saves registers on every path, and a body
-		// that would have widened the frame then widens nothing. The outcome does not depend on the
-		// order the callees are listed in.
-		for fillersFirst in [true, false] 'eachPass'
-			for (iter, calleeIndex) in callees.withIterator() 'eachCandidate'
-				view callee = module.getFunc(calleeIndex)
-				var frame = try planned.get(iter.index()) otherwise panic("spliceWave: no planned frame for candidate {iter.index()}")
+		for (iter, calleeIndex) in callees.withIterator() 'eachVerdict'
+			let verdict = try verdicts.get(iter.index()) otherwise panic("spliceWave: no verdict for candidate {iter.index()}")
 
-				if (frame == CalleeFrame.fillsTheFrame) != fillersFirst 'anotherPass'
-					continue
-				end 'anotherPass'
+			match verdict 'verdict'
+				undecided then panic("spliceWave: candidate {iter.index()} was never judged")
+				admitted then wave.admit(calleeIndex, valueBound: try valueBounds.get(iter.index()) otherwise panic("spliceWave: no value bound for candidate {iter.index()}"), blockCount: module.getFunc(calleeIndex).blockRefs.count())
+				widensTheFrame then refusals.add(CalledOnceRefusal.widensCallerFrame.ordinal, count: 1)
+				overBudget then refusals.add(CalledOnceRefusal.pressureBudgetExceeded.ordinal, count: 1)
+			end 'verdict'
 
-				if frame == CalleeFrame.widens and not calls.callerFrameIsLean(callerIndex) 'alreadyFilled'
-					frame = CalleeFrame.unguarded
-				end 'alreadyFilled'
-
-				if frame == CalleeFrame.widens 'widensTheFrame'
-					refusals.add(CalledOnceRefusal.widensCallerFrame.ordinal, count: 1)
-					continue
-				end 'widensTheFrame'
-
-				let valueBound = calleeValueBound(callerFacts, module: module, callee: callee, calleeIndex: calleeIndex)
-
-				if fitsSpliceBudget(module, budget: budget, facts: facts, callee: callee, calleeIndex: calleeIndex, calleeValueBound: valueBound, across: across, liveness: liveness) 'admitted'
-					wave.admit(calleeIndex, valueBound: valueBound, blockCount: callee.blockRefs.count())
-					admittedAny = true
-
-					if frame == CalleeFrame.fillsTheFrame 'callerSavesRegistersNow'
-						calls.dropLeanFrame(callerIndex)
-					end 'callerSavesRegistersNow'
-				end 'admitted' else 'overBudget'
-					refusals.add(CalledOnceRefusal.pressureBudgetExceeded.ordinal, count: 1)
-				end 'overBudget'
-			end 'eachCandidate'
-		end 'eachPass'
+			admittedAny = admittedAny or verdict == SiteVerdict.admitted
+		end 'eachVerdict'
 
 		if admittedAny 'somethingToSplice'
 			callers.push(callerIndex)
@@ -3335,6 +3630,63 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 	return retiring.count()
 end 'spliceWave'
 
+enum SiteVerdict
+	undecided
+	admitted
+	widensTheFrame
+	overBudget
+end 'SiteVerdict'
+
+typealias SiteVerdictArray = Array with SiteVerdict
+
+function judgeSites(module StdModule, budget HoistPressureBudget, callerIndex ElementIndex, sites SiteAcrossArray, valueBounds ValueIdArray, calleeHolds BoolArray, across StdValueUseSet, liveness StdLiveness, calls CallProbe) returns SiteVerdictArray
+	var planned = CalleeFrameArray.create()
+
+	for index in 0 upto sites.count() 'eachPlan'
+		planned.push(calls.frameOf(plannedSiteAt(sites, index: index), callerIndex: callerIndex, calleeHoldsRegisters: try calleeHolds.get(index) otherwise panic("judgeSites: no frame fact for site {index}")))
+	end 'eachPlan'
+
+	var verdicts = SiteVerdictArray.create()
+	verdicts.growFilled(sites.count(), value: SiteVerdict.undecided)
+
+	// Fillers go first: once one is admitted the caller saves registers on every path, and a body
+	// that would have widened the frame then widens nothing. The outcome does not depend on the
+	// order the sites are listed in.
+	for fillersFirst in [true, false] 'eachPass'
+		for index in 0 upto sites.count() 'eachCandidate'
+			let site = plannedSiteAt(sites, index: index)
+			var frame = try planned.get(index) otherwise panic("judgeSites: no planned frame for site {index}")
+
+			if (frame == CalleeFrame.fillsTheFrame) != fillersFirst 'anotherPass'
+				continue
+			end 'anotherPass'
+
+			if frame == CalleeFrame.widens and not calls.callerFrameIsLean(callerIndex) 'alreadyFilled'
+				frame = CalleeFrame.unguarded
+			end 'alreadyFilled'
+
+			if frame == CalleeFrame.widens 'widensTheFrame'
+				try verdicts.set(index, value: SiteVerdict.widensTheFrame) otherwise panic("judgeSites: verdicts.set OOB at {index}")
+				continue
+			end 'widensTheFrame'
+
+			let valueBound = try valueBounds.get(index) otherwise panic("judgeSites: no value bound for site {index}")
+
+			if fitsSpliceBudget(module, budget: budget, site: site, callee: module.getFunc(site.calleeIndex), calleeValueBound: valueBound, across: across, liveness: liveness) 'admitted'
+				try verdicts.set(index, value: SiteVerdict.admitted) otherwise panic("judgeSites: verdicts.set OOB at {index}")
+
+				if frame == CalleeFrame.fillsTheFrame 'callerSavesRegistersNow'
+					calls.dropLeanFrame(callerIndex)
+				end 'callerSavesRegistersNow'
+			end 'admitted' else 'overBudget'
+				try verdicts.set(index, value: SiteVerdict.overBudget) otherwise panic("judgeSites: verdicts.set OOB at {index}")
+			end 'overBudget'
+		end 'eachCandidate'
+	end 'eachPass'
+
+	return verdicts
+end 'judgeSites'
+
 typealias IndexGroupMap = Map with (ElementIndex, Array with ElementIndex)
 
 typealias SiteIndexMap = Map with (ElementIndex, ElementIndex)
@@ -3363,10 +3715,10 @@ end 'appendToGroup'
 // counts. A parameter live at the body's busiest point IS the caller's argument after the splice, so it
 // is counted on the caller's side when that argument already counts there and on the body's side
 // otherwise.
-function fitsSpliceBudget(module StdModule, budget HoistPressureBudget, facts CallerSiteFacts, callee IrFunction, calleeIndex ElementIndex, calleeValueBound ValueId, across StdValueUseSet, liveness StdLiveness) returns bool
+function fitsSpliceBudget(module StdModule, budget HoistPressureBudget, site SiteAcross, callee IrFunction, calleeValueBound ValueId, across StdValueUseSet, liveness StdLiveness) returns bool
 	match budget 'b'
 		unbounded then return true
-		registers(count) then return spliceFitsRegisters(module, facts: facts, callee: callee, calleeIndex: calleeIndex, calleeValueBound: calleeValueBound, budget: count, across: across, liveness: liveness)
+		registers(count) then return spliceFitsRegisters(module, site: site, callee: callee, calleeValueBound: calleeValueBound, budget: count, across: across, liveness: liveness)
 	end 'b'
 end 'fitsSpliceBudget'
 
@@ -3377,8 +3729,7 @@ end 'fitsSpliceBudget'
 // so a body too small to reach the budget from the site's count admits before it is read. Both answer
 // exactly what the full measurement would, and between them the body's live ranges are walked only
 // for the callees whose answer is not already known.
-function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, callee IrFunction, calleeIndex ElementIndex, calleeValueBound ValueId, budget RegCount, across StdValueUseSet, liveness StdLiveness) returns bool
-	let site = facts.siteOf(calleeIndex, callee: callee)
+function spliceFitsRegisters(module StdModule, site SiteAcross, callee IrFunction, calleeValueBound ValueId, budget RegCount, across StdValueUseSet, liveness StdLiveness) returns bool
 	let acrossCount = site.cut.across.count() as RegCount
 
 	if acrossCount > budget 'overBeforeTheBody'
@@ -3433,11 +3784,11 @@ end 'CalleeFrame'
 
 typealias CalleeFrameArray = Array with CalleeFrame
 
-// The frame rule, applied under a register budget only. A body that keeps a value in a register across
-// a call makes its caller save callee registers. The splice is refused (`widensCallerFrame`) when the
-// caller keeps none across any hot call and some hot entry-to-exit path avoids the site, since that
-// path would pay for registers it did not need. A site every hot path reaches is spliced: every path
-// pays either way.
+// The frame rule, applied under a register budget only, at called-once sites and wrapper sites alike
+// (`judgeSites`). A body that keeps a value in a register across a call makes its caller save callee
+// registers. The splice is refused (`widensCallerFrame`) when the caller keeps none across any hot call
+// and some hot entry-to-exit path avoids the site, since that path would pay for registers it did not
+// need. A site every hot path reaches is spliced: every path pays either way.
 type CallProbe
 	var meta as StdOpMetaMemo
 	var byName as FunctionNameIndex
@@ -3446,9 +3797,12 @@ type CallProbe
 	let runtimeTier as FunctionNameSet
 	var reference as StdFunctionReference
 	var tables as TableCallProbe
+	var joins as FallThroughJoins
 	var decided as BoolArray
 	var inlinable as BoolArray
 	var lean as BoolArray
+	var heldKnown as BoolArray
+	var held as BoolArray
 
 	static function create(project Project, funcCount ElementIndex, byName FunctionNameIndex, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound) returns CallProbe
 		var decided = BoolArray.create()
@@ -3457,8 +3811,12 @@ type CallProbe
 		inlinable.resize(funcCount)
 		var lean = BoolArray.create()
 		lean.resize(funcCount)
+		var heldKnown = BoolArray.create()
+		heldKnown.resize(funcCount)
+		var held = BoolArray.create()
+		held.resize(funcCount)
 
-		return Self{meta: meta, byName: byName, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier, reference: StdFunctionReference.create(), tables: TableCallProbe.create(project), decided: decided, inlinable: inlinable, lean: lean}
+		return Self{meta: meta, byName: byName, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier, reference: StdFunctionReference.create(), tables: TableCallProbe.create(project), joins: FallThroughJoins.create(), decided: decided, inlinable: inlinable, lean: lean, heldKnown: heldKnown, held: held}
 	end 'create'
 
 	// The called-once rule runs before the leaf rule, so a direct call the leaf rule will splice is not a
@@ -3484,7 +3842,7 @@ type CallProbe
 			return try self.inlinable.get(funcIndex) otherwise panic("CallProbe.leafRuleSplices: inlinable.get OOB at {funcIndex}")
 		end 'known'
 
-		let scan = leafBodyScanOf(module, func: module.getFunc(funcIndex), funcIndex: funcIndex, namedByIrRequest: self.namedByIrRequest, round: self.round, runtimeTier: self.runtimeTier, meta: self.meta, byName: self.byName, reference: self.reference, probe: self.tables)
+		let scan = leafBodyScanOf(module, func: module.getFunc(funcIndex), funcIndex: funcIndex, namedByIrRequest: self.namedByIrRequest, round: self.round, runtimeTier: self.runtimeTier, meta: self.meta, byName: self.byName, reference: self.reference, probe: self.tables, joins: self.joins, standing: StandingCallees.unknown)
 		let splices = scan.verdict == LeafVerdict.eligible
 		try self.decided.set(funcIndex, value: true) otherwise panic("CallProbe.leafRuleSplices: decided.set OOB at {funcIndex}")
 		try self.inlinable.set(funcIndex, value: splices) otherwise panic("CallProbe.leafRuleSplices: inlinable.set OOB at {funcIndex}")
@@ -3494,7 +3852,22 @@ type CallProbe
 
 	function forget(funcIndex ElementIndex)
 		try self.decided.set(funcIndex, value: false) otherwise panic("CallProbe.forget: decided.set OOB at {funcIndex}")
+		try self.heldKnown.set(funcIndex, value: false) otherwise panic("CallProbe.forget: heldKnown.set OOB at {funcIndex}")
 	end 'forget'
+
+	// Memoised per callee; `forget` drops the answer when a splice changes the body.
+	function calleeHoldsRegisters(module StdModule, calleeIndex ElementIndex, liveness StdLiveness) returns bool
+		let known = try self.heldKnown.get(calleeIndex) otherwise panic("CallProbe.calleeHoldsRegisters: heldKnown.get OOB at {calleeIndex}")
+
+		if known 'known'
+			return try self.held.get(calleeIndex) otherwise panic("CallProbe.calleeHoldsRegisters: held.get OOB at {calleeIndex}")
+		end 'known'
+
+		let holds = self.holdsRegisterAcrossACall(module, func: module.getFunc(calleeIndex), liveness: liveness)
+		try self.heldKnown.set(calleeIndex, value: true) otherwise panic("CallProbe.calleeHoldsRegisters: heldKnown.set OOB at {calleeIndex}")
+		try self.held.set(calleeIndex, value: holds) otherwise panic("CallProbe.calleeHoldsRegisters: held.set OOB at {calleeIndex}")
+		return holds
+	end 'calleeHoldsRegisters'
 
 	function callsOf(module StdModule, func IrFunction, atMost ElementIndex) returns AcrossCutArray
 		var cuts = AcrossCutArray.create()
@@ -3545,13 +3918,20 @@ type CallProbe
 		return false
 	end 'holdsRegisterAcrossACall'
 
-	function recordFrameFacts(module StdModule, func IrFunction, callerIndex ElementIndex, sites SiteAcrossArray, calleesOfCallers CsrGraph, liveness StdLiveness)
+	// `frameMatters` is false when no callee at these sites holds a register across a call: no site can
+	// widen the frame, so the caller is recorded as not lean and nothing else is computed.
+	function recordFrameFacts(module StdModule, func IrFunction, callerIndex ElementIndex, sites SiteAcrossArray, frameMatters bool, liveness StdLiveness)
+		try self.lean.set(callerIndex, value: false) otherwise panic("CallProbe.recordFrameFacts: lean.set OOB at {callerIndex}")
+
+		if not frameMatters 'noCalleeWidensAFrame'
+			return
+		end 'noCalleeWidensAFrame'
+
 		var aCalleeCalls = false
 
-		for k in 0 upto calleesOfCallers.degree(callerIndex as CsrIndex) 'eachCallee'
-			let calleeIndex = calleesOfCallers.neighbour(callerIndex as CsrIndex, k: k)
-			aCalleeCalls = aCalleeCalls or self.callsOf(module, func: module.getFunc(calleeIndex), atMost: OneCall).count() != 0
-		end 'eachCallee'
+		for site in sites 'eachSite'
+			aCalleeCalls = aCalleeCalls or self.callsOf(module, func: module.getFunc(site.calleeIndex), atMost: OneCall).count() != 0
+		end 'eachSite'
 
 		if not aCalleeCalls or self.holdsRegisterAcrossACall(module, func: func, liveness: liveness) 'nothingToGuard'
 			return
@@ -3570,12 +3950,12 @@ type CallProbe
 		return try self.lean.get(callerIndex) otherwise panic("CallProbe.callerFrameIsLean: lean.get OOB at {callerIndex}")
 	end 'callerFrameIsLean'
 
-	function frameOf(module StdModule, facts CallerSiteFacts, callerIndex ElementIndex, callee IrFunction, calleeIndex ElementIndex, liveness StdLiveness) returns CalleeFrame
-		if not self.callerFrameIsLean(callerIndex) or not self.holdsRegisterAcrossACall(module, func: callee, liveness: liveness) 'nothingToWiden'
+	function frameOf(site SiteAcross, callerIndex ElementIndex, calleeHoldsRegisters bool) returns CalleeFrame
+		if not self.callerFrameIsLean(callerIndex) or not calleeHoldsRegisters 'nothingToWiden'
 			return CalleeFrame.unguarded
 		end 'nothingToWiden'
 
-		if facts.siteOf(calleeIndex, callee: callee).bypassable 'aHotPathAvoidsIt'
+		if site.bypassable 'aHotPathAvoidsIt'
 			return CalleeFrame.widens
 		end 'aHotPathAvoidsIt'
 
@@ -3585,7 +3965,57 @@ type CallProbe
 	function dropLeanFrame(callerIndex ElementIndex)
 		try self.lean.set(callerIndex, value: false) otherwise panic("CallProbe.dropLeanFrame: lean.set OOB at {callerIndex}")
 	end 'dropLeanFrame'
+
+	// The gate answers `leafRuleSplices` from the plan (`noteSplicedLeaf`) and never rescans a body.
+	function decideEveryCallFromThePlan()
+		for funcIndex in 0 upto self.decided.count() 'eachFunc'
+			try self.decided.set(funcIndex, value: true) otherwise panic("CallProbe.decideEveryCallFromThePlan: decided.set OOB at {funcIndex}")
+		end 'eachFunc'
+	end 'decideEveryCallFromThePlan'
+
+	// Only call-free leaves are noted: a wrapper is judged per site and its copy carries its standing
+	// calls, so a call to one still counts as a call that stays.
+	function noteSplicedLeaf(funcIndex ElementIndex)
+		try self.inlinable.set(funcIndex, value: true) otherwise panic("CallProbe.noteSplicedLeaf: inlinable.set OOB at {funcIndex}")
+	end 'noteSplicedLeaf'
 end 'CallProbe'
+
+type WrapperGate
+	export let budget as HoistPressureBudget
+	export var liveness as StdLiveness
+	export var across as StdValueUseSet
+	export var calls as CallProbe
+
+	static function create(project Project, funcCount ElementIndex, byName FunctionNameIndex, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound) returns WrapperGate
+		var calls = CallProbe.create(project, funcCount: funcCount, byName: byName, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
+		calls.decideEveryCallFromThePlan()
+		return Self{budget: hoistPressureBudgetFor(project.target), liveness: StdLiveness.create(), across: StdValueUseSet.createRecordingIds(), calls: calls}
+	end 'create'
+
+	// A wrapper whose busiest live-in point, with none of the caller's values held, is past the register
+	// budget is refused outright: a value the caller holds across a site adds to that peak (one value
+	// passed as two arguments is counted on the callee side). Wasm's budget is `unbounded`, so it never
+	// refuses.
+	function canHoldItsValues(module StdModule, func IrFunction) returns bool
+		match self.budget 'budget'
+			unbounded then return true
+			registers(count) then return peakBodyLiveIn(module, func: func, valueBound: nextFreeValueId(module, func: func), heldParams: noParamsHeld(func), cap: count, liveness: self.liveness) <= count
+		end 'budget'
+	end 'canHoldItsValues'
+
+	function calleesHoldingRegisters(module StdModule, sites SiteAcrossArray) returns BoolArray
+		var holds = BoolArray.create()
+
+		for site in sites 'eachSite'
+			match self.budget 'budget'
+				unbounded then holds.push(false)
+				registers then holds.push(self.calls.calleeHoldsRegisters(module, calleeIndex: site.calleeIndex, liveness: self.liveness))
+			end 'budget'
+		end 'eachSite'
+
+		return holds
+	end 'calleesHoldingRegisters'
+end 'WrapperGate'
 
 // In a non-throwing function every `ret` and `errorReturn` is a success exit: the second slot of its
 // `errorReturn` carries an interface witness or a tuple half there, not an error flag.
@@ -3696,16 +4126,8 @@ end 'bodyLiveInBound'
 // The body's busiest point, capped at `cap + 1` (see `StdLiveness.peakLiveIn`): its largest
 // loop-header live-in set, or its largest block live-in when it holds no loop — less the parameters
 // whose argument the caller already holds across the site.
-//
-// A one-block body is answered without a liveness: every value it holds is defined in that block, so
-// nothing is live into it, loop header or not.
 function largestBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId, args ValueIdArray, across StdValueUseSet, cap RegCount, liveness StdLiveness) returns RegCount
-	if func.blockRefs.count() == 1 'everyValueDefinedInTheOneBlock'
-		return 0
-	end 'everyValueDefinedInTheOneBlock'
-
-	var heldAcross = BoolArray.create()
-	heldAcross.resize(func.paramCount)
+	var heldAcross = noParamsHeld(func)
 
 	for position in 0 upto func.paramCount 'eachParameter'
 		let arg = try args.get(position) otherwise panic("largestBodyLiveIn: parameter {position} has no argument among the site's {args.count()} — the arity check refuses a mismatch before any splice")
@@ -3715,8 +4137,24 @@ function largestBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId
 		end 'heldByTheCaller'
 	end 'eachParameter'
 
-	return liveness.peakLiveIn(module, func: func, valueBound: valueBound, heldParams: heldAcross, cap: cap)
+	return peakBodyLiveIn(module, func: func, valueBound: valueBound, heldParams: heldAcross, cap: cap, liveness: liveness)
 end 'largestBodyLiveIn'
+
+function noParamsHeld(func IrFunction) returns BoolArray
+	var held = BoolArray.create()
+	held.resize(func.paramCount)
+	return held
+end 'noParamsHeld'
+
+// A one-block body is answered without a liveness: every value it holds is defined in that block, so
+// nothing is live into it, loop header or not.
+function peakBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId, heldParams BoolArray, cap RegCount, liveness StdLiveness) returns RegCount
+	if func.blockRefs.count() == 1 'everyValueDefinedInTheOneBlock'
+		return 0
+	end 'everyValueDefinedInTheOneBlock'
+
+	return liveness.peakLiveIn(module, func: func, valueBound: valueBound, heldParams: heldParams, cap: cap)
+end 'peakBodyLiveIn'
 
 // ══════════════════════════════════════════════════════════════════════════
 // The splice
@@ -3727,6 +4165,56 @@ union SpliceAdmission
 	leaves(plan LeafPlan)
 	calledOnce(wave CalledOnceWave)
 end 'SpliceAdmission'
+
+type CollectedSites
+	var blocks as BlockPositionColumn
+	var positions as BlockOpPosArray
+	var callees as FuncIndexArray
+	var ops as OpIndexArray
+
+	static function create() returns CollectedSites
+		return Self{blocks: BlockPositionColumn.create(), positions: BlockOpPosArray.create(), callees: FuncIndexArray.create(), ops: OpIndexArray.create()}
+	end 'create'
+
+	function count() returns ElementIndex
+		return self.ops.count()
+	end 'count'
+
+	function push(block ElementIndex, position ElementIndex, calleeIndex ElementIndex, opRef ElementIndex)
+		self.blocks.push(block)
+		self.positions.push(position)
+		self.callees.push(calleeIndex)
+		self.ops.push(opRef)
+	end 'push'
+
+	function blockAt(index ElementIndex) returns ElementIndex
+		return try self.blocks.get(index) otherwise panic("CollectedSites.blockAt: blocks.get OOB at {index}")
+	end 'blockAt'
+
+	function positionAt(index ElementIndex) returns ElementIndex
+		return try self.positions.get(index) otherwise panic("CollectedSites.positionAt: positions.get OOB at {index}")
+	end 'positionAt'
+
+	function calleeAt(index ElementIndex) returns ElementIndex
+		return try self.callees.get(index) otherwise panic("CollectedSites.calleeAt: callees.get OOB at {index}")
+	end 'calleeAt'
+
+	function opAt(index ElementIndex) returns ElementIndex
+		return try self.ops.get(index) otherwise panic("CollectedSites.opAt: ops.get OOB at {index}")
+	end 'opAt'
+
+	function without(refused BoolArray) returns CollectedSites
+		var kept = CollectedSites.create()
+
+		for index in 0 upto self.count() 'eachSite'
+			if not (try refused.get(index) otherwise panic("CollectedSites.without: refused.get OOB at {index}")) 'kept'
+				kept.push(self.blockAt(index), position: self.positionAt(index), calleeIndex: self.calleeAt(index), opRef: self.opAt(index))
+			end 'kept'
+		end 'eachSite'
+
+		return kept
+	end 'without'
+end 'CollectedSites'
 
 // Per-caller splicer: owns the function it rewrites plus the fresh-ValueId counter every copied body
 // draws from, seeded past every id the function already uses.
@@ -3769,6 +4257,9 @@ type SiteSplicer
 	var tableArith as StdArithOperands
 	var restricted as bool
 	var offered as OfferedOpSet
+	var found as CollectedSites
+	var collectingBlock as ElementIndex
+	var originalBlockCount as ElementIndex
 	var appendedFirsts as OpIndexArray
 	var appendedBounds as OpIndexArray
 
@@ -3804,6 +4295,9 @@ type SiteSplicer
 			tableArith: StdArithOperands.create(),
 			restricted: false,
 			offered: OfferedOpSet.create(),
+			found: CollectedSites.create(),
+			collectingBlock: 0,
+			originalBlockCount: 0,
 			appendedFirsts: OpIndexArray.create(),
 			appendedBounds: OpIndexArray.create(),
 			def: def,
@@ -3846,21 +4340,29 @@ type SiteSplicer
 	// COPIED body under the leaf rule may hold calls in cold blocks, and the snapshot is what leaves
 	// them calls (`watchCopiedCalls` notes the flippable ones); under the called-once rule every
 	// called-once callee inside it was spliced in an earlier wave. A CONTINUATION holds ops of the
-	// ORIGINAL block, every site in which `inlineSitesIn` has already collected before it split
+	// ORIGINAL block, every site in which `collectSites` has already collected before it split
 	// anything. So one pass over the original blocks IS the whole walk — no worklist, no "already
 	// expanded" marker column, and no chain to follow.
+	//
+	// Every block's sites are collected before any is spliced, because a wrapper site's verdict depends
+	// on the caller's other sites (`judgeSites` admits the fillers first).
 	export function run()
-		let originalBlockCount = self.func.blockRefs.count()
+		self.originalBlockCount = self.func.blockRefs.count()
 
-		for i in 0 upto originalBlockCount 'eachBlock'
-			let blockRef = try self.func.blockRefs.get(i) otherwise panic("SiteSplicer.run: blockRefs.get OOB at {i} despite the snapshot bound")
-			self.inlineSitesIn(blockRef)
+		for i in 0 upto self.originalBlockCount 'eachBlock'
+			self.collectSites(try self.func.blockRefs.get(i) otherwise panic("SiteSplicer.run: blockRefs.get OOB at {i} despite the snapshot bound"), position: i)
 		end 'eachBlock'
 
+		match self.admission 'rule'
+			leaves(plan) then self.judgeWrapperSites(plan)
+			calledOnce then break
+		end 'rule'
+
+		self.spliceCollectedSites()
 		self.watchCopiedCalls()
 	end 'run'
 
-	// ⭐⭐ **ONE BLOCK, ONE FORWARD WALK, THEN A BACKWARD SPLIT PER SITE — never carve-then-rewalk.**
+	// ⭐⭐ **ONE BLOCK AT A TIME, A BACKWARD SPLIT PER SITE — never carve-then-rewalk.**
 	// Splitting FORWARD hands each continuation the whole remaining tail and copies it again at the next
 	// site: K sites in a B-op block cost Σ(B − pₖ) ≈ K·B/2, the product term `splitBlockInPlace`'s own
 	// header names. Backwards, the k-th split moves exactly the ops between site k and site k+1, and the
@@ -3870,13 +4372,24 @@ type SiteSplicer
 	// first (rightmost) split takes the terminator, the conditional-branch slot and the outgoing edge
 	// args, and every later split takes the `unset` that one left behind — which is exactly the
 	// un-terminated state each intermediate continuation should be in when its own splice terminates it.
-	function inlineSitesIn(blockRef ElementIndex)
-		if self.collectSites(blockRef) == 0 'noSite'
-			return
-		end 'noSite'
+	function spliceCollectedSites()
+		var first = 0 as ElementIndex
 
-		self.spliceRecordedSites(blockRef)
-	end 'inlineSitesIn'
+		while first < self.found.count() 'eachBlockWithSites'
+			let position = self.found.blockAt(first)
+			self.clearSiteBuffers()
+			var next = first
+
+			while next < self.found.count() and self.found.blockAt(next) == position 'eachSiteOfTheBlock'
+				self.sitePositions.push(self.found.positionAt(next))
+				self.siteCallees.push(self.found.calleeAt(next))
+				next = next + 1
+			end 'eachSiteOfTheBlock'
+
+			self.spliceRecordedSites(try self.func.blockRefs.get(position) otherwise panic("SiteSplicer.spliceCollectedSites: blockRefs.get OOB at {position}"))
+			first = next
+		end 'eachBlockWithSites'
+	end 'spliceCollectedSites'
 
 	// ⭐ **THE CALLED-ONCE RULE'S WALK IS THE WAVE'S READY CALLEES, NOT THE CALLER'S BLOCKS.** Every
 	// candidate site of the caller was located once (`CallerSiteFacts`), so a wave looks up the
@@ -4019,18 +4532,14 @@ type SiteSplicer
 		end 'eachSite'
 	end 'spliceRecordedSites'
 
-	// One forward walk of the block, recording every inlinable site and CENSUSING every other direct
-	// call. It allocates nothing for a block with no site — which is nearly every block in the
-	// module — because only `considerSite` seeds the buffers.
+	// One forward walk of the block, appending every inlinable site to `found` and CENSUSING every other
+	// direct call. A block with no site appends nothing — which is nearly every block in the module.
 	//
 	// ⚠ The `StdOp` match is EXHAUSTIVE: `call` and `tryCall` are named and so is every other variant, so a
 	// variant added later fails to compile here until it is consciously placed. A terminator is never a
 	// `call` or `tryCall`, so the half this walk omits holds no site.
-	function collectSites(blockRef ElementIndex) returns SiteCount
-		if self.siteBuffersSeeded 'reuse'
-			self.clearSiteBuffers()
-		end 'reuse'
-
+	function collectSites(blockRef ElementIndex, position ElementIndex)
+		self.collectingBlock = position
 		view block = self.blockAt(blockRef)
 
 		for pos in 0 upto block.bodyOpCount() 'eachOp'
@@ -4162,8 +4671,6 @@ type SiteSplicer
 				tryCall(_, _, callee, args) then self.considerSite(pos, opRef: opRef, callee: callee, args: args, shape: SiteShape.tryCall)
 			end 'kind'
 		end 'eachOp'
-
-		return self.sitePositions.count()
 	end 'collectSites'
 
 	// ⚠ **THE CALLEE IS A RAW `ByteArray` NAME AND IS COMPARED AS BYTES, NEVER PARSED.** Names like
@@ -4191,13 +4698,13 @@ type SiteSplicer
 
 		match self.admission 'rule'
 			leaves(plan) then self.considerLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args, shape: shape, opRef: opRef)
-			calledOnce(wave) then self.considerCalledOnceSite(pos, calleeIndex: calleeIndex, wave: wave)
+			calledOnce(wave) then self.considerCalledOnceSite(pos, calleeIndex: calleeIndex, wave: wave, opRef: opRef)
 		end 'rule'
 	end 'considerSite'
 
 	function considerLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray, shape SiteShape, opRef ElementIndex)
 		match plan.verdictOf(calleeIndex) 'verdict'
-			eligible then self.considerEligibleLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args, shape: shape)
+			eligible then self.considerEligibleLeafSite(pos, calleeIndex: calleeIndex, plan: plan, args: args, shape: shape, opRef: opRef)
 			tooManyOps then self.stats.noteSizeRefusal(plan.isWithinLargerBudget(calleeIndex))
 			notALeaf then self.watchIfFlippable(calleeIndex, plan: plan, opRef: opRef)
 		end 'verdict'
@@ -4209,7 +4716,7 @@ type SiteSplicer
 		end 'mayBecomeALeaf'
 	end 'watchIfFlippable'
 
-	function considerEligibleLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray, shape SiteShape)
+	function considerEligibleLeafSite(pos ElementIndex, calleeIndex ElementIndex, plan LeafPlan, args ValueIdArray, shape SiteShape, opRef ElementIndex)
 		if not conventionServesSite(plan.conventionOf(calleeIndex), site: shape) 'readsAnotherConvention'
 			self.stats.noteReturnConventionRefusal()
 			return
@@ -4225,8 +4732,74 @@ type SiteSplicer
 			return
 		end 'tablesAreNotConstantHere'
 
-		self.recordLeafSiteUnlessItWidensTheSafePoint(pos, calleeIndex: calleeIndex)
+		self.recordLeafSiteUnlessItWidensTheSafePoint(pos, calleeIndex: calleeIndex, opRef: opRef)
 	end 'considerEligibleLeafSite'
+
+	function judgeWrapperSites(plan LeafPlan)
+		if plan.wrapperCount == 0 'noWrapperInTheProgram'
+			return
+		end 'noWrapperInTheProgram'
+
+		var sites = SiteAcrossArray.create()
+		var siteIndices = FuncIndexArray.create()
+		var valueBounds = ValueIdArray.create()
+
+		for index in 0 upto self.found.count() 'eachCollectedSite'
+			let calleeIndex = self.found.calleeAt(index)
+
+			if not plan.isWrapper(calleeIndex) 'notAWrapperSite'
+				continue
+			end 'notAWrapperSite'
+
+			let position = self.found.blockAt(index)
+			let opPos = self.found.positionAt(index)
+			sites.push(SiteAcross.create(calleeIndex, position: position, opPos: opPos, args: siteArgsOf(self.module, caller: self.func, position: position, opPos: opPos, calleeIndex: calleeIndex, byName: self.byName)))
+			siteIndices.push(index)
+			valueBounds.push(plan.valueBoundOf(calleeIndex))
+		end 'eachCollectedSite'
+
+		if sites.count() == 0 'nothingToJudge'
+			return
+		end 'nothingToJudge'
+
+		let calleeHolds = plan.gate.calleesHoldingRegisters(self.module, sites: sites)
+		var frameMatters = false
+
+		for holds in calleeHolds 'eachCallee'
+			frameMatters = frameMatters or holds
+		end 'eachCallee'
+
+		match plan.gate.budget 'budget'
+			unbounded then break
+			registers(count) then collectRegisterFacts(self.module, func: self.func, callerIndex: self.funcIndex, sites: sites, cap: count, valueBound: nextFreeValueId(self.module, func: self.func), frameMatters: frameMatters, liveness: plan.gate.liveness, calls: plan.gate.calls)
+		end 'budget'
+
+		let verdicts = judgeSites(self.module, budget: plan.gate.budget, callerIndex: self.funcIndex, sites: sites, valueBounds: valueBounds, calleeHolds: calleeHolds, across: plan.gate.across, liveness: plan.gate.liveness, calls: plan.gate.calls)
+		self.stats.noteWrapperSitesJudged(sites.count() as SiteCount)
+		var refused = BoolArray.create()
+		refused.resize(self.found.count())
+
+		for index in 0 upto sites.count() 'eachVerdict'
+			match try verdicts.get(index) otherwise panic("SiteSplicer.judgeWrapperSites: no verdict for site {index}") 'verdict'
+				undecided then panic("SiteSplicer.judgeWrapperSites: site {index} was never judged")
+				admitted then self.stats.noteWrapperSiteAdmitted()
+				widensTheFrame then self.refuseWrapperSite(try siteIndices.get(index) otherwise panic("SiteSplicer.judgeWrapperSites: no collected site for {index}"), refused: refused, frame: true)
+				overBudget then self.refuseWrapperSite(try siteIndices.get(index) otherwise panic("SiteSplicer.judgeWrapperSites: no collected site for {index}"), refused: refused, frame: false)
+			end 'verdict'
+		end 'eachVerdict'
+
+		self.found = self.found.without(refused)
+	end 'judgeWrapperSites'
+
+	function refuseWrapperSite(collectedIndex ElementIndex, refused BoolArray, frame bool)
+		try refused.set(collectedIndex, value: true) otherwise panic("SiteSplicer.refuseWrapperSite: refused.set OOB at {collectedIndex}")
+
+		if frame 'widensTheFrame'
+			self.stats.noteWrapperFrameRefusal()
+		end 'widensTheFrame' else 'overTheRegisterBudget'
+			self.stats.noteWrapperPressureRefusal()
+		end 'overTheRegisterBudget'
+	end 'refuseWrapperSite'
 
 	function callerHoldsTheTables(plan LeafPlan, calleeIndex ElementIndex, args ValueIdArray) returns bool
 		if not self.callerDefsBuilt 'defsNotBuilt'
@@ -4288,7 +4861,7 @@ type SiteSplicer
 	// eligible leaf is spliced at every site it has, and its callers need not agree about provenance.
 	// It also refuses a witness-slot adapter that needs the green-thread stack guard at a caller that
 	// skips it, where the copy would run unguarded.
-	function recordLeafSiteUnlessItWidensTheSafePoint(pos ElementIndex, calleeIndex ElementIndex)
+	function recordLeafSiteUnlessItWidensTheSafePoint(pos ElementIndex, calleeIndex ElementIndex, opRef ElementIndex)
 		view calleeFunc = self.module.getFunc(calleeIndex)
 		let runtimeTier = self.project.libraryFacts.runtimeTier
 
@@ -4302,12 +4875,12 @@ type SiteSplicer
 			return
 		end 'wouldDropTheStackGuard'
 
-		self.recordSite(pos, calleeIndex: calleeIndex)
+		self.found.push(self.collectingBlock, position: pos, calleeIndex: calleeIndex, opRef: opRef)
 	end 'recordLeafSiteUnlessItWidensTheSafePoint'
 
-	function considerCalledOnceSite(pos ElementIndex, calleeIndex ElementIndex, wave CalledOnceWave)
+	function considerCalledOnceSite(pos ElementIndex, calleeIndex ElementIndex, wave CalledOnceWave, opRef ElementIndex)
 		if wave.admits(calleeIndex) 'admitted'
-			self.recordSite(pos, calleeIndex: calleeIndex)
+			self.found.push(self.collectingBlock, position: pos, calleeIndex: calleeIndex, opRef: opRef)
 		end 'admitted'
 	end 'considerCalledOnceSite'
 
@@ -4326,13 +4899,7 @@ type SiteSplicer
 		end 'rule'
 	end 'blockCountOf'
 
-	function recordSite(pos ElementIndex, calleeIndex ElementIndex)
-		self.seedSiteBuffers()
-		self.sitePositions.push(pos)
-		self.siteCallees.push(calleeIndex)
-	end 'recordSite'
-
-	// The call is the LAST op of `predRef` by construction — `inlineSitesIn` split immediately past it.
+	// The call is the LAST op of `predRef` by construction — `spliceRecordedSites` split immediately past it.
 	// It is read, spliced, and then dropped.
 	//
 	// ⚠ The dropped op is left behind as an ORPHAN in `module.ops`. That is the tier's own model

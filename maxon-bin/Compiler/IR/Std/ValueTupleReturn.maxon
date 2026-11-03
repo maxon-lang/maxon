@@ -40,30 +40,31 @@
 // A `return t` of a borrowed PARAMETER, and a `return p` of a record that also escaped, are neither — so
 // those functions keep the heap convention entirely, and every element-ownership question with them.
 //
-// ⭐ **AND THE CALLER MUST BE ABLE TO TAKE THE PAIR TOO, OR THE CALLEE DOES NOT GET THE CONVENTION.** A
-// call site qualifies when the result's only uses are whole-slot loads of its two halves plus its drops
-// — trivial `__mm_decref`s, which go, or `__destruct_<T>` cascades, each replaced by the per-slot releases
-// it would have run — so no record is needed and none is built; or when the result flows straight into
-// the enclosing function's own value-convention `ret`. Anything else (the pair escapes into an array, a
-// cascade releases a slot other than by one direct call on one half, it crosses a branch merge) takes the
-// callee OFF the convention for the whole compile. That is what keeps this pass from ever having to
-// materialize a record out of two registers — which in a `--debugstream` build would also have to invent
-// an mm-trace tag for a box no source line asked for.
+// ⭐ **EACH CALL SITE OF A CONVENTION CALLEE EITHER CONSUMES THE PAIR IN REGISTERS OR REBUILDS THE
+// RECORD.** A site consumes it when the result's only uses are whole-slot loads of its two halves plus its
+// drops — trivial `__mm_decref`s, which go, or `__destruct_<T>` cascades, each replaced by the per-slot
+// releases it would have run — so no record is needed and none is built; or when the result flows straight
+// into the `ret` of a caller that is itself on the convention. Any other site (the pair escapes into an
+// array, a cascade releases a slot other than by one direct call on one half, it crosses a branch merge,
+// it is forwarded by a caller that throws or has its address taken) rebuilds the record right after the
+// call (`buildThePairRecord`), so the rest of that caller sees the record the heap convention returns.
+// A callee whose every site would rebuild stays on the heap convention (`seedRefusals`): the registers
+// would save nothing. In a `--debugstream` build the rebuilt box is tagged with the callee's tuple type
+// (`pairBoxTagOf`).
 //
-// ⚠ **BOTH ENDS READ ONE VERDICT, AND THAT IS THE WHOLE SAFETY ARGUMENT.** A callee lowered to
-// `errorReturn` whose caller still reads one register hands back a scalar where a pointer is expected; the
-// reverse drops a word. So the decision is made ONCE, module-wide, and both rewrites are driven from it.
+// ⚠ **ONE VERDICT PER CALLEE DRIVES ITS `ret` AND EVERY ONE OF ITS SITES, AND THAT IS THE WHOLE SAFETY
+// ARGUMENT.** A callee lowered to `errorReturn` whose caller still reads one register hands back a scalar
+// where a pointer is expected; the reverse drops a word. So the decision is made ONCE, module-wide, and a
+// site's only freedom is to consume the two registers or rebuild the record from them.
 //
-// ⛔ **THE VERDICT IS A FIXPOINT, because the two conditions are mutually recursive** — a `ret` may forward
-// another candidate's pair, and a call site may forward into its own caller's `ret` — so a refused
-// candidate is removed and the removal propagates until nothing changes. The loop is bounded by the
-// candidate count (functions returning a two-element tuple at all) and re-reads only the two verdict
-// lists; the per-function analysis behind them is done once, before it.
+// ⛔ **THE VERDICT IS A FIXPOINT** — a `ret` may forward another candidate's pair, so a refused candidate
+// is removed and the removal propagates to every candidate whose `ret` forwards from it. The per-function
+// analysis behind the verdicts is done once, before it.
 //
 // ⚠ **ONLY A TUPLE.** A named struct with two word fields has the same layout and is deliberately
 // excluded: a struct has reference identity a user can observe (`is`, aliasing, mutation through an
-// alias), and while the call-site test above refuses every site that observes it, widening this pass to
-// user records is a different change with a different acceptance.
+// alias), and while the call-site test above gives registers only to sites that never observe the record,
+// widening this pass to user records is a different change with a different acceptance.
 //
 // ⭐ **THE THIRD SHAPE IS BOTH ENDS IN ONE FRAME.** A called-once callee, or a leaf with one return
 // exit whose only allocation is its pair box, is spliced into its caller (`InlineLeaves`), so a
@@ -314,22 +315,35 @@ union ValueTupleCallShape
 	// The halves are read out and the box dropped: no record is needed at this site.
 	readThenDropped
 
-	// The pair flows straight into the caller's own return, so the caller must be on the convention too.
-	forwardedByCaller
+	// The pair flows straight into the caller's own return, so the caller hands it on in registers or
+	// builds the record its own return carries.
+	forwardedToTheReturn
 
-	// Anything else. This site alone takes the callee off the convention.
+	// Anything else. The site rebuilds the record.
 	unusable
 end 'ValueTupleCallShape'
 
-// One recorded call site: which function holds it, which candidate it calls, and what it can do.
+// `callerIsACandidate` is the declaration-level answer, read before the fixpoint settles: a throwing or
+// address-taken caller is never one, so its forwarding site rebuilds the record.
 type ValueTupleCallSite
-	export let callerIndex as ElementIndex
 	export let calleeIndex as ElementIndex
 	export let shape as ValueTupleCallShape
+	export let callerIsACandidate as bool
 
-	static function create(callerIndex ElementIndex, calleeIndex ElementIndex, shape ValueTupleCallShape) returns ValueTupleCallSite
-		return Self{callerIndex: callerIndex, calleeIndex: calleeIndex, shape: shape}
+	static function create(calleeIndex ElementIndex, shape ValueTupleCallShape, callerIsACandidate bool) returns ValueTupleCallSite
+		return Self{calleeIndex: calleeIndex, shape: shape, callerIsACandidate: callerIsACandidate}
 	end 'create'
+
+	// ⛔ A forward from a caller that can never be on the convention (it throws or has its address taken)
+	// must rebuild the record: that caller's ABI hands back one register, so `rewriteOneReturn` would
+	// write the low half where its type says a record pointer, and the indirect call reading it faults.
+	function consumesThePair() returns bool
+		return match self.shape 'shape'
+			readThenDropped gives true
+			forwardedToTheReturn gives self.callerIsACandidate
+			unusable gives false
+		end 'shape'
+	end 'consumesThePair'
 end 'ValueTupleCallSite'
 
 typealias ValueTupleCallSiteArray = Array with ValueTupleCallSite
@@ -374,7 +388,7 @@ function convertWithNameIndex(project Project, module StdModule, signatures Prog
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		var flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
-		rewriteOneFunction(module, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, catalog: catalog)
+		rewriteOneFunction(module, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, catalog: catalog, project: project)
 	end 'eachFunc'
 end 'convertWithNameIndex'
 
@@ -1148,7 +1162,6 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 		osWriteStdout or
 		rdataAddr or
 		tryCall or
-		errorReturn or
 		osExit or
 		funcAddr or
 		callIndirect or
@@ -1250,6 +1263,7 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then break
+		errorReturn(retValId, _) then noteReturnedValue(flow, retValId: retValId)
 		ret(retValId) then noteReturnedValue(flow, retValId: retValId)
 		call(_, callee, args) then noteDrop(flow, callee: callee, args: args)
 		loadIndirect(_, addrId, offset, valueType) then noteHalfLoad(flow, addrId: addrId, offset: offset, valueType: valueType)
@@ -1295,7 +1309,6 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 		osWriteStdout or
 		rdataAddr or
 		tryCall or
-		errorReturn or
 		osExit or
 		funcAddr or
 		callIndirect or
@@ -1397,6 +1410,7 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe gives false
+		errorReturn(retValId, _) gives retValId == value
 		ret(retValId) gives retValId == value
 		call(_, callee, args) gives callIsTheDropOf(callee, args: args, value: value)
 		loadIndirect(_, addrId, offset, valueType) gives addrId == value and isAWholeHalf(offset, valueType: valueType)
@@ -1442,6 +1456,10 @@ end 'noteOtherUse'
 
 function noteReturnedValue(flow FunctionTupleFlow, retValId ValueId)
 	for value in flow.exitValuesOf(retValId) 'eachExitValue'
+		if not flow.tracks(value) 'notOurs'
+			continue
+		end 'notOurs'
+
 		var row = flow.rowOf(value)
 		row.returnUses = row.returnUses + 1
 	end 'eachExitValue'
@@ -1584,14 +1602,14 @@ function collectCallSites(module StdModule, byName FunctionNameIndex, flows Func
 		let func = module.getFunc(funcIndex)
 
 		for opIdx in module.liveOpIndices(func) 'eachOp'
-			noteCallSite(try module.ops.get(opIdx) otherwise panic("collectCallSites: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, catalog: catalog, sites: sites)
+			noteCallSite(try module.ops.get(opIdx) otherwise panic("collectCallSites: live op index {opIdx} not in module.ops"), callerIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, catalog: catalog, sites: sites)
 		end 'eachOp'
 	end 'eachFunc'
 
 	return sites
 end 'collectCallSites'
 
-function noteCallSite(op StdOp, funcIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog, sites ValueTupleCallSiteArray)
+function noteCallSite(op StdOp, callerIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog, sites ValueTupleCallSiteArray)
 	match op 'op'
 		const or
 		binOp or
@@ -1715,61 +1733,58 @@ function noteCallSite(op StdOp, funcIndex ElementIndex, byName FunctionNameIndex
 		osPathQuery or
 		osSocketOverlapped or
 		osSocketServe then break
-		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, catalog: catalog, sites: sites)
+		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, callerIndex: callerIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, catalog: catalog, sites: sites)
 	end 'op'
 end 'noteCallSite'
 
-function noteCandidateCallSite(resultId ValueId, callee ByteArray, funcIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog, sites ValueTupleCallSiteArray)
+function noteCandidateCallSite(resultId ValueId, callee ByteArray, callerIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog, sites ValueTupleCallSiteArray)
 	let calleeIndex = try byName.byName.get(callee) otherwise return
 
 	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'notACandidate'
 		return
 	end 'notACandidate'
 
-	sites.push(ValueTupleCallSite.create(funcIndex, calleeIndex: calleeIndex, shape: callShapeOf(flow, pair: resultId, callerIsACandidate: isOnTheConvention(onTheConvention, funcIndex: funcIndex), catalog: catalog)))
+	sites.push(ValueTupleCallSite.create(calleeIndex, shape: callShapeOf(flow, pair: resultId, catalog: catalog), callerIsACandidate: isOnTheConvention(onTheConvention, funcIndex: callerIndex)))
 end 'noteCandidateCallSite'
 
-// ⭐ **THE CALLER HALF OF THE GATE.** A pair that is read out and dropped needs no record; one
-// that flows into the caller's own return needs none either, PROVIDED the caller is on the convention.
-//
-// ⛔⛔ **A CALLER THAT IS NOT A CANDIDATE FORWARDS NOTHING, AND THE REFUSAL HAS TO BE STATED HERE.** The
-// fixpoint carries "the caller fell, so the callee falls" along an edge between two CANDIDATES; a caller
-// the declaration test already excluded — one whose address is taken, one that throws — is never a node
-// that edge can be seeded at, so admitting its site would leave the callee on the convention with a
-// forwarding `ret` in a function whose ABI hands back one register. Then `rewriteOneReturn` writes the
-// low half where the caller's type says a record pointer, and the indirect call reading it faults.
-function callShapeOf(flow FunctionTupleFlow, pair ValueId, callerIsACandidate bool, catalog StructDropCatalog) returns ValueTupleCallShape
+// ⭐ **THE CALLER HALF OF THE GATE.** A pair that is read out and dropped needs no record; one that flows
+// into the caller's own return needs none either. Whether that caller can take registers is
+// `ValueTupleCallSite.consumesThePair`'s question, so the caller is not consulted here.
+function callShapeOf(flow FunctionTupleFlow, pair ValueId, catalog StructDropCatalog) returns ValueTupleCallShape
 	if not flow.tracks(pair) 'noRowAtAll'
 		return ValueTupleCallShape.unusable
 	end 'noRowAtAll'
 
 	let row = flow.rowOf(pair)
 
-	if row.isReadThenDropped() and catalog.releasesTheSlotsOf(row) 'noRecordNeeded'
+	if readsOutAndDrops(row, catalog: catalog) 'noRecordNeeded'
 		return ValueTupleCallShape.readThenDropped
 	end 'noRecordNeeded'
 
-	if row.isForwardedToTheReturn() and callerIsACandidate 'straightBackOut'
-		return ValueTupleCallShape.forwardedByCaller
+	if row.isForwardedToTheReturn() 'straightBackOut'
+		return ValueTupleCallShape.forwardedToTheReturn
 	end 'straightBackOut'
 
 	return ValueTupleCallShape.unusable
 end 'callShapeOf'
 
+function readsOutAndDrops(row TupleValueRow, catalog StructDropCatalog) returns bool
+	return row.isReadThenDropped() and catalog.releasesTheSlotsOf(row)
+end 'readsOutAndDrops'
+
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 // Phase 3 — the fixpoint
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 
-// ⭐ **WHICH CANDIDATES FALL WHEN ONE FALLS.** Both verdict lists say the same kind of thing — *this
-// candidate is refused if THAT function is*: a `ret` that forwards a pair depends on the callee it forwards
-// from, and a call site that forwards into its caller's own return depends on that caller. So the removal is
-// a transitive closure over ONE relation, seeded by the refusals that depend on nothing — the shape
-// `reverseReachabilityMark` answers in O(candidates + edges) and a re-scan until nothing changes answers at
-// one pass per LINK of the longest refusal chain, which is quadratic in a program of forwarding wrappers.
+// ⭐ **WHICH CANDIDATES FALL WHEN ONE FALLS.** A `ret` that forwards a pair depends on the callee it
+// forwards from: *this candidate is refused if THAT function is*. So the removal is a transitive closure
+// over that relation, seeded by the refusals that depend on nothing — the shape `reverseReachabilityMark`
+// answers in O(candidates + edges) and a re-scan until nothing changes answers at one pass per LINK of
+// the longest refusal chain, which is quadratic in a program of forwarding wrappers.
 function settleTheConvention(onTheConvention BoolArray, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
 	var dependedOn = CsrColumn.create()
 	var dependent = CsrColumn.create()
-	collectDependencyEdges(dependedOn, dependent: dependent, retVerdicts: retVerdicts, callSites: callSites)
+	collectDependencyEdges(dependedOn, dependent: dependent, retVerdicts: retVerdicts)
 
 	var seeds = BoolArray.create()
 	seeds.growFilled(onTheConvention.count(), value: false)
@@ -1787,8 +1802,8 @@ function settleTheConvention(onTheConvention BoolArray, retVerdicts ValueTupleRe
 end 'settleTheConvention'
 
 // One edge per dependency, as the parallel columns `buildCsr` takes: a `ret` that forwards depends on the
-// callee it forwards from, and a call site that forwards into its caller's return depends on that caller.
-function collectDependencyEdges(dependedOn CsrColumn, dependent CsrColumn, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
+// callee it forwards from.
+function collectDependencyEdges(dependedOn CsrColumn, dependent CsrColumn, retVerdicts ValueTupleRetVerdictArray)
 	for verdict in retVerdicts 'eachReturn'
 		match verdict.kind 'kind'
 			freshPair or
@@ -1797,14 +1812,6 @@ function collectDependencyEdges(dependedOn CsrColumn, dependent CsrColumn, retVe
 			forwarded(calleeIndex) then noteDependency(dependedOn, dependent: dependent, dependedOnIndex: calleeIndex, dependentIndex: verdict.funcIndex)
 		end 'kind'
 	end 'eachReturn'
-
-	for site in callSites 'eachSite'
-		match site.shape 'shape'
-			readThenDropped or
-			unusable then break
-			forwardedByCaller then noteDependency(dependedOn, dependent: dependent, dependedOnIndex: site.callerIndex, dependentIndex: site.calleeIndex)
-		end 'shape'
-	end 'eachSite'
 end 'collectDependencyEdges'
 
 function noteDependency(dependedOn CsrColumn, dependent CsrColumn, dependedOnIndex ElementIndex, dependentIndex ElementIndex)
@@ -1812,7 +1819,8 @@ function noteDependency(dependedOn CsrColumn, dependent CsrColumn, dependedOnInd
 	dependent.push(dependentIndex as CsrIndex)
 end 'noteDependency'
 
-// The refusals that depend on nothing: a `ret` no rewrite fits, and a call site no rewrite fits.
+// The refusals that depend on nothing: a `ret` no rewrite fits, and a callee none of whose sites
+// consumes the pair in registers.
 function seedRefusals(seeds BoolArray, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
 	for verdict in retVerdicts 'eachReturn'
 		match verdict.kind 'kind'
@@ -1823,13 +1831,24 @@ function seedRefusals(seeds BoolArray, retVerdicts ValueTupleRetVerdictArray, ca
 		end 'kind'
 	end 'eachReturn'
 
+	var called = BoolArray.create()
+	called.growFilled(seeds.count(), value: false)
+	var consumed = BoolArray.create()
+	consumed.growFilled(seeds.count(), value: false)
+
 	for site in callSites 'eachSite'
-		match site.shape 'shape'
-			readThenDropped or
-			forwardedByCaller then break
-			unusable then markSeed(seeds, funcIndex: site.calleeIndex)
-		end 'shape'
+		try called.set(site.calleeIndex, value: true) otherwise panic("seedRefusals: called.set OOB at {site.calleeIndex} against a column of {called.count()}")
+
+		if site.consumesThePair() 'noRecordBuilt'
+			try consumed.set(site.calleeIndex, value: true) otherwise panic("seedRefusals: consumed.set OOB at {site.calleeIndex} against a column of {consumed.count()}")
+		end 'noRecordBuilt'
 	end 'eachSite'
+
+	for funcIndex in 0 upto seeds.count() 'eachCallee'
+		if (try called.get(funcIndex) otherwise panic("seedRefusals: called.get OOB at {funcIndex}")) and not (try consumed.get(funcIndex) otherwise panic("seedRefusals: consumed.get OOB at {funcIndex}")) 'onlyReboxedSites'
+			markSeed(seeds, funcIndex: funcIndex)
+		end 'onlyReboxedSites'
+	end 'eachCallee'
 end 'seedRefusals'
 
 function markSeed(seeds BoolArray, funcIndex ElementIndex)
@@ -1856,6 +1875,18 @@ function stampTheConvention(module StdModule, onTheConvention BoolArray)
 end 'stampTheConvention'
 
 typealias ChainHighByBlock = Map with (BlockId, ValueId)
+typealias CalleeByPair = Map with (ValueId, ElementIndex)
+
+function pairBoxTagOf(project Project, module StdModule, calleeIndex ElementIndex) returns FullRangeInt
+	if not project.debugStream 'untracedBuild'
+		return mmTagIndex(MmTag.Untagged)
+	end 'untracedBuild'
+
+	match module.getFunc(calleeIndex).maxonReturnType 'declared'
+		void then panic("pairBoxTagOf: function {calleeIndex} returns nothing, so it is no value-tuple candidate")
+		value(inner) then return userTagIndex(project.globalData, name: try project.typeNames.nameOf(typeNameIdOf(inner)) otherwise panic("pairBoxTagOf: the tuple type returned by function {calleeIndex} has no interned name"), debugStream: project.debugStream)
+	end 'declared'
+end 'pairBoxTagOf'
 
 enum NoSlotDrops
 	notElidable
@@ -1985,6 +2016,9 @@ type ValueTuplePlan
 	// reads of those two values, its trivial drops disappear, and each cascade drop becomes its
 	// `slotDrops`.
 	export var registerPair as BoolArray
+
+	export var materializedPair as BoolArray
+	export var materializedFrom as CalleeByPair
 	export var lowOf as ValueIdArray
 	export var highOf as ValueIdArray
 	export var anyRewrite as bool
@@ -1996,12 +2030,28 @@ type ValueTuplePlan
 	// holds it — so the ABI rewrite asks here before it writes.
 	export let onTheConvention as bool
 	export let catalog as StructDropCatalog
+	export var project as Project
 	export var slotDrops as SlotDropsByBox
 	export var followingOps as FollowingOpsByOp
 
-	static function create(valueBound ValueId, onTheConvention bool, catalog StructDropCatalog) returns ValueTuplePlan
-		return Self{returnsAsAPair: markColumn(valueBound), elidedBox: markColumn(valueBound), registerPair: markColumn(valueBound), lowOf: halfColumn(valueBound), highOf: halfColumn(valueBound), anyRewrite: false, chainHighs: ChainHighByBlock.create(), onTheConvention: onTheConvention, catalog: catalog, slotDrops: SlotDropsByBox.create(), followingOps: FollowingOpsByOp.create()}
+	static function create(valueBound ValueId, onTheConvention bool, catalog StructDropCatalog, project Project) returns ValueTuplePlan
+		return Self{returnsAsAPair: markColumn(valueBound), elidedBox: markColumn(valueBound), registerPair: markColumn(valueBound), materializedPair: markColumn(valueBound), materializedFrom: CalleeByPair.create(), lowOf: halfColumn(valueBound), highOf: halfColumn(valueBound), anyRewrite: false, chainHighs: ChainHighByBlock.create(), onTheConvention: onTheConvention, catalog: catalog, project: project, slotDrops: SlotDropsByBox.create(), followingOps: FollowingOpsByOp.create()}
 	end 'create'
+
+	function isAMaterializedPair(value ValueId) returns bool
+		return columnMarks(self.materializedPair, value: value)
+	end 'isAMaterializedPair'
+
+	function markMaterializedPair(pair ValueId, calleeIndex ElementIndex, low ValueId, high ValueId)
+		self.mark(self.materializedPair, value: pair)
+		self.materializedFrom.upsert(pair, value: calleeIndex)
+		try self.lowOf.set(pair, value: low) otherwise panic("ValueTuplePlan.markMaterializedPair: lowOf.set OOB at {pair}")
+		try self.highOf.set(pair, value: high) otherwise panic("ValueTuplePlan.markMaterializedPair: highOf.set OOB at {pair}")
+	end 'markMaterializedPair'
+
+	function calleeOfMaterializedPair(pair ValueId) returns ElementIndex
+		return try self.materializedFrom.get(pair) otherwise panic("ValueTuplePlan.calleeOfMaterializedPair: no callee was recorded for pair {pair} — asked of a value `isAMaterializedPair` answered true for")
+	end 'calleeOfMaterializedPair'
 
 	function returnsAPair(value ValueId) returns bool
 		return columnMarks(self.returnsAsAPair, value: value)
@@ -2078,7 +2128,7 @@ function halfColumn(valueBound ValueId) returns ValueIdArray
 	return column
 end 'halfColumn'
 
-function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog)
+function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog, project Project)
 	view func = module.getFunc(funcIndex)
 	let liveOps = module.liveOpIndices(func)
 
@@ -2086,7 +2136,7 @@ function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow Funct
 	// two readings of the same number.
 	let valueBound = nextFreeValueId(module, func: func)
 	var mint = ValueMinter.resuming(valueBound)
-	var plan = ValueTuplePlan.create(valueBound, onTheConvention: isOnTheConvention(onTheConvention, funcIndex: funcIndex), catalog: catalog)
+	var plan = ValueTuplePlan.create(valueBound, onTheConvention: isOnTheConvention(onTheConvention, funcIndex: funcIndex), catalog: catalog, project: project)
 
 	for opIdx in liveOps 'eachOp'
 		planOneOp(try module.ops.get(opIdx) otherwise panic("rewriteOneFunction: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
@@ -2476,13 +2526,28 @@ function markTheBoxIfFrameLocal(box ValueId, flow FunctionTupleFlow, plan ValueT
 	plan.markFrameLocalPair(box, low: row.storedLow, high: row.storedHigh)
 end 'markTheBoxIfFrameLocal'
 
+function registersConsume(row TupleValueRow, plan ValueTuplePlan) returns bool
+	if readsOutAndDrops(row, catalog: plan.catalog) 'readOutAndDropped'
+		return true
+	end 'readOutAndDropped'
+
+	return row.isForwardedToTheReturn() and plan.onTheConvention
+end 'registersConsume'
+
 function markThePairIfTheCalleeKeptTheConvention(resultId ValueId, calleeIndex ElementIndex, onTheConvention BoolArray, flow FunctionTupleFlow, plan ValueTuplePlan, mint ValueMinter)
 	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'refusedByTheFixpoint'
 		return
 	end 'refusedByTheFixpoint'
 
+	let row = flow.rowOf(resultId)
+
+	if not registersConsume(row, plan: plan) 'theSiteNeedsARecord'
+		plan.markMaterializedPair(resultId, calleeIndex: calleeIndex, low: mint.mint(), high: mint.mint())
+		return
+	end 'theSiteNeedsARecord'
+
 	let high = mint.mint()
-	planSlotReleases(plan, box: resultId, row: flow.rowOf(resultId), low: resultId, high: high)
+	planSlotReleases(plan, box: resultId, row: row, low: resultId, high: high)
 	plan.markRegisterPair(resultId, high: high)
 end 'markThePairIfTheCalleeKeptTheConvention'
 
@@ -2700,7 +2765,7 @@ function rewriteOneReturn(module StdModule, opIdx ElementIndex, retValId ValueId
 	end 'anOrdinaryReturn'
 
 	if not plan.onTheConvention 'theHeapConvention'
-		panic("rewriteOneReturn: value {retValId} is returned as a register pair by a function the fixpoint left on the HEAP convention — its declared one-register return would hand back the low half where a record pointer is expected; `callShapeOf` refuses a forwarding site whose caller is not a candidate so this cannot be reached")
+		panic("rewriteOneReturn: value {retValId} is returned as a register pair by a function the fixpoint left on the HEAP convention — its declared one-register return would hand back the low half where a record pointer is expected; `markThePairIfTheCalleeKeptTheConvention` builds the record a forwarding site's caller returns whenever that caller is off the convention, so this cannot be reached")
 	end 'theHeapConvention'
 
 	try module.ops.set(opIdx, value: StdOp.errorReturn(plan.lowHalfOf(retValId), errorFlagId: plan.highHalfOf(retValId))) otherwise panic("rewriteOneReturn: ops.set({opIdx}) OOB")
@@ -2717,6 +2782,12 @@ function rewriteOneCall(module StdModule, opIdx ElementIndex, resultId ValueId, 
 		try module.ops.set(opIdx, value: StdOp.tryCall(resultId, errorFlagId: plan.highHalfOf(resultId), callee: callee, args: args)) otherwise panic("rewriteOneCall: ops.set({opIdx}) OOB")
 		return
 	end 'capturesBothRegisters'
+
+	if plan.isAMaterializedPair(resultId) 'buildsTheRecordItsReturnCarries'
+		try module.ops.set(opIdx, value: StdOp.tryCall(plan.lowHalfOf(resultId), errorFlagId: plan.highHalfOf(resultId), callee: callee, args: args)) otherwise panic("rewriteOneCall: ops.set({opIdx}) OOB")
+		buildThePairRecord(module, opIdx: opIdx, resultId: resultId, plan: plan, mint: mint)
+		return
+	end 'buildsTheRecordItsReturnCarries'
 
 	let drop = try recordDropOf(callee, args: args) otherwise return
 
@@ -2750,6 +2821,26 @@ function replaceTheCascadeWithSlotReleases(module StdModule, opIdx ElementIndex,
 		plan.followingOps.upsert(opIdx, value: following)
 	end 'someFollow'
 end 'replaceTheCascadeWithSlotReleases'
+
+function buildThePairRecord(module StdModule, opIdx ElementIndex, resultId ValueId, plan ValueTuplePlan, mint ValueMinter)
+	let low = plan.lowHalfOf(resultId)
+	let high = plan.highHalfOf(resultId)
+	module.spans.current = module.spans.at(opIdx)
+
+	let size = mint.mint()
+	let destructor = mint.mint()
+	var following = OpIndexArray.create()
+	following.push(module.pushDetachedOp(StdOp.const(size, value: PairBytes as FullRangeInt, valueType: StdType.i64)))
+	following.push(module.pushDetachedOp(StdOp.const(destructor, value: TrivialDestructor, valueType: StdType.i64)))
+
+	for op in mmAllocOps(plan.project.debugStream, result: resultId, size: size, destructor: destructor, tag: pairBoxTagOf(plan.project, module: module, calleeIndex: plan.calleeOfMaterializedPair(resultId)), ids: mint) 'eachAllocOp'
+		following.push(module.pushDetachedOp(op))
+	end 'eachAllocOp'
+
+	following.push(module.pushDetachedOp(StdOp.storeIndirect(resultId, offset: LowHalfOffset, valueId: low, valueType: StdType.i64)))
+	following.push(module.pushDetachedOp(StdOp.storeIndirect(resultId, offset: HighHalfOffset, valueId: high, valueType: StdType.i64)))
+	plan.followingOps.upsert(opIdx, value: following)
+end 'buildThePairRecord'
 
 function insertFollowingOps(module StdModule, func IrFunction, plan ValueTuplePlan)
 	if plan.followingOps.count() == 0 'nothingFollows'

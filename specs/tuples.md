@@ -250,9 +250,10 @@ here and at every other call site in the program.
 ⭐ **THE FAMILY'S SHARED RULE, which the four cases below are shapes outside of.** The compiler gives a function
 the two-register convention only when its return touches no record at all: every `return` in it either
 builds a fresh two-word box nothing else in that function can see, or forwards another value-convention
-call's pair straight back out — AND every call site of it either reads the two halves and drops the box
-through the trivial `__mm_decref`, or forwards the pair into its own value-convention return. Everything
-else keeps the heap record, and every element-ownership question with it. Returns 33.
+call's pair straight back out — AND at least one call site of it reads the two halves and drops the box
+through the trivial `__mm_decref`, or forwards the pair into a value-convention return. Every other site
+builds the record from the two registers. A function none of whose sites reads or forwards keeps the heap
+record, and every element-ownership question with it. Returns 33.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias PairOp = function(Num, Num) returns (Num, Num)
@@ -276,9 +277,8 @@ end 'main'
 
 <!-- test: value-tuple-forwarded-through-an-address-taken-wrapper -->
 ⛔⛔ **A FORWARDING WRAPPER THAT IS ITSELF OFF THE CONVENTION.** `forward`'s address is taken, so it is off
-the convention; `pair` is not. A wrapper the declaration test excludes and the callee it forwards to must
-agree on how the tuple comes back, so `forward` returns the record its TYPE says it returns and `apply` reads
-33 on every target.
+the convention; `pair` is not. `forward` builds the record from the two registers `pair` returns in, so it
+returns the record its TYPE says it returns and `apply` reads 33 on every target.
 
 ⚠ **NEITHER NEIGHBOUR CATCHES IT.** `value-tuple-return-through-function-value` takes `pair`'s address
 DIRECTLY, so `pair` is excluded and nothing is rewritten; `value-tuple-return-forwarded` forwards through a
@@ -366,8 +366,8 @@ A returned tuple that ESCAPES into an array stays a heap record. An array holds 
 the record has to outlive the frame; `p` both escapes into `xs` AND is returned, so the record is the
 array's while a register return would copy its halves out, and releasing it would be a leak on one side and
 a double-free on the other. The record `stash` returns is therefore read by something other than the
-return, which is exactly what the gate refuses — and `pair` loses the convention here too, because this
-call site cannot take a register pair. Returns 66 (11+22 from the return, 11+22 read back out of the
+return, which is exactly what the gate refuses — and `pair` loses the convention here too, because its
+only call site would build the record from the registers. Returns 66 (11+22 from the return, 11+22 read back out of the
 array).
 ```maxon
 typealias Num = int(0 to 1000)
@@ -3879,4 +3879,384 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: a-pair-from-a-function-holding-standing-calls-allocates-only-for-a-throwing-forwarder -->
+<!-- MmTrace -->
+`twin` returns a pair built from two calls to `churn`, which is too large to be spliced, so `twin` is a real function with calls standing in it. Its result is read out of the two return registers at the loop in `main` and forwarded out of `checkedTwin`, whose throwing return cannot carry a pair in registers: `checkedTwin` builds a record from the two registers it receives. The loop runs a thousand times and the trace holds one record per checked call, two in all, and nothing else, so `twin` is not held to the heap convention by the one caller that needs a record.
+```maxon
+typealias Word = bits(64)
+typealias WordPair = (Word, Word)
+
+enum PairError implements Error
+	tooBig
+end 'PairError'
+
+function churn(x Word) returns Word
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function twin(a Word, b Word) returns WordPair
+	let first = churn(a) xor ((a shl 3) + (b shr 5)) xor ((a shr 7) + (b shl 11)) xor ((a shl 13) + (b shr 17))
+	let second = churn(b shr 8) xor ((b shl 3) + (a shr 5)) xor ((b shr 7) + (a shl 11)) xor ((b shl 13) + (a shr 17))
+
+	return (first, second)
+end 'twin'
+
+function checkedTwin(a Word, b Word) returns WordPair throws PairError
+	if a == 77 or b == 78 or a == 79 or b == 80 or a == 81 or b == 82 'tooBig'
+		throw PairError.tooBig
+	end 'tooBig'
+
+	return twin(a, b: b)
+end 'checkedTwin'
+
+function main() returns ExitCode
+	var lo = 1 as Word
+	var hi = 2 as Word
+
+	for _ in 0 upto 1000 'rounds'
+		let (x, y) = twin(lo, b: hi)
+		lo = y
+		hi = x
+	end 'rounds'
+
+	let (p, q) = try checkedTwin(hi, b: lo) otherwise panic("unreachable")
+	let (r, s) = try checkedTwin(lo, b: hi) otherwise panic("unreachable")
+
+	return ((p xor q xor r xor s) and 127) as ExitCode
+end 'main'
+```
+```exitcode
+63
+```
+```mm-trace
+mm_alloc __Tuple2.Word.Word #1 size=16
+mm_alloc __Tuple2.Word.Word #2 size=16
+mm_decref __Tuple2.Word.Word #2 rc=0
+mm_free __Tuple2.Word.Word #2
+mm_decref __Tuple2.Word.Word #1 rc=0
+mm_free __Tuple2.Word.Word #1
+```
+
+<!-- test: a-rebuilt-pair-with-a-bool-half-reads-back-the-same-bool -->
+<!-- MmTrace -->
+`flagged` holds standing calls, so it is a real function whose pair rides the two return registers: the loop's first call reads the halves out and drops the box. The second call passes its result to `inspect`, which takes the tuple as a record, so that one site builds the record from the two registers it receives. The bool half is stored into the record's eight-byte slot and read back through the bool load, so a stale upper byte in the register would flip `inspect`'s branch. The trace holds one record per loop round and nothing else.
+```maxon
+typealias Word = bits(64)
+typealias Flagged = (bool, Word)
+
+function churn(x Word) returns Word
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function flagged(a Word, b Word) returns Flagged
+	let first = churn(a) xor ((a shl 3) + (b shr 5)) xor ((a shr 7) + (b shl 11)) xor ((a shl 13) + (b shr 17))
+	let second = churn(b shr 8) xor ((b shl 3) + (a shr 5)) xor ((b shr 7) + (a shl 11)) xor ((b shl 13) + (a shr 17))
+
+	return ((first and 1) == 1, first xor second)
+end 'flagged'
+
+function inspect(t Flagged, k Word) returns Word
+	var acc = churn(t._1 xor k)
+
+	if t._0 'up'
+		acc = acc + (acc shl 3)
+		acc = acc xor (acc shr 5)
+		acc = acc + (acc shl 7)
+		acc = acc xor (acc shr 11)
+		acc = acc + (acc shl 13)
+		acc = acc xor (acc shr 17)
+		acc = acc + (acc shl 19)
+		acc = acc xor (acc shr 23)
+	end 'up' else 'down'
+		acc = acc xor (acc shl 9)
+		acc = acc + (acc shr 13)
+		acc = acc xor (acc shl 17)
+		acc = acc + (acc shr 19)
+		acc = acc xor (acc shl 21)
+		acc = acc + (acc shr 25)
+		acc = acc xor (acc shl 29)
+		acc = acc + (acc shr 31)
+	end 'down'
+
+	acc = acc xor (acc shr 23)
+	acc = acc + (acc shl 5)
+	acc = acc xor (acc shr 7)
+	acc = acc + (acc shl 11)
+	return acc xor (acc shr 13)
+end 'inspect'
+
+function main() returns ExitCode
+	var tally = 0 as Word
+
+	for round in 0 upto 4 'rounds'
+		let (up, word) = flagged(tally, b: round as Word)
+
+		if up 'raise'
+			tally = tally + word
+		end 'raise'
+
+		tally = tally xor inspect(flagged(word, b: tally), k: round as Word)
+	end 'rounds'
+
+	tally = tally xor inspect(flagged(tally, b: 7), k: 9)
+
+	return (tally and 127) as ExitCode
+end 'main'
+```
+```exitcode
+27
+```
+```mm-trace
+mm_alloc __Tuple2.bool.Word #1 size=16
+mm_decref __Tuple2.bool.Word #1 rc=0
+mm_free __Tuple2.bool.Word #1
+mm_alloc __Tuple2.bool.Word #2 size=16
+mm_decref __Tuple2.bool.Word #2 rc=0
+mm_free __Tuple2.bool.Word #2
+mm_alloc __Tuple2.bool.Word #3 size=16
+mm_decref __Tuple2.bool.Word #3 rc=0
+mm_free __Tuple2.bool.Word #3
+mm_alloc __Tuple2.bool.Word #4 size=16
+mm_decref __Tuple2.bool.Word #4 rc=0
+mm_free __Tuple2.bool.Word #4
+mm_alloc __Tuple2.bool.Word #5 size=16
+mm_decref __Tuple2.bool.Word #5 rc=0
+mm_free __Tuple2.bool.Word #5
+```
+
+<!-- test: a-rebuilt-pair-with-a-managed-half-releases-the-half-with-the-record -->
+<!-- MmTrace -->
+The same shape with a String half. `named` returns its pair in registers because the first site reads out the halves and releases the string through the cascade; the second site passes the result to `describe`, which takes the tuple as a record, so that site builds one from the two registers. The record owns the string, and releasing the record releases it: the trace pairs every string record with a free.
+```maxon
+typealias Word = bits(64)
+typealias Named = (String, Word)
+
+function churn(x Word) returns Word
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function named(a Word, b Word) returns Named
+	let first = churn(a) xor ((a shl 3) + (b shr 5)) xor ((a shr 7) + (b shl 11)) xor ((a shl 13) + (b shr 17))
+	let second = churn(b shr 8) xor ((b shl 3) + (a shr 5)) xor ((b shr 7) + (a shl 11)) xor ((b shl 13) + (a shr 17))
+
+	return ("n{first and 255}", first xor second)
+end 'named'
+
+function describe(t Named, k Word) returns Word
+	var acc = churn(t._1 xor k)
+	acc = acc + (acc shl 3)
+	acc = acc xor (acc shr 5)
+	acc = acc + (acc shl 7)
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 9)
+	acc = acc + (acc shr 13)
+	acc = acc xor (acc shl 17)
+	acc = acc + (acc shr 19)
+	acc = acc xor (acc shl 21)
+	acc = acc + (acc shr 25)
+	acc = acc xor (acc shl 29)
+	acc = acc + (acc shr 31)
+	acc = acc xor (acc shr 23)
+	acc = acc + (acc shl 5)
+	acc = acc xor (acc shr 7)
+	acc = acc + (acc shl 11)
+	return acc + (t._0.byteLength() as Word)
+end 'describe'
+
+function main() returns ExitCode
+	var tally = 0 as Word
+
+	for round in 0 upto 2 'rounds'
+		let (label, word) = named(tally, b: round as Word)
+		tally = tally xor word xor (label.byteLength() as Word)
+		tally = tally xor describe(named(word, b: tally), k: round as Word)
+	end 'rounds'
+
+	tally = tally xor describe(named(tally, b: 7), k: 9)
+
+	return (tally and 127) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```mm-trace
+mm_alloc InterpolationScratch #1 size=20
+mm_alloc StringRecord #2 size=60
+mm_decref InterpolationScratch #1 rc=0
+mm_free InterpolationScratch #1
+mm_alloc StringRecord #3 size=60
+mm_alloc InterpolationScratch #4 size=20
+mm_alloc StringRecord #5 size=60
+mm_decref InterpolationScratch #4 rc=0
+mm_free InterpolationScratch #4
+mm_alloc __Tuple2.String.Word #6 size=16
+mm_decref __Tuple2.String.Word #6 rc=0
+mm_decref StringRecord #5 rc=0
+mm_free StringRecord #5
+mm_free __Tuple2.String.Word #6
+mm_decref StringRecord #3 rc=0
+mm_free StringRecord #3
+mm_decref StringRecord #2 rc=0
+mm_free StringRecord #2
+mm_alloc InterpolationScratch #7 size=20
+mm_alloc StringRecord #8 size=60
+mm_decref InterpolationScratch #7 rc=0
+mm_free InterpolationScratch #7
+mm_alloc StringRecord #9 size=60
+mm_alloc InterpolationScratch #10 size=20
+mm_alloc StringRecord #11 size=60
+mm_decref InterpolationScratch #10 rc=0
+mm_free InterpolationScratch #10
+mm_alloc __Tuple2.String.Word #12 size=16
+mm_decref __Tuple2.String.Word #12 rc=0
+mm_decref StringRecord #11 rc=0
+mm_free StringRecord #11
+mm_free __Tuple2.String.Word #12
+mm_decref StringRecord #9 rc=0
+mm_free StringRecord #9
+mm_decref StringRecord #8 rc=0
+mm_free StringRecord #8
+mm_alloc InterpolationScratch #13 size=20
+mm_alloc StringRecord #14 size=61
+mm_decref InterpolationScratch #13 rc=0
+mm_free InterpolationScratch #13
+mm_alloc __Tuple2.String.Word #15 size=16
+mm_decref __Tuple2.String.Word #15 rc=0
+mm_decref StringRecord #14 rc=0
+mm_free StringRecord #14
+mm_free __Tuple2.String.Word #15
+```
+
+<!-- test: a-caller-on-the-convention-builds-a-record-at-its-one-site-that-needs-one -->
+<!-- MmTrace -->
+`relay` returns its pair in registers: it forwards `twin`'s pair straight out on one path, and the same function passes `twin`'s pair to `inspect` on the other, where the callee takes a record. `relay` stays on the convention and builds the one record at the second site; `main` reads relay's halves out of the registers. The trace holds one record per call that took the second path and no record for the forwarded one.
+```maxon
+typealias Word = bits(64)
+typealias WordPair = (Word, Word)
+
+function churn(x Word) returns Word
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function twin(a Word, b Word) returns WordPair
+	let first = churn(a) xor ((a shl 3) + (b shr 5)) xor ((a shr 7) + (b shl 11)) xor ((a shl 13) + (b shr 17))
+	let second = churn(b shr 8) xor ((b shl 3) + (a shr 5)) xor ((b shr 7) + (a shl 11)) xor ((b shl 13) + (a shr 17))
+
+	return (first, second)
+end 'twin'
+
+function inspect(t WordPair, k Word) returns Word
+	var acc = churn(t._0 xor k)
+	acc = acc + (acc shl 3)
+	acc = acc xor (acc shr 5)
+	acc = acc + (acc shl 7)
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 9)
+	acc = acc + (acc shr 13)
+	acc = acc xor (acc shl 17)
+	acc = acc + (acc shr 19)
+	acc = acc xor (acc shl 21)
+	acc = acc + (acc shr 25)
+	acc = acc xor (acc shl 29)
+	acc = acc + (acc shr 31)
+	acc = acc xor (acc shr 23)
+	acc = acc + (acc shl 5)
+	acc = acc xor (acc shr 7)
+	acc = acc + (acc shl 11)
+	return acc xor t._1
+end 'inspect'
+
+function relay(flag Word, a Word, b Word) returns WordPair
+	if flag == 0 'forward'
+		return twin(a, b: b)
+	end 'forward'
+
+	let spent = inspect(twin(b, b: a), k: flag)
+
+	return (spent, a xor b)
+end 'relay'
+
+function main() returns ExitCode
+	var lo = 1 as Word
+	var hi = 2 as Word
+
+	for round in 0 upto 4 'rounds'
+		let (x, y) = relay(round and 1, a: lo, b: hi)
+		lo = y
+		hi = x xor (round as Word)
+	end 'rounds'
+
+	let (p, q) = relay(1, a: hi, b: lo)
+	let scratch = inspect((p, q), k: 3)
+
+	return ((lo xor hi xor p xor q xor scratch) and 127) as ExitCode
+end 'main'
+```
+```exitcode
+91
+```
+```mm-trace
+mm_alloc __Tuple2.Word.Word #1 size=16
+mm_decref __Tuple2.Word.Word #1 rc=0
+mm_free __Tuple2.Word.Word #1
+mm_alloc __Tuple2.Word.Word #2 size=16
+mm_decref __Tuple2.Word.Word #2 rc=0
+mm_free __Tuple2.Word.Word #2
+mm_alloc __Tuple2.Word.Word #3 size=16
+mm_decref __Tuple2.Word.Word #3 rc=0
+mm_free __Tuple2.Word.Word #3
+mm_alloc __Tuple2.Word.Word #4 size=16
+mm_decref __Tuple2.Word.Word #4 rc=0
+mm_free __Tuple2.Word.Word #4
 ```

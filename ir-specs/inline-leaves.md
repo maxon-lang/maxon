@@ -4256,7 +4256,7 @@ function pick(heavy bool, limit Integer) returns Integer
 		return tally(limit)
 	end 'heavy'
 
-	return limit
+	return limit + limit * 2 + limit * 3 + limit * 4 + limit * 5 + limit * 6 + limit * 7 + limit * 8
 end 'pick'
 
 function main() returns ExitCode
@@ -4274,7 +4274,7 @@ end 'main'
 0
 1
 2
-3 3
+108 3
 ```
 ```TargetIr:x64-windows
 data {
@@ -4385,7 +4385,17 @@ func @pick {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg r8, rdx
+    x64.leaRegBaseIndexScale rax, [rdx + rdx*2]
+    x64.imulRegRegImm32 rcx, rdx, 3
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegBaseIndexScale rax, [rax + rdx*4]
+    x64.imulRegRegImm32 rcx, rdx, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, rdx, 6
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, rdx, 7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegBaseIndexScale r8, [rax + rdx*8]
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -4601,7 +4611,17 @@ func @pick {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg r8, rdx
+    x64.leaRegBaseIndexScale rax, [rdx + rdx*2]
+    x64.imulRegRegImm32 rcx, rdx, 3
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegBaseIndexScale rax, [rax + rdx*4]
+    x64.imulRegRegImm32 rcx, rdx, 5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, rdx, 6
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, rdx, 7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegBaseIndexScale r8, [rax + rdx*8]
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -4806,7 +4826,19 @@ func @pick {
     arm64.epilogue 16
     arm64.ret
   ifcont:
-    arm64.movRegReg x0, x1
+    arm64.arm64AddLsl x0, x1, x1, lsl #1
+    arm64.arm64AddLsl x2, x1, x1, lsl #1
+    arm64.add x0, x0, x2
+    arm64.arm64AddLsl x0, x0, x1, lsl #2
+    arm64.arm64AddLsl x2, x1, x1, lsl #2
+    arm64.add x0, x0, x2
+    arm64.movImm x16, 6
+    arm64.mul x2, x1, x16
+    arm64.add x0, x0, x2
+    arm64.movImm x16, 7
+    arm64.mul x2, x1, x16
+    arm64.add x0, x0, x2
+    arm64.arm64AddLsl x0, x0, x1, lsl #3
     arm64.epilogue 16
     arm64.ret
 }
@@ -5014,7 +5046,19 @@ func @pick {
     arm64.epilogue 16
     arm64.ret
   ifcont:
-    arm64.movRegReg x0, x1
+    arm64.arm64AddLsl x0, x1, x1, lsl #1
+    arm64.arm64AddLsl x2, x1, x1, lsl #1
+    arm64.add x0, x0, x2
+    arm64.arm64AddLsl x0, x0, x1, lsl #2
+    arm64.arm64AddLsl x2, x1, x1, lsl #2
+    arm64.add x0, x0, x2
+    arm64.movImm x16, 6
+    arm64.mul x2, x1, x16
+    arm64.add x0, x0, x2
+    arm64.movImm x16, 7
+    arm64.mul x2, x1, x16
+    arm64.add x0, x0, x2
+    arm64.arm64AddLsl x0, x0, x1, lsl #3
     arm64.epilogue 16
     arm64.ret
 }
@@ -8314,7 +8358,7 @@ function pick(heavy bool, limit Integer) returns (Integer, Integer)
 		return pairOf(tally(limit))
 	end 'heavy'
 
-	return pairOf(limit)
+	return pairOf(limit + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10)
 end 'pick'
 
 function main() returns ExitCode
@@ -8332,7 +8376,7 @@ end 'main'
 0
 1
 2
-3 4 3 4
+58 59 3 4
 ```
 ```TargetIr:x64-windows
 data {
@@ -8468,7 +8512,16 @@ func @pick {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg rcx, rdx
+    x64.leaRegRegImm32 rax, rdx, 1
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.leaRegRegImm32 rax, rax, 4
+    x64.leaRegRegImm32 rax, rax, 5
+    x64.leaRegRegImm32 rax, rax, 6
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.leaRegRegImm32 rax, rax, 9
+    x64.leaRegRegImm32 rcx, rax, 10
     x64.callDirect pairOf
     x64.epilogue 32
     x64.popReg rbp
@@ -8774,7 +8827,16 @@ func @pick {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg rcx, rdx
+    x64.leaRegRegImm32 rax, rdx, 1
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.leaRegRegImm32 rax, rax, 4
+    x64.leaRegRegImm32 rax, rax, 5
+    x64.leaRegRegImm32 rax, rax, 6
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.leaRegRegImm32 rax, rax, 9
+    x64.leaRegRegImm32 rcx, rax, 10
     x64.callDirect pairOf
     x64.epilogue 32
     x64.popReg rbp
@@ -9062,7 +9124,16 @@ func @pick {
     arm64.epilogue 16
     arm64.ret
   ifcont:
-    arm64.movRegReg x0, x1
+    arm64.add x0, x1, 1
+    arm64.add x0, x0, 2
+    arm64.add x0, x0, 3
+    arm64.add x0, x0, 4
+    arm64.add x0, x0, 5
+    arm64.add x0, x0, 6
+    arm64.add x0, x0, 7
+    arm64.add x0, x0, 8
+    arm64.add x0, x0, 9
+    arm64.add x0, x0, 10
     arm64.bl pairOf
     arm64.epilogue 16
     arm64.ret
@@ -9348,7 +9419,16 @@ func @pick {
     arm64.epilogue 16
     arm64.ret
   ifcont:
-    arm64.movRegReg x0, x1
+    arm64.add x0, x1, 1
+    arm64.add x0, x0, 2
+    arm64.add x0, x0, 3
+    arm64.add x0, x0, 4
+    arm64.add x0, x0, 5
+    arm64.add x0, x0, 6
+    arm64.add x0, x0, 7
+    arm64.add x0, x0, 8
+    arm64.add x0, x0, 9
+    arm64.add x0, x0, 10
     arm64.bl pairOf
     arm64.epilogue 16
     arm64.ret
@@ -13086,6 +13166,1802 @@ func @main {
     arm64.and x0, x0, 127
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
+    arm64.ret
+}
+```
+
+<!-- test: a-leaf-composed-of-two-spliced-leaves-is-spliced-into-a-loop -->
+`shiftRows` is `swapTopBytes(rotateNibblesDown(w))`, and each of the two helpers is a leaf well inside the budget. Splicing both into `shiftRows` leaves it call-free, and the body it then holds measures what the same arithmetic written flat in one function measures: the jumps between the three spliced pieces are fall-throughs, not code. So the follow-up round takes `shiftRows` for a leaf and splices it into both sites in the loop, and the pin holds no `callDirect` and no `shiftRows` function.
+```maxon
+typealias Word = bits(64)
+
+let nibbleKeep = 0x0000FFFF0000FFFF
+let nibbleDown = 0xFFF00000FFF00000 as Word
+let nibbleWrap = 0x000F0000000F0000
+let topBytes = 0x00FF00FF00000000
+
+function rotateNibblesDown(w Word) returns Word
+	return (w and nibbleKeep) or ((w and nibbleDown) shr 4) or ((w and nibbleWrap) shl 12)
+end 'rotateNibblesDown'
+
+function swapTopBytes(w Word) returns Word
+	let moved = (w xor (w shr 8)) and topBytes
+
+	return w xor moved xor (moved shl 8)
+end 'swapTopBytes'
+
+function shiftRows(w Word) returns Word
+	return swapTopBytes(rotateNibblesDown(w))
+end 'shiftRows'
+
+function main() returns ExitCode
+	var acc = 1 as Word
+
+	for _ in 0 upto 1000 'rounds'
+		acc = shiftRows(acc) xor shiftRows(acc + 1)
+	end 'rounds'
+
+	return (acc and 127) as ExitCode
+end 'main'
+```
+```exitcode
+127
+```
+```TargetIr:x64-windows
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr
+  __il_body#10:
+    x64.movRegImm rdx, 281470681808895
+    x64.movRegReg rsi, rax
+    x64.andRegReg rsi, rax, rdx
+    x64.movRegImm rdx, 18442240478376099840
+    x64.movRegReg rdi, rax
+    x64.andRegReg rdi, rax, rdx
+    x64.shrRegImm8 rdi, rdi, 4
+    x64.orRegReg rsi, rsi, rdi
+    x64.movRegImm rdx, 4222124651642880
+    x64.movRegReg rdi, rax
+    x64.andRegReg rdi, rax, rdx
+    x64.shlRegImm8 rdi, rdi, 12
+    x64.orRegReg rsi, rsi, rdi
+  __il_body#11:
+    x64.movRegReg rdx, rsi
+    x64.shrRegImm8 rdx, rsi, 8
+    x64.xorRegReg rdx, rdx, rsi
+    x64.movRegImm rdi, 71777214277877760
+    x64.andRegReg rdx, rdx, rdi
+    x64.xorRegReg rsi, rsi, rdx
+    x64.shlRegImm8 rdx, rdx, 8
+    x64.xorRegReg rsi, rsi, rdx
+  __il_cont#6:
+    x64.leaRegRegImm32 rax, rax, 1
+  __il_body#15:
+    x64.movRegImm rdx, 281470681808895
+    x64.movRegReg rdi, rax
+    x64.andRegReg rdi, rax, rdx
+    x64.movRegImm rdx, 18442240478376099840
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rdx
+    x64.shrRegImm8 r8, r8, 4
+    x64.orRegReg rdi, rdi, r8
+    x64.movRegImm rdx, 4222124651642880
+    x64.andRegReg rax, rax, rdx
+    x64.shlRegImm8 rax, rax, 12
+    x64.orRegReg rdi, rdi, rax
+  __il_body#16:
+    x64.movRegReg rax, rdi
+    x64.shrRegImm8 rax, rdi, 8
+    x64.xorRegReg rax, rax, rdi
+    x64.movRegImm rdx, 71777214277877760
+    x64.andRegReg rax, rax, rdx
+    x64.xorRegReg rdi, rdi, rax
+    x64.shlRegImm8 rax, rax, 8
+    x64.xorRegReg rdi, rdi, rax
+  __il_cont#5:
+    x64.xorRegReg rsi, rsi, rdi
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rax, rsi
+  forhdr:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc less, __il_body#10
+  forexit:
+    x64.movRegReg r8, rax
+    x64.andRegImm32 r8, rax, 127
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr
+  __il_body#10:
+    x64.movRegImm rdx, 281470681808895
+    x64.movRegReg rsi, rax
+    x64.andRegReg rsi, rax, rdx
+    x64.movRegImm rdx, 18442240478376099840
+    x64.movRegReg rdi, rax
+    x64.andRegReg rdi, rax, rdx
+    x64.shrRegImm8 rdi, rdi, 4
+    x64.orRegReg rsi, rsi, rdi
+    x64.movRegImm rdx, 4222124651642880
+    x64.movRegReg rdi, rax
+    x64.andRegReg rdi, rax, rdx
+    x64.shlRegImm8 rdi, rdi, 12
+    x64.orRegReg rsi, rsi, rdi
+  __il_body#11:
+    x64.movRegReg rdx, rsi
+    x64.shrRegImm8 rdx, rsi, 8
+    x64.xorRegReg rdx, rdx, rsi
+    x64.movRegImm rdi, 71777214277877760
+    x64.andRegReg rdx, rdx, rdi
+    x64.xorRegReg rsi, rsi, rdx
+    x64.shlRegImm8 rdx, rdx, 8
+    x64.xorRegReg rsi, rsi, rdx
+  __il_cont#6:
+    x64.leaRegRegImm32 rax, rax, 1
+  __il_body#15:
+    x64.movRegImm rdx, 281470681808895
+    x64.movRegReg rdi, rax
+    x64.andRegReg rdi, rax, rdx
+    x64.movRegImm rdx, 18442240478376099840
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rdx
+    x64.shrRegImm8 r8, r8, 4
+    x64.orRegReg rdi, rdi, r8
+    x64.movRegImm rdx, 4222124651642880
+    x64.andRegReg rax, rax, rdx
+    x64.shlRegImm8 rax, rax, 12
+    x64.orRegReg rdi, rdi, rax
+  __il_body#16:
+    x64.movRegReg rax, rdi
+    x64.shrRegImm8 rax, rdi, 8
+    x64.xorRegReg rax, rax, rdi
+    x64.movRegImm rdx, 71777214277877760
+    x64.andRegReg rax, rax, rdx
+    x64.xorRegReg rdi, rdi, rax
+    x64.shlRegImm8 rax, rax, 8
+    x64.xorRegReg rdi, rdi, rax
+  __il_cont#5:
+    x64.xorRegReg rsi, rsi, rdi
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rax, rsi
+  forhdr:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc less, __il_body#10
+  forexit:
+    x64.movRegReg r8, rax
+    x64.andRegImm32 r8, rax, 127
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  __il_body#10:
+    arm64.movImm x2, 281470681808895
+    arm64.and x2, x0, x2
+    arm64.movImm x3, 18442240478376099840
+    arm64.and x3, x0, x3
+    arm64.lsr x3, x3, 4
+    arm64.orr x2, x2, x3
+    arm64.movImm x3, 4222124651642880
+    arm64.and x3, x0, x3
+    arm64.lsl x3, x3, 12
+    arm64.orr x2, x2, x3
+  __il_body#11:
+    arm64.lsr x3, x2, 8
+    arm64.eor x3, x2, x3
+    arm64.movImm x4, 71777214277877760
+    arm64.and x3, x3, x4
+    arm64.eor x2, x2, x3
+    arm64.lsl x3, x3, 8
+    arm64.eor x2, x2, x3
+  __il_cont#6:
+    arm64.add x0, x0, 1
+  __il_body#15:
+    arm64.movImm x3, 281470681808895
+    arm64.and x3, x0, x3
+    arm64.movImm x4, 18442240478376099840
+    arm64.and x4, x0, x4
+    arm64.lsr x4, x4, 4
+    arm64.orr x3, x3, x4
+    arm64.movImm x4, 4222124651642880
+    arm64.and x0, x0, x4
+    arm64.lsl x0, x0, 12
+    arm64.orr x0, x3, x0
+  __il_body#16:
+    arm64.lsr x3, x0, 8
+    arm64.eor x3, x0, x3
+    arm64.movImm x4, 71777214277877760
+    arm64.and x3, x3, x4
+    arm64.eor x0, x0, x3
+    arm64.lsl x3, x3, 8
+    arm64.eor x0, x0, x3
+  __il_cont#5:
+    arm64.eor x0, x2, x0
+  forstep:
+    arm64.add x1, x1, 1
+  forhdr:
+    arm64.cmp x1, 1000
+    arm64.b.lt __il_body#10
+  forexit:
+    arm64.and x0, x0, 127
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  __il_body#10:
+    arm64.movImm x2, 281470681808895
+    arm64.and x2, x0, x2
+    arm64.movImm x3, 18442240478376099840
+    arm64.and x3, x0, x3
+    arm64.lsr x3, x3, 4
+    arm64.orr x2, x2, x3
+    arm64.movImm x3, 4222124651642880
+    arm64.and x3, x0, x3
+    arm64.lsl x3, x3, 12
+    arm64.orr x2, x2, x3
+  __il_body#11:
+    arm64.lsr x3, x2, 8
+    arm64.eor x3, x2, x3
+    arm64.movImm x4, 71777214277877760
+    arm64.and x3, x3, x4
+    arm64.eor x2, x2, x3
+    arm64.lsl x3, x3, 8
+    arm64.eor x2, x2, x3
+  __il_cont#6:
+    arm64.add x0, x0, 1
+  __il_body#15:
+    arm64.movImm x3, 281470681808895
+    arm64.and x3, x0, x3
+    arm64.movImm x4, 18442240478376099840
+    arm64.and x4, x0, x4
+    arm64.lsr x4, x4, 4
+    arm64.orr x3, x3, x4
+    arm64.movImm x4, 4222124651642880
+    arm64.and x0, x0, x4
+    arm64.lsl x0, x0, 12
+    arm64.orr x0, x3, x0
+  __il_body#16:
+    arm64.lsr x3, x0, 8
+    arm64.eor x3, x0, x3
+    arm64.movImm x4, 71777214277877760
+    arm64.and x3, x3, x4
+    arm64.eor x0, x0, x3
+    arm64.lsl x3, x3, 8
+    arm64.eor x0, x0, x3
+  __il_cont#5:
+    arm64.eor x0, x2, x0
+  forstep:
+    arm64.add x1, x1, 1
+  forhdr:
+    arm64.cmp x1, 1000
+    arm64.b.lt __il_body#10
+  forexit:
+    arm64.and x0, x0, 127
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+
+<!-- test: a-wrapper-over-a-standing-call-is-spliced-so-the-calls-land-in-the-caller -->
+`twin` is two calls to `churn` and a pair, and `churn` is far past the leaf budget, so `churn` stays a call and `twin` is no leaf. `twin` holds nothing but those calls: splicing it replaces the one call to `twin` with the two calls to `churn` it makes, and removes a frame. Both sites of `twin` are spliced and the pair never becomes a record. The pin holds four `callDirect churn` in `main`, no `callDirect twin` and no `twin` function.
+```maxon
+typealias Word = bits(64)
+typealias WordPair = (Word, Word)
+
+function churn(x Word) returns Word
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function twin(a Word, b Word) returns WordPair
+	return (churn(a), churn(b shr 8))
+end 'twin'
+
+function main() returns ExitCode
+	var lo = 1 as Word
+	var hi = 2 as Word
+
+	for _ in 0 upto 1000 'rounds'
+		let (x, y) = twin(lo, b: hi)
+		lo = y
+		hi = x
+	end 'rounds'
+
+	let (p, q) = twin(hi, b: lo)
+
+	return ((p xor q) and 127) as ExitCode
+end 'main'
+```
+```exitcode
+72
+```
+```TargetIr:x64-windows
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+  __mrt_program_started@11 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  __il_body#7:
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 8
+    x64.callDirect churn
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg r12, rbx
+    x64.movRegReg rbx, r8
+  forhdr:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, __il_body#7
+  __il_body#9:
+    x64.movRegReg rcx, r12
+    x64.callDirect churn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 8
+    x64.callDirect churn
+  __il_cont:
+    x64.xorRegReg r12, r12, r8
+    x64.movRegReg r8, r12
+    x64.andRegImm32 r8, r12, 127
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  __il_body#7:
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.shrRegImm8 rcx, r12, 8
+    x64.callDirect churn
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg r12, rbx
+    x64.movRegReg rbx, r8
+  forhdr:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, __il_body#7
+  __il_body#9:
+    x64.movRegReg rcx, r12
+    x64.callDirect churn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 8
+    x64.callDirect churn
+  __il_cont:
+    x64.xorRegReg r12, r12, r8
+    x64.movRegReg r8, r12
+    x64.andRegImm32 r8, r12, 127
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_state@0 = i64 0
+  __mrt_program_started@8 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  __il_body#7:
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.movRegReg x19, x0
+    arm64.lsr x0, x20, 8
+    arm64.bl churn
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x20, x19
+    arm64.movRegReg x19, x0
+  forhdr:
+    arm64.cmp x21, 1000
+    arm64.b.lt __il_body#7
+  __il_body#9:
+    arm64.movRegReg x0, x20
+    arm64.bl churn
+    arm64.movRegReg x20, x0
+    arm64.lsr x0, x19, 8
+    arm64.bl churn
+  __il_cont:
+    arm64.eor x0, x20, x0
+    arm64.and x0, x0, 127
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  __il_body#7:
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.movRegReg x19, x0
+    arm64.lsr x0, x20, 8
+    arm64.bl churn
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x20, x19
+    arm64.movRegReg x19, x0
+  forhdr:
+    arm64.cmp x21, 1000
+    arm64.b.lt __il_body#7
+  __il_body#9:
+    arm64.movRegReg x0, x20
+    arm64.bl churn
+    arm64.movRegReg x20, x0
+    arm64.lsr x0, x19, 8
+    arm64.bl churn
+  __il_cont:
+    arm64.eor x0, x20, x0
+    arm64.and x0, x0, 127
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+
+<!-- test: a-wrapper-stays-a-call-where-splicing-would-widen-a-lean-callers-frame -->
+`mix` is a wrapper of the case above: two calls to `churn`, the first result kept in a register across the second. `pickA` and `pickB` keep nothing across their one call and reach it only on the path that does not return early. Splicing `mix` there would make each caller save callee registers on every path, including the quick one, so on the lanes that allocate registers the site stays a call (`widensCallerFrame`). The pin holds `callDirect mix` in `pickA` and in `pickB`.
+```maxon
+typealias Word = bits(64)
+
+function churn(x Word) returns Word
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function mix(a Word, b Word) returns Word
+	return churn(a) xor churn(b shr 8)
+end 'mix'
+
+function pickA(flag Word, a Word, b Word) returns Word
+	if flag == 0 'quick'
+		return a xor b
+	end 'quick'
+
+	return mix(a, b: b) + 1
+end 'pickA'
+
+function pickB(flag Word, a Word, b Word) returns Word
+	if flag == 0 'quick'
+		return a + b
+	end 'quick'
+
+	return mix(b, b: a) + 3
+end 'pickB'
+
+function main() returns ExitCode
+	var acc = 1 as Word
+	var flag = 0 as Word
+
+	for _ in 0 upto 100 'rounds'
+		flag = (flag + 1) and 3
+		acc = pickA(flag, a: acc, b: 7) + pickB(flag, a: acc, b: 9)
+		acc = pickA(flag, a: acc, b: 11) + pickB(flag, a: acc, b: 13)
+	end 'rounds'
+
+	return (acc and 127) as ExitCode
+end 'main'
+```
+```exitcode
+88
+```
+```TargetIr:x64-windows
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @mix {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.callDirect churn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 8
+    x64.callDirect churn
+    x64.xorRegReg r12, r12, r8
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pickA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  quick:
+    x64.movRegReg r8, rdx
+    x64.xorRegReg r8, rdx, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect mix
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pickB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  quick:
+    x64.leaRegRegReg r8, rdx, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rax
+    x64.callDirect mix
+    x64.leaRegRegImm32 r8, r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  rounds:
+    x64.leaRegRegImm32 r13, rax, 1
+    x64.andRegImm32 r13, r13, 3
+    x64.movRegImm32 rax, 7
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect pickA
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 9
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect pickB
+    x64.leaRegRegReg rbx, r14, r8
+    x64.movRegImm32 rax, 11
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect pickA
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 13
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect pickB
+    x64.leaRegRegReg rax, r14, r8
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rbx, rax
+    x64.movRegReg rax, r13
+  forhdr:
+    x64.cmpRegImm32 r12, 100
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg r8, rbx
+    x64.andRegImm32 r8, rbx, 127
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @mix {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.callDirect churn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 8
+    x64.callDirect churn
+    x64.xorRegReg r12, r12, r8
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pickA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  quick:
+    x64.movRegReg r8, rdx
+    x64.xorRegReg r8, rdx, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect mix
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pickB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  quick:
+    x64.leaRegRegReg r8, rdx, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rax
+    x64.callDirect mix
+    x64.leaRegRegImm32 r8, r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  rounds:
+    x64.leaRegRegImm32 r13, rax, 1
+    x64.andRegImm32 r13, r13, 3
+    x64.movRegImm32 rax, 7
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect pickA
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 9
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect pickB
+    x64.leaRegRegReg rbx, r14, r8
+    x64.movRegImm32 rax, 11
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect pickA
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 13
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect pickB
+    x64.leaRegRegReg rax, r14, r8
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rbx, rax
+    x64.movRegReg rax, r13
+  forhdr:
+    x64.cmpRegImm32 r12, 100
+    x64.jcc less, rounds
+  forexit:
+    x64.movRegReg r8, rbx
+    x64.andRegImm32 r8, rbx, 127
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @mix {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.bl churn
+    arm64.movRegReg x20, x0
+    arm64.lsr x0, x19, 8
+    arm64.bl churn
+    arm64.eor x0, x20, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @pickA {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  quick:
+    arm64.eor x0, x1, x2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl mix
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @pickB {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  quick:
+    arm64.add x0, x1, x2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movRegReg x0, x2
+    arm64.bl mix
+    arm64.add x0, x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x0, 0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  rounds:
+    arm64.add x0, x0, 1
+    arm64.and x21, x0, 3
+    arm64.movImm x2, 7
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl pickA
+    arm64.movRegReg x22, x0
+    arm64.movImm x2, 9
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl pickB
+    arm64.add x19, x22, x0
+    arm64.movImm x2, 11
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl pickA
+    arm64.movRegReg x22, x0
+    arm64.movImm x2, 13
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl pickB
+    arm64.add x0, x22, x0
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x21
+  forhdr:
+    arm64.cmp x20, 100
+    arm64.b.lt rounds
+  forexit:
+    arm64.and x0, x19, 127
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @mix {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.bl churn
+    arm64.movRegReg x20, x0
+    arm64.lsr x0, x19, 8
+    arm64.bl churn
+    arm64.eor x0, x20, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @pickA {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  quick:
+    arm64.eor x0, x1, x2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl mix
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @pickB {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  quick:
+    arm64.add x0, x1, x2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movRegReg x0, x2
+    arm64.bl mix
+    arm64.add x0, x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x0, 0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  rounds:
+    arm64.add x0, x0, 1
+    arm64.and x21, x0, 3
+    arm64.movImm x2, 7
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl pickA
+    arm64.movRegReg x22, x0
+    arm64.movImm x2, 9
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl pickB
+    arm64.add x19, x22, x0
+    arm64.movImm x2, 11
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl pickA
+    arm64.movRegReg x22, x0
+    arm64.movImm x2, 13
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl pickB
+    arm64.add x0, x22, x0
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x21
+  forhdr:
+    arm64.cmp x20, 100
+    arm64.b.lt rounds
+  forexit:
+    arm64.and x0, x19, 127
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+
+<!-- test: a-panic-in-the-standing-callee-of-a-spliced-wrapper-names-every-frame -->
+`churn` is far past the leaf budget and stays a call; `both` is two calls to it and is a wrapper the compiler splices into `main`'s two sites. The pin shows `main` calling `churn` directly and no `callDirect both`; the panic fires inside `churn`, called from the copied wrapper body, and the trace still names `churn`, `both` and `main`, exactly as the calls did.
+```maxon
+typealias Word = bits(64)
+
+function churn(x Word) returns Word
+	if x == 0 'zero'
+		panic("zero")
+	end 'zero'
+
+	var acc = x
+	acc = acc xor (acc shl 13)
+	acc = acc xor (acc shr 7)
+	acc = acc xor (acc shl 17)
+	acc = acc + 0x9E3779B97F4A7C15
+	acc = acc xor (acc shr 11)
+	acc = acc xor (acc shl 5)
+	acc = acc + 0x7F4A7C159E3779B9
+	acc = acc xor (acc shr 3)
+	acc = acc xor (acc shl 29)
+	acc = acc + 0x1234567890ABCDEF
+	acc = acc xor (acc shr 19)
+	return acc
+end 'churn'
+
+function both(a Word, b Word) returns Word
+	return churn(a) xor churn(b)
+end 'both'
+
+function main() returns ExitCode
+	var seed = 3 as Word
+	var low = 1 as Word
+
+	for _ in 0 upto 3 'rounds'
+		seed = both(seed, b: low)
+		low = low - 1
+	end 'rounds'
+
+	let last = both(seed, b: low)
+
+	return (last and 127) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-panic-in-the-standing-callee-of-a-spliced-wrapper-names-every-frame.test:6: zero
+Stack trace:
+  in churn
+  in both
+  in main
+  in mrt_start
+```
+```TargetIr:x64-windows
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  zero:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-panic-in-the-standing-callee-of-a-spliced-wrapper-names-every-frame.test:6: zero\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  __il_body#6:
+    x64.callDirect churn
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.xorRegReg r13, r13, r8
+  __il_cont#5:
+    x64.leaRegRegImm32 rbx, rbx, -1
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rcx, r13
+  forhdr:
+    x64.cmpRegImm32 r12, 3
+    x64.jcc less, __il_body#6
+  __il_body#8:
+    x64.callDirect churn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.xorRegReg r12, r12, r8
+  __il_cont#7:
+    x64.movRegReg r8, r12
+    x64.andRegImm32 r8, r12, 127
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  zero:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-panic-in-the-standing-callee-of-a-spliced-wrapper-names-every-frame.test:6: zero\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 13
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 7
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 17
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 11400714819323198485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 11
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 5
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 9172280023384029625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 3
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.shlRegImm8 rax, rcx, 29
+    x64.xorRegReg rax, rax, rcx
+    x64.movRegImm rcx, 1311768467294899695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 19
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  __il_body#6:
+    x64.callDirect churn
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.xorRegReg r13, r13, r8
+  __il_cont#5:
+    x64.leaRegRegImm32 rbx, rbx, -1
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rcx, r13
+  forhdr:
+    x64.cmpRegImm32 r12, 3
+    x64.jcc less, __il_body#6
+  __il_body#8:
+    x64.callDirect churn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect churn
+    x64.xorRegReg r12, r12, r8
+  __il_cont#7:
+    x64.movRegReg r8, r12
+    x64.andRegImm32 r8, r12, 127
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  zero:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-panic-in-the-standing-callee-of-a-spliced-wrapper-names-every-frame.test:6: zero\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 3
+    arm64.movImm x19, 1
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  __il_body#6:
+    arm64.bl churn
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.eor x0, x21, x0
+  __il_cont#5:
+    arm64.sub x19, x19, 1
+  forstep:
+    arm64.add x20, x20, 1
+  forhdr:
+    arm64.cmp x20, 3
+    arm64.b.lt __il_body#6
+  __il_body#8:
+    arm64.bl churn
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.eor x0, x20, x0
+  __il_cont#7:
+    arm64.and x0, x0, 127
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  zero:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-panic-in-the-standing-callee-of-a-spliced-wrapper-names-every-frame.test:6: zero\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.lsl x1, x0, 13
+    arm64.eor x0, x0, x1
+    arm64.lsr x1, x0, 7
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 17
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 11400714819323198485
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 11
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 5
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 9172280023384029625
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 3
+    arm64.eor x0, x0, x1
+    arm64.lsl x1, x0, 29
+    arm64.eor x0, x0, x1
+    arm64.movImm x1, 1311768467294899695
+    arm64.add x0, x0, x1
+    arm64.lsr x1, x0, 19
+    arm64.eor x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 3
+    arm64.movImm x19, 1
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  __il_body#6:
+    arm64.bl churn
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.eor x0, x21, x0
+  __il_cont#5:
+    arm64.sub x19, x19, 1
+  forstep:
+    arm64.add x20, x20, 1
+  forhdr:
+    arm64.cmp x20, 3
+    arm64.b.lt __il_body#6
+  __il_body#8:
+    arm64.bl churn
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl churn
+    arm64.eor x0, x20, x0
+  __il_cont#7:
+    arm64.and x0, x0, 127
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```

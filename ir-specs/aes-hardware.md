@@ -2915,489 +2915,65 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 168
+    x64.prologue 88
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.storeSlotReg slot1, rbx
+    x64.storeSlotReg slot0, rbx
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
-    x64.storeSlotReg slot0, r12
+    x64.storeSlotReg slot1, r12
     x64.movRegImm32 rdx, 16
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_resize
     x64.movRegImm32 rdx, 16
     x64.movRegReg rcx, r12
     x64.callDirect __managed_resize
-  __il_body#29:
-    x64.callDirect __cpufeat_aes_usable
-  __il_cont#28:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, __il_body#144
-  __il_body#136:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 16
-    x64.movRegImm32 rax, 0
-    x64.jcc equal, scmerge#138
-  andrhs#137:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 24
-    x64.setccReg notEqual, rax
-  scmerge#138:
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#168
-  andrhs#139:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 32
-    x64.setccReg notEqual, rax
-    x64.jmp scmerge#140
-  critsplit#168:
-    x64.movRegReg rax, rcx
-  scmerge#140:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#142
-  keyLength#141:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#135
-  ifcont#142:
-    x64.movRegImm32 rax, 0
-  __il_cont#135:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr#2
-  __il_body#31:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.shrRegImm8 rax, rax, 2
-    x64.leaRegRegImm32 r12, rax, 6
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg r13, r8
-    x64.leaRegRegImm32 rax, r12, 1
-    x64.imulRegRegImm32 rdx, rax, 32
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_resize
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, rbx
-    x64.callDirect __cpufeat_aes_cipher_expand_key
-  __il_cont#30:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.storeBaseDispReg.word64 [rbx + 8], r13
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont#20
-  __il_body#144:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 16
-    x64.movRegImm32 rax, 0
-    x64.jcc equal, scmerge#146
-  andrhs#145:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 24
-    x64.setccReg notEqual, rax
-  scmerge#146:
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#170
-  andrhs#147:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 32
-    x64.setccReg notEqual, rax
-    x64.jmp scmerge#148
-  critsplit#170:
-    x64.movRegReg rax, rcx
-  scmerge#148:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#150
-  keyLength#149:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#143
-  ifcont#150:
-    x64.movRegImm32 rax, 0
-  __il_cont#143:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, tryok#34
-  tryerr#35:
-    x64.movRegImm32 rbx, 0
-    x64.jmp __il_cont#32
-  tryok#34:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.shrRegImm8 rax, rax, 2
-    x64.leaRegRegImm32 r12, rax, 6
-    x64.storeSlotReg slot3, r12
-    x64.cmpRegImm32 r12, 10
-    x64.jcc less, __rc_panic#37
-  __rc_chk#38:
-    x64.cmpRegImm32 r12, 14
-    x64.jcc greater, __rc_panic#37
-  __rc_ok#46:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.shrRegImm8 rax, rax, 2
-    x64.storeSlotReg slot5, rax
-    x64.leaRegRegImm32 rax, r12, 1
-    x64.shlRegImm8 rax, rax, 2
-    x64.storeSlotReg slot8, rax
-  __il_body#52:
-    x64.movRegImm32 rcx, 60
-    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N60_AesWord]
-    x64.callDirect FixedArray.create
-    x64.movRegReg r13, r8
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.shrRegImm8 rax, rax, 2
-    x64.movRegImm32 rcx, 0
-    x64.jmp forhdr#53
-  __rc_chk#60:
-    x64.cmpRegImm32 rcx, 59
-    x64.jcc greater, __rc_panic#59
-  __rc_ok#58:
-    x64.imulRegRegImm32 rdx, rcx, 4
-  __il_body#152:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
-    x64.cmpRegReg rdx, rsi
-    x64.jcc aboveEqual, __im_slow#156
-  __im_bounds:
-    x64.subRegReg rsi, rsi, rdx
-    x64.cmpRegImm32 rsi, 4
-    x64.jcc less, __im_slow#156
-  __im_load#158:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 24]
-    x64.cmpRegImm32 rsi, 1
-    x64.jcc notEqual, __im_slow#156
-  __im_byte#159:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.leaRegRegReg rdx, rsi, rdx
-    x64.loadRegBaseDisp.word32 rdx, [rdx + 0]
-  __il_cont#151:
-    x64.loadRegBaseDisp.word64 rsi, [r13 + 0]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_missing#67
-  __im_owned#69:
-    x64.loadRegBaseDisp.word64 rdi, [r13 + 16]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc less, __im_detach#68
-  __im_viewed#70:
-    x64.leaRegRegImm32 rdi, rsi, -16
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_detach#68
-  __im_detached#71:
-    x64.storeBaseIndexScaleReg.word64 [rsi + rcx*8 + 0], rdx
-  forstep#55:
-    x64.leaRegRegImm32 rcx, rcx, 1
-  forhdr#53:
-    x64.cmpRegReg rcx, rax
-    x64.jcc below, __rc_chk#60
-  forexit:
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#64
-  __rc_chk#65:
-    x64.cmpRegImm32 rax, 59
-    x64.jcc greater, __rc_panic#64
-  __rc_ok#63:
-    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
-    x64.loadRegBaseIndexScale.word64 rbx, [rcx + rax*8 + 0]
-  __im_cont#72:
-    x64.callDirect AesState.create
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rcx, 40
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r15 + 0], r13
-    x64.storeBaseDispReg.word64 [r15 + 8], r14
-    x64.storeBaseDispReg.word64 [r15 + 16], rbx
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r15 + 24], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r15 + 32], rax
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-  __il_cont#51:
-    x64.loadRegSlot rbx, slot5
-    x64.jmp forhdr#41
-  __il_body#99:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 24]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, ifelse
-  rotate:
-    x64.leaRegRdata rcx, [rip + __barr_rec_10]
-    x64.loadRegBaseDisp.word64 rdx, [r15 + 32]
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#124
-  __im_load#125:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 r13, [rax + rdx*8 + 0]
-  tryok#101:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
-  __il_body#134:
-    x64.movRegReg rcx, rax
-    x64.shrRegImm8 rcx, rax, 8
-    x64.shlRegImm8 rax, rax, 24
-    x64.orRegReg rcx, rcx, rax
-    x64.movRegImm32 rax, 4294967295
-    x64.movRegReg rdx, rcx
-    x64.andRegReg rdx, rcx, rax
-  __il_cont#133:
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 8]
-    x64.callDirect AesState.subWord
-    x64.xorRegReg r8, r8, r13
-    x64.jmp ifcont#108
-  ifelse:
-    x64.loadRegSlot rcx, slot5
-    x64.cmpRegImm32 rcx, 8
-    x64.movRegImm32 rcx, 0
-    x64.jcc notEqual, scmerge#105
-  andrhs#104:
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 24]
-    x64.cmpRegImm32 rcx, 4
-    x64.setccReg equal, rcx
-  scmerge#105:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#164
-  longKey:
-    x64.loadRegBaseDisp.word64 rdx, [r15 + 16]
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 8]
-    x64.callDirect AesState.subWord
-    x64.jmp ifcont#108
-  critsplit#164:
-    x64.movRegReg r8, rax
-  ifcont#108:
-    x64.loadRegSlot rax, slot5
     x64.movRegReg rcx, rbx
-    x64.subRegReg rcx, rbx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#112
-  __rc_chk#113:
-    x64.cmpRegImm32 rcx, 59
-    x64.jcc greater, __rc_panic#112
-  __rc_ok#111:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rcx*8 + 0]
-  __im_cont#126:
-    x64.xorRegReg r8, r8, rax
-    x64.storeBaseDispReg.word64 [r15 + 16], r8
-  __rc_chk#116:
-    x64.cmpRegImm32 rbx, 59
-    x64.jcc greater, __rc_panic#115
-  __rc_ok#114:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __im_missing#128
-  __im_owned#130:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc less, __im_detach#129
-  __im_viewed#131:
-    x64.leaRegRegImm32 rsi, rdx, -16
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_detach#129
-  critsplit#166:
-    x64.movRegReg rcx, rdx
-  __im_detached#132:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rbx*8 + 0], rax
-  __im_cont#127:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 24]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#118
-  __rc_chk#119:
-    x64.cmpRegImm32 rax, 8
-    x64.jcc greater, __rc_panic#118
-  __rc_ok#117:
-    x64.storeBaseDispReg.word64 [r15 + 24], rax
-    x64.loadRegBaseDisp.word64 rax, [r15 + 24]
-    x64.loadRegSlot rcx, slot5
-    x64.cmpRegReg rax, rcx
-    x64.jcc notEqual, forstep#43
-  wrap:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r15 + 24], rax
-    x64.loadRegBaseDisp.word64 rax, [r15 + 32]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#121
-  __rc_chk#122:
-    x64.cmpRegImm32 rax, 10
-    x64.jcc greater, __rc_panic#121
-  __rc_ok#120:
-    x64.storeBaseDispReg.word64 [r15 + 32], rax
-  forstep#43:
-    x64.leaRegRegImm32 rbx, rbx, 1
-  forhdr#41:
-    x64.loadRegSlot rax, slot8
-    x64.cmpRegReg rbx, rax
-    x64.jcc below, __il_body#99
-  __il_body#82:
-    x64.movRegImm32 rcx, 120
-    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N120_AesWord]
-    x64.callDirect FixedArray.create
-    x64.storeSlotReg slot10, r8
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rbx, r12, 1
-    x64.jmp forhdr#74
-  __rc_ok#83:
-    x64.imulRegRegImm32 r12, rax, 4
-    x64.imulRegRegImm32 r13, rax, 8
-    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rax + r12*8 + 0]
-  __im_cont#92:
-    x64.leaRegRegImm32 rax, r12, 2
-    x64.loadRegBaseDisp.word64 rdx, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.loadRegBaseIndexScale.word64 rdx, [rdx + rax*8 + 0]
-  __im_cont#93:
-    x64.callDirect aesInterleave
-    x64.movRegReg r14, r8
-    x64.leaRegRegImm32 rax, r12, 1
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rax*8 + 0]
-  __im_cont#94:
-    x64.leaRegRegImm32 rax, r12, 3
-    x64.loadRegBaseDisp.word64 rdx, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.loadRegBaseIndexScale.word64 rdx, [rdx + rax*8 + 0]
-  __im_cont#95:
-    x64.callDirect aesInterleave
-    x64.movRegImm32 rax, 0
-    x64.jmp forhdr#78
-  eachPlane:
-    x64.leaRegRegReg rdx, r13, rax
-  __il_body#97:
-    x64.movRegReg rcx, rax
-    x64.movRegReg rsi, r14
-    x64.shrRegCl rsi, r14
-    x64.movRegImm rdi, 72340172838076673
-    x64.andRegReg rsi, rsi, rdi
-    x64.movRegReg rcx, rax
-    x64.movRegReg rdi, r8
-    x64.shrRegCl rdi, r8
-    x64.movRegImm r9, 72340172838076673
-    x64.andRegReg rdi, rdi, r9
-    x64.imulRegRegImm32 rsi, rsi, 15
-    x64.imulRegRegImm32 rdi, rdi, 240
-    x64.orRegReg rsi, rsi, rdi
-  __il_cont#96:
-    x64.loadRegSlot rcx, slot10
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_missing#87
-  __im_owned#89:
-    x64.loadRegSlot rdi, slot10
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc less, __im_detach#88
-  __im_viewed#90:
-    x64.leaRegRegImm32 rdi, rcx, -16
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_detach#88
-  __im_detached#91:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
-  forstep#80:
-    x64.leaRegRegImm32 rax, rax, 1
-  forhdr#78:
-    x64.cmpRegImm32 rax, 8
-    x64.jcc less, eachPlane
-  forstep#76:
-    x64.loadRegSlot rax, slot7
-    x64.leaRegRegImm32 rax, rax, 1
-  forhdr#74:
-    x64.storeSlotReg slot7, rax
-    x64.cmpRegReg rax, rbx
-    x64.jcc below, __rc_ok#83
-  __il_cont#73:
-    x64.movRegReg rcx, r15
-    x64.callDirect __destruct_AesKeyExpansion
-  __il_cont#39:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.loadRegSlot rax, slot10
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.loadRegSlot rax, slot3
-    x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.movRegImm32 rax, 0
-    x64.movRegReg rbx, r8
-  __il_cont#32:
-    x64.cmpRegImm32 rax, 0
+    x64.callDirect Aes.create
+    x64.storeSlotReg slot2, r8
+    x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
-  tryok#26:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r12 + 0], rax
-    x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], r12
-    x64.movRegReg rcx, r8
-  __il_cont#20:
-    x64.storeSlotReg slot2, rcx
   tryok#1:
     x64.movRegImm32 r9, 0
-    x64.loadRegSlot rax, slot0
-    x64.movRegReg rdx, rax
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r12
     x64.callDirect Aes.encryptBlockInto
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#4
   tryok#3:
     x64.movRegImm32 rdx, 0
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#12
-  __im_load#13:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp tryok#5
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#12
-  __im_byte#15:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp tryok#5
-  __im_slow#12:
-    x64.loadRegSlot rcx, slot0
+  __im_slow:
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#160
+    x64.jcc equal, critsplit
   tryerr#6:
     x64.movRegImm32 rbx, 0
     x64.jmp trycont
-  critsplit#160:
+  critsplit:
     x64.movRegReg rax, r8
   tryok#5:
     x64.movRegReg rbx, rax
@@ -3406,7 +2982,7 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
-    x64.storeSlotReg slot4, r12
+    x64.storeSlotReg slot3, r12
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __uint_to_string
@@ -3415,11 +2991,11 @@ func @main {
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
-    x64.storeSlotReg slot6, rax
+    x64.storeSlotReg slot4, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot9, r8
+    x64.storeSlotReg slot5, r8
     x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
@@ -3431,231 +3007,34 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rax, slot9
+    x64.loadRegSlot rax, slot5
     x64.storeBaseDispReg.word64 [rax + 0], r15
-    x64.loadRegSlot rcx, slot6
+    x64.loadRegSlot rcx, slot4
     x64.storeBaseDispReg.word64 [rax + 8], rcx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-    x64.loadRegSlot rcx, slot4
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __mm_decref
-  __il_body#19:
-    x64.loadRegSlot rcx, slot9
+  __il_body:
+    x64.loadRegSlot rcx, slot5
     x64.callDirect __write_stdout
-  __il_cont#18:
-    x64.loadRegSlot rcx, slot9
+  __il_cont:
+    x64.loadRegSlot rcx, slot5
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot2
     x64.callDirect __destruct_Aes
   exitdrop#9:
-    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __managed_decref
   exitdrop#10:
-    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
   exitterminal:
     x64.movRegReg r8, rbx
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_slow#156:
-    x64.storeSlotReg slot11, rax
-    x64.storeSlotReg slot12, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_word_get_le4
-    x64.loadRegSlot rax, slot11
-    x64.loadRegSlot rcx, slot12
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#154
-  critsplit#171:
-    x64.movRegReg rdx, r8
-    x64.jmp __il_cont#151
-  __im_detach#68:
-    x64.storeSlotReg slot11, rax
-    x64.storeSlotReg slot12, rcx
-    x64.storeSlotReg slot13, rdx
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot11
-    x64.loadRegSlot rcx, slot12
-    x64.loadRegSlot rdx, slot13
-    x64.loadRegBaseDisp.word64 rsi, [r13 + 0]
-    x64.jmp __im_detached#71
-  __im_slow#124:
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#102
-  critsplit#165:
-    x64.movRegReg r13, r8
-    x64.jmp tryok#101
-  __im_detach#129:
-    x64.storeSlotReg slot11, rax
-    x64.storeSlotReg slot12, rcx
-    x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot11
-    x64.loadRegSlot rcx, slot12
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.jmp __im_detached#132
-  __im_detach#88:
-    x64.loadRegSlot rcx, slot10
-    x64.storeSlotReg slot11, rax
-    x64.storeSlotReg slot13, rdx
-    x64.storeSlotReg slot14, rsi
-    x64.storeSlotReg slot15, r8
-    x64.callDirect __managed_cow_detach
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot11
-    x64.loadRegSlot rdx, slot13
-    x64.loadRegSlot rsi, slot14
-    x64.loadRegSlot r8, slot15
-    x64.loadRegSlot rcx, slot10
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.jmp __im_detached#91
-  __rc_panic#37:
-    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at AesBitsliced.maxon:791: Range check failed: value outside typealias 'AesRoundCount'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#59:
-    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#154:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at AesBitsliced.maxon:111: aes: a word inside an array the caller sized is missing\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_missing#67:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#64:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#102:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#112:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#115:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_missing#128:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#118:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#121:
-    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_missing#87:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
+    x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -3667,7 +3046,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:7: key\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 168
+    x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -3679,7 +3058,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:8: block\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 168
+    x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -3790,489 +3169,65 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 168
+    x64.prologue 88
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.storeSlotReg slot1, rbx
+    x64.storeSlotReg slot0, rbx
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
-    x64.storeSlotReg slot0, r12
+    x64.storeSlotReg slot1, r12
     x64.movRegImm32 rdx, 16
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_resize
     x64.movRegImm32 rdx, 16
     x64.movRegReg rcx, r12
     x64.callDirect __managed_resize
-  __il_body#29:
-    x64.callDirect __cpufeat_aes_usable
-  __il_cont#28:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, __il_body#144
-  __il_body#136:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 16
-    x64.movRegImm32 rax, 0
-    x64.jcc equal, scmerge#138
-  andrhs#137:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 24
-    x64.setccReg notEqual, rax
-  scmerge#138:
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#168
-  andrhs#139:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 32
-    x64.setccReg notEqual, rax
-    x64.jmp scmerge#140
-  critsplit#168:
-    x64.movRegReg rax, rcx
-  scmerge#140:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#142
-  keyLength#141:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#135
-  ifcont#142:
-    x64.movRegImm32 rax, 0
-  __il_cont#135:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr#2
-  __il_body#31:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.shrRegImm8 rax, rax, 2
-    x64.leaRegRegImm32 r12, rax, 6
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg r13, r8
-    x64.leaRegRegImm32 rax, r12, 1
-    x64.imulRegRegImm32 rdx, rax, 32
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_resize
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, rbx
-    x64.callDirect __cpufeat_aes_cipher_expand_key
-  __il_cont#30:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.storeBaseDispReg.word64 [rbx + 8], r13
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont#20
-  __il_body#144:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 16
-    x64.movRegImm32 rax, 0
-    x64.jcc equal, scmerge#146
-  andrhs#145:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 24
-    x64.setccReg notEqual, rax
-  scmerge#146:
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#170
-  andrhs#147:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 32
-    x64.setccReg notEqual, rax
-    x64.jmp scmerge#148
-  critsplit#170:
-    x64.movRegReg rax, rcx
-  scmerge#148:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#150
-  keyLength#149:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#143
-  ifcont#150:
-    x64.movRegImm32 rax, 0
-  __il_cont#143:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, tryok#34
-  tryerr#35:
-    x64.movRegImm32 rbx, 0
-    x64.jmp __il_cont#32
-  tryok#34:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.shrRegImm8 rax, rax, 2
-    x64.leaRegRegImm32 r12, rax, 6
-    x64.storeSlotReg slot3, r12
-    x64.cmpRegImm32 r12, 10
-    x64.jcc less, __rc_panic#37
-  __rc_chk#38:
-    x64.cmpRegImm32 r12, 14
-    x64.jcc greater, __rc_panic#37
-  __rc_ok#46:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.shrRegImm8 rax, rax, 2
-    x64.storeSlotReg slot5, rax
-    x64.leaRegRegImm32 rax, r12, 1
-    x64.shlRegImm8 rax, rax, 2
-    x64.storeSlotReg slot8, rax
-  __il_body#52:
-    x64.movRegImm32 rcx, 60
-    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N60_AesWord]
-    x64.callDirect FixedArray.create
-    x64.movRegReg r13, r8
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.shrRegImm8 rax, rax, 2
-    x64.movRegImm32 rcx, 0
-    x64.jmp forhdr#53
-  __rc_chk#60:
-    x64.cmpRegImm32 rcx, 59
-    x64.jcc greater, __rc_panic#59
-  __rc_ok#58:
-    x64.imulRegRegImm32 rdx, rcx, 4
-  __il_body#152:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
-    x64.cmpRegReg rdx, rsi
-    x64.jcc aboveEqual, __im_slow#156
-  __im_bounds:
-    x64.subRegReg rsi, rsi, rdx
-    x64.cmpRegImm32 rsi, 4
-    x64.jcc less, __im_slow#156
-  __im_load#158:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 24]
-    x64.cmpRegImm32 rsi, 1
-    x64.jcc notEqual, __im_slow#156
-  __im_byte#159:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.leaRegRegReg rdx, rsi, rdx
-    x64.loadRegBaseDisp.word32 rdx, [rdx + 0]
-  __il_cont#151:
-    x64.loadRegBaseDisp.word64 rsi, [r13 + 0]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_missing#67
-  __im_owned#69:
-    x64.loadRegBaseDisp.word64 rdi, [r13 + 16]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc less, __im_detach#68
-  __im_viewed#70:
-    x64.leaRegRegImm32 rdi, rsi, -16
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_detach#68
-  __im_detached#71:
-    x64.storeBaseIndexScaleReg.word64 [rsi + rcx*8 + 0], rdx
-  forstep#55:
-    x64.leaRegRegImm32 rcx, rcx, 1
-  forhdr#53:
-    x64.cmpRegReg rcx, rax
-    x64.jcc below, __rc_chk#60
-  forexit:
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#64
-  __rc_chk#65:
-    x64.cmpRegImm32 rax, 59
-    x64.jcc greater, __rc_panic#64
-  __rc_ok#63:
-    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
-    x64.loadRegBaseIndexScale.word64 rbx, [rcx + rax*8 + 0]
-  __im_cont#72:
-    x64.callDirect AesState.create
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rcx, 40
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r15 + 0], r13
-    x64.storeBaseDispReg.word64 [r15 + 8], r14
-    x64.storeBaseDispReg.word64 [r15 + 16], rbx
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r15 + 24], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r15 + 32], rax
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-  __il_cont#51:
-    x64.loadRegSlot rbx, slot5
-    x64.jmp forhdr#41
-  __il_body#99:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 24]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, ifelse
-  rotate:
-    x64.leaRegRdata rcx, [rip + __barr_rec_10]
-    x64.loadRegBaseDisp.word64 rdx, [r15 + 32]
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#124
-  __im_load#125:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 r13, [rax + rdx*8 + 0]
-  tryok#101:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
-  __il_body#134:
-    x64.movRegReg rcx, rax
-    x64.shrRegImm8 rcx, rax, 8
-    x64.shlRegImm8 rax, rax, 24
-    x64.orRegReg rcx, rcx, rax
-    x64.movRegImm32 rax, 4294967295
-    x64.movRegReg rdx, rcx
-    x64.andRegReg rdx, rcx, rax
-  __il_cont#133:
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 8]
-    x64.callDirect AesState.subWord
-    x64.xorRegReg r8, r8, r13
-    x64.jmp ifcont#108
-  ifelse:
-    x64.loadRegSlot rcx, slot5
-    x64.cmpRegImm32 rcx, 8
-    x64.movRegImm32 rcx, 0
-    x64.jcc notEqual, scmerge#105
-  andrhs#104:
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 24]
-    x64.cmpRegImm32 rcx, 4
-    x64.setccReg equal, rcx
-  scmerge#105:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#164
-  longKey:
-    x64.loadRegBaseDisp.word64 rdx, [r15 + 16]
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 8]
-    x64.callDirect AesState.subWord
-    x64.jmp ifcont#108
-  critsplit#164:
-    x64.movRegReg r8, rax
-  ifcont#108:
-    x64.loadRegSlot rax, slot5
     x64.movRegReg rcx, rbx
-    x64.subRegReg rcx, rbx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#112
-  __rc_chk#113:
-    x64.cmpRegImm32 rcx, 59
-    x64.jcc greater, __rc_panic#112
-  __rc_ok#111:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rcx*8 + 0]
-  __im_cont#126:
-    x64.xorRegReg r8, r8, rax
-    x64.storeBaseDispReg.word64 [r15 + 16], r8
-  __rc_chk#116:
-    x64.cmpRegImm32 rbx, 59
-    x64.jcc greater, __rc_panic#115
-  __rc_ok#114:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __im_missing#128
-  __im_owned#130:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc less, __im_detach#129
-  __im_viewed#131:
-    x64.leaRegRegImm32 rsi, rdx, -16
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_detach#129
-  critsplit#166:
-    x64.movRegReg rcx, rdx
-  __im_detached#132:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rbx*8 + 0], rax
-  __im_cont#127:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 24]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#118
-  __rc_chk#119:
-    x64.cmpRegImm32 rax, 8
-    x64.jcc greater, __rc_panic#118
-  __rc_ok#117:
-    x64.storeBaseDispReg.word64 [r15 + 24], rax
-    x64.loadRegBaseDisp.word64 rax, [r15 + 24]
-    x64.loadRegSlot rcx, slot5
-    x64.cmpRegReg rax, rcx
-    x64.jcc notEqual, forstep#43
-  wrap:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r15 + 24], rax
-    x64.loadRegBaseDisp.word64 rax, [r15 + 32]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#121
-  __rc_chk#122:
-    x64.cmpRegImm32 rax, 10
-    x64.jcc greater, __rc_panic#121
-  __rc_ok#120:
-    x64.storeBaseDispReg.word64 [r15 + 32], rax
-  forstep#43:
-    x64.leaRegRegImm32 rbx, rbx, 1
-  forhdr#41:
-    x64.loadRegSlot rax, slot8
-    x64.cmpRegReg rbx, rax
-    x64.jcc below, __il_body#99
-  __il_body#82:
-    x64.movRegImm32 rcx, 120
-    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N120_AesWord]
-    x64.callDirect FixedArray.create
-    x64.storeSlotReg slot10, r8
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rbx, r12, 1
-    x64.jmp forhdr#74
-  __rc_ok#83:
-    x64.imulRegRegImm32 r12, rax, 4
-    x64.imulRegRegImm32 r13, rax, 8
-    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rax + r12*8 + 0]
-  __im_cont#92:
-    x64.leaRegRegImm32 rax, r12, 2
-    x64.loadRegBaseDisp.word64 rdx, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.loadRegBaseIndexScale.word64 rdx, [rdx + rax*8 + 0]
-  __im_cont#93:
-    x64.callDirect aesInterleave
-    x64.movRegReg r14, r8
-    x64.leaRegRegImm32 rax, r12, 1
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rax*8 + 0]
-  __im_cont#94:
-    x64.leaRegRegImm32 rax, r12, 3
-    x64.loadRegBaseDisp.word64 rdx, [r15 + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.loadRegBaseIndexScale.word64 rdx, [rdx + rax*8 + 0]
-  __im_cont#95:
-    x64.callDirect aesInterleave
-    x64.movRegImm32 rax, 0
-    x64.jmp forhdr#78
-  eachPlane:
-    x64.leaRegRegReg rdx, r13, rax
-  __il_body#97:
-    x64.movRegReg rcx, rax
-    x64.movRegReg rsi, r14
-    x64.shrRegCl rsi, r14
-    x64.movRegImm rdi, 72340172838076673
-    x64.andRegReg rsi, rsi, rdi
-    x64.movRegReg rcx, rax
-    x64.movRegReg rdi, r8
-    x64.shrRegCl rdi, r8
-    x64.movRegImm r9, 72340172838076673
-    x64.andRegReg rdi, rdi, r9
-    x64.imulRegRegImm32 rsi, rsi, 15
-    x64.imulRegRegImm32 rdi, rdi, 240
-    x64.orRegReg rsi, rsi, rdi
-  __il_cont#96:
-    x64.loadRegSlot rcx, slot10
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_missing#87
-  __im_owned#89:
-    x64.loadRegSlot rdi, slot10
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc less, __im_detach#88
-  __im_viewed#90:
-    x64.leaRegRegImm32 rdi, rcx, -16
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_detach#88
-  __im_detached#91:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
-  forstep#80:
-    x64.leaRegRegImm32 rax, rax, 1
-  forhdr#78:
-    x64.cmpRegImm32 rax, 8
-    x64.jcc less, eachPlane
-  forstep#76:
-    x64.loadRegSlot rax, slot7
-    x64.leaRegRegImm32 rax, rax, 1
-  forhdr#74:
-    x64.storeSlotReg slot7, rax
-    x64.cmpRegReg rax, rbx
-    x64.jcc below, __rc_ok#83
-  __il_cont#73:
-    x64.movRegReg rcx, r15
-    x64.callDirect __destruct_AesKeyExpansion
-  __il_cont#39:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.loadRegSlot rax, slot10
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.loadRegSlot rax, slot3
-    x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.movRegImm32 rax, 0
-    x64.movRegReg rbx, r8
-  __il_cont#32:
-    x64.cmpRegImm32 rax, 0
+    x64.callDirect Aes.create
+    x64.storeSlotReg slot2, r8
+    x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
-  tryok#26:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r12 + 0], rax
-    x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], r12
-    x64.movRegReg rcx, r8
-  __il_cont#20:
-    x64.storeSlotReg slot2, rcx
   tryok#1:
     x64.movRegImm32 r9, 0
-    x64.loadRegSlot rax, slot0
-    x64.movRegReg rdx, rax
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r12
     x64.callDirect Aes.encryptBlockInto
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#4
   tryok#3:
     x64.movRegImm32 rdx, 0
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#12
-  __im_load#13:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp tryok#5
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#12
-  __im_byte#15:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp tryok#5
-  __im_slow#12:
-    x64.loadRegSlot rcx, slot0
+  __im_slow:
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#160
+    x64.jcc equal, critsplit
   tryerr#6:
     x64.movRegImm32 rbx, 0
     x64.jmp trycont
-  critsplit#160:
+  critsplit:
     x64.movRegReg rax, r8
   tryok#5:
     x64.movRegReg rbx, rax
@@ -4281,7 +3236,7 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
-    x64.storeSlotReg slot4, r12
+    x64.storeSlotReg slot3, r12
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __uint_to_string
@@ -4290,11 +3245,11 @@ func @main {
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
-    x64.storeSlotReg slot6, rax
+    x64.storeSlotReg slot4, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot9, r8
+    x64.storeSlotReg slot5, r8
     x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
@@ -4306,231 +3261,34 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rax, slot9
+    x64.loadRegSlot rax, slot5
     x64.storeBaseDispReg.word64 [rax + 0], r15
-    x64.loadRegSlot rcx, slot6
+    x64.loadRegSlot rcx, slot4
     x64.storeBaseDispReg.word64 [rax + 8], rcx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-    x64.loadRegSlot rcx, slot4
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __mm_decref
-  __il_body#19:
-    x64.loadRegSlot rcx, slot9
+  __il_body:
+    x64.loadRegSlot rcx, slot5
     x64.callDirect __write_stdout
-  __il_cont#18:
-    x64.loadRegSlot rcx, slot9
+  __il_cont:
+    x64.loadRegSlot rcx, slot5
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot2
     x64.callDirect __destruct_Aes
   exitdrop#9:
-    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __managed_decref
   exitdrop#10:
-    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
   exitterminal:
     x64.movRegReg r8, rbx
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_slow#156:
-    x64.storeSlotReg slot11, rax
-    x64.storeSlotReg slot12, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_word_get_le4
-    x64.loadRegSlot rax, slot11
-    x64.loadRegSlot rcx, slot12
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#154
-  critsplit#171:
-    x64.movRegReg rdx, r8
-    x64.jmp __il_cont#151
-  __im_detach#68:
-    x64.storeSlotReg slot11, rax
-    x64.storeSlotReg slot12, rcx
-    x64.storeSlotReg slot13, rdx
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot11
-    x64.loadRegSlot rcx, slot12
-    x64.loadRegSlot rdx, slot13
-    x64.loadRegBaseDisp.word64 rsi, [r13 + 0]
-    x64.jmp __im_detached#71
-  __im_slow#124:
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#102
-  critsplit#165:
-    x64.movRegReg r13, r8
-    x64.jmp tryok#101
-  __im_detach#129:
-    x64.storeSlotReg slot11, rax
-    x64.storeSlotReg slot12, rcx
-    x64.callDirect __managed_cow_detach
-    x64.loadRegSlot rax, slot11
-    x64.loadRegSlot rcx, slot12
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.jmp __im_detached#132
-  __im_detach#88:
-    x64.loadRegSlot rcx, slot10
-    x64.storeSlotReg slot11, rax
-    x64.storeSlotReg slot13, rdx
-    x64.storeSlotReg slot14, rsi
-    x64.storeSlotReg slot15, r8
-    x64.callDirect __managed_cow_detach
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot11
-    x64.loadRegSlot rdx, slot13
-    x64.loadRegSlot rsi, slot14
-    x64.loadRegSlot r8, slot15
-    x64.loadRegSlot rcx, slot10
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.jmp __im_detached#91
-  __rc_panic#37:
-    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at AesBitsliced.maxon:791: Range check failed: value outside typealias 'AesRoundCount'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#59:
-    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#154:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at AesBitsliced.maxon:111: aes: a word inside an array the caller sized is missing\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_missing#67:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#64:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#102:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#112:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#115:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_missing#128:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#118:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#121:
-    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_missing#87:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 168
+    x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -4542,7 +3300,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:7: key\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 168
+    x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -4554,7 +3312,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:8: block\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 168
+    x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -4656,17 +3414,17 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 128
-    arm64.storeSlotReg slot13, x28
-    arm64.storeSlotReg slot12, x27
-    arm64.storeSlotReg slot11, x26
-    arm64.storeSlotReg slot10, x25
-    arm64.storeSlotReg slot9, x24
-    arm64.storeSlotReg slot8, x23
-    arm64.storeSlotReg slot7, x22
-    arm64.storeSlotReg slot6, x21
-    arm64.storeSlotReg slot5, x20
-    arm64.storeSlotReg slot4, x19
+    arm64.prologue 144
+    arm64.storeSlotReg slot14, x28
+    arm64.storeSlotReg slot13, x27
+    arm64.storeSlotReg slot12, x26
+    arm64.storeSlotReg slot11, x25
+    arm64.storeSlotReg slot10, x24
+    arm64.storeSlotReg slot9, x23
+    arm64.storeSlotReg slot8, x22
+    arm64.storeSlotReg slot7, x21
+    arm64.storeSlotReg slot6, x20
+    arm64.storeSlotReg slot5, x19
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -4986,39 +3744,37 @@ func @main {
     arm64.add x24, x21, 1
     arm64.b forhdr#74
   __rc_ok#83:
-    arm64.lsl x25, x23, 2
-    arm64.lsl x26, x23, 3
+    arm64.lsl x3, x23, 2
+    arm64.lsl x25, x23, 3
     arm64.loadRegBaseDisp.word64 x0, [x28 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x25*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x3*8 + 0]
   __im_cont#92:
-    arm64.add x1, x25, 2
+    arm64.add x1, x3, 1
     arm64.loadRegBaseDisp.word64 x2, [x28 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
   __im_cont#93:
-    arm64.bl aesInterleave
-    arm64.movRegReg x27, x0
-    arm64.add x0, x25, 1
-    arm64.loadRegBaseDisp.word64 x1, [x28 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x1 + x0*8 + 0]
+    arm64.add x2, x3, 2
+    arm64.loadRegBaseDisp.word64 x4, [x28 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x4 + x2*8 + 0]
   __im_cont#94:
-    arm64.add x1, x25, 3
-    arm64.loadRegBaseDisp.word64 x2, [x28 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
+    arm64.add x3, x3, 3
+    arm64.loadRegBaseDisp.word64 x4, [x28 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.loadRegBaseIndexScale.word64 x3, [x4 + x3*8 + 0]
   __im_cont#95:
-    arm64.bl aesInterleave
+    arm64.bl aesPackColumns
     arm64.movImm x1, 0
     arm64.b forhdr#78
   eachPlane:
-    arm64.add x2, x26, x1
+    arm64.add x2, x25, x1
   __il_body#97:
-    arm64.lsrv x3, x27, x1
+    arm64.lsrv x3, x0, x1
     arm64.movImm x4, 72340172838076673
     arm64.and x3, x3, x4
-    arm64.lsrv x4, x0, x1
+    arm64.lsrv x4, x9, x1
     arm64.movImm x5, 72340172838076673
     arm64.and x4, x4, x5
     arm64.movImm x16, 15
@@ -5170,17 +3926,17 @@ func @main {
     arm64.bl __managed_decref
   exitterminal:
     arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __im_slow#156:
     arm64.storeSlotReg slot0, x0
@@ -5228,6 +3984,7 @@ func @main {
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
     arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x9
     arm64.movRegReg x0, x22
     arm64.bl __managed_cow_detach
     arm64.movRegReg x4, x0
@@ -5235,231 +3992,232 @@ func @main {
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x9, slot4
     arm64.loadRegBaseDisp.word64 x4, [x22 + 0]
     arm64.b __im_detached#91
   __rc_panic#37:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:791: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:790: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#59:
     arm64.leaRdata x0, __str_blob_22  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   tryerr#154:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:111: aes: a word inside an array the caller sized is missing\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:119: aes: a word inside an array the caller sized is missing\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __im_missing#67:
     arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#64:
     arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   tryerr#102:
     arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#112:
     arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#115:
     arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __im_missing#128:
     arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#118:
     arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#121:
     arm64.leaRdata x0, __str_blob_28  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __im_missing#87:
     arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   tryerr#2:
     arm64.leaRdata x0, __str_blob_3  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:7: key\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   tryerr#4:
     arm64.leaRdata x0, __str_blob_4  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:8: block\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
 }
 
@@ -5552,17 +4310,17 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 128
-    arm64.storeSlotReg slot13, x28
-    arm64.storeSlotReg slot12, x27
-    arm64.storeSlotReg slot11, x26
-    arm64.storeSlotReg slot10, x25
-    arm64.storeSlotReg slot9, x24
-    arm64.storeSlotReg slot8, x23
-    arm64.storeSlotReg slot7, x22
-    arm64.storeSlotReg slot6, x21
-    arm64.storeSlotReg slot5, x20
-    arm64.storeSlotReg slot4, x19
+    arm64.prologue 144
+    arm64.storeSlotReg slot14, x28
+    arm64.storeSlotReg slot13, x27
+    arm64.storeSlotReg slot12, x26
+    arm64.storeSlotReg slot11, x25
+    arm64.storeSlotReg slot10, x24
+    arm64.storeSlotReg slot9, x23
+    arm64.storeSlotReg slot8, x22
+    arm64.storeSlotReg slot7, x21
+    arm64.storeSlotReg slot6, x20
+    arm64.storeSlotReg slot5, x19
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -5882,39 +4640,37 @@ func @main {
     arm64.add x24, x21, 1
     arm64.b forhdr#74
   __rc_ok#83:
-    arm64.lsl x25, x23, 2
-    arm64.lsl x26, x23, 3
+    arm64.lsl x3, x23, 2
+    arm64.lsl x25, x23, 3
     arm64.loadRegBaseDisp.word64 x0, [x28 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x25*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x3*8 + 0]
   __im_cont#92:
-    arm64.add x1, x25, 2
+    arm64.add x1, x3, 1
     arm64.loadRegBaseDisp.word64 x2, [x28 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
   __im_cont#93:
-    arm64.bl aesInterleave
-    arm64.movRegReg x27, x0
-    arm64.add x0, x25, 1
-    arm64.loadRegBaseDisp.word64 x1, [x28 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x1 + x0*8 + 0]
+    arm64.add x2, x3, 2
+    arm64.loadRegBaseDisp.word64 x4, [x28 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x4 + x2*8 + 0]
   __im_cont#94:
-    arm64.add x1, x25, 3
-    arm64.loadRegBaseDisp.word64 x2, [x28 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
+    arm64.add x3, x3, 3
+    arm64.loadRegBaseDisp.word64 x4, [x28 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.loadRegBaseIndexScale.word64 x3, [x4 + x3*8 + 0]
   __im_cont#95:
-    arm64.bl aesInterleave
+    arm64.bl aesPackColumns
     arm64.movImm x1, 0
     arm64.b forhdr#78
   eachPlane:
-    arm64.add x2, x26, x1
+    arm64.add x2, x25, x1
   __il_body#97:
-    arm64.lsrv x3, x27, x1
+    arm64.lsrv x3, x0, x1
     arm64.movImm x4, 72340172838076673
     arm64.and x3, x3, x4
-    arm64.lsrv x4, x0, x1
+    arm64.lsrv x4, x9, x1
     arm64.movImm x5, 72340172838076673
     arm64.and x4, x4, x5
     arm64.movImm x16, 15
@@ -6066,17 +4822,17 @@ func @main {
     arm64.bl __managed_decref
   exitterminal:
     arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __im_slow#156:
     arm64.storeSlotReg slot0, x0
@@ -6124,6 +4880,7 @@ func @main {
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
     arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x9
     arm64.movRegReg x0, x22
     arm64.bl __managed_cow_detach
     arm64.movRegReg x4, x0
@@ -6131,231 +4888,232 @@ func @main {
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x9, slot4
     arm64.loadRegBaseDisp.word64 x4, [x22 + 0]
     arm64.b __im_detached#91
   __rc_panic#37:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:791: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:790: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#59:
     arm64.leaRdata x0, __str_blob_22  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   tryerr#154:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:111: aes: a word inside an array the caller sized is missing\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:119: aes: a word inside an array the caller sized is missing\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __im_missing#67:
     arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#64:
     arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   tryerr#102:
     arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#112:
     arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#115:
     arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __im_missing#128:
     arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#118:
     arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __rc_panic#121:
     arm64.leaRdata x0, __str_blob_28  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   __im_missing#87:
     arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   tryerr#2:
     arm64.leaRdata x0, __str_blob_3  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:7: key\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
   tryerr#4:
     arm64.leaRdata x0, __str_blob_4  ; "panic at aes-hardware.a-program-that-only-encrypts-leaves-the-software-cipher-a-call-and-the-block-frame-lean.test:8: block\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
     arm64.ret
 }
 

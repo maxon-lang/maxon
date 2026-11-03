@@ -2066,7 +2066,9 @@ A tuple is a reference-counted record, like a `type`. Assigning a tuple shares i
 values (strings, records) releases them when the last reference goes away. A returned pair is the one
 exception: a two-element tuple of register-wide elements (a whole-word integer or a `bool`), returned by a
 function that does not throw and whose address is not taken, comes back in the two return registers and
-allocates nothing.
+allocates nothing. Callers may be mixed: a call site that reads the two halves, or returns the pair from
+another such function, takes the registers as they are, and a call site that needs the record (it stores
+the tuple, passes it on as a value, or returns it from a function that throws) builds one from them.
 
 ---
 
@@ -5918,8 +5920,9 @@ Three mechanisms carry this:
   [inline packed record](#inline-packed-records) — are plain values. Assigning one copies it.
 - **Records** — values of a `type`, tuples, unions with payloads, strings, arrays and other collections —
   live on the heap. A variable holds a **reference** to its record. A two-element tuple of register-wide
-  elements returned from a function is the one exception: it comes back in the two return registers and no
-  record is built (see [Memory Semantics](#memory-semantics) under Tuples).
+  elements returned from a function is the one exception: it comes back in the two return registers, and
+  a call site builds a record only when it needs one (see [Memory Semantics](#memory-semantics) under
+  Tuples).
 
 ### Reference-by-Default Assignment
 

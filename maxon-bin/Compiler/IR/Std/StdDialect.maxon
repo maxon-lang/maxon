@@ -6780,6 +6780,28 @@ export function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 
+export typealias PredecessorCounts = Array with ElementIndex
+
+// Counts the edges terminators draw into each block id; the function entry's own entry is not an edge
+// and is not counted.
+export function stdPredecessorCounts(module StdModule, func IrFunction) returns PredecessorCounts
+	var counts = PredecessorCounts.create()
+	counts.growFilled(func.nextBlockId as ElementIndex, value: 0)
+	var successors = BlockIdArray.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		successors.clear()
+		collectStdBlockSuccessorIds(module, block: module.getBlock(blockRef), out: successors)
+
+		for successor in successors 'eachSuccessor'
+			let seen = try counts.get(successor) otherwise panic("stdPredecessorCounts: block {successor} is outside the function's block ids")
+			try counts.set(successor, value: seen + 1) otherwise panic("stdPredecessorCounts: counts.set OOB at {successor}")
+		end 'eachSuccessor'
+	end 'eachBlock'
+
+	return counts
+end 'stdPredecessorCounts'
+
 // A conditional branch's two targets. A helper because a `match` arm is ONE statement and both edges
 // have to be recorded — the same shape `insertUsePair` takes for a two-operand op.
 function pushBothTargets(out BlockIdArray, thenBlockId BlockId, elseBlockId BlockId)

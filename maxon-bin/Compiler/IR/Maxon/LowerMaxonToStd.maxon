@@ -5169,28 +5169,24 @@ type MaxonToStdLowering
 		return judged
 	end 'bitwiseKindOf'
 
-	// ⭐ **THE ONE `__mm_alloc` CALL THIS TIER WRITES, AND THE ONE PLACE ITS FLAG-DEPENDENT ARITY IS KNOWN
-	// HERE** — `MmRuntime.emitMmAllocCall`'s Maxon-tier twin, which cannot be reused because that one mints
-	// through a `ValueMinter` and this walk mints from its own dense counter. With `--debugstream` off this
-	// is the two-argument call it has always been, byte for byte; with it on `tag` is appended as a third
-	// argument.
+	// ⭐ **THE ONE `__mm_alloc` CALL THIS TIER WRITES.** `MmRuntime.mmAllocOps` owns its flag-dependent
+	// arity: with `--debugstream` off it has two arguments, with it on `tag` is a third. The minter resumes
+	// this walk's dense counter and `nextValueId` takes it back, so no id is minted twice.
 	//
 	// The tag is the CALLER's because its two callers know it two different ways: a parser-emitted box is
 	// named from the side table or the result's own type (`allocTagIndexOf`), while a box this file builds
 	// itself names its roster case outright — which is the only way a `genericInstance` result gets a name at
 	// all, that tag being the one `allocTagIndexOf` deliberately declines to guess.
 	function appendMmAllocTag(result ValueId, args ValueIdArray, tag FullRangeInt, dstBlock IrBlock)
-		if not self.debugStream 'untracedBuild'
-			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: args))
-			return
-		end 'untracedBuild'
+		let size = try args.get(0) otherwise panic("LowerMaxonToStd.appendMmAllocTag: the alloc has no size argument")
+		let destructor = try args.get(1) otherwise panic("LowerMaxonToStd.appendMmAllocTag: the alloc has no destructor argument")
+		var ids = ValueMinter.resuming(self.nextValueId)
 
-		let tagValue = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(tagValue, value: tag, valueType: StdType.i64))
-		var tagged = ValueIdArray.create()
-		tagged.append(args)
-		tagged.push(tagValue)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: tagged))
+		for op in mmAllocOps(self.debugStream, result: result, size: size, destructor: destructor, tag: tag, ids: ids) 'eachOp'
+			self.stdModule.appendOp(dstBlock, op: op)
+		end 'eachOp'
+
+		self.nextValueId = ids.nextId()
 	end 'appendMmAllocTag'
 
 	// A box whose destructor releases nothing: whoever frees a parameter cell, an argument image or a
