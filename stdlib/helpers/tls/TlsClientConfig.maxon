@@ -38,7 +38,7 @@ public function tlsCheckedProtocols(protocols TlsProtocolArray) returns TlsProto
 end 'tlsCheckedProtocols'
 
 public function tlsCheckedProtocolNames(names StringArray) returns TlsProtocolNameArray throws TlsError
-	var checked = TlsProtocolNameArray.create()
+	var checked = TlsProtocolNameArray.create(0)
 
 	for name in names 'eachName'
 		if name.byteLength() == 0 or name.byteLength() > tlsMaxProtocolNameBytes 'unusable'
@@ -52,7 +52,7 @@ public function tlsCheckedProtocolNames(names StringArray) returns TlsProtocolNa
 end 'tlsCheckedProtocolNames'
 
 public function tlsEnabledSuites(codes TlsCipherSuiteCodeArray, protocols TlsProtocolArray) returns TlsCipherSuiteCodeArray
-	var enabled = TlsCipherSuiteCodeArray.create()
+	var enabled = TlsCipherSuiteCodeArray.create(0)
 
 	for code in codes 'eachCode'
 		for protocol in protocols 'eachProtocol'
@@ -96,7 +96,7 @@ public type TlsClientConfig
 	end 'create'
 
 	public static function defaults(peerName X509VerifyHost) returns TlsClientConfig
-		return Self{peerName: peerName, protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: tlsDefaultCipherSuites.clone(), groups: tlsDefaultGroups.clone(), keyShareGroups: tlsDefaultKeyShareGroups.clone(), signatureAlgorithms: tlsClientDefaultSignatureAlgorithms.clone(), applicationProtocols: TlsProtocolNameArray.create(), identity: TlsClientIdentity.anonymous}
+		return Self{peerName: peerName, protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: tlsDefaultCipherSuites.clone(), groups: tlsDefaultGroups.clone(), keyShareGroups: tlsDefaultKeyShareGroups.clone(), signatureAlgorithms: tlsClientDefaultSignatureAlgorithms.clone(), applicationProtocols: TlsProtocolNameArray.create(0), identity: TlsClientIdentity.anonymous}
 	end 'defaults'
 end 'TlsClientConfig'
 
@@ -124,7 +124,7 @@ module function tlsDrawBytes(count RandomByteCount) returns ByteArray throws Tls
 end 'tlsDrawBytes'
 
 module function tlsFreshSecrets(groups TlsGroupCodeArray) returns TlsKeySecretArray throws TlsHandshakeError
-	var secrets = TlsKeySecretArray.create()
+	var secrets = TlsKeySecretArray.create(0)
 
 	for group in groups 'eachGroup'
 		let named = try TlsNamedGroup.fromRawValue(group) otherwise continue
@@ -179,12 +179,12 @@ module function tlsBuildClientHello(config TlsClientConfig, entropy TlsClientEnt
 
 	var extensions = match config.peerName 'peer'
 		named(name) gives tlsServerNameExtensions(name)
-		none gives TlsExtensionArray.create()
+		none gives TlsExtensionArray.create(0)
 	end 'peer'
 
 	if config.protocols.contains(TlsProtocol.tls12) 'tls12'
 		extensions.push(TlsExtension.extendedMasterSecret)
-		extensions.push(TlsExtension.renegotiationInfo(ByteArray.create()))
+		extensions.push(TlsExtension.renegotiationInfo(ByteArray.create(0)))
 	end 'tls12'
 
 	extensions.push(TlsExtension.supportedGroups(config.groups))
@@ -210,7 +210,7 @@ module function tlsBuildClientHello(config TlsClientConfig, entropy TlsClientEnt
 end 'tlsBuildClientHello'
 
 function tlsServerNameExtensions(name String) returns TlsExtensionArray
-	var extensions = TlsExtensionArray.create()
+	var extensions = TlsExtensionArray.create(0)
 
 	if not x509IsIpAddress(name) 'dnsName'
 		extensions.push(TlsExtension.serverName(String.from(x509WithoutTrailingDot(name.toByteArray()))))
@@ -220,7 +220,7 @@ function tlsServerNameExtensions(name String) returns TlsExtensionArray
 end 'tlsServerNameExtensions'
 
 function tlsClientShares(config TlsClientConfig, entropy TlsClientEntropy) returns TlsKeyShareArray throws TlsHandshakeError
-	var shares = TlsKeyShareArray.create()
+	var shares = TlsKeyShareArray.create(0)
 
 	for group in config.keyShareGroups 'eachGroup'
 		let secret = try entropy.secret(group)
@@ -231,7 +231,7 @@ function tlsClientShares(config TlsClientConfig, entropy TlsClientEntropy) retur
 end 'tlsClientShares'
 
 function tlsVersionCodes(protocols TlsProtocolArray) returns TlsVersionCodeArray
-	var codes = TlsVersionCodeArray.create()
+	var codes = TlsVersionCodeArray.create(0)
 
 	for protocol in protocols 'eachProtocol'
 		codes.push(match protocol 'protocol'

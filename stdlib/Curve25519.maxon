@@ -354,8 +354,7 @@ function feEncode(ws WorkspaceLimbs, slot Count) returns ByteArray
 	workspaceLimbPut(ws, index: reducedBase, value: workspaceLimbAt(ws, index: reducedBase) + quotient * curve25519WrapFactor)
 	_ = feCarryPass(ws, base: reducedBase)
 
-	var bytes = ByteArray.create()
-	bytes.reserve(curve25519KeyBytes)
+	var bytes = ByteArray.create(curve25519KeyBytes, zeroed: false)
 	var pending = curve25519ZeroWord
 	var pendingBits = 0 as Curve25519PendingBits
 
@@ -460,7 +459,7 @@ function x25519Multiply(privateKey ByteArray, uCoordinate ByteArray) returns Byt
 end 'x25519Multiply'
 
 function x25519BasePoint() returns ByteArray
-	var point = ByteArray.create()
+	var point = ByteArray.create(0)
 	point.growFilled(curve25519KeyBytes, value: curve25519ZeroByte)
 	try point.set(0, value: x25519BasePointU) otherwise panic("x25519: base point has 32 bytes")
 	return point
@@ -519,8 +518,7 @@ end 'scalarLoadBytes'
 
 function scalarBytes(ws WorkspaceLimbs, slot Count) returns ByteArray
 	let base = ed25519ScalarSlots.offset(slot)
-	var bytes = ByteArray.create()
-	bytes.reserve(curve25519KeyBytes)
+	var bytes = ByteArray.create(curve25519KeyBytes, zeroed: false)
 
 	for index in 0 upto curve25519ScalarWordCount 'eachWord'
 		__Builtins.appendLittleEndian(bytes, workspaceLimbAt(ws, index: base + index) as OrderedWord, curve25519ReadBytes)
@@ -720,7 +718,7 @@ function ed25519BuildBaseTable() returns WorkspaceLimbs
 end 'ed25519BuildBaseTable'
 
 function ed25519ScalarLimbs(scalar ByteArray) returns WorkspaceLimbs
-	var limbs = WorkspaceLimbs.create()
+	var limbs = WorkspaceLimbs.create(0)
 
 	for index in 0 upto curve25519ScalarWordCount 'eachWord'
 		limbs.push(curve25519ReadWord(scalar, first: index * curve25519ReadBytes))

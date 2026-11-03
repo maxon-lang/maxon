@@ -112,8 +112,7 @@ end 'nistEqual'
 
 function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) returns WorkspaceLimbs
 	let limbCount = count / nistLimbBytes
-	var limbs = WorkspaceLimbs.create()
-	limbs.reserve(limbCount)
+	var limbs = WorkspaceLimbs.create(limbCount, zeroed: false)
 
 	for index in 0 upto limbCount 'eachLimb'
 		let first = start + count - (index + 1) * nistLimbBytes
@@ -125,8 +124,7 @@ function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) re
 end 'nistLimbsFromBytes'
 
 function nistBytesFromLimbs(limbs WorkspaceLimbs) returns ByteArray
-	var bytes = ByteArray.create()
-	bytes.reserve(limbs.count() * nistLimbBytes)
+	var bytes = ByteArray.create(limbs.count() * nistLimbBytes, zeroed: false)
 
 	for step in 0 upto limbs.count() 'eachLimb'
 		__Builtins.appendBigEndian(bytes, workspaceLimbAt(limbs, index: limbs.count() - 1 - step) as OrderedWord, nistLimbBytes)
@@ -144,8 +142,7 @@ function nistHexDigit(symbol Byte) returns Byte
 end 'nistHexDigit'
 
 function nistLimbsFromHex(hex String) returns WorkspaceLimbs
-	var bytes = ByteArray.create()
-	bytes.reserve(hex.byteLength() / nistHexDigitsPerByte)
+	var bytes = ByteArray.create(hex.byteLength() / nistHexDigitsPerByte, zeroed: false)
 	var high = nistZeroByte
 	var isHigh = true
 
@@ -258,7 +255,7 @@ function nistParseSignature(der ByteArray) returns (ByteArray, ByteArray) throws
 end 'nistParseSignature'
 
 function nistDerEncodedInteger(value WorkspaceLimbs) returns ByteArray
-	var content = ByteArray.create()
+	var content = ByteArray.create(0)
 
 	for byte in nistBytesFromLimbs(value) 'eachByte'
 		if content.isEmpty() and byte == nistZeroByte 'leadingZero'
@@ -338,8 +335,7 @@ type NistModulus
 	function reduceOnce(value WorkspaceLimbs) returns WorkspaceLimbs
 		let (difference, borrow) = nistSubtract(value, b: self.limbs)
 		let replace = nistMask(borrow xor nistOne)
-		var reduced = WorkspaceLimbs.create()
-		reduced.reserve(value.count())
+		var reduced = WorkspaceLimbs.create(value.count(), zeroed: false)
 
 		for (iter, limb) in value.withIterator() 'eachLimb'
 			reduced.push(selectByMask(limb, replacement: workspaceLimbAt(difference, index: iter.index()), mask: replace))
@@ -673,8 +669,7 @@ type NistCurve implements CombPoints
 	end 'decodeScalar'
 
 	function signatureScalar(content ByteArray) returns WorkspaceLimbs throws NistRefusal
-		var padded = ByteArray.create()
-		padded.reserve(self.scalarBytes)
+		var padded = ByteArray.create(self.scalarBytes, zeroed: false)
 
 		for byte in content 'eachByte'
 			if padded.isEmpty() and byte == nistZeroByte 'leadingZero'
@@ -736,8 +731,7 @@ type NistCurve implements CombPoints
 	end 'decodePoint'
 
 	function encodePoint(point NistAffinePoint) returns ByteArray
-		var encoded = ByteArray.create()
-		encoded.reserve(nistPointTagBytes + nistPointCoordinates * self.scalarBytes)
+		var encoded = ByteArray.create(nistPointTagBytes + nistPointCoordinates * self.scalarBytes, zeroed: false)
 		encoded.push(nistUncompressedTag)
 		encoded.append(nistBytesFromLimbs(point.0))
 		encoded.append(nistBytesFromLimbs(point.1))
@@ -827,9 +821,9 @@ type NistCurve implements CombPoints
 	function deterministicSignature(key WorkspaceLimbs, privateKey ByteArray, message ByteArray) returns ByteArray
 		let hashed = digest(message)
 		let hashOctets = nistBytesFromLimbs(self.scalarField.reduceOnce(hashed))
-		var nonceKey = ByteArray.create()
+		var nonceKey = ByteArray.create(0)
 		nonceKey.growFilled(self.scalarBytes, value: nistZeroByte)
-		var nonceValue = ByteArray.create()
+		var nonceValue = ByteArray.create(0)
 		nonceValue.growFilled(self.scalarBytes, value: nistNonceOneByte)
 
 		for separator in ByteArray from [nistZeroByte, nistNonceOneByte] 'eachSeed'

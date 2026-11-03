@@ -561,13 +561,12 @@ end 'handle'
 
 ## Collections
 
-### Use `reserve` for Known Sizes
+### Create Arrays at Their Known Size
 
-When you know how many elements you will add, reserve capacity upfront to avoid repeated reallocations.
+When you know how many elements you will add, create the array with that capacity to avoid repeated reallocations. `create(n, zeroed: false)` makes an empty array with room for `n` elements in one allocation; `reserve` grows an array that already exists.
 
 ```maxon
-var results = ResultArray.create()
-results.reserve(inputCount)
+var results = ResultArray.create(inputCount, zeroed: false)
 for item in inputs 'process'
 	results.push(transform(item))
 end 'process'

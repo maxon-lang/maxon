@@ -21,10 +21,10 @@ module function tlsEncodedMessage(message TlsHandshakeMessage) returns ByteArray
 end 'tlsEncodedMessage'
 
 module function tlsCertificateEntries(chain ByteArrays) returns TlsCertificateEntryArray
-	var entries = TlsCertificateEntryArray.create()
+	var entries = TlsCertificateEntryArray.create(0)
 
 	for certificate in chain 'eachCertificate'
-		entries.push(TlsCertificateEntry.create(certificate, extensions: TlsExtensionArray.create()))
+		entries.push(TlsCertificateEntry.create(certificate, extensions: TlsExtensionArray.create(0)))
 	end 'eachCertificate'
 
 	return entries
@@ -94,7 +94,7 @@ module function tlsDecodeClientKeyExchange(raw ByteArray) returns ByteArray thro
 end 'tlsDecodeClientKeyExchange'
 
 module function tlsCertificateChain(entries TlsCertificateEntryArray, offered TlsExtensionTypeTally) returns ByteArrays throws TlsHandshakeError
-	var chain = ByteArrays.create()
+	var chain = ByteArrays.create(0)
 
 	for entry in entries 'eachEntry'
 		for item in entry.extensions 'eachExtension'
@@ -111,7 +111,7 @@ end 'tlsCertificateChain'
 
 module function tlsExtensionsOf(block TlsExtensionBlock) returns TlsExtensionArray
 	return match block 'block'
-		absent gives TlsExtensionArray.create()
+		absent gives TlsExtensionArray.create(0)
 		listed(extensions) gives extensions.clone()
 	end 'block'
 end 'tlsExtensionsOf'

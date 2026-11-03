@@ -177,51 +177,28 @@ func @__managed_release {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
     x64.prologue 40
-    x64.storeSlotReg slot0, rcx
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r13, [rcx + 24]
-    x64.movRegImm32 r14, 0
-    x64.loadRegBaseDisp.word64 r15, [rcx + 40]
-    x64.cmpRegImm32 r15, 0
-    x64.jcc notEqual, dtorh
-    x64.jmp relbuf
-  dtorb:
-    x64.movRegReg rax, r14
-    x64.imulRegReg rax, r14, r13
-    x64.leaRegRegReg rax, rbx, rax
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, dtorstep
-  dtordo:
-    x64.callReg r15
-  dtorstep:
-    x64.leaRegRegImm32 r14, r14, 1
-  dtorh:
-    x64.cmpRegReg r14, r12
-    x64.jcc less, dtorb
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, relbuf
+  mwalk:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_destroy_range
   relbuf:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc greaterEqual, obase
   vbase:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rcx, [rax + 32]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.jmp basejoin
   obase:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, basejoin
   obufprobe:
-    x64.loadRegSlot rax, slot0
-    x64.leaRegRegImm32 rax, rax, 56
+    x64.leaRegRegImm32 rax, rbx, 56
     x64.cmpRegReg rcx, rax
     x64.jcc notEqual, basejoin
   obaseco:
@@ -232,12 +209,8 @@ func @__managed_release {
   rcstep:
     x64.callDirect __mm_decref
   freerec:
-    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rcx, rbx
     x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.tailJmp __mm_free
@@ -381,51 +354,28 @@ func @__managed_release {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
     x64.prologue 40
-    x64.storeSlotReg slot0, rcx
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r13, [rcx + 24]
-    x64.movRegImm32 r14, 0
-    x64.loadRegBaseDisp.word64 r15, [rcx + 40]
-    x64.cmpRegImm32 r15, 0
-    x64.jcc notEqual, dtorh
-    x64.jmp relbuf
-  dtorb:
-    x64.movRegReg rax, r14
-    x64.imulRegReg rax, r14, r13
-    x64.leaRegRegReg rax, rbx, rax
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, dtorstep
-  dtordo:
-    x64.callReg r15
-  dtorstep:
-    x64.leaRegRegImm32 r14, r14, 1
-  dtorh:
-    x64.cmpRegReg r14, r12
-    x64.jcc less, dtorb
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, relbuf
+  mwalk:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_destroy_range
   relbuf:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc greaterEqual, obase
   vbase:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rcx, [rax + 32]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.jmp basejoin
   obase:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, basejoin
   obufprobe:
-    x64.loadRegSlot rax, slot0
-    x64.leaRegRegImm32 rax, rax, 56
+    x64.leaRegRegImm32 rax, rbx, 56
     x64.cmpRegReg rcx, rax
     x64.jcc notEqual, basejoin
   obaseco:
@@ -436,12 +386,8 @@ func @__managed_release {
   rcstep:
     x64.callDirect __mm_decref
   freerec:
-    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rcx, rbx
     x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.tailJmp __mm_free
@@ -578,35 +524,16 @@ func @__managed_decref {
 
 func @__managed_release {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
+    arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x22, [x19 + 24]
-    arm64.movImm x23, 0
-    arm64.loadRegBaseDisp.word64 x24, [x19 + 40]
-    arm64.cmp x24, 0
-    arm64.b.ne dtorh
-    arm64.b relbuf
-  dtorb:
-    arm64.mul x0, x23, x22
-    arm64.add x0, x20, x0
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.b.eq dtorstep
-  dtordo:
-    arm64.blr x24
-  dtorstep:
-    arm64.add x23, x23, 1
-  dtorh:
-    arm64.cmp x23, x21
-    arm64.b.lt dtorb
+    arm64.b.eq relbuf
+  mwalk:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_destroy_range
   relbuf:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
@@ -632,12 +559,7 @@ func @__managed_release {
   freerec:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 32
     arm64.tailBranch __mm_free
 }
 ```
@@ -775,35 +697,16 @@ func @__managed_decref {
 
 func @__managed_release {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
+    arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x22, [x19 + 24]
-    arm64.movImm x23, 0
-    arm64.loadRegBaseDisp.word64 x24, [x19 + 40]
-    arm64.cmp x24, 0
-    arm64.b.ne dtorh
-    arm64.b relbuf
-  dtorb:
-    arm64.mul x0, x23, x22
-    arm64.add x0, x20, x0
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.b.eq dtorstep
-  dtordo:
-    arm64.blr x24
-  dtorstep:
-    arm64.add x23, x23, 1
-  dtorh:
-    arm64.cmp x23, x21
-    arm64.b.lt dtorb
+    arm64.b.eq relbuf
+  mwalk:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_destroy_range
   relbuf:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
@@ -829,12 +732,7 @@ func @__managed_release {
   freerec:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 32
     arm64.tailBranch __mm_free
 }
 ```

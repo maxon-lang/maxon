@@ -1797,6 +1797,7 @@ export union SourceParseError implements Error
 	arrayResizeManagedElement(elementType String, line LineNumber, column ColumnNumber)
 	arrayResizeZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
 	fixedArrayCreateZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
+	arrayCreateZeroedOutsideElement(elementType String, line LineNumber, column ColumnNumber)
 	bufferSetLengthZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
 	literalsShareNoIntegerType(negativeValue FullRangeInt, unsignedPattern FullRangeInt, line LineNumber, column ColumnNumber)
 
@@ -2236,6 +2237,7 @@ end 'CheckedBindingNames'
 enum ZeroElementRefusal
 	fixedArrayCreate
 	arrayResize
+	arrayCreateZeroed
 	bufferSetLength
 end 'ZeroElementRefusal'
 
@@ -4158,7 +4160,7 @@ union RangedParamError implements Error
 	noRangedParameters
 end 'RangedParamError'
 
-// `FieldDefault.helper` and `bareCreateHelper` differ only in the layout hash and the `let`
+// `FieldDefault.helper` and `emptyCreateHelper` differ only in the layout hash and the `let`
 // image-data fold in `SignatureIndex`; every Parser reader that only calls the helper treats them
 // alike, and an or-pattern cannot bind their shared payload (E3129).
 union FieldDefaultFill
@@ -4172,7 +4174,7 @@ function fieldDefaultFill(layout StructLayout, index FieldIndex) returns FieldDe
 		none gives FieldDefaultFill.none
 		literal(given) gives FieldDefaultFill.literal(given)
 		helper(name) gives FieldDefaultFill.callsHelper(name)
-		bareCreateHelper(name) gives FieldDefaultFill.callsHelper(name)
+		emptyCreateHelper(name) gives FieldDefaultFill.callsHelper(name)
 	end 'declared'
 end 'fieldDefaultFill'
 
@@ -9487,6 +9489,8 @@ module function tokenIsTheSpawnKeyword(tok Token) returns bool
 end 'tokenIsTheSpawnKeyword'
 
 let SpawnCapacityLabel = b"capacity"
+let ArrayCreateCapacityName = b"capacity"
+let ArrayCreateZeroedLabel = b"zeroed"
 
 module function spawnTargetIndexIn(tokens TokenArray, spawnIndex ElementIndex) returns ElementIndex
 	let groupStart = spawnIndex + 1
@@ -9569,6 +9573,59 @@ module function spawnTargetCallIn(tokens TokenArray, targetIndex ElementIndex) r
 
 	return SpawnTargetCall.create(chainSpellingAt(tokens, at: targetIndex, segments: (memberSegment - 1) as ElementIndex), member: chainMemberAt(tokens, at: targetIndex, segment: memberSegment))
 end 'spawnTargetCallIn'
+
+function tokenIsTheNameIn(tokens TokenArray, index ElementIndex, wanted ByteArray) returns bool
+	if tokenKindIn(tokens, index: index) != TokenKind.identifier 'notAnIdentifier'
+		return false
+	end 'notAnIdentifier'
+
+	return (try tokens.get(index) otherwise panic("tokenIsTheNameIn: index below count just checked but tokens.get({index}) failed")).value.equals(wanted)
+end 'tokenIsTheNameIn'
+
+function tokenIsTheZeroLiteralIn(tokens TokenArray, index ElementIndex) returns bool
+	if tokenKindIn(tokens, index: index) != TokenKind.intLiteral 'notAnIntegerLiteral'
+		return false
+	end 'notAnIntegerLiteral'
+
+	return (try tokens.get(index) otherwise panic("tokenIsTheZeroLiteralIn: index below count just checked but tokens.get({index}) failed")).value.equals(ZeroCapacityText)
+end 'tokenIsTheZeroLiteralIn'
+
+// The token count of the empty-array construction at `start` (`X.create()`, `X.create(0)` or
+// `X.create(0, zeroed: true|false)`, which build the same array, so image folding reads them as one), or
+// absent for any other tokens. The declaration sweep and the parse both read this one walk.
+//
+// ⚠ It is token-only because the sweep cannot resolve an alias, so each consumer gates by the declared type:
+// a user type's `Foo.create(0)` stays a helper call. `SignatureIndex` also requires an Array instance for the
+// argument forms, as the other containers' `create` is nullary (`parseBuiltinContainerStaticCall`).
+module function emptyCreateTokenCount(tokens TokenArray, start ElementIndex) returns ElementIndex throws AbsentError
+	if tokenKindIn(tokens, index: start) != TokenKind.identifier or tokenKindIn(tokens, index: start + EmptyCreateDotOffset) != TokenKind.dot 'notADottedName'
+		throw AbsentError.absent
+	end 'notADottedName'
+
+	if not tokenIsTheNameIn(tokens, index: start + EmptyCreateNameOffset, wanted: CreateMethod) or tokenKindIn(tokens, index: start + EmptyCreateOpenParenOffset) != TokenKind.leftParen 'notACreateCall'
+		throw AbsentError.absent
+	end 'notACreateCall'
+
+	if tokenKindIn(tokens, index: start + EmptyCreateCloseParenOffset) == TokenKind.rightParen 'nullary'
+		return EmptyCreateTokenCount
+	end 'nullary'
+
+	if not tokenIsTheZeroLiteralIn(tokens, index: start + EmptyCreateZeroOffset) 'notZeroCapacity'
+		throw AbsentError.absent
+	end 'notZeroCapacity'
+
+	if tokenKindIn(tokens, index: start + EmptyCreateAfterZeroOffset) == TokenKind.rightParen 'zeroOnly'
+		return EmptyCreateZeroTokenCount
+	end 'zeroOnly'
+
+	let zeroedValue = tokenKindIn(tokens, index: start + EmptyCreateZeroedValueOffset)
+
+	if tokenKindIn(tokens, index: start + EmptyCreateAfterZeroOffset) == TokenKind.comma and tokenIsTheNameIn(tokens, index: start + EmptyCreateZeroedLabelOffset, wanted: ArrayCreateZeroedLabel) and tokenKindIn(tokens, index: start + EmptyCreateZeroedColonOffset) == TokenKind.colon and (zeroedValue == TokenKind.true or zeroedValue == TokenKind.false) and tokenKindIn(tokens, index: start + EmptyCreateZeroedCloseParenOffset) == TokenKind.rightParen 'zeroedForm'
+		return EmptyCreateZeroedTokenCount
+	end 'zeroedForm'
+
+	throw AbsentError.absent
+end 'emptyCreateTokenCount'
 
 function tokenKindIn(tokens TokenArray, index ElementIndex) returns TokenKind
 	if index >= tokens.count() 'pastEnd'
@@ -10181,14 +10238,23 @@ end 'renderWitnessRequirements'
 // the drift these blocks exist to prevent. The dispatch matches the same byte strings.
 export let CreateMethod = b"create"
 
-// The five tokens of `<Type> . create ( )`, as offsets from the region's start
-// (`Parser.defaultRegionIsABareCreate`). Named rather than written as literals at the probe: the last of
-// them is the region-LENGTH test, where a bare 5 reads as an unrelated number.
-let BareCreateDotOffset = 1
-let BareCreateNameOffset = 2
-let BareCreateOpenParenOffset = 3
-let BareCreateCloseParenOffset = 4
-let BareCreateTokenCount = 5
+// The tokens of the empty forms of `<Type> . create (…)`, as offsets from the region's start, and the token
+// count each form spans (`emptyCreateTokenCount`). Named rather than written as literals at the probe: the
+// counts are the region-LENGTH test, where a bare 5 reads as an unrelated number.
+let EmptyCreateDotOffset = 1
+let EmptyCreateNameOffset = EmptyCreateDotOffset + 1
+let EmptyCreateOpenParenOffset = EmptyCreateNameOffset + 1
+let EmptyCreateCloseParenOffset = EmptyCreateOpenParenOffset + 1
+module let EmptyCreateTokenCount = EmptyCreateCloseParenOffset + 1
+let EmptyCreateZeroOffset = EmptyCreateOpenParenOffset + 1
+let EmptyCreateAfterZeroOffset = EmptyCreateZeroOffset + 1
+let EmptyCreateZeroedLabelOffset = EmptyCreateAfterZeroOffset + 1
+let EmptyCreateZeroedColonOffset = EmptyCreateZeroedLabelOffset + 1
+let EmptyCreateZeroedValueOffset = EmptyCreateZeroedColonOffset + 1
+let EmptyCreateZeroedCloseParenOffset = EmptyCreateZeroedValueOffset + 1
+let EmptyCreateZeroTokenCount = EmptyCreateAfterZeroOffset + 1
+let EmptyCreateZeroedTokenCount = EmptyCreateZeroedCloseParenOffset + 1
+let ZeroCapacityText = b"0"
 
 type FieldTypeSpelling
 	export let fieldType as MaxonType
@@ -22513,7 +22579,7 @@ export type Parser
 
 			let wanted = try paramNames.get(matched) otherwise panic("noteConstructsFromParams: paramNames.get OOB at {matched} below a count just compared against")
 
-			if not self.tokenIsTheName(q, wanted: wanted) 'fieldIsNotTheParameter'
+			if not tokenIsTheNameIn(self.tokens, index: q, wanted: wanted) 'fieldIsNotTheParameter'
 				return false
 			end 'fieldIsNotTheParameter'
 
@@ -22521,7 +22587,7 @@ export type Parser
 				return false
 			end 'notAFieldPair'
 
-			if not self.tokenIsTheName(q + 2, wanted: wanted) 'valueIsNotTheParameter'
+			if not tokenIsTheNameIn(self.tokens, index: q + 2, wanted: wanted) 'valueIsNotTheParameter'
 				return false
 			end 'valueIsNotTheParameter'
 
@@ -22547,16 +22613,6 @@ export type Parser
 
 		return self.kindAt(valueStart + 3) == TokenKind.newline
 	end 'returnedValueIsAReceiverField'
-
-	// Is the token at `at` the identifier `wanted`? The pair test the walk above asks six times, so a field
-	// name and the value beside it are compared one way.
-	function tokenIsTheName(at ElementIndex, wanted ByteArray) returns bool
-		if self.kindAt(at) != TokenKind.identifier 'notAnIdentifier'
-			return false
-		end 'notAnIdentifier'
-
-		return self.tokenAt(at).value.equals(wanted)
-	end 'tokenIsTheName'
 
 	// Does the group `openBracket` opens close with `closer`, and is that closer the last token on the line?
 	// ⚠ **THE CLOSER IS CHECKED AND NOT ASSUMED, which is the whole reason it is a parameter**: a `return f(…)`
@@ -26487,10 +26543,10 @@ export type Parser
 			return FieldDefault.literal(given)
 		end 'aLiteral'
 
-		let bareCreate = self.defaultRegionIsABareCreate(defaultStart, regionEnd: defaultEnd)
+		let bareCreate = self.defaultRegionIsAnEmptyCreate(defaultStart, regionEnd: defaultEnd)
 		let helperName = self.captureFieldDefault(layout.name, fieldName: nameTok.value, fieldType: inferred.spelling.fieldType, regionEnd: defaultEnd)
 
-		return FieldDefault.bareCreateHelper(helperName) if bareCreate else FieldDefault.helper(helperName)
+		return FieldDefault.emptyCreateHelper(helperName) if bareCreate else FieldDefault.helper(helperName)
 	end 'readInferredFieldDefault'
 
 	// An annotated field takes no default: `var x as T = e` is E2010 here, pinned by
@@ -26649,29 +26705,20 @@ export type Parser
 		return q + 1 == regionEnd
 	end 'defaultRegionIsLiteral'
 
-	// ⭐⭐ **IS THE DEFAULT EXACTLY `<Type>.create()` — the one expression shape whose RESULT a reader in
-	// another file can describe without running it (`FieldDefault.bareCreateHelper`)?** Five tokens and the
-	// region's end, so an argument, a receiver or anything trailing answers no.
+	// ⭐⭐ **IS THE DEFAULT EXACTLY AN EMPTY `<Type>.create()` (`create(0)` and `create(0, zeroed: …)` build the
+	// same array) — the one expression shape whose RESULT a reader in another file can describe without running
+	// it (`FieldDefault.emptyCreateHelper`)?** The `emptyCreateTokenCount` tokens and the region's end, so a
+	// nonzero capacity, a receiver or anything trailing answers no.
 	//
 	// ⚠ **IT ASKS ONLY ABOUT THE TOKENS, and every question about WHAT the name denotes is the reader's.**
 	// This walk is shared with the declaration SWEEP, which may not resolve an alias at all: what the shape
-	// buys is the guarantee that the value is whatever `create()` builds, and the field's own declared type
+	// buys is the guarantee that the value is whatever `create` builds, and the field's own declared type
 	// is what says which container that is.
-	function defaultRegionIsABareCreate(start ElementIndex, regionEnd ElementIndex) returns bool
-		if self.kindAt(start) != TokenKind.identifier or self.kindAt(start + BareCreateDotOffset) != TokenKind.dot 'notADottedName'
-			return false
-		end 'notADottedName'
+	function defaultRegionIsAnEmptyCreate(start ElementIndex, regionEnd ElementIndex) returns bool
+		let length = try emptyCreateTokenCount(self.tokens, start: start) otherwise return false
 
-		if not self.tokenIsTheName(start + BareCreateNameOffset, wanted: CreateMethod) 'notTheFactory'
-			return false
-		end 'notTheFactory'
-
-		if self.kindAt(start + BareCreateOpenParenOffset) != TokenKind.leftParen or self.kindAt(start + BareCreateCloseParenOffset) != TokenKind.rightParen 'notNullary'
-			return false
-		end 'notNullary'
-
-		return start + BareCreateTokenCount == regionEnd
-	end 'defaultRegionIsABareCreate'
+		return start + length == regionEnd
+	end 'defaultRegionIsAnEmptyCreate'
 
 	// Capture one field's `= <expression>` for the drain and leave the cursor at the token that ENDS it, so
 	// the field reader resumes exactly as it would have without a default. The cursor arrives just PAST the
@@ -68728,7 +68775,7 @@ export type Parser
 		// size. The declaration's `return Self{}` is unchanged, which is what lets the BOOTSTRAP compile the
 		// same corpus line — it has no `countof` and needs none, because the count is the literal's.
 		if self.signatures.declarationsValueIsTheManagedRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `declarationIsTheManagedRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
-			return try self.emitOwnedContainerCreate(self.signatures.ownRecordSelfInstance(layout.name), aliasTok: typeTok, aliasName: layout.name, range: SourceRange.between(typeTok, last: rbraceTok))
+			return try self.emitOwnedContainerCreate(self.signatures.ownRecordSelfInstance(layout.name), aliasTok: typeTok, aliasName: layout.name, range: SourceRange.between(typeTok, last: rbraceTok), sizing: ValueIdArray.create())
 		end 'theEmptyContainer'
 
 		self.fillFromNascentSelfSlots(layout, fieldValues: fieldValues, filled: filled, fieldBareLocal: fieldBareLocal, anchor: lbraceTok)
@@ -68850,7 +68897,7 @@ export type Parser
 		end 'writtenField'
 
 		let rbraceTok = try self.consume(TokenKind.rightBrace)
-		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: qualified, range: SourceRange.between(aliasTok, last: rbraceTok))
+		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: qualified, range: SourceRange.between(aliasTok, last: rbraceTok), sizing: ValueIdArray.create())
 	end 'parseInnerAliasLiteral'
 
 	// ⭐⭐ **WHERE AN INADMISSIBLE STRUCT LITERAL IS BLAMED: THE TOKEN FOLLOWING THE `{`, NOT THE TYPE
@@ -79602,8 +79649,8 @@ export type Parser
 		return try self.parseBuiltinContainerStaticCall(aliasTok, aliasName: aliasName, giid: giid)
 	end 'parseContainerAliasStaticCall'
 
-	// The `Array` statics. `create()` yields an OWNED empty array; `init(managed)` ADOPTS an existing buffer
-	// as the array around it. Both serve a CONCRETE instance
+	// The `Array` statics. `create` yields an OWNED array, empty or sized (`parseArrayCreateStatic`);
+	// `init(managed)` ADOPTS an existing buffer as the array around it. Both serve a CONCRETE instance
 	// (`Array with Integer`) and an OPAQUE one (`Array with T` inside a generic body) alike —
 	// `emitArrayCreateOp` branches on the element, and the adoption is element-agnostic by construction.
 	//
@@ -79622,17 +79669,79 @@ export type Parser
 		let range = SourceRange.between(aliasTok, last: methodTok)
 
 		match builtinArrayStaticKind(methodTok.value) 'kind'
-			builtinCreate then return try self.parseArrayCreateStatic(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
+			builtinCreate then return try self.parseArrayCreateStatic(func, giid: giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
 			builtinInit then return try self.parseArrayInitStatic(func, giid: giid, methodTok: methodTok, range: range)
 			corpus or
 			none then panic("parseArrayStaticCall: '{String.from(methodTok.value)}' reached the compiler's own Array statics and is neither `create` nor `init` — `resolveStaticMember` answers every other member that way as a corpus call or a refusal")
 		end 'kind'
 	end 'parseArrayStaticCall'
 
-	function parseArrayCreateStatic(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws SourceParseError
-		try self.consumeEmptyArgList()
-		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
+	// `create()` and `create(0)` build the empty array, `create(n)` builds `n` zero elements and
+	// `create(n, zeroed: false)` an empty array with room for `n`; the sized forms are each one
+	// `__managed_create_sized` call. `n` is proved to fit `ElementIndex` by the door `resize` uses (E3005).
+	//
+	// A literal-zero capacity returns before the zero-element gate, so `create(0)` is legal for every element.
+	// `zeroed:` takes a literal `true` or `false` (E2015 otherwise) because whether the element has a zero
+	// value is a compile-time fact the gate must see.
+	function parseArrayCreateStatic(func IrFunction, giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws SourceParseError
+		try self.consume(TokenKind.leftParen)
+
+		if self.at(TokenKind.rightParen) 'noArguments'
+			try self.consume(TokenKind.rightParen)
+
+			return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: ValueIdArray.create())
+		end 'noArguments'
+
+		let capacity = try self.parseBuiltinIntegerArg(func, paramName: ArrayCreateCapacityName, methodTok: aliasTok)
+		try self.requireArmServedIndexArgument(giid, member: ArrayResizeMethod, value: capacity, anchor: aliasTok, bufferSurface: false)
+
+		var zeroed = true
+
+		if self.at(TokenKind.comma) 'zeroedArgument'
+			try self.consume(TokenKind.comma)
+			zeroed = try self.parseArrayCreateZeroed()
+		end 'zeroedArgument'
+
+		try self.consume(TokenKind.rightParen)
+
+		if self.constIsKnown(capacity) and self.constOf(capacity) == 0 'emptyArray'
+			return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: ValueIdArray.create())
+		end 'emptyArray'
+
+		if zeroed 'zeroedSlots'
+			try self.requireArrayGrowthHasZeroElement(giid, tok: aliasTok, refusal: ZeroElementRefusal.arrayCreateZeroed)
+		end 'zeroedSlots'
+
+		let published = capacity if zeroed else self.emitLiteral(0, valueType: MaxonType.integer, range: range)
+
+		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: twoArgs(capacity, second: published))
 	end 'parseArrayCreateStatic'
+
+	function parseArrayCreateZeroed() returns bool throws SourceParseError
+		let zeroedLabel = try self.consume(TokenKind.identifier)
+
+		if not zeroedLabel.value.equals(ArrayCreateZeroedLabel) 'notZeroed'
+			throw SourceParseError.unsupported("'{String.from(zeroedLabel.value)}:' in '{String.from(CreateMethod)}(…)' — the second argument is '{String.from(ArrayCreateZeroedLabel)}:'", line: zeroedLabel.line, column: zeroedLabel.column)
+		end 'notZeroed'
+
+		try self.consume(TokenKind.colon)
+
+		if self.at(TokenKind.true) 'zeroedTrue'
+			try self.consume(TokenKind.true)
+
+			return true
+		end 'zeroedTrue'
+
+		if self.at(TokenKind.false) 'zeroedFalse'
+			try self.consume(TokenKind.false)
+
+			return false
+		end 'zeroedFalse'
+
+		let written = self.tokenAt(self.pos)
+
+		throw SourceParseError.unsupported("'{String.from(ArrayCreateZeroedLabel)}:' takes the literal 'true' or 'false' — whether a type has a zero value is decided where '{String.from(CreateMethod)}' is written", line: written.line, column: written.column)
+	end 'parseArrayCreateZeroed'
 
 	// ⭐⭐ **`ByteArray.init(managed)` — ADOPT A BUFFER AS THE ARRAY AROUND IT.**
 	// `stdlib/Array.maxon:110-115` declares `init(managed ElementMemory) returns Self` with the body
@@ -79797,7 +79906,7 @@ export type Parser
 
 		try self.consumeEmptyArgList()
 
-		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: SourceRange.between(aliasTok, last: methodTok))
+		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: SourceRange.between(aliasTok, last: methodTok), sizing: ValueIdArray.create())
 	end 'parseBuiltinContainerStaticCall'
 
 	// ⭐⭐ **THE OWNED EMPTY CONTAINER AN INSTANCE ALIAS DENOTES — the ONE producer behind BOTH spellings**,
@@ -79808,6 +79917,9 @@ export type Parser
 	//
 	// `Array` is its own arm and is UNGATED: its element rule is the instance's
 	// own, so `requireContainerColumnTypes` returns for it, and it alone carries the buffer-surface stamp.
+	//
+	// `sizing` is empty for the empty container and `(capacity, published length)` for an `Array`'s sized
+	// `create`, which is no empty container and so is not noted as an empty-container image.
 	//
 	// ⭐ **`BufArray.create()` YIELDS AN ARRAY OF BUFFERS** — asked of the ALIAS NAME and never of
 	// `giid`, which cannot answer: `Array with __ManagedMemory` and `Array with ByteArray` intern to the SAME
@@ -79821,28 +79933,35 @@ export type Parser
 	//
 	// ⚠ It is stamped in ONE place rather than in each of the three arms, because it is one fact about the
 	// CALL and not about which kind of container the call built.
-	function emitOwnedContainerCreate(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws SourceParseError
-		let container = try self.emitOwnedContainerRecord(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
+	function emitOwnedContainerCreate(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
+		let container = try self.emitOwnedContainerRecord(giid, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: sizing)
 
 		// `Xs.create()` builds an `Xs`; a bare `Array with Integer` spelled at the site builds an unbranded one.
 		self.brandValue(container, brand: self.brandOfSpelling(aliasName, readerFilePath: self.job.path))
-		self.noteEmptyContainerImage(container)
+
+		if sizing.count() == 0 'anEmptyContainer'
+			self.noteEmptyContainerImage(container)
+		end 'anEmptyContainer'
 
 		return container
 	end 'emitOwnedContainerCreate'
 
+	function emitOwnedArrayRecord(giid GenericInstanceId, aliasName ByteArray, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
+		let arr = try self.emitArrayCreateOp(giid, range: range, sizing: sizing)
+		self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
+
+		if self.signatures.aliasElementIsBufferSurface(aliasName, readerFilePath: self.job.path) 'elementsAreBuffers'
+			self.markBufferSurfaceElements(arr)
+		end 'elementsAreBuffers'
+
+		return arr
+	end 'emitOwnedArrayRecord'
+
 	// The record itself — one arm per container kind. Split from the stamping above so the provenance is written
 	// once for all three rather than at each `return`.
-	function emitOwnedContainerRecord(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws SourceParseError
+	function emitOwnedContainerRecord(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
 		if self.signatures.isArrayInstance(giid) 'array'
-			let arr = try self.emitArrayCreateOp(giid, range: range, sizing: ValueIdArray.create())
-			self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
-
-			if self.signatures.aliasElementIsBufferSurface(aliasName, readerFilePath: self.job.path) 'elementsAreBuffers'
-				self.markBufferSurfaceElements(arr)
-			end 'elementsAreBuffers'
-
-			return arr
+			return try self.emitOwnedArrayRecord(giid, aliasName: aliasName, range: range, sizing: sizing)
 		end 'array'
 
 		// ⭐⭐ **THE SIZED CONTAINER'S RECORD IS BORN WITH ITS SLOTS PUBLISHED, AND THAT IS THE WHOLE OF
@@ -79881,7 +80000,7 @@ export type Parser
 	// every one of `/specs/fixed-array.md`'s cases, which write a bare `create()`.
 	// `__managed_create_sized` throws nothing.
 	//
-	// ⚠⚠ **IT PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS
+	// ⚠⚠ **IT PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayGrowthHasZeroElement`, WHOSE E3106 IS
 	// THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** A published slot of a MANAGED element is
 	// a null pointer every accessor will dereference. The source-level rule cannot be reused here (its
 	// diagnostic is about a `resize` call the author wrote, and a fixed array's author wrote `create()`), so
@@ -81362,7 +81481,7 @@ export type Parser
 	// answers off `containerElementIsManaged` is answered here off the INSTANTIATION SET
 	// (`requireEveryInstantiationPublishesAValue`) — the same boundary, asked of the thing that is knowable
 	// at this position. The two are one invariant with two doors, exactly as this function and
-	// `requireArrayResizeHasZeroElement` already are.
+	// `requireArrayGrowthHasZeroElement` already are.
 	//
 	// ⚠⚠ **THE MANAGED TEST IS `containerElementIsManaged`, AND THE TAG WHITELIST BELOW CANNOT STAND IN FOR
 	// IT — THAT IS A MEASURED SEGFAULT, NOT A THEORETICAL GAP.** `tagIsIntegral` answers
@@ -81372,7 +81491,7 @@ export type Parser
 	// NULL slots: `count()` answers **2** while `try v.get(0)` takes the empty-slot branch — two elements it
 	// does not have, exit 0, no diagnostic — and `for a in v` with a read of `a` dereferences those NULLs
 	// through `__managed_get_unchecked` and **ACCESS-VIOLATES (0xC0000005)**.
-	// `requireArrayResizeHasZeroElement`'s
+	// `requireArrayGrowthHasZeroElement`'s
 	// E3106 is the rule that normally holds this shut, and `emitSizedContainerRecord` publishes zeroed slots
 	// without passing it; that header predicted this exact failure in these words — *"If this refusal is ever
 	// relaxed, that read becomes a null deref in a function whose own text still looks correct."*
@@ -81446,7 +81565,7 @@ export type Parser
 	// possible: the answer IS the size, the size is at the CALL, and a `static … returns Self` reads it out
 	// of the hidden slot every call site fills in from the instance it builds.
 	//
-	// ⚠⚠ **THE `create()` PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayResizeHasZeroElement`,
+	// ⚠⚠ **THE `create()` PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayGrowthHasZeroElement`,
 	// WHOSE E3106 IS THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ, AND THE CORPUS BODY REACHES
 	// `setLength` the same way.** A published slot of a MANAGED element is a null pointer every accessor
 	// dereferences, so the guarantee is carried by `requireFixedArrayElementType` instead — which is why that
@@ -83669,7 +83788,7 @@ export type Parser
 
 		if methodTok.value.equals(ArrayResizeMethod) 'resize'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			try self.requireArrayResizeHasZeroElement(giid, methodTok: methodTok)
+			try self.requireArrayGrowthHasZeroElement(giid, tok: methodTok, refusal: ZeroElementRefusal.arrayResize)
 			let n = try self.parseArrayOneArg(func)
 			try self.requireArmServedIndexArgument(giid, member: methodTok.value, value: n, anchor: methodTok, bufferSurface: isManagedMemory)
 			return self.emitArrayVoidCall(ManagedResizeName, args: twoArgs(arr, second: n), receiver: arr, range: range)
@@ -84258,8 +84377,10 @@ export type Parser
 		return self.signatures.isArrayInstanceAt(maxonTypeTag(t), nameId: typeNameIdOf(t))
 	end 'typeIsArrayInstance'
 
-	// ⭐ **THE DENSE-GROWTH GATE for `resize` (E3106).** `__managed_resize` lengthens by publishing a longer
-	// `length@8` over slots `__managed_grow` left ZEROED, and a zero is an ELEMENT only while the element lives
+	// ⭐ **THE DENSE-GROWTH GATE for `resize` and for `create(n)` with zeroed slots (E3106).** `__managed_resize`
+	// lengthens by publishing a longer `length@8` over slots `__managed_grow` left ZEROED, and `create(n)`
+	// publishes `n` slots of a fresh zeroed buffer; `create(n, zeroed: false)` and a literal-zero capacity
+	// publish none and never reach this gate. A zero is an ELEMENT only while the element lives
 	// INLINE in the buffer. A MANAGED element lives there as an 8-byte POINTER (`ManagedArrayElementBytes`),
 	// so a zeroed slot is NULL — an absence, not a value — and Maxon has no default constructor to make one.
 	// The array that comes back answers `count()` = N while `get(0)` takes the empty-slot branch of
@@ -84273,20 +84394,27 @@ export type Parser
 	// `containerElementIsManaged` already answers false for a type parameter, so the carve-out needs no second
 	// test written here.
 	//
-	// ⚠⚠ **A SECOND THING NOW DEPENDS ON THIS REFUSAL, IN ANOTHER FILE.**
+	// ⚠⚠ **A SECOND THING DEPENDS ON THIS REFUSAL, IN ANOTHER FILE.**
 	// `__managed_get_unchecked` — the element read a `for x in arr` loop makes — OMITS the empty-slot arm
 	// `__managed_get` carries, and is safe only because no index in `[0, count)` can hold a NULL managed slot.
-	// That is true precisely because this rule refuses the one operation that would create one. If this
-	// refusal is ever relaxed, that read becomes a null deref in a function whose own text still looks
-	// correct: `ManagedMemoryRuntime.maxon`'s `ManagedGetUncheckedName` header states the obligation from its end,
-	// and this note is the pointer back, so neither side can be changed without meeting the other.
-	function requireArrayResizeHasZeroElement(giid GenericInstanceId, methodTok Token) throws SourceParseError
+	// That is true precisely because this rule refuses `resize` and a zeroed `create(n)`, the operations that
+	// would create one. If this refusal is ever relaxed, that read becomes a null deref in a function whose own
+	// text still looks correct: `ManagedMemoryRuntime.maxon`'s `ManagedGetUncheckedName` header states the
+	// obligation from its end, and this note is the pointer back, so neither side can be changed without
+	// meeting the other.
+	function requireArrayGrowthHasZeroElement(giid GenericInstanceId, tok Token, refusal ZeroElementRefusal) throws SourceParseError
 		if self.signatures.containerElementIsManaged(giid) 'managed'
-			throw SourceParseError.arrayResizeManagedElement(self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
+			let element = self.signatures.arrayElementDisplayName(giid)
+
+			match refusal 'managedRefusal'
+				arrayCreateZeroed then throw SourceParseError.arrayCreateZeroedOutsideElement(element, line: tok.line, column: tok.column)
+				arrayResize then throw SourceParseError.arrayResizeManagedElement(element, line: tok.line, column: tok.column)
+				default panic("requireArrayGrowthHasZeroElement: only `create` and `resize` publish zeroed slots of a growing array")
+			end 'managedRefusal'
 		end 'managed'
 
-		try self.requireZeroIsAnElement(giid, tok: methodTok, refusal: ZeroElementRefusal.arrayResize)
-	end 'requireArrayResizeHasZeroElement'
+		try self.requireZeroIsAnElement(giid, tok: tok, refusal: refusal)
+	end 'requireArrayGrowthHasZeroElement'
 
 	function requireZeroIsAnElement(giid GenericInstanceId, tok Token, refusal ZeroElementRefusal) throws SourceParseError
 		if not self.containerElementExcludesZero(giid) 'zeroIsAnElement'
@@ -84298,6 +84426,7 @@ export type Parser
 		match refusal 'refusal'
 			fixedArrayCreate then throw SourceParseError.fixedArrayCreateZeroOutsideElement(element, line: tok.line, column: tok.column)
 			arrayResize then throw SourceParseError.arrayResizeZeroOutsideElement(element, line: tok.line, column: tok.column)
+			arrayCreateZeroed then throw SourceParseError.arrayCreateZeroedOutsideElement(element, line: tok.line, column: tok.column)
 			bufferSetLength then throw SourceParseError.bufferSetLengthZeroOutsideElement(element, line: tok.line, column: tok.column)
 		end 'refusal'
 	end 'requireZeroIsAnElement'
@@ -84335,7 +84464,7 @@ export type Parser
 	// would only make it reported — and buys the runtime setter no check at all.
 	//
 	// ⚠ **NO OPAQUE-`T` CARVE-OUT IS NEEDED, and that is checked rather than inherited from
-	// `requireArrayResizeHasZeroElement`'s note** (which does need one). `.managed` is not reachable inside a
+	// `requireArrayGrowthHasZeroElement`'s note** (which does need one). `.managed` is not reachable inside a
 	// shared generic body: `self.items.managed` is refused a step earlier as a field access through a
 	// non-struct, so every site this rule can see has a CONCRETE element and a statically known answer.
 	// `containerElementIsManaged` answering false for a type parameter is therefore not what makes this sound.

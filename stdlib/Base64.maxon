@@ -37,8 +37,7 @@ let Base64MaxPadding = 2
 public type Base64
 	/// The canonical encoding of `data`: padded to a multiple of 4 characters, with no line breaks.
 	public static function encode(data ByteArray) returns String
-		var symbols = ByteArray.create()
-		symbols.reserve((data.count() + Base64GroupBytes - 1) / Base64GroupBytes * Base64GroupLength)
+		var symbols = ByteArray.create((data.count() + Base64GroupBytes - 1) / Base64GroupBytes * Base64GroupLength, zeroed: false)
 
 		var accumulator = 0 as Base64Accumulator
 		var bitCount = 0 as Base64BitCount
@@ -69,8 +68,7 @@ public type Base64
 	/// then the length, then where the padding sits, then the pad bits, so each input has one error.
 	public static function decode(text String) returns ByteArray throws Base64Error
 		let symbolCount = text.byteLength()
-		var bytes = ByteArray.create()
-		bytes.reserve(symbolCount / Base64GroupLength * Base64GroupBytes)
+		var bytes = ByteArray.create(symbolCount / Base64GroupLength * Base64GroupBytes, zeroed: false)
 
 		var padding = 0 as Count
 		var paddingInterrupted = false

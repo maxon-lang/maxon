@@ -775,7 +775,7 @@ end 'main'
   is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds
   for every alias form — ranged, function, generic-instance and tuple — and for the elements of a container
   instance: `Array with Score` over two `Score` declarations is two types.
-- An `Array` is indexed by the standard library's `ElementIndex`: `get`, `set` and `resize` take one.
+- An `Array` is indexed by the standard library's `ElementIndex`: `get`, `set`, `resize` and the capacity of `create(n)` take one.
   `count()` returns a `Count`, which implements `ElementIndex`, so a count goes wherever an index is taken
   and an `ElementIndex` goes where a `Count` is declared only by cast. The index must be an `ElementIndex`
   or an alias that implements it; any other alias, or a non-integer such as a `String`, is **E3005** —
@@ -3694,12 +3694,14 @@ function main() returns ExitCode
 end 'main'
 ```
 
-**Sizing an array.** `create()` makes an empty array; `push(value)` appends; `reserve(n)` grows capacity
-without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so it is available
-only for elements stored inline — integers, floats, `bool`, payload-free enums — whose type admits zero. For an
-array of records, strings or other managed values, or of an alias whose range excludes 0 (`int(1 to 100)`),
-`resize` is **E3106**; grow with `push` or `growFilled(n, value:)` and shrink
-with `truncate(n)`:
+**Sizing an array.** `create()` and `create(0)` make an empty array. `create(n)` makes `n` zero elements and
+`create(n, zeroed: false)` an empty array with room for `n`, each in one allocation; `n` is an `ElementIndex`
+and `zeroed:` a literal `true` or `false`. `push(value)` appends; `reserve(n)` grows the capacity of an existing
+array without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so `resize` and
+`create(n)` are available only for elements stored inline — integers, floats, `bool`, payload-free enums —
+whose type admits zero. For an array of records, strings or other managed values, or of an alias whose range
+excludes 0 (`int(1 to 100)`), `resize` and `create(n)` are **E3106**; create with `create(n, zeroed: false)`,
+grow with `push` or `growFilled(n, value:)` and shrink with `truncate(n)`:
 
 ```maxon
 typealias Names = Array with String

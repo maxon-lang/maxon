@@ -35,7 +35,7 @@ public type BuildConfig
 	/// directory is refused.
 	public var inputs as StringArray
 
-	public static function create(sources StringArray, output String = "", debug_info bool = true, version String = "", defines StringArray = StringArray.create(), directory String = "", delegateTarget String = "", rebuildWithOutput bool = false, inputs StringArray = StringArray.create()) returns BuildConfig
+	public static function create(sources StringArray, output String = "", debug_info bool = true, version String = "", defines StringArray = StringArray.create(0), directory String = "", delegateTarget String = "", rebuildWithOutput bool = false, inputs StringArray = StringArray.create(0)) returns BuildConfig
 		return BuildConfig{output: output, sources: sources, debug_info: debug_info, version: version, defines: defines, directory: directory, delegateTarget: delegateTarget, rebuildWithOutput: rebuildWithOutput, inputs: inputs}
 	end 'create'
 end 'BuildConfig'
@@ -68,8 +68,8 @@ public type Build
 	/// rebuildWithOutput: build again with the program just written, as
 	/// `BuildConfig.rebuildWithOutput` describes. inputs: files besides `source` this description
 	/// depends on, as `BuildConfig.inputs` describes.
-	public static function build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = StringArray.create(), rebuildWithOutput bool = false, inputs StringArray = StringArray.create())
-		var sources = StringArray.create()
+	public static function build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = StringArray.create(0), rebuildWithOutput bool = false, inputs StringArray = StringArray.create(0))
+		var sources = StringArray.create(0)
 		sources.push(source)
 		Build.emitBuildConfig(BuildConfig.create(sources, output: output, debug_info: debugInfo, version: version, defines: defines, rebuildWithOutput: rebuildWithOutput, inputs: inputs))
 	end 'build'
@@ -84,8 +84,8 @@ public type Build
 	/// delegated project builds the same way from either end. target: which of its targets to build,
 	/// named as `maxon build` names one; empty means its sole target. inputs: files this delegation
 	/// depends on, joined to the delegated project's own, as `BuildConfig.inputs` describes.
-	public static function delegate(directory String, target String = "", inputs StringArray = StringArray.create())
-		Build.emitBuildConfig(BuildConfig.create(StringArray.create(), directory: directory, delegateTarget: target, inputs: inputs))
+	public static function delegate(directory String, target String = "", inputs StringArray = StringArray.create(0))
+		Build.emitBuildConfig(BuildConfig.create(StringArray.create(0), directory: directory, delegateTarget: target, inputs: inputs))
 	end 'delegate'
 
 	/// Emit one build configuration as JSON. Every string is JSON-escaped, so a `"` or a Windows `\`

@@ -91,7 +91,7 @@ end 'main'
   is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds
   for every alias form — ranged, function, generic-instance and tuple — and for the elements of a container
   instance: `Array with Score` over two `Score` declarations is two types.
-- An `Array` is indexed by the standard library's `ElementIndex`: `get`, `set` and `resize` take one.
+- An `Array` is indexed by the standard library's `ElementIndex`: `get`, `set`, `resize` and the capacity of `create(n)` take one.
   `count()` returns a `Count`, which implements `ElementIndex`, so a count goes wherever an index is taken
   and an `ElementIndex` goes where a `Count` is declared only by cast. The index must be an `ElementIndex`
   or an alias that implements it; any other alias, or a non-integer such as a `String`, is **E3005** —

@@ -735,3 +735,89 @@ mm_alloc AsyncArgumentImage #1 size=128
 mm_decref AsyncArgumentImage #1 rc=0
 mm_free AsyncArgumentImage #1
 ```
+
+<!-- test: module-let-array-of-zero-capacity-costs-no-allocation -->
+`Items.create(0)` is the empty array, so a module-scope `let` of it is the image record, exactly as `Items.create()` is, and the block is EMPTY. The not-zeroed spelling of a zero capacity is the same empty array.
+<!-- MmTrace -->
+```maxon
+typealias Key = int(0 to 1000)
+typealias Items = Array with Key
+
+let NoItems = Items.create(0)
+let NoMoreItems = Items.create(0, zeroed: false)
+
+function main() returns ExitCode
+	return (NoItems.count() + NoMoreItems.count()) as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+```mm-trace
+```
+
+<!-- test: struct-field-default-array-of-zero-capacity-is-imaged-with-its-struct -->
+A struct whose field default is `Items.create(0)` is built into the image when a module-scope `let` constructs it, so the block is EMPTY: the field's default is a bare create whether the capacity is written or not.
+<!-- MmTrace -->
+```maxon
+typealias Key = int(0 to 1000)
+typealias Items = Array with Key
+
+type Bag
+	var items = Items.create(0)
+	var spare = Items.create(0, zeroed: false)
+
+	static function create() returns Bag
+		return Self{}
+	end 'create'
+
+	function size() returns Count
+		return self.items.count() + self.spare.count()
+	end 'size'
+end 'Bag'
+
+let NoBag = Bag.create()
+
+function main() returns ExitCode
+	return NoBag.size() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+```mm-trace
+```
+
+<!-- test: struct-field-default-bare-array-create-is-imaged-with-its-struct -->
+The same struct with the no-argument default: the control for the case above.
+<!-- MmTrace -->
+```maxon
+typealias Key = int(0 to 1000)
+typealias Items = Array with Key
+
+type Bag
+	var items = Items.create()
+
+	static function create() returns Bag
+		return Self{}
+	end 'create'
+
+	function size() returns Count
+		return self.items.count()
+	end 'size'
+end 'Bag'
+
+let NoBag = Bag.create()
+
+function main() returns ExitCode
+	return NoBag.size() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+```mm-trace
+```

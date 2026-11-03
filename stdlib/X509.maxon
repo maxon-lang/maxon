@@ -339,8 +339,8 @@ end 'X509BasicConstraints'
 
 /// A subjectAltName extension's DNS names and IP addresses.
 public type X509SubjectAltName
-	var storedDnsNames = StringArray.create()
-	var storedIpAddresses = ByteArrays.create()
+	var storedDnsNames = StringArray.create(0)
+	var storedIpAddresses = ByteArrays.create(0)
 
 	/// The dNSName entries, in encoded order.
 	public function dnsNames() returns StringArray
@@ -367,10 +367,10 @@ end 'X509SubjectAltName'
 
 /// A nameConstraints extension's dNSName and iPAddress subtrees.
 public type X509NameConstraints
-	var storedPermittedDnsNames = StringArray.create()
-	var storedExcludedDnsNames = StringArray.create()
-	var storedPermittedIpRanges = ByteArrays.create()
-	var storedExcludedIpRanges = ByteArrays.create()
+	var storedPermittedDnsNames = StringArray.create(0)
+	var storedExcludedDnsNames = StringArray.create(0)
+	var storedPermittedIpRanges = ByteArrays.create(0)
+	var storedExcludedIpRanges = ByteArrays.create(0)
 
 	/// The dNSName bases of permittedSubtrees, as encoded.
 	public function permittedDnsNames() returns StringArray
@@ -422,18 +422,18 @@ public type X509NameConstraints
 end 'X509NameConstraints'
 
 type X509Extensions
-	var seen = ByteArrays.create()
+	var seen = ByteArrays.create(0)
 	module var basicConstraints = X509BasicConstraints.create(false, pathLength: 0, hasPathLength: false)
 	module var hasBasicConstraints = false
-	module var keyUsage = X509KeyUsages.create()
+	module var keyUsage = X509KeyUsages.create(0)
 	module var hasKeyUsage = false
-	module var extendedKeyUsage = ByteArrays.create()
+	module var extendedKeyUsage = ByteArrays.create(0)
 	module var hasExtendedKeyUsage = false
 	module var subjectAltName = X509SubjectAltName.create()
 	module var hasSubjectAltName = false
-	module var authorityKeyId = ByteArray.create()
+	module var authorityKeyId = ByteArray.create(0)
 	module var hasAuthorityKeyId = false
-	module var subjectKeyId = ByteArray.create()
+	module var subjectKeyId = ByteArray.create(0)
 	module var hasSubjectKeyId = false
 	module var nameConstraints = X509NameConstraints.create()
 	module var hasNameConstraints = false
@@ -585,7 +585,7 @@ public type Certificate
 			throw X509FieldError.absent
 		end 'missing'
 
-		var purposes = StringArray.create()
+		var purposes = StringArray.create(0)
 
 		for purpose in extensions.extendedKeyUsage 'eachPurpose'
 			purposes.push(x509DottedOid(purpose))
@@ -692,7 +692,7 @@ type X509Reader
 	end 'element'
 
 	function elements() returns ByteArrays throws X509Error
-		var all = ByteArrays.create()
+		var all = ByteArrays.create(0)
 
 		while not der.isAtEnd() 'eachElement'
 			all.push(try element())
@@ -846,7 +846,7 @@ module type X509RootPool
 		// outside it, so it parses from a copy of its own.
 		let owned = roots.clone()
 
-		return Self{derRoots: owned, parsedRoots: x509Pool(owned, isRoot: true, excluded: ByteArrays.create())}
+		return Self{derRoots: owned, parsedRoots: x509Pool(owned, isRoot: true, excluded: ByteArrays.create(0))}
 	end 'create'
 
 	module function der() returns ByteArrays
@@ -864,11 +864,11 @@ type X509PathSearch
 	var host as X509Host
 	var purpose as X509Purpose
 	var now as UnixSeconds
-	var accepted = X509Chain.create()
+	var accepted = X509Chain.create(0)
 	var failure = X509VerifyError.unknownAuthority
 	var hasFailure = false
 	var attempts = 0 as X509SignatureAttempts
-	var checkedLinks = X509CheckedLinks.create()
+	var checkedLinks = X509CheckedLinks.create(0)
 
 	static function create(roots X509Candidates, intermediates X509Candidates, host X509Host, purpose X509Purpose, now UnixSeconds) returns X509PathSearch
 		return X509PathSearch{roots: roots, intermediates: intermediates, host: host, purpose: purpose, now: now}
@@ -881,7 +881,7 @@ type X509PathSearch
 			throw failure
 		end 'noChain'
 
-		var chain = ByteArrays.create()
+		var chain = ByteArrays.create(0)
 
 		for link in accepted 'eachLink'
 			chain.push(link.der)
@@ -1222,7 +1222,7 @@ function x509PssFields(parameters ByteArray) returns X509TaggedFields throws X50
 		throw X509Error.invalidEncoding
 	end 'notSequence'
 
-	var fields = X509TaggedFields.create()
+	var fields = X509TaggedFields.create(0)
 
 	for item in try X509Reader.over(parameters).sequenceElements() 'eachField'
 		fields.push(try x509PssField(item, previous: fields))
@@ -1356,7 +1356,7 @@ function x509Name(element ByteArray) returns X509Name throws X509Error
 		throw X509Error.invalidEncoding
 	end 'notSequence'
 
-	var attributes = X509Attributes.create()
+	var attributes = X509Attributes.create(0)
 
 	for relativeName in try X509Reader.over(element).sequenceElements() 'eachRelativeName'
 		try x509AppendRelativeName(relativeName, attributes: attributes)
@@ -1663,7 +1663,7 @@ end 'x509PathLength'
 function x509KeyUsage(value ByteArray) returns X509KeyUsages throws X509Error
 	var whole = try X509Reader.whole(value)
 	let bits = try whole.readBitString()
-	var usages = X509KeyUsages.create()
+	var usages = X509KeyUsages.create(0)
 
 	for usage in X509KeyUsage.allCases 'eachUsage'
 		if x509BitIsSet(bits, index: usage.ordinal) 'set'
@@ -1686,7 +1686,7 @@ end 'x509BitIsSet'
 function x509ExtendedKeyUsage(value ByteArray) returns ByteArrays throws X509Error
 	var whole = try X509Reader.whole(value)
 	let items = try whole.sequenceElements()
-	var purposes = ByteArrays.create()
+	var purposes = ByteArrays.create(0)
 
 	for item in items 'eachPurpose'
 		if x509Tag(item) != x509TagObjectIdentifier 'notOid'
@@ -1942,7 +1942,7 @@ function x509HasBoundedArcs(content ByteArray) returns bool
 end 'x509HasBoundedArcs'
 
 function x509Pool(ders ByteArrays, isRoot bool, excluded ByteArrays) returns X509Candidates
-	var pool = X509Candidates.create()
+	var pool = X509Candidates.create(0)
 
 	for der in ders 'eachCertificate'
 		let certificate = try X509.parse(der) otherwise continue
@@ -2201,13 +2201,13 @@ function x509Lowercase(octet Byte) returns Byte
 end 'x509Lowercase'
 
 function x509Split(bytes ByteArray, separator Byte) returns ByteArrays
-	var parts = ByteArrays.create()
-	var part = ByteArray.create()
+	var parts = ByteArrays.create(0)
+	var part = ByteArray.create(0)
 
 	for octet in bytes 'eachOctet'
 		if octet == separator 'boundary'
 			parts.push(part)
-			part = ByteArray.create()
+			part = ByteArray.create(0)
 		end 'boundary' else 'inside'
 			part.push(x509Lowercase(octet))
 		end 'inside'
@@ -2221,7 +2221,7 @@ function x509NameLabels(bytes ByteArray) returns ByteArrays throws X509Malformat
 	let labels = x509Split(bytes, separator: x509Dot)
 
 	if bytes.isEmpty() 'everything'
-		return ByteArrays.create()
+		return ByteArrays.create(0)
 	end 'everything'
 
 	if not x509AreNameLabels(labels) 'malformed'
@@ -2356,7 +2356,7 @@ end 'x509WithoutTrailingDot'
 
 function x509Ipv4(bytes ByteArray) returns ByteArray throws X509Malformation
 	let parts = x509Split(bytes, separator: x509Dot)
-	var address = ByteArray.create()
+	var address = ByteArray.create(0)
 
 	if parts.count() != x509Ipv4Parts 'parts'
 		throw X509Malformation.malformed
@@ -2397,7 +2397,7 @@ function x509Ipv6(bytes ByteArray) returns ByteArray throws X509Malformation
 	let parts = x509Split(bytes, separator: x509Colon)
 	let last = try parts.get(parts.count() - 1) otherwise panic("a split has a part")
 	let hasTail = last.contains(x509Dot)
-	var tail = ByteArray.create()
+	var tail = ByteArray.create(0)
 
 	if hasTail 'ipv4Tail'
 		tail = try x509Ipv4(last)
@@ -2405,7 +2405,7 @@ function x509Ipv6(bytes ByteArray) returns ByteArray throws X509Malformation
 
 	let gaps = x509InnerGaps(parts)
 	try x509CheckGaps(parts, gaps: gaps)
-	var address = ByteArray.create()
+	var address = ByteArray.create(0)
 
 	for (iter, part) in parts.withIterator() 'eachPart'
 		if gaps.contains(iter.index()) 'gap'
@@ -2425,7 +2425,7 @@ function x509Ipv6(bytes ByteArray) returns ByteArray throws X509Malformation
 end 'x509Ipv6'
 
 function x509InnerGaps(parts ByteArrays) returns X509PartIndices
-	var gaps = X509PartIndices.create()
+	var gaps = X509PartIndices.create(0)
 
 	for (iter, part) in parts.withIterator() 'eachPart'
 		if iter.index() > 0 and iter.index() + 1 < parts.count() and part.isEmpty() 'empty'

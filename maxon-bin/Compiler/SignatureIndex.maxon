@@ -237,11 +237,12 @@ enum SignatureDiscriminator
 	// must hash differently from both. It rides ALONE — see `mixFieldDefault` for why the expression must not.
 	fieldShapeDefaultHelper = 75
 
-	// ⭐ A field whose default is a bare `<Type>.create()` (`FieldDefault.bareCreateHelper`) — a FOURTH constant
+	// ⭐ A field whose default is an empty `<Type>.create()`, written `create()`, `create(0)` or
+	// `create(0, zeroed: …)` (`FieldDefault.emptyCreateHelper`) — a FOURTH constant
 	// beside the three above, and the only one whose EXPRESSION a reader in another file depends on: the empty
 	// container that call builds is laid down as bytes, so an edit between `IntArray.create()` and
 	// `IntArray.withCapacity(4)` changes what every reader emits and must move every reader's memo.
-	fieldShapeDefaultBareCreate = 115
+	fieldShapeDefaultEmptyCreate = 115
 
 	// ⭐ Whether a LITERAL default's number was written with a leading minus, above `i64.max`, or
 	// neither — three constants beside the pair above for their exact reason, one step further out:
@@ -1521,8 +1522,6 @@ enum InitializerShape
 	records
 	runsCode
 end 'InitializerShape'
-
-let ContainerCreateInitializerTokenCount = 5
 
 function initializerTokenAt(tokens TokenArray, decl TopLevelDecl, offset ElementIndex) returns Token
 	return try tokens.get(decl.initStart + offset) otherwise panic("initializerTokenAt: initializer token {decl.initStart + offset} of '{String.from(decl.name)}' is not below the declaring file's {tokens.count()} tokens")
@@ -21604,7 +21603,7 @@ export type ProgramSignatures
 			none gives Hasher.combined(state, value: SignatureDiscriminator.fieldShapeNoDefault)
 			literal(given) gives self.mixDefaultLiteral(state, given: given)
 			helper gives Hasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaultHelper)
-			bareCreateHelper gives Hasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaultBareCreate)
+			emptyCreateHelper gives Hasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaultEmptyCreate)
 		end 'shape'
 	end 'mixFieldDefault'
 
@@ -22859,20 +22858,20 @@ export type ProgramSignatures
 
 	function constructionHelperDefaultSlot(callee ByteArray, layout StructLayout, index FieldIndex, declared MaxonType, arena ImmortalBoxNodeArray) returns ContainerBoxSlot
 		match layout.fieldDefault(index) 'declared'
-			bareCreateHelper(helperName) then return self.constructionBareCreateSlot(callee, helperName: helperName, layout: layout, index: index, declared: declared, arena: arena)
+			emptyCreateHelper(helperName) then return self.constructionEmptyCreateSlot(callee, helperName: helperName, layout: layout, index: index, declared: declared, arena: arena)
 			none or
 			literal or
 			helper then return ContainerBoxSlot.notImageable
 		end 'declared'
 	end 'constructionHelperDefaultSlot'
 
-	function constructionBareCreateSlot(callee ByteArray, helperName ByteArray, layout StructLayout, index FieldIndex, declared MaxonType, arena ImmortalBoxNodeArray) returns ContainerBoxSlot
+	function constructionEmptyCreateSlot(callee ByteArray, helperName ByteArray, layout StructLayout, index FieldIndex, declared MaxonType, arena ImmortalBoxNodeArray) returns ContainerBoxSlot
 		if not callee.equals(helperName) 'notThisSlotsDefault'
 			return ContainerBoxSlot.notImageable
 		end 'notThisSlotsDefault'
 
 		return self.constructionContainerSlot(declared, declared: declared, offset: layout.offsetOfField(index), arena: arena)
-	end 'constructionBareCreateSlot'
+	end 'constructionEmptyCreateSlot'
 
 	function constructionUnionCaseSlot(typeName ByteArray, caseName ByteArray, declared MaxonType, offset ByteOffset, arena ImmortalBoxNodeArray) returns ContainerBoxSlot
 		if not self.fieldDeclaresTypeNamed(declared, typeName: typeName) or not self.boxedUnionCaseIsImageData(typeName, caseName: caseName) 'aPayloadCarryingCase'
@@ -23145,7 +23144,7 @@ export type ProgramSignatures
 			none or
 			helper then return ContainerBoxSlot.notImageable
 			literal(given) then return self.containerBoxScalarSlot(layout, index: index, given: given)
-			bareCreateHelper then return self.boxColumnSlot(owner, layout: layout, index: index, walk: walk)
+			emptyCreateHelper then return self.boxColumnSlot(owner, layout: layout, index: index, walk: walk)
 		end 'declared'
 	end 'boxSlot'
 
@@ -24118,26 +24117,25 @@ export type ProgramSignatures
 	end 'initializerShapeOf'
 
 	function initializerIsALibraryContainerCreate(tokens TokenArray, decl TopLevelDecl) returns bool
-		if decl.initEnd != decl.initStart + ContainerCreateInitializerTokenCount 'notTheFactoryShape'
+		let length = try emptyCreateTokenCount(tokens, start: decl.initStart) otherwise return false
+
+		if decl.initEnd != decl.initStart + length 'notTheFactoryShape'
 			return false
 		end 'notTheFactoryShape'
 
 		let head = initializerTokenAt(tokens, decl: decl, offset: 0)
-		let method = initializerTokenAt(tokens, decl: decl, offset: 2)
-
-		if head.kind != TokenKind.identifier or initializerTokenAt(tokens, decl: decl, offset: 1).kind != TokenKind.dot or method.kind != TokenKind.identifier or not method.value.equals(CreateMethod) 'notAFactoryCall'
-			return false
-		end 'notAFactoryCall'
-
-		if initializerTokenAt(tokens, decl: decl, offset: 3).kind != TokenKind.leftParen or initializerTokenAt(tokens, decl: decl, offset: 4).kind != TokenKind.rightParen 'hasArguments'
-			return false
-		end 'hasArguments'
 
 		if not self.isAliasOfFormFor(head.value, readerFilePath: decl.declFilePath, wanted: FormAliasKind.generic) 'notAGenericAlias'
 			return false
 		end 'notAGenericAlias'
 
-		let base = self.genericInstanceBaseName(self.genericAliasInstanceFrom(head.value, readerFilePath: decl.declFilePath))
+		let instance = self.genericAliasInstanceFrom(head.value, readerFilePath: decl.declFilePath)
+
+		if length != EmptyCreateTokenCount and not self.isArrayInstance(instance) 'anArgumentOnANonArray'
+			return false
+		end 'anArgumentOnANonArray'
+
+		let base = self.genericInstanceBaseName(instance)
 		return self.isBuiltinGenericBaseName(base) or not (self.containsStructInAnyFile(base) or self.containsEnumInAnyFile(base))
 	end 'initializerIsALibraryContainerCreate'
 

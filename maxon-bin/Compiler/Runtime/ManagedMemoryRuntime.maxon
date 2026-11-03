@@ -395,11 +395,13 @@ export let ManagedGetName = b"__managed_get"
 // Dropping the NULL-slot arm is only safe while no index in `[0, count)` can hold an empty managed
 // slot, and the reason none can is that GROWING an array of managed elements is refused at COMPILE
 // time — `SourceParseError.arrayResizeManagedElement` / E3106, rendered in `Queries.maxon`, because a grown
-// slot holds no element and Maxon has no default constructor. `push` always writes, and `[count,
+// slot holds no element and Maxon has no default constructor; a zeroed `create(n)` is refused the same way
+// (`arrayCreateZeroedOutsideElement`). `push` always writes, and `[count,
 // capacity)` is always zeroed. So the invariant is real, but it is a PARSER rule protecting a RUNTIME
 // omission with nothing between them: relax that refusal and this read is a null deref, in a function
-// whose own text would still look correct. If managed `resize` ever grows, THIS FUNCTION NEEDS THE
-// NULL-SLOT ARM BACK — and `requireArrayResizeHasZeroElement` carries the pointer back here.
+// whose own text would still look correct. If managed `resize` or `create(n)` ever publishes zeroed slots,
+// THIS FUNCTION NEEDS THE NULL-SLOT ARM BACK — and `requireArrayGrowthHasZeroElement` carries the pointer
+// back here.
 // A `FixedArray` `get` at a proven index reads through here too, and its slots are never empty because
 // `Parser.requireFixedArrayElementType` refuses a managed element: relax that refusal and the same
 // null deref follows.
@@ -445,6 +447,8 @@ export let ManagedClearName = b"__managed_clear"
 export let ManagedRemoveName = b"__managed_remove"
 export let ManagedDecrefName = b"__managed_decref"
 let ManagedReleaseName = b"__managed_release"
+let ManagedDestroyRangeName = b"__managed_destroy_range"
+let ManagedShrinkLengthName = b"__managed_shrink_length"
 
 // The whole-array copy operations. `slice` is THROWING (bounds/inverted-range → `ArrayError`),
 // `clone`/`append` are not. `slice`/`clone` return an array that BEHAVES as an independent copy but is an
@@ -1287,6 +1291,7 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	buildArrayEquals(module, name: ManagedEqName)
 	buildCountedDecref(module, name: ManagedDecrefName, releaseCallee: ManagedReleaseName, shape: DecrefRecordShape.bufferRecord)
 	buildManagedRelease(module)
+	buildManagedDestroyRange(module)
 
 	// The `__ManagedMemory` members with a runtime of their own — part of the all-or-nothing
 	// `usesManagedMemory` install for the reason the header gives: `__`-prefixed functions are
@@ -1294,6 +1299,7 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	// call `__managed_create_sized`/`__managed_reserve`/`__managed_cow_detach` anyway.
 	buildManagedMemCreate(module)
 	buildManagedSetLength(module)
+	buildManagedShrinkLength(module)
 	buildManagedSetByte(module)
 	buildManagedByteAt(module)
 	buildManagedMemGrow(module)
@@ -1782,8 +1788,7 @@ end 'emitBackwardCopy'
 // ⭐ **THE MANAGED-ELEMENT DESTROY WALK.** Walk `[start, end)` of `buffer` (stride
 // `elementSize`, always 8 for a managed element — a heap pointer) and DESTROY each NON-NULL slot by calling
 // the `destroy` function pointer on it through a `callIndirect`. ONE home for the null-guarded per-slot
-// destroy loop, shared by `__managed_decref` (drop, `[0, length)`), `__managed_clear` (`[0, length)`) and
-// `__managed_resize`'s shrink (`[n, oldLen)`). The null-guard skips a MOVED-OUT slot (a `pop`/`remove` nulls the
+// destroy loop, emitted only into `__managed_destroy_range`. The null-guard skips a MOVED-OUT slot (a `pop`/`remove` nulls the
 // slot it hands to the caller). `destroy` is the element's own destroy function (`__str_decref` /
 // `__destruct_<T>` / `__mm_decref` / `__managed_decref`), so each element is destroyed ONCE under the
 // move-only model rather than netted through a refcount. Threads through `cur` (sets its terminator) and returns the
@@ -1856,26 +1861,49 @@ export function emitElementDestructorCall(module StdModule, block IrBlock, destr
 end 'emitElementDestructorCall'
 
 // ⭐ **GATE THE MANAGED-ELEMENT DESTROY WALK on `element_destroy@40`.** Load the array's stamped
-// element destructor and, when it is non-zero (a MANAGED-element array), DESTROY `[start, stop)` through
-// `emitElementDestroyRange`; a TRIVIAL-element array (destructor 0) skips the walk untouched. Returns the block
+// element destructor and, when it is non-zero (a MANAGED-element array), call `__managed_destroy_range` to
+// DESTROY `[start, length)`; a TRIVIAL-element array (destructor 0) skips the call untouched. Returns the block
 // both paths converge on. This is the ONE home of the "must these slots be destroyed, and if so destroy them"
-// decision — shared by `__managed_decref` (drop `[0, length)`), `__managed_set` (the ONE overwritten slot), `__managed_clear`
-// (`[0, length)`) and `__managed_resize`'s shrink (`[n, oldLen)`) — so a trivial-element array can never
-// `callIndirect(0)` and every mutator that VACATES a live managed slot destroys it exactly once instead of
-// leaking it. Threads `cur` (sets its terminator); `record` is the array whose `element_destroy@40` is read,
-// `buffer` its element storage.
-function emitDestroyRangeIfManaged(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, start ValueId, stop ValueId, elementSize ValueId, ids ValueMinter) returns IrBlock
+// decision — shared by `__managed_release` (drop `[0, length)`) and `__managed_shrink_length` (`[n, length)`) —
+// so a trivial-element array can never `callIndirect(0)`. Threads `cur` (sets its terminator); `record` is the
+// array whose `element_destroy@40` is read, and its length field must still hold the length being vacated.
+function emitDestroyRangeIfManaged(module StdModule, func IrFunction, cur IrBlock, record ValueId, start ValueId, ids ValueMinter) returns IrBlock
 	let dtor = emitLoadField(module, block: cur, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let hasDtor = emitElementIsManaged(module, block: cur, destroy: dtor, ids: ids)
 	var walk = module.addBlock(func, label: b"mwalk", heat: BlockHeat.normal)
 	var cont = module.addBlock(func, label: b"mcont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(hasDtor, thenBlockId: walk.id, elseBlockId: cont.id))
 
-	var afterWalk = emitElementDestroyRange(module, func: func, cur: walk, buffer: buffer, start: start, stop: stop, elementSize: elementSize, destroy: dtor, ids: ids)
-	module.setTerminator(afterWalk, op: StdOp.branch(cont.id))
+	module.appendOp(walk, op: StdOp.call(ids.mint(), callee: ManagedDestroyRangeName, args: twoArgs(record, second: start)))
+	module.setTerminator(walk, op: StdOp.branch(cont.id))
 
 	return cont
 end 'emitDestroyRangeIfManaged'
+
+// `__managed_destroy_range(record, start)` — destroy the non-null elements of `[start, length)`.
+//
+// It is its own function so the walk's callee-saved registers stay out of the release, clear, resize and
+// set_length frames. It takes no end because every caller runs it while the record's length field still holds
+// the old length. It is stack-guarded, unlike the flat `__managed_*` entries, because the walk recurses
+// through element destructors and the depth follows the data.
+function buildManagedDestroyRange(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDestroyRangeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 2)
+	let record = 0
+	let start = 1
+
+	let stop = emitLoadField(module, block: entry, record: record, offset: ManagedRecordLengthOffset, ids: ids)
+	let dtor = emitLoadField(module, block: entry, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	let buffer = emitLoadField(module, block: entry, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, record: record, offset: ManagedRecordElementSizeOffset, ids: ids)
+	var afterWalk = emitElementDestroyRange(module, func: func, cur: entry, buffer: buffer, start: start, stop: stop, elementSize: es, destroy: dtor, ids: ids)
+	module.setTerminator(afterWalk, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedDestroyRange'
 
 // Store the low `size` bytes of the register `value` at `addr`, little-endian — a push/set/insert of a
 // trivial element word. Byte `i` is `(value >>logical i·8)` stored as a `u8` (which keeps the low byte).
@@ -3051,7 +3079,7 @@ export enum ManagedHeaderEffect
 	// and `set_byte` detach before their capacity bound (`emitBufferAccessGuard`), `set` after its
 	// length bound, and in each case the header is written by the detach or not at all. `set` and
 	// `mem_set` run an element destructor — of the rejected value (`emitDestroyRejectedElement`) or
-	// the overwritten occupant (`emitDestroyRangeIfManaged`) — only when `element_destroy@40` is
+	// the overwritten occupant (`emitDestroyOccupant`) — only when `element_destroy@40` is
 	// non-zero.
 	detachesUnlessOwnedUnshared
 
@@ -3950,6 +3978,9 @@ end 'emitMintRecord'
 // published, zero-filled because `__mm_alloc` zeroes. A buffer of at most `CoAllocationMaxBytes` is
 // allocated with the record; `BufferOwnership.coAllocatedBufferOffset` owns the layout.
 //
+// A negative `capacity` is a capacity overflow (`arrayCapacityOverflow`), refused before the floor lifts it to
+// `MinimumCapacity`, so no caller can publish a negative `length`.
+//
 // ⚠ It runs without a green-thread stack check, so E5004 prices every chain of unguarded functions below it.
 // It allocates through `__mm_alloc` itself: a chain through `__managed_reserve` and `__managed_grow` under
 // `__managed_clone` overruns the guard margin.
@@ -3959,6 +3990,7 @@ function buildManagedCreateSized(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
+	var checkSign = module.addBlock(func, label: b"chksign", heat: BlockHeat.normal)
 	var emptyArm = module.addBlock(func, label: b"emptyarm", heat: BlockHeat.normal)
 	var floorCapacity = module.addBlock(func, label: b"floorcap", heat: BlockHeat.normal)
 	var takeMinimum = module.addBlock(func, label: b"takemin", heat: BlockHeat.normal)
@@ -3994,7 +4026,8 @@ function buildManagedCreateSized(module StdModule)
 	let room = ids.mint()
 	fit.blockArgs.push(IrBlockArg.create(room, argType: StdType.i64))
 
-	emitBranchOnCompare(module, block: checkCapacity, value: capacity, pred: StdCmpPred.eq, against: 0, whenTrue: emptyArm, whenFalse: floorCapacity, ids: ids)
+	emitBranchOnCompare(module, block: checkCapacity, value: capacity, pred: StdCmpPred.lt, against: 0, whenTrue: sizeOverflow, whenFalse: checkSign, ids: ids)
+	emitBranchOnCompare(module, block: checkSign, value: capacity, pred: StdCmpPred.eq, against: 0, whenTrue: emptyArm, whenFalse: floorCapacity, ids: ids)
 
 	let noBuffer = emitConst(module, block: emptyArm, value: 0, ids: ids)
 	emitBranchCarrying(module, from: emptyArm, to: alloc, values: threeArgs(recordBytes, second: noBuffer, third: noBuffer))
@@ -4246,13 +4279,14 @@ end 'buildManagedSetUnchecked'
 //
 // ⭐ **DESTROY THE OCCUPANT A SET OVERWRITES.** A managed array's `set` moves a new owner into
 // the slot, so whatever the slot held must be destroyed first or it leaks (the parser consumes the new value
-// into the array — nothing else drops the old one). Destroy exactly the one slot `[index, index+1)` through
-// the shared gate (a trivial-element array skips it and stores directly), THEN store the new value.
+// into the array — nothing else drops the old one). Only the one slot `[index, index+1)` is touched: its
+// occupant is read by `emitOccupantRead` (a trivial-element array reads none), the new value is stored, and
+// `emitDestroyOccupant` destroys the occupant.
 //
 // ⭐⭐ **AND THAT WALK IS ALREADY CORRECT FOR A SLOT PAST THE LENGTH.**
 // `__managed_mem_set` may address `[length, capacity)`, a slot that was never live. By the capacity-slot
 // invariant every such slot reads ZERO — every vacating operation erases on the way out and fresh capacity
-// comes zeroed from the allocator — and `emitElementDestroyRange`'s per-slot NULL GUARD skips a zero slot, so
+// comes zeroed from the allocator — and `emitDestroyOccupant`'s NULL GUARD skips a zero slot, so
 // no destructor is ever called on a null.
 //
 // ⚠ **THE RELEASE IS NOT GATED ON `idx < length`, AND THAT IS DELIBERATE.** Such a gate is affordable only
@@ -4419,16 +4453,8 @@ function buildManagedResize(module StdModule)
 	let oldLen = emitLoadField(module, block: resize, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	emitBranchOnCompareValues(module, block: resize, a: n, pred: StdCmpPred.lt, b: oldLen, whenTrue: doZero, whenFalse: setLen, ids: ids)
 
-	let es = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-
-	// ⭐ **DESTROY THE VACATED MANAGED ELEMENTS `[n, oldLen)` BEFORE ZEROING.** A shrink drops the
-	// tail `[n, oldLen)`, so each managed element there must be destroyed or it leaks; the destroy MUST precede the
-	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
-	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: doZero, record: arr, buffer: buffer, start: n, stop: oldLen, elementSize: es, ids: ids)
-	let vacatedCount = emitBin(module, block: afterDestroy, a: oldLen, b: n, opcode: StdBinOpcode.sub, ids: ids)
-	emitZeroElems(module, block: afterDestroy, buffer: buffer, start: n, count: vacatedCount, es: es, ids: ids)
-	module.setTerminator(afterDestroy, op: StdOp.branch(setLen.id))
+	module.appendOp(doZero, op: StdOp.call(ids.mint(), callee: ManagedShrinkLengthName, args: twoArgs(arr, second: n)))
+	module.setTerminator(doZero, op: StdOp.retVoid)
 
 	emitStoreField(module, block: setLen, record: arr, offset: ManagedRecordLengthOffset, value: n)
 	module.setTerminator(setLen, op: StdOp.retVoid)
@@ -4471,22 +4497,12 @@ function buildManagedClear(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
 
-	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1). `clear` cannot throw, and an
-	// EMPTY literal detaches here too, into a zero-byte private buffer (trap 2).
+	// Detach BEFORE `__managed_shrink_length` loads the buffer pointer (`__managed_cow_detach` trap 1). `clear`
+	// cannot throw, and an EMPTY literal detaches here too, into a zero-byte private buffer (trap 2).
 	entry = emitCowDetachWhenNeeded(module, func: func, block: entry, arr: arr, prefix: "cl", ids: ids)
-	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-
-	// ⭐ **DESTROY THE LIVE MANAGED ELEMENTS `[0, length)` BEFORE ZEROING.** `clear` drops the
-	// whole live region, so each managed element must be destroyed or it leaks; the destroy MUST run before the
-	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
-	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: arr, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
-	emitZeroElems(module, block: afterDestroy, buffer: buffer, start: start, count: length, es: es, ids: ids)
-	let zero = emitConst(module, block: afterDestroy, value: 0, ids: ids)
-	emitStoreField(module, block: afterDestroy, record: arr, offset: ManagedRecordLengthOffset, value: zero)
-	module.setTerminator(afterDestroy, op: StdOp.retVoid)
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: ManagedShrinkLengthName, args: twoArgs(arr, second: start)))
+	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildManagedClear'
@@ -4977,22 +4993,46 @@ function buildManagedSetLength(module StdModule)
 	let oldLen = emitLoadField(module, block: pick, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	emitBranchOnCompareValues(module, block: pick, a: n, pred: StdCmpPred.lt, b: oldLen, whenTrue: doZero, whenFalse: setLen, ids: ids)
 
-	// The SHRINK path is `__managed_resize`'s verbatim, through the same two shared helpers: destroy the managed
+	// The SHRINK path is `__managed_shrink_length`, shared with `resize` and `clear`: it destroys the managed
 	// elements that leave the live range (inert for the byte element `__ManagedMemory` binds to, and correct
-	// for any other), THEN zero the vacated bytes so the `[length, capacity)`-reads-zero invariant survives a
+	// for any other), THEN zeroes the vacated bytes so the `[length, capacity)`-reads-zero invariant survives a
 	// later grow back — which `managed-file.write-and-read` does, twice.
-	let es = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: doZero, record: arr, buffer: buffer, start: n, stop: oldLen, elementSize: es, ids: ids)
-	let vacatedCount = emitBin(module, block: afterDestroy, a: oldLen, b: n, opcode: StdBinOpcode.sub, ids: ids)
-	emitZeroElems(module, block: afterDestroy, buffer: buffer, start: n, count: vacatedCount, es: es, ids: ids)
-	module.setTerminator(afterDestroy, op: StdOp.branch(setLen.id))
+	module.appendOp(doZero, op: StdOp.call(ids.mint(), callee: ManagedShrinkLengthName, args: twoArgs(arr, second: n)))
+	emitVoidOkReturn(module, block: doZero, ids: ids)
 
 	emitStoreField(module, block: setLen, record: arr, offset: ManagedRecordLengthOffset, value: n)
 	emitVoidOkReturn(module, block: setLen, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedSetLength'
+
+// `__managed_shrink_length(arr, n)` — the one shrink path of `set_length`, `resize` and `clear`: destroy the
+// managed elements of `[n, length)`, THEN zero that range, THEN publish `n`. The destroy precedes the zero
+// because a zeroed slot is a NULL the destroy walk skips; the publish comes last because
+// `__managed_destroy_range` reads the old length from the record.
+//
+// ⚠ `n` is at most the current length, and the caller has already detached: the zeroing writes through the
+// buffer, which through a shared one would rewrite the parent's bytes.
+function buildManagedShrinkLength(module StdModule)
+	var func = IrFunction.createFromStd(ManagedShrinkLengthName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 2)
+	let arr = 0
+	let n = 1
+
+	let oldLen = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: arr, start: n, ids: ids)
+	let vacatedCount = emitBin(module, block: afterDestroy, a: oldLen, b: n, opcode: StdBinOpcode.sub, ids: ids)
+	emitZeroElems(module, block: afterDestroy, buffer: buffer, start: n, count: vacatedCount, es: es, ids: ids)
+	emitStoreField(module, block: afterDestroy, record: arr, offset: ManagedRecordLengthOffset, value: n)
+	module.setTerminator(afterDestroy, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedShrinkLength'
 
 // ⭐ `__managed_set_byte(arr, byteOffset, value)` — write ONE byte at a BYTE offset, or throw
 // `invalidByteRange`. VOID and throwing.
@@ -5174,7 +5214,7 @@ end 'emitBufferAccessGuard'
 // its own placement: a runtime that is correct on its own outlives a front-end rule that may move, and the
 // day `__managed_mem_set` gains a second door is the day this would have been the missing half. **The dependency
 // runs BOTH ways and is written down at both ends** — the refusal's own header says the runtime does not rely
-// on it, this says the runtime does not assume it — exactly as `requireArrayResizeHasZeroElement` and
+// on it, this says the runtime does not assume it — exactly as `requireArrayGrowthHasZeroElement` and
 // `ManagedGetUncheckedName` pin each other. Relax the refusal and this call becomes load-bearing again with no
 // edit; delete this call and nothing will tell you.
 function buildManagedMemSet(module StdModule)
@@ -5970,11 +6010,8 @@ function buildManagedRelease(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let record = 0
 
-	let buffer = emitLoadField(module, block: entry, record: record, offset: ManagedRecordBufferOffset, ids: ids)
-	let length = emitLoadField(module, block: entry, record: record, offset: ManagedRecordLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: entry, record: record, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
-	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: record, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
+	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: record, start: start, ids: ids)
 	module.setTerminator(afterWalk, op: StdOp.branch(releaseBuf.id))
 
 	let base = emitOwedAllocationBase(module, func: func, cur: releaseBuf, join: baseJoin, record: record, ids: ids)

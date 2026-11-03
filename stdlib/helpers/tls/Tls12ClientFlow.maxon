@@ -190,7 +190,7 @@ module type Tls12ClientFlow implements TlsMessageHandler
 		try session.input.requireKeyBoundary()
 
 		var credentials = credentialsFor(request)
-		var flight = ByteArray.create()
+		var flight = ByteArray.create(0)
 
 		try appendCertificate(flight, credentials: credentials)
 		try session.emit(flight, message: TlsHandshakeMessage.clientKeyExchange(exchange.publicKey))
@@ -232,7 +232,7 @@ module type Tls12ClientFlow implements TlsMessageHandler
 	function appendCertificate(flight ByteArray, credentials Tls12ClientCredentials) throws TlsHandshakeError
 		match credentials 'credentials'
 			unrequested then return
-			anonymous then try session.emit(flight, message: TlsHandshakeMessage.tls12Certificate(ByteArrays.create()))
+			anonymous then try session.emit(flight, message: TlsHandshakeMessage.tls12Certificate(ByteArrays.create(0)))
 			signing(chain, _, _) then try session.emit(flight, message: TlsHandshakeMessage.tls12Certificate(chain))
 		end 'credentials'
 	end 'appendCertificate'

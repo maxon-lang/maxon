@@ -76,8 +76,8 @@ public type JsonNode
 	public var boolValue = false
 	public var numberValue = 0.0 as JsonFloat
 	public var stringValue = ""
-	public var keys = StringArray.create()
-	public var children = JsonNodeIdArray.create()
+	public var keys = StringArray.create(0)
+	public var children = JsonNodeIdArray.create(0)
 
 	public static function nullNode() returns JsonNode
 		return Self{kind: JsonKind.jsonNull}
@@ -120,7 +120,7 @@ public typealias StringArray = Array with String
 // (other than `create`/`add`/`get`/`rootKind`, which the parser needs) are
 // instance-callable through inferred receiver types without a visibility modifier.
 public type JsonDoc
-	public var nodes = JsonNodeArray.create()
+	public var nodes = JsonNodeArray.create(0)
 	public var root = 0 as JsonNodeId
 
 	public static function create() returns JsonDoc
@@ -242,7 +242,7 @@ public type Json
 	/// Serialize a `JsonDoc` rooted at `doc.root` to compact RFC 8259 output.
 	/// Non-finite numbers (NaN, Infinity) are emitted as `null` to stay valid JSON.
 	public static function stringify(doc JsonDoc) returns String
-		var out = ByteArray.create()
+		var out = ByteArray.create(0)
 		writeNode(doc, id: doc.root, out: out)
 		return String.from(out)
 	end 'stringify'
@@ -250,7 +250,7 @@ public type Json
 	/// `text` as one JSON string value: quoted, with `"`, `\` and every control byte escaped — the
 	/// spelling `stringify` gives a string node, for output written without building a `JsonDoc`.
 	public static function quote(text String) returns String
-		var out = ByteArray.create()
+		var out = ByteArray.create(0)
 		writeJsonString(text, out: out)
 		return String.from(out)
 	end 'quote'
@@ -261,7 +261,7 @@ public type Json
 	/// node id to serialize one value out of a shared arena without first copying
 	/// it into a doc of its own.
 	public static function stringifyPrettyNode(doc JsonDoc, root JsonNodeId) returns String
-		var out = ByteArray.create()
+		var out = ByteArray.create(0)
 		writeNodePretty(doc, id: root, depth: 0, out: out)
 		return String.from(out)
 	end 'stringifyPrettyNode'
@@ -419,7 +419,7 @@ type JsonParser
 
 	function parseArray() returns JsonNodeId throws JsonError
 		try expect(0x5B)
-		var children = JsonNodeIdArray.create()
+		var children = JsonNodeIdArray.create(0)
 		skipWhitespace()
 		let b = try peek()
 
@@ -455,8 +455,8 @@ type JsonParser
 
 	function parseObject() returns JsonNodeId throws JsonError
 		try expect(0x7B)
-		var keys = StringArray.create()
-		var children = JsonNodeIdArray.create()
+		var keys = StringArray.create(0)
+		var children = JsonNodeIdArray.create(0)
 		skipWhitespace()
 		let b = try peek()
 
@@ -503,7 +503,7 @@ type JsonParser
 
 	function parseString() returns String throws JsonError
 		try expect(0x22)
-		var out = ByteArray.create()
+		var out = ByteArray.create(0)
 
 		while true 'scan'
 			let b = try peek()
@@ -1087,7 +1087,7 @@ end 'writeBytes'
 // =============================================================================
 
 function nullBytes() returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.push(0x6E)
 	b.push(0x75)
 	b.push(0x6C)
@@ -1096,7 +1096,7 @@ function nullBytes() returns ByteArray
 end 'nullBytes'
 
 function trueBytes() returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.push(0x74)
 	b.push(0x72)
 	b.push(0x75)
@@ -1105,7 +1105,7 @@ function trueBytes() returns ByteArray
 end 'trueBytes'
 
 function falseBytes() returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.push(0x66)
 	b.push(0x61)
 	b.push(0x6C)

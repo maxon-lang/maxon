@@ -26,7 +26,7 @@ module type TlsClientOffer
 	module static function of(hello TlsClientHello) returns TlsClientOffer
 		let scan = TlsExtensionScan.ofBlock(hello.extensions().clone())
 		var versions = scan.supportedVersions.clone()
-		var shareGroups = TlsGroupCodeArray.create()
+		var shareGroups = TlsGroupCodeArray.create(0)
 
 		if versions.isEmpty() 'implicit'
 			versions.push(tlsLegacyVersion)
@@ -214,7 +214,7 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 		end 'changesNothing'
 
 		var replacement = try replacementShares(scan)
-		var modified = TlsExtensionArray.create()
+		var modified = TlsExtensionArray.create(0)
 
 		for item in tlsExtensionsOf(firstHello.extensions()) 'eachExtension'
 			if item.extensionType() == TlsExtensionKind.cookie.code() 'staleCookie'
@@ -249,7 +249,7 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	end 'acceptHelloRetryRequest'
 
 	function replacementShares(scan TlsExtensionScan) returns TlsKeyShareArray throws TlsHandshakeError
-		var shares = TlsKeyShareArray.create()
+		var shares = TlsKeyShareArray.create(0)
 
 		for group in scan.selectedGroups 'eachGroup'
 			if not offer.scan.supportedGroups.contains(group) or offer.shareGroups.contains(group) 'unusable'
@@ -375,7 +375,7 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 
 	function clientFlight(request TlsCertificateRequest, suite Tls13CipherSuite, handshakeSecret ByteArray) returns ByteArray throws TlsHandshakeError
 		var flight = match request 'request'
-			notRequested gives ByteArray.create()
+			notRequested gives ByteArray.create(0)
 			requested(context, schemes) gives try clientAuthentication(context, schemes: schemes, suite: suite)
 		end 'request'
 
@@ -390,14 +390,14 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 
 	function clientAuthentication(context ByteArray, schemes TlsSignatureSchemeCodeArray, suite Tls13CipherSuite) returns ByteArray throws TlsHandshakeError
 		match config.identity 'identity'
-			anonymous then return try sentCertificate(context, chain: ByteArrays.create())
+			anonymous then return try sentCertificate(context, chain: ByteArrays.create(0))
 			certified(chain, key) then return try certifiedAuthentication(context, schemes: schemes, suite: suite, chain: chain, key: key)
 		end 'identity'
 	end 'clientAuthentication'
 
 	function certifiedAuthentication(context ByteArray, schemes TlsSignatureSchemeCodeArray, suite Tls13CipherSuite, chain ByteArrays, key TlsPrivateKey) returns ByteArray throws TlsHandshakeError
 		let scheme = try tlsPickScheme(config.signatureAlgorithms, offered: schemes, algorithm: key.algorithm(), protocol: TlsProtocol.tls13) otherwise 'unmatched'
-			return try sentCertificate(context, chain: ByteArrays.create())
+			return try sentCertificate(context, chain: ByteArrays.create(0))
 		end 'unmatched'
 
 		var authentication = try sentCertificate(context, chain: chain)

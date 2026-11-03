@@ -4213,3 +4213,310 @@ end 'main'
 ```maxoncstderr
 error E2004: <fragment>:4:10: A var cannot start from a bare number: write 'var name = expr as Type'.
 ```
+
+<!-- test: create-with-capacity-publishes-that-many-zero-elements -->
+`create(n)` builds an array of `n` elements, every one zero, in one call: the length is `n` and no element needs writing first.
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create(16)
+
+	try bytes.set(3, value: 9) otherwise return 1
+
+	var sum = 0 as Count
+
+	for byte in bytes 'eachByte'
+		sum = sum + (byte as Count)
+	end 'eachByte'
+
+	return (bytes.count() + sum) as ExitCode
+end 'main'
+```
+```exitcode
+25
+```
+
+<!-- test: create-with-capacity-of-zero-is-empty -->
+```maxon
+function main() returns ExitCode
+	let bytes = ByteArray.create(0)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: create-with-capacity-works-for-a-wide-element -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias WideArray = Array with Wide
+
+function main() returns ExitCode
+	var words = WideArray.create(5)
+
+	try words.set(4, value: 7) otherwise return 1
+
+	let last = try words.get(4) otherwise 99
+	let first = try words.get(0) otherwise 99
+
+	if words.count() != 5 or first != 0 'wrongShape'
+		return 1
+	end 'wrongShape'
+
+	return last as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: create-with-capacity-not-zeroed-is-empty-with-room -->
+`create(n, zeroed: false)` is an empty array with room for `n` elements: the length is 0 and `n` pushes need no growth.
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create(16, zeroed: false)
+	let before = bytes.count()
+
+	for i in 0 upto 16 'eachByte'
+		bytes.push((i + 1) as Byte)
+	end 'eachByte'
+
+	let last = try bytes.get(15) otherwise 0
+
+	return (before * 100 + bytes.count() + (last as Count)) as ExitCode
+end 'main'
+```
+```exitcode
+32
+```
+
+<!-- test: create-with-capacity-explicitly-zeroed-matches-the-default -->
+```maxon
+function main() returns ExitCode
+	let bytes = ByteArray.create(4, zeroed: true)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: create-with-capacity-not-zeroed-holds-a-managed-element -->
+A `String` has no zero value, so only the not-zeroed form builds an array of them, and `push` supplies each element.
+```maxon
+typealias Words = Array with String
+
+function main() returns ExitCode
+	var words = Words.create(2, zeroed: false)
+
+	words.push("ab")
+	words.push("cde")
+
+	return (words.count() * 10 + (try words.get(1) otherwise "").byteLength()) as ExitCode
+end 'main'
+```
+```exitcode
+23
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-managed-element -->
+A zeroed slot of a `String` would be a null pointer, so the default (zeroed) form is refused for it, naming the element and the spelling that works.
+```maxon
+typealias Words = Array with String
+
+function main() returns ExitCode
+	let words = Words.create(2)
+
+	return words.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:5:14: 'create(n)' cannot publish zeroed slots of 'String': zero is not a value of 'String'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-explicitly-zeroed-cannot-hold-a-managed-element -->
+```maxon
+typealias Words = Array with String
+
+function main() returns ExitCode
+	let words = Words.create(2, zeroed: true)
+
+	return words.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:5:14: 'create(n)' cannot publish zeroed slots of 'String': zero is not a value of 'String'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-an-alias-that-excludes-zero -->
+```maxon
+typealias Percent = int(1 to 100)
+typealias PercentArray = Array with Percent
+
+function main() returns ExitCode
+	let xs = PercentArray.create(3)
+
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:6:11: 'create(n)' cannot publish zeroed slots of 'Percent': zero is not a value of 'Percent'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-zeroed-must-be-a-literal -->
+```maxon
+function main() returns ExitCode
+	let flag = true
+	let bytes = ByteArray.create(4, zeroed: flag)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:42: Unsupported: 'zeroed:' takes the literal 'true' or 'false' — whether a type has a zero value is decided where 'create' is written
+```
+
+<!-- test: create-with-capacity-allocates-one-record-and-buffer-together -->
+<!-- MmTrace -->
+The zeroed form is one `__mm_alloc`: the record and its buffer share a box.
+```maxon
+function main() returns ExitCode
+	let bytes = ByteArray.create(16)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+
+```mm-trace
+mm_alloc ArrayRecord #1 size=72
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+```
+
+<!-- test: create-with-capacity-not-zeroed-allocates-one-record-and-buffer-together -->
+<!-- MmTrace -->
+The not-zeroed form is one `__mm_alloc` too, and 16 pushes after it allocate nothing more.
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create(16, zeroed: false)
+
+	for i in 0 upto 16 'eachByte'
+		bytes.push(i as Byte)
+	end 'eachByte'
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+
+```mm-trace
+mm_alloc ArrayRecord #1 size=72
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+```
+
+<!-- test: create-of-zero-is-an-empty-array-for-any-element -->
+`create(0)` publishes no slot, so it needs no zero element: it is the empty array, even of a `String`.
+```maxon
+typealias Words = Array with String
+
+function main() returns ExitCode
+	var words = Words.create(0)
+
+	words.push("abc")
+
+	return (words.count() * 10 + (try words.get(0) otherwise "").byteLength()) as ExitCode
+end 'main'
+```
+```exitcode
+13
+```
+
+<!-- test: a-field-default-calling-another-types-create-of-zero-is-not-an-empty-container -->
+`Tally.create(0)` is the program's own factory, not an empty array: a module-scope `let` that builds a `Holder` still runs it, so the field holds the five the factory makes of its zero.
+```maxon
+type Tally
+	var total as Count
+
+	static function create(start Count) returns Tally
+		return Self{total: start + 5}
+	end 'create'
+
+	function read() returns Count
+		return self.total
+	end 'read'
+end 'Tally'
+
+type Holder
+	var tally = Tally.create(0)
+
+	static function create() returns Holder
+		return Self{}
+	end 'create'
+
+	function total() returns Count
+		return self.tally.read()
+	end 'total'
+end 'Holder'
+
+let Shared = Holder.create()
+
+function main() returns ExitCode
+	return Shared.total() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.create-negative-capacity-is-refused -->
+`create(n)` takes an `ElementIndex` as `resize` does, so a literal negative is refused where it is written.
+```maxon
+function main() returns ExitCode
+	let bytes = ByteArray.create(-1)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:14: Value -1 is outside the range of 'ElementIndex' (int(0 to 18446744073709551615))
+```
+
+<!-- test: error.create-capacity-from-a-signed-domain-must-be-proven -->
+A capacity that may be negative is not an `ElementIndex` until a cast proves it, exactly as for `resize`.
+```maxon
+function main() returns ExitCode
+	var wanted = 5 as FullRangeInt
+	wanted = wanted - 10
+	let bytes = ByteArray.create(wanted)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:14: argument type mismatch for 'newLength': expected 'ElementIndex', got 'FullRangeInt'
+```
+
+<!-- test: create-with-a-capacity-proven-by-a-cast-runs -->
+```maxon
+function sized(wanted FullRangeInt) returns Count
+	let size = wanted as ElementIndex
+	let bytes = ByteArray.create(size)
+
+	return bytes.count()
+end 'sized'
+
+function main() returns ExitCode
+	return sized(12) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```

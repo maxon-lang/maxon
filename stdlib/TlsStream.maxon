@@ -58,7 +58,7 @@ public type TlsStream
 	end 'establish'
 
 	module static function unshaken(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream
-		return Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(), consumed: 0, unread: ByteArray.create(), unreadConsumed: 0, writeClosed: false, writeHealth: TlsWriteHealth.intact, closed: false, phase: TlsHandshakePhase.pending, handshakeDeadlineMs: deadlineMs, readDeadlineMs: NoDeadlineMs, writeDeadlineMs: NoDeadlineMs}
+		return Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(0), consumed: 0, unread: ByteArray.create(0), unreadConsumed: 0, writeClosed: false, writeHealth: TlsWriteHealth.intact, closed: false, phase: TlsHandshakePhase.pending, handshakeDeadlineMs: deadlineMs, readDeadlineMs: NoDeadlineMs, writeDeadlineMs: NoDeadlineMs}
 	end 'unshaken'
 
 	/// Run the handshake if it has not run; returns at once when it has completed. `send`, `recv` and
@@ -349,7 +349,7 @@ public type TlsStream
 
 		try requireIntactWrites()
 
-		var wire = ByteArray.create()
+		var wire = ByteArray.create(0)
 
 		for record in records 'eachRecord'
 			wire.append(record)

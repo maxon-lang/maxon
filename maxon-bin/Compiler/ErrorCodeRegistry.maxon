@@ -1166,6 +1166,9 @@ export enum ErrorCode
 	// The same call is refused for an inline element whose range excludes zero (`int(1 to 100)`): the grown
 	// slots hold zero, which is not a value of the element. So are the other producers of slots nothing
 	// wrote, over such an element: `__ManagedMemory.setLength` and `FixedArray.create`.
+	// `Array.create(n)` and `create(n, zeroed: true)` over such an element are refused the same way, because
+	// they publish `n` zeroed slots. `create(0)` is legal for every element, and `create(n, zeroed: false)`
+	// reserves room for `n` elements and publishes none; append with `push(value)`.
 	// The refusal covers the WHOLE call and not only its growing half, because which half a
 	// `resize(n)` is cannot be known until it runs: `n` is compared against a length, and a
 	// compiler holds neither. The two halves therefore split by NAME. Growing supplies the element

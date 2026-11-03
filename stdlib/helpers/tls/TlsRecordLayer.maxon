@@ -128,7 +128,7 @@ module type TlsRecordWriter
 	var changeCipherSpecWritten as bool
 
 	module static function create(firstVersion TlsRecordVersion) returns TlsRecordWriter
-		return Self{cipher: TlsPlaintextCipher.create(firstVersion), records: ByteArrays.create(), changeCipherSpecWritten: false}
+		return Self{cipher: TlsPlaintextCipher.create(firstVersion), records: ByteArrays.create(0), changeCipherSpecWritten: false}
 	end 'create'
 
 	module function install(next TlsRecordCipher)
@@ -144,7 +144,7 @@ module type TlsRecordWriter
 	end 'writeApplicationData'
 
 	module function writeAlert(level TlsAlertLevel, alert TlsAlert) throws TlsHandshakeError
-		var body = ByteArray.create()
+		var body = ByteArray.create(0)
 		body.push(level.rawValue as Byte)
 		body.push(alert.rawValue as Byte)
 
@@ -245,7 +245,7 @@ public type TlsRecordInput
 	public var receivedAlert as TlsReceivedAlert
 
 	module static function create() returns TlsRecordInput
-		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(), consumed: 0, uselessRecords: 0, stagedCipher: TlsStagedCipher.none, version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false, receivedAlert: TlsReceivedAlert.none}
+		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(0), consumed: 0, uselessRecords: 0, stagedCipher: TlsStagedCipher.none, version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false, receivedAlert: TlsReceivedAlert.none}
 	end 'create'
 
 	module function install(next TlsRecordCipher)

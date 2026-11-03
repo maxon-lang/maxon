@@ -51,8 +51,7 @@ function poly1305Limb(source ByteArray, base ElementIndex, limit ElementIndex, i
 end 'poly1305Limb'
 
 function poly1305Multiplier(key ByteArray) returns Poly1305Words
-	var limbs = Poly1305Words.create()
-	limbs.reserve(poly1305LimbCount)
+	var limbs = Poly1305Words.create(poly1305LimbCount, zeroed: false)
 
 	for (iter, clamp) in poly1305ClampMasks.withIterator() 'eachLimb'
 		limbs.push(poly1305Limb(key, base: 0, limit: poly1305KeyBytes, index: iter.index() as Poly1305LimbIndex) and clamp)
@@ -78,8 +77,7 @@ end 'poly1305Select'
 // h + 5 carries past 2^130 exactly when h ≥ p = 2^130 − 5, and then its low 130 bits are h − p. The
 // result is selected by mask, never by branch, so the time does not depend on h.
 function poly1305Reduced(limbs Poly1305Words) returns Poly1305Words
-	var subtracted = Poly1305Words.create()
-	subtracted.reserve(poly1305LimbCount)
+	var subtracted = Poly1305Words.create(poly1305LimbCount, zeroed: false)
 	var carry = poly1305ReductionFactor
 
 	for limb in limbs 'eachLimb'
@@ -89,8 +87,7 @@ function poly1305Reduced(limbs Poly1305Words) returns Poly1305Words
 	end 'eachLimb'
 
 	let mask = carry * poly1305AllOnes
-	var reduced = Poly1305Words.create()
-	reduced.reserve(poly1305LimbCount)
+	var reduced = Poly1305Words.create(poly1305LimbCount, zeroed: false)
 
 	for (iter, limb) in limbs.withIterator() 'eachSelected'
 		let alternative = try subtracted.get(iter.index()) otherwise panic("poly1305: limb index unreachable")
@@ -102,8 +99,7 @@ end 'poly1305Reduced'
 
 function poly1305Tag(limbs Poly1305Words, key ByteArray) returns ByteArray
 	let reduced = poly1305Reduced(limbs)
-	var tag = ByteArray.create()
-	tag.reserve(poly1305BlockBytes)
+	var tag = ByteArray.create(poly1305BlockBytes, zeroed: false)
 	var carry = poly1305ZeroWord
 
 	for k in 0 upto poly1305TagWords 'eachWord'

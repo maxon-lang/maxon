@@ -57,7 +57,7 @@ module type Tls12ServerFlow implements TlsMessageHandler
 		session.alpn = choice.alpn
 		session.transcript.append(raw)
 
-		var flight = ByteArray.create()
+		var flight = ByteArray.create(0)
 
 		try session.emit(flight, message: TlsHandshakeMessage.serverHello(tls12ServerHello(choice, parameters: parameters)))
 		try session.emit(flight, message: TlsHandshakeMessage.tls12Certificate(config.chain))
@@ -211,7 +211,7 @@ function tls12ServerRandom(config TlsServerConfig, entropy TlsServerEntropy) ret
 end 'tls12ServerRandom'
 
 function tls12ServerHello(choice Tls12ServerChoice, parameters Tls12Parameters) returns TlsServerHello
-	var extensions = TlsExtensionArray.create()
+	var extensions = TlsExtensionArray.create(0)
 
 	if choice.acknowledgesName 'name'
 		extensions.push(TlsExtension.serverNameAcknowledgement)
@@ -222,7 +222,7 @@ function tls12ServerHello(choice Tls12ServerChoice, parameters Tls12Parameters) 
 	end 'extended'
 
 	if choice.secureRenegotiation 'renegotiation'
-		extensions.push(TlsExtension.renegotiationInfo(ByteArray.create()))
+		extensions.push(TlsExtension.renegotiationInfo(ByteArray.create(0)))
 	end 'renegotiation'
 
 	if choice.answersPointFormats 'pointFormats'
@@ -231,7 +231,7 @@ function tls12ServerHello(choice Tls12ServerChoice, parameters Tls12Parameters) 
 
 	choice.alpn.appendTo(extensions)
 
-	return TlsServerHello.create(tlsLegacyVersion, random: parameters.serverRandom, legacySessionIdEcho: ByteArray.create(), cipherSuite: choice.suite.rawValue as TlsCipherSuiteCode, compressionMethod: tlsNullCompression, extensions: TlsExtensionBlock.listed(extensions))
+	return TlsServerHello.create(tlsLegacyVersion, random: parameters.serverRandom, legacySessionIdEcho: ByteArray.create(0), cipherSuite: choice.suite.rawValue as TlsCipherSuiteCode, compressionMethod: tlsNullCompression, extensions: TlsExtensionBlock.listed(extensions))
 end 'tls12ServerHello'
 
 function tls12KeyExchange(config TlsServerConfig, entropy TlsServerEntropy, choice Tls12ServerChoice, parameters Tls12Parameters, secret TlsKeySecret) returns Tls12ServerKeyExchange throws TlsHandshakeError
@@ -241,7 +241,7 @@ function tls12KeyExchange(config TlsServerConfig, entropy TlsServerEntropy, choi
 end 'tls12KeyExchange'
 
 function tls12CertificateRequest(config TlsServerConfig) returns TlsHandshakeMessage
-	var authorities = TlsAuthorityNameArray.create()
+	var authorities = TlsAuthorityNameArray.create(0)
 
 	for authority in config.clientAuthorities 'eachAuthority'
 		authorities.push(authority)

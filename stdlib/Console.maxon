@@ -26,7 +26,7 @@ public type Stdin
 	var eofSeen as bool
 
 	public static function create() returns Stdin
-		return Self{pending: ByteArray.create(), eofSeen: false}
+		return Self{pending: ByteArray.create(0), eofSeen: false}
 	end 'create'
 
 	/// True when the last underlying read returned 0 AND no buffered bytes remain.
@@ -135,7 +135,7 @@ public type Stdin
 	// Remove and return the first `n` bytes of `pending`. Caller must ensure
 	// `n <= pending.count()`.
 	function takePrefix(n BytePos) returns ByteArray
-		var out = ByteArray.create()
+		var out = ByteArray.create(0)
 		var i = 0 as BytePos
 
 		while i < n 'copy'
@@ -159,7 +159,7 @@ public type Stdin
 	// Shift `pending` left by `n`, discarding the first `n` bytes.
 	function shiftLeft(n BytePos)
 		let len = pending.count()
-		var rebuilt = ByteArray.create()
+		var rebuilt = ByteArray.create(0)
 		var i = n
 
 		while i < len as BytePos 'copy'
@@ -192,7 +192,7 @@ function stripTrailingCRBytes(bytes ByteArray) returns ByteArray
 		return bytes
 	end 'noCR'
 
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	var i = 0 as ElementIndex
 
 	while i < len - 1 'copy'

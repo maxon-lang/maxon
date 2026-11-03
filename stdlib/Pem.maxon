@@ -49,7 +49,7 @@ type PemScanner
 	var boundarySuffix as ByteArray
 
 	static function create() returns PemScanner
-		return PemScanner{blocks: PemBlocks.create(), inBlock: false, label: ByteArray.create(), body: ByteArray.create(), beginPrefix: PemBeginPrefix.toByteArray(), endPrefix: PemEndPrefix.toByteArray(), boundarySuffix: PemBoundarySuffix.toByteArray()}
+		return PemScanner{blocks: PemBlocks.create(0), inBlock: false, label: ByteArray.create(0), body: ByteArray.create(0), beginPrefix: PemBeginPrefix.toByteArray(), endPrefix: PemEndPrefix.toByteArray(), boundarySuffix: PemBoundarySuffix.toByteArray()}
 	end 'create'
 
 	function accept(line ByteArray) throws PemError
@@ -58,7 +58,7 @@ type PemScanner
 
 			if isBegin(line, boundaryLength: boundaryLength) 'begins'
 				label = labelOf(line, boundaryLength: boundaryLength)
-				body = ByteArray.create()
+				body = ByteArray.create(0)
 				inBlock = true
 			end 'begins'
 
@@ -205,7 +205,7 @@ public type Pem
 	/// a line starting `-----BEGIN ` is `unterminatedBlock`.
 	public static function decode(text String) returns PemBlocks throws PemError
 		var scanner = PemScanner.create()
-		var line = ByteArray.create()
+		var line = ByteArray.create(0)
 
 		// Bytes, because a `\r\n` is one grapheme: a character scan never sees its line feed.
 		for byte in text.bytes() 'eachByte'
@@ -230,7 +230,7 @@ public type Pem
 		end 'invalid'
 
 		let symbols = Base64.encode(data)
-		var text = ByteArray.create()
+		var text = ByteArray.create(0)
 		var column = 0 as Count
 
 		pemAppendBoundary(text, prefix: PemBeginPrefix, label: label)

@@ -655,7 +655,9 @@ Output: `1 5 9` and `4 9 -1 true`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `Array.create()` | `Array` | An empty array. |
+| `Array.create()` | `Array` | An empty array; `Array.create(0)` is the same array. |
+| `Array.create(n)` | `Array` | `n` zero-valued elements, in one allocation. `n` is an `ElementIndex`. Refused at compile time (E3106) for an element type with no zero value — a struct, a `String`, a nested container, or a ranged alias that excludes 0; create those with `create(n, zeroed: false)`. |
+| `Array.create(n, zeroed: false)` | `Array` | An empty array with room for `n` elements, in one allocation; append with `push`. `n` is an `ElementIndex` and `zeroed:` is a literal `true` or `false`. Available for every element type. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
 | `clone()` | `Array` | An independent copy. Each record, `String` or union element is cloned; an array of scalars shares its storage copy-on-write, which separates on the first write to either, unless the storage was created at a known size of at most 256 bytes, which is copied at once. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is refused (an element slot is one machine word). A copy of an element that is or holds a promise is E3141, here and at `slice` and `append`. |
 | `Array.from(source Iterable)` | `Array` | Collect every element of an iterable, called through an alias (`ScoreArray.from(range)`). The iterable must bind `Element` to the alias's own element (E3127). |
@@ -693,8 +695,8 @@ Output: `1 5 9` and `4 9 -1 true`.
 
 | Member | Description |
 |--------|-------------|
-| `reserve(minCapacity)` | Ensure at least `minCapacity` slots. A capacity no allocation can satisfy (`u64.max`) panics. |
-| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container — and for a ranged alias that excludes 0. Use `growFilled` or `truncate` for those. |
+| `reserve(minCapacity)` | Ensure an existing array has at least `minCapacity` slots; a new array is sized by `create(n, zeroed: false)`. A capacity no allocation can satisfy (`u64.max`) panics. |
+| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container — and for a ranged alias that excludes 0, as `create(n)` is. Use `growFilled` or `truncate` for those. |
 | `truncate(newLength)` | Shorten to `newLength`, releasing the removed elements. A longer `newLength` does nothing. |
 | `growFilled(newLength, value Element)` | Lengthen to `newLength`, setting only the added elements to `value`. Grows capacity geometrically, so repeated small extensions stay amortized linear. A shorter `newLength` does nothing. |
 | `refill(newLength, value Element)` | Set the length to `newLength` and write `value` into every element, growing or shrinking. |
@@ -3700,10 +3702,8 @@ XOR of their plaintexts, and let an attacker forge tags.
 
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
-	key.resize(32)
-	var nonce = ByteArray.create()
-	nonce.resize(12)
+	let key = ByteArray.create(32)
+	let nonce = ByteArray.create(12)
 
 	let aead = try ChaCha20Poly1305.create(key) otherwise return 1
 	let sealed = try aead.seal(nonce, plaintext: "hello".toByteArray(), additionalData: "v1".toByteArray()) otherwise return 1

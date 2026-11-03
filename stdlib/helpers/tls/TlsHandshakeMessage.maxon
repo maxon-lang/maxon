@@ -293,7 +293,7 @@ public union TlsHandshakeMessage
 	end 'handshakeType'
 
 	function encodedBody() returns ByteArray throws TlsEncodeError
-		var body = ByteArray.create()
+		var body = ByteArray.create(0)
 
 		match self 'message'
 			helloRequest or
@@ -343,7 +343,7 @@ public type TlsHandshakeCodec
 	/// The message with its 4-byte header and minimal-width length prefixes; `encode(decode(m)) == m`
 	/// for every `m` that decodes.
 	public static function encode(message TlsHandshakeMessage) returns ByteArray throws TlsEncodeError
-		var encoded = ByteArray.create()
+		var encoded = ByteArray.create(0)
 		appendUnsigned(encoded, value: message.handshakeType().rawValue as TlsWireValue, width: TlsWireWidth.uint8)
 		try appendVector(encoded, prefix: TlsLengthPrefix.uint24, contents: try message.encodedBody())
 
@@ -374,7 +374,7 @@ function decodeClientHello(body TlsReader) returns TlsHandshakeMessage throws Tl
 	let random = try body.readBytes(tlsRandomBytes)
 	let sessionId = try body.readBoundedVectorBytes(TlsLengthPrefix.uint8, minimum: tlsAnyLength, maximum: tlsMaxSessionIdBytes)
 	var suites = try body.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
-	var cipherSuites = TlsCipherSuiteCodeArray.create()
+	var cipherSuites = TlsCipherSuiteCodeArray.create(0)
 
 	while not suites.isAtEnd() 'eachSuite'
 		cipherSuites.push((try suites.readUnsigned(TlsWireWidth.uint16)) as TlsCipherSuiteCode)
@@ -445,7 +445,7 @@ end 'decodeCertificate'
 function decodeTls13Certificate(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
 	let requestContext = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsAnyLength)
 	var list = try body.readVector(TlsLengthPrefix.uint24, minimum: tlsAnyLength)
-	var entries = TlsCertificateEntryArray.create()
+	var entries = TlsCertificateEntryArray.create(0)
 
 	while not list.isAtEnd() 'eachEntry'
 		let certificate = try list.readVectorBytes(TlsLengthPrefix.uint24, minimum: tlsNonEmpty)
@@ -458,7 +458,7 @@ end 'decodeTls13Certificate'
 
 function decodeTls12Certificate(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
 	var list = try body.readVector(TlsLengthPrefix.uint24, minimum: tlsAnyLength)
-	var certificates = ByteArrays.create()
+	var certificates = ByteArrays.create(0)
 
 	while not list.isAtEnd() 'eachCertificate'
 		certificates.push(try list.readVectorBytes(TlsLengthPrefix.uint24, minimum: tlsNonEmpty))
@@ -487,7 +487,7 @@ function decodeTls12CertificateRequest(body TlsReader) returns TlsHandshakeMessa
 	let certificateTypes = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsNonEmpty)
 	var schemes = try body.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
 	var list = try body.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
-	var authorities = TlsAuthorityNameArray.create()
+	var authorities = TlsAuthorityNameArray.create(0)
 
 	while not list.isAtEnd() 'eachAuthority'
 		authorities.push(try list.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsNonEmpty))
@@ -535,7 +535,7 @@ function appendClientHello(body ByteArray, hello TlsClientHello) throws TlsEncod
 end 'appendClientHello'
 
 function appendCipherSuites(output ByteArray, suites TlsCipherSuiteCodeArray) throws TlsEncodeError
-	var list = ByteArray.create()
+	var list = ByteArray.create(0)
 
 	for suite in suites 'eachSuite'
 		appendUnsigned(list, value: suite, width: TlsWireWidth.uint16)
@@ -562,7 +562,7 @@ function appendNewSessionTicket(body ByteArray, ticket TlsNewSessionTicket) thro
 end 'appendNewSessionTicket'
 
 function appendTls13Certificate(body ByteArray, requestContext ByteArray, entries TlsCertificateEntryArray) throws TlsEncodeError
-	var list = ByteArray.create()
+	var list = ByteArray.create(0)
 
 	for entry in entries 'eachEntry'
 		try appendVector(list, prefix: TlsLengthPrefix.uint24, contents: entry.certificate())
@@ -574,7 +574,7 @@ function appendTls13Certificate(body ByteArray, requestContext ByteArray, entrie
 end 'appendTls13Certificate'
 
 function appendTls12Certificate(body ByteArray, certificates ByteArrays) throws TlsEncodeError
-	var list = ByteArray.create()
+	var list = ByteArray.create(0)
 
 	for certificate in certificates 'eachCertificate'
 		try appendVector(list, prefix: TlsLengthPrefix.uint24, contents: certificate)
@@ -589,7 +589,7 @@ function appendTls13CertificateRequest(body ByteArray, requestContext ByteArray,
 end 'appendTls13CertificateRequest'
 
 function appendTls12CertificateRequest(body ByteArray, request Tls12CertificateRequest) throws TlsEncodeError
-	var list = ByteArray.create()
+	var list = ByteArray.create(0)
 
 	for authority in request.authorities 'eachAuthority'
 		try appendVector(list, prefix: TlsLengthPrefix.uint16, contents: authority)
@@ -606,7 +606,7 @@ function appendCertificateVerify(body ByteArray, scheme TlsSignatureSchemeCode, 
 end 'appendCertificateVerify'
 
 module function tlsServerKeyExchangeParameters(namedGroup TlsGroupCode, publicKey ByteArray) returns ByteArray throws TlsEncodeError
-	var parameters = ByteArray.create()
+	var parameters = ByteArray.create(0)
 	appendUnsigned(parameters, value: tlsNamedCurveType, width: TlsWireWidth.uint8)
 	appendUnsigned(parameters, value: namedGroup, width: TlsWireWidth.uint16)
 	try appendVector(parameters, prefix: TlsLengthPrefix.uint8, contents: publicKey)

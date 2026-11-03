@@ -254,12 +254,14 @@ function main() returns ExitCode
 end 'main'
 ```
 
-**Sizing an array.** `create()` makes an empty array; `push(value)` appends; `reserve(n)` grows capacity
-without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so it is available
-only for elements stored inline — integers, floats, `bool`, payload-free enums — whose type admits zero. For an
-array of records, strings or other managed values, or of an alias whose range excludes 0 (`int(1 to 100)`),
-`resize` is **E3106**; grow with `push` or `growFilled(n, value:)` and shrink
-with `truncate(n)`:
+**Sizing an array.** `create()` and `create(0)` make an empty array. `create(n)` makes `n` zero elements and
+`create(n, zeroed: false)` an empty array with room for `n`, each in one allocation; `n` is an `ElementIndex`
+and `zeroed:` a literal `true` or `false`. `push(value)` appends; `reserve(n)` grows the capacity of an existing
+array without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so `resize` and
+`create(n)` are available only for elements stored inline — integers, floats, `bool`, payload-free enums —
+whose type admits zero. For an array of records, strings or other managed values, or of an alias whose range
+excludes 0 (`int(1 to 100)`), `resize` and `create(n)` are **E3106**; create with `create(n, zeroed: false)`,
+grow with `push` or `growFilled(n, value:)` and shrink with `truncate(n)`:
 
 ```maxon
 typealias Names = Array with String

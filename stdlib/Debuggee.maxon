@@ -45,7 +45,7 @@ let LowDwordMask = 0xFFFFFFFF
 let HighDwordShift = 32
 
 function wordToBytes(word RegisterWord) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for lane in 0 upto WordBytes 'eachByte'
 		bytes.push((word shr ((lane * BitsPerByte) as BitShift)) and 0xFF)
@@ -124,7 +124,7 @@ module type ScratchPages
 	end 'addressOf'
 
 	module function bytesAt(offset ScratchOffset, count DebuggeeByteCount) returns ByteArray
-		var taken = ByteArray.create()
+		var taken = ByteArray.create(0)
 		var index = 0 as DebuggeeByteCount
 
 		while index < count 'eachWord'
@@ -160,7 +160,7 @@ public type RegisterBlock
 	let words as RegisterWordArray
 
 	module static function readFrom(pages ScratchPages, at ScratchOffset, length ScratchBytes) returns RegisterBlock
-		var words = RegisterWordArray.create()
+		var words = RegisterWordArray.create(0)
 		var index = 0 as ScratchBytes
 
 		while index < length 'eachWord'
@@ -517,7 +517,7 @@ public type DebugPort
 		let wanted = try transferIsWanted(count as TransferByteCount, refusal: DebuggeeError.unreadable)
 
 		if not wanted 'nothingAsked'
-			return ByteArray.create()
+			return ByteArray.create(0)
 		end 'nothingAsked'
 
 		self.scratch.setWord(OutWordSlot, value: 0)
@@ -867,7 +867,7 @@ public type ProcessTrace
 		let wanted = try transferIsWanted(count as TransferByteCount, refusal: DebuggeeError.unreadable)
 
 		if not wanted 'nothingAsked'
-			return ByteArray.create()
+			return ByteArray.create(0)
 		end 'nothingAsked'
 
 		self.scratch.setWord(TraceReadCountSlot, value: 0)

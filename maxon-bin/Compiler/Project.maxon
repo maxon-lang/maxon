@@ -6824,8 +6824,9 @@ export union FieldDefault
 	// and a call result cannot be.
 	helper(let name ByteArray)
 
-	// ⭐⭐ **THE DEFAULT IS A BARE `<Type>.create()`, AND THAT IS THE ONE EXPRESSION SHAPE A READER IN
-	// ANOTHER FILE CAN DESCRIBE WITHOUT RUNNING IT.** It synthesizes the same helper the arm above does, and
+	// ⭐⭐ **THE DEFAULT IS AN EMPTY `<Type>.create()` (`create(0)` AND `create(0, zeroed: …)` BUILD THE SAME
+	// ARRAY), AND THAT IS THE ONE EXPRESSION SHAPE A READER IN ANOTHER FILE CAN DESCRIBE WITHOUT RUNNING
+	// IT.** It synthesizes the same helper the arm above does, and
 	// every reader that wants only the callee treats the two alike; what this arm adds is that the slot's
 	// value is the EMPTY container its declared type denotes — which is what lets a `let` holding a `Map` or
 	// a `Set` be laid down as bytes (`ProgramSignatures.declaredContainerBoxIsImageData`).
@@ -6836,7 +6837,7 @@ export union FieldDefault
 	// lays down, so it must change the hash.
 	//
 	// ⚠ Declared after `helper`.
-	bareCreateHelper(let name ByteArray)
+	emptyCreateHelper(let name ByteArray)
 end 'FieldDefault'
 
 // @generated library-cache begin
@@ -6847,7 +6848,7 @@ function cacheWriteFieldDefault(writer LibraryCacheWriter, value FieldDefault)
 		none then break
 		literal(a0) then cacheWriteFieldDefaultLiteral(writer, a0: a0)
 		helper(a0) then cacheWriteFieldDefaultHelper(writer, a0: a0)
-		bareCreateHelper(a0) then cacheWriteFieldDefaultBareCreateHelper(writer, a0: a0)
+		emptyCreateHelper(a0) then cacheWriteFieldDefaultEmptyCreateHelper(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteFieldDefault'
 
@@ -6859,9 +6860,9 @@ function cacheWriteFieldDefaultHelper(writer LibraryCacheWriter, a0 ByteArray)
 	writer.bytes(a0)
 end 'cacheWriteFieldDefaultHelper'
 
-function cacheWriteFieldDefaultBareCreateHelper(writer LibraryCacheWriter, a0 ByteArray)
+function cacheWriteFieldDefaultEmptyCreateHelper(writer LibraryCacheWriter, a0 ByteArray)
 	writer.bytes(a0)
-end 'cacheWriteFieldDefaultBareCreateHelper'
+end 'cacheWriteFieldDefaultEmptyCreateHelper'
 
 function cacheReadFieldDefault(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
 	let tag = try reader.unsigned()
@@ -6870,7 +6871,7 @@ function cacheReadFieldDefault(reader LibraryCacheReader) returns FieldDefault t
 		0 gives FieldDefault.none
 		1 gives try cacheReadFieldDefaultLiteral(reader)
 		2 gives try cacheReadFieldDefaultHelper(reader)
-		3 gives try cacheReadFieldDefaultBareCreateHelper(reader)
+		3 gives try cacheReadFieldDefaultEmptyCreateHelper(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadFieldDefault'
@@ -6887,11 +6888,11 @@ function cacheReadFieldDefaultHelper(reader LibraryCacheReader) returns FieldDef
 	return FieldDefault.helper(a0)
 end 'cacheReadFieldDefaultHelper'
 
-function cacheReadFieldDefaultBareCreateHelper(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
+function cacheReadFieldDefaultEmptyCreateHelper(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
 	let a0 = try reader.bytes()
 
-	return FieldDefault.bareCreateHelper(a0)
-end 'cacheReadFieldDefaultBareCreateHelper'
+	return FieldDefault.emptyCreateHelper(a0)
+end 'cacheReadFieldDefaultEmptyCreateHelper'
 
 // @generated library-cache end
 

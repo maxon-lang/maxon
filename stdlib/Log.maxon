@@ -38,7 +38,7 @@ public type LogField
 	end 'dottedKey'
 
 	function under(outer LogGroupPath) returns LogField
-		var path = LogGroupPath.create()
+		var path = LogGroupPath.create(0)
 
 		for group in outer 'eachOuter'
 			path.push("{group}")
@@ -76,16 +76,16 @@ public type LogAttr
 	end 'bool'
 
 	public static function group(name String, attrs LogAttrArray) returns LogAttr
-		var path = LogGroupPath.create()
+		var path = LogGroupPath.create(0)
 		path.push(name)
-		var collected = LogFieldArray.create()
+		var collected = LogFieldArray.create(0)
 		appendLogFields(attrs, groups: path, into: collected)
 		return LogAttr{fields: collected}
 	end 'group'
 
 	static function single(key String, value LogValue) returns LogAttr
-		var collected = LogFieldArray.create()
-		collected.push(LogField.create(key, value: value, groups: LogGroupPath.create()))
+		var collected = LogFieldArray.create(0)
+		collected.push(LogField.create(key, value: value, groups: LogGroupPath.create(0)))
 		return LogAttr{fields: collected}
 	end 'single'
 end 'LogAttr'
@@ -325,7 +325,7 @@ end 'LogSink'
 let LogHandOverTimeoutMs = 10000 as Milliseconds
 
 function ownedLogRecord(time UnixNanos, level LogLevel, message String, bound LogFieldArray, attrs LogAttrArray, groups LogGroupPath, file String, line SourceLineNumber) returns LogRecord
-	var fields = LogFieldArray.create()
+	var fields = LogFieldArray.create(0)
 
 	for field in bound 'eachBound'
 		fields.push(field.clone())
@@ -344,31 +344,31 @@ default LogSink = LogSink.create(spawn TextLogHandler.create(LogHandlerOptions.s
 public type Log
 	/// Logs `message` at `level`. `file` and `line` default to the caller's; a wrapper forwards its
 	/// own so the record names the wrapper's caller.
-	public static function log(level LogLevel, message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function log(level LogLevel, message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		let sink = LogSink.current()
 
 		if sink.enabled(level) 'enabled'
-			sink.write(level, message: message, bound: LogFieldArray.create(), attrs: attrs, groups: LogGroupPath.create(), file: file, line: line)
+			sink.write(level, message: message, bound: LogFieldArray.create(0), attrs: attrs, groups: LogGroupPath.create(0), file: file, line: line)
 		end 'enabled'
 	end 'log'
 
-	public static function trace(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function trace(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		Log.log(LogLevel.trace, message: message, attrs: attrs, file: file, line: line)
 	end 'trace'
 
-	public static function debug(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function debug(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		Log.log(LogLevel.debug, message: message, attrs: attrs, file: file, line: line)
 	end 'debug'
 
-	public static function info(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function info(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		Log.log(LogLevel.info, message: message, attrs: attrs, file: file, line: line)
 	end 'info'
 
-	public static function warn(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function warn(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		Log.log(LogLevel.warn, message: message, attrs: attrs, file: file, line: line)
 	end 'warn'
 
-	public static function error(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function error(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		Log.log(LogLevel.error, message: message, attrs: attrs, file: file, line: line)
 	end 'error'
 
@@ -416,7 +416,7 @@ public type Logger
 	let levelKeys as LogGroupPath
 
 	static function over(sink LogSink) returns Logger
-		return Logger{sink: sink, bound: LogFieldArray.create(), groups: LogGroupPath.create(), levelKeys: LogGroupPath.create()}
+		return Logger{sink: sink, bound: LogFieldArray.create(0), groups: LogGroupPath.create(0), levelKeys: LogGroupPath.create(0)}
 	end 'over'
 
 	/// A logger that adds `attrs` to every record.
@@ -466,29 +466,29 @@ public type Logger
 		self.sink.clearGroupLevel(group)
 	end 'clearGroupLevel'
 
-	public function log(level LogLevel, message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public function log(level LogLevel, message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		if self.enabled(level) 'enabled'
 			self.sink.write(level, message: message, bound: self.bound, attrs: attrs, groups: self.groups, file: file, line: line)
 		end 'enabled'
 	end 'log'
 
-	public function trace(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public function trace(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		self.log(LogLevel.trace, message: message, attrs: attrs, file: file, line: line)
 	end 'trace'
 
-	public function debug(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public function debug(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		self.log(LogLevel.debug, message: message, attrs: attrs, file: file, line: line)
 	end 'debug'
 
-	public function info(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public function info(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		self.log(LogLevel.info, message: message, attrs: attrs, file: file, line: line)
 	end 'info'
 
-	public function warn(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public function warn(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		self.log(LogLevel.warn, message: message, attrs: attrs, file: file, line: line)
 	end 'warn'
 
-	public function error(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public function error(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		self.log(LogLevel.error, message: message, attrs: attrs, file: file, line: line)
 	end 'error'
 end 'Logger'

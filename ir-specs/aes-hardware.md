@@ -3475,30 +3475,29 @@ func @main {
   __il_body#31:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.lsr x0, x0, 2
-    arm64.add x21, x0, 6
+    arm64.add x0, x0, 6
+    arm64.add x0, x0, 1
+    arm64.lsl x2, x0, 5
     arm64.movImm x0, 1
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x22, x0
-    arm64.add x0, x21, 1
-    arm64.lsl x1, x0, 5
-    arm64.movRegReg x0, x22
-    arm64.bl __managed_resize
-    arm64.movRegReg x0, x22
+    arm64.movImm x3, 0
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
     arm64.bl __cpufeat_aes_cipher_expand_key
   __il_cont#30:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x21, x0
+    arm64.movRegReg x22, x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x21 + 0], x0
-    arm64.storeBaseDispReg.word64 [x21 + 8], x22
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.storeBaseDispReg.word64 [x0 + 0], x22
     arm64.movRegReg x21, x0
     arm64.b tryok#1
   __il_body#144:
@@ -3996,7 +3995,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x22 + 0]
     arm64.b __im_detached#91
   __rc_panic#37:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:790: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:782: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4371,30 +4370,29 @@ func @main {
   __il_body#31:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.lsr x0, x0, 2
-    arm64.add x21, x0, 6
+    arm64.add x0, x0, 6
+    arm64.add x0, x0, 1
+    arm64.lsl x2, x0, 5
     arm64.movImm x0, 1
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x22, x0
-    arm64.add x0, x21, 1
-    arm64.lsl x1, x0, 5
-    arm64.movRegReg x0, x22
-    arm64.bl __managed_resize
-    arm64.movRegReg x0, x22
+    arm64.movImm x3, 0
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
     arm64.bl __cpufeat_aes_cipher_expand_key
   __il_cont#30:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x21, x0
+    arm64.movRegReg x22, x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x21 + 0], x0
-    arm64.storeBaseDispReg.word64 [x21 + 8], x22
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.storeBaseDispReg.word64 [x0 + 0], x22
     arm64.movRegReg x21, x0
     arm64.b tryok#1
   __il_body#144:
@@ -4892,7 +4890,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x22 + 0]
     arm64.b __im_detached#91
   __rc_panic#37:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:790: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:782: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5

@@ -149,6 +149,14 @@ makes `HttpServer.serve` serve each connection in place and withdraws the `expor
 message (E3167), so `C1` only serves one connection at a time. The `spawn` stays in the tree, which is what lets
 `C1` build the unshimmed tree.
 
+⭐ **A STDLIB CALL-SITE SPELLING THE SEED'S PARSER CANNOT READ IS THE ELEVENTH CASE.** The tree's `stdlib/` sizes
+an array where it creates it — `create(n)` and `create(n, zeroed: false)` — a call the seed's parser reads only as
+`create()`, so the library linked into `C1` is refused. The patch writes each such site back as `create()` followed
+by `resize(n)` or `reserve(n)`, and `create(0)` as `create()`. Only the library's call sites change: the compiler's
+own parse of the form stays, which is what lets `C1` compile the unshimmed library. It is hand-written and numbered
+`0005`, below the generated patch, because the generator computes its hunks over every other patch here and refuses
+one that sorts after it.
+
 ⛔ **The commit that pins a new seed deletes every patch.** A patch here is what makes CI freeze, prove and pin
 that seed (`docs/RELEASING.md`), and `scripts/pin-seed.sh` deletes them all in the pinning commit once the seed
 has built the tree with none. A patch is dead from that moment — the plain build succeeds before anything here

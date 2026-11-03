@@ -499,7 +499,7 @@
 					throw SamplerError.noSuchProcess
 				end 'noSuchProcess'
 
-				var sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(), captures: CaptureSerialCell.create(0 as CaptureSerial)}
+				var sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(0), captures: CaptureSerialCell.create(0 as CaptureSerial)}
 
 				if not sampled.scratch.held() or not sampled.window.held() 'noPages'
 					sampled.close()
@@ -536,7 +536,7 @@
 					throw SamplerError.accessDenied
 				end 'refused'
 
-				let sampled = Self{process: __ManagedHandle.adopting(port), pid: pid as RegisterWord, scratch: scratch, window: window, openThreads: OpenThreadArray.create(), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(), pending: PendingStop.none()}
+				let sampled = Self{process: __ManagedHandle.adopting(port), pid: pid as RegisterWord, scratch: scratch, window: window, openThreads: OpenThreadArray.create(0), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(0), pending: PendingStop.none()}
 
 				return sampled
 			#endif
@@ -552,7 +552,7 @@
 					throw SamplerError.threadNotPinned
 				end 'unpinnable'
 
-				var sampled = Self{pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(), pending: PendingStop.none(), trace: ProcessTrace.create(), seized: SeizedThreads.open(pid, pin: pin)}
+				var sampled = Self{pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(0), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(0), pending: PendingStop.none(), trace: ProcessTrace.create(), seized: SeizedThreads.open(pid, pin: pin)}
 
 				if not sampled.scratch.held() or not sampled.window.held() or not sampled.trace.isReady() or not sampled.seized.held() 'noPages'
 					sampled.close()
@@ -587,7 +587,7 @@
 		end 'track'
 
 		public function threads() returns SampledThreadArray
-			var found = SampledThreadArray.create()
+			var found = SampledThreadArray.create(0)
 
 			#if os(Windows) and arch(x64)
 				var cursor = 0 as RegisterWord
@@ -1171,13 +1171,13 @@
 					throw SamplerError.moduleListUnavailable
 				end 'gone'
 
-				return SampledModuleArray.create()
+				return SampledModuleArray.create(0)
 			#endif
 		end 'modules'
 
 		#if os(Macos)
 			function machImages() returns SampledModuleArray
-				var modules = SampledModuleArray.create()
+				var modules = SampledModuleArray.create(0)
 				_ = self.nextCapture()
 				self.scratch.setWord(MachCountSlot, value: MachTaskDyldInfoWords)
 
@@ -1215,7 +1215,7 @@
 
 		#if os(Windows) and arch(x64)
 			function walkedModules(snapshot RegisterWord) returns SampledModuleArray
-				var modules = SampledModuleArray.create()
+				var modules = SampledModuleArray.create(0)
 				self.scratch.setWord(ModuleEntrySizeSlot, value: ModuleEntryBytes)
 				var more = __Builtins.profileModuleFirst(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
 
@@ -1229,7 +1229,7 @@
 			end 'walkedModules'
 
 			function moduleName() returns String
-				var name = ByteArray.create()
+				var name = ByteArray.create(0)
 				var offset = ModuleEntryNameOffset as ScratchOffset
 
 				while offset < ModuleEntryBytes 'eachWord'
@@ -1286,7 +1286,7 @@
 			end 'machTextExtent'
 
 			function machBaseName(path RegisterWord) returns String
-				var name = ByteArray.create()
+				var name = ByteArray.create(0)
 				var address = path
 
 				while address - path < MacosMaxPathLength 'eachChunk'

@@ -508,10 +508,8 @@ XOR of their plaintexts, and let an attacker forge tags.
 
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
-	key.resize(32)
-	var nonce = ByteArray.create()
-	nonce.resize(12)
+	let key = ByteArray.create(32)
+	let nonce = ByteArray.create(12)
 
 	let aead = try ChaCha20Poly1305.create(key) otherwise return 1
 	let sealed = try aead.seal(nonce, plaintext: "hello".toByteArray(), additionalData: "v1".toByteArray()) otherwise return 1

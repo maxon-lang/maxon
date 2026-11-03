@@ -69,8 +69,7 @@ let rsaSha384DigestInfo = ByteArray from [0x30, 0x41, 0x30, 0x0D, 0x06, 0x09, 0x
 let rsaSha512DigestInfo = ByteArray from [0x30, 0x51, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40]
 
 function rsaZeroLimbs(count Count) returns RsaLimbs
-	var limbs = RsaLimbs.create()
-	limbs.reserve(count)
+	var limbs = RsaLimbs.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachLimb'
 		limbs.push(0)
@@ -104,8 +103,7 @@ function rsaLimbsFromBytes(bytes ByteArray, count Count) returns RsaLimbs
 end 'rsaLimbsFromBytes'
 
 function rsaBytesFromLimbs(limbs RsaLimbs, count Count) returns ByteArray
-	var bytes = ByteArray.create()
-	bytes.reserve(count)
+	var bytes = ByteArray.create(count, zeroed: false)
 
 	for offset in 0 upto count 'eachByte'
 		let fromEnd = count - 1 - offset
@@ -370,7 +368,7 @@ type RsaMontgomery
 
 	function powerTable(base RsaLimbs) returns RsaLimbTable
 		let factor = toMontgomery(base)
-		var table = RsaLimbTable.create()
+		var table = RsaLimbTable.create(0)
 		table.push(toMontgomery(rsaOne(modulus.count())))
 
 		for _ in 1 upto rsaTableEntries 'eachEntry'
@@ -468,7 +466,7 @@ end 'rsaAlgorithm'
 function rsaIntegers(encoding ByteArray, count Count) returns RsaIntegers throws DerError
 	var sequence = try DerReader.wholeSequence(encoding)
 
-	var integers = RsaIntegers.create()
+	var integers = RsaIntegers.create(0)
 
 	for _ in 0 upto count 'eachInteger'
 		integers.push(try sequence.readInteger())
@@ -558,8 +556,7 @@ function rsaTopBits(modulusBits Count) returns RsaTopBits
 end 'rsaTopBits'
 
 function rsaZeroBytes(count Count) returns ByteArray
-	var bytes = ByteArray.create()
-	bytes.reserve(count)
+	var bytes = ByteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachByte'
 		bytes.push(0)
@@ -579,8 +576,7 @@ end 'rsaDigestInfo'
 function rsaPkcs1Block(hash HashAlgorithm, message ByteArray, length Count) returns ByteArray
 	let prefix = rsaDigestInfo(hash)
 	let digest = sha2Once(hash, data: message)
-	var block = ByteArray.create()
-	block.reserve(length)
+	var block = ByteArray.create(length, zeroed: false)
 	block.push(0)
 	block.push(rsaPkcs1BlockType)
 
@@ -595,8 +591,7 @@ function rsaPkcs1Block(hash HashAlgorithm, message ByteArray, length Count) retu
 end 'rsaPkcs1Block'
 
 function rsaMgf1(hash HashAlgorithm, seed ByteArray, length Count) returns ByteArray
-	var mask = ByteArray.create()
-	mask.reserve(length)
+	var mask = ByteArray.create(length, zeroed: false)
 	var counter = 0 as RsaLimb
 
 	while mask.count() < length 'eachBlock'
@@ -618,8 +613,7 @@ end 'rsaMgf1'
 
 function rsaMaskBlock(hash HashAlgorithm, seed ByteArray, block ByteArray, topBits RsaTopBits) returns ByteArray
 	let mask = rsaMgf1(hash, seed: seed, length: block.count())
-	var masked = ByteArray.create()
-	masked.reserve(block.count())
+	var masked = ByteArray.create(block.count(), zeroed: false)
 
 	for (iter, byte) in block.withIterator() 'eachByte'
 		masked.push(byte xor (try mask.get(iter.index()) otherwise panic("the mask is as long as the block")))

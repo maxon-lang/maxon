@@ -343,10 +343,9 @@ public type Digest
 			sha512 gives sha512InitialState()
 		end 'initial'
 
-		var schedule = Sha2Words.create()
-		schedule.reserve(sha512RoundCount)
+		var schedule = Sha2Words.create(sha512RoundCount, zeroed: false)
 
-		return Digest{algorithm: algorithm, state: initial, schedule: schedule, pending: ByteArray.create(), consumed: 0, finished: false}
+		return Digest{algorithm: algorithm, state: initial, schedule: schedule, pending: ByteArray.create(0), consumed: 0, finished: false}
 	end 'create'
 
 	/// Feed `data` into the hash. It panics after `finalize`.
@@ -407,8 +406,7 @@ public type Digest
 
 		let digestBytes = algorithm.digestBytes()
 		let wordBytes = algorithm.wordBytes()
-		var digest = ByteArray.create()
-		digest.reserve(digestBytes)
+		var digest = ByteArray.create(digestBytes, zeroed: false)
 
 		for word in state 'eachWord'
 			if digest.count() == digestBytes 'complete'

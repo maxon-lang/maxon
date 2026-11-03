@@ -40,7 +40,7 @@ type TraceRecorder
 	var keys as TraceKeyArray
 
 	static function create() returns Self
-		return Self{keys: TraceKeyArray.create()}
+		return Self{keys: TraceKeyArray.create(0)}
 	end 'create'
 
 	export function apply(command TraceCommand)
@@ -52,7 +52,7 @@ type TraceRecorder
 
 	export function finish() returns TraceKeyArray
 		var result = self.keys
-		self.keys = TraceKeyArray.create()
+		self.keys = TraceKeyArray.create(0)
 		return result
 	end 'finish'
 end 'TraceRecorder'
@@ -92,7 +92,7 @@ type TraceCaptureControl
 
 		return try await self.recorder.finish(sendTimeout: ForeverMs) otherwise (e) 'refused'
 			match e 'why'
-				mailboxFull then return TraceKeyArray.create()
+				mailboxFull then return TraceKeyArray.create(0)
 				serviceStopped then panic("TraceCapture.stopCapture: the recorder service is gone")
 			end 'why'
 		end 'refused'

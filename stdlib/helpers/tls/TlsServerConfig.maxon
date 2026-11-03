@@ -21,7 +21,7 @@ public type TlsServerConfig
 	end 'create'
 
 	public static function defaults(chain ByteArrays, key TlsPrivateKey) returns TlsServerConfig
-		return Self{protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: tlsDefaultCipherSuites.clone(), groups: tlsDefaultGroups.clone(), signatureAlgorithms: tlsServerDefaultSignatureAlgorithms.clone(), applicationProtocols: TlsProtocolNameArray.create(), chain: chain, key: key, clientAuthentication: TlsClientAuthentication.none, clientSignatureAlgorithms: tlsServerDefaultSignatureAlgorithms.clone(), clientAuthorities: ByteArrays.create()}
+		return Self{protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: tlsDefaultCipherSuites.clone(), groups: tlsDefaultGroups.clone(), signatureAlgorithms: tlsServerDefaultSignatureAlgorithms.clone(), applicationProtocols: TlsProtocolNameArray.create(0), chain: chain, key: key, clientAuthentication: TlsClientAuthentication.none, clientSignatureAlgorithms: tlsServerDefaultSignatureAlgorithms.clone(), clientAuthorities: ByteArrays.create(0)}
 	end 'defaults'
 
 	module function applicationProtocol(scan TlsExtensionScan) returns TlsAlpnChoice throws TlsHandshakeError
@@ -49,7 +49,7 @@ public type TlsServerConfig
 	end 'preferredGroup'
 
 	module function requestedSchemes() returns TlsSignatureSchemeCodeArray throws TlsHandshakeError
-		var schemes = TlsSignatureSchemeCodeArray.create()
+		var schemes = TlsSignatureSchemeCodeArray.create(0)
 
 		for code in clientSignatureAlgorithms 'eachScheme'
 			if not tlsIsPkcs1Code(code) 'usable'

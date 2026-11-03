@@ -437,7 +437,7 @@ public type Configuration
 	public static function create(executable Executable, workingDirectory FilePath = FilePath.empty()) returns Configuration
 		return Configuration{
 			executable: executable,
-			arguments: StringArray.create(),
+			arguments: StringArray.create(0),
 			workingDirectory: workingDirectory,
 			environment: Environment.inherit,
 			standardInput: InputSource.none,
@@ -634,7 +634,7 @@ end 'resolveByName'
 /// The runtime walks the blob using argc as the token count (NUL bytes act as
 /// separators; the runtime advances past each NUL between tokens).
 function buildArgvBlob(executablePath String, args StringArray) returns String
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	appendNulTerminated(out, source: executablePath)
 	let n = args.count()
 
@@ -733,7 +733,7 @@ end 'subprocessEmptyCString'
 /// entry reads the same field itself — and no length travels beside them, so the terminating NUL after
 /// the last entry is the only thing that tells a runtime where the block ends.
 function spawnEnvironmentFor(env Environment) returns SpawnEnvironment throws SubprocessError
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 
 	match env 'e'
 		inherit then return SpawnEnvironment.create(emptyEnvBlock(), source: EnvSource.parent.rawValue)
@@ -749,7 +749,7 @@ end 'spawnEnvironmentFor'
 /// terminator. The runtime never reads it — `EnvSource.parent` tells it not to — but the slot is a
 /// buffer pointer that the argument lowering dereferences either way, so it has to be a real one.
 function emptyEnvBlock() returns String
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	out.push(BlobTokenTerminator)
 	return String.from(out)
 end 'emptyEnvBlock'

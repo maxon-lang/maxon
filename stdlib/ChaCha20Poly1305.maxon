@@ -66,12 +66,10 @@ public type ChaCha20Poly1305 implements Aead
 	end 'apply'
 
 	function authenticate(nonce ByteArray, additionalData ByteArray, ciphertext ByteArray) returns ByteArray
-		var zeros = ByteArray.create()
-		zeros.resize(chaCha20Poly1305KeyBytes)
+		var zeros = ByteArray.create(chaCha20Poly1305KeyBytes)
 		let oneTimeKey = apply(nonce, counter: chaCha20Poly1305OneTimeKeyBlock, data: zeros)
 
-		var input = ByteArray.create()
-		input.reserve(additionalData.count() + ciphertext.count() + chaCha20Poly1305PaddingBlockBytes * 2 + chaCha20Poly1305LengthFieldBytes * 2)
+		var input = ByteArray.create(additionalData.count() + ciphertext.count() + chaCha20Poly1305PaddingBlockBytes * 2 + chaCha20Poly1305LengthFieldBytes * 2, zeroed: false)
 		input.append(additionalData)
 		chaCha20Poly1305PadToBlock(input)
 		input.append(ciphertext)

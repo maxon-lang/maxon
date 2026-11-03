@@ -7,8 +7,7 @@
 	let aesGcmHardwareScheduleHalfShift = 1
 
 	export function aesGcmHardwareKeys(schedule ByteArray) returns ByteArray
-		var keys = ByteArray.create()
-		keys.resize(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
+		var keys = ByteArray.create(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
 		__Builtins.aesGcmInit(keys, schedule)
 
 		return keys
@@ -25,8 +24,7 @@
 	end 'aesGcmHardwareSealInto'
 
 	export function aesGcmHardwareOpen(keys ByteArray, nonce ByteArray, sealed ByteArray, additionalData ByteArray, ciphertextBytes Count) returns ByteArray throws AeadError
-		var plaintext = ByteArray.create()
-		plaintext.resize(ciphertextBytes)
+		var plaintext = ByteArray.create(ciphertextBytes)
 
 		if not __Builtins.aesGcmOpen(plaintext, aesHardwareFirstByte, keys, nonce, additionalData, sealed) 'forged'
 			throw AeadError.authenticationFailed

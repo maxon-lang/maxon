@@ -292,8 +292,8 @@ public extension Array
 		// run shorter than this is manufactured by the stable quicksort rather
 		// than padded with insertion sort.
 		let minGood = self.minGoodRunLen(n)
-		var stack = RunArrayStack.create()
-		var scratch = MergeScratchArray.create()
+		var stack = RunArrayStack.create(0)
+		var scratch = MergeScratchArray.create(0)
 
 		// `stablePartition`'s one-slot pivot storage. It lives out here for the
 		// same reason `scratch` does — so a sort pays for it once rather than
@@ -301,7 +301,7 @@ public extension Array
 		// is the whole point of it (see `driftQuicksort.stablePartition`). It
 		// starts empty; the first partition's `push` gives it its one slot and
 		// every later `clear` + `push` reuses that slot's capacity.
-		var pivotHold = MergeScratchArray.create()
+		var pivotHold = MergeScratchArray.create(0)
 
 		// The buffer holds max(n - n/2, min(n, 8 MB of elements), the small-sort
 		// threshold): full size, shrinking to about n/2 for large inputs. Every
