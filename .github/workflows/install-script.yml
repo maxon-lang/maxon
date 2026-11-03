@@ -215,7 +215,7 @@ jobs:
           count="$(grep -c 'Added by the Maxon installer' "$profile")"
           [ "$count" = 1 ] || { echo "::error::$profile has $count installer lines"; exit 1; }
 
-      - name: With Claude Code on PATH, the Maxon plugin is offered, installed when accepted, and not offered once installed
+      - name: With Claude Code on PATH, the Maxon plugin is offered, installed when accepted or by --claude-plugin, skipped by --no-claude-plugin, and not offered once installed
         run: |
           set -euo pipefail
           fake="$(mktemp -d)"
@@ -227,10 +227,12 @@ jobs:
           chmod +x "$fake/claude"
           install_line='claude plugin install maxon-lsp --marketplace maxon-lang/maxon'
           on_a_terminal() {
+            answer="$1"
+            shift
             if [ "$(uname -s)" = Darwin ]; then
-              printf '%s\n' "$1" | script -q /dev/null sh website/public/install.sh
+              printf '%s\n' "$answer" | script -q /dev/null sh website/public/install.sh "$@"
             else
-              printf '%s\n' "$1" | script -qec 'sh website/public/install.sh' /dev/null
+              printf '%s\n' "$answer" | script -qec "sh website/public/install.sh $*" /dev/null
             fi
           }
 
@@ -255,6 +257,23 @@ jobs:
           : > "$fake/calls"
           PATH="$fake:$SYSTEM_PATH" on_a_terminal y
           grep -qx 'plugin install maxon-lsp --marketplace maxon-lang/maxon' "$fake/calls" || { echo "::error::an accepted offer did not install the plugin"; exit 1; }
+
+          : > "$fake/calls"
+          env PATH="$fake:$SYSTEM_PATH" sh -s -- --claude-plugin < website/public/install.sh
+          grep -qx 'plugin install maxon-lsp --marketplace maxon-lang/maxon' "$fake/calls" || { echo "::error::--claude-plugin did not install the plugin"; exit 1; }
+
+          : > "$fake/calls"
+          out="$(PATH="$fake:$SYSTEM_PATH" on_a_terminal y --no-claude-plugin)"
+          echo "$out"
+          case "$out" in
+            *maxon-lsp*) echo "::error::--no-claude-plugin mentioned the plugin"; exit 1 ;;
+          esac
+          [ ! -s "$fake/calls" ] || { echo "::error::--no-claude-plugin ran claude: $(cat "$fake/calls")"; exit 1; }
+
+          if env PATH="$fake:$SYSTEM_PATH" sh -s -- --claude-plugin --no-claude-plugin < website/public/install.sh; then
+            echo "::error::--claude-plugin with --no-claude-plugin was accepted"
+            exit 1
+          fi
 
           echo '[{"id": "maxon-lsp@maxon"}]' > "$fake/list"
           out="$(PATH="$fake:$SYSTEM_PATH" on_a_terminal y)"
@@ -631,7 +650,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already installed') { throw 'a rerun did not report the install as current' }
           if ([Environment]::GetEnvironmentVariable('Path', 'User') -ne $before) { throw 'a rerun changed the user Path' }
 
-      - name: With Claude Code on PATH, the Maxon plugin's install command is printed, and not once it is installed
+      - name: With Claude Code on PATH, the Maxon plugin install command is printed, -ClaudePlugin installs it, -NoClaudePlugin skips it, and nothing is printed once it is installed
         run: |
           $fake = (New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'fake-claude')).FullName
           Set-Content -Encoding ascii -Path "$fake\claude.cmd" -Value @(
@@ -647,6 +666,20 @@ jobs:
           $out
           if ($LASTEXITCODE -ne 0 -or -not $out.Contains($installLine)) { throw 'the install did not print the plugin install command' }
           if ((Get-Content "$fake\calls") -match 'plugin install') { throw 'the plugin was installed without being asked' }
+
+          Remove-Item "$fake\calls"
+          $out = & ([scriptblock]::Create((Get-Content -Raw website/public/install.ps1))) -ClaudePlugin 6>&1 | Out-String -Width 4096
+          $out
+          if ($LASTEXITCODE -ne 0 -or -not ((Get-Content "$fake\calls") -contains 'plugin install maxon-lsp --marketplace maxon-lang/maxon')) { throw '-ClaudePlugin did not install the plugin' }
+
+          Remove-Item "$fake\calls"
+          $out = & ([scriptblock]::Create((Get-Content -Raw website/public/install.ps1))) -NoClaudePlugin 6>&1 | Out-String -Width 4096
+          $out
+          if ($LASTEXITCODE -ne 0 -or $out.Contains('maxon-lsp')) { throw '-NoClaudePlugin mentioned the plugin' }
+          if (Test-Path "$fake\calls") { throw "-NoClaudePlugin ran claude: $(Get-Content "$fake\calls")" }
+
+          $null = & ([scriptblock]::Create((Get-Content -Raw website/public/install.ps1))) -ClaudePlugin -NoClaudePlugin 6>&1
+          if ($LASTEXITCODE -ne 1) { throw '-ClaudePlugin with -NoClaudePlugin was accepted' }
 
           Set-Content -Encoding ascii -Path "$fake\list" -Value '[{"id": "maxon-lsp@maxon"}]'
           $out = & ([scriptblock]::Create((Get-Content -Raw website/public/install.ps1))) 6>&1 | Out-String -Width 4096

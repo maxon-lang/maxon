@@ -19,7 +19,8 @@
 # A PowerShell started for it cannot change the PATH of the shell that started it, so in that case this
 # prints the line that does, in that shell's own syntax.
 #
-# Parameters: -Version X.Y.Z, -Force (reinstall a current install), -NoPathUpdate.
+# Parameters: -Version X.Y.Z, -Force (reinstall a current install), -NoPathUpdate, -ClaudePlugin
+# (install Claude Code's maxon-lsp plugin without asking), -NoClaudePlugin (neither offer nor mention it).
 # Environment: MAXON_INSTALL (default %USERPROFILE%\.maxon), MAXON_DOWNLOAD_BASE (a mirror laid out
 # as <base>/v<version>/<asset>; needs -Version).
 # Uninstall: delete %USERPROFILE%\.maxon and remove its bin directory from your user PATH.
@@ -37,13 +38,18 @@
 param(
     [string]$Version = '',
     [switch]$Force,
-    [switch]$NoPathUpdate
+    [switch]$NoPathUpdate,
+    [switch]$ClaudePlugin,
+    [switch]$NoClaudePlugin
 )
 
 function Install-Maxon {
-    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath)
+    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath, [bool]$InstallClaudePlugin, [bool]$SkipClaudePlugin)
 
     $ErrorActionPreference = 'Stop'
+    if ($InstallClaudePlugin -and $SkipClaudePlugin) {
+        throw '-ClaudePlugin and -NoClaudePlugin cannot both be given'
+    }
     # A caller's PSModulePath may name another PowerShell edition's modules ahead of this host's:
     # `maxon upgrade` starts Windows PowerShell with the environment of whatever shell started IT, and
     # from pwsh 7 that path names pwsh 7's copies first. This host refuses to load them and then reports
@@ -374,9 +380,22 @@ function Install-Maxon {
         return $true
     }
 
+    function Install-ClaudePlugin([string]$claude, [string]$installLine) {
+        & $claude plugin install $claudePlugin --marketplace $repo
+        if ($LASTEXITCODE -ne 0) {
+            Say "could not install the Claude Code plugin; the Maxon install itself is complete. To try again: $installLine"
+        }
+    }
+
     function Request-ClaudePlugin {
+        if ($SkipClaudePlugin) {
+            return
+        }
         $claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -eq $claude) {
+            if ($InstallClaudePlugin) {
+                Say "-ClaudePlugin: claude is not on PATH, so Claude Code's $claudePlugin plugin was not installed"
+            }
             return
         }
         try {
@@ -389,14 +408,16 @@ function Install-Maxon {
         }
 
         $installLine = "claude plugin install $claudePlugin --marketplace $repo"
+        if ($InstallClaudePlugin) {
+            Install-ClaudePlugin $claude.Source $installLine
+            return
+        }
+
         if (Test-CanAsk) {
             Write-Host -NoNewline "maxon-install: Claude Code is installed. Install its $claudePlugin plugin, which gives it the Maxon language server? [Y/n] "
             $answer = [Console]::ReadLine()
             if ($null -ne $answer -and $answer.Trim() -match '^(y|yes)?$') {
-                & $claude.Source plugin install $claudePlugin --marketplace $repo
-                if ($LASTEXITCODE -ne 0) {
-                    Say "could not install the Claude Code plugin; the Maxon install itself is complete. To try again: $installLine"
-                }
+                Install-ClaudePlugin $claude.Source $installLine
                 return
             }
         }
@@ -544,13 +565,13 @@ function Install-Maxon {
 
 # A script block of its own, so nothing it assigns lands in the session `irm | iex` runs in.
 & {
-    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath)
+    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath, [bool]$InstallClaudePlugin, [bool]$SkipClaudePlugin)
     try {
-        Install-Maxon -RequestedVersion $RequestedVersion -Reinstall $Reinstall -UpdatePath $UpdatePath
+        Install-Maxon -RequestedVersion $RequestedVersion -Reinstall $Reinstall -UpdatePath $UpdatePath -InstallClaudePlugin $InstallClaudePlugin -SkipClaudePlugin $SkipClaudePlugin
         $global:LASTEXITCODE = 0
     } catch {
         $global:LASTEXITCODE = 1
         [Console]::Error.WriteLine("maxon-install: $($_.Exception.Message)")
     }
-} $Version $Force.IsPresent (-not $NoPathUpdate.IsPresent)
+} $Version $Force.IsPresent (-not $NoPathUpdate.IsPresent) $ClaudePlugin.IsPresent $NoClaudePlugin.IsPresent
 Remove-Item -Path Function:\Install-Maxon

@@ -28,15 +28,18 @@ main() {
 	version=""
 	modify_path=1
 	force=0
+	claude_plugin_choice="ask"
 
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--version)        [ $# -ge 2 ] || fail "--version needs a value"; version="${2#v}"; shift 2 ;;
-			--version=*)      version="${1#--version=}"; version="${version#v}"; shift ;;
-			--no-modify-path) modify_path=0; shift ;;
-			--force)          force=1; shift ;;
-			-h|--help)        usage; exit 0 ;;
-			*)                fail "unknown option '$1' (see --help)" ;;
+			--version)          [ $# -ge 2 ] || fail "--version needs a value"; version="${2#v}"; shift 2 ;;
+			--version=*)        version="${1#--version=}"; version="${version#v}"; shift ;;
+			--no-modify-path)   modify_path=0; shift ;;
+			--force)            force=1; shift ;;
+			--claude-plugin)    choose_claude_plugin install; shift ;;
+			--no-claude-plugin) choose_claude_plugin skip; shift ;;
+			-h|--help)          usage; exit 0 ;;
+			*)                  fail "unknown option '$1' (see --help)" ;;
 		esac
 	done
 
@@ -150,6 +153,9 @@ Options:
   --force             reinstall even when that release is already installed
   --no-modify-path    do not put maxon on PATH: no link in ~/.local/bin or ~/bin,
                       no line in your shell profile
+  --claude-plugin     install Claude Code's maxon-lsp plugin without asking, when
+                      claude is on PATH
+  --no-claude-plugin  neither offer nor mention Claude Code's maxon-lsp plugin
 
 Environment:
   MAXON_INSTALL       where Maxon is installed (default ~/.maxon)
@@ -239,31 +245,61 @@ check_scriptlib() {
 	return 0
 }
 
+choose_claude_plugin() {
+	if [ "$claude_plugin_choice" != ask ] && [ "$claude_plugin_choice" != "$1" ]; then
+		fail "--claude-plugin and --no-claude-plugin cannot both be given"
+	fi
+	claude_plugin_choice="$1"
+}
+
+# A subshell, because a failed redirection on `:` exits a non-interactive shell, failing the install.
+has_terminal() {
+	(: < /dev/tty) 2>/dev/null
+}
+
 offer_claude_plugin() {
+	[ "$claude_plugin_choice" != skip ] || return 0
 	claude="$(command -v claude 2>/dev/null || true)"
-	[ -n "$claude" ] || return 0
+	if [ -z "$claude" ]; then
+		if [ "$claude_plugin_choice" = install ]; then
+			warn "--claude-plugin: claude is not on PATH, so Claude Code's $claude_plugin plugin was not installed"
+		fi
+		return 0
+	fi
 	# Under `curl | sh` stdin is this script, so `claude` is given the terminal or nothing.
 	if "$claude" plugin list --json < /dev/null 2>/dev/null | grep -q "\"$claude_plugin@"; then
 		return 0
 	fi
 
 	install_line="claude plugin install $claude_plugin --marketplace $repo"
-	# A subshell, because a failed redirection on `:` exits a non-interactive shell, failing the install.
-	if [ -t 1 ] && (: < /dev/tty) 2>/dev/null; then
+	if [ "$claude_plugin_choice" = install ]; then
+		install_claude_plugin
+		return 0
+	fi
+
+	if [ -t 1 ] && has_terminal; then
 		printf 'maxon-install: Claude Code is installed. Install its %s plugin, which gives it the Maxon language server? [Y/n] ' "$claude_plugin"
 		answer=""
 		read -r answer < /dev/tty || answer="n"
 		case "$answer" in
 			""|[Yy]|[Yy][Ee][Ss])
-				if ! "$claude" plugin install "$claude_plugin" --marketplace "$repo" < /dev/tty; then
-					warn "could not install the Claude Code plugin; the Maxon install itself is complete. To try again: $install_line"
-				fi
+				install_claude_plugin
 				return 0
 				;;
 		esac
 	fi
 
 	say "to give Claude Code the Maxon language server, run: $install_line"
+}
+
+install_claude_plugin() {
+	terminal=/dev/null
+	if has_terminal; then
+		terminal=/dev/tty
+	fi
+	if ! "$claude" plugin install "$claude_plugin" --marketplace "$repo" < "$terminal"; then
+		warn "could not install the Claude Code plugin; the Maxon install itself is complete. To try again: $install_line"
+	fi
 }
 
 roll_back() {
