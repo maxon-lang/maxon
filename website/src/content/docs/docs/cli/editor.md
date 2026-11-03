@@ -96,12 +96,15 @@ Trusting the workspace tells the running language server and searches for the co
 ## Claude Code
 
 The **maxon-lsp** plugin gives Claude Code's `LSP` tool the language server, so an agent gets
-diagnostics after each edit, hover, go-to-definition and find-references in Maxon documents. Install it
-from Claude Code:
+diagnostics after each edit, hover, go-to-definition and find-references in Maxon documents. The install
+script and `maxon upgrade` offer to install it when `claude` is on `PATH` and the plugin is missing;
+without a terminal to ask in they print the command to run. To install it yourself, from Claude Code:
 
 ```
 /plugin install maxon-lsp --marketplace maxon-lang/maxon
 ```
+
+or from a shell: `claude plugin install maxon-lsp --marketplace maxon-lang/maxon`.
 
 The plugin runs `maxon lsp-server` from `PATH`, for `.maxon`, `.maxproj`, `.maxtasks`, `.maxtest` and
 `.test` files. The MCP tools are configured separately (see [MCP Server](/docs/cli/mcp-server/)).

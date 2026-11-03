@@ -57,6 +57,7 @@ function Install-Maxon {
     # The progress bar slows Invoke-WebRequest by an order of magnitude on Windows PowerShell 5.1.
     $ProgressPreference = 'SilentlyContinue'
     $repo = 'maxon-lang/maxon'
+    $claudePlugin = 'maxon-lsp'
     $installEntries = @('stdlib', 'runtime', 'examples', 'docs')
 
     function Say([string]$message) { Write-Host "maxon-install: $message" }
@@ -360,6 +361,49 @@ function Install-Maxon {
         return $null
     }
 
+    function Test-CanAsk {
+        if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+            return $false
+        }
+        # `maxon upgrade` starts this PowerShell with -NonInteractive, and its console is still a terminal.
+        foreach ($argument in [Environment]::GetCommandLineArgs()) {
+            if ($argument -like '-noni*') {
+                return $false
+            }
+        }
+        return $true
+    }
+
+    function Request-ClaudePlugin {
+        $claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $claude) {
+            return
+        }
+        try {
+            $listed = Invoke-Captured $claude.Source 'plugin list --json'
+        } catch {
+            return
+        }
+        if ($listed.Output -match ('"' + [regex]::Escape($claudePlugin) + '@')) {
+            return
+        }
+
+        $installLine = "claude plugin install $claudePlugin --marketplace $repo"
+        if (Test-CanAsk) {
+            Write-Host -NoNewline "maxon-install: Claude Code is installed. Install its $claudePlugin plugin, which gives it the Maxon language server? [Y/n] "
+            $answer = [Console]::ReadLine()
+            if ($null -ne $answer -and $answer.Trim() -match '^(y|yes)?$') {
+                & $claude.Source plugin install $claudePlugin --marketplace $repo
+                if ($LASTEXITCODE -ne 0) {
+                    Say "could not install the Claude Code plugin; the Maxon install itself is complete. To try again: $installLine"
+                }
+                return
+            }
+        }
+
+        Say "to give Claude Code the Maxon language server, run: $installLine"
+    }
+
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw 'this installer is for Windows; on macOS or Linux run: curl -fsSL https://maxon.dev/install.sh | sh'
     }
@@ -494,6 +538,8 @@ function Install-Maxon {
     if ($null -ne $found -and $found.Source -ine $exe) {
         Say "warning: $($found.Source) comes first on your PATH, so ``maxon`` runs that one"
     }
+
+    Request-ClaudePlugin
 }
 
 # A script block of its own, so nothing it assigns lands in the session `irm | iex` runs in.

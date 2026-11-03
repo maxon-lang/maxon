@@ -23,6 +23,7 @@ main() {
 	set -eu
 
 	repo="maxon-lang/maxon"
+	claude_plugin="maxon-lsp"
 	install_entries="stdlib runtime examples docs"
 	version=""
 	modify_path=1
@@ -72,6 +73,7 @@ main() {
 			say "Maxon $version, the latest release, is already installed in $root (--force reinstalls it)"
 		fi
 		finish_path "$bin_dir" "$modify_path"
+		offer_claude_plugin
 		return 0
 	fi
 
@@ -133,6 +135,7 @@ main() {
 	say "installed Maxon $version in $root"
 	check_scriptlib "$root" "$bin_dir" "$version"
 	finish_path "$bin_dir" "$modify_path"
+	offer_claude_plugin
 }
 
 usage() {
@@ -234,6 +237,33 @@ check_scriptlib() {
 		warn "$root/scriptlib needs updating for Maxon $version: the packages above do not compile with this release. The install itself is complete."
 	fi
 	return 0
+}
+
+offer_claude_plugin() {
+	claude="$(command -v claude 2>/dev/null || true)"
+	[ -n "$claude" ] || return 0
+	# Under `curl | sh` stdin is this script, so `claude` is given the terminal or nothing.
+	if "$claude" plugin list --json < /dev/null 2>/dev/null | grep -q "\"$claude_plugin@"; then
+		return 0
+	fi
+
+	install_line="claude plugin install $claude_plugin --marketplace $repo"
+	# A subshell, because a failed redirection on `:` exits a non-interactive shell, failing the install.
+	if [ -t 1 ] && (: < /dev/tty) 2>/dev/null; then
+		printf 'maxon-install: Claude Code is installed. Install its %s plugin, which gives it the Maxon language server? [Y/n] ' "$claude_plugin"
+		answer=""
+		read -r answer < /dev/tty || answer="n"
+		case "$answer" in
+			""|[Yy]|[Yy][Ee][Ss])
+				if ! "$claude" plugin install "$claude_plugin" --marketplace "$repo" < /dev/tty; then
+					warn "could not install the Claude Code plugin; the Maxon install itself is complete. To try again: $install_line"
+				fi
+				return 0
+				;;
+		esac
+	fi
+
+	say "to give Claude Code the Maxon language server, run: $install_line"
 }
 
 roll_back() {
