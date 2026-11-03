@@ -226,14 +226,31 @@ jobs:
           } > "$fake/claude"
           chmod +x "$fake/claude"
           install_line='claude plugin install maxon-lsp --marketplace maxon-lang/maxon'
+          # The answer is typed once the prompt is on the terminal: input sent earlier can arrive after
+          # macOS's `script` has already passed on its end-of-file, and the read sees nothing.
           on_a_terminal() {
-            answer="$1"
-            shift
-            if [ "$(uname -s)" = Darwin ]; then
-              printf '%s\n' "$answer" | script -q /dev/null sh website/public/install.sh "$@"
-            else
-              printf '%s\n' "$answer" | script -qec "sh website/public/install.sh $*" /dev/null
-            fi
+            python3 -c '
+          import os, pty, sys
+          answer = sys.argv[1].encode() + b"\n"
+          pid, fd = pty.fork()
+          if pid == 0:
+              os.execvp(sys.argv[2], sys.argv[2:])
+          seen = b""
+          while True:
+              try:
+                  chunk = os.read(fd, 1024)
+              except OSError:
+                  break
+              if not chunk:
+                  break
+              sys.stdout.buffer.write(chunk)
+              sys.stdout.flush()
+              if b"[Y/n] " not in seen and b"[Y/n] " in seen + chunk:
+                  os.write(fd, answer)
+              seen += chunk
+          _, status = os.waitpid(pid, 0)
+          sys.exit(os.waitstatus_to_exitcode(status))
+          ' "$1" sh website/public/install.sh "${@:2}"
           }
 
           echo '[]' > "$fake/list"
@@ -868,6 +885,7 @@ jobs:
 
       - name: A scriptlib package the new compiler rejects is reported, and the install still succeeds
         run: |
+          $ErrorActionPreference = 'Continue'
           $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
           $env:MAXON_INSTALL = Join-Path $env:RUNNER_TEMP 'scriptlib-notice'
           & $install -NoPathUpdate
