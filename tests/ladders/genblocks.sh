@@ -23,10 +23,13 @@
 # linear in everything else — which pinned it to the per-function block-offset table and, from
 # there, to `Map`'s unmixed integer hashing (see `stdlib/Interfaces.spreadHash`).
 #
-# Every chain starts from `scaleOpaque`, an out-of-line call, for `ScaleCorpus`'s reason: The compiler has
-# no inliner and no interprocedural constant propagation, so a call result is opaque and
-# `foldConstOperands` cannot fold the program flat. A ladder that folds away measures an empty
-# compile and reports a beautiful straight line.
+# Every chain starts from `scaleOpaque`, a call, for `ScaleCorpus`'s reason: a ladder that folds away
+# measures an empty compile and reports a beautiful straight line. ⚠ The call is NOT an opaque clobber:
+# `inlineLeaves` splices `scaleOpaque` and `big` (each called once) into `main`
+# (`--log=ir:debug` reads `2 called-once callee(s) spliced`). MEASURED 2026-11-02 that the program is
+# still not folded flat: `blocks` at n = 256 / 512 is a 15,440 / 23,632-byte exe with `regalloc`
+# allocations 64,774 / 127,384; `straight` at 256 / 512 is 10,320 / 12,368 bytes. Check the executable
+# grows with <n> before reading any phase column.
 #
 # ⚠ The per-line text is emitted directly rather than through a `$(...)` helper — a subshell per
 # line makes the GENERATOR the thing being measured (see `genmutchain.sh`).

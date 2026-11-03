@@ -27,12 +27,16 @@
 #                            THE CONTROL. Same sites, same splices, same copied bodies; only the
 #                            per-block concentration differs. If `onefunc` bends and `spread` does not,
 #                            the bend is the split's product term and not the per-site cost.
-#            `nosites`     — the same <n> calls with the callee made `throws`, so every site is a
-#                            `tryCall`. Meant as THE SCAN AXIS, the cost of WALKING a program the
-#                            pass inlines nothing in (the shape that caught a union boxed per op in
+#            `nosites`     — the same <n> calls with the callee taking its first parameter BY
+#                            REFERENCE (it assigns it), which the pass refuses whatever its op budget
+#                            is. THE SCAN AXIS: the cost of WALKING a program the pass inlines nothing
+#                            in (the shape that caught a union boxed per op in
 #                            `genmanagedsites.sh nosites`: 2 allocations and 64 bytes per Std op).
-#                            ⚠ Its `--log=ir:debug` census reads the same inlined-site count as
-#                            `onefunc` (173 at n=128, 301 at n=256), so it isolates no walk.
+#                            Its `--log=ir:debug` census reads the program's fixed share (60 sites)
+#                            at every <n>; MEASURED 2026-11-02, `phase:inlineLeaves` allocations are
+#                            106,130 / 106,776 / 108,067 at n = 128 / 256 / 512, i.e. 5.05 per call
+#                            site (+646, +1,291) over a floor of about 105,500 — linear, and the
+#                            only per-<n> term is the walk itself.
 #            `guardone`    — `onefunc` with a `regMaskContains`-shaped leaf: an `int(0 to 63)` parameter,
 #                            so `insertRangeChecks` gives the callee an entry guard whose PANIC block the
 #                            splice drops and redirects. THE SLOW-ARM AXIS: one extra block, one extra
@@ -42,8 +46,11 @@
 #                            ONE block (`genwidelive.sh sum`'s shape, the splitter's Θ(N)×Θ(N) region),
 #                            with the opaque callee made STRUCTURALLY NON-INLINABLE — its body is
 #                            past `MaxInlinedColdArmLeafOps`, which no cascade of splices can
-#                            dissolve. The generated functions hold no splice site; the census still
-#                            counts sites outside them (45 without follow-up rounds, 60 with them).
+#                            dissolve. The generated functions hold no splice site: the census reads
+#                            the program's fixed share of 60 sites, the same figure as `nosites`, at
+#                            n = 100 and 200 alike, while the
+#                            <n> opaque calls show as <n> + 4 refused-by-size sites. MEASURED
+#                            2026-11-02, `phase:inlineLeaves` allocations are 106,283 / 107,091.
 #                            ⇒ **THE A/B CONTROL FOR THE COMPILER'S OWN EMITTED CODE.** Two compilers
 #                            that differ by this pass get a BIT-IDENTICAL `regalloc` input from it
 #                            (assert it: their `regalloc` ALLOCATION counts must match to the digit),
@@ -68,8 +75,8 @@
 #
 # and confirm the sites were really taken with `--log=ir:debug`, which prints the pass's own census
 # (`inlineLeaves: N site(s) inlined, …`). ⚠ **A ladder whose site count is not what <n> says measures
-# nothing** — `onefunc` must read <n> more than the program's own fixed share of sites (45 on a
-# compiler without follow-up rounds, 60 with them, at both rungs measured).
+# nothing** — `onefunc` must read <n> more than the program's own fixed share of sites (60 at
+# every rung measured), and `nosites` and `pressure` must read that fixed share and not one site more.
 #
 # ⚠ **READ THE ALLOCATION AND BYTE COLUMNS — they are exact and bit-reproducible, so a ratio off them
 # is a datapoint on the first run.** And because the ladder DOUBLES, the RATIO between consecutive <n>
@@ -129,8 +136,10 @@ fi
 		echo "end 'leafPure'"
 		;;
 	nosites)
-		# The callee is `throws`, so its sites are `tryCall`s. `--log=ir:debug` reports the same
-		# inlined-site count here as for `onefunc`.
+		# The callee assigns its first parameter, so it takes that parameter BY REFERENCE
+		# (`IrFunction.reassignedParamMask`), which `InlineLeaves.functionShape` refuses whatever the op
+		# budget is: the address's aliasing cannot be kept by a copy. Every site stays a `call`, and
+		# `--log=ir:debug` reports no inlined site beyond the program's fixed share at any <n>.
 		#
 		# ⛔⛔ **AND ONE SEEDED SITE, WHICH IS WHAT MAKES THIS MODE MEASURE THE WALK AT ALL.**
 		# `inlineWithNameIndex` RETURNS after `buildLeafPlan` when the module holds no eligible callee
@@ -140,13 +149,8 @@ fi
 		echo "function leafSeed(a LadderInt) returns LadderInt"
 		echo "	return a + 1"
 		echo "end 'leafSeed'"
-		echo "enum LeafErr"
-		echo "	never"
-		echo "end 'LeafErr'"
-		echo "function leafPure(a LadderInt, b LadderInt) returns LadderInt throws LeafErr"
-		echo "	if a < -1000000 'never'"
-		echo "		throw LeafErr.never"
-		echo "	end 'never'"
+		echo "function leafPure(a mutable LadderInt, b LadderInt) returns LadderInt"
+		echo "	a = a + 1"
 		echo "	return ((a + b) * 3) - 1"
 		echo "end 'leafPure'"
 		;;
@@ -182,9 +186,12 @@ fi
 		# moves ONE axis.
 		echo "function leafMany(a LadderInt) returns LadderInt"
 		echo "	var acc = 0 as LadderInt"
+		if [ "$MODE" = "nosites" ]; then
+			echo "	var cursor = a"
+		fi
 		for ((i = 0; i < N; i++)); do
 			case "$MODE" in
-			nosites) echo "	acc = acc + (try leafPure(a, b: $i) otherwise 0)" ;;
+			nosites) echo "	acc = acc + leafPure(cursor, b: $i)" ;;
 			guardone) echo "	acc = acc + leafPure(a, r: ((a + $i) and 63) as $GUARD_ALIAS)" ;;
 			*) echo "	acc = acc + leafPure(a, b: $i)" ;;
 			esac

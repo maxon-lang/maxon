@@ -57,10 +57,11 @@
 # is ~30x cheaper than the `ByteArray` hash probe it replaced and the crossover sits far past any
 # realistic A. If a rung ever makes wide-carried-set code ordinary, that is the shape to add here.
 #
-# Every chain starts from `scaleOpaque`, an out-of-line call, for `ScaleCorpus`'s reason: The compiler has
-# no inliner and no interprocedural constant propagation, so a call result is opaque and
-# `foldConstOperands` cannot fold the program flat. A ladder that folds away measures an empty
-# compile and reports a beautiful straight line.
+# `main` calls `big(scaleOpaque(1))`, for `ScaleCorpus`'s reason: a ladder that folds away measures an
+# empty compile and reports a beautiful straight line. ⚠ The call is NOT an opaque clobber:
+# `inlineLeaves` splices `scaleOpaque` and `big` (each called once) into `main` (`--log=ir:debug` reads `2 called-once callee(s) spliced`). MEASURED 2026-11-02 that it is still not
+# folded flat: `if` at constructs = locals = 64 / 128 is a 9,296 / 9,808-byte exe with `regalloc`
+# allocations 14,436 / 26,431. Check the executable grows with the knobs before reading any phase column.
 #
 # ⚠ The per-line text is emitted directly rather than through a `$(...)` helper — a subshell per
 # line makes the GENERATOR the thing being measured (see `genmutchain.sh`).
