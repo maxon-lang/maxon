@@ -16,6 +16,7 @@ typealias AesRoundIndex = int(0 to 14) implements ElementIndex
 typealias AesPlaneShift = int(0 to 7)
 typealias AesKeyWordIndex = int(0 to 59) implements ElementIndex
 typealias AesKeySlot = int(0 to 8)
+typealias AesSwapDistance = int(1 to 4)
 typealias AesConstantIndex = int(0 to 10) implements ElementIndex
 
 export enum AesDirection
@@ -52,6 +53,9 @@ let aesAllOnes = u64.max as AesWord
 let aesLowNibbles = 15
 let aesHighNibbles = 240
 
+let aesOrthoDistance1 = 1
+let aesOrthoDistance2 = 2
+let aesOrthoDistance4 = 4
 let aesOrthoMask1 = 0x5555555555555555
 let aesOrthoMask2 = 0x3333333333333333
 let aesOrthoMask4 = 0x0F0F0F0F0F0F0F0F
@@ -93,6 +97,16 @@ function aesLane(low AesWord, high AesWord) returns AesWord
 	return aesGather(low) or (aesGather(high) shl aesHalfBits)
 end 'aesLane'
 
+function aesDeltaSwap(near AesWord, far AesWord, mask AesWord, distance AesSwapDistance) returns AesPair
+	let moved = ((near shr distance) xor far) and mask
+
+	return (near xor (moved shl distance), far xor moved)
+end 'aesDeltaSwap'
+
+function aesBlockCount(byteCount Count) returns Count
+	return (byteCount + aesBlockBytes - 1) shr aesBlockShift
+end 'aesBlockCount'
+
 function aesReadWord(source ByteArray, at ElementIndex) returns AesWord
 	return (try __Builtins.readLittleEndian(source, at, aesWordBytes) otherwise panic("aes: a word inside an array the caller sized is missing")) as AesWord
 end 'aesReadWord'
@@ -119,7 +133,8 @@ end 'aesSwapTopRowBytes'
 
 // ShiftRows in two stages, with no loop and no variable shift: rows 1 and 3 rotate by one nibble, then
 // the bytes of rows 2 and 3 swap, which rotates them by two more. Rows 1, 2 and 3 end up rotated by 1, 2
-// and 3. Both stages are in this body because a helper called from a helper is not inlined.
+// and 3. Both stages are in this body because, split into two helpers, the spliced body measures past
+// the leaf budget and every call stays on the round path.
 function aesShiftRowsWord(word AesWord) returns AesWord
 	let rotated = (word and aesRowLaneMask) or ((word and aesRotatedDownNibbles) shr 4) or ((word and aesWrappedUpNibbles) shl 12)
 	let moved = (rotated xor (rotated shr aesBitsPerByte)) and aesTopRowsLowBytes
@@ -173,8 +188,7 @@ type AesState
 	end 'create'
 
 	// Swaps the plane index with the bit index inside each byte lane, so it is its own inverse: the same
-	// call packs a loaded batch and unpacks a finished one. The twelve delta swaps are written out
-	// because a helper for one swap is not inlined.
+	// call packs a loaded batch and unpacks a finished one.
 	function ortho()
 		var a0 = self.q0
 		var a1 = self.q1
@@ -185,44 +199,20 @@ type AesState
 		var a6 = self.q6
 		var a7 = self.q7
 
-		var moved = ((a0 shr 1) xor a1) and aesOrthoMask1
-		a0 = a0 xor (moved shl 1)
-		a1 = a1 xor moved
-		moved = ((a2 shr 1) xor a3) and aesOrthoMask1
-		a2 = a2 xor (moved shl 1)
-		a3 = a3 xor moved
-		moved = ((a4 shr 1) xor a5) and aesOrthoMask1
-		a4 = a4 xor (moved shl 1)
-		a5 = a5 xor moved
-		moved = ((a6 shr 1) xor a7) and aesOrthoMask1
-		a6 = a6 xor (moved shl 1)
-		a7 = a7 xor moved
+		(a0, a1) = aesDeltaSwap(a0, far: a1, mask: aesOrthoMask1, distance: aesOrthoDistance1)
+		(a2, a3) = aesDeltaSwap(a2, far: a3, mask: aesOrthoMask1, distance: aesOrthoDistance1)
+		(a4, a5) = aesDeltaSwap(a4, far: a5, mask: aesOrthoMask1, distance: aesOrthoDistance1)
+		(a6, a7) = aesDeltaSwap(a6, far: a7, mask: aesOrthoMask1, distance: aesOrthoDistance1)
 
-		moved = ((a0 shr 2) xor a2) and aesOrthoMask2
-		a0 = a0 xor (moved shl 2)
-		a2 = a2 xor moved
-		moved = ((a1 shr 2) xor a3) and aesOrthoMask2
-		a1 = a1 xor (moved shl 2)
-		a3 = a3 xor moved
-		moved = ((a4 shr 2) xor a6) and aesOrthoMask2
-		a4 = a4 xor (moved shl 2)
-		a6 = a6 xor moved
-		moved = ((a5 shr 2) xor a7) and aesOrthoMask2
-		a5 = a5 xor (moved shl 2)
-		a7 = a7 xor moved
+		(a0, a2) = aesDeltaSwap(a0, far: a2, mask: aesOrthoMask2, distance: aesOrthoDistance2)
+		(a1, a3) = aesDeltaSwap(a1, far: a3, mask: aesOrthoMask2, distance: aesOrthoDistance2)
+		(a4, a6) = aesDeltaSwap(a4, far: a6, mask: aesOrthoMask2, distance: aesOrthoDistance2)
+		(a5, a7) = aesDeltaSwap(a5, far: a7, mask: aesOrthoMask2, distance: aesOrthoDistance2)
 
-		moved = ((a0 shr 4) xor a4) and aesOrthoMask4
-		a0 = a0 xor (moved shl 4)
-		a4 = a4 xor moved
-		moved = ((a1 shr 4) xor a5) and aesOrthoMask4
-		a1 = a1 xor (moved shl 4)
-		a5 = a5 xor moved
-		moved = ((a2 shr 4) xor a6) and aesOrthoMask4
-		a2 = a2 xor (moved shl 4)
-		a6 = a6 xor moved
-		moved = ((a3 shr 4) xor a7) and aesOrthoMask4
-		a3 = a3 xor (moved shl 4)
-		a7 = a7 xor moved
+		(a0, a4) = aesDeltaSwap(a0, far: a4, mask: aesOrthoMask4, distance: aesOrthoDistance4)
+		(a1, a5) = aesDeltaSwap(a1, far: a5, mask: aesOrthoMask4, distance: aesOrthoDistance4)
+		(a2, a6) = aesDeltaSwap(a2, far: a6, mask: aesOrthoMask4, distance: aesOrthoDistance4)
+		(a3, a7) = aesDeltaSwap(a3, far: a7, mask: aesOrthoMask4, distance: aesOrthoDistance4)
 
 		self.q0 = a0
 		self.q1 = a1
@@ -265,8 +255,8 @@ type AesState
 		self.ortho()
 	end 'loadCounters'
 
-	// Two functions rather than one returning a pair: a helper that returns two values is not inlined,
-	// and the call lands on the per-block path.
+	// Two functions rather than one returning a pair: a pair helper over `aesLane`, which is past the
+	// leaf budget, stays a call and returns its pair through the heap on the per-block path.
 	function firstLane() returns AesWord
 		return aesLane(self.q0, high: self.q4)
 	end 'firstLane'
@@ -825,7 +815,7 @@ export type AesBitsliced
 	end 'cryptBlockInto'
 
 	export function xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
-		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift
+		let blocks = aesBlockCount(data.count())
 		let firstBlock = counter as Count
 		let (nonceLow, nonceMid) = try streamNonceWords(nonce, firstCounter: firstBlock, streamBlocks: blocks)
 		var state = AesState.create()
@@ -840,7 +830,7 @@ export type AesBitsliced
 	// `counter` is returned as its two lanes instead of being XORed in. The overflow check covers that
 	// block plus the data.
 	export function xorKeyStreamPastFirstBlock(nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
-		let streamBlocks = ((data.count() + aesBlockBytes - 1) shr aesBlockShift) + aesMaskLeadBlocks
+		let streamBlocks = aesBlockCount(data.count()) + aesMaskLeadBlocks
 		let firstBlock = counter as Count
 		let (nonceLow, nonceMid) = try streamNonceWords(nonce, firstCounter: firstBlock, streamBlocks: streamBlocks)
 		var state = AesState.create()

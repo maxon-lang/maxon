@@ -3520,7 +3520,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.jmp __im_detached#91
   __rc_panic#37:
-    x64.leaRegRdata rcx, [rip + __str_blob_32]  ; "panic at AesBitsliced.maxon:801: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at AesBitsliced.maxon:791: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3532,7 +3532,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#59:
-    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at AesBitsliced.maxon:704: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3544,7 +3544,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#154:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at AesBitsliced.maxon:97: aes: a word inside an array the caller sized is missing\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at AesBitsliced.maxon:111: aes: a word inside an array the caller sized is missing\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3556,7 +3556,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __im_missing#67:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3568,7 +3568,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#64:
-    x64.leaRegRdata rcx, [rip + __str_blob_23]  ; "panic at AesBitsliced.maxon:707: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3580,7 +3580,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#102:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at AesBitsliced.maxon:716: aes: round constant index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3592,7 +3592,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#112:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at AesBitsliced.maxon:722: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3604,7 +3604,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#115:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at AesBitsliced.maxon:723: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3616,7 +3616,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __im_missing#128:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3628,7 +3628,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#118:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at AesBitsliced.maxon:724: Range check failed: value outside typealias 'AesKeySlot'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3640,7 +3640,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#121:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at AesBitsliced.maxon:728: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3652,7 +3652,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __im_missing#87:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4395,7 +4395,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.jmp __im_detached#91
   __rc_panic#37:
-    x64.leaRegRdata rcx, [rip + __str_blob_32]  ; "panic at AesBitsliced.maxon:801: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at AesBitsliced.maxon:791: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4407,7 +4407,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#59:
-    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at AesBitsliced.maxon:704: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4419,7 +4419,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#154:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at AesBitsliced.maxon:97: aes: a word inside an array the caller sized is missing\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at AesBitsliced.maxon:111: aes: a word inside an array the caller sized is missing\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4431,7 +4431,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __im_missing#67:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4443,7 +4443,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#64:
-    x64.leaRegRdata rcx, [rip + __str_blob_23]  ; "panic at AesBitsliced.maxon:707: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4455,7 +4455,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#102:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at AesBitsliced.maxon:716: aes: round constant index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4467,7 +4467,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#112:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at AesBitsliced.maxon:722: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4479,7 +4479,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#115:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at AesBitsliced.maxon:723: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4491,7 +4491,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __im_missing#128:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4503,7 +4503,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#118:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at AesBitsliced.maxon:724: Range check failed: value outside typealias 'AesKeySlot'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4515,7 +4515,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#121:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at AesBitsliced.maxon:728: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4527,7 +4527,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __im_missing#87:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -5238,7 +5238,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x22 + 0]
     arm64.b __im_detached#91
   __rc_panic#37:
-    arm64.leaRdata x0, __str_blob_32  ; "panic at AesBitsliced.maxon:801: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:791: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5254,7 +5254,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#59:
-    arm64.leaRdata x0, __str_blob_21  ; "panic at AesBitsliced.maxon:704: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_22  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5270,7 +5270,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   tryerr#154:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:97: aes: a word inside an array the caller sized is missing\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:111: aes: a word inside an array the caller sized is missing\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5286,7 +5286,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __im_missing#67:
-    arm64.leaRdata x0, __str_blob_35  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5302,7 +5302,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#64:
-    arm64.leaRdata x0, __str_blob_23  ; "panic at AesBitsliced.maxon:707: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5318,7 +5318,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   tryerr#102:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:716: aes: round constant index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5334,7 +5334,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#112:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:722: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5350,7 +5350,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#115:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:723: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5366,7 +5366,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __im_missing#128:
-    arm64.leaRdata x0, __str_blob_35  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5382,7 +5382,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#118:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:724: Range check failed: value outside typealias 'AesKeySlot'\x0a"
+    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5398,7 +5398,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#121:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:728: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_28  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -5414,7 +5414,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __im_missing#87:
-    arm64.leaRdata x0, __str_blob_35  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6134,7 +6134,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x4, [x22 + 0]
     arm64.b __im_detached#91
   __rc_panic#37:
-    arm64.leaRdata x0, __str_blob_32  ; "panic at AesBitsliced.maxon:801: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:791: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6150,7 +6150,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#59:
-    arm64.leaRdata x0, __str_blob_21  ; "panic at AesBitsliced.maxon:704: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_22  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6166,7 +6166,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   tryerr#154:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:97: aes: a word inside an array the caller sized is missing\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:111: aes: a word inside an array the caller sized is missing\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6182,7 +6182,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __im_missing#67:
-    arm64.leaRdata x0, __str_blob_35  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6198,7 +6198,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#64:
-    arm64.leaRdata x0, __str_blob_23  ; "panic at AesBitsliced.maxon:707: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6214,7 +6214,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   tryerr#102:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:716: aes: round constant index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6230,7 +6230,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#112:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:722: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6246,7 +6246,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#115:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:723: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6262,7 +6262,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __im_missing#128:
-    arm64.leaRdata x0, __str_blob_35  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6278,7 +6278,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#118:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:724: Range check failed: value outside typealias 'AesKeySlot'\x0a"
+    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6294,7 +6294,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#121:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:728: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_28  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -6310,7 +6310,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __im_missing#87:
-    arm64.leaRdata x0, __str_blob_35  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+    arm64.leaRdata x0, __str_blob_36  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4

@@ -132,6 +132,15 @@ func counterBlock(nonceMid, counter uint64) uint64 {
 	return nonceMid | (spreadBytes(counterWord(counter)) << 8)
 }
 
+func deltaSwap(near, far, mask uint64, distance uint) (uint64, uint64) {
+	moved := ((near >> distance) ^ far) & mask
+	return near ^ (moved << distance), far ^ moved
+}
+
+func blockCount(byteCount int) int {
+	return (byteCount + blockBytes - 1) >> 4
+}
+
 func rotateNibblesDown(word uint64) uint64 {
 	return (word & rowLaneMask) | ((word & rotatedDownNibble) >> 4) | ((word & wrappedUpNibble) << 12)
 }
@@ -162,44 +171,20 @@ type state struct{ q0, q1, q2, q3, q4, q5, q6, q7 uint64 }
 func (s *state) ortho() {
 	a0, a1, a2, a3, a4, a5, a6, a7 := s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7
 
-	moved := ((a0 >> 1) ^ a1) & m1
-	a0 ^= moved << 1
-	a1 ^= moved
-	moved = ((a2 >> 1) ^ a3) & m1
-	a2 ^= moved << 1
-	a3 ^= moved
-	moved = ((a4 >> 1) ^ a5) & m1
-	a4 ^= moved << 1
-	a5 ^= moved
-	moved = ((a6 >> 1) ^ a7) & m1
-	a6 ^= moved << 1
-	a7 ^= moved
+	a0, a1 = deltaSwap(a0, a1, m1, 1)
+	a2, a3 = deltaSwap(a2, a3, m1, 1)
+	a4, a5 = deltaSwap(a4, a5, m1, 1)
+	a6, a7 = deltaSwap(a6, a7, m1, 1)
 
-	moved = ((a0 >> 2) ^ a2) & m2
-	a0 ^= moved << 2
-	a2 ^= moved
-	moved = ((a1 >> 2) ^ a3) & m2
-	a1 ^= moved << 2
-	a3 ^= moved
-	moved = ((a4 >> 2) ^ a6) & m2
-	a4 ^= moved << 2
-	a6 ^= moved
-	moved = ((a5 >> 2) ^ a7) & m2
-	a5 ^= moved << 2
-	a7 ^= moved
+	a0, a2 = deltaSwap(a0, a2, m2, 2)
+	a1, a3 = deltaSwap(a1, a3, m2, 2)
+	a4, a6 = deltaSwap(a4, a6, m2, 2)
+	a5, a7 = deltaSwap(a5, a7, m2, 2)
 
-	moved = ((a0 >> 4) ^ a4) & m4
-	a0 ^= moved << 4
-	a4 ^= moved
-	moved = ((a1 >> 4) ^ a5) & m4
-	a1 ^= moved << 4
-	a5 ^= moved
-	moved = ((a2 >> 4) ^ a6) & m4
-	a2 ^= moved << 4
-	a6 ^= moved
-	moved = ((a3 >> 4) ^ a7) & m4
-	a3 ^= moved << 4
-	a7 ^= moved
+	a0, a4 = deltaSwap(a0, a4, m4, 4)
+	a1, a5 = deltaSwap(a1, a5, m4, 4)
+	a2, a6 = deltaSwap(a2, a6, m4, 4)
+	a3, a7 = deltaSwap(a3, a7, m4, 4)
 
 	s.q0, s.q1, s.q2, s.q3, s.q4, s.q5, s.q6, s.q7 = a0, a1, a2, a3, a4, a5, a6, a7
 }
@@ -565,7 +550,7 @@ func (a *BitslicedAes) EncryptBlock(block []byte) []byte {
 }
 
 func (a *BitslicedAes) XorKeyStream(nonce []byte, counter uint32, data []byte) []byte {
-	blocks := (len(data) + 15) >> 4
+	blocks := blockCount(len(data))
 	firstBlock := int(counter)
 	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, blocks)
 	var s state
@@ -574,7 +559,7 @@ func (a *BitslicedAes) XorKeyStream(nonce []byte, counter uint32, data []byte) [
 }
 
 func (a *BitslicedAes) XorKeyStreamPastFirstBlock(nonce []byte, counter uint32, data, output []byte) ([]byte, uint64, uint64) {
-	streamBlocks := ((len(data) + 15) >> 4) + maskLeadBlocks
+	streamBlocks := blockCount(len(data)) + maskLeadBlocks
 	firstBlock := int(counter)
 	nonceLow, nonceMid := streamNonceWords(nonce, firstBlock, streamBlocks)
 	var s state
