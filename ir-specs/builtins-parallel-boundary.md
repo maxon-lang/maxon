@@ -59,26 +59,18 @@ data {
   __mrt_program_started@3 = i8 0
 }
 
-func @checkpoint {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __parallel_boundary
-    x64.callDirect __parallel_boundary
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect checkpoint
-    x64.callDirect checkpoint
+  __il_body#3:
+    x64.callDirect __parallel_boundary
+    x64.callDirect __parallel_boundary
+  __il_body#4:
+    x64.callDirect __parallel_boundary
+    x64.callDirect __parallel_boundary
+  __il_cont:
     x64.movRegImm32 r8, 4
     x64.epilogue 32
     x64.popReg rbp
@@ -101,26 +93,18 @@ data {
   __mrt_program_started@16 = i8 0
 }
 
-func @checkpoint {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __parallel_boundary
-    x64.callDirect __parallel_boundary
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect checkpoint
-    x64.callDirect checkpoint
+  __il_body#3:
+    x64.callDirect __parallel_boundary
+    x64.callDirect __parallel_boundary
+  __il_body#4:
+    x64.callDirect __parallel_boundary
+    x64.callDirect __parallel_boundary
+  __il_cont:
     x64.movRegImm32 r8, 4
     x64.epilogue 32
     x64.popReg rbp
@@ -141,21 +125,16 @@ data {
   __mrt_program_started@0 = i8 0
 }
 
-func @checkpoint {
-  entry:
-    arm64.prologue 16
-    arm64.bl __parallel_boundary
-    arm64.bl __parallel_boundary
-    arm64.movRegReg x1, x0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.bl checkpoint
-    arm64.bl checkpoint
+  __il_body#3:
+    arm64.bl __parallel_boundary
+    arm64.bl __parallel_boundary
+  __il_body#4:
+    arm64.bl __parallel_boundary
+    arm64.bl __parallel_boundary
+  __il_cont:
     arm64.movImm x0, 4
     arm64.epilogue 16
     arm64.ret
@@ -177,21 +156,16 @@ data {
   __mrt_program_started@24 = i8 0
 }
 
-func @checkpoint {
-  entry:
-    arm64.prologue 16
-    arm64.bl __parallel_boundary
-    arm64.bl __parallel_boundary
-    arm64.movRegReg x1, x0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.bl checkpoint
-    arm64.bl checkpoint
+  __il_body#3:
+    arm64.bl __parallel_boundary
+    arm64.bl __parallel_boundary
+  __il_body#4:
+    arm64.bl __parallel_boundary
+    arm64.bl __parallel_boundary
+  __il_cont:
     arm64.movImm x0, 4
     arm64.epilogue 16
     arm64.ret
