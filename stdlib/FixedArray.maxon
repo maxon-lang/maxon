@@ -12,7 +12,9 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 		return Self{managed: managed}
 	end 'init'
 
-	/// Create a zero-initialized fixed array with capacity from the typealias
+	/// Create a zero-initialized fixed array of the length its type states, as in `Vec3.create()` for
+	/// `typealias Vec3 = FixedArray with 3 Int`. A runtime-sized type (`FixedArray with Int`) states
+	/// no length and is created with `Buf.create(n)`.
 	public static function create() returns Self
 		return Self{}
 	end 'create'
@@ -23,11 +25,13 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 
 	/// Get the fixed size of the fixed array.
 	///
-	/// ⭐ IT ANSWERS FROM THE TYPE, NOT FROM THE RECORD. The count is a coordinate of the instance —
-	/// a `FixedArray with 3 Int` is a different type from a `FixedArray with 4 Int` — so `countof(Self)` is
-	/// the number itself, folded to a literal by both compilers, and no load happens at all.
+	/// ⭐ A SIZED TYPE ANSWERS FROM THE TYPE, NOT FROM THE RECORD. The count is a coordinate of the
+	/// instance — a `FixedArray with 3 Int` is a different type from a `FixedArray with 4 Int` — so
+	/// `countof(Self)` is the number itself, folded to a literal by both compilers, and no load
+	/// happens at all. A runtime-sized receiver (`FixedArray with Int`) has no such number:
+	/// `countof(Self)` loads the record's length.
 	///
-	/// ⛔ `managed.length()` is NOT the same question. It answers
+	/// ⛔ For a sized type `managed.length()` is NOT the same question. It answers
 	/// out of the RECORD, by a route that can disagree with the type: the buffer under a fixed array is
 	/// sized through the array's policy, whose minimum is 4, so a three-element fixed array's record has
 	/// a fourth slot the type has not got. A fixed size that can disagree with its own type is not
@@ -35,13 +39,14 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 	/// difference is closed by construction rather than left to a test to notice.
 	///
 	/// ⚠⚠ THE OTHER TWO READERS ANSWER OUT OF THE RECORD, SO THE INVARIANT BETWEEN THEM IS ESTABLISHED
-	/// BY CONSTRUCTION AND DEFENDED BY A REFUSAL.
-	/// `get` forwards to `managed.get`, which is LENGTH-bounded, and `createIterator` hands the raw
-	/// buffer to a cursor that walks the same length — so all three agree exactly while
-	/// `managed.length() == countof(Self)`, which every route into the record does establish:
-	/// `create()` builds the record at the count with that length, and `FixedArray from [...]` interns the
-	/// instance at the literal's own element count. `init(managed)` is not exported, so no program
-	/// can hand this type a buffer of its own choosing.
+	/// BY CONSTRUCTION AND DEFENDED BY A REFUSAL. `get` forwards to `managed.get`, which is
+	/// LENGTH-bounded, and `createIterator` hands the raw buffer to a cursor that walks the same
+	/// length — so all three agree exactly while `managed.length() == countof(Self)`, which every
+	/// route into the record does establish: `create()` builds the record at the count with that
+	/// length, and `FixedArray from [...]` interns the instance at the literal's own element count. (A
+	/// runtime-sized receiver's `countof(Self)` is the record's length, so the three agree by
+	/// definition.) `init(managed)` is not exported, so no program can hand this type a buffer of its
+	/// own choosing.
 	///
 	/// ⛔ THE BUFFER MUST NOT BE REACHED PAST THE SURFACE. `managed` is visible to an
 	/// `extension FixedArray`, so without the refusals below a program can move the record out from under
@@ -103,13 +108,15 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 	end 'count'
 
 	/// Get element at index, throws if out of bounds. A call whose index is proven inside the fixed
-	/// size cannot throw and is written without `try`.
+	/// size cannot throw and is written without `try`. A runtime-sized fixed array's index is never
+	/// proven, so its calls need `try`.
 	public function get(index ElementIndex) returns Element throws ArrayError
 		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
 	end 'get'
 
 	/// Set element at index, throws if out of bounds. A call whose index is proven inside the fixed
-	/// size cannot throw and is written without `try`.
+	/// size cannot throw and is written without `try`. A runtime-sized fixed array's index is never
+	/// proven, so its calls need `try`.
 	///
 	/// ⛔ THE GUARD IS THE WHOLE OF THE FIXED ARRAY'S BOUND AND NOT BELT-AND-BRACES, WHICH IS
 	/// `stdlib/Array.maxon`'s `set` word for word one container over. The BUFFER's setter is bounded by

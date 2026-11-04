@@ -213,7 +213,7 @@ A numeric literal's text is not a number -- two decimal points ('1.5.3'), or any
 
 ### E2069 — `fixedArraySizeMalformed`
 
-A 'FixedArray with ...' does not state a usable element COUNT before its element type: 'FixedArray with Int' (no count at all), 'FixedArray with 0 Int' (a fixed array of no elements), or a count too large for the compiler to fold into a buffer allocation. A FixedArray's SIZE IS PART OF ITS TYPE ('FixedArray with 3 Int' and 'FixedArray with 4 Int' are different types), which is why the count is required rather than defaulted: there is no size a sizeless spelling could mean, and a default would silently give two declarations one type. It is NOT E2056 GenericArityMismatch, which counts TYPE arguments -- the count is a value, is consumed before the type-argument list is read, and a 'FixedArray with 3' missing its element type IS the E2056 that code names. It has a code of its own so the one rule has one message wherever the spelling is met.
+A 'FixedArray' element count runs from 1 to 4294967295, and the program states one outside that range or spells it as something other than an integer literal. The message names the fault: "its element count is N" (0, a fixed array of no elements, or a count too large for the compiler to fold into a buffer allocation); "create's length is the constant N" (a constant length given to the 'create(n)' of a runtime-sized fixed array that is 0 or above 4294967295); "the element count of a `FixedArray` type is an integer literal, not X" (a name, a signed number or a fractional number written where the count goes: 'FixedArray with K Int', 'FixedArray with -3 Int', 'FixedArray with 3.5 Int'). Write an integer literal in range, as in 'FixedArray with 3 Int'. A count is part of the TYPE ('FixedArray with 3 Int' and 'FixedArray with 4 Int' are different types). A missing count, 'FixedArray with Int', is the runtime-sized form, whose length each value carries and 'create(n)' states, so it is not this error. This code is NOT E2056 GenericArityMismatch, which counts TYPE arguments -- the count is a value, is consumed before the type-argument list is read, and a 'FixedArray with 3' missing its element type IS the E2056 that code names. It has a code of its own so the one rule has one message wherever the spelling is met.
 
 ### E2070 — `ucdTableLabelUnknown`
 
@@ -880,6 +880,10 @@ A function throws a service send's error, `<Service>.<message>.sendError`, from 
 ### E3193 — `semanticInstanceMethodCalledWithoutReceiver`
 
 An instance method is called with no value to call it on: a bare call to a sibling instance method from a `static` method, a file-scope initializer or a `static var` initializer, none of which has a `self`, or `Type.method()` with an empty argument list. Call it on a value, `value.method(…)`, or pass the value as the first argument, `Type.method(value, …)`; or declare the method `static` if it uses no instance state.
+
+### E3194 — `fixedArrayCreateLengthForm`
+
+A fixed array's 'create' is called with the wrong arguments for the form of its type. A type that states its length ('Vec3' for 'FixedArray with 3 Int') takes none: write 'Vec3.create()'. A runtime-sized type ('Buf' for 'FixedArray with Int') needs its length and only that: write 'Buf.create(n)'. A second argument is refused, because a fixed array is always zeroed and never grows; for a growable buffer write 'Array.create(n, zeroed: false)'.
 
 ## Intermediate Representation (E4xxx)
 

@@ -2986,3 +2986,597 @@ func @main {
     arm64.ret
 }
 ```
+
+<!-- test: a-runtime-sized-creation-is-one-sized-create -->
+`Cells.create(n)` over an element with no count in its type is one call to `__managed_create_sized` with the capacity and the length both `n`; there is no `__managed_create` followed by a grow or a `setLength`. `make` is reached through a function value so that its body stays in the program.
+```maxon
+typealias Word = bits(64)
+typealias Cells = FixedArray with Word
+
+typealias CellsMaker = function(ElementIndex) returns Cells
+
+function make(n ElementIndex) returns Cells
+	return Cells.create(n)
+end 'make'
+
+var maker = make as CellsMaker
+
+function main() returns ExitCode
+	var cells = maker(6)
+
+	return cells.count() as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```TargetIr:x64-windows
+data {
+  __data_maker@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
+}
+
+func @make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_maker
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 6
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rdx, rbx
+    x64.callReg rax
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __data_maker@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_maker
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 6
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rdx, rbx
+    x64.callReg rax
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __data_maker@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @make {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x2, x0
+    arm64.movImm x0, 8
+    arm64.movImm x3, 0
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_maker
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 6
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.movRegReg x1, x19
+    arm64.blr x2
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+  __il_cont:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __data_maker@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
+}
+
+func @make {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x2, x0
+    arm64.movImm x0, 8
+    arm64.movImm x3, 0
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_maker
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 6
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.movRegReg x1, x19
+    arm64.blr x2
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+  __il_cont:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+
+<!-- test: a-constant-length-creation-is-one-sized-create-at-the-constant -->
+`Cells.create(8)` has the length 8 in its type, so the call is `__managed_create_sized` with the constants 8 and 8, exactly as `Planes.create()` over a `FixedArray with 8` is. The result is returned as a `Cells`, which a sized array widens to.
+```maxon
+typealias Word = bits(64)
+typealias Cells = FixedArray with Word
+
+typealias CellsMaker = function() returns Cells
+
+function make() returns Cells
+	return Cells.create(8)
+end 'make'
+
+var maker = make as CellsMaker
+
+function main() returns ExitCode
+	var cells = maker()
+
+	return cells.count() as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+```TargetIr:x64-windows
+data {
+  __data_maker@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
+}
+
+func @make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_maker
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rcx, rbx
+    x64.callReg rax
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-constant-length-creation-is-one-sized-create-at-the-constant.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __data_maker@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_sized
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_maker
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rcx, rbx
+    x64.callReg rax
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-constant-length-creation-is-one-sized-create-at-the-constant.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __data_maker@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @make {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x2, 8
+    arm64.movImm x0, 8
+    arm64.movImm x3, 0
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_maker
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x19
+    arm64.blr x1
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+  __il_cont:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-constant-length-creation-is-one-sized-create-at-the-constant.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __data_maker@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
+}
+
+func @make {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x2, 8
+    arm64.movImm x0, 8
+    arm64.movImm x3, 0
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_sized
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_maker
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x19
+    arm64.blr x1
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+  __il_cont:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-constant-length-creation-is-one-sized-create-at-the-constant.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```

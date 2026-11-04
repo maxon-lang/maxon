@@ -2258,6 +2258,7 @@ end 'literalEntryCloser'
 enum SoughtGive
 	known
 	aliasedNumber
+	runtimeSizedFixedArray
 	float
 	deferred
 end 'SoughtGive'
@@ -9841,6 +9842,20 @@ function instanceMethodCalledWithoutReceiver(typeName String, methodTok Token) r
 
 	return SourceParseError.registryRefused(ErrorCode.semanticInstanceMethodCalledWithoutReceiver, explanation: "'{method}' is an instance method of '{typeName}' and needs a receiver: call it on a value, such as 'value.{method}(...)', or make it `static`", line: methodTok.line, column: methodTok.column, note: DiagnosticNote.none)
 end 'instanceMethodCalledWithoutReceiver'
+
+let FixedArrayCreateLengthName = b"length"
+
+function typeSizedCreateTakesALength(alias String, sized String, memberTok Token) returns SourceParseError
+	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}' states its length in its type ({sized}), so '{String.from(CreateMethod)}' takes no argument: write '{alias}.{String.from(CreateMethod)}()'", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+end 'typeSizedCreateTakesALength'
+
+function runtimeSizedCreateNeedsALength(alias String, memberTok Token) returns SourceParseError
+	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}' states no length in its type, so '{String.from(CreateMethod)}' needs one: write '{alias}.{String.from(CreateMethod)}(n)'", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+end 'runtimeSizedCreateNeedsALength'
+
+function runtimeSizedCreateTakesOnlyALength(alias String, memberTok Token) returns SourceParseError
+	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}.{String.from(CreateMethod)}' takes only a length: a fixed array is always zeroed and never grows. Use 'Array.{String.from(CreateMethod)}(n, {String.from(ArrayCreateZeroedLabel)}: false)' for a growable buffer", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+end 'runtimeSizedCreateTakesOnlyALength'
 
 function paramOwnerAdmitsCapabilities(owner ParamDefaultOwner) returns bool
 	return match owner 'owner'
@@ -23098,11 +23113,12 @@ export type Parser
 	// `type Holder uses Element` would make `Holder.size` reserve a count its `slot` already STATES.
 	//
 	// ⭐ **THE PRECISE RULE IS A FACT ABOUT WHERE A COUNT CAN BE READ AT ALL: only inside the SIZED
-	// CONTAINER's own body.** `countof(Self)` requires it (`countofOperandIsTheOwnInstanceAt`) and so does the
-	// `Self{}` that publishes the slots (`ownRecordLiteralOfTheSizedContainerAt`). Everywhere else a receiver's
-	// instance STATES its count, so the call site folds a constant and owes its caller nothing. So the count
-	// graph is the container's own call graph and is EMPTY for every other type — which is also why this costs
-	// no allocation where it says nothing.
+	// CONTAINER's own body.** `countof(Self)` requires it (`countofOperandIsTheOwnInstanceAt`) and so
+	// does the `Self{}` that publishes the slots (`ownRecordLiteralOfTheSizedContainerAt`). Everywhere
+	// else a receiver's instance STATES its count (a constant) or holds it in its record (a
+	// runtime-sized instance), so the call site owes its caller nothing. So the count graph is the
+	// container's own call graph and is EMPTY for every other type — which is also why this costs no
+	// allocation where it says nothing.
 	function fixedElementCountEdgesFor(typeName ByteArray, scan FixedElementCountScan) returns NameRoster
 		if not self.signatures.isFixedArrayBaseName(typeName) 'notTheSizedContainersOwnBody'
 			return NameRoster.create()
@@ -28739,8 +28755,12 @@ export type Parser
 		end 'unsizedBase'
 
 		if not self.at(TokenKind.intLiteral) 'noCount'
-			self.recordSizedBaseCountRefusal(self.current(), fault: "it states no element count")
-			return InstanceShape.unsized
+			if self.atMisspelledElementCount() 'aMisspelledCount'
+				try self.refuseMisspelledElementCount()
+				return InstanceShape.unsized
+			end 'aMisspelledCount'
+
+			return InstanceShape.runtimeSized
 		end 'noCount'
 
 		let countTok = try self.consume(TokenKind.intLiteral)
@@ -28754,19 +28774,43 @@ export type Parser
 		return InstanceShape.sized(count as FixedElementCount)
 	end 'readSizedBaseElementCount'
 
-	// The ONE wording of E2069, shared by the two faults that reach it (no count, and a count outside the
-	// usable range) so a reader meets one sentence about one rule however the declaration went wrong.
+	function atMisspelledElementCount() returns bool
+		let kind = self.current().kind
+
+		if kind == TokenKind.floatLiteral or kind == TokenKind.minus or kind == TokenKind.plus 'aNumberNoCountIs'
+			return true
+		end 'aNumberNoCountIs'
+
+		return kind == TokenKind.identifier and not self.atReadonlyModifier() and self.peekKind() == TokenKind.identifier
+	end 'atMisspelledElementCount'
+
+	function refuseMisspelledElementCount() throws SourceParseError
+		let firstTok = try self.consume(self.current().kind)
+		var spelling = tokenDisplayText(firstTok)
+
+		if (firstTok.kind == TokenKind.minus or firstTok.kind == TokenKind.plus) and (self.at(TokenKind.intLiteral) or self.at(TokenKind.floatLiteral)) 'aSignedCount'
+			spelling = "{spelling}{tokenDisplayText(self.current())}"
+			try self.consume(self.current().kind)
+		end 'aSignedCount'
+
+		self.recordSizedBaseCountRefusal(firstTok, fault: "the element count of a `{String.from(FixedArrayBuiltinBaseName)}` type is an integer literal, not `{spelling}`")
+	end 'refuseMisspelledElementCount'
+
+	// The ONE wording of E2069, shared by every fault that reaches it (a written count outside the
+	// usable range, a count spelled as anything but an integer literal, a constant `create` length
+	// outside that range) so a reader meets one sentence about one rule however the program went
+	// wrong.
 	//
-	// ⚠ It takes only the token to BLAME. The base it names is `FixedArrayBuiltinBaseName` and cannot be anything
-	// else — `readSizedBaseElementCount` returns before this is reachable for every other base — so passing
-	// the base token in and then interpolating both it and the constant was one name written twice, free to
+	// ⚠ It takes only the token to BLAME. The base it names is `FixedArrayBuiltinBaseName` and cannot
+	// be anything else — every caller is already inside a `FixedArray` spelling or construction — so
+	// the base token passed in alongside the constant would be one name written twice, free to
 	// disagree with itself in a single sentence.
 	function recordSizedBaseCountRefusal(spelledAt Token, fault String)
 		if not self.signatures.allFilesFolded 'indexStillBuilding'
 			return
 		end 'indexStillBuilding'
 
-		self.recordArtifactDiagnostic(ErrorCode.fixedArraySizeMalformed, message: "`{String.from(FixedArrayBuiltinBaseName)} with …` needs a positive element count before its element type (`{String.from(FixedArrayBuiltinBaseName)} with 3 Int`), and {fault}. The count is part of the TYPE — a `{String.from(FixedArrayBuiltinBaseName)} with 3 Int` is a different type from a `{String.from(FixedArrayBuiltinBaseName)} with 4 Int` — so there is no size a sizeless spelling could mean and none is assumed. Counts run from {MinFixedElementCount} to {MaxFixedElementCount}", range: SourceRange.ofToken(spelledAt))
+		self.recordArtifactDiagnostic(ErrorCode.fixedArraySizeMalformed, message: "A `{String.from(FixedArrayBuiltinBaseName)}` element count runs from {MinFixedElementCount} to {MaxFixedElementCount}, and {fault}", range: SourceRange.ofToken(spelledAt))
 	end 'recordSizedBaseCountRefusal'
 
 	// Was the FIRST type argument of the `Base with …` at the cursor spelled `__ManagedMemory`? The
@@ -44673,10 +44717,12 @@ export type Parser
 		self.admitUnsignedLiteralBeside(otherwiseValue, partner: result)
 
 		var cont = self.artifact.module.addBlock(func, label: b"trycont", heat: BlockHeat.normal)
-		let phiId = self.mintPhi(cont, tag: self.tagOf(result), nameId: try self.bodyState.valueNameIds.get(result) otherwise panic("finishValueTry: result has no name column"))
+		let joinedAtTheFallback = self.otherwiseJoinsAtARuntimeSizedFixedArray(otherwiseValue, result: result)
+		let phiTypeSource = otherwiseValue if joinedAtTheFallback else result
+		let phiId = self.mintPhi(cont, tag: self.tagOf(phiTypeSource), nameId: try self.bodyState.valueNameIds.get(phiTypeSource) otherwise panic("finishValueTry: the merge's type source has no name column"))
 
-		// The merge wears the try-result's brand; the fallback was just checked against it.
-		self.brandValue(phiId, brand: self.brandOf(result))
+		// The merge wears the try-result's brand, or the runtime-sized fallback's where the two join there.
+		self.brandValue(phiId, brand: self.brandOf(phiTypeSource))
 		var tryArms = argsOf(result)
 		tryArms.push(otherwiseValue)
 		self.carryMergeOrigin(phiId, arms: tryArms, anchor: tryTok)
@@ -45178,7 +45224,7 @@ export type Parser
 		view resultAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(result), nameId: self.valueNameId(result), readerFilePath: self.job.path)
 		view fallbackAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(otherwiseValue), nameId: self.valueNameId(otherwiseValue), readerFilePath: self.job.path)
 
-		if self.signatures.aggregatesConflict(resultAggregate, expectedTag: self.tagOf(result), expectedNameId: self.valueNameId(result), expectedBrand: self.brandOf(result), got: fallbackAggregate, gotTag: self.tagOf(otherwiseValue), gotNameId: self.valueNameId(otherwiseValue), gotBrand: self.brandOf(otherwiseValue), readerFilePath: self.job.path) 'aggregateOtherwiseMismatch'
+		if not self.otherwiseJoinsAtARuntimeSizedFixedArray(otherwiseValue, result: result) and self.signatures.aggregatesConflict(resultAggregate, expectedTag: self.tagOf(result), expectedNameId: self.valueNameId(result), expectedBrand: self.brandOf(result), got: fallbackAggregate, gotTag: self.tagOf(otherwiseValue), gotNameId: self.valueNameId(otherwiseValue), gotBrand: self.brandOf(otherwiseValue), readerFilePath: self.job.path) 'aggregateOtherwiseMismatch'
 			try self.refuseOtherwiseMismatch(self.valueDisplayTypeName(otherwiseValue), expectedType: self.valueDisplayTypeName(result), fallback: otherwiseValue, tryTok: tryTok)
 			return
 		end 'aggregateOtherwiseMismatch'
@@ -45191,6 +45237,10 @@ export type Parser
 			try self.refuseOtherwiseMismatch(self.valueKindWord(otherwiseValue), expectedType: self.valueKindWord(result), fallback: otherwiseValue, tryTok: tryTok)
 		end 'managedOtherwiseTypeMismatch'
 	end 'requireOtherwiseMatchesResult'
+
+	function otherwiseJoinsAtARuntimeSizedFixedArray(otherwiseValue ValueId, result ValueId) returns bool
+		return self.signatures.sizedFixedArrayWidens(self.tagOf(otherwiseValue), declaredNameId: self.valueNameId(otherwiseValue), gotTag: self.tagOf(result), gotNameId: self.valueNameId(result))
+	end 'otherwiseJoinsAtARuntimeSizedFixedArray'
 
 	function refuseOtherwiseMismatch(fallbackType String, expectedType String, fallback ValueId, tryTok Token) throws SourceParseError
 		try self.refuseUnlessDeferred(SourceParseError.errorTypeMismatch("otherwise type '{fallbackType}' does not match expected type '{expectedType}'", line: tryTok.line, column: tryTok.column), value: fallback)
@@ -57477,6 +57527,7 @@ export type Parser
 		return match sought 'kind'
 			known gives not self.valueIsDeferred(give)
 			aliasedNumber gives self.valueIsAnAliasedNumber(give)
+			runtimeSizedFixedArray gives self.signatures.isRuntimeSizedFixedArrayAt(self.tagOf(give), nameId: self.valueNameId(give))
 			float gives tagIsFloat(self.tagOf(give))
 			deferred gives self.valueIsDeferred(give)
 		end 'kind'
@@ -57484,6 +57535,11 @@ export type Parser
 
 	function baselineGiveIndex(reachingArms MatchArmExitArray) returns ElementIndex
 		let firstKnown = try self.firstArmGiving(reachingArms, sought: SoughtGive.known) otherwise 0
+
+		if let runtimeSized = try self.firstArmGiving(reachingArms, sought: SoughtGive.runtimeSizedFixedArray) 'theJoinOfSizedAndRuntimeSized'
+			return runtimeSized
+		end 'theJoinOfSizedAndRuntimeSized'
+
 		let firstArm = try reachingArms.get(firstKnown) otherwise panic("baselineGiveIndex: reachingArms.get OOB at {firstKnown}")
 
 		if not self.valueIsAPlainNumber(self.giveValueOf(firstArm.give)) 'theFirstArmNamesItsType'
@@ -66886,8 +66942,8 @@ export type Parser
 	end 'namedStructSizeBytes'
 
 	// ⭐⭐ **`countof(Type)`** — how many ELEMENTS a fixed-size container type holds, `sizeof`'s twin
-	// one axis over: that one answers in BYTES per value, this one in ELEMENTS per instance. Two outcomes,
-	// decided by whether the operand STATES a count:
+	// one axis over: that one answers in BYTES per value, this one in ELEMENTS per instance. Three
+	// outcomes, decided by where the operand's count lives:
 	//
 	//   • An instance that states one (`FixedArray with 3 Int`, and every alias for it) is a COMPILE-TIME
 	//     CONSTANT folded to a `literal` right here, which is where the instance registry lives. It cannot
@@ -66895,9 +66951,12 @@ export type Parser
 	//   • The sized container's OWN `Self` states none — `ProgramSignatures.ownRecordSelfInstance`
 	//     interns at `InstanceShape.unsized`, deliberately, so ONE shared body serves every size
 	//     (`substitutedShape`) — so inside `type FixedArray uses Element` there is no compile-time answer,
-	//     and the expression IS the hidden FIXED-ELEMENT-COUNT parameter every call site fills in — so
-	//     it emits NO OP AT ALL, the way a `let` bound to a literal emits none: the value is already
-	//     defined, by the entry block's `param`.
+	//     and the expression IS the hidden FIXED-ELEMENT-COUNT parameter every call site fills in — a
+	//     constant from a receiver that states its count, the record's length from a runtime-sized
+	//     receiver — so it emits NO OP AT ALL, the way a `let` bound to a literal emits none: the
+	//     value is already defined, by the entry block's `param`.
+	//   • A runtime-sized instance (`FixedArray with Int`) is refused (E2015): its length belongs to
+	//     the value, so there is no type-level answer to fold.
 	//
 	// ⛔⛔ **THE COUNT TRAVELS IN ITS OWN HIDDEN PARAMETER AND NOT AS A TENTH LAYOUT-DESCRIPTOR WORD, AND THAT
 	// IS A MEASUREMENT.** See `ProgramSignatures.fixedElementCountNeeds`: a descriptor word describes the type
@@ -66939,6 +66998,12 @@ export type Parser
 			throw self.countofStatesNoCount(countofTok)
 		end 'noElementCount'
 
+		match self.signatures.elementCountSourceOf(maxonTypeTag(operand), nameId: typeNameIdOf(operand)) 'source'
+			inTheRecord then throw SourceParseError.unsupported("countof of a runtime-sized fixed array — its length is part of the value and not of the type, so ask the value for its `count()`, or name a sized alias (`typealias Sized = FixedArray with 4 Int`) and take `countof(Sized)`", line: countofTok.line, column: countofTok.column)
+			stated or
+			callerSlot then break
+		end 'source'
+
 		return (countofTok, genericInstanceIdOf(operand))
 	end 'parseCountofOperand'
 
@@ -66947,22 +67012,26 @@ export type Parser
 	end 'countofStatesNoCount'
 
 	// The count of one sized instance, at the parse: a literal when the instance states one, this
-	// function's own hidden slot when it does not. Two askers and one answer: the `countof(T)`
-	// expression a program writes, and the `Self{}` construction `stdlib/FixedArray.maxon`'s `create()`
-	// is. They must agree exactly — a record built with one number and read back through another is a
-	// `count()` that disagrees with `get()`, a silent wrong answer.
+	// function's own hidden slot when the caller supplies it, and a refusal for a runtime-sized
+	// instance, whose length is the building call's own argument. Two askers and one answer: the
+	// `countof(T)` expression a program writes, and the `Self{}` construction
+	// `stdlib/FixedArray.maxon`'s `create()` is. They must agree exactly — a record built with one
+	// number and read back through another is a `count()` that disagrees with `get()`, a silent wrong
+	// answer.
 	//
 	// A closure body is emitted as its own top-level function, so it reads the enclosing method's slot out
 	// of its environment (`enclosingThroughEnv`), captured at the literal.
 	function fixedElementCountValue(giid GenericInstanceId, anchor Token) returns ValueId throws SourceParseError
-		if let stated = try self.signatures.genericInstanceFixedCount(giid) 'aStatedCount'
-			return self.emitLiteral(stated as FullRangeInt, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
-		end 'aStatedCount'
+		match self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: giid as TypeNameId) 'source'
+			stated(count) then return self.emitLiteral(count as FullRangeInt, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
+			inTheRecord then throw runtimeSizedCreateNeedsALength(String.from(anchor.value), memberTok: anchor)
+			callerSlot then break
+		end 'source'
 
 		match self.bodyState.fixedElementCountParam 'countParam'
 			slot(valueId) then return valueId
 			enclosingThroughEnv then return self.closureEnvWord(self.closureHiddenWordSlot(ClosureHiddenWord.fixedElementCount), anchor: anchor)
-			none then throw SourceParseError.unsupported("countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. The pre-scan that reserves that slot reads raw tokens, so spell the operand `Self` (or the container's own name) directly rather than through an alias", line: anchor.line, column: anchor.column)
+			none then throw SourceParseError.unsupported("countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. A default argument is evaluated in a helper function of its own, which holds no such argument to read: read `countof(Self)` in the body of a method of the sized container", line: anchor.line, column: anchor.column)
 		end 'countParam'
 	end 'fixedElementCountValue'
 
@@ -73378,6 +73447,16 @@ export type Parser
 		let constructed = self.constructorInstanceOf(aliasName)
 		try self.requireConstructedFixedArrayElementType(constructed, aliasTok: typeTok)
 
+		if let built = try self.instanceBuiltByCreate(constructed, memberTok: memberTok) 'aCreate'
+			if self.signatures.isFixedArrayInstance(built) 'aFixedArrayCreate'
+				match self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: built as TypeNameId) 'lengthSource'
+					inTheRecord then return try self.parseRuntimeSizedFixedArrayCreate(func, giid: built, aliasTok: typeTok, aliasName: aliasName)
+					stated(count) then try self.requireTypeSizedCreateTakesNoLength(built, count: count, aliasTok: typeTok, memberTok: memberTok)
+					callerSlot then break
+				end 'lengthSource'
+			end 'aFixedArrayCreate'
+		end 'aCreate'
+
 		// ⭐⭐ **A BARE GENERIC BASE NAMED FROM A NON-GENERIC SCOPE HAS NO OTHER SOURCE FOR ITS TYPE
 		// ARGUMENTS.** `constructorInstanceOf` answers from a generic ALIAS or from the enclosing type's
 		// parameters, and `Outer.create(1 as Whole)` written in `main` has neither — so only the factory's own
@@ -73397,6 +73476,56 @@ export type Parser
 
 		return result
 	end 'parseDeclaredStaticCall'
+
+	function instanceBuiltByCreate(constructed ConstructorInstance, memberTok Token) returns GenericInstanceId throws AbsentError
+		if not memberTok.value.equals(CreateMethod) 'notCreate'
+			throw AbsentError.absent
+		end 'notCreate'
+
+		match constructed 'constructed'
+			none then throw AbsentError.absent
+			instance(gid) then return gid
+		end 'constructed'
+	end 'instanceBuiltByCreate'
+
+	function requireTypeSizedCreateTakesNoLength(giid GenericInstanceId, count FixedElementCount, aliasTok Token, memberTok Token) throws SourceParseError
+		if self.kindAt(self.pos + 1) != TokenKind.leftParen or self.kindAt(self.pos + 2) == TokenKind.rightParen 'noArgument'
+			return
+		end 'noArgument'
+
+		throw typeSizedCreateTakesALength(String.from(aliasTok.value), sized: "{String.from(FixedArrayBuiltinBaseName)} with {count} {self.signatures.arrayElementDisplayName(giid)}", memberTok: memberTok)
+	end 'requireTypeSizedCreateTakesNoLength'
+
+	function parseRuntimeSizedFixedArrayCreate(func IrFunction, giid GenericInstanceId, aliasTok Token, aliasName ByteArray) returns ValueId throws SourceParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(aliasTok, last: methodTok)
+		try self.consume(TokenKind.leftParen)
+
+		if self.at(TokenKind.rightParen) 'noLength'
+			throw runtimeSizedCreateNeedsALength(String.from(aliasTok.value), memberTok: methodTok)
+		end 'noLength'
+
+		let lengthTok = self.current()
+		let length = try self.parseCreateLengthArg(func, lengthOwner: self.signatures.arrayRecordBaseName(), paramName: FixedArrayCreateLengthName, aliasTok: aliasTok)
+
+		if self.at(TokenKind.comma) 'anotherArgument'
+			throw runtimeSizedCreateTakesOnlyALength(String.from(aliasTok.value), memberTok: methodTok)
+		end 'anotherArgument'
+
+		try self.consume(TokenKind.rightParen)
+
+		if self.constIsKnown(length) and self.constOf(length) >= 0 'aNonNegativeConstant'
+			if self.constOf(length) >= (MinFixedElementCount as FullRangeInt) and self.constOf(length) <= (MaxFixedElementCount as FullRangeInt) 'aUsableCount'
+				let sized = self.signatures.fixedArrayInstanceForElement(self.signatures.containerElementType(giid), size: self.constOf(length) as FixedElementCount)
+
+				return try self.emitOwnedContainerRecord(sized, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: ValueIdArray.create())
+			end 'aUsableCount'
+
+			self.recordSizedBaseCountRefusal(lengthTok, fault: "create's length is the constant {self.constOf(length)}")
+		end 'aNonNegativeConstant'
+
+		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: twoArgs(length, second: length))
+	end 'parseRuntimeSizedFixedArrayCreate'
 
 	// The base an ordinary static call may INFER an instantiation for: a written type name that declares type
 	// parameters and that no alias or enclosing scope has already fixed. `FactoryInference.none` for
@@ -73454,27 +73583,33 @@ export type Parser
 		end 'aReceiverCall'
 	end 'requireBareGenericSubjectIsBound'
 
-	function staticTakesItsCountFromTheCallSite(callee ByteArray) returns bool
-		if self.signatures.calleeReceiverOf(callee) == CalleeReceiver.takesReceiver or isFieldDefaultHelperName(callee) or self.signatures.calleeReturnsItsDeclaringType(callee) 'theCountHasAnotherSource'
+	function staticReadsItsCount(callee ByteArray) returns bool
+		if self.signatures.calleeReceiverOf(callee) == CalleeReceiver.takesReceiver or isFieldDefaultHelperName(callee) 'theCountHasAnotherSource'
 			return false
 		end 'theCountHasAnotherSource'
 
 		return self.signatures.functionReadsFixedElementCount(callee)
-	end 'staticTakesItsCountFromTheCallSite'
+	end 'staticReadsItsCount'
 
 	function requireACountSourceForAStaticCall(callee ByteArray, constructed ConstructorInstance, anchor Token) throws SourceParseError
-		if not self.signatures.anyFunctionReadsFixedElementCount() or not self.staticTakesItsCountFromTheCallSite(callee) 'theCountHasAnotherSource'
+		if not self.signatures.anyFunctionReadsFixedElementCount() or not self.staticReadsItsCount(callee) 'theCountHasAnotherSource'
 			return
 		end 'theCountHasAnotherSource'
 
-		let callNamesTheCount = match constructed 'qualifier'
-			instance(gid) gives self.signatures.valueStatesItsOwnElementCount(ValueTypeTag.genericInstance, nameId: gid as TypeNameId)
-			none gives false
+		let source = match constructed 'qualifier'
+			instance(gid) gives self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: gid as TypeNameId)
+			none gives ElementCountSource.callerSlot
 		end 'qualifier'
 
-		if callNamesTheCount 'theQualifierStatesIt'
+		match source 'qualifierSource'
+			stated then return
+			inTheRecord then throw SourceParseError.unsupported("calling '{String.from(unqualifiedMemberOf(callee))}' (which reads `countof` of the sized container's own `Self`) through the name of a runtime-sized fixed array, whose length is the value's and not the type's — a `static function` has no value to read it from. Name a sized instance with a typealias (`FixedArray with 3 Int`) and call it through that, or call it from a method of the sized container", line: anchor.line, column: anchor.column)
+			callerSlot then break
+		end 'qualifierSource'
+
+		if self.signatures.calleeReturnsItsDeclaringType(callee) 'theResultStatesIt'
 			return
-		end 'theQualifierStatesIt'
+		end 'theResultStatesIt'
 
 		match self.bodyState.fixedElementCountParam 'hasOneToForward'
 			slot or
@@ -73807,6 +73942,7 @@ export type Parser
 	// `create(item: x)` fixes `T` exactly as `create(x)` does.
 	function factoryTypeArgumentAt(typeName ByteArray, paramName ByteArray, position ElementIndex, decl SweptDeclaration, args ValueIdArray, argLabels NameRoster) returns InferredTypeArgument
 		let token = typeParamTokenFor(typeName, paramName: paramName)
+		var inferred = InferredTypeArgument.absent
 
 		for p in 0 upto decl.paramTypes.count() 'eachFactoryParam'
 			let swept = try decl.paramTypes.get(p) otherwise panic("factoryTypeArgumentAt: paramTypes.get OOB at {p} below count {decl.paramTypes.count()}")
@@ -73828,14 +73964,21 @@ export type Parser
 				end 'anotherPosition'
 
 				match self.typeArgumentFixedByArgument(declared, actual: self.spawnTypeArgumentOfValue(try args.get(i) otherwise panic("factoryTypeArgumentAt: args.get OOB at {i}")), token: token, base: typeName, position: position) 'atThisArgument'
-					found(fixed) then return InferredTypeArgument.found(fixed)
+					found(fixed) then inferred = self.joinedInferredArgument(inferred, next: fixed)
 					absent then break
 				end 'atThisArgument'
 			end 'eachArgument'
 		end 'eachFactoryParam'
 
-		return InferredTypeArgument.absent
+		return inferred
 	end 'factoryTypeArgumentAt'
+
+	function joinedInferredArgument(sofar InferredTypeArgument, next MaxonType) returns InferredTypeArgument
+		return match sofar 'sofar'
+			absent gives InferredTypeArgument.found(next)
+			found(held) gives InferredTypeArgument.found(self.signatures.joinedFixedArrayArgument(held, next: next))
+		end 'sofar'
+	end 'joinedInferredArgument'
 
 	// A parameter written as the bare base inside its own type is the instance over the type's own
 	// parameters, so the argument's type argument at `position` is the one it fixes.
@@ -76260,10 +76403,10 @@ export type Parser
 		end 'namedReturn'
 	end 'retypeInstanceMethodResult'
 
-	// A callee that reads `countof` of the sized
-	// container's own `Self` takes the answer from a hidden argument the call site fills in, from one
-	// of two sources: the receiver's instance when it states a count, and the emitting function's own
-	// slot when it does not. A frame with neither would reach
+	// A callee that reads `countof` of the sized container's own `Self` takes the answer from a hidden
+	// argument the call site fills in, from one of three sources: the receiver's instance when it
+	// states a count, the receiver's record when the instance is runtime-sized, and the emitting
+	// function's own slot otherwise. A frame with none would reach
 	// `LowerMaxonToStd.forwardCallerFixedElementCount`'s panic, far from the spelling that caused it.
 	//
 	// ⛔ The reservation fixpoint cannot be made complete by adding token shapes, which is why this is
@@ -76280,8 +76423,8 @@ export type Parser
 	// but emitted as its own function, and carries the count only as a word inherited through its
 	// environment (`enclosingThroughEnv`).
 	//
-	// ⚠ The receiver test is `ProgramSignatures.valueStatesItsOwnElementCount`, the same predicate
-	// `LowerMaxonToStd.emitFixedElementCountOf` branches on, so this refusal cannot disagree with the
+	// ⚠ The receiver test is `ProgramSignatures.elementCountSourceOf`, the same question
+	// `LowerMaxonToStd.emitFixedElementCountOfReceiver` branches on, so this refusal cannot disagree with the
 	// emit about which receivers need a forward. Wider, it would refuse a legal program; narrower, it
 	// would let the abort back through.
 	//
@@ -76292,9 +76435,11 @@ export type Parser
 			return
 		end 'noCountInThisProgram'
 
-		if self.signatures.valueStatesItsOwnElementCount(self.tagOf(base.box), nameId: self.valueNameId(base.box)) 'theReceiverStatesIt'
-			return
-		end 'theReceiverStatesIt'
+		match self.signatures.elementCountSourceOf(self.tagOf(base.box), nameId: self.valueNameId(base.box)) 'receiverSource'
+			stated or
+			inTheRecord then return
+			callerSlot then break
+		end 'receiverSource'
 
 		match self.bodyState.fixedElementCountParam 'hasOneToForward'
 			slot or
@@ -77433,7 +77578,7 @@ export type Parser
 	function pairedDisplays(value ValueId, declaredTag ValueTypeTag, declaredNameId TypeNameId, declaredBrand ByteArray, declaredIdentity ByteArray, declaredShown String) returns PairedDisplays
 		let gotShown = self.valueDisplayTypeName(value)
 		view gotIdentity = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(value), nameId: self.valueNameId(value), readerFilePath: self.job.path)
-		let gotNote = self.signatures.contestedTypeNote(self.tagOf(value), nameId: self.valueNameId(value), brand: self.brandOf(value), identity: gotIdentity, shown: gotShown, otherShown: declaredShown)
+		let gotNote = self.signatures.gotSideNote(self.tagOf(value), gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), gotIdentity: gotIdentity, gotShown: gotShown, declaredTag: declaredTag, declaredNameId: declaredNameId, declaredShown: declaredShown)
 		let declaredNote = self.signatures.contestedTypeNote(declaredTag, nameId: declaredNameId, brand: declaredBrand, identity: declaredIdentity, shown: declaredShown, otherShown: gotShown)
 		return PairedDisplays.create(self.signatures.tupleDisplayNoted(gotShown, identity: gotIdentity, otherShown: declaredShown, otherIdentity: declaredIdentity), gotNote: gotNote, declared: self.signatures.tupleDisplayNoted(declaredShown, identity: declaredIdentity, otherShown: gotShown, otherIdentity: gotIdentity), declaredNote: declaredNote)
 	end 'pairedDisplays'
@@ -79688,8 +79833,7 @@ export type Parser
 			return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: ValueIdArray.create())
 		end 'noArguments'
 
-		let capacity = try self.parseBuiltinIntegerArg(func, paramName: ArrayCreateCapacityName, methodTok: aliasTok)
-		try self.requireArmServedIndexArgument(giid, member: ArrayResizeMethod, value: capacity, anchor: aliasTok, bufferSurface: false)
+		let capacity = try self.parseCreateLengthArg(func, lengthOwner: self.signatures.genericInstanceBaseName(giid), paramName: ArrayCreateCapacityName, aliasTok: aliasTok)
 
 		var zeroed = true
 
@@ -79914,8 +80058,9 @@ export type Parser
 	// `Array` is its own arm and is UNGATED: its element rule is the instance's
 	// own, so `requireContainerColumnTypes` returns for it, and it alone carries the buffer-surface stamp.
 	//
-	// `sizing` is empty for the empty container and `(capacity, published length)` for an `Array`'s sized
-	// `create`, which is no empty container and so is not noted as an empty-container image.
+	// `sizing` is empty for the empty container and `(capacity, published length)` for an `Array`'s
+	// sized `create` and a runtime-sized `FixedArray`'s `create(n)`, which are no empty container and
+	// so are not noted as an empty-container image.
 	//
 	// ⭐ **`BufArray.create()` YIELDS AN ARRAY OF BUFFERS** — asked of the ALIAS NAME and never of
 	// `giid`, which cannot answer: `Array with __ManagedMemory` and `Array with ByteArray` intern to the SAME
@@ -79971,9 +80116,10 @@ export type Parser
 		// countless `Self` (`ownRecordSelfInstance`, interned at `InstanceShape.unsized` so ONE body
 		// serves every size), so the size is a fact about the CALLER and arrives in the hidden count
 		// slot; at a concrete `Vec3{}` it folds to 3. Reading the registry directly here would publish
-		// ZERO slots in the one body that matters.
+		// ZERO slots in the one body that matters. A runtime-sized instance has no such fact: its length
+		// is the `sizing` the building call passes.
 		if self.signatures.isFixedArrayInstance(giid) 'sizedContainer'
-			let sized = try self.emitSizedContainerRecord(giid, anchor: aliasTok, range: range)
+			let sized = try self.emitSizedContainerRecord(giid, anchor: aliasTok, range: range, sizing: sizing)
 			self.trackOwnedTemp(sized, exclusivity: OwnedHeapExclusivity.sole)
 			return sized
 		end 'sizedContainer'
@@ -79983,12 +80129,13 @@ export type Parser
 		return container
 	end 'emitOwnedContainerRecord'
 
-	// ⭐ **THE RECORD IS BORN WITH ITS SLOTS PUBLISHED** — one
-	// `__managed_create_sized(elementSize, count, count, elementDestroy)` yields a zeroed buffer of `count`
-	// elements and a length of `count`, which together are exactly *"zero-initialized, N elements"*.
-	// `element_destroy@40` stays 0, which `requireFixedArrayElementType` is what makes correct. The call
-	// writes nothing but the record it returns, so `SemanticCheck.containerReadCallee` lists it as
-	// effect-free and a discarded `create()` is E3064.
+	// ⭐ **THE RECORD IS BORN WITH ITS SLOTS PUBLISHED** — one `__managed_create_sized(elementSize,
+	// count, count, elementDestroy)` yields a zeroed buffer of `count` elements and a length of
+	// `count`, which together are exactly *"zero-initialized, N elements"*. `count` is the type's, or
+	// for a runtime-sized instance the `create(n)` argument carried in `sizing`. `element_destroy@40`
+	// stays 0, which `requireFixedArrayElementType` is what makes correct. The call writes nothing but
+	// the record it returns, so `SemanticCheck.containerReadCallee` lists it as effect-free and a
+	// discarded `create()` is E3064.
 	//
 	// ⚠ **NOT `__managed_mem_create(N, elementSize)`, WHICH WOULD OTHERWISE BE THE OBVIOUS FIT.** That entry
 	// is THROWING (`isManagedMemoryMemberCallee` — it reports `invalidAllocation` for a size the allocator
@@ -80003,7 +80150,15 @@ export type Parser
 	// the guarantee is carried by `requireFixedArrayElementType` instead, at
 	// `requireSizedContainerElementType` — the construction door, where the element is concrete. **The two
 	// are one invariant with two doors — do not relax either without the other.**
-	function emitSizedContainerRecord(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
+	function emitSizedContainerRecord(giid GenericInstanceId, anchor Token, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
+		if sizing.count() != 0 'sizedByTheCaller'
+			match self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: giid as TypeNameId) 'sizingOwner'
+				inTheRecord then return try self.emitArrayCreateOp(giid, range: range, sizing: sizing)
+				stated or
+				callerSlot then panic("emitSizedContainerRecord: a caller sized a fixed array whose count the type states or the caller's slot carries — only a runtime-sized instance takes its sizing from the call that builds it")
+			end 'sizingOwner'
+		end 'sizedByTheCaller'
+
 		let count = try self.fixedElementCountValue(giid, anchor: anchor)
 		return try self.emitArrayCreateOp(giid, range: range, sizing: twoArgs(count, second: count))
 	end 'emitSizedContainerRecord'
@@ -80051,9 +80206,12 @@ export type Parser
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws SourceParseError
 		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
 
-		// ⚠ **THERE IS NO `FixedArray` ARM, BECAUSE THE create WHOSE ANSWER IS THE SIZE — which `countof(Self)` is what
-		// lets a shared corpus body name — IS DECLARED BY `stdlib/FixedArray.maxon`.** `Vec3.create()` never reaches this
-		// router: `instanceCreateIsDeclared` answers TRUE for it and both create doors take the declared road instead.
+		// ⚠ **THERE IS NO `FixedArray` ARM, BECAUSE THE create WHOSE ANSWER IS THE SIZE — which
+		// `countof(Self)` is what lets a shared corpus body name — IS DECLARED BY
+		// `stdlib/FixedArray.maxon`.** `Vec3.create()` never reaches this router:
+		// `instanceCreateIsDeclared` answers TRUE for it and both create doors take the declared road
+		// instead. A runtime-sized `Buf.create(n)` is built by `parseRuntimeSizedFixedArrayCreate` and
+		// misses it too.
 		if self.signatures.isManagedListInstance(giid) 'managedList'
 			return try self.emitListCreateOp(giid, range: range)
 		end 'managedList'
@@ -81589,7 +81747,7 @@ export type Parser
 	// ⭐ **THE SIZE COMES FROM THE TOKENS, NOT FROM THE RECORD.** It is part of the TYPE, so it must be known
 	// at parse time — `length@8` is a runtime fact — and the literal's element COUNT is exactly what the
 	// source wrote between its brackets (`arrayLiteralElementCountAt`, the same counter the sweep pre-interns
-	// with, so the instance the parser reads back is the instance the sweep minted).
+	// with, so the instance the parser asks for is the instance the sweep interned).
 	//
 	// ⭐ **THE GATE IS ASKED OF THE SOURCE ARRAY'S INSTANCE, WHICH IS NOT A STAND-IN — IT IS THE SAME
 	// QUESTION.** `Array with T` and `FixedArray with N T` share their element exactly, and every door
@@ -81626,11 +81784,14 @@ export type Parser
 		return arr
 	end 'parseFixedArrayFromConstruction'
 
-	// ⭐ **`Vec3 from [1, 2, 3]` — THE ALIAS STATES THE ELEMENT AND THE SIZE, SO THE LITERAL IS BUILT AT THEM.**
-	// The bare form's retype, over a literal built at the alias's element rather than one the first element
-	// inferred: a `FixedArray with 3 Reading` element strides the alias's slot, and a record built at a bare `int`'s
-	// stride could not be retyped into it. The `Array` instance at that element is interned before any parse
-	// (`ProgramSignatures.internAliasedFixedArrayLiteralArrays`), so this read mints nothing.
+	// ⭐ **`Vec3 from [1, 2, 3]` — THE ALIAS STATES THE ELEMENT AND THE SIZE, SO THE LITERAL IS BUILT
+	// AT THEM.** The bare form's retype, over a literal built at the alias's element rather than one
+	// the first element inferred: a `FixedArray with 3 Reading` element strides the alias's slot, and
+	// a record built at a bare `int`'s stride could not be retyped into it. The `Array` instance at
+	// that element is interned before any parse
+	// (`ProgramSignatures.internAliasedFixedArrayLiteralArrays`), so this read mints nothing. A
+	// runtime-sized alias states no size: the literal's written element count gives the instance,
+	// which the parse mints.
 	function parseAliasedFixedArrayLiteral(func IrFunction, vecTok Token) returns ValueId throws SourceParseError
 		let giid = self.signatures.genericAliasInstanceFrom(vecTok.value, readerFilePath: self.job.path)
 		try self.requireFixedArrayElementType(giid, tok: vecTok)
@@ -81640,21 +81801,29 @@ export type Parser
 		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.stated(arrayGiid))
 
 		let written = try self.arrayLiteralElementCountAt(openIndex, anchor: vecTok)
-		let size = try self.signatures.genericInstanceFixedCount(giid) otherwise throw SourceParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` states no size — a fixed array's size is part of its type", line: vecTok.line, column: vecTok.column)
+		var literalInstance = giid
 
-		if written != size 'wrongElementCount'
-			throw SourceParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` holds {size} — a fixed array's size is part of its type", line: vecTok.line, column: vecTok.column)
-		end 'wrongElementCount'
+		match self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: giid as TypeNameId) 'declaredSize'
+			stated(size) then try self.requireLiteralWritesTheStatedSize(written, size: size, vecTok: vecTok)
+			inTheRecord then literalInstance = self.signatures.fixedArrayInstanceForElement(self.signatures.containerElementType(giid), size: written)
+			callerSlot then throw SourceParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` states no size — a fixed array's size is part of its type", line: vecTok.line, column: vecTok.column)
+		end 'declaredSize'
 
-		self.retypeValue(arr, valueType: MaxonType.genericInstance(giid))
+		self.retypeValue(arr, valueType: MaxonType.genericInstance(literalInstance))
 		return arr
 	end 'parseAliasedFixedArrayLiteral'
 
-	// ⭐ **HOW MANY ELEMENTS THE ARRAY LITERAL AT `openIndex` WRITES** — the top-level commas between its
-	// brackets, plus one. Read from TOKENS because both of its callers need the answer before any expression
-	// is parsed: the declaration sweep (which has no parser state at all) and the construction above (which
-	// must know the instance before it can retype the value into it), and the two must agree exactly or the
-	// parser's read is the first write to the shared instance registry.
+	function requireLiteralWritesTheStatedSize(written FixedElementCount, size FixedElementCount, vecTok Token) throws SourceParseError
+		if written != size 'wrongElementCount'
+			throw SourceParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` holds {size} — a fixed array's size is part of its type", line: vecTok.line, column: vecTok.column)
+		end 'wrongElementCount'
+	end 'requireLiteralWritesTheStatedSize'
+
+	// ⭐ **HOW MANY ELEMENTS THE ARRAY LITERAL AT `openIndex` WRITES** — the top-level commas between
+	// its brackets, plus one. Read from TOKENS because both of its callers need the answer before any
+	// expression is parsed: the declaration sweep (which has no parser state at all) and the
+	// construction above (which must know the instance before it can retype the value into it), and
+	// the two must agree exactly so the sweep interns the instance the construction asks for.
 	//
 	// Nesting is tracked over the three bracket kinds a literal element can open, so `[f(1, 2), g(3)]` counts
 	// TWO and `[[1, 2], [3, 4]]` counts two as well.
@@ -85690,17 +85859,26 @@ export type Parser
 			return
 		end 'aMachineWordNotAStdlibAlias'
 
-		let receiverName = self.signatures.genericInstanceBaseName(giid)
+		try self.requireDeclaredIndexArgument(self.signatures.genericInstanceBaseName(giid), member: member, value: value, anchor: anchor)
+	end 'requireArmServedIndexArgument'
 
+	function requireDeclaredIndexArgument(receiverName ByteArray, member ByteArray, value ValueId, anchor Token) throws SourceParseError
 		// A program's own array record may leave a roster member undeclared; its synthesized surface
 		// carries no alias to enforce.
 		let decl = try self.signatures.sweptDeclarationOf(qualifiedMethodName(receiverName, methodName: member)) otherwise return
 
-		let paramName = try decl.paramNames.get(0) otherwise panic("requireArmServedIndexArgument: {String.from(receiverName)}.{String.from(member)} is declared with no first parameter")
+		let paramName = try decl.paramNames.get(0) otherwise panic("requireDeclaredIndexArgument: {String.from(receiverName)}.{String.from(member)} is declared with no first parameter")
 
-		view alias = try requireDeclaredAlias(self.signatures.declaredParamAliasAt(decl, position: 0)) otherwise panic("requireArmServedIndexArgument: the first parameter of {String.from(receiverName)}.{String.from(member)} names no ranged typealias, so `corpusServesNamedMemberOffRoster` should have served the declaration as a call")
+		view alias = try requireDeclaredAlias(self.signatures.declaredParamAliasAt(decl, position: 0)) otherwise panic("requireDeclaredIndexArgument: the first parameter of {String.from(receiverName)}.{String.from(member)} names no ranged typealias, so `corpusServesNamedMemberOffRoster` should have served the declaration as a call")
 		try self.requireArgumentFitsDeclaredAlias(value, alias: alias, paramName: paramName, anchor: anchor)
-	end 'requireArmServedIndexArgument'
+	end 'requireDeclaredIndexArgument'
+
+	function parseCreateLengthArg(func IrFunction, lengthOwner ByteArray, paramName ByteArray, aliasTok Token) returns ValueId throws SourceParseError
+		let length = try self.parseBuiltinIntegerArg(func, paramName: paramName, methodTok: aliasTok)
+		try self.requireDeclaredIndexArgument(lengthOwner, member: ArrayResizeMethod, value: length, anchor: aliasTok)
+
+		return length
+	end 'parseCreateLengthArg'
 
 	function mintArrayCountResult(giid GenericInstanceId, bufferSurface bool) returns ValueId
 		if bufferSurface 'theBuffersOwnCount'
@@ -90930,9 +91108,17 @@ export type Parser
 
 		match try self.callLayoutSource(result, callee: callee, args: args) otherwise return true 'source'
 			forwardedFromTheCaller then return true
-			ofInstance(instance) then return not self.signatures.valueStatesItsOwnElementCount(ValueTypeTag.genericInstance, nameId: instance as TypeNameId)
+			ofInstance(instance) then return self.instanceCountIsForwarded(instance)
 		end 'source'
 	end 'callForwardsTheFixedElementCount'
+
+	function instanceCountIsForwarded(instance GenericInstanceId) returns bool
+		return match self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: instance as TypeNameId) 'countSource'
+			stated or
+			inTheRecord gives false
+			callerSlot gives true
+		end 'countSource'
+	end 'instanceCountIsForwarded'
 
 	function callReadsTheDescriptor(result ValueId, callee ByteArray, args ValueIdArray) returns bool
 		if descriptorRuntimeCallOf(self.signatures, callee: callee, result: instanceViewOf(self.bodyState.valueTags, nameIds: self.bodyState.valueNameIds, value: result)) != DescriptorRuntimeCall.none 'aDescriptorRuntimeEntry'

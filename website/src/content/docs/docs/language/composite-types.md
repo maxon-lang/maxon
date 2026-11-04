@@ -477,7 +477,8 @@ end 'main'
 The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
 `Map`, and `Array`, `Set`, `List` and `FixedArray` aliases take `Alias from [ ... ]`, for example
 `CharSet from ['a', 'e']`; the alias states the element type, and a `FixedArray` alias's literal must write
-exactly as many elements as the alias holds. When that element is itself an array alias, each element is a
+exactly as many elements as the alias holds (a [runtime-sized](/docs/language/expressions/#runtime-sized-fixed-arrays) alias holds
+as many as its literal writes). When that element is itself an array alias, each element is a
 value of it: another `Alias from [ ... ]`, a bare `[ ... ]` that takes its element type from the alias, or
 a local of the inner alias — `Rows from [Ints from [1, 2], [3], row]` over `typealias Rows = Array with
 Ints`. `Set` and `List` also take any `Array` value, under the bare name or an alias: `Set from names` builds

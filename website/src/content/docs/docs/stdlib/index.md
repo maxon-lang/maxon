@@ -271,7 +271,7 @@ Trigonometry, logarithms and powers are in [Math](/docs/stdlib/runtime/#math).
 | Builtin | Description |
 |---------|-------------|
 | `sizeof(TypeName)` | Storage size of a type in bytes, as a constant `Count`: `int` and `float` are 8, `bool` and `byte` are 1. |
-| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `FixedArray with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
+| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `FixedArray with 3 Coord`. A type with no fixed element count, a runtime-sized `FixedArray with Coord` among them, is refused (E2015); ask the value for `count()`. |
 | `__file__`, `__line__` | Legal only as a parameter's default value; each expands at the **call site**. |
 
 `__line__` parameters are declared `SourceLineNumber` and `__file__` parameters `String`. The file is the

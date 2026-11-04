@@ -447,12 +447,10 @@ end 'main'
 error E2015: <fragment>:13:10: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
 ```
 
-<!-- test: error.an-alias-spelling-the-pre-scan-cannot-see-is-refused -->
-⭐ **A POSITIONED REFUSAL WHERE THE MECHANISM WOULD OTHERWISE ABORT.** The hidden count slot
-is reserved by a walk over RAW TOKENS that runs before any body is parsed, so it recognizes
-the operand by its spelling. An inner alias naming the same countless instance reaches the
-READ without having reached that walk — and rather than discovering the missing slot two
-passes later with no source position, the parse refuses it here, naming the line and the cure.
+<!-- test: error.an-extension-alias-stating-no-count-is-a-runtime-sized-fixed-array -->
+`FixedArray with Element` states no count, so inside an extension it is the runtime-sized fixed
+array over `Element`, whose length belongs to a value. `countof` of it is refused at its position,
+naming the two spellings that do have a count.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
@@ -471,8 +469,32 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:10: Unsupported: countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. The pre-scan that reserves that slot reads raw tokens, so spell the operand `Self` (or the container's own name) directly rather than through an alias
-error E2069: <fragment>:6:33: `FixedArray with …` needs a positive element count before its element type (`FixedArray with 3 Int`), and it states no element count. The count is part of the TYPE — a `FixedArray with 3 Int` is a different type from a `FixedArray with 4 Int` — so there is no size a sizeless spelling could mean and none is assumed. Counts run from 1 to 4294967295
+error E2015: <fragment>:9:10: Unsupported: countof of a runtime-sized fixed array — its length is part of the value and not of the type, so ask the value for its `count()`, or name a sized alias (`typealias Sized = FixedArray with 4 Int`) and take `countof(Sized)`
+```
+
+<!-- test: error.a-default-argument-reading-countof-Self-is-refused -->
+⭐ **A POSITIONED REFUSAL WHERE THE MECHANISM WOULD OTHERWISE ABORT.** The hidden count slot
+belongs to the method that reads `countof(Self)`. A default argument is evaluated in a helper function of its
+own, which carries no such slot, so a `countof(Self)` written there reaches the READ with nothing to read it
+from — and rather than discovering the missing slot two passes later with no source position, the parse
+refuses it here, naming the line and the cure.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+
+extension FixedArray
+	function padded(extra Count = countof(Self)) returns Int
+		return extra as Int
+	end 'padded'
+end 'FixedArray'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.padded()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:32: Unsupported: countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. A default argument is evaluated in a helper function of its own, which holds no such argument to read: read `countof(Self)` in the body of a method of the sized container
 ```
 
 <!-- test: error.an-ordinary-generics-static-is-refused-for-the-right-reason -->
@@ -954,4 +976,78 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: lib/<fragment>:11:17: typealias 'Hidden' is not exported
+```
+
+<!-- test: error.countof-of-a-runtime-sized-fixed-array -->
+A runtime-sized fixed array's length belongs to the value, so the type has no count to ask for. The refusal points at the two spellings that have one.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	return countof(Buf) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:9: Unsupported: countof of a runtime-sized fixed array — its length is part of the value and not of the type, so ask the value for its `count()`, or name a sized alias (`typealias Sized = FixedArray with 4 Int`) and take `countof(Sized)`
+```
+
+<!-- test: error.a-countof-static-through-a-runtime-sized-alias -->
+A static that reads `countof(Self)` takes the count from the instance its call names, and a runtime-sized alias names none: there is no record to read the length from, so the call is refused at its position.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+extension FixedArray
+	static function slotsOf() returns Int
+		return countof(Self)
+	end 'slotsOf'
+end 'FixedArray'
+
+function main() returns ExitCode
+	print("{Buf.slotsOf()}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:14: Unsupported: calling 'slotsOf' (which reads `countof` of the sized container's own `Self`) through the name of a runtime-sized fixed array, whose length is the value's and not the type's — a `static function` has no value to read it from. Name a sized instance with a typealias (`FixedArray with 3 Int`) and call it through that, or call it from a method of the sized container
+```
+
+<!-- test: error.a-top-level-countof-of-a-runtime-sized-fixed-array -->
+The refusal a function body gives a runtime-sized operand is the one a file-scope initialiser gives, at the same token.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+let n = countof(Buf)
+
+function main() returns ExitCode
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:9: Unsupported: countof of a runtime-sized fixed array — its length is part of the value and not of the type, so ask the value for its `count()`, or name a sized alias (`typealias Sized = FixedArray with 4 Int`) and take `countof(Sized)`
+```
+
+<!-- test: error.a-static-returning-Self-through-a-runtime-sized-alias -->
+A static that builds its own `Self` publishes the count of the instance its call names, and a runtime-sized alias names none: there is no length to build the record at, so the call is refused at its position.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+extension FixedArray
+	static function blank() returns Self
+		return Self{}
+	end 'blank'
+end 'FixedArray'
+
+function main() returns ExitCode
+	let blank = Buf.blank()
+
+	return blank.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:18: Unsupported: calling 'blank' (which reads `countof` of the sized container's own `Self`) through the name of a runtime-sized fixed array, whose length is the value's and not the type's — a `static function` has no value to read it from. Name a sized instance with a typealias (`FixedArray with 3 Int`) and call it through that, or call it from a method of the sized container
 ```

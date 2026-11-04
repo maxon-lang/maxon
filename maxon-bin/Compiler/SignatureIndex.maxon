@@ -11525,6 +11525,10 @@ export let MaxFixedElementCount = u32.max as FixedElementCount
 
 let UnsizedHashWord = 0 as HashDigest
 
+let RuntimeSizedHashWord = 8589934592 as HashDigest
+
+let RuntimeSizedShapeTag = "R"
+
 let ReadOnlyHashFlag = 1099511627776
 
 export typealias ReadOnlyArgMask = bits(64)
@@ -11584,6 +11588,12 @@ export enum InstanceSizeLookup implements Error
 	unsized
 end 'InstanceSizeLookup'
 
+export union ElementCountSource
+	stated(let count FixedElementCount)
+	inTheRecord
+	callerSlot
+end 'ElementCountSource'
+
 export enum InstanceShapeLookup implements Error
 	notQualified
 end 'InstanceShapeLookup'
@@ -11592,19 +11602,31 @@ export union InstanceShape
 	unsized
 	sized(let count FixedElementCount)
 	readOnlyArgs(let mask ReadOnlyArgMask)
+	runtimeSized
 
 	export function isSized() returns bool
 		return match self 'shape'
 			unsized or
-			readOnlyArgs gives false
+			readOnlyArgs or
+			runtimeSized gives false
 			sized gives true
 		end 'shape'
 	end 'isSized'
 
+	export function isRuntimeSized() returns bool
+		return match self 'shape'
+			unsized or
+			sized or
+			readOnlyArgs gives false
+			runtimeSized gives true
+		end 'shape'
+	end 'isRuntimeSized'
+
 	export function count() returns FixedElementCount throws InstanceSizeLookup
 		match self 'shape'
 			unsized or
-			readOnlyArgs then throw InstanceSizeLookup.unsized
+			readOnlyArgs or
+			runtimeSized then throw InstanceSizeLookup.unsized
 			sized(count) then return count
 		end 'shape'
 	end 'count'
@@ -11612,7 +11634,8 @@ export union InstanceShape
 	export function readOnlyMask() returns ReadOnlyArgMask throws InstanceShapeLookup
 		match self 'shape'
 			unsized or
-			sized then throw InstanceShapeLookup.notQualified
+			sized or
+			runtimeSized then throw InstanceShapeLookup.notQualified
 			readOnlyArgs(mask) then return mask
 		end 'shape'
 	end 'readOnlyMask'
@@ -11629,16 +11652,18 @@ export union InstanceShape
 
 	export function sameAs(other InstanceShape) returns bool
 		match self 'shape'
-			unsized then return not other.isSized() and not other.isReadOnlyQualified()
+			unsized then return not other.isSized() and not other.isReadOnlyQualified() and not other.isRuntimeSized()
 			sized(count) then return count == (try other.count() otherwise return false)
 			readOnlyArgs(mask) then return mask == (try other.readOnlyMask() otherwise return false)
+			runtimeSized then return other.isRuntimeSized()
 		end 'shape'
 	end 'sameAs'
 
 	export function isReadOnlyQualified() returns bool
 		return match self 'shape'
 			unsized or
-			sized gives false
+			sized or
+			runtimeSized gives false
 			readOnlyArgs gives true
 		end 'shape'
 	end 'isReadOnlyQualified'
@@ -11648,12 +11673,14 @@ export union InstanceShape
 			unsized gives ""
 			sized(count) gives "{count}"
 			readOnlyArgs(mask) gives "r{mask}"
+			runtimeSized gives RuntimeSizedShapeTag
 		end 'shape'
 	end 'keyText'
 
 	export function hashWord() returns HashDigest
 		return match self 'shape'
 			unsized gives UnsizedHashWord
+			runtimeSized gives RuntimeSizedHashWord
 			sized(count) gives count as HashDigest
 
 			// Combined rather than OR-ed: a mask reaching the flag's bit would alias it.
@@ -11670,6 +11697,7 @@ module function cacheWriteInstanceShape(writer LibraryCacheWriter, value Instanc
 		unsized then break
 		sized(a0) then cacheWriteInstanceShapeSized(writer, a0: a0)
 		readOnlyArgs(a0) then cacheWriteInstanceShapeReadOnlyArgs(writer, a0: a0)
+		runtimeSized then break
 	end 'payload'
 end 'cacheWriteInstanceShape'
 
@@ -11688,6 +11716,7 @@ module function cacheReadInstanceShape(reader LibraryCacheReader) returns Instan
 		0 gives InstanceShape.unsized
 		1 gives try cacheReadInstanceShapeSized(reader)
 		2 gives try cacheReadInstanceShapeReadOnlyArgs(reader)
+		3 gives InstanceShape.runtimeSized
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadInstanceShape'
@@ -11734,6 +11763,11 @@ export type GenericInstanceRegistry
 	// every instance that spells none. It rides `instanceKey` for `fixedSizes`' reason, so `Array with
 	// readonly T` and `Array with T` never share a gid.
 	var readOnlyArgs as ReadOnlyArgMaskArray
+
+	// Which instances are a `FixedArray` with no count (`FixedArray with Int`). It rides `instanceKey`
+	// through the shape's key text, so a runtime-sized instance never shares a gid with the countless
+	// `Self` of the shared body.
+	var runtimeSized as BoolArray
 	var index as GenericInstanceIndexMap
 
 	// Base id ⇒ its instances, in intern order. The SECOND payload⇒id index (see
@@ -11769,7 +11803,7 @@ export type GenericInstanceRegistry
 	var mergeCopyDemandedRows as GenericInstanceIdArray
 
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedElementCountColumn.create(), readOnlyArgs: ReadOnlyArgMaskArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(), baselineCount: 0, parseBandOpen: false, parseNamedRows: GenericInstanceIdSet.create(), mergeNamedRows: GenericInstanceIdArray.create(), copyDemanded: GenericInstanceIdSet.create(), parseCopyDemandedRows: GenericInstanceIdSet.create(), mergeCopyDemandedRows: GenericInstanceIdArray.create()}
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedElementCountColumn.create(), readOnlyArgs: ReadOnlyArgMaskArray.create(), runtimeSized: BoolArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(), baselineCount: 0, parseBandOpen: false, parseNamedRows: GenericInstanceIdSet.create(), mergeNamedRows: GenericInstanceIdArray.create(), copyDemanded: GenericInstanceIdSet.create(), parseCopyDemandedRows: GenericInstanceIdSet.create(), mergeCopyDemandedRows: GenericInstanceIdArray.create()}
 	end 'create'
 
 	export function settleBaseline()
@@ -11844,6 +11878,7 @@ export type GenericInstanceRegistry
 		self.argLists.truncate(self.baselineCount)
 		self.fixedSizes.truncate(self.baselineCount)
 		self.readOnlyArgs.truncate(self.baselineCount)
+		self.runtimeSized.truncate(self.baselineCount)
 		self.speculative.truncate(self.baselineCount)
 
 		for id in self.mergeNamedRows 'eachNamedByAMerge'
@@ -11867,6 +11902,7 @@ export type GenericInstanceRegistry
 		fingerprint.note("argLists", value: self.argLists.count() as EntryCount)
 		fingerprint.note("fixedSizes", value: self.fixedSizes.count() as EntryCount)
 		fingerprint.note("readOnlyArgs", value: self.readOnlyArgs.count() as EntryCount)
+		fingerprint.note("runtimeSized", value: self.runtimeSized.count() as EntryCount)
 		fingerprint.note("speculative", value: self.speculative.count() as EntryCount)
 		fingerprint.note("index", value: self.index.count())
 		fingerprint.note("byBase", value: self.byBase.count())
@@ -11979,10 +12015,10 @@ export type GenericInstanceRegistry
 		return key.toByteArray()
 	end 'instanceKey'
 
-	// Intern `(baseId, args, shape)`, returning an existing id for a structural repeat. O(1)
-	// amortized via `index`. `shape` defaults to `unsized` — every instance that is neither a sized `FixedArray`
-	// nor spells a `readonly` argument — so the default is what the call sites that MINT such an instance
-	// mean, and none of them spells it.
+	// Intern `(baseId, args, shape)`, returning an existing id for a structural repeat. O(1) amortized
+	// via `index`. `shape` defaults to `unsized` — every instance that is neither a sized or
+	// runtime-sized `FixedArray` nor spells a `readonly` argument — so the default is what the call
+	// sites that MINT such an instance mean, and none of them spells it.
 	//
 	// ⛔ **THE DEFAULT IS A TRAP FOR A CALLER THAT IS RE-INTERNING AN INSTANCE IT ALREADY HOLDS, and that
 	// caller exists: `fileScopedInstance`.** Rebuilding a key from an existing instance means carrying every
@@ -12020,6 +12056,7 @@ export type GenericInstanceRegistry
 		end 'unsized'
 
 		self.readOnlyArgs.push(try shape.readOnlyMask() otherwise 0)
+		self.runtimeSized.push(shape.isRuntimeSized())
 
 		self.speculative.push(asSpeculative)
 		self.index.upsert(key, value: id)
@@ -12082,9 +12119,19 @@ export type GenericInstanceRegistry
 			panic("GenericInstanceRegistry: readOnlyArgs desync at position {position}")
 		end 'readOnlyDesync'
 
+		if position >= self.runtimeSized.count() 'runtimeSizedDesync'
+			panic("GenericInstanceRegistry: runtimeSized desync at position {position}")
+		end 'runtimeSizedDesync'
+
 		if let count = try self.fixedSizes.get(position) 'sized'
 			return InstanceShape.sized(count)
 		end 'sized'
+
+		let isRuntimeSized = try self.runtimeSized.get(position) otherwise panic("GenericInstanceRegistry.shapeAtPosition: runtimeSized.get OOB at {position}")
+
+		if isRuntimeSized 'runtimeSizedRow'
+			return InstanceShape.runtimeSized
+		end 'runtimeSizedRow'
 
 		return readOnlyShapeOf(try self.readOnlyArgs.get(position) otherwise panic("GenericInstanceRegistry.shapeAtPosition: readOnlyArgs.get OOB at {position}"))
 	end 'shapeAtPosition'
@@ -12129,6 +12176,7 @@ export type GenericInstanceRegistry
 		cacheWriteMaxonTypeArrayArray(writer, value: self.argLists)
 		cacheWriteFixedElementCountColumn(writer, value: self.fixedSizes)
 		cacheWriteReadOnlyArgMaskArray(writer, value: self.readOnlyArgs)
+		cacheWriteBoolArray(writer, value: self.runtimeSized)
 		cacheWriteGenericInstanceIndexMap(writer, value: self.index)
 		cacheWriteGenericInstancesByBaseMap(writer, value: self.byBase)
 		cacheWriteBoolArray(writer, value: self.speculative)
@@ -12146,6 +12194,7 @@ export type GenericInstanceRegistry
 		let f_argLists = try cacheReadMaxonTypeArrayArray(reader)
 		let f_fixedSizes = try cacheReadFixedElementCountColumn(reader)
 		let f_readOnlyArgs = try cacheReadReadOnlyArgMaskArray(reader)
+		let f_runtimeSized = try cacheReadBoolArray(reader)
 		let f_index = try cacheReadGenericInstanceIndexMap(reader)
 		let f_byBase = try cacheReadGenericInstancesByBaseMap(reader)
 		let f_speculative = try cacheReadBoolArray(reader)
@@ -12157,11 +12206,11 @@ export type GenericInstanceRegistry
 		let f_parseCopyDemandedRows = try cacheReadGenericInstanceIdSet(reader)
 		let f_mergeCopyDemandedRows = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{baseIds: f_baseIds, argLists: f_argLists, fixedSizes: f_fixedSizes, readOnlyArgs: f_readOnlyArgs, index: f_index, byBase: f_byBase, speculative: f_speculative, baselineCount: f_baselineCount, parseBandOpen: f_parseBandOpen, parseNamedRows: f_parseNamedRows, mergeNamedRows: f_mergeNamedRows, copyDemanded: f_copyDemanded, parseCopyDemandedRows: f_parseCopyDemandedRows, mergeCopyDemandedRows: f_mergeCopyDemandedRows}
+		return Self{baseIds: f_baseIds, argLists: f_argLists, fixedSizes: f_fixedSizes, readOnlyArgs: f_readOnlyArgs, runtimeSized: f_runtimeSized, index: f_index, byBase: f_byBase, speculative: f_speculative, baselineCount: f_baselineCount, parseBandOpen: f_parseBandOpen, parseNamedRows: f_parseNamedRows, mergeNamedRows: f_mergeNamedRows, copyDemanded: f_copyDemanded, parseCopyDemandedRows: f_parseCopyDemandedRows, mergeCopyDemandedRows: f_mergeCopyDemandedRows}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize112
-		return sizeof(GenericInstanceRegistry) as CacheSize112
+	static function cacheLayoutBytes() returns CacheSize120
+		return sizeof(GenericInstanceRegistry) as CacheSize120
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -12178,10 +12227,10 @@ end 'GenericInstanceRegistry'
 export union GenericArgNode
 	leaf(argType MaxonType)
 
-	// ⭐ `shape` is the nested instance's own element COUNT or `readonly` mask — `unsized` for an instance
-	// that is neither a sized `FixedArray` nor spells a `readonly` argument. It rides the NODE because the node
-	// is all `resolveArgNode` has when it interns the instance, and the shape is part of that instance's
-	// identity (`GenericInstanceRegistry.instanceKey`).
+	// ⭐ `shape` is the nested instance's own element COUNT or `readonly` mask — `unsized` for an
+	// instance that is neither a sized or runtime-sized `FixedArray` nor spells a `readonly` argument.
+	// It rides the NODE because the node is all `resolveArgNode` has when it interns the instance, and
+	// the shape is part of that instance's identity (`GenericInstanceRegistry.instanceKey`).
 	instanceHeader(let baseName ByteArray, argCount FieldIndex, shape InstanceShape)
 end 'GenericArgNode'
 
@@ -12387,10 +12436,11 @@ export type GenericAliasEntry
 	export let sweptInstance as GenericInstanceId
 	export let sweptInstanceRecorded as bool
 
-	// ⭐ **THE SIZE A SIZED DECLARATION WROTE** — `typealias Vec3 = FixedArray with 3 Int`'s 3, read off the
-	// literal by `Parser.readSizedBaseElementCount` and carried here because `recordGenericAlias` is where the
-	// instance is interned and the size is half of that instance's identity. `unsized` for every other
-	// declaration, which is every declaration whose base is not `FixedArray`.
+	// ⭐ **THE SIZE A SIZED DECLARATION WROTE** — `typealias Vec3 = FixedArray with 3 Int`'s 3, read
+	// off the literal by `Parser.readSizedBaseElementCount` and carried here because
+	// `recordGenericAlias` is where the instance is interned and the size is half of that instance's
+	// identity. `runtimeSized` for a `FixedArray` declaration that writes no count, `unsized` for
+	// every declaration whose base is not `FixedArray`.
 	export var shape as InstanceShape
 
 	// ⭐⭐ **WAS THIS ALIAS DECLARED INSIDE A `type`** — `type Character`'s `typealias ByteMemory =
@@ -27312,6 +27362,10 @@ export type ProgramSignatures
 			return false
 		end 'oneByteRecord'
 
+		if self.sizedFixedArrayWidens(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId) 'aSizedFixedArrayAtARuntimeSizedOne'
+			return false
+		end 'aSizedFixedArrayAtARuntimeSizedOne'
+
 		return not self.inferredIntColumnBoundaryAdmits(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId)
 	end 'aggregatesConflict'
 
@@ -31042,44 +31096,52 @@ export type ProgramSignatures
 	end 'isFixedArrayInstanceAt'
 
 	// ⭐ **HOW MANY ELEMENTS INSTANCE `id` HOLDS** — the second coordinate of a sized instance's
-	// identity; an unsized one throws `unsized`. Read by `FixedArray.create()` (the `__managed_mem_create`
-	// count) and by `count()`, which folds to this constant rather than reading `length@8`: a fixed
-	// size is a fact about the TYPE, so the value it publishes may not depend on the record.
+	// identity; an unsized or runtime-sized one throws `unsized`.
 	export function genericInstanceFixedCount(id GenericInstanceId) returns FixedElementCount throws InstanceSizeLookup
 		return try self.genericInstances.instanceFixedCount(id)
 	end 'genericInstanceFixedCount'
 
-	// ⭐⭐ **DOES A VALUE TYPED AT `(tag, nameId)` STATE ITS OWN ELEMENT COUNT — i.e. can a call site read
-	// the hidden fixed-element-count argument off the RECEIVER, or must it forward its own slot?** The
-	// ONE predicate both halves of that decision ask: `LowerMaxonToStd.emitFixedElementCountOf` branches on it
-	// to choose between a `const` and a forward, and `Parser.requireFixedElementCountSourceForForwarding`
-	// refuses on it when the forward has no source.
-	//
-	// ⚠ **THE TWO MAY NOT RESTATE IT, BECAUSE THEY DISAGREE IN BOTH DIRECTIONS AND NEITHER IS A COMPILE
-	// ERROR.** A refusal that is WIDER than the emit rejects a legal program; one that is NARROWER lets the
-	// call through to `forwardCallerFixedElementCount`'s abort, which is the defect the refusal exists to
-	// replace.
-	//
-	// ⛔ Asked as the (tag, id) PAIR for `isFixedArrayInstanceAt`'s measured reason — a `TypeNameId` and a
-	// `GenericInstanceId` share one numeric space, so the id half alone can answer about an instance the
-	// caller never had.
-	export function valueStatesItsOwnElementCount(tag ValueTypeTag, nameId TypeNameId) returns bool
-		try self.elementCountStatedBy(tag, nameId: nameId) otherwise return false
-		return true
-	end 'valueStatesItsOwnElementCount'
+	export function isRuntimeSizedFixedArrayAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return match self.elementCountSourceOf(tag, nameId: nameId) 'source'
+			inTheRecord gives true
+			stated or
+			callerSlot gives false
+		end 'source'
+	end 'isRuntimeSizedFixedArrayAt'
 
-	export function elementCountStatedBy(tag ValueTypeTag, nameId TypeNameId) returns FixedElementCount throws InstanceSizeLookup
+	// ⭐⭐ **WHERE THE ELEMENT COUNT OF A VALUE TYPED AT `(tag, nameId)` COMES FROM — the ONE question
+	// every asker of the hidden fixed-element-count argument shares.** The instance states it
+	// (`stated`), the value's record holds it (`inTheRecord`, a runtime-sized instance), or the
+	// emitting function's caller supplies it (`callerSlot`, every other type, the sized container's
+	// own countless `Self` included). `LowerMaxonToStd.emitFixedElementCountOfReceiver` and the
+	// `Parser` doors (`requireFixedElementCountSourceForForwarding`,
+	// `requireACountSourceForAStaticCall` and the closure-environment reader) branch on its answer,
+	// and no asker may restate it: they disagree in both directions without a compile error, a refusal
+	// wider than the emit rejecting a legal program and a narrower one letting the call through to
+	// `forwardCallerFixedElementCount`'s abort.
+	//
+	// ⛔ Asked as the (tag, id) PAIR for `isFixedArrayInstanceAt`'s measured reason — a `TypeNameId`
+	// and a `GenericInstanceId` share one numeric space, so the id half alone can answer about an
+	// instance the caller never had.
+	export function elementCountSourceOf(tag ValueTypeTag, nameId TypeNameId) returns ElementCountSource
 		if tag != ValueTypeTag.genericInstance 'notAnInstance'
-			throw InstanceSizeLookup.unsized
+			return ElementCountSource.callerSlot
 		end 'notAnInstance'
 
-		return try self.genericInstanceFixedCount(nameId as GenericInstanceId)
-	end 'elementCountStatedBy'
+		return match self.genericInstances.instanceShape(nameId as GenericInstanceId) 'shape'
+			sized(count) gives ElementCountSource.stated(count)
+			runtimeSized gives ElementCountSource.inTheRecord
+			unsized or
+			readOnlyArgs gives ElementCountSource.callerSlot
+		end 'shape'
+	end 'elementCountSourceOf'
 
-	// The `FixedArray with <size> <element>` instance — the SIZED twin of `builtinInstanceForElement`, and the one
-	// door that mints one. Its two callers are the alias fold (`recordGenericAlias`, off a declaration) and the
-	// declaration sweep's `FixedArray from […]` pre-intern, which must agree on the instance or the parser's own
-	// read would be the first write to the shared registry mid-parse (`Parser.atContainerFromConstruction`'s rule).
+	// The `FixedArray with <size> <element>` instance — the SIZED twin of `builtinInstanceForElement`,
+	// and the one door that mints one. Its callers are the alias fold (`recordGenericAlias`, off a
+	// declaration), the declaration sweep's `FixedArray from […]` pre-intern, and the parse itself for
+	// a constant-length `create(n)` and a `from […]` through a runtime-sized alias. The parse's mints
+	// land in its band (`GenericInstanceRegistry.parseBandOpen`), which the merge renumbers into the
+	// one registry, so one instance has one id across files.
 	export function fixedArrayInstanceForElement(element MaxonType, size FixedElementCount) returns GenericInstanceId
 		var args = MaxonTypeArray.create()
 		args.push(element)
@@ -31849,6 +31911,42 @@ export type ProgramSignatures
 
 		return false
 	end 'inferredIntColumnBoundaryAdmits'
+
+	export function joinedFixedArrayArgument(held MaxonType, next MaxonType) returns MaxonType
+		if self.sizedFixedArrayWidens(maxonTypeTag(next), declaredNameId: typeNameIdOf(next), gotTag: maxonTypeTag(held), gotNameId: typeNameIdOf(held)) 'theLaterArgumentIsRuntimeSized'
+			return next
+		end 'theLaterArgumentIsRuntimeSized'
+
+		return held
+	end 'joinedFixedArrayArgument'
+
+	export function sizedFixedArrayWidens(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
+		if not self.isFixedArrayInstanceAt(declaredTag, nameId: declaredNameId) or not self.isFixedArrayInstanceAt(gotTag, nameId: gotNameId) 'notTwoFixedArrays'
+			return false
+		end 'notTwoFixedArrays'
+
+		if not self.genericInstances.instanceShape(declaredNameId as GenericInstanceId).isRuntimeSized() or not self.genericInstances.instanceShape(gotNameId as GenericInstanceId).isSized() 'notRuntimeSizedFromSized'
+			return false
+		end 'notRuntimeSizedFromSized'
+
+		return self.columnsDenoteOneSlot(self.containerElementType(declaredNameId as GenericInstanceId), gotColumn: self.containerElementType(gotNameId as GenericInstanceId))
+	end 'sizedFixedArrayWidens'
+
+	export function gotSideNote(gotTag ValueTypeTag, gotNameId TypeNameId, gotBrand ByteArray, gotIdentity ByteArray, gotShown String, declaredTag ValueTypeTag, declaredNameId TypeNameId, declaredShown String) returns String
+		return "{self.contestedTypeNote(gotTag, nameId: gotNameId, brand: gotBrand, identity: gotIdentity, shown: gotShown, otherShown: declaredShown)}{self.runtimeSizedLengthNote(declaredTag, declaredNameId: declaredNameId, gotTag: gotTag, gotNameId: gotNameId)}"
+	end 'gotSideNote'
+
+	function runtimeSizedLengthNote(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns String
+		if not self.isFixedArrayInstanceAt(declaredTag, nameId: declaredNameId) or not self.isFixedArrayInstanceAt(gotTag, nameId: gotNameId) 'notTwoFixedArrays'
+			return ""
+		end 'notTwoFixedArrays'
+
+		if not self.genericInstances.instanceShape(declaredNameId as GenericInstanceId).isSized() or not self.genericInstances.instanceShape(gotNameId as GenericInstanceId).isRuntimeSized() 'notSizedFromRuntimeSized'
+			return ""
+		end 'notSizedFromRuntimeSized'
+
+		return " — a runtime-sized fixed array's length is not part of its type; build it with a constant length"
+	end 'runtimeSizedLengthNote'
 
 	function instancesShareAShape(declaredNameId TypeNameId, gotNameId TypeNameId) returns bool
 		return self.genericInstances.instanceShape(declaredNameId as GenericInstanceId).sameAs(self.genericInstances.instanceShape(gotNameId as GenericInstanceId))
@@ -34979,28 +35077,34 @@ export type ProgramSignatures
 	// (a map key, a `Set.contains` probe) or builds a NEW string around it (`destructorSymbol`,
 	// `String.from`), and none writes through it.
 	//
-	// ⭐⭐ **AND IT IS WHERE A CONTESTED NAME IS MOVED INTO THE RESERVED SPACE — AT THE SOLE PRODUCER, NOT
-	// AT A LATER CHECK.** See `reservedIfDeclared`. Deriving the final name HERE is what lets every
-	// consumer be a pure read: the PARSER is one of them (`decrefCalleeFor` bakes
+	// ⭐⭐ **AND IT IS WHERE A CONTESTED NAME IS MOVED INTO THE RESERVED SPACE — AT THE SOLE PRODUCER,
+	// NOT AT A LATER CHECK.** See `reservedIfDeclared`. Deriving the final name HERE is what lets
+	// every consumer be a pure read: the PARSER is one of them (`decrefCalleeFor` bakes
 	// `__destruct_<mangled>` into an emitted drop call), so a name revised after the parse would leave
-	// `main` calling a symbol the destructor synthesis never emits.
-	// ⭐⭐ **THE STEM BOTH INSTANCE-NAME BUILDERS START FROM — the base name, PLUS a sized container's COUNT.**
-	// The two builders (`mangleGenericInstance`, the emitted symbol; `canonicalNameWithin`, the comparison
-	// name) differ only in how they render an ARGUMENT, so the head is written once and neither can come to
-	// disagree with the other about whether a size is part of a type's name.
+	// `main` calling a symbol the destructor synthesis never emits. ⭐⭐ **THE STEM BOTH INSTANCE-NAME
+	// BUILDERS START FROM — the base name, PLUS a sized container's COUNT, or `RuntimeSizedShapeTag`
+	// for a runtime-sized one.** The two builders (`mangleGenericInstance`, the emitted symbol;
+	// `canonicalNameWithin`, the comparison name) differ only in how they render an ARGUMENT, so the
+	// head is written once and neither can come to disagree with the other about whether a size is
+	// part of a type's name.
 	//
-	// ⚠ **WITHOUT THE COUNT, TWO LEGAL TYPES SHARE ONE NAME, AND IT IS NOT A COSMETIC CLASH.** `FixedArray with 3
-	// Int` and `FixedArray with 4 Int` are different types by construction (the size is half of the instance
-	// key), and both mangled to `FixedArray_Int` — MEASURED: a program declaring both is refused outright with
-	// **E3006 duplicate definition of 'FixedArray_Int' — the generic instantiations `FixedArray with Int` and
-	// `FixedArray with Int` compile to that same name**, a message naming one type twice. `ParseStaging`'s symbol
-	// check is what caught it, which is exactly what that check is for.
+	// ⚠ **WITHOUT THE COUNT, TWO LEGAL TYPES SHARE ONE NAME, AND IT IS NOT A COSMETIC CLASH.**
+	// `FixedArray with 3 Int` and `FixedArray with 4 Int` are different types by construction (the
+	// size is half of the instance key), and both mangled to `FixedArray_Int` — MEASURED: a program
+	// declaring both is refused outright with **E3006 duplicate definition of 'FixedArray_Int' — the
+	// generic instantiations `FixedArray with Int` and `FixedArray with Int` compile to that same
+	// name**, a message naming one type twice. `ParseStaging`'s symbol check is what caught it, which
+	// is exactly what that check is for. The tag keeps a runtime-sized instance from mangling like the
+	// countless `Self` of the shared body or like any sized instance.
 	function instanceNameStem(id GenericInstanceId) returns String
 		var out = String.from(self.genericInstanceBaseName(id))
 
-		if let size = try self.genericInstanceFixedCount(id) 'sized'
-			out.append("_{FixedSizeNameTag}{size}")
-		end 'sized'
+		match self.genericInstances.instanceShape(id) 'shape'
+			sized(size) then out.append("_{FixedSizeNameTag}{size}")
+			runtimeSized then out.append("_{RuntimeSizedShapeTag}")
+			unsized or
+			readOnlyArgs then break
+		end 'shape'
 
 		return out
 	end 'instanceNameStem'
@@ -36041,34 +36145,40 @@ export type ProgramSignatures
 	// was typed with the DECLARATION-view tuple and refused against a correctly substituted parameter,
 	// `expected 'fn(__Tuple2.String.int) …', got 'fn(__Tuple2.Tfcd8090be60770aa.T5d84c0fc6312cff6) …'`.
 	//
-	// The index's OWN interner is the right table here and needs no caller to supply one: `instanceArgs` answers
-	// in this index's space, which is the same space `substituteTupleThroughInstance` interns its result into.
-	// ⭐⭐ **A DECLARATION'S OWN `Self` IS SIZE-POLYMORPHIC — IT ADOPTS THE RECEIVER'S COUNT.**
-	// A `FixedArray`'s identity has a SECOND coordinate the args do not carry (`GenericInstanceRegistry.fixedSizes`,
-	// see `FixedArrayBuiltinBaseName`), and `Self` inside `type FixedArray uses Element` states none: it is
-	// `ownRecordSelfInstance`, interned `unsized`. So substituting `Self` through a receiver mints
-	// `FixedArray_Int` while every value a program holds is a `Vec3` — different keys, different ids, and a corpus
-	// method's `self` parameter that can never match its own receiver
-	// (**`E3005 argument type mismatch for 'self': expected 'FixedArray_Int', got 'Vec3'`**). ⇒ **the countless
-	// instance takes the count of the receiver it is being viewed through.** One body serves every size,
-	// which is cure (1) of the two `FixedArrayBuiltinBaseName` names; cure (2) — monomorphizing the body per
-	// size — costs one copy of every member per distinct count in the program.
+	// The index's OWN interner is the right table here and needs no caller to supply one:
+	// `instanceArgs` answers in this index's space, which is the same space
+	// `substituteTupleThroughInstance` interns its result into. ⭐⭐ **A DECLARATION'S OWN `Self` IS
+	// SIZE-POLYMORPHIC — IT ADOPTS THE RECEIVER'S COUNT, OR ITS RUNTIME-SIZED SHAPE.** A
+	// `FixedArray`'s identity has a SECOND coordinate the args do not carry
+	// (`GenericInstanceRegistry.fixedSizes`, see `FixedArrayBuiltinBaseName`), and `Self` inside `type
+	// FixedArray uses Element` states none: it is `ownRecordSelfInstance`, interned `unsized`. So
+	// substituting `Self` through a receiver mints `FixedArray_Int` while every value a program holds
+	// is a `Vec3` — different keys, different ids, and a corpus method's `self` parameter that can
+	// never match its own receiver (**`E3005 argument type mismatch for 'self': expected
+	// 'FixedArray_Int', got 'Vec3'`**). ⇒ **the countless instance takes the count (or the
+	// runtime-sized shape) of the receiver it is being viewed through.** One body serves every size,
+	// which is cure (1) of the two `FixedArrayBuiltinBaseName` names; cure (2) — monomorphizing the
+	// body per size — costs one copy of every member per distinct count in the program.
 	//
-	// ⚠ **IT IS NOT SIZE ERASURE, AND THE THREE CLAUSES ARE WHAT KEEP IT FROM BEING.** The count is adopted
-	// only when the viewed instance STATES NO COUNT (so a `FixedArray with 4 Element` field keeps its 4, which is
-	// `fixed-array.capacity-is-part-of-instance-identity`), only when it shares the receiver's BASE (so a `FixedArray`'s
-	// own `Array with Element` buffer is untouched), and only from a receiver that HAS one. Two SIZED
-	// instances are never compared through here, so `fixed-array.error.wrong-size-fixed-array-argument` goes on being
-	// refused: passing a `Vec3` where a `Vec4` is declared is still two types.
+	// ⚠ **IT IS NOT SIZE ERASURE, AND THE THREE CLAUSES ARE WHAT KEEP IT FROM BEING.** The count is
+	// adopted only when the viewed instance STATES NO COUNT and is not runtime-sized (so a `FixedArray
+	// with 4 Element` field keeps its 4, which is
+	// `fixed-array.capacity-is-part-of-instance-identity`), only when it shares the receiver's BASE
+	// (so a `FixedArray`'s own `Array with Element` buffer is untouched), and only from a receiver
+	// that HAS a count or is runtime-sized. Two SIZED instances are never compared through here, so
+	// `fixed-array.error.wrong-size-fixed-array-argument` goes on being refused: passing a `Vec3`
+	// where a `Vec4` is declared is still two types.
 	function substitutedShape(nested GenericInstanceId, through GenericInstanceId) returns InstanceShape
 		let own = self.genericInstances.instanceShape(nested)
 
-		if own.isSized() or own.isReadOnlyQualified() 'itStatesItsOwnShape'
+		if own.isSized() or own.isRuntimeSized() or own.isReadOnlyQualified() 'itStatesItsOwnShape'
 			return own
 		end 'itStatesItsOwnShape'
 
-		if self.genericInstances.instanceShape(through).isSized() and self.genericInstances.instanceBaseId(nested) == self.genericInstances.instanceBaseId(through) 'theSameSizedContainer'
-			return self.genericInstances.instanceShape(through)
+		let viewed = self.genericInstances.instanceShape(through)
+
+		if (viewed.isSized() or viewed.isRuntimeSized()) and self.genericInstances.instanceBaseId(nested) == self.genericInstances.instanceBaseId(through) 'theSameSizedContainer'
+			return viewed
 		end 'theSameSizedContainer'
 
 		return self.readOnlyArgsCarriedThrough(nested, through: through)

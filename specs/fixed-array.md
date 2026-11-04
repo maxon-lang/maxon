@@ -94,15 +94,9 @@ var v = Vec4.create()
 var n = v.count()  // always 4
 ```
 
-### Stack vs Heap
+### Storage
 
-Fixed arrays are designed for small, fixed-size data. The compiler places the storage on the stack when the total byte size (element size x count) is 8192 bytes or less. Larger fixed arrays are automatically heap-allocated.
-
-```text
-typealias Int = int(i64.min to i64.max)
-typealias SmallVec = FixedArray with 100 Int    // 800 bytes → stack
-typealias LargeVec = FixedArray with 2000 Int   // 16000 bytes → heap
-```
+A fixed array's elements live in a heap record, whatever the count; `FixedArray with 100 Int` is not stack-placed. The record is freed with its owner.
 
 ### Use Cases
 
@@ -2490,4 +2484,1293 @@ end 'main'
 ```
 ```stdout
 0 5
+```
+
+## A Runtime-Sized Fixed Array Takes Its Length At `create`
+
+A `FixedArray with T` that states no count is a fixed array whose length is chosen when it is built: `Buf.create(n)` makes one heap allocation of `n` zeroed elements, and the length never changes afterwards. Its length is a fact about the value and not about the type, so `count()` and the bound of `get` and `set` read the record, and an index is never proven inside it: `get` and `set` need `try` (E3057 without it). A length that is a compile-time constant gives the type `FixedArray with n T` instead, so every property of a sized fixed array follows from it.
+
+<!-- test: runtime-sized-create-holds-n-zeros -->
+`launder` makes the length a value the compiler cannot fold. The array holds five elements, every one zero: `5 5`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(5))
+	var zeros = 0 as Int
+
+	for x in buf 'each'
+		if x == 0 'zero'
+			zeros = zeros + 1
+		end 'zero'
+	end 'each'
+
+	print("{buf.count()} {zeros}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 5
+```
+
+<!-- test: runtime-sized-set-and-get-round-trip -->
+Every slot is written and read back through `try`, and the last slot is the fourth: `10 40`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var buf = Buf.create(launder(4))
+	var i = 0 as Int
+
+	while i < 4 'fill'
+		try buf.set(i as ElementIndex, value: (i + 1) * 10) otherwise panic("fill")
+		i = i + 1
+	end 'fill'
+
+	let first = try buf.get(0) otherwise panic("first")
+	let last = try buf.get(3) otherwise panic("last")
+	print("{first} {last}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 40
+```
+
+<!-- test: runtime-sized-get-past-the-length-throws -->
+The buffer under the array may be larger than three elements, and the bound is the length: the read at 3 throws.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(3))
+	let missed = try buf.get(launder(3)) otherwise -1
+	print("{missed}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-1
+```
+
+<!-- test: runtime-sized-set-past-the-length-throws -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var buf = Buf.create(launder(3))
+
+	try buf.set(launder(3), value: 99) otherwise 'oob'
+		return 7
+	end 'oob'
+
+	return 0
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.a-runtime-sized-bare-get-requires-try -->
+No index is proven inside a length the type does not state, so a bare `get` is E3057.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(3))
+	let first = buf.get(0)
+	print("{first}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:11:18: throwing function requires try: 'stdlib.FixedArray.get'
+```
+
+<!-- test: runtime-sized-runtime-zero-length -->
+A length of zero known only at run time is legal: the array is empty, a read throws and a `for` runs no iteration.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(0))
+	var seen = 0 as Int
+
+	for _ in buf 'each'
+		seen = seen + 1
+	end 'each'
+
+	let missed = try buf.get(0) otherwise -1
+	print("{buf.count()} {seen} {missed}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 0 -1
+```
+
+<!-- test: runtime-sized-bool-packs-across-a-byte -->
+A `bool` element is one bit, so seventeen of them straddle a third byte. Slots 0 and 16 are set, and the walk finds exactly those two: `17 2 true false`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Flags = FixedArray with bool
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var flags = Flags.create(launder(17))
+	try flags.set(0, value: true) otherwise panic("set 0")
+	try flags.set(16, value: true) otherwise panic("set 16")
+
+	var ones = 0 as Int
+
+	for flag in flags 'each'
+		if flag 'on'
+			ones = ones + 1
+		end 'on'
+	end 'each'
+
+	let last = try flags.get(16) otherwise panic("get 16")
+	let before = try flags.get(15) otherwise panic("get 15")
+	print("{flags.count()} {ones} {last} {before}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+17 2 true false
+```
+
+<!-- test: runtime-sized-float -->
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Samples = FixedArray with Real
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var samples = Samples.create(launder(3))
+	try samples.set(1, value: 2.5) otherwise panic("set")
+	try samples.set(2, value: 4.0) otherwise panic("set")
+
+	var total = 0.0 as Real
+
+	for sample in samples 'each'
+		total = total + sample
+	end 'each'
+
+	print("{samples.count()} {total}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 6.5
+```
+
+<!-- test: runtime-sized-as-field-and-parameter -->
+A runtime-sized array is a field of a record and a parameter of a function, and in both places its length is the value's: `3 12`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+type Ledger
+	export var cells as Buf
+
+	static function create(size ElementIndex) returns Ledger
+		return Ledger{cells: Buf.create(size)}
+	end 'create'
+
+	function record(value Int)
+		try self.cells.set(0, value: value) otherwise panic("record")
+		try self.cells.set(2, value: value) otherwise panic("record")
+	end 'record'
+end 'Ledger'
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function total(cells Buf) returns Int
+	var sum = 0 as Int
+
+	for cell in cells 'each'
+		sum = sum + cell
+	end 'each'
+
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	var ledger = Ledger.create(launder(3))
+	ledger.record(6)
+	print("{ledger.cells.count()} {total(ledger.cells)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 12
+```
+
+<!-- test: runtime-sized-in-a-generic-body -->
+The generic body is compiled once for every element. It builds the array over its own type parameter at a length the caller chose, and the length comes back through `count()`: `4 7`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Ring uses Element
+	typealias Slots = FixedArray with Element
+
+	var slots as Slots
+
+	static function create(size ElementIndex) returns Self
+		return Self{slots: Slots.create(size)}
+	end 'create'
+
+	function put(at ElementIndex, value Element) throws ArrayError
+		try slots.set(at, value: value)
+	end 'put'
+
+	function take(at ElementIndex) returns Element throws ArrayError
+		return try slots.get(at)
+	end 'take'
+
+	function size() returns Count
+		return slots.count()
+	end 'size'
+end 'Ring'
+
+typealias IntRing = Ring with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var ring = IntRing.create(launder(4))
+	try ring.put(3, value: 7) otherwise panic("put")
+	let got = try ring.take(3) otherwise panic("take")
+	print("{ring.size()} {got}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 7
+```
+
+<!-- test: an-extension-reading-countof-Self-answers-the-record-length -->
+`countof(Self)` inside `extension FixedArray` is the receiver's count. For a runtime-sized receiver the count is not in the type, so the call site passes the record's length: `6`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+extension FixedArray
+	function slots() returns Count
+		return countof(Self)
+	end 'slots'
+end 'FixedArray'
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(6))
+	print("{buf.slots()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: error.a-type-sized-create-takes-no-length -->
+The length is in the type, so `create` takes no argument.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+
+function main() returns ExitCode
+	let v = Vec3.create(3)
+
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3194: <fragment>:6:15: 'Vec3' states its length in its type (FixedArray with 3 Int), so 'create' takes no argument: write 'Vec3.create()'
+```
+
+<!-- test: error.a-runtime-sized-create-needs-a-length -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf.create()
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3194: <fragment>:6:16: 'Buf' states no length in its type, so 'create' needs one: write 'Buf.create(n)'
+```
+
+<!-- test: error.a-runtime-sized-create-takes-no-zeroed-argument -->
+A fixed array is always zeroed and never grows, so there is no `zeroed:` argument; the growable `Array` has the unpublished buffer.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf.create(4, zeroed: false)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3194: <fragment>:6:16: 'Buf.create' takes only a length: a fixed array is always zeroed and never grows. Use 'Array.create(n, zeroed: false)' for a growable buffer
+```
+
+<!-- test: error.push-is-refused-on-a-runtime-sized-fixed-array -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var buf = Buf.create(launder(2))
+	buf.push(4)
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4006: <fragment>:11:6: Type 'FixedArray' has no method named 'push'
+```
+
+<!-- test: error.a-zero-excluding-element-under-create-n -->
+The slots of `create(n)` are zero, and zero is not a value of `Positive`.
+```maxon
+typealias Positive = int(1 to 100)
+typealias Buf = FixedArray with Positive
+
+function main() returns ExitCode
+	let buf = Buf.create(4)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:6:12: 'FixedArray.create' cannot publish slots of 'Positive': every slot is zero and zero is not a value of 'Positive'
+```
+
+<!-- test: error.a-managed-element-under-create-n -->
+```maxon
+typealias Names = FixedArray with String
+
+function main() returns ExitCode
+	let names = Names.create(4)
+
+	return names.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:14: Unsupported: `FixedArray` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float
+```
+
+<!-- test: error.a-length-of-another-integer-type-names-the-cast -->
+A length that may be negative is not an `ElementIndex` until a cast proves it, as for `Array.create(n)`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	var wanted = 5 as FullRangeInt
+	wanted = wanted - 10
+	let buf = Buf.create(wanted)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:12: argument type mismatch for 'newLength': expected 'ElementIndex', got 'FullRangeInt' — cast the argument with 'as ElementIndex'
+```
+
+<!-- test: a-constant-length-create-is-the-sized-type -->
+`Buf.create(4)` is a `FixedArray with 4 Int`, unbranded, so it is accepted where the `Vec4` alias is declared, its bare `set` and `get` at proven indices need no `try`, and `count()` is the constant: `4 5`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = FixedArray with 4 Int
+typealias Buf = FixedArray with Int
+
+function sumOf(v Vec4) returns Int
+	return v.get(0) + v.get(1) + v.get(2) + v.get(3)
+end 'sumOf'
+
+function main() returns ExitCode
+	var v = Buf.create(4)
+	v.set(2, value: 5)
+	print("{v.count()} {sumOf(v)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 5
+```
+
+<!-- test: a-let-bound-a-top-level-let-and-a-countof-fold-are-constant-lengths -->
+A `let` bound to a constant, a top-level `let` and a folded `countof` expression are all constants, so each array has its length in its type and its last element is read bare: `2 3 4`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+typealias Buf = FixedArray with Int
+
+let Width = 3
+
+function main() returns ExitCode
+	let local = 2
+	let a = Buf.create(local)
+	let b = Buf.create(Width)
+	let c = Buf.create(countof(Vec3) + 1)
+	print("{a.count()} {b.count()} {c.count()} {a.get(1) + b.get(2) + c.get(3)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 3 4 0
+```
+
+<!-- test: a-var-length-is-the-constant-it-holds-where-it-is-read -->
+A `var` that is reassigned only after the `create` still holds the known constant where the `create` reads it, so its array has the length in its type and a bare `get` at a proven index is legal: `3 0 4`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	var n = 3 as ElementIndex
+	let buf = Buf.create(n)
+	n = n + 1
+	print("{buf.count()} {buf.get(0)} {n}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 0 4
+```
+
+<!-- test: a-loop-counter-length-is-runtime-sized -->
+A loop counter is no constant, so each array is runtime-sized and `try` on its `get` is required, not refused: `6 0`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	var total = 0 as Int
+	var firsts = 0 as Int
+
+	for n in 1 to 3 'each'
+		let buf = Buf.create(n)
+		total = total + (buf.count() as Int)
+		firsts = firsts + (try buf.get(0) otherwise -100)
+	end 'each'
+
+	print("{total} {firsts}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 0
+```
+
+<!-- test: error.try-on-a-proven-index-of-a-constant-length-create -->
+The array is a `FixedArray with 4 Int`, so slot 0 is proven and the `try` is E3055, exactly as on a `Vec4`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf.create(4)
+	let first = try buf.get(0) otherwise -1
+
+	return first as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3055: <fragment>:7:14: try requires a throwing function: this `get` cannot fail — its index is already proven inside the fixed array's 4 elements, so there is no out-of-bounds error to catch
+```
+
+<!-- test: error.a-constant-index-past-a-constant-length -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf.create(4)
+	let last = buf.get(4)
+
+	return last as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:17: Value 4 is outside the range of the indices of 'FixedArray with 4' (int(0 to 3))
+```
+
+<!-- test: error.a-constant-length-of-zero -->
+A fixed array of zero constant length has nothing to hold: it is E2069, as `FixedArray with 0 Int` is.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf.create(0)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2069: <fragment>:6:23: A `FixedArray` element count runs from 1 to 4294967295, and create's length is the constant 0
+```
+
+<!-- test: a-top-level-let-of-a-constant-length-create-is-sized -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+let table = Buf.create(4)
+
+function main() returns ExitCode
+	print("{table.count()} {table.get(3)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 0
+```
+
+<!-- test: a-sized-fixed-array-widens-to-runtime-sized -->
+A `Vec3` is accepted where a `Buf` is declared: the record's length is the 3 the type states, so nothing converts. The callee sees a runtime-sized array, so its `get` needs `try`: `14`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+typealias Buf = FixedArray with Int
+
+function describe(buf Buf) returns Int
+	let last = try buf.get(2) otherwise -1
+	return (buf.count() as Int) * 3 + last
+end 'describe'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.set(2, value: 5)
+	print("{describe(v)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+14
+```
+
+<!-- test: a-literal-through-a-runtime-sized-alias-is-sized -->
+`Buf from [...]` writes its length, so it is a `FixedArray with 3 Int` and its bare `get` at 2 is proven: `3 30`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf from [10, 20, 30]
+	print("{buf.count()} {buf.get(2)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 30
+```
+
+<!-- test: error.a-runtime-sized-value-where-a-sized-one-is-declared -->
+The widening runs one way. A runtime-sized value has no length in its type to satisfy a `Vec3`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function takes(v Vec3) returns Int
+	return v.get(0)
+end 'takes'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(3))
+
+	return takes(buf) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:9: argument type mismatch for 'v': expected 'Vec3', got 'Buf' — a runtime-sized fixed array's length is not part of its type; build it with a constant length
+```
+
+<!-- test: error.fixed-array-with-a-constant-name-as-count -->
+The count of a `FixedArray with` spelling is an integer literal. A name before the element type is refused for that, and the element type after it is read as written.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+let K = 3
+
+typealias Vec = FixedArray with K Int
+
+function main() returns ExitCode
+	return K as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2069: <fragment>:6:33: A `FixedArray` element count runs from 1 to 4294967295, and the element count of a `FixedArray` type is an integer literal, not `K`
+```
+
+<!-- test: error.fixed-array-with-a-negative-count -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+typealias Vec = FixedArray with -3 Int
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2069: <fragment>:4:33: A `FixedArray` element count runs from 1 to 4294967295, and the element count of a `FixedArray` type is an integer literal, not `-3`
+```
+
+<!-- test: error.fixed-array-with-a-float-count -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+typealias Vec = FixedArray with 3.5 Int
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2069: <fragment>:4:33: A `FixedArray` element count runs from 1 to 4294967295, and the element count of a `FixedArray` type is an integer literal, not `3.5`
+```
+
+<!-- test: runtime-sized-as-an-array-element -->
+A runtime-sized array is an element of a growable `Array`, and a sized one pushed there widens to the element type. Each element answers its own length when it is read back and written through: `2 4 7`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+typealias Bufs = Array with Buf
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var bufs = Bufs.create()
+	bufs.push(Buf.create(launder(2)))
+	bufs.push(Buf.create(4))
+
+	var second = try bufs.get(1) otherwise panic("second")
+	try second.set(3, value: 7) otherwise panic("set")
+
+	var first = try bufs.get(0) otherwise panic("first")
+	let written = try second.get(3) otherwise panic("get")
+	print("{first.count()} {second.count()} {written}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 4 7
+```
+
+<!-- test: runtime-sized-in-a-closure -->
+A closure reads a runtime-sized array it captured, and the length it sees is the record's: `14`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var buf = Buf.create(launder(5))
+	try buf.set(4, value: 9) otherwise panic("set")
+
+	let probe = function() gives (try buf.get(4) otherwise -1) + (buf.count() as Int)
+	print("{probe()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+14
+```
+
+<!-- test: error.a-runtime-sized-alias-is-not-built-by-a-struct-literal -->
+A runtime-sized alias is built by `create(n)` alone. A struct literal of it is the refusal every record gets.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf{}
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3076: <fragment>:6:16: type 'Buf' can only be constructed from within its own methods; use a static factory method instead
+```
+
+<!-- test: error.an-inner-runtime-sized-alias-literal-states-no-length -->
+Inside the type that declares the alias, `Cells{}` would be an empty container for a growable `Array`; for a runtime-sized fixed array there is no length to build it at.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder
+	typealias Cells = FixedArray with Int
+
+	static function make() returns Int
+		let cells = Cells{}
+
+		return cells.count() as Int
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	return Holder.make() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3194: <fragment>:8:15: 'Cells' states no length in its type, so 'create' needs one: write 'Cells.create(n)'
+```
+
+<!-- test: runtime-sized-reached-through-a-witness-reads-its-record-length -->
+An interface conformance declared on `extension FixedArray` is dispatched through a witness table. The table's adapter passes the count the impl reads, and for a runtime-sized instance that count is the receiver's record length: `6`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+interface Measured
+	function measure() returns Count
+end 'Measured'
+
+extension FixedArray implements Measured
+	function measure() returns Count
+		return countof(Self)
+	end 'measure'
+end 'FixedArray'
+
+type Probe uses Item where Item is Measured
+	var item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function measured() returns Count
+		return self.item.measure()
+	end 'measured'
+end 'Probe'
+
+typealias BufProbe = Probe with Buf
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let probe = BufProbe.create(Buf.create(launder(6)))
+	print("{probe.measured()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: error.a-static-witness-reading-countof-Self-through-a-runtime-sized-alias -->
+A `static` requirement is not dispatchable through a type parameter at all, so a witness table can never hand a runtime-sized instance a count that only a record could answer: the call is refused before any table is read.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+interface Counting
+	static function slots() returns Count
+end 'Counting'
+
+extension FixedArray implements Counting
+	static function slots() returns Count
+		return countof(Self)
+	end 'slots'
+end 'FixedArray'
+
+type Probe uses Item where Item is Counting
+	var item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function slots() returns Count
+		return Item.slots()
+	end 'slots'
+end 'Probe'
+
+typealias BufProbe = Probe with Buf
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let probe = BufProbe.create(Buf.create(launder(6)))
+	print("{probe.slots()}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:23:15: 'Item.slots' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'Item' cannot reach it. Call a `static` member on a concrete type
+```
+
+<!-- test: a-conditional-joins-a-sized-and-a-runtime-sized-fixed-array-in-either-order -->
+The two arms meet in a type that holds either, which is the runtime-sized one whichever arm is written first. Both results are runtime-sized, so `get` needs `try`: `8 8 0 0`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let flag = launder(1) == 1
+	let first = Vec3.create() if flag else Buf.create(launder(5))
+	let second = Buf.create(launder(5)) if flag else Vec3.create()
+	let a = try first.get(0) otherwise -1
+	let b = try second.get(0) otherwise -1
+	print("{first.count() + second.count()} {second.count() + first.count()} {a} {b}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 8 0 0
+```
+
+<!-- test: a-generic-type-built-from-a-sized-and-a-runtime-sized-fixed-array-in-either-order -->
+A generic factory takes the type argument from its arguments. A sized and a runtime-sized fixed array give the runtime-sized one whichever is written first: `8 8`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+typealias Buf = FixedArray with Int
+
+type Pair uses T
+	export var left as T
+	export var right as T
+
+	static function create(left T, right T) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let sizedFirst = Pair.create(Vec3.create(), right: Buf.create(launder(5)))
+	let runtimeFirst = Pair.create(Buf.create(launder(5)), right: Vec3.create())
+	print("{sizedFirst.left.count() + sizedFirst.right.count()} {runtimeFirst.left.count() + runtimeFirst.right.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 8
+```
+
+<!-- test: a-sized-fixed-array-widens-on-a-return-and-on-a-field-store -->
+A `Vec3` returned from a function declared to return a `Buf`, written into a `Buf` field by a struct literal and stored into it by a later assignment: `3 3 3`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+typealias Buf = FixedArray with Int
+
+type Holder
+	export var cells as Buf
+
+	static function create() returns Holder
+		return Holder{cells: Vec3.create()}
+	end 'create'
+end 'Holder'
+
+function make() returns Buf
+	return Vec3.create()
+end 'make'
+
+function main() returns ExitCode
+	let made = make()
+	var holder = Holder.create()
+	let first = holder.cells.count()
+	holder.cells = Vec3.create()
+	print("{made.count()} {first} {holder.cells.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 3 3
+```
+
+<!-- test: a-literal-through-an-inner-runtime-sized-alias-is-sized -->
+`Cells from [...]` inside the type that declares the alias writes its length, so the result is a `FixedArray with 3 Int` and a bare `get` at 2 is proven: `3 6`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder
+	typealias Cells = FixedArray with Int
+
+	static function make() returns Int
+		let cells = Cells from [4, 5, 6]
+
+		return (cells.count() as Int) * 100 + cells.get(2)
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	print("{Holder.make()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+306
+```
+
+<!-- test: error.a-constant-length-above-the-largest-count -->
+A constant length past `4294967295` cannot be a type's count either: it is E2069.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf.create(4294967296)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2069: <fragment>:6:23: A `FixedArray` element count runs from 1 to 4294967295, and create's length is the constant 4294967296
+```
+
+<!-- test: a-negative-runtime-length-panics-at-the-range-check -->
+A length that is negative at run time is not an `ElementIndex`: the cast that proves it panics where it is written.
+```maxon
+typealias Signed = int(i64.min to i64.max)
+typealias Buf = FixedArray with Signed
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(-1) as ElementIndex)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-negative-runtime-length-panics-at-the-range-check.test:10: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: error.a-negative-constant-length-is-one-diagnostic -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf.create(-1)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:12: Value -1 is outside the range of 'ElementIndex' (int(0 to 18446744073709551615))
+```
+
+<!-- test: runtime-sized-reached-through-a-witness-table-that-also-holds-a-static-requirement -->
+A conformance whose interface also declares a `static` requirement reading the count builds a table with a slot for each. The instance slot reads the record's length; the static slot is never dispatched through the type parameter, so the table needs no receiver for it: `6`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+interface Measured
+	function measure() returns Count
+	static function slots() returns Count
+end 'Measured'
+
+extension FixedArray implements Measured
+	function measure() returns Count
+		return countof(Self)
+	end 'measure'
+
+	static function slots() returns Count
+		return countof(Self)
+	end 'slots'
+end 'FixedArray'
+
+type Probe uses Item where Item is Measured
+	var item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function measured() returns Count
+		return self.item.measure()
+	end 'measured'
+end 'Probe'
+
+typealias BufProbe = Probe with Buf
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let probe = BufProbe.create(Buf.create(launder(6)))
+	print("{probe.measured()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: a-sized-fixed-array-minted-in-two-files-is-one-type -->
+`Buf.create(4)` in one file and `Buf from [...]` in another each build a `FixedArray with 4 Int` while their bodies are parsed. Both are the one instance the `Vec4` alias names, so each value crosses to a `Vec4` parameter in the other file: `9 4`.
+```maxon
+// --- file: lib/types.maxon
+module typealias Int = int(i64.min to i64.max)
+module typealias Vec4 = FixedArray with 4 Int
+module typealias Buf = FixedArray with Int
+
+// --- file: lib/a.maxon
+module function fromA() returns Vec4
+	return Buf.create(4)
+end 'fromA'
+
+module function lastOf(v Vec4) returns Int
+	return v.get(3)
+end 'lastOf'
+
+// --- file: lib/b.maxon
+module function sumB(v Vec4) returns Int
+	let own = Buf from [1, 2, 3, 4]
+
+	return v.get(3) + lastOf(own)
+end 'sumB'
+
+// --- file: lib/main.maxon
+function main() returns ExitCode
+	var v = fromA()
+	v.set(3, value: 5)
+	print("{sumB(v)} {lastOf(Buf.create(4)) + 4}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9 4
+```
+
+<!-- test: a-try-otherwise-joins-a-sized-and-a-runtime-sized-fixed-array-in-either-order -->
+The call's result and its fallback meet in the runtime-sized type whichever of them is the sized one, as the arms of a conditional do. Each result is runtime-sized, so `get` needs `try`, and each keeps the length of the array that reached the merge: `5 5 3 3 0 0`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+typealias Buf = FixedArray with Int
+
+enum ProbeError implements Error
+	failed
+end 'ProbeError'
+
+function sizedOrFail(fail bool) returns Vec3 throws ProbeError
+	if fail 'failing'
+		throw ProbeError.failed
+	end 'failing'
+
+	return Vec3.create()
+end 'sizedOrFail'
+
+function runtimeOrFail(fail bool, n ElementIndex) returns Buf throws ProbeError
+	if fail 'failing'
+		throw ProbeError.failed
+	end 'failing'
+
+	return Buf.create(n)
+end 'runtimeOrFail'
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let first = try sizedOrFail(true) otherwise Buf.create(launder(5))
+	let second = try runtimeOrFail(false, n: launder(5)) otherwise Vec3.create()
+	let third = try sizedOrFail(false) otherwise Buf.create(launder(5))
+	let fourth = try runtimeOrFail(true, n: launder(5)) otherwise Vec3.create()
+	let a = try first.get(0) otherwise -1
+	let b = try third.get(0) otherwise -1
+	print("{first.count()} {second.count()} {third.count()} {fourth.count()} {a} {b}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 5 3 3 0 0
 ```

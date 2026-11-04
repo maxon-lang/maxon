@@ -1608,7 +1608,8 @@ end 'main'
 The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
 `Map`, and `Array`, `Set`, `List` and `FixedArray` aliases take `Alias from [ ... ]`, for example
 `CharSet from ['a', 'e']`; the alias states the element type, and a `FixedArray` alias's literal must write
-exactly as many elements as the alias holds. When that element is itself an array alias, each element is a
+exactly as many elements as the alias holds (a [runtime-sized](#runtime-sized-fixed-arrays) alias holds
+as many as its literal writes). When that element is itself an array alias, each element is a
 value of it: another `Alias from [ ... ]`, a bare `[ ... ]` that takes its element type from the alias, or
 a local of the inner alias — `Rows from [Ints from [1, 2], [3], row]` over `typealias Rows = Array with
 Ints`. `Set` and `List` also take any `Array` value, under the bare name or an alias: `Set from names` builds
@@ -3646,9 +3647,14 @@ Both take a **type** and produce a compile-time `Count`.
   `type Holder uses T, U`, `sizeof(T)` and `sizeof(U)` each answer for their own argument.
 - `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(FixedArray with 3 Int)`
   is `3`. Inside such a container's own body, `countof(Self)` is the count of the instance a method is
-  called on, or that a `static function`'s call names. A type with no fixed
-  element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its
-  `count()` instead.
+  called on: the number its type states, or the record's length for a
+  [runtime-sized](#runtime-sized-fixed-arrays) receiver. In a `static function` it is the count of the
+  instance the call names, so a static that reads `countof(Self)` or returns `Self`, called through a
+  runtime-sized alias, is **E2015**. A default argument reading `countof(Self)` is **E2015** too, because a
+  default runs in a helper function of its own that has no count to read. A type with no fixed element
+  count — a record, a primitive, a growable `Array`, a runtime-sized `FixedArray with Int` — is refused
+  (**E2015**); ask the value for its `count()`, or name a sized alias
+  (`typealias Sized = FixedArray with 4 Int`) and take `countof(Sized)`.
 - `countof(T)` is also a constant in a [top-level initializer](#top-level-variables), alone or folded
   (`let last = countof(Vec3) - 1`), and the binding is a `Count`. Such a `let` is a compile-time bound inside a
   function: over `let slots = countof(Vec4)`, `for i in 0 upto slots` proves its counter a
@@ -3738,8 +3744,9 @@ whether the index lies inside `0 to N-1`:
 - **Any other index** is checked at run time and throws `ArrayError.indexOutOfBounds`, so the call needs
   `try`; a bare call is **E3057**, with the hint to give the index a ranged type within `int(0 to N-1)`.
   An `ElementIndex` or `Count` parameter, a `var` stepped by a `while` loop, a call result and a
-  reassigned `var` are such indices, and so is every index inside an `extension FixedArray`, where the
-  count is known only at run time.
+  reassigned `var` (except at a read where it still holds a known constant, which is that constant) are
+  such indices, and so is every index inside an `extension FixedArray`, where the count is known only at
+  run time.
 
 The same known ranges prove a divisor non-zero (see [Division by Zero](#division-by-zero)).
 
@@ -3760,6 +3767,60 @@ function main() returns ExitCode
 	end 'fill'
 
 	print("{read(v, at: 2)} {v.get(3)}\n")        // 20 30
+	return 0
+end 'main'
+```
+
+#### Runtime-sized fixed arrays
+
+A `FixedArray with T` with no count is **runtime-sized**: its length is chosen when it is built and belongs
+to the value, not to the type. `Buf.create(n)` through `typealias Buf = FixedArray with Int` builds one
+zeroed heap record of `n` elements. The length is fixed at creation, so `push` and `reserve` are refused. `count()`
+loads the record's length, and `get` and `set` check against it at run time: no index is proven inside a
+runtime-sized array, so both need `try` (a bare call is **E3057**).
+
+- **The length `n`** is checked as `Array.create(n)`'s is. A plain integer, an `ElementIndex` or a `Count`
+  is accepted, range-checked at run time where the compiler cannot prove it non-negative. A value of another
+  named integer type is **E3005**, with the hint to cast it `as ElementIndex`.
+- **A constant `n`** gives the type `FixedArray with n T`, unbranded, so every property of a sized fixed array
+  applies: `count()` is the constant and indices are proven against it. A constant is a literal, a `let`
+  bound to a constant, a top-level `let`, a folded `countof(...)` expression, or a `var` read where it holds a
+  constant. A constant `0`, or one above `4294967295`, is **E2069**.
+- **The element** is an integer, a `bool` or a float. A managed element is **E2015**, and an element whose
+  range excludes 0 is **E3106**, because every slot starts as zero.
+- **A sized array widens to a runtime-sized one.** A `FixedArray with N T` is accepted where a
+  `FixedArray with T` is declared, in an argument, a return or a field store; the reverse is **E3005**. A
+  conditional, a `match`, a `try ... otherwise` and the type arguments inferred for a generic type that meet
+  a sized and a runtime-sized array give the runtime-sized type, whichever is written first.
+- **A literal through a runtime-sized alias is sized.** `Buf from [10, 20, 30]` is a `FixedArray with 3 Int`.
+- **`create` takes the form its type has (E3194).** A type-sized alias takes no length (`Vec3.create()`), a
+  runtime-sized alias takes exactly one (`Buf.create(n)`), and a second argument is refused: for a growable
+  buffer write `Array.create(n, zeroed: false)`.
+- **A count is an integer literal.** `FixedArray with K Int`, `with -3 Int` and `with 3.5 Int` are **E2069**.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+typealias Buf = FixedArray with Int
+
+function total(values Buf) returns Int
+	var sum = 0 as Int
+
+	for i in 0 upto values.count() 'each'
+		sum = sum + (try values.get(i) otherwise 0)
+	end 'each'
+
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.set(1, value: 7)
+
+	let literal = Buf from [10, 20, 30]
+	let zeros = Buf.create(literal.count())
+
+	print("{total(v)} {literal.get(2)} {total(zeros)}\n")    // 7 30 0
 	return 0
 end 'main'
 ```

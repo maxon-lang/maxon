@@ -469,7 +469,8 @@ type_arg      = [ 'readonly' ] generic_base 'with' [ INTEGER ] type_args    (* n
 
                 (* 'readonly' only on an Array or List element and a Map value: `Map with Key, readonly Value` (E2075) *)
 
-                (* the optional INTEGER is a fixed element count: `FixedArray with 3 Coord` *)
+                (* the optional INTEGER is a fixed element count: `FixedArray with 3 Coord`; an absent INTEGER is the
+                   runtime-sized form, whose length each value carries: `FixedArray with Coord` *)
 
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ```

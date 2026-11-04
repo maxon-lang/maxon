@@ -266,7 +266,7 @@ Trigonometry, logarithms and powers are in [Math](#math).
 | Builtin | Description |
 |---------|-------------|
 | `sizeof(TypeName)` | Storage size of a type in bytes, as a constant `Count`: `int` and `float` are 8, `bool` and `byte` are 1. |
-| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `FixedArray with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
+| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `FixedArray with 3 Coord`. A type with no fixed element count, a runtime-sized `FixedArray with Coord` among them, is refused (E2015); ask the value for `count()`. |
 | `__file__`, `__line__` | Legal only as a parameter's default value; each expands at the **call site**. |
 
 `__line__` parameters are declared `SourceLineNumber` and `__file__` parameters `String`. The file is the
@@ -884,26 +884,29 @@ Output: `2 true true 1`.
 ## FixedArray
 
 `FixedArray` is a fixed-size array whose element count is part of its type: `FixedArray with 3 Coord`
-holds exactly three elements, and `countof(Vec3)` is the constant `3`. It implements `Iterable`. The
-growable array is [`Array`](#array).
+holds exactly three elements, and `countof(Vec3)` is the constant `3`. A `FixedArray with Coord` with no count
+is [runtime-sized](LANGUAGE_REFERENCE.md#runtime-sized-fixed-arrays): its length is given to `create(n)`. It
+implements `Iterable`. The growable array is [`Array`](#array).
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0. A pure call: discarding the result with `_ =` is E3064. A fixed array of at most 256 bytes of elements is one allocation. |
-| `FixedArray from [a, b, c]` | `FixedArray` | A literal; the count is the literal's length. |
-| `count()` | `Count` | The fixed size, answered from the type. |
+| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0. A pure call: discarding the result with `_ =` is E3064. A fixed array of at most 256 bytes of elements is one allocation. Called through an alias that states a count (`Vec3.create()`); a length argument is **E3194**. |
+| `FixedArray.create(n)` | `FixedArray` | Through a runtime-sized alias (`typealias Buf = FixedArray with Coord`): `n` zero elements in one heap record, `n` an `ElementIndex`. A constant `n` gives the sized type `FixedArray with n Coord`. The length is fixed at creation, so `push` and `reserve` are refused; a second argument, or no `n`, is **E3194**. |
+| `FixedArray from [a, b, c]` | `FixedArray` | A literal; the count is the literal's length, through a runtime-sized alias too. |
+| `count()` | `Count` | The fixed size: answered from the type, and for a runtime-sized value read from the record's length. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past the fixed size, unless the index is proven inside it. |
 | `set(index, value Element)` | — | Throws `ArrayError.indexOutOfBounds` at or past the fixed size, unless the index is proven inside it. |
 | `createIterator()` | `ArrayIterator` | Throws `IterationError.exhausted` when the fixed array is empty. |
 
-A fixed array's length is the count its type states for its whole life; the members above are all it has.
+A fixed array's length is set when it is built, by the count its type states or by `create(n)`, and holds for
+its whole life; the members above are all it has.
 
 An index the compiler proves inside `0 to N-1` makes `get` and `set` total: the call cannot throw, is
 written without `try`, and a `try` on it is **E3055**. A proven index is a constant, a value whose ranged
 type lies inside (`typealias Slot = int(0 to 2) implements ElementIndex` for a `FixedArray with 3`), the
 counter of a counted `for` loop between compile-time bounds inside the size, or a `let` computed from
 those. A constant index at or past the size is **E3005**. Any other index is checked at run time and needs
-`try` (**E3057** without it). See
+`try` (**E3057** without it), as every index into a runtime-sized fixed array is. See
 [Fixed arrays](LANGUAGE_REFERENCE.md#fixed-arrays-and-proven-indices).
 
 ```maxon

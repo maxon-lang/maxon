@@ -1610,7 +1610,7 @@ type MaxonToStdLowering
 
 	// The ValueId of the CURRENT function's hidden fixed-element-count parameter — the slot between
 	// the layout descriptor and the constraint witnesses. Read only to FORWARD it, by
-	// `emitFixedElementCountOf`: `countof(Self)` itself needs nothing here, because the parser resolved its
+	// `forwardCallerFixedElementCount`: `countof(Self)` itself needs nothing here, because the parser resolved its
 	// own reservation and the expression simply IS this parameter.
 	var implicitCountValueId as ValueId
 
@@ -3499,6 +3499,12 @@ type MaxonToStdLowering
 		var entry = self.stdModule.addBlock(adapter, label: b"entry", heat: BlockHeat.normal)
 		emitTypedParams(self.stdModule, block: entry, paramTypes: paramTypes)
 
+		if self.slotCountsARuntimeSizedFixedArrayWithNoRecord(request) 'aStaticSlotOverARuntimeSizedInstance'
+			emitRuntimeFatal(self.stdModule, func: adapter, block: entry, fatal: RuntimeFatal.staticCountReadThroughARuntimeSizedFixedArray, ids: ValueMinter.resuming(request.slotArity as ValueId))
+			self.stdModule.functions.push(adapter)
+			return
+		end 'aStaticSlotOverARuntimeSizedInstance'
+
 		var args = ValueIdArray.create()
 
 		for k in 0 upto request.slotArity 'eachForwardedArg'
@@ -3525,6 +3531,16 @@ type MaxonToStdLowering
 
 		self.stdModule.functions.push(adapter)
 	end 'synthesizeWitnessSlotAdapter'
+
+	// A static impl has no receiver to read a runtime-sized instance's record length from, so its slot
+	// aborts deterministically. No source can dispatch it: a static requirement cannot be called
+	// through a type parameter (E3116).
+	function slotCountsARuntimeSizedFixedArrayWithNoRecord(request WitnessAdapterRequest) returns bool
+		match request.instance 'table'
+			shared then return false
+			perInstance(gid) then return not self.signatures.declaredCalleeTakesReceiver(request.implName) and self.fixedElementCountParamCountFor(request.implName) != 0 and self.signatures.isRuntimeSizedFixedArrayAt(ValueTypeTag.genericInstance, nameId: gid as TypeNameId)
+		end 'table'
+	end 'slotCountsARuntimeSizedFixedArrayWithNoRecord'
 
 	function reinterpretSlotWords(args ValueIdArray, request WitnessAdapterRequest, entry IrBlock, ids ValueMinter)
 		for k in 0 upto request.slotArity 'eachSlotWord'
@@ -3605,12 +3621,18 @@ type MaxonToStdLowering
 	// at the end is the two copies of that number meeting.
 	function appendInstanceAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, gid GenericInstanceId, sig FuncSignature)
 		if self.fixedElementCountParamCountFor(request.implName) != 0 'aFixedElementCount'
-			// A per-instance table is only minted for a CONCRETE instance, and a concrete instance states its
-			// own count — `FixedArray with 4 Element` says 4 — so unlike the value door there is no caller slot to
-			// fall back on and a silent instance is an internal break.
-			let count = try self.signatures.genericInstanceFixedCount(gid) otherwise panic("appendInstanceAdapterDictionary: '{String.from(request.implName)}' reads a fixed element count and the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' states none — a table is keyed by an instance only when `instanceIsFullyConcrete` accepted it, and a concrete instance states its own count")
+			// A per-instance table is only minted for a CONCRETE instance, and a concrete instance either
+			// states its own count — `FixedArray with 4 Element` says 4 — or is runtime-sized, whose count
+			// is its receiver's record length. So unlike the value door there is no caller slot to fall back
+			// on and a silent instance is an internal break.
 			let countId = args.count() as ValueId
-			self.stdModule.appendOp(entry, op: StdOp.const(countId, value: count as FullRangeInt, valueType: StdType.i64))
+
+			match self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: gid as TypeNameId) 'source'
+				stated(count) then self.stdModule.appendOp(entry, op: StdOp.const(countId, value: count as FullRangeInt, valueType: StdType.i64))
+				inTheRecord then self.appendAdapterRecordLength(args, request: request, entry: entry, countId: countId)
+				callerSlot then panic("appendInstanceAdapterDictionary: '{String.from(request.implName)}' reads a fixed element count and the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' states none — a table is keyed by an instance only when `instanceIsFullyConcrete` accepted it, and a concrete instance states its own count")
+			end 'source'
+
 			args.push(countId)
 		end 'aFixedElementCount'
 
@@ -3633,6 +3655,12 @@ type MaxonToStdLowering
 			panic("appendInstanceAdapterDictionary: the adapter for '{String.from(request.implName)}' built {args.count()} argument(s) and the impl declares {impl.paramCount} — the three hidden blocks are asked of the same predicates the call-site appender uses, so a difference means one of them answers differently for an adapter than for a direct call")
 		end 'theTwoParameterListsDisagree'
 	end 'appendInstanceAdapterDictionary'
+
+	function appendAdapterRecordLength(args ValueIdArray, request WitnessAdapterRequest, entry IrBlock, countId ValueId)
+		let receiver = try args.get(0) otherwise panic("appendAdapterRecordLength: the adapter for instance method '{String.from(request.implName)}' forwards no receiver to read a record length from")
+		var ids = ValueMinter.resuming(countId)
+		_ = emitLoadField(self.stdModule, block: entry, record: receiver, offset: ManagedRecordLengthOffset, ids: ids)
+	end 'appendAdapterRecordLength'
 
 	// The witness table one `where` constraint of `gid`'s BASE resolves to at this instantiation — the
 	// concrete-instance arm of `witnessArgSourceFor`, asked of an instance rather than of a receiver value, and
@@ -4879,8 +4907,9 @@ type MaxonToStdLowering
 		end 'builtOnAParameter'
 	end 'noteTableCandidate'
 
-	// ⭐⭐ **THE ELEMENT COUNT A COUNT-NEEDING CALL PASSES — A COMPILE-TIME CONSTANT AT EVERY CALL SITE,
-	// WHICH IS THE WHOLE REASON THE COUNT IS A PARAMETER AND NOT A DESCRIPTOR WORD.**
+	// ⭐⭐ **THE ELEMENT COUNT A COUNT-NEEDING CALL PASSES — A FACT ABOUT THE INSTANCE THE CALL SITE
+	// HOLDS, WHICH IS THE WHOLE REASON THE COUNT IS A PARAMETER AND NOT A DESCRIPTOR WORD.** A
+	// constant for a sized instance, the receiver's record length for a runtime-sized one.
 	// `materializeLayoutArgFor`'s twin, reading the same `hiddenArgumentSourceOf`.
 	//
 	// ⛔⛔ **AND IT IS CORRECT WHERE THE DESCRIPTOR IS NOT.** `emitInstanceDescriptorAddr` may FORWARD the
@@ -4893,8 +4922,8 @@ type MaxonToStdLowering
 	// descriptor at all, which matters because a frame holding such a field is not guaranteed to have one.
 	function materializeFixedElementCountArgFor(argIds ValueIdArray, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
 		match self.hiddenArgumentSourceOf(argIds, result: result, callee: callee) 'source'
-			ofReceiver(value) then return self.emitFixedElementCountOf(value, callee: callee, dstBlock: dstBlock)
-			ofResult(value) then return self.emitFixedElementCountOf(value, callee: callee, dstBlock: dstBlock)
+			ofReceiver(value) then return self.emitFixedElementCountOfReceiver(value, callee: callee, dstBlock: dstBlock)
+			ofResult(value) then return self.emitFixedElementCountOfResult(value, callee: callee, dstBlock: dstBlock)
 			ofQualifier(instance) then return self.emitFixedElementCountOfInstance(instance, callee: callee, dstBlock: dstBlock)
 			forwardedFromTheCaller then return self.forwardCallerFixedElementCount(callee)
 		end 'source'
@@ -4911,35 +4940,49 @@ type MaxonToStdLowering
 		return self.implicitCountValueId
 	end 'forwardCallerFixedElementCount'
 
-	// The count for ONE value typed at a generic instance: a `const` when the instance STATES its own count,
-	// and the caller's own slot forwarded when it does not.
+	// The count for ONE value typed at a generic instance: a `const` when the instance STATES its own
+	// count, the receiver's record length when it is runtime-sized, and the caller's own slot
+	// forwarded otherwise.
 	//
 	// ⭐ **THE FORWARD ARM IS NOT AN OPTIMIZATION HERE, IT IS THE ONLY ANSWER.** `Self` inside
 	// `type FixedArray uses Element` is `ownRecordSelfInstance`, interned at `NoFixedSize` so that ONE shared body
 	// serves every size — so a `FixedArray` method calling a sibling on `self` holds an instance that states no
 	// count, and the answer it must pass on is the one its own caller handed it.
-	function emitFixedElementCountOf(instanceValue ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		let tag = self.valueTagOf(instanceValue)
+	function emitFixedElementCountOfReceiver(receiver ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		let tag = self.valueTagOf(receiver)
 
-		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.emitFixedElementCountOfInstance(self.instanceIdOfValue(instanceValue), callee: callee, dstBlock: dstBlock)
-		end 'anInstance'
+		if tag != ValueTypeTag.genericInstance 'notAnInstance'
+			return self.forwardCallerFixedElementCount(callee)
+		end 'notAnInstance'
 
-		return self.forwardCallerFixedElementCount(callee)
-	end 'emitFixedElementCountOf'
+		match self.signatures.elementCountSourceOf(tag, nameId: self.instanceIdOfValue(receiver) as TypeNameId) 'source'
+			stated(count) then return self.emitStatedFixedElementCount(count, dstBlock: dstBlock)
+			inTheRecord then return self.loadRecordWord(ManagedRecordLengthOffset, record: receiver, entryBlock: dstBlock)
+			callerSlot then return self.forwardCallerFixedElementCount(callee)
+		end 'source'
+	end 'emitFixedElementCountOfReceiver'
+
+	function emitFixedElementCountOfResult(result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notAnInstance'
+			return self.forwardCallerFixedElementCount(callee)
+		end 'notAnInstance'
+
+		return self.emitFixedElementCountOfInstance(self.instanceIdOfValue(result), callee: callee, dstBlock: dstBlock)
+	end 'emitFixedElementCountOfResult'
 
 	function emitFixedElementCountOfInstance(gid GenericInstanceId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		// ⚠ The BRANCH is `elementCountStatedBy`'s, not a second reading of the same two clauses:
-		// `Parser.requireFixedElementCountSourceForForwarding` refuses on that predicate, and a refusal that
-		// disagrees with this branch is either a rejected legal program or this routine's own abort.
-		if let count = try self.signatures.elementCountStatedBy(ValueTypeTag.genericInstance, nameId: gid as TypeNameId) 'statesItsOwnCount'
-			let countId = self.mintStdValueId()
-			self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: count as FullRangeInt, valueType: StdType.i64))
-			return countId
-		end 'statesItsOwnCount'
-
-		return self.forwardCallerFixedElementCount(callee)
+		match self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: gid as TypeNameId) 'source'
+			stated(count) then return self.emitStatedFixedElementCount(count, dstBlock: dstBlock)
+			inTheRecord then panic("emitFixedElementCountOfInstance: '{String.from(callee)}' reads the length of a runtime-sized fixed array through its call site's qualifier or result, which holds no record — `requireACountSourceForAStaticCall` refuses that call")
+			callerSlot then return self.forwardCallerFixedElementCount(callee)
+		end 'source'
 	end 'emitFixedElementCountOfInstance'
+
+	function emitStatedFixedElementCount(count FixedElementCount, dstBlock IrBlock) returns ValueId
+		let countId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: count as FullRangeInt, valueType: StdType.i64))
+		return countId
+	end 'emitStatedFixedElementCount'
 
 	function forwardCallerLayout(callee ByteArray) returns ValueId
 		self.requireImplicitLayout("forwardCallerLayout to '{String.from(callee)}'")
