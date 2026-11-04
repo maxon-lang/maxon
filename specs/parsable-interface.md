@@ -321,7 +321,7 @@ type Value implements Parsable
 
 	static function fromString(input String) returns Self throws ArrayError
 		var digits = IntegerArray.create()
-		digits.push(input.byteLength() + 4)
+		digits.push((input.byteLength() + 4) as Integer)
 		let first = try digits.get(0)
 		return Value{n: first}
 	end 'fromString'
