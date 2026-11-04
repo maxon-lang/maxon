@@ -114,8 +114,8 @@ module function callSiteWalkOrder(ir MaxonModule, func IrFunction) returns Block
 		collectMaxonBlockSuccessors(ir, block: block, into: successors)
 
 		for successorId in successors 'eachSuccessor'
-			edgeFrom.push(position)
-			edgeTo.push(try byId.get(successorId) otherwise panic("callSiteWalkOrder: block_{block.id} branches to block_{successorId}, which is not a block of '{String.from(func.name)}'"))
+			edgeFrom.push(position as CsrIndex)
+			edgeTo.push((try byId.get(successorId) otherwise panic("callSiteWalkOrder: block_{block.id} branches to block_{successorId}, which is not a block of '{String.from(func.name)}'")) as CsrIndex)
 		end 'eachSuccessor'
 	end 'eachBlock'
 
@@ -300,7 +300,7 @@ function ranksOf(order CsrColumn) returns CsrColumn
 	ranks.resize(order.count())
 
 	for (iter, index) in order.withIterator() 'eachPosition'
-		try ranks.set(index, value: iter.index()) otherwise panic("ranksOf: function index {index} is outside the {order.count()} the order spans")
+		try ranks.set(index, value: iter.index() as CsrIndex) otherwise panic("ranksOf: function index {index} is outside the {order.count()} the order spans")
 	end 'eachPosition'
 
 	return ranks
@@ -328,8 +328,8 @@ module function calleesFirstOrder(module MaxonModule, funcNames FunctionNameInde
 				end 'notANamedCall'
 
 				if let callee = try funcNames.byName.get(maxonOpCalleeName(op)) 'aFunctionOfThisModule'
-					callers.push(iter.index())
-					callees.push(callee)
+					callers.push(iter.index() as CsrIndex)
+					callees.push(callee as CsrIndex)
 				end 'aFunctionOfThisModule'
 			end 'eachOp'
 		end 'eachBlock'
@@ -359,8 +359,8 @@ module type CallDependencies
 
 	module function note(callee ElementIndex)
 		if self.recording 'firstPass'
-			self.callees.push(callee)
-			self.callers.push(self.caller)
+			self.callees.push(callee as CsrIndex)
+			self.callers.push(self.caller as CsrIndex)
 		end 'firstPass'
 	end 'note'
 end 'CallDependencies'

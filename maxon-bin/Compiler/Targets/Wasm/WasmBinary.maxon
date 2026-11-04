@@ -65,11 +65,11 @@ function writeUleb128(buf ByteArray, value Wasm32Index)
 		v = v shr 7
 
 		if v == 0 'last'
-			buf.push(b)
+			buf.push(b as Byte)
 			return
 		end 'last'
 
-		buf.push(b or lebContinuationBit)
+		buf.push((b or lebContinuationBit) as Byte)
 	end 'encode'
 
 	panic("writeUleb128: {value} did not terminate within {ulebMaxBytes} bytes — outside the u32 index space")
@@ -90,11 +90,11 @@ function writeSleb128(buf ByteArray, value FullRangeInt)
 		let last = (v == 0 and not signBitSet) or (v == -1 and signBitSet)
 
 		if last 'done'
-			buf.push(b)
+			buf.push(b as Byte)
 			return
 		end 'done'
 
-		buf.push(b or lebContinuationBit)
+		buf.push((b or lebContinuationBit) as Byte)
 	end 'encode'
 
 	panic("writeSleb128: {value} did not terminate within {slebMaxBytes} bytes — not a 64-bit integer")
@@ -779,7 +779,7 @@ export type WasmBody
 	// address, and `align` is the op's natural alignment (see `wasmMemAlignWord64`). The load/store
 	// pushing is factored so the four public ops cannot disagree on the memarg layout.
 	function pushMemAccess(opcode MachineWord, align Wasm32Index, offset Wasm32Index)
-		self.buf.push(opcode)
+		self.buf.push(opcode as Byte)
 		writeUleb128(self.buf, value: align)
 		writeUleb128(self.buf, value: offset)
 	end 'pushMemAccess'
@@ -962,7 +962,7 @@ end 'writeWasmName'
 // it claimed to; the levels are kept honest by the two call sites naming their own `wasmSection*` /
 // `wasmNameSubsection*` constants, which is where the distinction actually lives.
 function writeIdTaggedBlob(buf ByteArray, id MachineWord, payload ByteArray)
-	buf.push(id)
+	buf.push(id as Byte)
 	writeUleb128(buf, value: payload.count() as Wasm32Index)
 	buf.append(payload)
 end 'writeIdTaggedBlob'
@@ -987,13 +987,13 @@ export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray
 	writeUleb128(enc, value: params.count() as Wasm32Index)
 
 	for p in params 'eachParam'
-		enc.push(valTypeByte(p))
+		enc.push(valTypeByte(p) as Byte)
 	end 'eachParam'
 
 	writeUleb128(enc, value: results.count() as Wasm32Index)
 
 	for r in results 'eachResult'
-		enc.push(valTypeByte(r))
+		enc.push(valTypeByte(r) as Byte)
 	end 'eachResult'
 
 	return enc
@@ -1033,7 +1033,7 @@ function writeLocalDecls(buf ByteArray, localTypes WasmValTypeArray)
 	for (iter, gt) in groupTypes.withIterator() 'emit'
 		let count = try groupCounts.get(iter.index()) otherwise panic("writeLocalDecls: groupCounts/groupTypes fell out of lockstep at {iter.index()}")
 		writeUleb128(buf, value: count)
-		buf.push(valTypeByte(gt))
+		buf.push(valTypeByte(gt) as Byte)
 	end 'emit'
 end 'writeLocalDecls'
 
@@ -1381,7 +1381,7 @@ export type WasmModuleBuilder
 
 		for entry in self.exportEntries 'each'
 			writeWasmName(contents, name: entry.name)
-			contents.push(entry.kind)
+			contents.push(entry.kind as Byte)
 			writeUleb128(contents, value: entry.index)
 		end 'each'
 

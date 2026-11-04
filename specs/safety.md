@@ -859,8 +859,9 @@ Stack trace:
 The entry guard closes the call-argument door at the CALLEE's entry, and cannot reach this one — an element
 travels as `__managed_push`'s third argument into a shared `Array` body whose parameter is the OPAQUE
 element type, so there is no narrowed parameter for an entry guard to stand behind. The store guard
-shuts it from the other side: the guard goes at the **store**, in the caller, which is the one place
-that still knows the element type. Everything the entry guard could not see is visible here, and the
+shuts it from the other side for a value that carries no alias (`-ident(0)`): the guard goes at the
+**store**, in the caller, which is the one place that still knows the element type. A value cast
+`as NonZero` is guarded at the cast, and a value of another named alias is E3005 at the `push`. Everything the entry guard could not see is visible here, and the
 value never reaches the array.
 
 Unguarded, this program would print `before` and die `panic: integer divide by zero` — the element
@@ -868,17 +869,17 @@ read back out is a `NonZero` the compiler believes, so `100 / d` is a bare `idiv
 there and does NOT run: the guard fires at the `push`, ahead of it, which is what proves the check
 lands at the store rather than at the read.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Offset = int(-50 to 100)
 typealias NonZero = int(1 to i64.max)
 typealias NonZeroArray = Array with NonZero
 
-function ident(v Integer) returns Integer
+function ident(v Offset) returns Offset
 	return v
 end 'ident'
 
 function main() returns ExitCode
 	var xs = NonZeroArray.create()
-	xs.push(ident(0))
+	xs.push(-ident(0))
 	let d = try xs.get(0) otherwise 1
 	print("before\n")
 	return 100 / d

@@ -342,6 +342,13 @@ release's version as its heading when the release is cut.
   on every target, so discarding a result with `_ =` is E3064.
   Fix: use the result. For `AesGcm.open` that means acting on the plain text or on the failure, since the call
   is also the authentication check.
+- Storing a value of one named integer type into an array whose element type is another, or a value of one
+  float alias into an array of another, is E3005. `items.push(n)`, `items.set(i, value: n)` and
+  `WideArray from [n]`, with `n` a `Narrow` and the array an `Array with Wide`, name the cast, as a variable,
+  field or argument does; a float alias has no cast hint. A program that declares its own `typealias Byte`
+  and stores it into a stdlib `ByteArray`, or the reverse, crosses two types.
+  Fix: write `n as Wide`, or use the stdlib `Byte`. A plain `int`, a value of the element's own alias and an
+  `as Wide` cast are accepted.
 
 ## 0.5.0 — 2026-10-08
 

@@ -1401,7 +1401,7 @@ function writeSectionName(buf ByteArray, name String)
 	for ch in name 'chars'
 		// PE section names are ASCII literals; a non-ASCII char would be a caller bug.
 		let b = try ch.asciiValue() otherwise panic("writeSectionName: non-ASCII section name '{name}'")
-		buf.push(b)
+		buf.push(b as Byte)
 	end 'chars'
 
 	for _ in name.count() upto 8 'pad'
@@ -1458,8 +1458,8 @@ function writeCoffSymbolEntry(pe ByteArray, stringTable ByteArray, name String, 
 	writeDword(pe, value: value)
 	writeWord(pe, value: sectionNumber)
 	writeWord(pe, value: symType)
-	pe.push(storageClass and 0xFF)
-	pe.push(numAux and 0xFF)
+	pe.push((storageClass and 0xFF) as Byte)
+	pe.push((numAux and 0xFF) as Byte)
 end 'writeCoffSymbolEntry'
 
 // Append section symbols (one per emitted section, in emission order, each with a

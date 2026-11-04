@@ -782,7 +782,7 @@ export type SplitEdits
 
 			// The slots already recorded are handed down, because a re-space MOVES the ops they name — see
 			// `PressureRelayoutScratch.applyMoves`, which is the repair that keeps them valid.
-			self.insertedSlots.push(pressure.insertOp(module, topo: topo, index: index, gaps: gaps, scratch: relayout, opFacts: opFacts, blockLocal: blockLocal, pos: at, opIdx: opIdx, buf: buf, pending: self.insertedSlots))
+			self.insertedSlots.push(pressure.insertOp(module, topo: topo, index: index, gaps: gaps, scratch: relayout, opFacts: opFacts, blockLocal: blockLocal, pos: at, opIdx: opIdx, buf: buf, pending: self.insertedSlots) as DenseInt)
 		end 'eachSplice'
 
 		if withRemoval 'dropTheDeadDef'
@@ -1458,7 +1458,7 @@ export type PressureIndex
 
 		for b in 0 upto topo.numBlocks 'eachBlock'
 			let block = blockAt(module, topo: topo, local: b)
-			try opCounts.set(b, value: block.opCountInRunOrder()) otherwise panic("PressureIndex.layOut: opCounts.set OOB for block {b}")
+			try opCounts.set(b, value: block.opCountInRunOrder() as DenseInt) otherwise panic("PressureIndex.layOut: opCounts.set OOB for block {b}")
 			try self.terminated.set(b, value: block.hasTerminatorOp()) otherwise panic("PressureIndex.layOut: terminated.set OOB for block {b}")
 		end 'eachBlock'
 
@@ -2647,7 +2647,7 @@ export type PressureIndex
 		scratch.opCounts.refill(topo.numBlocks, value: 0)
 
 		for b in 0 upto topo.numBlocks 'countEachBlock'
-			try scratch.opCounts.set(b, value: scratch.opsIn(b)) otherwise panic("PressureIndex.relayout: opCounts.set OOB for block {b}")
+			try scratch.opCounts.set(b, value: scratch.opsIn(b) as DenseInt) otherwise panic("PressureIndex.relayout: opCounts.set OOB for block {b}")
 		end 'countEachBlock'
 
 		self.placeRuns(topo, opCounts: scratch.opCounts)
@@ -2774,7 +2774,7 @@ export type PressureRelayoutScratch
 		for k in 0 upto count 'eachSlot'
 			try self.holdsOp.set(k, value: try runHoldsOp.get((from + k) as ElementIndex) otherwise panic("PressureRelayoutScratch.captureWindow: holdsOp.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: holdsOp.set OOB at {k}")
 			try self.opAt.set(k, value: try runOpAt.get((from + k) as ElementIndex) otherwise panic("PressureRelayoutScratch.captureWindow: opAt.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: opAt.set OOB at {k}")
-			try self.moved.set(k, value: from + k) otherwise panic("PressureRelayoutScratch.captureWindow: moved.set OOB at {k}")
+			try self.moved.set(k, value: (from + k) as DenseInt) otherwise panic("PressureRelayoutScratch.captureWindow: moved.set OOB at {k}")
 			try self.capturedPending.set(k, value: index.pendingAt(from + k)) otherwise panic("PressureRelayoutScratch.captureWindow: capturedPending.set OOB at {k}")
 			try self.capturedPhysLive.set(k, value: index.physLiveAt(from + k)) otherwise panic("PressureRelayoutScratch.captureWindow: capturedPhysLive.set OOB at {k}")
 
@@ -2797,7 +2797,7 @@ export type PressureRelayoutScratch
 
 	// Record that the op at `oldSlot` now sits at `newSlot`.
 	export function recordMove(oldSlot PressureSlot, newSlot PressureSlot)
-		try self.moved.set((oldSlot - self.windowFirst) as ElementIndex, value: newSlot) otherwise panic("PressureRelayoutScratch.recordMove: slot {oldSlot} is outside the captured window at {self.windowFirst}")
+		try self.moved.set((oldSlot - self.windowFirst) as ElementIndex, value: newSlot as DenseInt) otherwise panic("PressureRelayoutScratch.recordMove: slot {oldSlot} is outside the captured window at {self.windowFirst}")
 	end 'recordMove'
 
 	// A use record's sequence number is its op's slot offset within its block
@@ -3692,8 +3692,8 @@ export type SplitWindows
 	end 'clear'
 
 	export function set(blockLocal ElementIndex, firstPos ElementIndex, lastPos ElementIndex)
-		try self.lo.set(blockLocal, value: firstPos) otherwise panic("SplitWindows.set: lo.set OOB for block {blockLocal}")
-		try self.hi.set(blockLocal, value: lastPos) otherwise panic("SplitWindows.set: hi.set OOB for block {blockLocal}")
+		try self.lo.set(blockLocal, value: firstPos as DenseInt) otherwise panic("SplitWindows.set: lo.set OOB for block {blockLocal}")
+		try self.hi.set(blockLocal, value: lastPos as DenseInt) otherwise panic("SplitWindows.set: hi.set OOB for block {blockLocal}")
 		try self.stamp.set(blockLocal, value: self.generation + 1) otherwise panic("SplitWindows.set: stamp.set OOB for block {blockLocal}")
 	end 'set'
 

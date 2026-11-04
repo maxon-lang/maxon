@@ -608,7 +608,7 @@ type CycleTrace implements SummaryCallWalker
 
 			for target in targets 'eachSuccessor'
 				let position = self.positionOfBlock(target)
-				blockSuccessors.push(position)
+				blockSuccessors.push(position as OriginIndex)
 				try predecessorCounts.set(position, value: (try predecessorCounts.get(position) otherwise panic("CycleTrace.indexBody: predecessorCounts.get OOB at {position}")) + 1) otherwise panic("CycleTrace.indexBody: predecessorCounts.set OOB at {position}")
 				try lastPredecessor.set(position, value: blockIter.index()) otherwise panic("CycleTrace.indexBody: lastPredecessor.set OOB at {position}")
 			end 'eachSuccessor'
@@ -1616,7 +1616,7 @@ type CycleTrace implements SummaryCallWalker
 		var reached = BoolArray.create()
 		reached.refill(self.successors.count(), value: false)
 		var pending = OriginList.create()
-		pending.push(block)
+		pending.push(block as OriginIndex)
 		var head = 0 as ElementIndex
 
 		while head < pending.count() 'eachPending'

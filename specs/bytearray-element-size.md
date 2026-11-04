@@ -1153,7 +1153,7 @@ typealias Bytes = Array with Byte
 
 function feed(v Integer) returns Integer
 	var made = Bytes.create()
-	made.push(v)
+	made.push(v as Byte)
 	return try made.get(0) otherwise 0
 end 'feed'
 

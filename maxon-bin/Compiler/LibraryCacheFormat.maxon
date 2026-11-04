@@ -1,7 +1,6 @@
 export typealias CacheUnsigned = int(0 to u64.max)
 export typealias CacheSigned = int(i64.min to i64.max)
 typealias CacheWord = bits(64)
-typealias CacheByteValue = int(0 to u8.max)
 
 let LibraryCacheMagic = "MXLC"
 let HeaderWordByteCount = 8
@@ -73,11 +72,11 @@ export type LibraryCacheWriter
 			rest = rest shr VarintPayloadBits
 
 			if rest == 0 'last'
-				self.buffer.push(low as CacheByteValue)
+				self.buffer.push(low as Byte)
 				return
 			end 'last'
 
-			self.buffer.push((low or VarintContinuationBit) as CacheByteValue)
+			self.buffer.push((low or VarintContinuationBit) as Byte)
 		end 'eachByte'
 
 		panic("LibraryCacheWriter.unsigned: {value} did not end within {VarintMostBytes} bytes")
@@ -135,7 +134,7 @@ function headerWordBytes(word CacheWord) returns ByteArray
 	var bytes = ByteArray.create()
 
 	for position in 0 upto HeaderWordByteCount 'eachByte'
-		bytes.push(((word shr (position * ByteBitWidth)) and ByteMask) as CacheByteValue)
+		bytes.push(((word shr (position * ByteBitWidth)) and ByteMask) as Byte)
 	end 'eachByte'
 
 	return bytes
@@ -192,7 +191,7 @@ export type LibraryCacheReader
 		return Self{image: image, limit: endIndex, position: start, paths: ReaderPathMap.create()}
 	end 'over'
 
-	function nextByte() returns CacheByteValue throws LibraryCacheDamage
+	function nextByte() returns Byte throws LibraryCacheDamage
 		if self.position >= self.limit 'pastTheEnd'
 			throw LibraryCacheDamage.truncated
 		end 'pastTheEnd'

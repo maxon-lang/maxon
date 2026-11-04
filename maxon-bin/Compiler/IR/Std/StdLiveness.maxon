@@ -208,7 +208,7 @@ module type StdLiveness
 
 		for cut in 0 upto cutCount 'eachCutRank'
 			rankColumn.push(self.reach.rankOfNode(self.blockCount + cut))
-			cutColumn.push(cut)
+			cutColumn.push(cut as CsrIndex)
 		end 'eachCutRank'
 
 		let byRank = buildCsr(rankColumn, to: cutColumn, nodeCount: self.nodeCount as CsrIndex)
@@ -247,8 +247,8 @@ module type StdLiveness
 		for cut in 0 upto cutBlock.count() 'eachCut'
 			let block = try cutBlock.get(cut) otherwise panic("StdLiveness.segmentedSuccessors: cutBlock.get OOB at {cut}")
 			let continuation = self.blockCount + cut
-			edgeFrom.push(try tail.get(block) otherwise panic("StdLiveness.segmentedSuccessors: tail.get OOB at {block}"))
-			edgeTo.push(continuation)
+			edgeFrom.push((try tail.get(block) otherwise panic("StdLiveness.segmentedSuccessors: tail.get OOB at {block}")) as CsrIndex)
+			edgeTo.push(continuation as CsrIndex)
 			try tail.set(block, value: continuation) otherwise panic("StdLiveness.segmentedSuccessors: tail.set OOB at {block}")
 		end 'eachCut'
 
@@ -256,7 +256,7 @@ module type StdLiveness
 			let last = try tail.get(block) otherwise panic("StdLiveness.segmentedSuccessors: tail.get OOB at {block}")
 
 			for k in 0 upto self.blockSucc.degree(block as CsrIndex) 'eachSuccessor'
-				edgeFrom.push(last)
+				edgeFrom.push(last as CsrIndex)
 				edgeTo.push(self.blockSucc.neighbour(block as CsrIndex, k: k))
 			end 'eachSuccessor'
 		end 'eachBlockExit'
@@ -351,8 +351,8 @@ module type StdLiveness
 			let valueId = self.reads.insertedIdAt(i)
 
 			if self.definingBlockOf(valueId) != segment 'definedElsewhere'
-				self.useValue.push(valueId)
-				self.useBlock.push(segment)
+				self.useValue.push(valueId as CsrIndex)
+				self.useBlock.push(segment as CsrIndex)
 			end 'definedElsewhere'
 		end 'eachRead'
 

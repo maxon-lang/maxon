@@ -171,7 +171,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -223,7 +223,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -286,7 +286,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -354,7 +354,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -492,7 +492,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -535,7 +535,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -584,7 +584,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -629,7 +629,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -677,7 +677,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -723,7 +723,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -770,7 +770,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -821,7 +821,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -878,7 +878,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -935,7 +935,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -983,7 +983,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1033,7 +1033,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1130,7 +1130,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1224,7 +1224,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1287,7 +1287,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1329,7 +1329,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1369,7 +1369,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1418,7 +1418,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1481,7 +1481,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1547,7 +1547,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1606,7 +1606,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1659,7 +1659,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1706,7 +1706,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1758,7 +1758,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1801,7 +1801,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1848,7 +1848,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1908,7 +1908,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -1962,7 +1962,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -2021,7 +2021,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -2075,7 +2075,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -2246,7 +2246,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -2298,7 +2298,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -2358,7 +2358,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -2533,7 +2533,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
@@ -2615,7 +2615,7 @@ function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'

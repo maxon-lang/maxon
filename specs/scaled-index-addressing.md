@@ -219,7 +219,6 @@ it back under a substituted concrete type), so the fork is exactly the question 
 `specs/static-stride-specialization.md` carries the case that fails without it.
 The INTEGER cases above are where it does fire, and their emitted code shows no fork at all.
 ```maxon
-typealias Byte = int(0 to 255)
 typealias Total = int(0 to u64.max)
 
 function sumBytes(b ByteArray) returns Total

@@ -68,7 +68,7 @@ export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset De
 		end 'alreadyListed'
 
 		named.insert(local.name)
-		tree.roots.push(renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: local.name, registers: registers))
+		tree.roots.push(renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: local.name, registers: registers) as DebugValueIndex)
 	end 'eachLocal'
 
 	return tree
@@ -101,7 +101,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 	end 'eachMember'
 
 	var held = tree.nodeAt(current)
-	tree.roots.push(tree.add(DebugValueNode.create(path, typeName: held.typeName, kind: held.kind, display: held.display, availability: held.availability.clone(), children: held.children)))
+	tree.roots.push(tree.add(DebugValueNode.create(path, typeName: held.typeName, kind: held.kind, display: held.display, availability: held.availability.clone(), children: held.children)) as DebugValueIndex)
 
 	return DebugValueAnswer.rendered(tree)
 end 'renderValuePath'
@@ -307,7 +307,7 @@ function renderSequence(tree DebugValueTree, memory DebugMemory, symbols DebugSy
 	let shown = length if length < MaxRenderedChildren else MaxRenderedChildren
 
 	for i in 0 upto shown 'eachElement'
-		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: "[{i}]", typeId: record.elementTypeId, source: DebugValueSource.address(buffer + (i as DebugAddress) * (stride as DebugAddress))))
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: "[{i}]", typeId: record.elementTypeId, source: DebugValueSource.address(buffer + (i as DebugAddress) * (stride as DebugAddress))) as DebugValueIndex)
 	end 'eachElement'
 
 	return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: "[{length}]", children: children))
@@ -335,7 +335,7 @@ function fieldsAt(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols,
 
 	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachField'
 		let field = symbols.fieldRecordOf(k as MxdbgIndex)
-		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: fieldSource(memory, symbols: symbols, field: field, base: base)))
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: fieldSource(memory, symbols: symbols, field: field, base: base)) as DebugValueIndex)
 	end 'eachField'
 
 	return children
@@ -397,7 +397,7 @@ function renderFoldedStruct(tree DebugValueTree, memory DebugMemory, symbols Deb
 
 	for (iter, word) in words.withIterator() 'eachWord'
 		let field = symbols.fieldRecordOf(record.fieldFirst + (iter.index() as MxdbgIndex))
-		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: DebugValueSource.word(word as DebuggeeWord)))
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: DebugValueSource.word(word as DebuggeeWord)) as DebugValueIndex)
 	end 'eachWord'
 
 	return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: StructDisplay, children: children))
@@ -453,7 +453,7 @@ function payloadOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols
 	var children = DebugValueIndexArray.create()
 
 	if symbols.typeIsDescribed(caseRecord.typeId) and symbols.typeNameOf(caseRecord.typeId) != VoidPayloadName 'aPayload'
-		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: caseRecord.name, typeId: caseRecord.typeId, source: payload))
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: caseRecord.name, typeId: caseRecord.typeId, source: payload) as DebugValueIndex)
 	end 'aPayload'
 
 	return children

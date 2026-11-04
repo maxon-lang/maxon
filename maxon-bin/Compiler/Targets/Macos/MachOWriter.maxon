@@ -457,7 +457,7 @@ function writeMachoName(buf ByteArray, name String)
 
 	for ch in name 'chars'
 		let b = try ch.asciiValue() otherwise panic("writeMachoName: non-ASCII character in Mach-O name '{name}'")
-		buf.push(b)
+		buf.push(b as Byte)
 		written = written + 1
 	end 'chars'
 
@@ -614,7 +614,7 @@ function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, deb
 
 	for reloc in globalData.pendingRdataAbsRelocs 'collectDataSlots'
 		offsets.push(rdataAbsSlotOffset(globalData, reloc: reloc))
-		targets.push(constImageOffset + (rdataAbsTargetOffset(globalData, reloc: reloc) as MachineWord))
+		targets.push((constImageOffset + (rdataAbsTargetOffset(globalData, reloc: reloc) as MachineWord)) as ByteOffset)
 	end 'collectDataSlots'
 
 	// The PIE counterpart of the fixed-base `bakeFuncAbs64Relocs`: same slots, same resolution through the
@@ -625,7 +625,7 @@ function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, deb
 	for reloc in globalData.pendingRdataRelocs 'collectFuncSlots'
 		let funcOffset = try funcOffsets.get(reloc.funcName) otherwise panic("writeMachoRdataRebases: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references .text function '{String.from(reloc.funcName)}', which is in no debug symbol — it was never installed (a DCE-root gap where the slot's owner was built), so its address cannot be resolved")
 		offsets.push(rdataFuncSlotOffset(globalData, reloc: reloc))
-		targets.push(textImageOffset + (funcOffset as MachineWord))
+		targets.push((textImageOffset + (funcOffset as MachineWord)) as ByteOffset)
 	end 'collectFuncSlots'
 
 	sortMachoRebases(offsets, targets: targets)
@@ -1067,7 +1067,7 @@ end 'entitlementsDerBlob'
 
 function derByteArrayOf(value MachineWord) returns ByteArray
 	var bytes = ByteArray.create()
-	bytes.push(value and DerByteMask)
+	bytes.push((value and DerByteMask) as Byte)
 
 	return bytes
 end 'derByteArrayOf'
@@ -1078,8 +1078,8 @@ function derElement(tag MachineWord, content ByteArray) returns ByteArray
 	end 'longForm'
 
 	var element = ByteArray.create()
-	element.push(tag and DerByteMask)
-	element.push(content.count() and DerByteMask)
+	element.push((tag and DerByteMask) as Byte)
+	element.push((content.count() and DerByteMask) as Byte)
 	element.append(content)
 
 	return element
@@ -1101,7 +1101,7 @@ type MachoSymtab
 		var nameOffsets = ByteOffsetArray.create()
 
 		for sym in debugSymbols 'eachSym'
-			nameOffsets.push(strtab.count())
+			nameOffsets.push(strtab.count() as ByteOffset)
 			strtab.push(0x5F)  // '_'
 			strtab.append(sym.name)
 			strtab.push(0)
@@ -1679,7 +1679,7 @@ function identifierOfCodeDirectory(image ByteArray, directory BytePos, signature
 			return String.from(identifier)
 		end 'terminated'
 
-		identifier.push(byte)
+		identifier.push(byte as Byte)
 	end 'eachIdentifierByte'
 
 	throw MachOResignError.malformedImage("the CodeDirectory's identifier has no terminator")

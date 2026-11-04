@@ -280,7 +280,7 @@ export type StdDominatorTree
 				continue
 			end 'theEntryHasNoParent'
 
-			parents.push(try self.idom.get(position) otherwise panic("StdDominatorTree.idomOfEachNonEntryReachableBlock: idom.get OOB at {position}"))
+			parents.push((try self.idom.get(position) otherwise panic("StdDominatorTree.idomOfEachNonEntryReachableBlock: idom.get OOB at {position}")) as CsrIndex)
 		end 'eachReachableBlock'
 
 		return parents
@@ -487,7 +487,7 @@ type RpoOrder
 				continue
 			end 'theEntryIsNobodysChild'
 
-			blocks.push(position)
+			blocks.push(position as CsrIndex)
 		end 'eachReachableBlock'
 
 		return blocks
@@ -526,8 +526,8 @@ module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockC
 				panic("buildStdSuccessorGraph: in '{String.from(func.name)}', block_{block.id} at position {position} branches to block_{successorId}, indexed at position {successor} of a {blockCount}-block function — the block index and blockRefs disagree")
 			end 'pastTheFunction'
 
-			edgeFrom.push(position)
-			edgeTo.push(successor)
+			edgeFrom.push(position as CsrIndex)
+			edgeTo.push(successor as CsrIndex)
 		end 'eachSuccessor'
 	end 'eachBlock'
 

@@ -1477,7 +1477,7 @@ function edgeBlocksBeforeTheirTarget(module TargetModule, topo FuncTopology, pos
 			if topo.succ.degree(topo.pred.neighbour(local as CsrIndex, k: 0)) > 1 and topo.pred.degree(target) > 1 and (try rank.get(target) otherwise panic("edgeBlocksBeforeTheirTarget: rank.get OOB")) > ri and blockAt(module, topo: topo, local: local).bodyOpCount() == 0 'criticalEdgeBlock'
 				try rider.set(local, value: true) otherwise panic("edgeBlocksBeforeTheirTarget: rider.set OOB")
 				targets.push(target)
-				riders.push(local)
+				riders.push(local as CsrIndex)
 			end 'criticalEdgeBlock'
 		end 'oneInOneOut'
 	end 'eachBlock'
@@ -1509,7 +1509,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 
 	for i in 0 upto numBlocks 'invert'
 		let o = try oldByNew.get(i) otherwise panic("permuteTopology: oldByNew.get OOB")
-		try newByOld.set(o, value: i) otherwise panic("permuteTopology: newByOld.set OOB")
+		try newByOld.set(o, value: i as DenseInt) otherwise panic("permuteTopology: newByOld.set OOB")
 	end 'invert'
 
 	var blockRefByLocal = BlockRefArray.create()
@@ -1534,7 +1534,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 		end 'notInFunc'
 
 		let newLocal = try newByOld.get(oldLocal) otherwise panic("permuteTopology: newByOld.get OOB")
-		try localByBlockId.set(bid, value: newLocal) otherwise panic("permuteTopology: localByBlockId.set OOB")
+		try localByBlockId.set(bid, value: newLocal as ElementIndex) otherwise panic("permuteTopology: localByBlockId.set OOB")
 	end 'remapIds'
 
 	var edgeFrom = CsrColumn.create()
@@ -1547,8 +1547,8 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 
 		for k in 0 upto old.succ.degree(oldU as CsrIndex) 'eachSucc'
 			let oldV = old.succ.neighbour(oldU as CsrIndex, k: k)
-			edgeFrom.push(u)
-			edgeTo.push(try newByOld.get(oldV) otherwise panic("permuteTopology: newByOld.get OOB"))
+			edgeFrom.push(u as CsrIndex)
+			edgeTo.push((try newByOld.get(oldV) otherwise panic("permuteTopology: newByOld.get OOB")) as CsrIndex)
 		end 'eachSucc'
 	end 'eachNewBlock'
 
@@ -1678,8 +1678,8 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 				panic("buildFuncTopology: block '{String.from(block.label)}' branches to block id {sid} which is not in function '{String.from(func.name)}'")
 			end 'notInFunc'
 
-			edgeFrom.push(i)
-			edgeTo.push(j)
+			edgeFrom.push(i as CsrIndex)
+			edgeTo.push(j as CsrIndex)
 		end 'eachSucc'
 	end 'eachBlock'
 
@@ -3739,7 +3739,7 @@ function collectReindexCandidates(index UseIndex, pressure PressureIndex, edits 
 			// re-records it.
 			match index.useKindAt(record) 'kind'
 				edge then break
-				op then out.push(pressure.slotOfSeq(index.useSeqAt(record)))
+				op then out.push(pressure.slotOfSeq(index.useSeqAt(record)) as DenseInt)
 			end 'kind'
 
 			record = index.nextUseOf(record)
@@ -3752,7 +3752,7 @@ function collectReindexCandidates(index UseIndex, pressure PressureIndex, edits 
 		let defSlot = pressure.defSlotOf(victim)
 
 		if pressure.slotHoldsOp(defSlot) 'stillThere'
-			out.push(defSlot)
+			out.push(defSlot as DenseInt)
 		end 'stillThere'
 	end 'definedByAnOp'
 
@@ -3870,7 +3870,7 @@ export type BlockSet
 		end 'alreadyIn'
 
 		try self.stamp.set(blockLocal, value: mark) otherwise panic("BlockSet.add: stamp.set OOB for block {blockLocal}")
-		self.members.push(blockLocal)
+		self.members.push(blockLocal as DenseInt)
 	end 'add'
 
 	export function holds(blockLocal ElementIndex) returns bool
@@ -4160,7 +4160,7 @@ export type LivenessMarkScratch
 		end 'already'
 
 		try self.candStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.noteCandidate: candStamp.set OOB")
-		self.candidates.push(b)
+		self.candidates.push(b as DenseInt)
 	end 'noteCandidate'
 
 	// `b` is live-in and reads nothing of the value, so the value is live into every block of
@@ -4387,7 +4387,7 @@ export type LivenessMarkScratch
 			let b = try self.inVisited.get(k) otherwise panic("LivenessMarkScratch.installVisited: inVisited.get OOB at {k}")
 
 			if (try self.liveOutStamp.get(b) otherwise panic("LivenessMarkScratch.installVisited: liveOutStamp.get OOB")) == gen and (try self.touchStamp.get(b) otherwise panic("LivenessMarkScratch.installVisited: touchStamp.get OOB")) != gen 'transparentHere'
-				self.transparent.push(b)
+				self.transparent.push(b as DenseInt)
 
 				if expand 'dirtyTheTransparentBlock'
 					touched.add(b)

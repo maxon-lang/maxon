@@ -487,7 +487,7 @@ export function appendLittleEndianScalar(image ByteArray, value FullRangeInt, by
 	let bits = value as MachineWord
 
 	for i in 0 upto byteCount 'eachByte'
-		image.push((bits shr ((i as FullRangeInt) * BitsPerByte)) and ByteMask)
+		image.push(((bits shr ((i as FullRangeInt) * BitsPerByte)) and ByteMask) as Byte)
 	end 'eachByte'
 end 'appendLittleEndianScalar'
 
@@ -529,7 +529,7 @@ function packConstantElements(values FullRangeIntArray, packedBits PackedBitWidt
 		// A packed width DIVIDES a byte, so `shift + packedBits <= 8` and the shifted field never leaves the
 		// byte it starts in. The `and 0xFF` states that rather than relying on it: it is the one line where a
 		// straddle would silently corrupt the next element instead of failing.
-		try out.set(byteIndex, value: (occupied or ((value and fieldMask) shl shift)) and 0xFF) otherwise panic("packConstantElements: byte {byteIndex} was readable a line ago and is not writable now")
+		try out.set(byteIndex, value: ((occupied or ((value and fieldMask) shl shift)) and 0xFF) as Byte) otherwise panic("packConstantElements: byte {byteIndex} was readable a line ago and is not writable now")
 	end 'eachElement'
 
 	return out

@@ -198,8 +198,8 @@ export function collectPhiOperands(module StdModule, func IrFunction, refByBlock
 
 			for k in 0 upto target.blockArgs.count() 'eachSlot'
 				let arg = try target.blockArgs.get(k) otherwise panic("collectPhiOperands: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
-				args.push(arg.valueId)
-				incoming.push(incomingArgAt(edge, k: k as ValueId, pred: pred, target: target))
+				args.push(arg.valueId as CsrIndex)
+				incoming.push(incomingArgAt(edge, k: k as ValueId, pred: pred, target: target) as CsrIndex)
 			end 'eachSlot'
 		end 'eachEdge'
 	end 'eachPred'
@@ -230,7 +230,7 @@ export function buildBlockIdIndex(module StdModule, func IrFunction) returns Val
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("buildBlockIdIndex: blockRef from func.blockRefs not in module.blocks")
-		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("buildBlockIdIndex: block '{String.from(block.label)}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
+		try refByBlockId.set(block.id, value: (blockRef + 1) as ValueId) otherwise panic("buildBlockIdIndex: block '{String.from(block.label)}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
 	end 'eachBlock'
 
 	return refByBlockId

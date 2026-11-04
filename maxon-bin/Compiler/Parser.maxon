@@ -7089,17 +7089,18 @@ end 'ArrayLiteralElement'
 
 union ElementFit
 	opaque
-	checked(let payload PayloadClass, let declaredNameId TypeNameId)
+	checked(let payload PayloadClass)
 end 'ElementFit'
 
 type ElementSlot
 	export let indexSpaceType as MaxonType
 	export let declared as MaxonType
+	export let declaredKeepingAlias as MaxonType
 	export let alias as DeclaredAlias
 	export let fit as ElementFit
 
-	static function create(indexSpaceType MaxonType, declared MaxonType, alias DeclaredAlias, fit ElementFit) returns ElementSlot
-		return Self{indexSpaceType: indexSpaceType, declared: declared, alias: alias, fit: fit}
+	static function create(indexSpaceType MaxonType, declared MaxonType, declaredKeepingAlias MaxonType, alias DeclaredAlias, fit ElementFit) returns ElementSlot
+		return Self{indexSpaceType: indexSpaceType, declared: declared, declaredKeepingAlias: declaredKeepingAlias, alias: alias, fit: fit}
 	end 'create'
 end 'ElementSlot'
 
@@ -17019,7 +17020,7 @@ module function solveFixedElementCountNeeds(methodNames NameRoster, seeds Descri
 		for calleeName in calleesOf(methodNames, selfCallees: callees, callerIndex: i) 'edge'
 			if let c = try nameToIndex.get(calleeName) 'realEdge'
 				edgeCallee.push(c)
-				edgeCaller.push(i)
+				edgeCaller.push(i as CsrIndex)
 			end 'realEdge'
 		end 'edge'
 	end 'edges'
@@ -22918,7 +22919,7 @@ export type Parser
 			return
 		end 'alreadyRebound'
 
-		try shadowedInBlock.set(index, value: depth + 1) otherwise panic("noteParameterShadowedInBlock: set({index}) OOB despite the growth above reaching it")
+		try shadowedInBlock.set(index, value: (depth + 1) as ParamShadowDepth) otherwise panic("noteParameterShadowedInBlock: set({index}) OOB despite the growth above reaching it")
 	end 'noteParameterShadowedInBlock'
 
 	// The LINE-scoped twin — a match arm's payload and a closure's parameter, which bind for one expression.
@@ -24216,7 +24217,7 @@ export type Parser
 			paramBase.push(totalNodes)
 
 			for _ in 0 upto scan.paramNames.count() 'node'
-				nodeMethod.push(i)
+				nodeMethod.push(i as CsrIndex)
 			end 'node'
 
 			totalNodes = totalNodes + scan.paramNames.count() as CsrIndex
@@ -60888,12 +60889,12 @@ export type Parser
 		// so it takes the NOT-A-MINT seed, its own id, which is the index this push is about to land at.
 		// `remove` therefore refuses a bare parameter handle only if no binding owns it, and `bindParameters`
 		// gives every parameter one.
-		self.bodyState.nodeHandleMintedFrom.push(self.bodyState.nodeHandleMintedFrom.count())
+		self.bodyState.nodeHandleMintedFrom.push(self.bodyState.nodeHandleMintedFrom.count() as ValueId)
 
 		// A parameter was read out of no slot in THIS frame — whatever the caller moved it out of, the move
 		// finished at the call. NOT-SET is the final answer for every parameter.
-		self.bodyState.promiseSlotContainer.push(self.bodyState.promiseSlotContainer.count())
-		self.bodyState.promiseSlotIndex.push(self.bodyState.promiseSlotIndex.count())
+		self.bodyState.promiseSlotContainer.push(self.bodyState.promiseSlotContainer.count() as ValueId)
+		self.bodyState.promiseSlotIndex.push(self.bodyState.promiseSlotIndex.count() as ValueId)
 		self.bodyState.promiseSlotIsAField.push(false)
 
 		// A parameter is never a merge, and its declared range IS proved — by the entry guard `guardRangedParams`
@@ -78978,16 +78979,22 @@ export type Parser
 			return try self.storedPromiseValue(value, storage: genericInstanceIdOf(slot.declared), anchor: elemTok, range: SourceRange.ofToken(elemTok))
 		end 'aPromiseElement'
 
+		// Asked before the conversion, which retags a number of another alias into the slot's alias and so
+		// leaves two equal names to compare.
+		if tagIsIntegral(self.tagOf(value)) or tagIsFloat(self.tagOf(value)) 'aNumberCarriesItsOwnIdentity'
+			try self.requireElementIdentity(giid, slot: slot, value: value, site: ContainerElementSite.literalElement(elemTok))
+		end 'aNumberCarriesItsOwnIdentity'
+
 		// ⚠ **THE ELEMENT TYPE HAS TO BE RE-SPELLED IN THIS FILE'S INTERNER BEFORE ANY DOOR BELOW SEES IT.**
 		// The instance's argument was interned by `ProgramSignatures`, and every step from here mints or reads
 		// a `named` id against the FILE's table — `castTargetTag` resolves one, `emitRetaggedCastValue` stamps
 		// one onto the value it mints. It is always a `named` type where the conversion runs, because
 		// `elementMustBeConvertedInto` answers false for a target that declares no ranged alias.
 		//
-		// ⛔ **NO GUARD IS SPELLED HERE, AND THAT IS THE POINT.** This door once re-spelled
-		// `requireCastKindsConvert` and thereby got ONE of the conversion's three legality guards; the enum
-		// refusal it dropped let `ByteArray from [Color.red, …]` through. They live inside
-		// `convertValueToDeclaredType` now, so reaching the conversion is what grants them.
+		// ⛔ **NO CONVERSION GUARD IS SPELLED HERE, AND THAT IS THE POINT.** The conversion's three
+		// legality guards live inside `convertValueToDeclaredType`, so reaching the conversion grants all of
+		// them; a guard re-spelled here, such as `requireCastKindsConvert`, would grant one and drop the enum
+		// refusal that keeps `ByteArray from [Color.red, …]` out.
 		let converted = try self.convertedArrayLiteralElement(value, slot: slot, giid: giid, elemTok: elemTok, valueStart: valueStart)
 		let fitted = try self.requireElementFitsSlot(giid, slot: slot, value: converted, valueStart: valueStart, site: ContainerElementSite.literalElement(elemTok))
 		try self.requireLiteralElementIsStorable(value, giid: giid, elemTok: elemTok, valueStart: valueStart)
@@ -85614,7 +85621,8 @@ export type Parser
 	// **IT IS `requireFieldType`'S BODY, AND DELIBERATELY SO**: an array element is a storage slot of a
 	// container exactly as a struct field is, so it takes the SAME classifier and the SAME two verdict doors
 	// — `assignableValue` (the coercion-site rule `checkDeclaredType` plus the widening an `ok` verdict owes,
-	// in one call) for a trivial element, `requireManagedValueMatches` (the matching heap kind, plus the
+	// in one call) and then `requireElementIdentity` (the alias or enum name a tag cannot compare) for a
+	// trivial element, `requireManagedValueMatches` (the matching heap kind, plus the
 	// aggregate NAME two `structRef` pointers share a tag over) for a managed one. No sentence is composed
 	// here: the array door and an ordinary assignment cannot come to explain one rule two ways.
 	//
@@ -85647,7 +85655,8 @@ export type Parser
 	// against; the instantiation's argument is checked in the CALLER's frame, where the type is concrete.
 	//
 	// ⚠ **THE ARRAY LITERAL ENTERS BELOW, AT `requireElementFitsSlot`.** Its element has no method token to
-	// name, and its read-only and mutable-store questions are `requireLiteralElementIsStorable`'s.
+	// name, and its read-only and mutable-store questions are `requireLiteralElementIsStorable`'s. A numeric
+	// literal element asks `requireElementIdentity` itself, before its conversion.
 	//
 	// ⚠ **AN INTEGRAL ELEMENT SLOT COERCES A CHARACTER LITERAL BEFORE IT COMPARES.** `a.push('e')`
 	// into an `Array with Character` needs nothing — the literal already IS a Character — but pushing one into
@@ -85681,23 +85690,40 @@ export type Parser
 		let alias = self.declaredAliasOfIndexSpaceType(indexSpaceType)
 
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
-			return ElementSlot.create(indexSpaceType, declared: declared, alias: alias, fit: ElementFit.opaque)
+			return ElementSlot.create(indexSpaceType, declared: declared, declaredKeepingAlias: declared, alias: alias, fit: ElementFit.opaque)
 		end 'opaqueInSharedBody'
 
 		let payload = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.job.path)
-		let declaredNameId = typeNameIdOf(self.typeKeepingAlias(indexSpaceType, collapsed: declared, scopeFilePath: self.job.path))
+		let declaredKeepingAlias = self.typeKeepingAlias(indexSpaceType, collapsed: declared, scopeFilePath: self.job.path)
 
-		return ElementSlot.create(indexSpaceType, declared: declared, alias: alias, fit: ElementFit.checked(payload, declaredNameId: declaredNameId))
+		return ElementSlot.create(indexSpaceType, declared: declared, declaredKeepingAlias: declaredKeepingAlias, alias: alias, fit: ElementFit.checked(payload))
 	end 'freshElementSlot'
 
 	function requireElementFitsSlot(giid GenericInstanceId, slot ElementSlot, value ValueId, valueStart ElementIndex, site ContainerElementSite) returns ValueId throws SourceParseError
 		return match slot.fit 'fit'
 			opaque gives value
-			checked(payload, declaredNameId) gives try self.requireValueFitsCheckedSlot(giid, slot: slot, payload: payload, declaredNameId: declaredNameId, value: value, valueStart: valueStart, site: site)
+			checked(payload) gives try self.requireValueFitsCheckedSlot(giid, slot: slot, payload: payload, value: value, valueStart: valueStart, site: site)
 		end 'fit'
 	end 'requireElementFitsSlot'
 
-	function requireValueFitsCheckedSlot(giid GenericInstanceId, slot ElementSlot, payload PayloadClass, declaredNameId TypeNameId, value ValueId, valueStart ElementIndex, site ContainerElementSite) returns ValueId throws SourceParseError
+	// The nominal half of an element store, which `assignableValue` cannot ask: two aliases of one integer
+	// or float share a tag. It is its own function because a `call` asks it after `assignableValue` while a
+	// literal asks it before its conversion. A managed slot asks it inside `requireManagedValueMatches`, an
+	// opaque slot has no concrete element type, and a deferred value was refused where it was minted.
+	function requireElementIdentity(giid GenericInstanceId, slot ElementSlot, value ValueId, site ContainerElementSite) throws SourceParseError
+		let askedElsewhere = match slot.fit 'fit'
+			opaque gives true
+			checked(payload) gives payloadClassIsManaged(payload)
+		end 'fit'
+
+		if askedElsewhere or self.valueIsDeferred(value) 'nothingToAskHere'
+			return
+		end 'nothingToAskHere'
+
+		try self.requireSlotAggregateIdentity(slot.declaredKeepingAlias, value: value, placeDoor: FunctionTypeDoor.containerElement, placeName: containerElementSiteName(site), placeOwner: SlotOwner.unowned, placeBrand: self.elementBrandOf(giid), placeSpelling: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: containerElementSiteAnchor(site))
+	end 'requireElementIdentity'
+
+	function requireValueFitsCheckedSlot(giid GenericInstanceId, slot ElementSlot, payload PayloadClass, value ValueId, valueStart ElementIndex, site ContainerElementSite) returns ValueId throws SourceParseError
 		let anchor = containerElementSiteAnchor(site)
 		let declared = slot.declared
 
@@ -85724,14 +85750,14 @@ export type Parser
 		// The VOICE is the other axis and is the mutator's own: `push` is a METHOD and its element is that
 		// method's ARGUMENT, so the type refusal is the argument sentence rather than the assignment one.
 		// See `SlotMismatchVoice`, which records what calling `push` a "variable" was measured to say.
-		let stored = try self.assignableValue(anchor, value: element, declared: maxonTypeTag(declared), declaredNameId: declaredNameId, door: FunctionTypeDoor.field, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.containerElementArgument)
+		let stored = try self.assignableValue(anchor, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(slot.declaredKeepingAlias), door: FunctionTypeDoor.field, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.containerElementArgument)
 
-		// An enum is the one aggregate that reaches here: its value is a scalar `named` tag, so
-		// `assignableValue`'s verdict agrees for any two enums. A managed aggregate's identity is the
-		// `managed` arm's.
-		if self.typeIsEnumOrUnion(maxonTypeTag(declared), nameId: typeNameIdOf(declared)) 'anEnumElement'
-			try self.requireSlotAggregateIdentity(declared, value: element, placeDoor: FunctionTypeDoor.containerElement, placeName: containerElementSiteName(site), placeOwner: SlotOwner.unowned, placeBrand: self.elementBrandOf(giid), placeSpelling: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: anchor)
-		end 'anEnumElement'
+		// A literal element is asked in `admitArrayLiteralElement`, before its conversion retags it; asked
+		// here it would compare the slot's alias with itself.
+		match site 'identity'
+			call then try self.requireElementIdentity(giid, slot: slot, value: element, site: site)
+			literalElement then break
+		end 'identity'
 
 		// ⭐⭐ **THE ELEMENT'S DECLARED RANGE BINDS IT AT RUNTIME TOO — AND THE GUARD GOES
 		// HERE, AT THE STORE, WHICH IS THE LAST PLACE THAT KNOWS THE ELEMENT TYPE.** The element

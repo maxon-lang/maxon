@@ -294,7 +294,7 @@ typealias WordArray = Array with Word
 function growAndSum(a WordArray) returns Word
 	var t = 0 as Word
 	for i in 0 upto a.count() 'each'
-		a.push(i)
+		a.push(i as Word)
 		t = t + (try a.get(i) otherwise 1000)
 	end 'each'
 	return t

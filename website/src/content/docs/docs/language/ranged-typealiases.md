@@ -53,7 +53,8 @@ typealias TallyArray = Array with Tally      // not Array with int
 
 **Every typealias declaration is its own type**, even when two aliases spell the same range. A value of one
 alias reaches a place declared with another — a parameter, an assignment, an `otherwise` fallback, a `match`
-arm, a struct field, a union payload, a generic argument — through the cast you write:
+arm, a struct field, a union payload, a generic argument, an array element (`push`, `set`, `insert`,
+`from [..]`) — through the cast you write:
 
 ```maxon
 typealias Age = int(0 to 150)
@@ -82,7 +83,8 @@ end 'main'
   computed from them (see [Variables](/docs/language/variables/)). A named value also fits an unnamed slot. Two
   *different* names conflict unless one implements the other (next section).
 - An **E3005** between two integer-range types (a ranged integer alias or `ExitCode`) ends with the cast
-  that fixes it: `— cast the argument with 'as Year'` at an argument, a builtin's included, and
+  that fixes it: `— cast the argument with 'as Year'` at an argument, a builtin's included, and at an
+  array element stored by `push`, `set` or `from [..]`, and
   `— cast the value with 'as Year'` at a store (a variable, global, field, tuple element, struct literal
   or union payload). The hint ends only a diagnostic whose expected type carries no `(declared in <file>)`
   note.

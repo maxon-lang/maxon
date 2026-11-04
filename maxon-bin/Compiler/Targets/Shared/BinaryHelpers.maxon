@@ -76,26 +76,26 @@ export function codeHere(code ByteArray) returns CodeOffset
 end 'codeHere'
 
 export function writeWord(buf ByteArray, value MachineWord)
-	buf.push(value and 0xFF)
-	buf.push((value shr 8) and 0xFF)
+	buf.push((value and 0xFF) as Byte)
+	buf.push(((value shr 8) and 0xFF) as Byte)
 end 'writeWord'
 
 export function writeDword(buf ByteArray, value MachineWord)
-	buf.push(value and 0xFF)
-	buf.push((value shr 8) and 0xFF)
-	buf.push((value shr 16) and 0xFF)
-	buf.push((value shr 24) and 0xFF)
+	buf.push((value and 0xFF) as Byte)
+	buf.push(((value shr 8) and 0xFF) as Byte)
+	buf.push(((value shr 16) and 0xFF) as Byte)
+	buf.push(((value shr 24) and 0xFF) as Byte)
 end 'writeDword'
 
 export function writeQword(buf ByteArray, value MachineWord)
-	buf.push(value and 0xFF)
-	buf.push((value shr 8) and 0xFF)
-	buf.push((value shr 16) and 0xFF)
-	buf.push((value shr 24) and 0xFF)
-	buf.push((value shr 32) and 0xFF)
-	buf.push((value shr 40) and 0xFF)
-	buf.push((value shr 48) and 0xFF)
-	buf.push((value shr 56) and 0xFF)
+	buf.push((value and 0xFF) as Byte)
+	buf.push(((value shr 8) and 0xFF) as Byte)
+	buf.push(((value shr 16) and 0xFF) as Byte)
+	buf.push(((value shr 24) and 0xFF) as Byte)
+	buf.push(((value shr 32) and 0xFF) as Byte)
+	buf.push(((value shr 40) and 0xFF) as Byte)
+	buf.push(((value shr 48) and 0xFF) as Byte)
+	buf.push(((value shr 56) and 0xFF) as Byte)
 end 'writeQword'
 
 export function writeZeros(buf ByteArray, n BytePos)
@@ -110,7 +110,7 @@ function writeAscii(buf ByteArray, text String)
 		// char is a programmer error, not recoverable input — fail loudly rather than
 		// silently emitting a null byte that would corrupt the output.
 		let b = try ch.asciiValue() otherwise panic("writeAscii: non-ASCII character in an ASCII-only context")
-		buf.push(b)
+		buf.push(b as Byte)
 	end 'chars'
 
 	buf.push(0)
@@ -185,8 +185,8 @@ end 'readQword'
 export function patchWord(buf ByteArray, offset ByteOffset, value MachineWord)
 	// Caller's contract: offset+2 <= buf.count(). Both byte writes share this single invariant.
 	try 'writeBytes'
-		buf.set(offset, value: value and 0xFF)
-		buf.set((offset + 1) as ElementIndex, value: (value shr 8) and 0xFF)
+		buf.set(offset, value: (value and 0xFF) as Byte)
+		buf.set((offset + 1) as ElementIndex, value: ((value shr 8) and 0xFF) as Byte)
 	end 'writeBytes' otherwise (e) 'badWrite'
 		match e 'kind'
 			indexOutOfBounds then panic("patchWord: caller must ensure offset+2 <= buf.count() (offset={offset}, buf.count={buf.count()})")
@@ -198,10 +198,10 @@ end 'patchWord'
 export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
 	// Caller's contract: offset+4 <= buf.count(). All four byte writes share this single invariant.
 	try 'writeBytes'
-		buf.set(offset, value: value and 0xFF)
-		buf.set((offset + 1) as ElementIndex, value: (value shr 8) and 0xFF)
-		buf.set((offset + 2) as ElementIndex, value: (value shr 16) and 0xFF)
-		buf.set((offset + 3) as ElementIndex, value: (value shr 24) and 0xFF)
+		buf.set(offset, value: (value and 0xFF) as Byte)
+		buf.set((offset + 1) as ElementIndex, value: ((value shr 8) and 0xFF) as Byte)
+		buf.set((offset + 2) as ElementIndex, value: ((value shr 16) and 0xFF) as Byte)
+		buf.set((offset + 3) as ElementIndex, value: ((value shr 24) and 0xFF) as Byte)
 	end 'writeBytes' otherwise (e) 'badWrite'
 		match e 'kind'
 			indexOutOfBounds then panic("patchDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
@@ -216,10 +216,10 @@ export function patchQword(buf ByteArray, offset ByteOffset, value MachineWord)
 end 'patchQword'
 
 export function writeDwordBE(buf ByteArray, value MachineWord)
-	buf.push((value shr 24) and 0xFF)
-	buf.push((value shr 16) and 0xFF)
-	buf.push((value shr 8) and 0xFF)
-	buf.push(value and 0xFF)
+	buf.push(((value shr 24) and 0xFF) as Byte)
+	buf.push(((value shr 16) and 0xFF) as Byte)
+	buf.push(((value shr 8) and 0xFF) as Byte)
+	buf.push((value and 0xFF) as Byte)
 end 'writeDwordBE'
 
 export function writeQwordBE(buf ByteArray, value MachineWord)

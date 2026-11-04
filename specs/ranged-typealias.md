@@ -2256,8 +2256,9 @@ Stack trace:
 The array-element door's other half. An element is a storage slot the alias governs exactly as a
 field is, so an UNFOLDABLE element owes the runtime check a folded one owes the compile error —
 unguarded, `push` of an opaque out-of-range value would be admitted in silence and the element read
-back out would be a `Percent` the compiler believes. The guard goes at the STORE, in the caller, where the element type is still known; the
-panic names the `push` that wrote it.
+back out would be a `Percent` the compiler believes. A value that carries no alias (`-grow(5)`) is guarded at the STORE, in the
+caller, where the element type is still known, and the panic names the `push` that wrote it. A value cast `as Percent` is guarded
+at the cast (next case). A value of another named alias is refused as E3005 before either guard.
 
 <!-- test: array-element-runtime-panic -->
 ```maxon
@@ -2271,7 +2272,7 @@ end 'grow'
 
 function main() returns ExitCode
 	var a = PA.create()
-	a.push(grow(5))
+	a.push(-grow(5))
 	return a.count()
 end 'main'
 ```
@@ -2285,11 +2286,38 @@ Stack trace:
   in mrt_start
 ```
 
+<!-- test: array-element-cast-runtime-panic -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function grow(n Wide) returns Wide
+	return n * 101
+end 'grow'
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(grow(5) as Percent)
+	return a.count()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at array-element-cast-runtime-panic.test:12: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
 ### Array `set`: runtime panic
 
 `push` is not the only way in. `set` and `insert` reach the same slot through the same door
 (`requireArrayElementType`), so all three owe the same two halves — a rule that held for one spelling
-and not the others would be the door half-shut.
+and not the others would be the door half-shut. The same split holds for `set`: an unnamed value is
+guarded at the store, an `as Percent` value at its cast, and a value of another named alias is E3005.
 
 ⚠ **AND THE COMPILE-TIME HALF OF `set`.** `push` and `insert` each have their literal refusal above,
 and `set` its runtime panic below; this is `set`'s literal refusal, the sixth of the six halves.
@@ -2325,7 +2353,7 @@ end 'grow'
 function main() returns ExitCode
 	var a = PA.create()
 	a.push(3)
-	try a.set(0, value: grow(5)) otherwise 'oob'
+	try a.set(0, value: -grow(5)) otherwise 'oob'
 		return 9
 	end 'oob'
 	return a.count()
@@ -2336,6 +2364,35 @@ end 'main'
 ```
 ```stderr
 panic at array-set-runtime-panic.test:13: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: array-set-cast-runtime-panic -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function grow(n Wide) returns Wide
+	return n * 101
+end 'grow'
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(3)
+	try a.set(0, value: grow(5) as Percent) otherwise 'oob'
+		return 9
+	end 'oob'
+	return a.count()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at array-set-cast-runtime-panic.test:13: Range check failed: value outside typealias 'Percent'
 Stack trace:
   in main
   in mrt_start
@@ -2389,6 +2446,33 @@ end 'main'
 ```
 ```stderr
 panic at array-insert-runtime-panic.test:13: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: array-insert-unnamed-runtime-panic -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function grow(n Wide) returns Wide
+	return n * 101
+end 'grow'
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(3)
+	a.insert(0, value: -grow(5))
+	return a.count()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at array-insert-unnamed-runtime-panic.test:13: Range check failed: value outside typealias 'Percent'
 Stack trace:
   in main
   in mrt_start

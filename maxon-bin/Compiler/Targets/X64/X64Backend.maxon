@@ -614,13 +614,13 @@ end 'writeImm32Signed'
 
 // ModR/M byte for a register-direct (mod=11) reg-to-r/m instruction.
 function emitModRmRegReg(code ByteArray, regField X64Register, rmField X64Register)
-	code.push(ModRmRegDirect or (regLow3(regField) shl 3) or regLow3(rmField))
+	code.push((ModRmRegDirect or (regLow3(regField) shl 3) or regLow3(rmField)) as Byte)
 end 'emitModRmRegReg'
 
 // ModR/M byte for a register-direct (mod=11) instruction whose reg field carries
 // a fixed opcode extension (e.g. group-1 /5 for SUB).
 function emitModRmExt(code ByteArray, ext MachineWord, rmField X64Register)
-	code.push(ModRmRegDirect or (ext shl 3) or regLow3(rmField))
+	code.push((ModRmRegDirect or (ext shl 3) or regLow3(rmField)) as Byte)
 end 'emitModRmExt'
 
 // Emit a mod=11 register-direct instruction from its parts: the REX prefix (with
@@ -643,7 +643,7 @@ function encodeModRmDirect(code ByteArray, twoByteEscape bool, opcode MachineWor
 		code.push(TwoByteOpcodeEscape)
 	end 'esc'
 
-	code.push(opcode)
+	code.push(opcode as Byte)
 	emitModRmRegReg(code, regField: regField, rmField: rmField)
 end 'encodeModRmDirect'
 
@@ -656,7 +656,7 @@ end 'encodeModRmDirect'
 // (group-1) form is assembled; callers append any trailing immediate.
 function encodeModRmExtDirect(code ByteArray, opcode MachineWord, ext MachineWord, rmField X64Register)
 	emitRex(code, wide: true, regField: X64Register.rax, rmField: rmField)
-	code.push(opcode)
+	code.push(opcode as Byte)
 	emitModRmExt(code, ext: ext, rmField: rmField)
 end 'encodeModRmExtDirect'
 
@@ -665,7 +665,7 @@ end 'encodeModRmExtDirect'
 // group-1 ALU form needs; callers append any trailing immediate.
 function encodeModRmExtBaseDisp(code ByteArray, opcode MachineWord, ext MachineWord, base X64Register, disp Imm32, wide bool)
 	emitRex(code, wide: wide, regField: X64Register.rax, rmField: base)
-	code.push(opcode)
+	code.push(opcode as Byte)
 	emitBaseDispModRmBits(code, regFieldBits: ext, base: base, disp: disp)
 end 'encodeModRmExtBaseDisp'
 
@@ -693,7 +693,7 @@ export function encodeModRmBaseDisp(code ByteArray, twoByteEscape bool, opcode M
 		code.push(TwoByteOpcodeEscape)
 	end 'esc'
 
-	code.push(opcode)
+	code.push(opcode as Byte)
 	emitBaseDispModRm(code, regField: regField, base: base, disp: disp, index: index, indexScale: indexScale)
 end 'encodeModRmBaseDisp'
 
@@ -701,7 +701,7 @@ end 'encodeModRmBaseDisp'
 // `regFieldBits` is the raw reg field: a register's low 3 bits for `lea`, an opcode
 // extension for `call /2`.
 function emitModRmRipRel(code ByteArray, regFieldBits MachineWord)
-	code.push(ModRmMod00 or (regFieldBits shl 3) or ModRmRmRipRelative)
+	code.push((ModRmMod00 or (regFieldBits shl 3) or ModRmRmRipRelative) as Byte)
 end 'emitModRmRipRel'
 
 // ==========================================================================
@@ -767,7 +767,7 @@ end 'encodeGrp1BaseDispImm32'
 // (it masks a 64-bit shift's count to 6 bits), so the byte is written verbatim.
 export function encodeGrp2RegImm8(code ByteArray, ext MachineWord, reg X64Register, count ShiftCount)
 	encodeModRmExtDirect(code, opcode: OpcodeGrp2Imm8, ext: ext, rmField: reg)
-	code.push(count)
+	code.push(count as Byte)
 end 'encodeGrp2RegImm8'
 
 // The GROUP-2 SHIFT forms, by a VARIABLE count (`REX.W D3 /ext`): `shl` (/4) and `sar`
@@ -789,7 +789,7 @@ end 'encodeGrp2RegCl'
 function encodeSetccReg(code ByteArray, dest X64Register, cond X64CondCode)
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: dest, force: true)
 	code.push(TwoByteOpcodeEscape)
-	code.push(OpcodeSetccRm8Base or (cond.rawValue as MachineWord))
+	code.push((OpcodeSetccRm8Base or (cond.rawValue as MachineWord)) as Byte)
 	emitModRmExt(code, ext: SetccExtNone, rmField: dest)
 
 	// `movzx dest64, dest8` (REX.W 0F B6 /r): reg field = dest (the 64-bit destination),
@@ -894,9 +894,9 @@ function encodeSseMap3ARegRegImm8(code ByteArray, opcode MachineWord, dest X64Re
 	emitRex(code, wide: wide, regField: dest, rmField: src)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeThreeByteEscape3A)
-	code.push(opcode)
+	code.push(opcode as Byte)
 	emitModRmRegReg(code, regField: dest, rmField: src)
-	code.push(imm)
+	code.push(imm as Byte)
 end 'encodeSseMap3ARegRegImm8'
 
 function encodeSseMap38RegReg(code ByteArray, opcode MachineWord, dest X64Register, src X64Register)
@@ -904,7 +904,7 @@ function encodeSseMap38RegReg(code ByteArray, opcode MachineWord, dest X64Regist
 	emitRex(code, wide: false, regField: dest, rmField: src)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeThreeByteEscape38)
-	code.push(opcode)
+	code.push(opcode as Byte)
 	emitModRmRegReg(code, regField: dest, rmField: src)
 end 'encodeSseMap38RegReg'
 
@@ -934,7 +934,7 @@ end 'encodePclmulqdq'
 
 export function encodeSseRegRegImm8(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, imm MachineWord)
 	encodeSseRegReg(code, prefix: prefix, opcode: opcode, dest: dest, src: src, wide: false)
-	code.push(imm)
+	code.push(imm as Byte)
 end 'encodeSseRegRegImm8'
 
 // `abs(x)` for an f64 already in `reg`: shift the sign bit out and shift the rest back
@@ -1033,9 +1033,9 @@ export function encodeSseShiftRegImm8(code ByteArray, opcode MachineWord, ext Ma
 	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
 	code.push(TwoByteOpcodeEscape)
-	code.push(opcode)
+	code.push(opcode as Byte)
 	emitModRmExt(code, ext: ext, rmField: reg)
-	code.push(count)
+	code.push(count as Byte)
 end 'encodeSseShiftRegImm8'
 
 // `roundsd`'s imm8 for a rounding mode — the ONE place the target-neutral `FloatRoundMode` becomes
@@ -1264,15 +1264,15 @@ function emitBaseDispModRmBits(code ByteArray, regFieldBits MachineWord, base X6
 	// trap is answered once for the whole family (mod=00 with base field 101 means "no base", so an
 	// rbp/r13 base is forced to mod=01 with a zero disp8).
 	if index != X64SibNoIndex 'indexed'
-		code.push(modField or (regFieldBits shl 3) or ModRmRmSibFollows)
-		code.push(sibByte(indexScale, indexBits: regLow3(index), baseBits: baseBits))
+		code.push((modField or (regFieldBits shl 3) or ModRmRmSibFollows) as Byte)
+		code.push(sibByte(indexScale, indexBits: regLow3(index), baseBits: baseBits) as Byte)
 	end 'indexed' else 'noIndex'
-		code.push(modField or (regFieldBits shl 3) or baseBits)
+		code.push((modField or (regFieldBits shl 3) or baseBits) as Byte)
 
 		if baseBits == ModRmRmSibFollows 'sib'
 			// An rsp/r12 base has low-3 bits 100, which the rm field spends on "a SIB follows" — so the
 			// real base has to move into the SIB, with the index field saying there is none.
-			code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: baseBits))
+			code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: baseBits) as Byte)
 		end 'sib'
 	end 'noIndex'
 
@@ -1286,7 +1286,7 @@ end 'emitBaseDispModRmBits'
 // `[base + disp]` assembler above and the `[base + index]` encoder).
 function emitTrailingDisp(code ByteArray, modField MachineWord, disp Imm32)
 	if modField == ModRmMod01 'disp8'
-		code.push(imm32Bits(disp) and 0xFF)
+		code.push((imm32Bits(disp) and 0xFF) as Byte)
 	end 'disp8' else if modField == ModRmMod10 'disp32'
 		writeImm32Signed(code, value: disp)
 	end 'disp32'
@@ -1408,7 +1408,7 @@ end 'encodeStoreBaseDispReg16'
 export function encodeByteSwapReg(code ByteArray, reg X64Register, width WordBytes)
 	emitRex(code, wide: width == WordBytes.eight, regField: X64Register.rax, rmField: reg)
 	code.push(TwoByteOpcodeEscape)
-	code.push(OpcodeBswapBase + regLow3(reg))
+	code.push((OpcodeBswapBase + regLow3(reg)) as Byte)
 
 	if width == WordBytes.two 'halfword'
 		encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: reg, count: ByteSwapHalfwordShift)
@@ -1459,7 +1459,7 @@ export typealias ChunkRel32FixupArray = Array with ChunkRel32Fixup
 // 4-byte field" convention and the ±2 GiB guard are the shared ones rather than a second copy.
 function encodeJccPlaceholder(code ByteArray, cond X64CondCode) returns CodeOffset
 	code.push(TwoByteOpcodeEscape)
-	code.push(OpcodeJccRel32Base or (cond.rawValue as MachineWord))
+	code.push((OpcodeJccRel32Base or (cond.rawValue as MachineWord)) as Byte)
 	let dispOffset = code.count()
 	writeDword(code, value: 0)
 	return dispOffset
@@ -1508,7 +1508,7 @@ export function encodeJmpBackwardShort(code ByteArray, targetOffset CodeOffset)
 	end 'outOfReach'
 
 	code.push(OpcodeJmpRel8)
-	code.push(imm32Bits(rel as Imm32) and 0xFF)
+	code.push((imm32Bits(rel as Imm32) and 0xFF) as Byte)
 end 'encodeJmpBackwardShort'
 
 // The bytes a `jmp rel8` occupies: the opcode and its displacement, which counts from their end.
@@ -1791,7 +1791,7 @@ function encodeModRmRipRelative(code ByteArray, twoByteEscape bool, opcode Machi
 		code.push(TwoByteOpcodeEscape)
 	end 'esc'
 
-	code.push(opcode)
+	code.push(opcode as Byte)
 	emitModRmRipRel(code, regFieldBits: regLow3(regField))
 end 'encodeModRmRipRelative'
 
@@ -1927,7 +1927,7 @@ export function encodeMovRegImm32(code ByteArray, dest X64Register, value Machin
 	// rule, so no reg needs REX for rax-rdi; a base register in `regField` keeps
 	// REX.R clear (mirrors encodeMovRegImm64, which differs only in REX.W).
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: dest)
-	code.push(OpcodeMovRegImmBase + regLow3(dest))
+	code.push((OpcodeMovRegImmBase + regLow3(dest)) as Byte)
 	writeDword(code, value: value)
 end 'encodeMovRegImm32'
 
@@ -1936,7 +1936,7 @@ end 'encodeMovRegImm32'
 // choice routes only 0..u32.max to the zero-extending 32-bit form).
 export function encodeMovRegImm64(code ByteArray, dest X64Register, value MachineWord)
 	emitRex(code, wide: true, regField: X64Register.rax, rmField: dest)
-	code.push(OpcodeMovRegImmBase + regLow3(dest))
+	code.push((OpcodeMovRegImmBase + regLow3(dest)) as Byte)
 	writeQword(code, value: value)
 end 'encodeMovRegImm64'
 
@@ -1952,7 +1952,7 @@ end 'encodeMovRegImm64'
 function encodeRspAdjust(code ByteArray, ext MachineWord, amount StackSize)
 	if amount <= i8.max 'imm8'
 		encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm8, ext: ext, rmField: X64Register.rsp)
-		code.push(amount and 0xFF)
+		code.push((amount and 0xFF) as Byte)
 	end 'imm8' else 'imm32'
 		encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: ext, rmField: X64Register.rsp)
 		writeImm32Signed(code, value: amount as Imm32)
@@ -1974,14 +1974,14 @@ end 'encodeRspAdjust'
 export function encodePushReg(code ByteArray, reg X64Register)
 	let gpr = requireClass(reg, class: RegClass.gpr)
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: gpr)
-	code.push(OpcodePushBase + regLow3(gpr))
+	code.push((OpcodePushBase + regLow3(gpr)) as Byte)
 end 'encodePushReg'
 
 // pop r64 (58+r) — the exact mirror of `encodePushReg`, class gate included.
 export function encodePopReg(code ByteArray, reg X64Register)
 	let gpr = requireClass(reg, class: RegClass.gpr)
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: gpr)
-	code.push(OpcodePopBase + regLow3(gpr))
+	code.push((OpcodePopBase + regLow3(gpr)) as Byte)
 end 'encodePopReg'
 
 // The register the page walk borrows. It must hold no live value AT THE PROLOGUE, which rules out
@@ -2143,11 +2143,11 @@ end 'encodeMovRegSegAbs'
 // base): it needs the SIB with base=101, and the segment override has no home in that encoder. `rmField` is
 // `rax` so REX.B stays clear — in this SIB form the base is a disp32, not a register.
 function encodeSegAbsModRm(code ByteArray, opcode MachineWord, regField X64Register, disp Imm32, wide bool, segment X64ThreadPointerSegment)
-	code.push(segmentPrefixByte(segment))
+	code.push(segmentPrefixByte(segment) as Byte)
 	emitRex(code, wide: wide, regField: regField, rmField: X64Register.rax)
-	code.push(opcode)
-	code.push(ModRmMod00 or (regLow3(regField) shl 3) or ModRmRmSibFollows)
-	code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: SibBaseDisp32Field))
+	code.push(opcode as Byte)
+	code.push((ModRmMod00 or (regLow3(regField) shl 3) or ModRmRmSibFollows) as Byte)
+	code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: SibBaseDisp32Field) as Byte)
 	writeImm32Signed(code, value: disp)
 end 'encodeSegAbsModRm'
 
@@ -2171,7 +2171,7 @@ end 'encodeSegAbsModRm'
 // the push order here is not the one `encodeModRmBaseDisp` would produce on its own; the prefix is emitted
 // here and the rest delegated.
 export function encodeMovRegSegBase(code ByteArray, dest X64Register, base X64Register, segment X64ThreadPointerSegment)
-	code.push(segmentPrefixByte(segment))
+	code.push(segmentPrefixByte(segment) as Byte)
 	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: dest, base: base, disp: 0, wide: true)
 end 'encodeMovRegSegBase'
 
@@ -2182,7 +2182,7 @@ end 'encodeMovRegSegBase'
 // It delegates its ModR/M for `encodeMovRegSegBase`'s reason — the `[rbp]`/`[r13]` RIP-relative trap — and
 // emits the segment prefix before the REX byte, which REX's "last prefix" rule requires.
 export function encodeMovSegBaseReg(code ByteArray, base X64Register, srcReg X64Register, segment X64ThreadPointerSegment)
-	code.push(segmentPrefixByte(segment))
+	code.push(segmentPrefixByte(segment) as Byte)
 	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: 0, wide: true)
 end 'encodeMovSegBaseReg'
 

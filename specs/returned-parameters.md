@@ -291,7 +291,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function first(a TallyArray, b TallyArray) returns TallyArray
-	b.push(a.count())
+	b.push(a.count() as Tally)
 
 	return a
 end 'first'

@@ -11,7 +11,8 @@ category: type-system
 
 Every `typealias` names its own type. Two ranged aliases over the SAME range are two types, and a value of
 one never flows into a slot of the other — a parameter, a rebind, an `otherwise`, a `match` arm, a struct
-field, a union payload, a generic type argument — unless the author writes the cast:
+field, a union payload, a generic type argument, an array element (`push`, `set`, `insert`, `from [..]`) — unless the
+author writes the cast:
 
 ```text
 typealias Age = int(0 to 150)
@@ -1397,6 +1398,279 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:12:21: type mismatch: 'expected Wide, got Narrow' — cast the value with 'as Wide'
+```
+
+<!-- test: error.array-push-across-aliases -->
+An array element is a slot like any other: `push` into an `Array with Wide` takes a `Wide`, and a `Narrow`
+is not one.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideArray = Array with Wide
+
+function main() returns ExitCode
+	var items = WideArray.create(0)
+	let n = 5 as Narrow
+	items.push(n)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:8: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.array-set-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideArray = Array with Wide
+
+function main() returns ExitCode
+	var items = WideArray.create(1)
+	let n = 5 as Narrow
+	try items.set(0, value: n) otherwise panic("the element exists")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:12: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.array-insert-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideArray = Array with Wide
+
+function main() returns ExitCode
+	var items = WideArray.create(0)
+	let n = 5 as Narrow
+	items.insert(0, value: n)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:8: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.array-literal-element-across-aliases -->
+`WideArray from [n]` stores `n` into a `Wide` slot, so it is refused as `push` is.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideArray = Array with Wide
+
+function main() returns ExitCode
+	let n = 5 as Narrow
+	let items = WideArray from [n]
+	return items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:30: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.array-later-literal-element-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideArray = Array with Wide
+
+function main() returns ExitCode
+	let n = 5 as Narrow
+	let items = WideArray from [1, n]
+	return items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:33: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.array-grow-filled-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideArray = Array with Wide
+
+function main() returns ExitCode
+	var items = WideArray.create(0)
+	let n = 5 as Narrow
+	items.growFilled(2, value: n)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:8: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.array-refill-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideArray = Array with Wide
+
+function main() returns ExitCode
+	var items = WideArray.create(0)
+	let n = 5 as Narrow
+	items.refill(2, value: n)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:8: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.fixed-array-set-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideVec = FixedArray with 2 Wide
+
+function main() returns ExitCode
+	var v = WideVec.create()
+	let n = 5 as Narrow
+	v.set(0, value: n)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:4: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.map-key-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideMap = Map with (Wide, Wide)
+
+function main() returns ExitCode
+	var m = WideMap.create()
+	let n = 5 as Narrow
+	try m.insert(n, value: 1) otherwise panic("the key is new")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:8: argument type mismatch for 'key': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.map-value-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideMap = Map with (Wide, Wide)
+
+function main() returns ExitCode
+	var m = WideMap.create()
+	let n = 5 as Narrow
+	try m.insert(1, value: n) otherwise panic("the key is new")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:8: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.set-element-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideSet = Set with Wide
+
+function main() returns ExitCode
+	var s = WideSet.create()
+	let n = 5 as Narrow
+	s.insert(n)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:4: argument type mismatch for 'element': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.list-append-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideList = List with Wide
+
+function main() returns ExitCode
+	var l = WideList.create()
+	let n = 5 as Narrow
+	l.append(n)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:4: argument type mismatch for 'value': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
+```
+
+<!-- test: error.array-push-across-float-aliases -->
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Ratio = float(0.0 to 1.0)
+typealias Reals = Array with Real
+
+function main() returns ExitCode
+	var items = Reals.create(0)
+	let r = 0.5 as Ratio
+	items.push(r)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:8: argument type mismatch for 'value': expected 'Real', got 'Ratio'
+```
+
+<!-- test: error.array-literal-element-across-float-aliases -->
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Ratio = float(0.0 to 1.0)
+typealias Reals = Array with Real
+
+function main() returns ExitCode
+	let r = 0.5 as Ratio
+	let items = Reals from [r]
+	return items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:26: argument type mismatch for 'value': expected 'Real', got 'Ratio'
+```
+
+<!-- test: an-array-element-takes-its-own-alias-an-int-and-a-cast -->
+A slot named `Wide` is entered by a `Wide` value, a plain `int` and an `as Wide` cast, at `push`, `insert`
+and a `from [..]` literal alike.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias WideArray = Array with Wide
+
+function narrowed() returns Narrow
+	return 5
+end 'narrowed'
+
+function main() returns ExitCode
+	var items = WideArray.create(0)
+	let same = 3 as Wide
+	let plain = 4
+	let n = narrowed()
+	items.push(1)
+	items.push(same)
+	items.push(plain)
+	items.push(plain as Wide)
+	items.push(n as Wide)
+	items.insert(0, value: n as Wide)
+	let literal = WideArray from [2, same, plain, n as Wide]
+	print("{items.count()} {literal.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 4
 ```
 
 <!-- test: error.type-argument-fed-a-different-alias -->

@@ -182,7 +182,6 @@ emitted code (`--emit-ir`) shows the `[<rec> + 24]` load, the `cmpRegImm32 …, 
 CODEGEN pin, and the program that makes the rule load-bearing is
 `a-substituted-container-field-is-word-strided-however-it-is-typed` below.
 ```maxon
-typealias Byte = int(0 to 255)
 typealias Total = int(0 to u64.max)
 
 function sumBytes(b ByteArray) returns Total
