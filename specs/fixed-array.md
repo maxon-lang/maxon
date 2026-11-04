@@ -3774,3 +3774,539 @@ end 'main'
 ```stdout
 5 5 3 3 0 0
 ```
+
+## A Sized Fixed Array Strides By Its Element, Not By The Machine Word
+
+<!-- test: a-sized-fixed-array-strides-by-its-element-and-reads-back-every-element -->
+<!-- tier: stdlib -->
+A fixed array whose type states its length lays its elements out at the element's own width, exactly as the runtime-sized form does: one byte for a `Byte` or a `bits(8)`, two for a 16-bit element, four for a 32-bit one, and a packed 1, 2 or 4 bits for a `bool`, an `int(0 to 3)` and an `int(0 to 15)`. Every element written through `set` reads back through `get`, through `for` and through a `clone`.
+```maxon
+typealias Half = int(0 to 65535)
+typealias Wide = int(0 to u32.max)
+typealias Octet = bits(8)
+typealias Lane = bits(16)
+typealias Crumb = int(0 to 3)
+typealias Nibble = int(0 to 15)
+typealias Bytes = FixedArray with 300 Byte
+typealias Halves = FixedArray with 300 Half
+typealias Wides = FixedArray with 300 Wide
+typealias Octets = FixedArray with 300 Octet
+typealias Lanes = FixedArray with 300 Lane
+typealias Flags = FixedArray with 301 bool
+typealias Crumbs = FixedArray with 301 Crumb
+typealias Nibbles = FixedArray with 301 Nibble
+
+extension FixedArray
+	function strideText() returns String
+		return "{managed.elementSize()}"
+	end 'strideText'
+end 'FixedArray'
+
+function bytes() returns String
+	var cells = Bytes.create()
+
+	for at in 0 upto 300 'write'
+		cells.set(at, value: (at mod 251) as Byte)
+	end 'write'
+
+	var viaGet = 0 as Count
+
+	for at in 0 upto 300 'readEach'
+		viaGet = viaGet + (cells.get(at) as Count)
+	end 'readEach'
+
+	var viaFor = 0 as Count
+
+	for cell in cells 'walk'
+		viaFor = viaFor + (cell as Count)
+	end 'walk'
+
+	var viaClone = 0 as Count
+	let copy = cells.clone()
+
+	for cell in copy 'walkCopy'
+		viaClone = viaClone + (cell as Count)
+	end 'walkCopy'
+
+	return "byte {cells.strideText()} {copy.strideText()} {viaGet} {viaFor} {viaClone}"
+end 'bytes'
+
+function halves() returns String
+	var cells = Halves.create()
+
+	for at in 0 upto 300 'write'
+		cells.set(at, value: ((at * 217) mod 65536) as Half)
+	end 'write'
+
+	var viaGet = 0 as Count
+
+	for at in 0 upto 300 'readEach'
+		viaGet = viaGet + (cells.get(at) as Count)
+	end 'readEach'
+
+	var viaFor = 0 as Count
+
+	for cell in cells 'walk'
+		viaFor = viaFor + (cell as Count)
+	end 'walk'
+
+	var viaClone = 0 as Count
+	let copy = cells.clone()
+
+	for cell in copy 'walkCopy'
+		viaClone = viaClone + (cell as Count)
+	end 'walkCopy'
+
+	return "half {cells.strideText()} {copy.strideText()} {viaGet} {viaFor} {viaClone}"
+end 'halves'
+
+function wides() returns String
+	var cells = Wides.create()
+
+	for at in 0 upto 300 'write'
+		cells.set(at, value: ((at * 16777259) mod 4294967296) as Wide)
+	end 'write'
+
+	var viaGet = 0 as Count
+
+	for at in 0 upto 300 'readEach'
+		viaGet = viaGet + (cells.get(at) as Count)
+	end 'readEach'
+
+	var viaFor = 0 as Count
+
+	for cell in cells 'walk'
+		viaFor = viaFor + (cell as Count)
+	end 'walk'
+
+	var viaClone = 0 as Count
+	let copy = cells.clone()
+
+	for cell in copy 'walkCopy'
+		viaClone = viaClone + (cell as Count)
+	end 'walkCopy'
+
+	return "wide {cells.strideText()} {copy.strideText()} {viaGet} {viaFor} {viaClone}"
+end 'wides'
+
+function octets() returns String
+	var cells = Octets.create()
+
+	for at in 0 upto 300 'write'
+		cells.set(at, value: (at mod 251) as Octet)
+	end 'write'
+
+	var viaGet = 0 as Count
+
+	for at in 0 upto 300 'readEach'
+		viaGet = viaGet + (cells.get(at) as Count)
+	end 'readEach'
+
+	var viaFor = 0 as Count
+
+	for cell in cells 'walk'
+		viaFor = viaFor + (cell as Count)
+	end 'walk'
+
+	var viaClone = 0 as Count
+	let copy = cells.clone()
+
+	for cell in copy 'walkCopy'
+		viaClone = viaClone + (cell as Count)
+	end 'walkCopy'
+
+	return "octet {cells.strideText()} {copy.strideText()} {viaGet} {viaFor} {viaClone}"
+end 'octets'
+
+function lanes() returns String
+	var cells = Lanes.create()
+
+	for at in 0 upto 300 'write'
+		cells.set(at, value: ((at * 217) mod 65536) as Lane)
+	end 'write'
+
+	var viaGet = 0 as Count
+
+	for at in 0 upto 300 'readEach'
+		viaGet = viaGet + (cells.get(at) as Count)
+	end 'readEach'
+
+	var viaFor = 0 as Count
+
+	for cell in cells 'walk'
+		viaFor = viaFor + (cell as Count)
+	end 'walk'
+
+	var viaClone = 0 as Count
+	let copy = cells.clone()
+
+	for cell in copy 'walkCopy'
+		viaClone = viaClone + (cell as Count)
+	end 'walkCopy'
+
+	return "lane {cells.strideText()} {copy.strideText()} {viaGet} {viaFor} {viaClone}"
+end 'lanes'
+
+function flags() returns String
+	var cells = Flags.create()
+
+	for at in 0 upto 301 'write'
+		cells.set(at, value: at mod 3 == 0)
+	end 'write'
+
+	var viaGet = 0 as Count
+
+	for at in 0 upto 301 'readEach'
+		if cells.get(at) 'set'
+			viaGet = viaGet + 1
+		end 'set'
+	end 'readEach'
+
+	var viaFor = 0 as Count
+
+	for cell in cells 'walk'
+		if cell 'set'
+			viaFor = viaFor + 1
+		end 'set'
+	end 'walk'
+
+	var viaClone = 0 as Count
+	let copy = cells.clone()
+
+	for cell in copy 'walkCopy'
+		if cell 'set'
+			viaClone = viaClone + 1
+		end 'set'
+	end 'walkCopy'
+
+	return "flag {cells.strideText()} {copy.strideText()} {viaGet} {viaFor} {viaClone}"
+end 'flags'
+
+function crumbs() returns String
+	var cells = Crumbs.create()
+
+	for at in 0 upto 301 'write'
+		cells.set(at, value: (at mod 4) as Crumb)
+	end 'write'
+
+	var viaGet = 0 as Count
+
+	for at in 0 upto 301 'readEach'
+		viaGet = viaGet + (cells.get(at) as Count)
+	end 'readEach'
+
+	var viaFor = 0 as Count
+
+	for cell in cells 'walk'
+		viaFor = viaFor + (cell as Count)
+	end 'walk'
+
+	var viaClone = 0 as Count
+	let copy = cells.clone()
+
+	for cell in copy 'walkCopy'
+		viaClone = viaClone + (cell as Count)
+	end 'walkCopy'
+
+	return "crumb {cells.strideText()} {copy.strideText()} {viaGet} {viaFor} {viaClone}"
+end 'crumbs'
+
+function nibbles() returns String
+	var cells = Nibbles.create()
+
+	for at in 0 upto 301 'write'
+		cells.set(at, value: (at mod 16) as Nibble)
+	end 'write'
+
+	var viaGet = 0 as Count
+
+	for at in 0 upto 301 'readEach'
+		viaGet = viaGet + (cells.get(at) as Count)
+	end 'readEach'
+
+	var viaFor = 0 as Count
+
+	for cell in cells 'walk'
+		viaFor = viaFor + (cell as Count)
+	end 'walk'
+
+	var viaClone = 0 as Count
+	let copy = cells.clone()
+
+	for cell in copy 'walkCopy'
+		viaClone = viaClone + (cell as Count)
+	end 'walkCopy'
+
+	return "nibble {cells.strideText()} {copy.strideText()} {viaGet} {viaFor} {viaClone}"
+end 'nibbles'
+
+function main() returns ExitCode
+	print("{bytes()}\n")
+	print("{halves()}\n")
+	print("{wides()}\n")
+	print("{octets()}\n")
+	print("{lanes()}\n")
+	print("{flags()}\n")
+	print("{crumbs()}\n")
+	print("{nibbles()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+byte 1 1 32551 32551 32551
+half 2 2 9732450 9732450 9732450
+wide 4 4 563481505126 563481505126 563481505126
+octet 1 1 32551 32551 32551
+lane 2 2 9732450 9732450 9732450
+flag -1 -1 101 101 101
+crumb -2 -2 450 450 450
+nibble -4 -4 2238 2238 2238
+```
+
+<!-- test: a-second-type-parameter-strides-by-its-own-instantiation -->
+<!-- tier: stdlib -->
+A generic type holding a fixed array over its SECOND parameter lays the elements out at that parameter's instantiation, whatever the first parameter is: one byte for `Byte` beside an `Integer`, a packed bit for `bool` beside a `String`. Every element reads back through `get` and through `for`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+extension FixedArray
+	function strideText() returns String
+		return "{managed.elementSize()}"
+	end 'strideText'
+end 'FixedArray'
+
+type Two uses A, B
+	typealias Cells = FixedArray with 8 B
+
+	var tag as A
+	var cells as Cells
+
+	static function create(tag A) returns Self
+		return Self{tag: tag, cells: Cells.create()}
+	end 'create'
+
+	function put(at ElementIndex, value B)
+		try cells.set(at, value: value) otherwise panic("put")
+	end 'put'
+
+	function take(at ElementIndex) returns B
+		return try cells.get(at) otherwise panic("take")
+	end 'take'
+
+	function walked() returns Count
+		var walked = 0 as Count
+
+		for _ in cells 'walk'
+			walked = walked + 1
+		end 'walk'
+
+		return walked
+	end 'walked'
+
+	function strideText() returns String
+		return cells.strideText()
+	end 'strideText'
+end 'Two'
+
+typealias ByteTwo = Two with (Integer, Byte)
+typealias FlagTwo = Two with (String, bool)
+
+function main() returns ExitCode
+	var bytes = ByteTwo.create(7)
+	var flags = FlagTwo.create("flags")
+
+	for at in 0 upto 8 'write'
+		bytes.put(at, value: (at * 31) as Byte)
+		flags.put(at, value: at mod 3 == 0)
+	end 'write'
+
+	var byteSum = 0 as Count
+	var flagCount = 0 as Count
+
+	for at in 0 upto 8 'read'
+		byteSum = byteSum + (bytes.take(at) as Count)
+
+		if flags.take(at) 'set'
+			flagCount = flagCount + 1
+		end 'set'
+	end 'read'
+
+	print("byte {bytes.strideText()} {byteSum} {bytes.walked()}\n")
+	print("flag {flags.strideText()} {flagCount} {flags.walked()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+byte 1 868 8
+flag -1 3 8
+```
+
+<!-- test: a-nested-generic-passes-its-instantiation-to-the-fixed-array-it-holds -->
+<!-- tier: stdlib -->
+A generic `Outer uses T` holding an `Inner with T`, whose `create` builds a `FixedArray with 6 T`, reaches that array through the descriptor table: the elements still stride at `T`'s own width, one byte for `Byte` and a packed bit for `bool`.
+```maxon
+extension FixedArray
+	function strideText() returns String
+		return "{managed.elementSize()}"
+	end 'strideText'
+end 'FixedArray'
+
+type Inner uses T
+	typealias Slots = FixedArray with 6 T
+
+	var slots as Slots
+
+	static function create() returns Self
+		return Self{slots: Slots.create()}
+	end 'create'
+
+	function put(at ElementIndex, value T)
+		try slots.set(at, value: value) otherwise panic("put")
+	end 'put'
+
+	function take(at ElementIndex) returns T
+		return try slots.get(at) otherwise panic("take")
+	end 'take'
+
+	function strideText() returns String
+		return slots.strideText()
+	end 'strideText'
+end 'Inner'
+
+type Outer uses T
+	typealias Held = Inner with T
+
+	var inner as Held
+
+	static function create() returns Self
+		return Self{inner: Held.create()}
+	end 'create'
+
+	function put(at ElementIndex, value T)
+		inner.put(at, value: value)
+	end 'put'
+
+	function take(at ElementIndex) returns T
+		return inner.take(at)
+	end 'take'
+
+	function strideText() returns String
+		return inner.strideText()
+	end 'strideText'
+end 'Outer'
+
+typealias ByteOuter = Outer with Byte
+typealias FlagOuter = Outer with bool
+
+function main() returns ExitCode
+	var bytes = ByteOuter.create()
+	var flags = FlagOuter.create()
+
+	for at in 0 upto 6 'write'
+		bytes.put(at, value: (at * 41) as Byte)
+		flags.put(at, value: at mod 2 == 1)
+	end 'write'
+
+	var byteSum = 0 as Count
+	var flagCount = 0 as Count
+
+	for at in 0 upto 6 'read'
+		byteSum = byteSum + (bytes.take(at) as Count)
+
+		if flags.take(at) 'set'
+			flagCount = flagCount + 1
+		end 'set'
+	end 'read'
+
+	print("byte {bytes.strideText()} {byteSum}\n")
+	print("flag {flags.strideText()} {flagCount}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+byte 1 615
+flag -1 3
+```
+
+<!-- test: a-user-generic-over-a-packed-element-strides-by-its-bits -->
+<!-- tier: stdlib -->
+A user generic over a packed element passes a negative stride through its own body: forty `bool` elements pack into five bytes, and 40 `int(0 to 3)` elements into ten, and every element written through the body reads back.
+```maxon
+typealias Crumb = int(0 to 3)
+
+extension FixedArray
+	function strideText() returns String
+		return "{managed.elementSize()}"
+	end 'strideText'
+end 'FixedArray'
+
+type Bits uses T
+	typealias Cells = FixedArray with 40 T
+
+	var cells as Cells
+
+	static function create() returns Self
+		return Self{cells: Cells.create()}
+	end 'create'
+
+	function put(at ElementIndex, value T)
+		try cells.set(at, value: value) otherwise panic("put")
+	end 'put'
+
+	function take(at ElementIndex) returns T
+		return try cells.get(at) otherwise panic("take")
+	end 'take'
+
+	function strideText() returns String
+		return cells.strideText()
+	end 'strideText'
+end 'Bits'
+
+typealias FlagBits = Bits with bool
+typealias CrumbBits = Bits with Crumb
+
+function main() returns ExitCode
+	var flags = FlagBits.create()
+	var crumbs = CrumbBits.create()
+
+	for at in 0 upto 40 'write'
+		flags.put(at, value: at mod 5 == 0)
+		crumbs.put(at, value: (at mod 4) as Crumb)
+	end 'write'
+
+	var flagCount = 0 as Count
+	var crumbSum = 0 as Count
+
+	for at in 0 upto 40 'read'
+		if flags.take(at) 'set'
+			flagCount = flagCount + 1
+		end 'set'
+
+		crumbSum = crumbSum + (crumbs.take(at) as Count)
+	end 'read'
+
+	print("flag {flags.strideText()} {flagCount}\n")
+	print("crumb {crumbs.strideText()} {crumbSum}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+flag -1 8
+crumb -2 60
+```

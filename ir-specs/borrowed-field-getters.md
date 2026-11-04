@@ -102,7 +102,7 @@ func @Big.create {
     x64.movRegReg r12, r8
   __il_body#12:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 112]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 120]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
   __il_body#13:
@@ -371,7 +371,7 @@ func @Big.create {
     x64.movRegReg r12, r8
   __il_body#12:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 112]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 120]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
   __il_body#13:
@@ -640,7 +640,7 @@ func @Big.create {
     arm64.movRegReg x21, x0
   __il_body#12:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 112]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 120]
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
   __il_body#13:
@@ -900,7 +900,7 @@ func @Big.create {
     arm64.movRegReg x21, x0
   __il_body#12:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 112]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 120]
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
   __il_body#13:

@@ -66959,7 +66959,7 @@ export type Parser
 	//   • A runtime-sized instance (`FixedArray with Int`) is refused (E2015): its length belongs to
 	//     the value, so there is no type-level answer to fold.
 	//
-	// ⛔⛔ **THE COUNT TRAVELS IN ITS OWN HIDDEN PARAMETER AND NOT AS A TENTH LAYOUT-DESCRIPTOR WORD, AND THAT
+	// ⛔⛔ **THE COUNT TRAVELS IN ITS OWN HIDDEN PARAMETER AND NOT AS A LAYOUT-DESCRIPTOR WORD, AND THAT
 	// IS A MEASUREMENT.** See `ProgramSignatures.fixedElementCountNeeds`: a descriptor word describes the type
 	// ARGUMENT, is FORWARDED wholesale to a callee whose instance is written over the caller's parameters, and
 	// therefore cannot carry a fact about the INSTANCE — a `FixedArray with 4 Element` reached from inside
@@ -79719,19 +79719,23 @@ export type Parser
 	end 'emitArrayCreateOp'
 
 	function emitComposedArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId
-		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as FullRangeInt, valueType: MaxonType.integer, range: range)
-		return self.emitArrayCreateCall(giid, sizeVal: sizeVal, trailing: ValueIdArray.create(), sizing: sizing, range: range)
+		return self.emitArrayCreateCall(giid, leading: argsOf(self.emitInstanceElementSize(giid, range: range)), trailing: ValueIdArray.create(), sizing: sizing, range: range)
 	end 'emitComposedArrayCreateOp'
 
 	function emitStampedArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
-		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as FullRangeInt, valueType: MaxonType.integer, range: range)
+		let sizeVal = self.emitInstanceElementSize(giid, range: range)
 		try self.requireColumnDropIsNameable(giid, range: range)
 		let destroyVal = self.columnDestroyValue(self.signatures.containerElementType(giid), range: range)
-		return self.emitArrayCreateCall(giid, sizeVal: sizeVal, trailing: argsOf(destroyVal), sizing: sizing, range: range)
+		return self.emitArrayCreateCall(giid, leading: argsOf(sizeVal), trailing: argsOf(destroyVal), sizing: sizing, range: range)
 	end 'emitStampedArrayCreateOp'
 
-	function emitArrayCreateCall(giid GenericInstanceId, sizeVal ValueId, trailing ValueIdArray, sizing ValueIdArray, range SourceRange) returns ValueId
-		var args = argsOf(sizeVal)
+	function emitInstanceElementSize(giid GenericInstanceId, range SourceRange) returns ValueId
+		return self.emitLiteral(self.signatures.arrayElementSize(giid) as FullRangeInt, valueType: MaxonType.integer, range: range)
+	end 'emitInstanceElementSize'
+
+	function emitArrayCreateCall(giid GenericInstanceId, leading ValueIdArray, trailing ValueIdArray, sizing ValueIdArray, range SourceRange) returns ValueId
+		var args = ValueIdArray.create()
+		args.append(leading)
 		args.append(sizing)
 		args.append(trailing)
 
@@ -79754,8 +79758,11 @@ export type Parser
 	// where `ElementArray = Array with typeParameter(token)`. Two things differ from a concrete create, both
 	// because the element type is opaque here (the shared body compiles ONCE and serves every concrete
 	// instance through dictionary-passing):
-	//   • element_size is the fixed machine-word slot every opaque `T` occupies (`LAYOUT_TYPE_PARAM_SLOT_BYTES`),
-	//     NOT a source-`sizeof` — a managed element is a pointer and a trivial one an inline word, both 8 bytes.
+	//   • element_size of an `Array` is the fixed machine-word slot every opaque `T` occupies
+	//     (`LAYOUT_TYPE_PARAM_SLOT_BYTES`), NOT a source-`sizeof` — a managed element is a pointer and a
+	//     trivial one an inline word, both 8 bytes. A FixedArray's is READ from the descriptor's
+	//     `elementStride@72` at RUN TIME (`opaqueCreateReadsStrideFromDescriptor`), so it strides by the
+	//     concrete element, and the parser emits no element_size argument for it.
 	//   • element_destroy@40 is not known statically, so it is READ from the enclosing instance's threaded
 	//     layout descriptor at RUN TIME (`destroyFunc@40`). The parser emits a `__managed_create` short its
 	//     destructor argument (element_size only, plus the capacity and length of a sized create);
@@ -79763,8 +79770,12 @@ export type Parser
 	//     owns the descriptor's ValueId (`implicitLayoutValueId`) is the tier that reads it — the same split
 	//     `sizeof(T)` uses. For a TRIVIAL instance the slot reads 0 and the array's drop walk is skipped.
 	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId
+		if opaqueCreateReadsStrideFromDescriptor(self.arrayCreateCallee(giid, sizing: sizing)) 'strideFromTheDescriptor'
+			return self.emitArrayCreateCall(giid, leading: ValueIdArray.create(), trailing: ValueIdArray.create(), sizing: sizing, range: range)
+		end 'strideFromTheDescriptor'
+
 		let sizeVal = self.emitLiteral(LAYOUT_TYPE_PARAM_SLOT_BYTES as FullRangeInt, valueType: MaxonType.integer, range: range)
-		return self.emitArrayCreateCall(giid, sizeVal: sizeVal, trailing: ValueIdArray.create(), sizing: sizing, range: range)
+		return self.emitArrayCreateCall(giid, leading: argsOf(sizeVal), trailing: ValueIdArray.create(), sizing: sizing, range: range)
 	end 'emitOpaqueArrayCreateOp'
 
 	// Emit the RAW `.text` address of a COMPILER-INTERNAL runtime function (`__str_decref`, `__destruct_<T>`,

@@ -89,12 +89,12 @@ pin shows which label a `lea` names; only this block shows what is IN it.
 ## Tests
 
 <!-- test: layout-descriptor-payload -->
-`Sizer with bool`'s layout descriptor is the program's whole read-only image: nine
-machine words — size, alignment, elementSize, four zero slots, elementLogicalSize, and the
-`retainFunc@64` a `bool` argument leaves 0.
+`Sizer with bool`'s layout descriptor is the program's whole read-only image: ten
+machine words — size, alignment, elementSize, four zero slots, elementLogicalSize, the
+`retainFunc@64` a `bool` argument leaves 0, and the `elementStride@72` of a `bool` (-1, one packed bit).
 
-⚠ The ninth word is pinned deliberately. This block is checked as a PREFIX of the image, so a
-descriptor that grew a slot would go on passing an eight-word pin while the prose above described
+⚠ The tenth word is pinned deliberately. This block is checked as a PREFIX of the image, so a
+descriptor that grew a slot would go on passing a nine-word pin while the prose above described
 a blob that does not exist.
 
 ```maxon
@@ -132,6 +132,7 @@ i64 0
 i64 0
 i64 1
 i64 0
+i64 -1
 ```
 
 ```TargetIr:x64-windows

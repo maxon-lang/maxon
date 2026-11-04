@@ -1890,6 +1890,116 @@ open true true
 0
 ```
 
+<!-- test: aes-hardware.a-sized-fixed-array-is-a-buffer -->
+<!-- tier: stdlib -->
+A fixed array whose type states its length is a buffer in every position a `ByteArray` is, and gives the same bytes: it
+strides one byte per element, as the runtime-sized form does.
+```maxon
+typealias Schedule = FixedArray with 352 Byte
+typealias Block = FixedArray with 16 Byte
+typealias Stream = FixedArray with 32 Byte
+typealias Keys = FixedArray with 432 Byte
+typealias Box = FixedArray with 56 Byte
+typealias Recovered = FixedArray with 40 Byte
+typealias Bytes = FixedArray with Byte
+
+function bytesFor(seed Count, count Count) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for index in 0 upto count 'eachByte'
+		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
+		bytes.push(((mixed shr 11) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'bytesFor'
+
+function blank(count Count) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.resize(count)
+
+	return bytes
+end 'blank'
+
+function same(left Bytes, right ByteArray) returns bool
+	if left.count() != right.count() 'length'
+		return false
+	end 'length'
+
+	for position in 0 upto right.count() 'eachByte'
+		let a = try left.get(position) otherwise return false
+		let b = try right.get(position) otherwise return false
+
+		if a != b 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'same'
+
+function main() returns ExitCode
+	let key = bytesFor(1, count: 16)
+	let plain = bytesFor(2, count: 16)
+	let counterBlock = bytesFor(3, count: 16)
+	let nonce = bytesFor(4, count: 12)
+	let additional = bytesFor(5, count: 20)
+	let message = bytesFor(6, count: 40)
+
+	var byteSchedule = blank(352)
+	__Builtins.aesExpandKey(byteSchedule, key)
+	var fixedSchedule = Schedule.create()
+	__Builtins.aesExpandKey(fixedSchedule, key)
+	print("schedule {same(fixedSchedule, right: byteSchedule)}\n")
+
+	var byteSealed = blank(16)
+	__Builtins.aesEncryptBlock(byteSealed, 0, byteSchedule, plain, 0)
+	var fixedSealed = Block.create()
+	__Builtins.aesEncryptBlock(fixedSealed, 0, fixedSchedule, plain, 0)
+	print("encrypt {same(fixedSealed, right: byteSealed)}\n")
+
+	var opened = Block.create()
+	__Builtins.aesDecryptBlock(opened, 0, fixedSchedule, fixedSealed, 0)
+	print("decrypt {same(opened, right: plain)}\n")
+
+	var byteStream = blank(32)
+	__Builtins.aesCtrXor(byteStream, 0, byteSchedule, counterBlock, 0, 2)
+	var fixedStream = Stream.create()
+	__Builtins.aesCtrXor(fixedStream, 0, fixedSchedule, counterBlock, 0, 2)
+	print("ctr {same(fixedStream, right: byteStream)}\n")
+
+	var byteKeys = blank(432)
+	__Builtins.aesGcmInit(byteKeys, byteSchedule)
+	var fixedKeys = Keys.create()
+	__Builtins.aesGcmInit(fixedKeys, fixedSchedule)
+	print("keys {same(fixedKeys, right: byteKeys)}\n")
+
+	var byteBox = blank(56)
+	__Builtins.aesGcmSeal(byteBox, 0, byteKeys, nonce, additional, message)
+	var fixedBox = Box.create()
+	__Builtins.aesGcmSeal(fixedBox, 0, fixedKeys, nonce, additional, message)
+	print("seal {same(fixedBox, right: byteBox)}\n")
+
+	var recovered = Recovered.create()
+	let authentic = __Builtins.aesGcmOpen(recovered, 0, fixedKeys, nonce, additional, fixedBox)
+	print("open {authentic} {same(recovered, right: message)}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+schedule true
+encrypt true
+decrypt true
+ctr true
+keys true
+seal true
+open true true
+```
+```exitcode
+0
+```
+
 <!-- test: aes-hardware.error.a-fixed-array-of-wider-elements-is-not-a-buffer -->
 <!-- tier: stdlib -->
 A buffer position takes a fixed array only of bytes.

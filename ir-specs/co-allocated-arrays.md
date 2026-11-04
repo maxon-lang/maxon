@@ -60,7 +60,7 @@ func @make {
     x64.movRegImm32 rax, 8
     x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
-    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 72]
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
     x64.callDirect __managed_create_fixed
@@ -134,7 +134,7 @@ func @make {
     x64.movRegImm32 rax, 8
     x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
-    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 72]
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
     x64.callDirect __managed_create_fixed
@@ -204,7 +204,7 @@ func @make {
     arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
-    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 72]
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
     arm64.bl __managed_create_fixed
@@ -272,7 +272,7 @@ func @make {
     arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
-    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 72]
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
     arm64.bl __managed_create_fixed
@@ -1169,7 +1169,7 @@ func @main {
     x64.movRegImm32 rax, 8
     x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
-    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 72]
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
     x64.callDirect __managed_create_fixed
@@ -1335,7 +1335,7 @@ func @main {
     x64.movRegImm32 rax, 8
     x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
   __il_body:
-    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 72]
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
     x64.callDirect __managed_create_fixed
@@ -1497,7 +1497,7 @@ func @main {
     arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
-    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 72]
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
     arm64.bl __managed_create_fixed
@@ -1648,7 +1648,7 @@ func @main {
     arm64.movImm x2, 8
     arm64.leaRdata x1, __layout_FixedArray_N8_Word
   __il_body:
-    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 72]
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
     arm64.bl __managed_create_fixed

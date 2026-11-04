@@ -464,6 +464,134 @@ end 'main'
 0
 ```
 
+<!-- test: a-sized-byte-fixed-array-is-as-large-as-its-bytes -->
+A fixed array whose type states its length of 300 bytes is one record of 56 bytes of header and 300 bytes of elements,
+the size a runtime-sized `create(300)` has. **If the sized form's `ArrayRecord` is larger than the runtime-sized
+one's, its elements are not one byte each.**
+<!-- MmTrace -->
+```maxon
+typealias Wide = FixedArray with 300 Byte
+typealias Runtime = FixedArray with Byte
+
+function sized() returns Byte
+	var wide = Wide.create()
+	wide.set(299, value: 5)
+
+	return wide.get(299)
+end 'sized'
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function runtime() returns Byte
+	var bytes = Runtime.create(launder(300))
+	try bytes.set(299, value: 5) otherwise panic("set")
+
+	return try bytes.get(299) otherwise panic("get")
+end 'runtime'
+
+function main() returns ExitCode
+	if sized() + runtime() != 10 'values'
+		return 1
+	end 'values'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+```mm-trace
+mm_alloc ArrayRecord #1 size=356
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+mm_alloc ArrayRecord #2 size=356
+mm_decref ArrayRecord #2 rc=0
+mm_free ArrayRecord #2
+```
+
+<!-- test: a-sized-fixed-array-is-as-large-as-its-elements-at-every-width -->
+A sized fixed array's record is the 56-byte header and its elements at their own width: 200 bytes for a hundred 16-bit
+elements, 400 for a hundred 32-bit ones, and a hundred bools, 2-bit and 4-bit elements packed into 13, 25 and 50.
+<!-- MmTrace -->
+```maxon
+typealias Half = int(0 to 65535)
+typealias Wide = int(0 to u32.max)
+typealias Crumb = int(0 to 3)
+typealias Nibble = int(0 to 15)
+typealias Halves = FixedArray with 100 Half
+typealias Wides = FixedArray with 100 Wide
+typealias Flags = FixedArray with 100 bool
+typealias Crumbs = FixedArray with 100 Crumb
+typealias Nibbles = FixedArray with 100 Nibble
+
+function halves() returns Half
+	var cells = Halves.create()
+	cells.set(99, value: 7)
+
+	return cells.get(99)
+end 'halves'
+
+function wides() returns Wide
+	var cells = Wides.create()
+	cells.set(99, value: 7)
+
+	return cells.get(99)
+end 'wides'
+
+function flags() returns bool
+	var cells = Flags.create()
+	cells.set(99, value: true)
+
+	return cells.get(99)
+end 'flags'
+
+function crumbs() returns Crumb
+	var cells = Crumbs.create()
+	cells.set(99, value: 3)
+
+	return cells.get(99)
+end 'crumbs'
+
+function nibbles() returns Nibble
+	var cells = Nibbles.create()
+	cells.set(99, value: 15)
+
+	return cells.get(99)
+end 'nibbles'
+
+function main() returns ExitCode
+	if halves() != 7 or wides() != 7 or not flags() or crumbs() != 3 or nibbles() != 15 'values'
+		return 1
+	end 'values'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+```mm-trace
+mm_alloc ArrayRecord #1 size=256
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+mm_alloc ArrayRecord #2 size=456
+mm_decref ArrayRecord #2 rc=0
+mm_free ArrayRecord #2
+mm_alloc ArrayRecord #3 size=69
+mm_decref ArrayRecord #3 rc=0
+mm_free ArrayRecord #3
+mm_alloc ArrayRecord #4 size=81
+mm_decref ArrayRecord #4 rc=0
+mm_free ArrayRecord #4
+mm_alloc ArrayRecord #5 size=106
+mm_decref ArrayRecord #5 rc=0
+mm_free ArrayRecord #5
+```
+
 <!-- test: a-sized-memory-is-one-allocation -->
 <!-- tier: stdlib -->
 `__ManagedMemory.create(capacity, elementSize)` is the sized creation the standard library's own buffers use.

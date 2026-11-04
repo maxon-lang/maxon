@@ -4223,8 +4223,8 @@ func @main {
   tryok#22:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_incref
-    x64.loadRegBaseDisp.word64 rax, [r12 + 80]
-    x64.loadRegBaseDisp.word64 r12, [r12 + 72]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 88]
+    x64.loadRegBaseDisp.word64 r12, [r12 + 80]
   __il_body#26:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -4502,8 +4502,8 @@ func @main {
   tryok#22:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_incref
-    x64.loadRegBaseDisp.word64 rax, [r12 + 80]
-    x64.loadRegBaseDisp.word64 r12, [r12 + 72]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 88]
+    x64.loadRegBaseDisp.word64 r12, [r12 + 80]
   __il_body#26:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -4782,8 +4782,8 @@ func @main {
   tryok#22:
     arm64.movRegReg x0, x22
     arm64.bl __mm_incref
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 80]
-    arm64.loadRegBaseDisp.word64 x21, [x21 + 72]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 88]
+    arm64.loadRegBaseDisp.word64 x21, [x21 + 80]
   __il_body#26:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
@@ -5068,8 +5068,8 @@ func @main {
   tryok#22:
     arm64.movRegReg x0, x22
     arm64.bl __mm_incref
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 80]
-    arm64.loadRegBaseDisp.word64 x21, [x21 + 72]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 88]
+    arm64.loadRegBaseDisp.word64 x21, [x21 + 80]
   __il_body#26:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
@@ -5387,8 +5387,8 @@ func @xorKeyStream {
   tryok#44:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_incref
-    x64.loadRegBaseDisp.word64 rax, [r12 + 80]
-    x64.loadRegBaseDisp.word64 r12, [r12 + 72]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 88]
+    x64.loadRegBaseDisp.word64 r12, [r12 + 80]
   __il_body#48:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -5932,8 +5932,8 @@ func @xorKeyStream {
   tryok#44:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_incref
-    x64.loadRegBaseDisp.word64 rax, [r12 + 80]
-    x64.loadRegBaseDisp.word64 r12, [r12 + 72]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 88]
+    x64.loadRegBaseDisp.word64 r12, [r12 + 80]
   __il_body#48:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -6475,8 +6475,8 @@ func @xorKeyStream {
   tryok#44:
     arm64.movRegReg x0, x23
     arm64.bl __mm_incref
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 80]
-    arm64.loadRegBaseDisp.word64 x22, [x22 + 72]
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 88]
+    arm64.loadRegBaseDisp.word64 x22, [x22 + 80]
   __il_body#48:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
@@ -7016,8 +7016,8 @@ func @xorKeyStream {
   tryok#44:
     arm64.movRegReg x0, x23
     arm64.bl __mm_incref
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 80]
-    arm64.loadRegBaseDisp.word64 x22, [x22 + 72]
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 88]
+    arm64.loadRegBaseDisp.word64 x22, [x22 + 80]
   __il_body#48:
     arm64.movImm x0, 8
     arm64.movImm x1, 0

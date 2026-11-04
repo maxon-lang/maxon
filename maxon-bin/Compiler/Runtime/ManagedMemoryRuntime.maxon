@@ -381,6 +381,13 @@ export function isManagedSizedCreateCallee(callee ByteArray) returns bool
 	return callee.equals(ManagedCreateSizedName) or callee.equals(ManagedCreateFixedName)
 end 'isManagedSizedCreateCallee'
 
+// The parser omits the element_size argument of an opaque-element create exactly when the lowering
+// prepends the descriptor's `elementStride@72` load, so both ask this: answering differently leaves the
+// runtime call one argument off.
+export function opaqueCreateReadsStrideFromDescriptor(callee ByteArray) returns bool
+	return callee.equals(ManagedCreateFixedName)
+end 'opaqueCreateReadsStrideFromDescriptor'
+
 // Growing past a co-allocated buffer's capacity moves the elements to an allocation of their own and leaves
 // the inline bytes unused until the record dies, so an array that outgrows its first buffer carries up to
 // this many dead bytes for its whole life. A FixedArray cannot outgrow its buffer through its API and
@@ -2086,7 +2093,7 @@ end 'emitManagedReserve'
 //      element load, the element store, `__managed_fill`'s three per-stride loops, and the inline
 //      pass one tier up.
 //   2. **A MANAGED ELEMENT**, which is never packed by construction
-//      (`ProgramSignatures.arrayElementPackedBits` answers `ElementPacking.byteStrided` for it
+//      (`ProgramSignatures.elementPackingOfType` answers `ElementPacking.byteStrided` for it
 //      before it reads anything else) — the destroy walk, the deep-clone walk, and the `_managed`
 //      slice/append the parser routes a managed element to instead of the trivial path.
 //   3. **A CALLER WHOSE `elementSize` IS A COMPILE-TIME CONSTANT THE STRIDE FORK ALREADY PROVED** —
@@ -2482,9 +2489,10 @@ end 'StrideDispatchPlan'
 //
 // ⛔⛔ **THE STATIC STAMP IS NOT ALWAYS THE RECORD'S, AND THAT IS WHY THIS IS NOT SIMPLY THE TWO COMPARES
 // AGAIN.** A container declared over a TYPE PARAMETER is created inside a SHARED GENERIC
-// BODY, where every `T` occupies one machine word — `Parser.emitOpaqueArrayCreateOp` stamps
-// `LAYOUT_TYPE_PARAM_SLOT_BYTES` and not the concrete element's width, because the one compiled body moves
-// elements as words whatever the instantiation. Read back through a concrete receiver, that same record
+// BODY, where every `T` occupies one machine word — `Parser.emitOpaqueArrayCreateOp` stamps an `Array`
+// with `LAYOUT_TYPE_PARAM_SLOT_BYTES` and not the concrete element's width, because the one compiled body
+// moves elements as words whatever the instantiation. A FixedArray's create reads the concrete stride from
+// the descriptor (`elementStride@72`), so its record carries its instance's own stamp. Read back through a concrete receiver, that same record
 // wears a SUBSTITUTED type (`Parser.slotTypeThroughReceiver`): a `Bag with Byte`'s `Array with Element`
 // field is typed `Array with Byte`, stride 1, while its record stamps 8.
 //

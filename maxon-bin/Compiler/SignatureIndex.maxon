@@ -15617,7 +15617,7 @@ export type SettledDeclarations
 	// reads, keyed by the qualified `Type.method` name and solved by a fixpoint over the sized container's
 	// self-call graph.**
 	//
-	// ⛔⛔ **IT IS A SECOND PARAMETER RATHER THAN A TENTH DESCRIPTOR WORD, AND THAT IS A MEASUREMENT AND NOT A
+	// ⛔⛔ **IT IS A SECOND PARAMETER RATHER THAN A DESCRIPTOR WORD, AND THAT IS A MEASUREMENT AND NOT A
 	// PREFERENCE.** A count is a fact about the INSTANCE; every word the layout descriptor carries is a fact
 	// about the type ARGUMENT, and that difference is exactly what `MaxonToStdLowering.emitInstanceDescriptorAddr`
 	// relies on when it FORWARDS the caller's own blocks to a callee whose instance is written over the
@@ -30693,7 +30693,7 @@ export type ProgramSignatures
 	end 'isLibraryArrayInstance'
 
 	function isInlineSlotOfLibraryArray(id GenericInstanceId) returns bool
-		return self.isLibraryArrayInstance(id) and not self.containerElementOccupiesAPointerSlot(id) and not self.containerElementIsOpaque(id)
+		return self.isLibraryArrayInstance(id) and not self.typeOccupiesAPointerSlot(self.containerElementType(id)) and not self.containerElementIsOpaque(id)
 	end 'isInlineSlotOfLibraryArray'
 
 	function arrayElementClass(id GenericInstanceId) returns ArrayElementClass
@@ -31169,7 +31169,7 @@ export type ProgramSignatures
 	// whose slot holds a refcounted pointer; and a GREEN-THREAD HANDLE, whose slot holds a pointer into the
 	// scheduler's own slab that `__gt_promise_drop` reclaims and no refcount owns (`PromiseType.maxon`).
 	//
-	// ⛔⛔ **`arrayElementSize` ASKS THE OWNERSHIP QUESTION, OR A LEGAL PROGRAM PANICS THE COMPILER.**
+	// ⛔⛔ **`elementStrideOfType` ASKS THE OWNERSHIP QUESTION, OR A LEGAL PROGRAM PANICS THE COMPILER.**
 	// `typealias Ps = Array with Promise with (Integer, MathError)` (the element spelled INLINE)
 	// reached `trivialElementSlot` with a `genericInstance`, because `containerElementIsManaged` is
 	// `typeIsManaged`, and `typeIsManaged`'s own instance arm answers `false` for a promise handle by
@@ -31186,9 +31186,9 @@ export type ProgramSignatures
 	// changed here because no program can reach the difference: a promise is never a compile-time constant, so
 	// `everyElementIsAKnownConstant` refuses the blob before that predicate's answer is used. A latent second
 	// face, not a live one.
-	export function containerElementOccupiesAPointerSlot(id GenericInstanceId) returns bool
-		return self.containerElementIsManaged(id) or self.containerElementIsAGreenThreadHandle(id)
-	end 'containerElementOccupiesAPointerSlot'
+	function typeOccupiesAPointerSlot(element MaxonType) returns bool
+		return self.typeIsManaged(element, from: self.typeNames) or self.typeIsAGreenThreadHandle(element, from: self.typeNames)
+	end 'typeOccupiesAPointerSlot'
 
 	// ⭐ **DOES THIS CONTAINER'S ELEMENT OWE A DROP?** The instance-keyed spelling of `typeOwesDrop`, and the
 	// question the ELEMENT DESTRUCTOR STAMP must ask — `containerElementIsManaged` is the narrower "is the
@@ -31546,7 +31546,8 @@ export type ProgramSignatures
 	// struct / union / instance / nested Array) is a heap box stored as an 8-byte POINTER
 	// (`ManagedArrayElementBytes`), so its slot is the pointer, NOT the element's full logical size — the
 	// drop walk destroys the pointer, the accessors load/store it. A TRIVIAL element is stored inline, at
-	// the width `trivialElementSlot` gives it.
+	// the width `trivialElementSlot` gives it. `genericInstanceArgElementStride` asks the same question of a
+	// descriptor's type argument through `elementStrideOfType`, so the two cannot differ.
 	//
 	// ⚠ **IT IS NOT THE SOURCE `sizeof`, AND IT DOES NOT ROUTE THROUGH THE LOGICAL-SIZE DOOR.** Both of the
 	// storage rules above diverge from `sizeof`: a `String` element's slot is 8 where its `sizeof` is the
@@ -31562,15 +31563,22 @@ export type ProgramSignatures
 	// second "unpacked byte width" accessor beside this one would be a second producer of a stride, which
 	// is the shape this function's own name exists to prevent.
 	export function arrayElementSize(id GenericInstanceId) returns ElementStride
-		// ⚠ **THE STORAGE QUESTION AND NOT THE REFCOUNT ONE** — see `containerElementOccupiesAPointerSlot`,
+		return self.elementStrideOfType(self.containerElementType(id))
+	end 'arrayElementSize'
+
+	export function genericInstanceArgElementStride(id GenericInstanceId, position ElementIndex) returns ElementStride
+		return self.elementStrideOfType(self.descriptorArgumentAt(id, position: position))
+	end 'genericInstanceArgElementStride'
+
+	function elementStrideOfType(element MaxonType) returns ElementStride
+		// ⚠ **THE STORAGE QUESTION AND NOT THE REFCOUNT ONE** — see `typeOccupiesAPointerSlot`,
 		// whose header carries the compiler panic that measured the difference.
-		if self.containerElementOccupiesAPointerSlot(id) 'storedAsAnAddress'
+		if self.typeOccupiesAPointerSlot(element) 'storedAsAnAddress'
 			return ManagedArrayElementBytes
 		end 'storedAsAnAddress'
 
-		let element = self.containerElementType(id)
-		return elementStrideOf(self.arrayElementPackedBits(id), storageBytes: self.trivialElementSlot(element).bytes)
-	end 'arrayElementSize'
+		return elementStrideOf(self.elementPackingOfType(element), storageBytes: self.trivialElementSlot(element).bytes)
+	end 'elementStrideOfType'
 
 	// ⭐⭐ **IS THIS TYPE STORED IN A NARROW SIGNED SLOT, AND HOW WIDE? (`enum-narrow-storage`.)** The shared
 	// element load is ONE compiled byte loop shared by every array in the program, strided by the record's
@@ -31638,7 +31646,7 @@ export type ProgramSignatures
 		return not self.containerElementIsManaged(id) and not self.containerElementIsOpaque(id)
 	end 'arrayElementMayBeConstantBlob'
 
-	// ⭐⭐ **IS THIS INSTANCE'S ELEMENT SUB-BYTE PACKED, AND HOW WIDE — THE ONE HOME OF THE PACKING RULE.**
+	// ⭐⭐ **IS THIS ELEMENT TYPE SUB-BYTE PACKED, AND HOW WIDE — THE ONE HOME OF THE PACKING RULE.**
 	// `ElementPacking.byteStrided` for every element a byte or wider. The stamp above is derived from
 	// it, and so is every runtime decision downstream, so "does this array pack?" is asked here or not
 	// at all.
@@ -31657,14 +31665,14 @@ export type ProgramSignatures
 	// ⭐ **THE DECISION IS MADE AT `__managed_create`, NOT AT FIRST `grow`, AND `LayoutDescriptor`'s
 	// `bit1=bitPacked` FLAG IS RESERVED.** The create sites already hold the CONCRETE instance — the parser
 	// mints it (`Parser.emitArrayCreateOp`), for a global's initializer as for a body — so the record is
-	// never briefly unpacked, no descriptor is read at run time, and there is no second stamp site to
-	// disagree at.
-	export function arrayElementPackedBits(id GenericInstanceId) returns ElementPacking
-		if self.containerElementIsManaged(id) 'managed'
+	// never briefly unpacked and there is no second stamp site to disagree at. An opaque FixedArray create
+	// reads its stride from the descriptor's `elementStride@72`, which is this same rule applied to the
+	// descriptor's type argument.
+	function elementPackingOfType(element MaxonType) returns ElementPacking
+		if self.typeIsManaged(element, from: self.typeNames) 'managed'
 			return ElementPacking.byteStrided
 		end 'managed'
 
-		let element = self.containerElementType(id)
 		let tag = maxonTypeTag(element)
 
 		if tag == ValueTypeTag.boolean 'theOneBitCase'
@@ -31676,7 +31684,7 @@ export type ProgramSignatures
 		end 'notARangedAlias'
 
 		return self.settledDeclarations().typeAliases.packedBitsInEveryFile(self.nameOfId(typeNameIdOf(element)))
-	end 'arrayElementPackedBits'
+	end 'elementPackingOfType'
 
 	// ⭐ **DOES INSTANCE `id`'s ELEMENT STRIDE A FULL MACHINE WORD** — the question a door asks when it reads a
 	// buffer ONE WORD PER SLOT and so cannot walk a byte-PACKED element (`Parser.parseListFromConstruction`,
@@ -34664,15 +34672,20 @@ export type ProgramSignatures
 	end 'genericInstanceBoxSize'
 
 	export function genericInstanceArgLogicalSize(id GenericInstanceId, position ElementIndex) returns ByteOffset
-		view args = self.genericInstances.instanceArgs(id)
-		let arg = try args.get(position) otherwise panic("genericInstanceArgLogicalSize: instanceArgs.get({position}) failed below count {args.count()}")
+		return self.typeLogicalByteSize(self.descriptorArgumentAt(id, position: position))
+	end 'genericInstanceArgLogicalSize'
+
+	// The canonical argument, the form `containerElementType` hands `arrayElementSize`, so a descriptor's
+	// size and stride describe the same type the array's own create stamps.
+	function descriptorArgumentAt(id GenericInstanceId, position ElementIndex) returns MaxonType
+		let arg = self.canonicalInstanceArgAt(id, position: position)
 
 		if self.typeIsBuiltOnATypeParameter(arg) 'aParametricArgument'
-			panic("genericInstanceArgLogicalSize: argument {position} of instance {id} is built on a type parameter, so it has no size to write into a descriptor")
+			panic("descriptorArgumentAt: argument {position} of instance {id} is built on a type parameter, so it has no size or stride to write into a descriptor")
 		end 'aParametricArgument'
 
-		return self.typeLogicalByteSize(arg)
-	end 'genericInstanceArgLogicalSize'
+		return arg
+	end 'descriptorArgumentAt'
 
 	// The full source-level byte size of a type argument, resolved against THIS index's own interner. A
 	// declared struct (stored `named` by the sweep, which does not resolve `structRef`) is its full box; a

@@ -391,9 +391,9 @@ answers **false** for a promise by design (*"an `Array with Promise` answers `fa
 here"*, in `containerElementOwesDrop`'s words). Sizing the element by `containerElementIsManaged` would
 send it to the INLINE-STORAGE path, where `trivialElementSlot` would size an aggregate through the
 primitive helper; the two-step spelling would escape only because its element is the alias NAME, which
-the undeclared-`named` fallback sizes at a machine word. `arrayElementSize` asks
-`containerElementOccupiesAPointerSlot`, which is the question actually being asked, and both populations
-answer it.
+the undeclared-`named` fallback sizes at a machine word. `arrayElementSize` asks `typeOccupiesAPointerSlot`
+of the element type (through `elementStrideOfType`), which is the question actually being asked, and both
+populations answer it.
 
 ⚠ **THE TWO SPELLINGS AGREE TO THE BYTE.** A drop-the-promises
 program — an `Array with Promise` filled and abandoned — emits the same bytes and

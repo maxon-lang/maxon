@@ -3,13 +3,13 @@
 // ⭐ **The compiler does NOT monomorphize a generic body.** `Sizer.typeSize` compiles ONCE against an
 // opaque `T` (an i64), and everything the body needs to know about the concrete `T` at a given
 // call site arrives at RUNTIME through a hidden trailing parameter: the address of a fixed-shape
-// 72-byte descriptor blob in `.rdata`. `sizeof(T)` inside the shared body is a LOAD of the
+// descriptor blob in `.rdata`. `sizeof(T)` inside the shared body is a LOAD of the
 // `elementLogicalSize@56` slot in `T`'s own block; the caller passes the address of the descriptor
 // for its concrete instance (`__layout_Sizer_bool`). This is the "dictionary-passing" model.
 //
 // ⚠ **The byte shape is an ABI between two ends** — `LowerMaxonToStd` WRITES the blob
-// (`encodeLayoutDescriptor`) and READS it back (`sizeof(T)` → a load at a constant offset). Its first
-// EIGHT words are FROZEN, and managed args, drop-through-`destroyFunc@40` and Array copy-thunks
+// (`encodeLayoutDescriptor`) and READS it back (`sizeof(T)` → a load at a constant offset). Every
+// word's offset is FROZEN, and managed args, drop-through-`destroyFunc@40` and Array copy-thunks
 // populate the zero slots without moving anything:
 //
 //   +0   size               u64   base generic type's own box byteSize (`StructLayout.sizeBytes`)
@@ -24,8 +24,11 @@
 //                                 2-int Pair=16); the slot `sizeof(T)` reads
 //   +64  retainFunc         u64   0 when the type ARGUMENT owns nothing; how a shared body takes a
 //                                 REFERENCE to a borrowed opaque `T` it stores
+//   +72  elementStride      u64   `elementStrideOf` encoding for an array whose element is the block's
+//                                 type arg (positive byte width, negative packed bits); the slot an
+//                                 opaque `FixedArray.create` stamps as its `element_size`
 //
-// ⭐⭐ **THE NINTH WORD IS APPENDED, NOT SLOTTED INTO A RESERVED ONE, AND THAT IS DELIBERATE.**
+// ⭐⭐ **THE TENTH WORD IS APPENDED, NOT SLOTTED INTO A RESERVED ONE, AND THAT IS DELIBERATE.**
 // `flags@24` and `fieldOffsetsPtr@48` are both still 0 and both still MEAN something; taking one
 // would make the field-offset blob's arrival a migration. Appending is the band-append discipline
 // one tier down: every existing offset
@@ -43,8 +46,8 @@
 // byte-identical to everything above.
 
 // The fixed on-disk size of ONE descriptor block — one type parameter's dictionary. Every field is a
-// machine word (8 bytes), and there are nine of them.
-let LAYOUT_DESCRIPTOR_BYTE_SIZE = 72
+// machine word (8 bytes).
+let LAYOUT_DESCRIPTOR_BYTE_SIZE = LAYOUT_OFFSET_ELEMENT_STRIDE + LAYOUT_FIELD_BYTES
 
 // The byte offset of the `elementLogicalSize` slot — the source-level `sizeof` of the block's type
 // arg. `sizeof(T)` inside a shared generic body lowers to a load of `[T's block + this]`. `module`
@@ -118,6 +121,11 @@ export let LAYOUT_OFFSET_DESTROY_FUNC = 40 as ByteOffset
 // that they read one predicate is worth nothing unless the code has one expression for it.** See
 // `ProgramSignatures.typeParamOwnershipProtocol`, which IS that expression.
 export let LAYOUT_OFFSET_RETAIN_FUNC = 64 as ByteOffset
+
+// The byte offset of the `elementStride` slot, the block's last word. `LAYOUT_DESCRIPTOR_BYTE_SIZE` is
+// derived from it, so a word appended after it must move this constant too; `encodeLayoutDescriptor`
+// panics when the encoded length disagrees.
+module let LAYOUT_OFFSET_ELEMENT_STRIDE = 72 as ByteOffset
 
 // The number of little-endian bytes in one descriptor field.
 let LAYOUT_FIELD_BYTES = 8
@@ -683,8 +691,8 @@ let LAYOUT_ZERO_SLOTS_MID = 4 as ByteOffset
 let LAYOUT_ZERO_SLOTS_TAIL = 1 as ByteOffset
 
 // The data model for one instance's descriptor. Only the three slots that are the same in
-// every block are fields; each block's `elementLogicalSize@56` is handed to the encoder per
-// parameter, and the zero slots are supplied by the encoder (they carry no information, and
+// every block are fields; each block's `elementLogicalSize@56` and `elementStride@72` are handed to the
+// encoder per parameter as an `ArgumentDictionary`, and the zero slots are supplied by the encoder (they carry no information, and
 // inventing fields to hold a constant 0 would be a place for the encoder and the model to
 // disagree).
 //
@@ -702,17 +710,28 @@ module type LayoutDescriptor
 	end 'create'
 end 'LayoutDescriptor'
 
-// Encode a LayoutDescriptor as one 72-byte block of nine little-endian machine words per entry of
-// `elementLogicalSizes`, which is in type-parameter order: block `i` is what `sizeof` of
-// parameter `i` reads. The three function-pointer slots (+32 copyFunc, +40 destroyFunc, +64
+module type ArgumentDictionary
+	export let logicalSize as ByteOffset
+	export let elementStride as ElementStride
+
+	module static function create(logicalSize ByteOffset, elementStride ElementStride) returns ArgumentDictionary
+		return Self{logicalSize: logicalSize, elementStride: elementStride}
+	end 'create'
+end 'ArgumentDictionary'
+
+module typealias ArgumentDictionaryArray = Array with ArgumentDictionary
+
+// Encode a LayoutDescriptor as one block of little-endian machine words per entry of
+// `dictionaries`, which is in type-parameter order: block `i` is what `sizeof` of
+// parameter `i` reads and what an array of parameter `i` strides by. The three function-pointer slots (+32 copyFunc, +40 destroyFunc, +64
 // retainFunc) and the field-offsets slot (+48) are zero on disk for a trivial instance: it has no
 // thunk, owes no reference and has no field-offset blob, so nothing patches them and the blob needs
 // no relocation.
-module function encodeLayoutDescriptor(d LayoutDescriptor, elementLogicalSizes ByteOffsetArray) returns ByteArray
+module function encodeLayoutDescriptor(d LayoutDescriptor, dictionaries ArgumentDictionaryArray) returns ByteArray
 	var buf = ByteArray.create()
-	buf.reserve(layoutDescriptorBytesFor(elementLogicalSizes.count() as ElementIndex))
+	buf.reserve(layoutDescriptorBytesFor(dictionaries.count() as ElementIndex))
 
-	for logicalSize in elementLogicalSizes 'eachTypeParam'
+	for dictionary in dictionaries 'eachTypeParam'
 		appendLittleEndianScalar(buf, value: d.size as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
 		appendLittleEndianScalar(buf, value: d.alignment as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
 		appendLittleEndianScalar(buf, value: d.elementSize as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
@@ -721,17 +740,23 @@ module function encodeLayoutDescriptor(d LayoutDescriptor, elementLogicalSizes B
 			appendLittleEndianScalar(buf, value: 0, byteCount: LAYOUT_FIELD_BYTES)
 		end 'zeroSlots'
 
-		appendLittleEndianScalar(buf, value: logicalSize as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
+		appendLittleEndianScalar(buf, value: dictionary.logicalSize as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
 
 		for _ in 0 upto LAYOUT_ZERO_SLOTS_TAIL 'tailZeroSlots'
 			appendLittleEndianScalar(buf, value: 0, byteCount: LAYOUT_FIELD_BYTES)
 		end 'tailZeroSlots'
+
+		appendLittleEndianScalar(buf, value: dictionary.elementStride as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
 	end 'eachTypeParam'
+
+	if (buf.count() as ByteOffset) != layoutDescriptorBytesFor(dictionaries.count() as ElementIndex) 'blockSizeDrift'
+		panic("encodeLayoutDescriptor: {dictionaries.count()} blocks encoded to {buf.count()} bytes where `LAYOUT_DESCRIPTOR_BYTE_SIZE` says {layoutDescriptorBytesFor(dictionaries.count() as ElementIndex)} — a word was added or removed without moving `LAYOUT_OFFSET_ELEMENT_STRIDE`")
+	end 'blockSizeDrift'
 
 	return buf
 end 'encodeLayoutDescriptor'
 
-// ⭐⭐ **A DESCRIPTOR IS ONE 72-BYTE BLOCK PER TYPE PARAMETER, AND BLOCK 0 IS THE WHOLE OF A
+// ⭐⭐ **A DESCRIPTOR IS ONE BLOCK PER TYPE PARAMETER, AND BLOCK 0 IS THE WHOLE OF A
 // SINGLE-PARAMETER INSTANCE'S.** The three function-pointer slots — `copyFunc@32`,
 // `destroyFunc@40` and `retainFunc@64` — describe ONE type argument, so a `Map with (Key, Value)` needs two
 // of each: its
@@ -753,8 +778,8 @@ end 'encodeLayoutDescriptor'
 // ONE-parameter instance has one block at offset 0.
 //
 // The header fields (size, alignment, elementSize) are the INSTANCE's and are the same in every
-// block, and `elementLogicalSize@56` is parameter `i`'s own, so block `i` is a complete dictionary
-// for parameter `i` and a reader never has to hold two pointers.
+// block, and `elementLogicalSize@56` and `elementStride@72` are parameter `i`'s own, so block `i` is a
+// complete dictionary for parameter `i` and a reader never has to hold two pointers.
 function layoutDescriptorBytesFor(typeParamCount ElementIndex) returns ByteOffset
 	return LAYOUT_DESCRIPTOR_BYTE_SIZE * (typeParamCount as ByteOffset)
 end 'layoutDescriptorBytesFor'
