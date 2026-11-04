@@ -880,17 +880,24 @@ func @__mm_decref {
     x64.jcc equal, lower
   sharedcount:
     x64.movRegImm rdx, 18446744073709551615
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.lock xadd [rax], rdx <- rdx
-    x64.movRegImm rax, 2305843009213693952
-    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rsi, rax, 8
+    x64.lock xadd [rsi], rdx <- rdx
+    x64.movRegImm rsi, 2305843009213693952
+    x64.subRegReg rdx, rdx, rsi
   stepped:
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, release
   lower:
     x64.popReg rbp
     x64.ret
+  free:
+    x64.popReg rbp
+    x64.tailJmp __mm_free
   release:
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, free
+  destroy:
     x64.popReg rbp
     x64.tailJmp __mm_release
 }
@@ -899,20 +906,18 @@ func @__mm_release {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 48
-    x64.leaRegRegImm32 rax, rcx, -16
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegRegImm32 rax, rbx, -16
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, destroy
-  free:
-    x64.epilogue 48
+    x64.movRegReg rcx, rbx
+    x64.callReg rax
+    x64.movRegReg rcx, rbx
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.tailJmp __mm_free
-  destroy:
-    x64.storeSlotReg slot0, rcx
-    x64.callReg rax
-    x64.loadRegSlot rcx, slot0
-    x64.jmp free
 }
 ```
 ```TargetIr:x64-linux
@@ -1023,17 +1028,24 @@ func @__mm_decref {
     x64.jcc equal, lower
   sharedcount:
     x64.movRegImm rdx, 18446744073709551615
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.lock xadd [rax], rdx <- rdx
-    x64.movRegImm rax, 2305843009213693952
-    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rsi, rax, 8
+    x64.lock xadd [rsi], rdx <- rdx
+    x64.movRegImm rsi, 2305843009213693952
+    x64.subRegReg rdx, rdx, rsi
   stepped:
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, release
   lower:
     x64.popReg rbp
     x64.ret
+  free:
+    x64.popReg rbp
+    x64.tailJmp __mm_free
   release:
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, free
+  destroy:
     x64.popReg rbp
     x64.tailJmp __mm_release
 }
@@ -1042,20 +1054,18 @@ func @__mm_release {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 48
-    x64.leaRegRegImm32 rax, rcx, -16
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegRegImm32 rax, rbx, -16
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, destroy
-  free:
-    x64.epilogue 48
+    x64.movRegReg rcx, rbx
+    x64.callReg rax
+    x64.movRegReg rcx, rbx
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.tailJmp __mm_free
-  destroy:
-    x64.storeSlotReg slot0, rcx
-    x64.callReg rax
-    x64.loadRegSlot rcx, slot0
-    x64.jmp free
 }
 ```
 ```TargetIr:arm64-macos
@@ -1162,18 +1172,24 @@ func @__mm_decref {
     arm64.b.eq lower
   sharedcount:
     arm64.movImm x2, 18446744073709551615
-    arm64.add x1, x1, 8
-    arm64.arm64AtomicRmw.add x1, [x1], x2
-    arm64.movImm x2, 2305843009213693952
-    arm64.sub x1, x1, x2
-    arm64.movRegReg x2, x1
+    arm64.add x3, x1, 8
+    arm64.arm64AtomicRmw.add x2, [x3], x2
+    arm64.movImm x3, 2305843009213693952
+    arm64.sub x2, x2, x3
   stepped:
     arm64.cmp x2, 0
     arm64.b.eq release
   lower:
     arm64.epilogue 16
     arm64.ret
+  free:
+    arm64.epilogue 16
+    arm64.tailBranch __mm_free
   release:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq free
+  destroy:
     arm64.epilogue 16
     arm64.tailBranch __mm_release
 }
@@ -1181,18 +1197,16 @@ func @__mm_decref {
 func @__mm_release {
   entry:
     arm64.prologue 32
-    arm64.sub x1, x0, 16
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.cmp x1, 0
-    arm64.b.ne destroy
-  free:
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.sub x0, x19, 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.blr x1
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.tailBranch __mm_free
-  destroy:
-    arm64.storeSlotReg slot0, x0
-    arm64.blr x1
-    arm64.loadRegSlot x0, slot0
-    arm64.b free
 }
 ```
 ```TargetIr:arm64-linux
@@ -1302,18 +1316,24 @@ func @__mm_decref {
     arm64.b.eq lower
   sharedcount:
     arm64.movImm x2, 18446744073709551615
-    arm64.add x1, x1, 8
-    arm64.arm64AtomicRmw.add x1, [x1], x2
-    arm64.movImm x2, 2305843009213693952
-    arm64.sub x1, x1, x2
-    arm64.movRegReg x2, x1
+    arm64.add x3, x1, 8
+    arm64.arm64AtomicRmw.add x2, [x3], x2
+    arm64.movImm x3, 2305843009213693952
+    arm64.sub x2, x2, x3
   stepped:
     arm64.cmp x2, 0
     arm64.b.eq release
   lower:
     arm64.epilogue 16
     arm64.ret
+  free:
+    arm64.epilogue 16
+    arm64.tailBranch __mm_free
   release:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq free
+  destroy:
     arm64.epilogue 16
     arm64.tailBranch __mm_release
 }
@@ -1321,17 +1341,15 @@ func @__mm_decref {
 func @__mm_release {
   entry:
     arm64.prologue 32
-    arm64.sub x1, x0, 16
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.cmp x1, 0
-    arm64.b.ne destroy
-  free:
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.sub x0, x19, 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.blr x1
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.tailBranch __mm_free
-  destroy:
-    arm64.storeSlotReg slot0, x0
-    arm64.blr x1
-    arm64.loadRegSlot x0, slot0
-    arm64.b free
 }
 ```

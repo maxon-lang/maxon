@@ -275,7 +275,12 @@ a walk with a builder stays a builder:
 The slab object layer's remaining entries are builders in `installSlabRuntime`: `__slab_collect_remote`,
 `__slab_rounded_size`, `__slab_refill`, `__slab_alloc`, `__slab_alloc_tracked`, `__slab_alloc_raw`, `__slab_span_destroy`,
 `__slab_free_to_full`, `__slab_free_to_raw`, `__slab_scavenge`, `__slab_free_to_span`, `__slab_free`,
-`__slab_free_tracked`, and the eight census wrappers that take `__slab_lock` around a tier census walk. The refill, the
+`__slab_free_tracked`, and the eight census wrappers that take `__slab_lock` around a tier census walk. Each
+allocation and free door is a leaf that serves a hit and tail-jumps to its full body, the door's name with a
+`_slow` suffix (`__slab_alloc_slow`, `__slab_free_tracked_slow`, and so on for the raw, scaffold and
+`--poison-freed` box doors). In a build without `--debugstream`, `__mm_alloc` and `__mm_free` carry the tracked
+pair's leaves and bail to `__mm_alloc_slow` and `__mm_free_slow`. `__slab_past_end` and
+`__slab_evict_unowned` are the aborts the pop reaches by tail jump. The refill, the
 allocation doors, the scavenger, the free and the census wrappers take `TargetFacilities.machineModel(target)`: on
 wasm32-wasi (`singleMachine`) the "which processor am I" walk is a constant, elsewhere a TLS read. The
 allocator reads no usage bit; whether a second thread exists is a run-time word in the state head

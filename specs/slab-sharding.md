@@ -379,10 +379,11 @@ end 'main'
 
 <!-- test: slab-sharding.the-traffic-counters-are-exact-across-green-threads -->
 **THE COUNTERS, READ THROUGH THE SHARDED ALLOCATOR.** Every traffic column an emitted program keeps is
-stepped inside the slab's doors, and `__mm_alloc`/`__mm_free` reach their slot through
-`__slab_alloc_tracked`/`__slab_free_tracked`. The allocation door carries the class lookup, the processor read, the shard row, the state region and the pop in ONE body
-— and a SHARDED build's copy of that body is a different emission from the single-threaded one (it
-carries the ownership gate, the remote drain and the lock arm). This drives two waves of green-thread
+stepped inside the slab's doors, and `__mm_alloc`/`__mm_free` carry the tracked doors' hit path inline in a
+build without `--debugstream` and otherwise reach `__slab_alloc_tracked`/`__slab_free_tracked`. A door's hit
+path carries the class lookup, the processor read, the shard row, the state region and the pop in ONE leaf,
+and a SHARDED build's copy is a different emission from the single-threaded one (it carries the ownership
+gate and the remote push; the lock arm and the remote drain stay in the `_slow` body). This drives two waves of green-thread
 allocations through it and asks the two tracked columns the only questions that are EXACT: the LIVE
 count comes back to the number it started at, and two identical waves credit the CUMULATIVE column by
 the identical amount.

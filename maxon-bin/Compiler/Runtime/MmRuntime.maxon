@@ -243,11 +243,11 @@ end 'emitRouteOnRefcountWord'
 // and summed by a reader. A `.data` word would be one shared counter every thread steps, and every heap
 // program's rendered Target IR shows the `data {` table it would sit in.
 //
-// ⭐⭐ **TWO LAYERS, NESTED: EVERY BOX IS ALSO A SLAB REQUEST.** The RAW trio counts every request at the
-// slab doors, boxes included; the TRACKED trio counts boxes at the tracked doors. The public raw readers
-// answer raw − tracked (`buildMmCounterAccessors`), so the layers they report are disjoint.
-// `__mm_alloc_bytes` records the payload rounded up to `BoxSlotAlignment`, so the raw reader also subtracts
-// the box prefix per box to keep its answer the header-free volume.
+// ⭐⭐ **TWO LAYERS, DISJOINT BY DOOR.** The RAW trio counts the requests of the counted slab doors; the
+// TRACKED trio counts boxes at the tracked doors, and a box credits no raw column. The public raw readers
+// answer the raw columns alone (`buildMmCounterAccessors`). `__mm_alloc_bytes` records the payload rounded
+// up to `BoxSlotAlignment`, the request less the box prefix, so the process-wide byte total adds the
+// prefix back per box (`processWideFigure`).
 
 export let MmIncrefName = b"__mm_incref"
 export let MmRetainName = b"__mm_retain"
@@ -260,6 +260,8 @@ export let MmOwnName = b"__mm_own"
 // SLOTS address other records.** `__mm_own`'s blit is sound only for a box of scalars; see `buildMmOwnDeep`.
 export let MmOwnDeepName = b"__mm_own_deep"
 export let MmAllocName = b"__mm_alloc"
+let MmAllocSlowName = b"__mm_alloc_slow"
+let MmFreeSlowName = b"__mm_free_slow"
 
 // `(size, destructor)`; a `--debugstream` build passes a trace tag as a third argument.
 export let MmAllocBaseArgCount = 2 as ParamCount
@@ -272,9 +274,9 @@ export let MmLeakCheckName = b"__mm_leak_check"
 // siblings.** Each walks one figure over every row, PER LAYER, because only the raw live count can say
 // whether a header-free BUFFER leaked.
 //
-// ⛔ **FOUR OF THE SIX ARE DIFFERENCES, SO A BRACKET CANNOT BE TAKEN OVER THEM.** A live figure is a total
-// less its frees, and a raw figure is the raw column less the tracked one — two columns a box steps at two
-// different instants — so a reading taken while another thread allocates can stand below an earlier one.
+// ⛔ **TWO OF THE SIX ARE DIFFERENCES, SO A BRACKET CANNOT BE TAKEN OVER THEM.** A live figure is a total
+// less its frees — two columns stepped at two different instants — so a reading taken while another
+// thread allocates can stand below an earlier one.
 // The process-wide totals below are the figures a delta can be taken over while other threads run.
 //
 // ⭐ **THEY WEAR THE `__mm_` PREFIX ON PURPOSE, WHICH IS WHAT DECLARES THE HEAP DEPENDENCY.**
@@ -317,16 +319,14 @@ export let MmCounterThreadAllocsName = b"__mm_counter_thread_allocs"
 export let MmCounterThreadFreesName = b"__mm_counter_thread_frees"
 export let MmCounterThreadAllocBytesName = b"__mm_counter_thread_alloc_bytes"
 
-// ⭐⭐⭐ **THE THREE PROCESS-WIDE TOTALS — the per-thread three asked of the whole process.** Each is ONE
-// raw column summed over every row, with no subtraction anywhere: the raw columns count every slab request,
-// boxes included, so each already covers both layers. Every word summed only rises, and a later reading
-// loads each row after an earlier one did, so it is never below the earlier one whatever other threads are
-// doing — the difference of two cannot go negative.
+// ⭐⭐⭐ **THE THREE PROCESS-WIDE TOTALS — the per-thread three asked of the whole process.** Each is a raw
+// column and its tracked counterpart summed over every row (`processWideFigure`), with no subtraction
+// anywhere: the layers are disjoint, so their sum covers every slab request. Every word summed only rises,
+// and a later reading loads each row after an earlier one did, so it is never below the earlier one
+// whatever other threads are doing — the difference of two cannot go negative.
 //
-// ⚠ **THE BYTE TOTAL COUNTS A BOX's HEADER WITH ITS PAYLOAD**, exactly as the per-thread byte column does.
-// The header-free volume (`mmAllocBytes + mmRawAllocBytes`) is not a total that only rises: a box credits its
-// whole request to the raw layer first and then subtracts the header back out at its tracked step, so a
-// reading between the two stands above one taken after.
+// ⚠ **THE BYTE TOTAL COUNTS A BOX's HEADER WITH ITS PAYLOAD**, exactly as the per-thread byte column does:
+// the tracked byte column holds the payload alone, and each box adds its header back.
 export let MmCounterProcessAllocsName = b"__mm_counter_process_allocs"
 export let MmCounterProcessFreesName = b"__mm_counter_process_frees"
 export let MmCounterProcessAllocBytesName = b"__mm_counter_process_alloc_bytes"
@@ -529,7 +529,7 @@ let RuntimeCallPrefix = b"__mm_"
 // ⭐ **IS THIS CALLEE A HEAP-RUNTIME ENTRY POINT?** The `__mm_`-only test that decides whether the
 // program carries the ALLOCATOR + the leak check. It is DELIBERATELY narrower than
 // `isCompilerInternalCallee` (below): a call to any `__mm_*` entry point implies the whole heap
-// runtime (`__mm_alloc` calls `__slab_alloc_tracked`, `__mm_decref` reaches `__mm_free` through `__mm_release`, the leak check reads
+// runtime (`__mm_alloc` reaches `__slab_alloc_tracked`, `__mm_decref` reaches `__mm_free`, the leak check reads
 // the counter the others maintain), while a `__print_string`/`__str_eq` call implies NEITHER — a
 // print-only program must not drag in the heap floor or the leak gate.
 //
@@ -776,10 +776,10 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage, target Ta
 	// (`Compiler.compileToCodeResult`); this file builds the box layer over it.
 	let model = machineModel(target)
 
-	buildMmAlloc(module)
+	buildMmAlloc(module, model: model)
 	buildCountedDecref(module, name: MmDecrefName, releaseCallee: MmReleaseName, shape: DecrefRecordShape.box)
 	buildMmRelease(module)
-	buildMmFree(module)
+	buildMmFree(module, model: model)
 	buildMmLeakCheck(module, usage: usage)
 	buildMmCounterAccessors(module, model: model)
 
@@ -1107,6 +1107,16 @@ export function emitRuntimeCall(module StdModule, block IrBlock, callee ByteArra
 	module.appendOp(block, op: StdOp.call(v, callee: callee, args: args))
 	return v
 end 'emitRuntimeCall'
+
+export function emitCallAndReturn(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
+	let answer = emitRuntimeCall(module, block: block, callee: callee.clone(), args: args, ids: ids)
+	module.setTerminator(block, op: StdOp.ret(answer))
+end 'emitCallAndReturn'
+
+export function emitCallAndReturnVoid(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: callee.clone(), args: args))
+	module.setTerminator(block, op: StdOp.retVoid)
+end 'emitCallAndReturnVoid'
 
 // `<op> operand` into a fresh value. `operandType` is the SOURCE's type, never the result's — the
 // distinction `StdUnaryOpcode`'s header makes in full, and the reason it is a required argument here
@@ -1713,8 +1723,57 @@ end 'closeCopyRunSplit'
 // slack between the rounded total and the end of the slot is the allocator's business, exactly as the slack
 // inside a size class is.
 //
-// ⚠ **A TRACED BUILD AND A NORMAL ONE SHARE ONE BODY SHAPE**, differing only in the tag argument below.
-function buildMmAlloc(module StdModule)
+// ⚠ **A TRACED BUILD AND A NORMAL ONE SHARE ONE BODY SHAPE**, differing only in the tag argument below
+// (`buildMmAllocBody`). A normal build also puts `buildMmAllocFast` ahead of it as `__mm_alloc`, serving the
+// slab's hit path inline, and the body becomes `__mm_alloc_slow`.
+function buildMmAlloc(module StdModule, model MachineModel)
+	if module.debugStream 'traced'
+		buildMmAllocBody(module, name: MmAllocName)
+
+		return
+	end 'traced'
+
+	buildMmAllocFast(module, model: model)
+	buildMmAllocBody(module, name: MmAllocSlowName)
+end 'buildMmAlloc'
+
+function emitBoxTotal(module StdModule, block IrBlock, size ValueId, ids ValueMinter) returns ValueId
+	let roundUpConst = emitConst(module, block: block, value: boxPrefixBytes(module.debugStream) + BoxSlotAlignment - 1, ids: ids)
+	let alignMaskConst = emitConst(module, block: block, value: -BoxSlotAlignment, ids: ids)
+	let unrounded = emitBin(module, block: block, a: size, b: roundUpConst, opcode: StdBinOpcode.add, ids: ids)
+
+	return emitBin(module, block: block, a: unrounded, b: alignMaskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitBoxTotal'
+
+function buildMmAllocFast(module StdModule, model MachineModel)
+	var func = IrFunction.createFromStd(MmAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var bail = module.addBlock(func, label: b"slow", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: 2)
+	let size = 0
+	let destructor = 1
+
+	let total = emitBoxTotal(module, block: entry, size: size, ids: ids)
+	let slot = ids.mint()
+	var served = emitSlabFastAlloc(module, func: func, cur: entry, size: total, zeroed: true, counting: SlabCounting.tracked, model: model, bail: bail, slotId: slot, ids: ids)
+
+	emitStoreField(module, block: served, record: slot, offset: HeaderDestructorOffset, value: destructor)
+	let payloadOffset = emitConst(module, block: served, value: HeaderBytes, ids: ids)
+	let payload = emitBin(module, block: served, a: slot, b: payloadOffset, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(served, op: StdOp.ret(payload))
+
+	// `__mm_alloc_slow` rounds its size again, so it is handed `total` less the prefix: `emitBoxTotal` of
+	// that is `total`, and the slow body allocates and credits the size the leaf computed.
+	let slowSize = emitBin(module, block: bail, a: total, b: emitConst(module, block: bail, value: boxPrefixBytes(false), ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	emitCallAndReturn(module, block: bail, callee: MmAllocSlowName, args: twoArgs(slowSize, second: destructor), ids: ids)
+
+	module.functions.push(func)
+end 'buildMmAllocFast'
+
+function buildMmAllocBody(module StdModule, name ByteArray)
 	// ⚠ **THE ARITY IS THE FLAG'S, AND THAT IS WHY EVERY CALL SITE GOES THROUGH `emitMmAllocCall`.** A
 	// `--debugstream` build takes a THIRD argument — the allocation's tag index — because a tag cannot be
 	// recovered from a pointer later and this is the only moment it is known. A normal build takes two, so
@@ -1722,7 +1781,7 @@ function buildMmAlloc(module StdModule)
 	let debugStream = module.debugStream
 	let paramCount = 3 if debugStream else 2
 	let paramTypes = threeI64Params() if debugStream else twoI64Params()
-	var func = IrFunction.createFromStd(MmAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes)
 	var ids = ValueMinter.create(paramCount)
 
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1733,10 +1792,7 @@ function buildMmAlloc(module StdModule)
 
 	let headerConst = ids.mint()
 	module.appendOp(block, op: StdOp.const(headerConst, value: boxPrefixBytes(debugStream), valueType: StdType.i64))
-	let roundUpConst = emitConst(module, block: block, value: boxPrefixBytes(debugStream) + BoxSlotAlignment - 1, ids: ids)
-	let alignMaskConst = emitConst(module, block: block, value: -BoxSlotAlignment, ids: ids)
-	let unrounded = emitBin(module, block: block, a: size, b: roundUpConst, opcode: StdBinOpcode.add, ids: ids)
-	let total = emitBin(module, block: block, a: unrounded, b: alignMaskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let total = emitBoxTotal(module, block: block, size: size, ids: ids)
 	let allocation = emitSlabAlloc(module, block: block, bytes: total, kind: SlabBufferKind.managedBox, ids: ids)
 
 	// The DebugStream prefix word, when this build has one: `(alloc_id << 16) | tag_index`, stamped once
@@ -1796,7 +1852,7 @@ function buildMmAlloc(module StdModule)
 	module.setTerminator(out, op: StdOp.ret(payload))
 
 	module.functions.push(func)
-end 'buildMmAlloc'
+end 'buildMmAllocBody'
 
 // ⭐ **THE `__mm_alloc` CALL EMISSION FOR EVERY BOX BUILT AS ALREADY-LOWERED `StdOp`s — a String record, an
 // array record, its element buffer, a list node, a user struct — so `__mm_alloc(size, destructor[, tag])`
@@ -2669,10 +2725,11 @@ export enum DecrefRecordShape
 end 'DecrefRecordShape'
 
 // `__mm_decref(ptr)` and `__managed_decref(record)` — one fewer owner. The refcount
-// read-modify-write is the shared `emitRefcountCheckToLastOwner`; the last owner is handed to
-// `releaseCallee` (`__mm_release`, which runs the header's `destructor@0` and frees the box, or
-// `__managed_release`), the half that carries the stack guard. This body has no guard, and its call
-// to `releaseCallee` is a tail call.
+// read-modify-write is the shared `emitRefcountCheckToLastOwner`; the last owner is handed on by a tail
+// call to the half that carries the stack guard. For a buffer record that is `releaseCallee`
+// (`__managed_release`). For a box it is `__mm_release`, which runs the header's `destructor@0` and frees
+// the box, when the header holds a destructor, and `__mm_free` directly when it does not. This body has no
+// guard.
 export function buildCountedDecref(module StdModule, name ByteArray, releaseCallee ByteArray, shape DecrefRecordShape)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -2688,11 +2745,29 @@ export function buildCountedDecref(module StdModule, name ByteArray, releaseCall
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: countable, lower: lower, record: record, lastOwner: release, ids: ids)
 
-	module.appendOp(release, op: StdOp.call(ids.mint(), callee: releaseCallee, args: argsOf(record)))
-	module.setTerminator(release, op: StdOp.retVoid)
+	emitLastOwnerRelease(module, func: func, release: release, record: record, releaseCallee: releaseCallee, shape: shape, ids: ids)
 
 	module.functions.push(func)
 end 'buildCountedDecref'
+
+function emitLastOwnerRelease(module StdModule, func IrFunction, release IrBlock, record ValueId, releaseCallee ByteArray, shape DecrefRecordShape, ids ValueMinter)
+	match shape 'shape'
+		box then emitBoxLastOwner(module, func: func, release: release, record: record, releaseCallee: releaseCallee, ids: ids)
+		bufferRecord then emitCallAndReturnVoid(module, block: release, callee: releaseCallee, args: argsOf(record), ids: ids)
+	end 'shape'
+end 'emitLastOwnerRelease'
+
+function emitBoxLastOwner(module StdModule, func IrFunction, release IrBlock, record ValueId, releaseCallee ByteArray, ids ValueMinter)
+	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.cold)
+	var free = module.addBlock(func, label: b"free", heat: BlockHeat.normal)
+
+	let header = emitHeaderBase(module, block: release, ptr: record, ids: ids)
+	let destructor = emitLoadField(module, block: release, record: header, offset: HeaderDestructorOffset, ids: ids)
+	emitBranchOnCompare(module, block: release, value: destructor, pred: StdCmpPred.ne, against: TrivialDestructor, whenTrue: destroy, whenFalse: free, ids: ids)
+
+	emitCallAndReturnVoid(module, block: destroy, callee: releaseCallee, args: argsOf(record), ids: ids)
+	emitCallAndReturnVoid(module, block: free, callee: MmFreeName, args: argsOf(record), ids: ids)
+end 'emitBoxLastOwner'
 
 function countableEntryOf(module StdModule, func IrFunction, entry IrBlock, record ValueId, shape DecrefRecordShape, ids ValueMinter) returns IrBlock
 	return match shape 'shape'
@@ -2724,9 +2799,9 @@ function emitImmortalRecordExit(module StdModule, func IrFunction, entry IrBlock
 	return countable
 end 'emitImmortalRecordExit'
 
-// The last owner's half of `__mm_decref`, a function of its own so it carries a stack guard: a
-// destructor releases what its record holds, which recurses as deep as the data does, and an
-// unguarded chain may not recurse (E5004).
+// The last owner's half of `__mm_decref` for a box whose header holds a destructor, a function of its own
+// so it carries a stack guard: a destructor releases what its record holds, which recurses as deep as the
+// data does, and an unguarded chain may not recurse (E5004).
 //
 // A header destructor releases what the record holds and never frees the record: `__mm_free`
 // follows it here, so a destructor that freed would be a double free.
@@ -2735,21 +2810,14 @@ function buildMmRelease(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.cold)
-	var free = module.addBlock(func, label: b"free", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0
 
 	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
 	let destructor = emitLoadField(module, block: entry, record: header, offset: HeaderDestructorOffset, ids: ids)
-	emitBranchOnCompare(module, block: entry, value: destructor, pred: StdCmpPred.ne, against: TrivialDestructor, whenTrue: destroy, whenFalse: free, ids: ids)
-
-	module.appendOp(destroy, op: StdOp.callIndirect(ids.mint(), calleeReg: destructor, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(ptr)))
-	module.setTerminator(destroy, op: StdOp.branch(free.id))
-
-	module.appendOp(free, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(ptr)))
-	module.setTerminator(free, op: StdOp.retVoid)
+	module.appendOp(entry, op: StdOp.callIndirect(ids.mint(), calleeReg: destructor, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(ptr)))
+	emitCallAndReturnVoid(module, block: entry, callee: MmFreeName, args: argsOf(ptr), ids: ids)
 
 	module.functions.push(func)
 end 'buildMmRelease'
@@ -2804,8 +2872,43 @@ end 'emitBoxAllocationBase'
 // ⚠ The header's `destructor@0` is not run here: `__mm_decref` runs it before calling this, and a
 // cascade that frees its own box has already released its fields, so running it here would release
 // them twice.
-function buildMmFree(module StdModule)
-	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+//
+// ⭐⭐ **IN AN UNTRACED BUILD `__mm_free` IS A LEAF AND THE BODY ABOVE IS `__mm_free_slow`.**
+// `buildMmFreeFast` serves the slab's hit path inline, the `--poison-freed` fill included, and tail-jumps
+// to the body for anything else. The stack guard and the thread pin sit on the body: runtime code holding a
+// lock can reach the free, where a guard must not park (`GtGuardSite.runtimeEntry`), and the leaf calls
+// nothing. A traced build has the body alone, under the name `__mm_free`.
+function buildMmFree(module StdModule, model MachineModel)
+	if not slabBoxDoorsAreInlined(module) 'generic'
+		buildMmFreeBody(module, name: MmFreeName)
+
+		return
+	end 'generic'
+
+	buildMmFreeFast(module, model: model)
+	buildMmFreeBody(module, name: MmFreeSlowName)
+end 'buildMmFree'
+
+function buildMmFreeFast(module StdModule, model MachineModel)
+	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var bail = module.addBlock(func, label: b"slow", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0
+
+	let slot = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
+	emitSlabFastFree(module, func: func, cur: entry, ptr: slot, door: slabFreeDoorOf(module, kind: SlabBufferKind.managedBox), model: model, bail: bail, ids: ids)
+
+	emitCallAndReturnVoid(module, block: bail, callee: MmFreeSlowName, args: argsOf(ptr), ids: ids)
+
+	module.functions.push(func)
+end 'buildMmFreeFast'
+
+function buildMmFreeBody(module StdModule, name ByteArray)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var start = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2834,39 +2937,38 @@ function buildMmFree(module StdModule)
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildMmFree'
+end 'buildMmFreeBody'
 
 // ⭐⭐ **THE SIX PER-LAYER READERS, THE THREE PER-THREAD COLUMNS AND THE THREE PROCESS-WIDE TOTALS.** They
 // are FUNCTIONS rather than an inline walk at the call site because that is the door every argumentless
 // intrinsic in this compiler takes (`Parser.emitZeroArgIntrinsic`), and because the row walk stays one
 // spelling (`SlabRuntime.emitSlabTrafficRead`).
 //
-// ⭐⭐ **THE RAW READERS ANSWER raw − tracked.** Every box is also a slab request, so the slab's raw
-// columns count boxes too; subtracting the tracked column at READ time keeps the two reported layers
-// disjoint. The byte column subtracts the box prefix per box as well, because the tracked byte column
-// records the rounded payload and the raw column the whole slot request.
+// ⭐⭐ **THE RAW READERS ANSWER THEIR COLUMNS ALONE.** A box is credited to the tracked columns at the
+// tracked doors and to no raw column, so the two reported layers are disjoint by door and no reader
+// subtracts. The tracked byte column records the rounded payload.
 //
-// ⛔⛔ **EVERY ONE OF THEM IS ONE WALK, AND A LAYER'S SUBTRACTION HAPPENS INSIDE IT.** Each figure is a
-// `SlabTrafficFigure` — an expression over a SINGLE row — so a difference reads its two columns together.
-// Two walks would sample them thousands of loads apart, and the allocation that lands between them is
-// credited to the subtrahend alone.
+// ⛔⛔ **EVERY ONE OF THEM IS ONE WALK, AND A FIGURE'S COLUMNS ARE READ TOGETHER INSIDE IT.** Each figure is
+// a `SlabTrafficFigure` — an expression over a SINGLE row — so a difference or a sum reads its two columns
+// together. Two walks would sample them thousands of loads apart, and the allocation that lands between
+// them is credited to one of the columns alone.
 //
 // All twelve are installed in every heap program and `DeadFunctionElimination` drops the ones nothing calls.
 function buildMmCounterAccessors(module StdModule, model MachineModel)
 	buildFigureReader(module, name: MmCounterAllocTotalName, figure: SlabTrafficFigure.column(SlabTrafficColumn.trackedTotal))
 	buildFigureReader(module, name: MmCounterAllocLiveName, figure: SlabTrafficFigure.live(SlabTrafficLayer.tracked))
 	buildFigureReader(module, name: MmCounterAllocBytesName, figure: SlabTrafficFigure.column(SlabTrafficColumn.trackedBytes))
-	buildFigureReader(module, name: MmCounterRawAllocTotalName, figure: SlabTrafficFigure.disjoint(SlabTrafficColumn.rawTotal, tracked: SlabTrafficColumn.trackedTotal, prefixPerBox: 0))
-	buildFigureReader(module, name: MmCounterRawAllocLiveName, figure: SlabTrafficFigure.disjointLive)
-	buildFigureReader(module, name: MmCounterRawAllocBytesName, figure: SlabTrafficFigure.disjoint(SlabTrafficColumn.rawBytes, tracked: SlabTrafficColumn.trackedBytes, prefixPerBox: boxPrefixBytes(module.debugStream)))
+	buildFigureReader(module, name: MmCounterRawAllocTotalName, figure: SlabTrafficFigure.column(SlabTrafficColumn.rawTotal))
+	buildFigureReader(module, name: MmCounterRawAllocLiveName, figure: SlabTrafficFigure.live(SlabTrafficLayer.raw))
+	buildFigureReader(module, name: MmCounterRawAllocBytesName, figure: SlabTrafficFigure.column(SlabTrafficColumn.rawBytes))
 
 	buildThreadCounterReader(module, name: MmCounterThreadAllocsName, model: model, count: CombinedCount.allocs)
 	buildThreadCounterReader(module, name: MmCounterThreadFreesName, model: model, count: CombinedCount.frees)
 	buildThreadCounterReader(module, name: MmCounterThreadAllocBytesName, model: model, count: CombinedCount.bytes)
 
-	buildFigureReader(module, name: MmCounterProcessAllocsName, figure: processWideFigure(CombinedCount.allocs))
-	buildFigureReader(module, name: MmCounterProcessFreesName, figure: processWideFigure(CombinedCount.frees))
-	buildFigureReader(module, name: MmCounterProcessAllocBytesName, figure: processWideFigure(CombinedCount.bytes))
+	buildFigureReader(module, name: MmCounterProcessAllocsName, figure: processWideFigure(module, count: CombinedCount.allocs))
+	buildFigureReader(module, name: MmCounterProcessFreesName, figure: processWideFigure(module, count: CombinedCount.frees))
+	buildFigureReader(module, name: MmCounterProcessAllocBytesName, figure: processWideFigure(module, count: CombinedCount.bytes))
 
 	buildAllocTallyReader(module, name: MmCounterAllocTotalByTagName, column: DsAllocTallyCountOffset)
 	buildAllocTallyReader(module, name: MmCounterAllocBytesByTagName, column: DsAllocTallyBytesOffset)
@@ -3000,19 +3102,20 @@ function buildThreadCounterReader(module StdModule, name ByteArray, model Machin
 	module.setTerminator(haveThread, op: StdOp.ret(field))
 
 	let processWide = ids.mint()
-	var walked = emitSlabTrafficRead(module, func: func, cur: oneThreadOfExecution, figure: processWideFigure(count), answerId: processWide, ids: ids, label: b"sum")
+	var walked = emitSlabTrafficRead(module, func: func, cur: oneThreadOfExecution, figure: processWideFigure(module, count: count), answerId: processWide, ids: ids, label: b"sum")
 	module.setTerminator(walked, op: StdOp.ret(processWide))
 
 	module.functions.push(func)
 end 'buildThreadCounterReader'
 
-// The process's figure for one count. The raw columns count every request, boxes included, so each is the
-// raw column alone — which is exactly what the per-thread columns record, one green thread at a time.
-function processWideFigure(count CombinedCount) returns SlabTrafficFigure
+// The process's figure for one count: the raw and tracked columns added, which is exactly what the
+// per-thread columns record, one green thread at a time. The byte figure adds the box prefix back per
+// box, because the tracked byte column holds the request less it.
+function processWideFigure(module StdModule, count CombinedCount) returns SlabTrafficFigure
 	return match count 'which'
-		allocs gives SlabTrafficFigure.column(SlabTrafficColumn.rawTotal)
-		frees gives SlabTrafficFigure.column(SlabTrafficColumn.rawFrees)
-		bytes gives SlabTrafficFigure.column(SlabTrafficColumn.rawBytes)
+		allocs gives SlabTrafficFigure.sum(SlabTrafficColumn.rawTotal, second: SlabTrafficColumn.trackedTotal, prefixPerBox: 0)
+		frees gives SlabTrafficFigure.sum(SlabTrafficColumn.rawFrees, second: SlabTrafficColumn.trackedFrees, prefixPerBox: 0)
+		bytes gives SlabTrafficFigure.sum(SlabTrafficColumn.rawBytes, second: SlabTrafficColumn.trackedBytes, prefixPerBox: boxPrefixBytes(module.debugStream))
 	end 'which'
 end 'processWideFigure'
 

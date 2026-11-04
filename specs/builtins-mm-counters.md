@@ -47,23 +47,21 @@ are one question.
 | `__Builtins.processFreeTotal()` | cumulative frees by every thread, both layers |
 | `__Builtins.processAllocBytes()` | cumulative bytes requested from the slab by every thread, a box's header included |
 
-Each is ONE raw column summed over the allocator's rows, with no subtraction anywhere: the raw columns count
-every slab request, boxes included, so each already covers both layers. Every word summed only rises, so a
+Each is a raw column and its tracked counterpart summed over the allocator's rows, with no subtraction
+anywhere: the layers are disjoint, so their sum covers every slab request. Every word summed only rises, so a
 reading never stands below an earlier one whatever other threads are doing — which is the one property a
 bracket needs, because the difference of two readings is then never negative.
 
-⚠ **THE SIX ABOVE CANNOT GIVE A BRACKET THAT PROPERTY.** Four of them are differences — a live figure is a
-total less its frees, and a raw figure is the raw column less the tracked one, which a box steps at two
-different instants. Read while another thread allocates, a sum or difference of them can stand below an
+⚠ **THE SIX ABOVE CANNOT GIVE A BRACKET THAT PROPERTY.** Two of them are differences — a live figure is a
+total less its frees, two columns stepped at two different instants. Read while another thread allocates, a sum or difference of them can stand below an
 earlier reading. A bracket over a main-thread phase that derives its frees as *(total − live)* from the six
 can close below its opening reading while other threads allocate, and `PhaseProbe.elapsedInto` then dies
 with `Range check failed: value outside typealias 'AllocCount'`.
 
 ⚠ **THE BYTE TOTAL COUNTS A BOX's HEADER WITH ITS PAYLOAD**, which is what `threadAllocBytes()` counts too,
 so the process-wide and per-thread byte figures measure one quantity. The header-free volume
-(`mmAllocBytes() + mmRawAllocBytes()`) is not a total that only rises: a box credits its whole request to the
-raw layer first and subtracts its header back out at the tracked step, so a reading between the two stands
-above one taken after.
+(`mmAllocBytes() + mmRawAllocBytes()`) is that figure less the box header per box: the tracked byte column
+holds each box's request less its header.
 
 All twelve take no arguments and answer an `int`. `maxon-bin/Compiler/PhaseProbe.maxon` reads the three
 process-wide totals for a main-thread phase and the three per-thread columns inside a pool worker — so
@@ -106,18 +104,15 @@ reading the contract.** `bytes-scale-with-the-request` below is written on the s
 reason, and it is not a stylistic choice: WHERE a payload lands is the allocator's private business,
 and only the sum is stable across a change to it.
 
-### The layers NEST in the allocator and are made DISJOINT at the reader
+### The layers are DISJOINT by door
 
-A caller asking about both layers SUMS them, and `__mm_alloc` reaches the slab through
-`__slab_alloc_tracked`, which credits the RAW columns as well as the TRACKED ones, so the slab's RAW
-columns count every box as well as every scratch buffer. The public raw readers therefore answer
-**raw − tracked**: `mmRawAllocTotal()` is the slab's request count less the box count, `mmRawAllocLive()`
-the same for live, and `mmRawAllocBytes()` the slab's byte volume less the tracked payload volume less the
-box header per box (`MmRuntime.buildMmCounterAccessors`). Counted naively — a reader that forgot the
-subtraction — every box would be reported in both columns and the sum would read exactly double, which is
-what `the-two-layers-are-disjoint` below catches. Its opposite,
-`raw-total-is-never-below-tracked-total-after-boxes`, catches the two ways the subtraction goes too far:
-answering NEGATIVE, and standing on a raw column nothing credits.
+A caller asking about both layers SUMS them. The counted doors credit the RAW columns only and the tracked
+doors (`__slab_alloc_tracked`, `__slab_free_tracked`, which `__mm_alloc` reaches) credit the TRACKED columns
+only, so a box moves no raw column and the public raw readers answer their columns as they stand:
+`mmRawAllocTotal()` is the counted doors' request count, `mmRawAllocLive()` their live count, and
+`mmRawAllocBytes()` their byte volume. The tracked byte column holds each box's request less its header. A
+door that credited both layers would report every box in both columns and the sum would read exactly double,
+which `the-two-layers-are-disjoint` below catches.
 
 ⭐ **The layer split is a runtime's private business; the SUM is the contract**, and while one thread runs it
 is exactly what the process-wide totals answer (`process-totals-are-the-six-summed-while-one-thread-runs`).
@@ -125,14 +120,13 @@ is exactly what the process-wide totals answer (`process-totals-are-the-six-summ
 ### `mmRawAllocLive` and `mmRawAllocTotal` are TWO numbers
 
 They read two columns. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive` rises with
-each slab request and FALLS at the slab's free doors (`__slab_free`, `__slab_free_tracked`). A `__slab_alloc` caller that frees its region moves the
+each slab request and FALLS at the slab's free door `__slab_free`. A `__slab_alloc` caller that frees its region moves the
 live column back: the subprocess runner's and the read probe's per-call scratch, and a service's
 mailbox, freed by whichever of its handle and its service lets go last (its message ring goes back with
 it through the uncounted door and moves neither column). A green-thread record is never credited at
 all: it comes from the scheduler's record arena, not the slab, and is recycled through the scheduler's
 own free lists (`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`). `__mm_alloc`'s boxes move
-both raw columns and both tracked columns by the same amount, so the reader's subtraction leaves the
-public raw figures untouched by them. `raw-live-falls-below-raw-total` below pins the two-number shape.
+the tracked columns only, so the public raw figures are untouched by them. `raw-live-falls-below-raw-total` below pins the two-number shape.
 
 ### They are maintained in EVERY heap program, per row
 
@@ -308,13 +302,12 @@ end 'main'
 <!-- test: builtins-mm-counters.the-two-layers-are-disjoint -->
 <!-- tier: stdlib -->
 **THE CASE THAT PROVES THE TWO LAYERS' SUM DOES NOT DOUBLE-COUNT.** the compiler's `__mm_alloc` obtains its
-box from `__slab_alloc_tracked`, which credits BOTH columns, so the obvious reader answers the raw column
-as it stands and the sum reads exactly double. Here a program allocates 512 array elements and nothing else:
-the TRACKED column moves and the RAW column does not, because the raw reader subtracts the boxes the
-slab counted on `__mm_alloc`'s behalf.
+box through the tracked doors, which credit ONLY the tracked columns, so the raw column does not move: a
+door that also credited the raw columns would make the sum read exactly double. Here a program allocates 512
+array elements and nothing else: the TRACKED column moves and the RAW column does not.
 
-✅ **It is the only case in this file that catches it.** With the raw readers answering the raw
-column without the tracked subtraction, this case goes RED (exit **2** against the pinned 7 — the
+✅ **It is the only case in this file that catches it.** With the tracked doors also crediting the raw
+columns, this case goes RED (exit **2** against the pinned 7 — the
 `tracked > 0` half holds and `raw == 0` does not) while `total-is-monotonic-and-moves`,
 `live-returns-to-its-floor`, `bytes-scale-with-the-request` and `total-is-never-below-live` stay
 GREEN. A suite without this case would report a compiler whose layer sum reads exactly double as
@@ -499,8 +492,8 @@ end 'main'
 HEADER.** The prefix is 32 bytes, not 16, so an empty array's 48-byte record is an 80-byte request (64 untraced).
 Eight of them, created and dropped in a window, move the tracked total by 8, its live
 count by 0 and its byte column by 384 (80 less the 32-byte prefix, the same payload figure as untraced), the per-thread columns by
-8, 8 and 640 (the whole request), and every raw column by 0, which only holds if the raw readers subtract
-the same traced prefix from the whole request that the credit did.
+8, 8 and 640 (the whole request), and every raw column by 0, which only holds if the tracked doors credit no
+raw column.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -585,50 +578,6 @@ mm_free ArrayRecord #7
 mm_alloc ArrayRecord #8 size=48
 mm_decref ArrayRecord #8 rc=0
 mm_free ArrayRecord #8
-```
-
-<!-- test: builtins-mm-counters.raw-total-is-never-below-tracked-total-after-boxes -->
-<!-- tier: stdlib -->
-**THE NESTING INVARIANT, READ ACROSS A WINDOW, WHERE A RAW COLUMN NOTHING CREDITS WOULD SHOW.** Every box
-is one slab request, so `raw + boxes` is the slab's OWN request count whatever the reader's subtraction
-does, and a window that boxes N times must move it by at least N. The two halves that carry the case fail
-for opposite reasons and neither is implied by the other: a reader that subtracted the tracked column from
-a raw one nothing credited answers NEGATIVE, and an allocator that stopped crediting the raw column on the
-box path moves the sum by 0 while the box column moves by N. ⚠ A bare `raw + boxes >= boxes` would be
-neither — for the signed `int` these intrinsics answer it is `raw >= 0` rewritten, so the two halves could
-not disagree.
-
-⭐ The window is what makes it a claim about THIS program rather than about the process: the readings
-bracket the loop, so the pre-`main` scaffolding of a lane that has a scheduler cancels out of both deltas.
-`the-two-layers-are-disjoint` pins the other edge, `raw == 0`, for a whole program.
-```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
-function main() returns ExitCode
-	let rawBefore = __Builtins.mmRawAllocTotal()
-	let boxesBefore = __Builtins.mmAllocTotal()
-	var buf = ByteArray.create()
-	for _ in 0 upto 256 'push'
-		buf.push(3)
-	end 'push'
-	let raw = __Builtins.mmRawAllocTotal()
-	let boxes = __Builtins.mmAllocTotal()
-	var score = 0 as Count
-	if boxes > boxesBefore 'theWindowBoxedSomething'
-		score = score + 1
-	end 'theWindowBoxedSomething'
-	if raw >= 0 'theSubtractionStaysPositive'
-		score = score + 2
-	end 'theSubtractionStaysPositive'
-	if raw + boxes - rawBefore - boxesBefore >= boxes - boxesBefore 'everyBoxIsASlabRequest'
-		score = score + 4
-	end 'everyBoxIsASlabRequest'
-	return score as ExitCode
-end 'main'
-```
-```exitcode
-7
 ```
 
 <!-- test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding -->
@@ -894,8 +843,7 @@ instrumentation family there.
 
 It is also the one case that names all six in one program, and so the only place `mmRawAllocBytes`
 is exercised outside the scheduler cases. The three raw readers must answer exactly 0: every slab request
-this program makes is a box, and the reader subtracts the tracked column — the byte column less the box
-header per box — from the raw one.
+this program makes is a box, and a box credits no raw column.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte

@@ -162,7 +162,7 @@ export enum RuntimeAbort
 	// statement about the arena and a misleading one about the fault.
 	slabClassServesNoObject = 85
 
-	// ⭐⭐ `__slab_alloc`'s pop (`emitSlabAllocClass`): **INV-1 IS BROKEN.** The span reported free slots
+	// ⭐⭐ `__slab_past_end`, the allocator pop's trap (`emitSlabPop`): **INV-1 IS BROKEN.** The span reported free slots
 	// (`free_count > 0`), its free list was empty, and its virgin bump region was exhausted — so the three
 	// sources of a free slot disagree about how many there are. The alternative to trapping is handing out
 	// a slot PAST the span's last one, which writes into whatever the arena placed in the next chunk and
@@ -459,6 +459,13 @@ export enum RuntimeAbort
 	// sleep on a runtime lock creates (`osEventCreate` answered 0), so the machine has nothing to
 	// sleep on.
 	runtimeLockSemaphoreRefused = 126
+
+	// `__slab_evict_unowned`: a leaf's pop took a span's last slot and found the span's owner word to be a
+	// state (`partial`, `freed` or `full`) rather than the raw row or a P, so there is no mcache entry to
+	// clear. The leaf's probe admitted the span only as owned by the thread popping, so only an owner word
+	// that changed under the pop, or a corrupted span, reaches it. Continuing would read a P's id through
+	// that state word as though it were a P pointer.
+	slabEvictOfUnownedSpan = 127
 
 	// `__mbox_unknown_tag`, the default arm of `<T>.__loop`'s dispatch: a received request's tag
 	// names no variant of the request union. The switch covers every variant, so only a corrupted

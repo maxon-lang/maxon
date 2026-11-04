@@ -9,8 +9,8 @@ category: system
 
 ## Documentation
 
-The slab is the layer every heap byte in a Maxon program comes from: `__mm_alloc` asks it, through
-`__slab_alloc_tracked`, for each managed box WHOLE (header + payload, one request), and the
+The slab is the layer every heap byte in a Maxon program comes from: `__mm_alloc` asks it, through the tracked door
+`__slab_alloc_tracked` (its hit path is inline in `__mm_alloc` in a build without `--debugstream`), for each managed box WHOLE (header + payload, one request), and the
 green-thread scheduler, the subprocess scratch buffers and the DebugStream ring call `__slab_alloc`
 directly. It is a **size-classed span
 allocator** over the chunk arena (`Compiler/Runtime/SlabRuntime.maxon` on
@@ -75,7 +75,8 @@ What the cases here can and cannot see of four of the layer's behaviours, and sa
   accounts of its own free slots disagree, which no legal sequence of allocations can produce. It is
   verified by SABOTAGE — breaking the bump cursor's bound turns these cases red — not by a case.
 - **The span FREE list's recycling IS OBSERVABLE.** `__mm_free` keeps no buckets of its own, so for
-  every box in the language every free reaches `__slab_free_tracked` and every reuse comes off a span's
+  every box in the language every free reaches the tracked free path (`__slab_free_tracked`, inline in `__mm_free` in a build without
+  `--debugstream`) and every reuse comes off a span's
   free list or its bump region.
 - **The size a request is ROUNDED to.** `__slab_rounded_size` reports it, and nothing in the compiler asks.
   The rounding is still what these cases depend on — a class too small corrupts a neighbour —
@@ -198,8 +199,9 @@ end 'main'
 ```
 
 <!-- test: slab-allocator.an-os-direct-buffer-round-trips -->
-**THE OS-DIRECT ROUND TRIP.** A 300 KB buffer is far past `SlabMaxSmallSize`, so `__slab_alloc_tracked` gives
-it its own mapping; when the box dies `__mm_free` hands it to `__slab_free_tracked`, whose reverse-map lookup
+**THE OS-DIRECT ROUND TRIP.** A 300 KB buffer is far past `SlabMaxSmallSize`, so `__mm_alloc` bails to
+`__mm_alloc_slow`, whose `__slab_alloc_tracked` gives it its own mapping; when the box dies `__mm_free`
+bails to `__mm_free_slow`, which hands it to `__slab_free_tracked`, whose reverse-map lookup
 MISSES — and a miss IS the OS-direct sentinel — so the mapping goes back to the OS whole, its length
 read out of the 16-byte prefix the allocation stamped.
 

@@ -2095,12 +2095,8 @@ function arm64EmitMemFill(code ByteArray, fillByte FullRangeInt)
 
 	// UNSIGNED (`lo`/`hs`) throughout — a byte count is a length, and a signed compare would send a
 	// >= 2^63 count down the wrong arm rather than simply being unreachable.
-	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillWordBytes)
-	let toByteLoop = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
-	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillPairBytes)
-	let toOneWord = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillTwoPairBytes)
-	let toOnePair = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
+	let toBelowTwoPairs = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
 	let toTwoPairs = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 
@@ -2119,13 +2115,17 @@ function arm64EmitMemFill(code ByteArray, fillByte FullRangeInt)
 	arm64EmitFillOverlappingSpan(code, spanBytes: Arm64MemFillTwoPairBytes)
 	let doneFromTwoPairs = arm64EmitLocalInsn(code, insn: Arm64OpB)
 
-	arm64PatchBranch19(code, codeOffset: toOnePair, targetOffset: codeHere(code))
+	arm64PatchBranch19(code, codeOffset: toBelowTwoPairs, targetOffset: codeHere(code))
+	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillPairBytes)
+	let toBelowPair = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 	arm64EmitFillOverlappingSpan(code, spanBytes: Arm64MemFillPairBytes)
 	let doneFromOnePair = arm64EmitLocalInsn(code, insn: Arm64OpB)
 
 	// 8..15: one word from each end. A PAIR does not fit twice here, so this is the one band the STP run
 	// above cannot serve — hence the STR/STUR spelling, and hence `Arm64MemFillWordBytes` existing at all.
-	arm64PatchBranch19(code, codeOffset: toOneWord, targetOffset: codeHere(code))
+	arm64PatchBranch19(code, codeOffset: toBelowPair, targetOffset: codeHere(code))
+	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillWordBytes)
+	let toByteLoop = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: Arm64SlotScale)
 	arm64EmitUnscaledMem(code, opcode: Arm64OpSturX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillEnd, byteOffset: -(Arm64MemFillWordBytes as Imm32))
 	let doneFromOneWord = arm64EmitLocalInsn(code, insn: Arm64OpB)

@@ -1693,12 +1693,8 @@ function encodeX64MemFill(code ByteArray, fillByte FullRangeInt)
 	// The band dispatch. UNSIGNED throughout — a byte count is a length, never negative, and a signed
 	// compare would send a >= 2^63 count (which no allocation can produce) down the wrong arm rather than
 	// simply being unreachable.
-	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillQwordBytes)
-	let toByteLoop = encodeJccPlaceholder(code, cond: X64CondCode.below)
-	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillTwoQwordBytes)
-	let toOneQword = encodeJccPlaceholder(code, cond: X64CondCode.below)
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillFourQwordBytes)
-	let toTwoQwords = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	let toBelowFourQwords = encodeJccPlaceholder(code, cond: X64CondCode.below)
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillLoopStride)
 	let toFourQwords = encodeJccPlaceholder(code, cond: X64CondCode.below)
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillRepThreshold)
@@ -1727,11 +1723,15 @@ function encodeX64MemFill(code ByteArray, fillByte FullRangeInt)
 	encodeMemFillOverlappingSpan(code, spanBytes: MemFillFourQwordBytes)
 	let doneFromFour = encodeJmpPlaceholder(code)
 
-	patchLocalForwardBranch(code, dispOffset: toTwoQwords, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: toBelowFourQwords, what: PatchSite.x64MemFillRel32)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillTwoQwordBytes)
+	let toBelowTwoQwords = encodeJccPlaceholder(code, cond: X64CondCode.below)
 	encodeMemFillOverlappingSpan(code, spanBytes: MemFillTwoQwordBytes)
 	let doneFromTwo = encodeJmpPlaceholder(code)
 
-	patchLocalForwardBranch(code, dispOffset: toOneQword, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: toBelowTwoQwords, what: PatchSite.x64MemFillRel32)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillQwordBytes)
+	let toByteLoop = encodeJccPlaceholder(code, cond: X64CondCode.below)
 	encodeMemFillOverlappingSpan(code, spanBytes: MemFillQwordBytes)
 	let doneFromOne = encodeJmpPlaceholder(code)
 

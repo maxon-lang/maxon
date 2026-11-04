@@ -15,13 +15,24 @@ The heap is part of the runtime the compiler emits into every program that alloc
   memory it reserves from the operating system.
 - `SlabRuntime.maxon` carves them into spans of one size class each. A request above 32 KiB bypasses the size
   classes and goes to the operating system directly, and is returned to it whole when freed.
-- `MmRuntime.maxon` is the box layer on top: `__mm_alloc` asks `__slab_alloc_tracked` for the box, header and
-  payload together, and `__mm_free` hands the same pointer back to `__slab_free_tracked`. The tracked doors
-  credit the box layer's traffic columns in the shard walk that credits the allocator's own.
+- `MmRuntime.maxon` is the box layer on top: `__mm_alloc` takes the box, header and payload together, from
+  the tracked allocation path, and `__mm_free` hands the same pointer back to the tracked free path. Those
+  paths credit the box layer's own traffic columns, separate from the columns the counted doors credit.
 
 Each processor (P) of the scheduler owns a cache of spans and is their only writer, so allocating from it
 takes no lock. A slot freed by another P is pushed onto the owning P's queue with a compare-and-swap, and the
 owner reclaims it on its slow path. A thread holding no P allocates from a shared row under a global lock.
+
+Every allocation and free door (`__slab_alloc`, `__slab_alloc_tracked`, `__slab_alloc_scaffold`,
+`__slab_alloc_raw`, `__slab_free`, `__slab_free_tracked`, `__slab_free_scaffold` and `__slab_free_box`) is a
+leaf that finishes a request the cache can serve and tail-jumps to its full body, the door's name with a
+`_slow` suffix, for any other: a refill, the lock, a full span's relist, an oversize request. The leaf changes
+no allocator state and credits no traffic row before the hit is certain, so the full body that takes over
+credits a request once. A free into a span that is `partial` or owned by another P pushes onto the span's
+remote list inside the leaf. In a build without `--debugstream`, `__mm_alloc` and `__mm_free` carry the
+tracked doors' leaves and bail to `__mm_alloc_slow` and `__mm_free_slow`, so the tracked doors exist there as
+their full bodies under their own names. The pop's two corruption checks abort through `__slab_past_end`
+(exit 86) and `__slab_evict_unowned` (exit 127), which the leaf reaches by tail jump.
 
 A span serves slots from two places: its free list of slots that were allocated and freed, and a bump region
 of slots never handed out. The bump region is never threaded into the free list up front, because writing a
@@ -42,14 +53,14 @@ path:
 - **Every byte of a span's bump region is zero** (INV-3), because the region is carved from chunks and is
   never written until a slot is handed out. A bump slot costs nothing to hand out.
 
-A recycled slot is re-zeroed as it is popped from the free list: `__slab_alloc` and `__slab_alloc_tracked` fill the
-whole slot with 0 (`memFill`). `__slab_alloc_raw` is built without that fill, for a caller that provably writes every byte
+A recycled slot is re-zeroed as it is popped from the free list: `__slab_alloc` and `__slab_alloc_tracked` (which
+`__mm_alloc` carries inline in a build without `--debugstream`) fill the whole slot with 0 (`memFill`). `__slab_alloc_raw` is built without that fill, for a caller that provably writes every byte
 before anything reads it and never keeps managed pointers in the region; it has no caller, so dead function
 elimination removes it from every program.
 
-`__mm_free` returns a box through `__slab_free_tracked`, which puts the slot back on its span as it is.
-A build made with `--poison-freed` returns a managed box through `__slab_free_box`, which fills the
-freed slot with `0x3F` (`SlabFreedBoxPoisonByte`) before the slot goes back to its span. The fill starts at the
+`__mm_free` returns a box through `__slab_free_tracked` (which `__mm_free` carries inline in a build without
+`--debugstream`), which puts the slot back on its span as it is. A build made with `--poison-freed` returns a
+managed box through `__slab_free_box`, carried inline the same way, which fills the freed slot with `0x3F` (`SlabFreedBoxPoisonByte`) before the slot goes back to its span. The fill starts at the
 payload and runs to the end of the slot. A box is filled when it is freed into a span whose slot extends past
 the box's header (and `--debugstream` prefix); an OS-direct mapping goes back whole. Every other buffer kind
 frees through `__slab_free` or `__slab_free_scaffold`. A filled integer reads as a conspicuous 63, and a filled pointer is a
