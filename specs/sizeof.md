@@ -468,7 +468,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'Count'
+error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'Count' — cast the argument with 'as Score'
 ```
 
 ### `sizeof` of each parameter of a two-parameter generic

@@ -90,7 +90,26 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:10: argument type mismatch for 'n': expected 'Narrow', got 'Wide'
+error E3005: <fragment>:11:10: argument type mismatch for 'n': expected 'Narrow', got 'Wide' — cast the argument with 'as Narrow'
+```
+
+<!-- test: error.a-signed-value-into-a-ranged-parameter-names-the-cast -->
+A value the compiler cannot prove inside the alias's range is refused with the cast that crosses it.
+```maxon
+typealias Score = int(0 to 100)
+
+function show(v Score) returns Score
+	return v
+end 'show'
+
+function main() returns ExitCode
+	var n = 5 as FullRangeInt
+	n = n - 10
+	return show(n) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:9: argument type mismatch for 'v': expected 'Score', got 'FullRangeInt' — cast the argument with 'as Score'
 ```
 
 <!-- test: error.narrow-into-wide-parameter -->
@@ -111,7 +130,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:10: argument type mismatch for 'w': expected 'Wide', got 'Narrow'
+error E3005: <fragment>:11:10: argument type mismatch for 'w': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
 ```
 
 <!-- test: error.an-aliased-index-into-array-get -->
@@ -132,7 +151,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:19: argument type mismatch for 'index': expected 'ElementIndex', got 'Offset'
+error E3005: <fragment>:10:19: argument type mismatch for 'index': expected 'ElementIndex', got 'Offset' — cast the argument with 'as ElementIndex'
 ```
 
 <!-- test: error.an-aliased-index-into-array-set -->
@@ -151,7 +170,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:11: argument type mismatch for 'index': expected 'ElementIndex', got 'Offset'
+error E3005: <fragment>:10:11: argument type mismatch for 'index': expected 'ElementIndex', got 'Offset' — cast the argument with 'as ElementIndex'
 ```
 
 <!-- test: error.an-aliased-length-into-array-resize -->
@@ -169,7 +188,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:9:7: argument type mismatch for 'newLength': expected 'ElementIndex', got 'Offset'
+error E3005: <fragment>:9:7: argument type mismatch for 'newLength': expected 'ElementIndex', got 'Offset' — cast the argument with 'as ElementIndex'
 ```
 
 <!-- test: error.array-count-into-another-alias -->
@@ -191,7 +210,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:10: argument type mismatch for 'n': expected 'Narrow', got 'Count'
+error E3005: <fragment>:12:10: argument type mismatch for 'n': expected 'Narrow', got 'Count' — cast the argument with 'as Narrow'
 ```
 
 <!-- test: error.array-count-cast-to-count-is-unneeded -->
@@ -309,7 +328,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:11: argument type mismatch for 'n': expected 'Count', got 'ElementIndex'
+error E3005: <fragment>:14:11: argument type mismatch for 'n': expected 'Count', got 'ElementIndex' — cast the argument with 'as Count'
 ```
 
 <!-- test: a-codepoint-count-compares-with-an-array-count -->
@@ -423,7 +442,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:10: argument type mismatch for 'b': expected 'BlockId', got 'VarId'
+error E3005: <fragment>:11:10: argument type mismatch for 'b': expected 'BlockId', got 'VarId' — cast the argument with 'as BlockId'
 ```
 
 <!-- test: error.a-supertype-does-not-narrow-to-its-subtype -->
@@ -443,7 +462,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:10: argument type mismatch for 'b': expected 'BlockId', got 'ElementIndex'
+error E3005: <fragment>:10:10: argument type mismatch for 'b': expected 'BlockId', got 'ElementIndex' — cast the argument with 'as BlockId'
 ```
 
 <!-- test: a-subtype-with-its-ancestor-is-the-subtype -->
@@ -748,7 +767,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:15: cannot assign a value of type 'VarId' to field 'block' of 'Holder', which holds 'BlockId'
+error E3005: <fragment>:10:15: cannot assign a value of type 'VarId' to field 'block' of 'Holder', which holds 'BlockId' — cast the value with 'as BlockId'
 ```
 <!-- test: an-implements-alias-widens-to-its-parent -->
 `typealias FooId = int(0 to 1000) implements ElementIndex` keeps its own range and is a subtype of
@@ -945,7 +964,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:20:10: argument type mismatch for 'l': expected 'Left', got 'Base'
+error E3005: <fragment>:20:10: argument type mismatch for 'l': expected 'Left', got 'Base' — cast the argument with 'as Left'
 ```
 
 <!-- test: error.a-ternary-over-unrelated-aliases -->
@@ -1077,7 +1096,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:10: argument type mismatch for 'b': expected 'BlockId', got 'VarId'
+error E3005: <fragment>:12:10: argument type mismatch for 'b': expected 'BlockId', got 'VarId' — cast the argument with 'as BlockId'
 ```
 
 <!-- test: error.a-bound-mixed-expression-is-the-common-ancestor -->
@@ -1101,7 +1120,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:13:10: argument type mismatch for 'b': expected 'BlockId', got 'ElementIndex'
+error E3005: <fragment>:13:10: argument type mismatch for 'b': expected 'BlockId', got 'ElementIndex' — cast the argument with 'as BlockId'
 ```
 
 <!-- test: error.an-alias-of-an-alias-is-refused -->
@@ -1138,7 +1157,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:19: argument type mismatch for 'index': expected 'ElementIndex', got 'Position'
+error E3005: <fragment>:10:19: argument type mismatch for 'index': expected 'ElementIndex', got 'Position' — cast the argument with 'as ElementIndex'
 ```
 
 <!-- test: a-narrow-value-converts-at-a-wide-return -->
@@ -1241,7 +1260,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:8:2: cannot assign a value of type 'Narrow' to variable 'w', which holds 'Wide'
+error E3005: <fragment>:8:2: cannot assign a value of type 'Narrow' to variable 'w', which holds 'Wide' — cast the value with 'as Wide'
 ```
 
 <!-- test: error.otherwise-across-aliases -->
@@ -1311,7 +1330,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:9:15: cannot assign a value of type 'Narrow' to field 'w' of 'Holder', which holds 'Wide'
+error E3005: <fragment>:9:15: cannot assign a value of type 'Narrow' to field 'w' of 'Holder', which holds 'Wide' — cast the value with 'as Wide'
 ```
 
 <!-- test: error.struct-field-assignment-across-aliases -->
@@ -1336,7 +1355,25 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:16:4: cannot assign a value of type 'Narrow' to field 'w' of 'Holder', which holds 'Wide'
+error E3005: <fragment>:16:4: cannot assign a value of type 'Narrow' to field 'w' of 'Holder', which holds 'Wide' — cast the value with 'as Wide'
+```
+
+<!-- test: error.global-store-across-aliases -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+
+var shared = 9 as Wide
+
+function main() returns ExitCode
+	let n = 5 as Narrow
+	shared = n
+	print("{shared}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: cannot assign a value of type 'Narrow' to global 'shared', which holds 'Wide' — cast the value with 'as Wide'
 ```
 
 <!-- test: error.union-payload-across-aliases -->
@@ -1359,7 +1396,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:21: type mismatch: 'expected Wide, got Narrow'
+error E3005: <fragment>:12:21: type mismatch: 'expected Wide, got Narrow' — cast the value with 'as Wide'
 ```
 
 <!-- test: error.type-argument-fed-a-different-alias -->
@@ -1387,7 +1424,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:17:17: argument type mismatch for 'v': expected 'Integer', got 'Narrow'
+error E3005: <fragment>:17:17: argument type mismatch for 'v': expected 'Integer', got 'Narrow' — cast the argument with 'as Integer'
 ```
 
 <!-- test: error.a-user-struct-named-parsedint-is-still-a-record -->
@@ -1441,7 +1478,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:10: argument type mismatch for 's': expected 'Small', got 'AlsoSmall'
+error E3005: <fragment>:11:10: argument type mismatch for 's': expected 'Small', got 'AlsoSmall' — cast the argument with 'as Small'
 ```
 
 <!-- test: main-returns-an-alias-typed-value -->
@@ -1601,7 +1638,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:13:10: argument type mismatch for 't': expected 'Tally', got 'Small'
+error E3005: <fragment>:13:10: argument type mismatch for 't': expected 'Tally', got 'Small' — cast the argument with 'as Tally'
 ```
 
 <!-- test: error.arithmetic-result-carries-the-alias -->
@@ -1623,7 +1660,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:10: argument type mismatch for 'y': expected 'Year', got 'Age'
+error E3005: <fragment>:12:10: argument type mismatch for 'y': expected 'Year', got 'Age' — cast the argument with 'as Year'
 ```
 
 <!-- test: error.an-adopted-literal-operand-carries-the-alias -->
@@ -1645,7 +1682,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:10: argument type mismatch for 'y': expected 'Year', got 'Age'
+error E3005: <fragment>:11:10: argument type mismatch for 'y': expected 'Year', got 'Age' — cast the argument with 'as Year'
 ```
 
 <!-- test: error.a-shift-adopts-only-its-left-operand -->
@@ -1668,7 +1705,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:10: argument type mismatch for 'w': expected 'Wide', got 'Narrow'
+error E3005: <fragment>:12:10: argument type mismatch for 'w': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
 ```
 
 <!-- test: error.negation-carries-a-signed-alias -->
@@ -1689,7 +1726,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:10: argument type mismatch for 'w': expected 'Wide', got 'Delta'
+error E3005: <fragment>:11:10: argument type mismatch for 'w': expected 'Wide', got 'Delta' — cast the argument with 'as Wide'
 ```
 
 <!-- test: error.a-loop-variable-carries-the-element-alias -->
@@ -1715,7 +1752,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:15:15: argument type mismatch for 'w': expected 'Wide', got 'Narrow'
+error E3005: <fragment>:15:15: argument type mismatch for 'w': expected 'Wide', got 'Narrow' — cast the argument with 'as Wide'
 ```
 
 ### What still flows — the legal side of every door above
@@ -1894,7 +1931,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:2: cannot assign a value of type 'Age' to variable 'acc', which holds 'Year'
+error E3005: <fragment>:12:2: cannot assign a value of type 'Age' to variable 'acc', which holds 'Year' — cast the value with 'as Year'
 ```
 
 <!-- test: a-payload-free-enum-decays-into-an-alias-slot -->
@@ -2001,7 +2038,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:10: argument type mismatch for 'x': expected 'beta.MyInt', got 'alpha.MyInt'
+error E3005: <fragment>:18:10: argument type mismatch for 'x': expected 'beta.MyInt', got 'alpha.MyInt' — cast the argument with 'as beta.MyInt'
 ```
 
 ### `as` — the one door, both ways, and what it costs

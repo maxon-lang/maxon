@@ -27315,6 +27315,29 @@ export type ProgramSignatures
 		return not self.inferredIntColumnBoundaryAdmits(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId)
 	end 'aggregatesConflict'
 
+	// Both sides must be integer-range types: only then is an `as` cast between them the author's fix, so
+	// only then does a refusal earn the cast hint.
+	export function crossesIntegerRange(expectedTag ValueTypeTag, expected ByteArray, gotTag ValueTypeTag, got ByteArray) returns bool
+		return self.wearsAnIntegerRange(expectedTag, identity: expected) and self.wearsAnIntegerRange(gotTag, identity: got)
+	end 'crossesIntegerRange'
+
+	// `isRangedAliasIdentity` is asked before the alias table: a bare name a struct and an alias both hold is
+	// the struct's identity, and a table lookup by that name would hand the struct the alias's hint.
+	function wearsAnIntegerRange(tag ValueTypeTag, identity ByteArray) returns bool
+		if tag == ValueTypeTag.exitCode 'theBuiltinExitCode'
+			return true
+		end 'theBuiltinExitCode'
+
+		if not self.isRangedAliasIdentity(identity) 'notARangedAlias'
+			return false
+		end 'notARangedAlias'
+
+		match self.settledDeclarations().typeAliases.declarationInAnyFile(identity) 'declaration'
+			declared(alias) then return maxonTypeTag(alias.underlying) == ValueTypeTag.integer
+			undeclared then return false
+		end 'declaration'
+	end 'wearsAnIntegerRange'
+
 	// The underlying primitive of a qualified alias (base-template OR per-instance) — TypeResolution's
 	// erasure door: both collapse to their `int`/`float` underlying before lowering, exactly as a plain
 	// ranged alias does; only the per-instance one ALSO carries nominal identity (kept in the value column).

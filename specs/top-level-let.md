@@ -1592,7 +1592,7 @@ typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
 error E3062: <fragment>:15:11: unused typealias: 'Unused'
-error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode' — cast the argument with 'as Small'
 ```
 
 <!-- test: error.a-parse-error-in-one-file-beside-an-undefined-call-in-another-reports-both -->
@@ -2741,7 +2741,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode' — cast the argument with 'as Small'
 ```
 
 <!-- test: error.an-exit-code-local-is-refused-where-a-ranged-alias-is-required -->
@@ -2758,7 +2758,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+error E3005: <fragment>:10:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode' — cast the argument with 'as Small'
 ```
 
 <!-- test: error.a-constant-derived-from-a-top-level-exit-code-constant-is-refused-where-a-ranged-alias-is-required -->
@@ -2778,7 +2778,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+error E3005: <fragment>:12:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode' — cast the argument with 'as Small'
 ```
 
 <!-- test: error.a-derived-exit-code-local-is-refused-where-a-ranged-alias-is-required -->
@@ -2796,7 +2796,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode'
+error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode' — cast the argument with 'as Small'
 ```
 
 <!-- test: a-top-level-exit-code-var-is-reassigned-as-an-exit-code -->

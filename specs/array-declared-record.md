@@ -1897,7 +1897,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:29:9: argument type mismatch for 'n': expected 'Small', got 'Count'
+error E3005: <fragment>:29:9: argument type mismatch for 'n': expected 'Small', got 'Count' — cast the argument with 'as Small'
 ```
 
 <!-- test: a-declared-roster-member-keyed-by-an-enum-is-served-from-the-declaration -->
@@ -1982,7 +1982,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:30:16: argument type mismatch for 'index': expected 'Slot', got 'Other'
+error E3005: <fragment>:30:16: argument type mismatch for 'index': expected 'Slot', got 'Other' — cast the argument with 'as Slot'
 ```
 
 <!-- test: error.a-declared-ranged-index-refuses-a-string -->

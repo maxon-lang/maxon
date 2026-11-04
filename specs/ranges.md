@@ -543,7 +543,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:3: argument type mismatch for 'v': expected 'Score', got 'Count'
+error E3005: <fragment>:10:3: argument type mismatch for 'v': expected 'Score', got 'Count' — cast the argument with 'as Score'
 ```
 
 <!-- test: error.a-loop-counter-is-immutable -->

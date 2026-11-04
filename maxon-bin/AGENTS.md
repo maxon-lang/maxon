@@ -499,12 +499,17 @@ runs. Fixing such a leak turns exit 101 into an access violation. Follow the fau
 
 ## Ranged aliases
 
-**Ranged aliases are prove-or-refuse.** A value lands in a ranged alias when the compiler proves it fits, and
-otherwise is a compile error; the unprovable gap is crossed only with `try (x as T) otherwise …`
-(`otherwise panic("why")` for "I know"), on the model of division's prove-or-try (E3057 bare, E3055 on a proven
-one). New work adds no runtime range panic. "Provable" is a normative spec rule over the parser's analysis,
-never an optimizer outcome. Friction is reduced by a stronger prover, and each prover gain surfaces as E3055 on a
-`try` it made unneeded.
+**A ranged alias is entered by its own type or by a cast, and checked at run time where it is not proven.**
+- A literal outside the range is E3005.
+- A value of another named integer type (another alias, `ExitCode`) is E3005, and the message names the crossing:
+  `as T`.
+- A value typed `T`, including arithmetic on `T` values (`a - b`, `xs.count() - 1`), a plain unnamed `int`, and a
+  value cast with `as T` all land in `T` with a range check. That check is elided where the compiler proves the value fits, and panics
+  ("Range check failed: value outside typealias 'T'") where it does not.
+
+"Proves" is a normative spec rule over the parser's analysis (`valueIsProvablyInRange`), never an optimizer
+outcome, so whether a check is emitted is a property of the program. A stronger prover removes checks. It never
+changes which programs compile.
 
 ## Error codes — ONE registry, and it is the enum itself
 

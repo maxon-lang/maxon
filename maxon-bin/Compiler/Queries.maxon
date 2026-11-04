@@ -3606,7 +3606,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// The SIGNATURE-checked builtins (the `__Managed*` family) report through the sentence used for
 		// an ordinary call argument, not the operand wording above, because their arguments ARE a
 		// signature check. Pinned by `builtin-type-checking`.
-		builtinArgumentType(paramName, expected, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: argTypeMismatchSentence(quotedParamLabel(paramName), expected: expected, got: got), line: line, column: column, filePath: path)
+		builtinArgumentType(paramName, expected, got, line, column, expectedNote, crossesRange) gives Diagnostic.create(ErrorCode.typeMismatch, message: argTypeMismatchSentence(quotedParamLabel(paramName), expected: expected, got: got, expectedNote: expectedNote, gotNote: "", crossesRange: crossesRange), line: line, column: column, filePath: path)
 		unsupported(feature, line, column) gives unsupportedFeatureDiagnostic(feature, line: line, column: column, path: path)
 		memberAccessOnNonStruct(feature, line, column, _) gives unsupportedFeatureDiagnostic(feature, line: line, column: column, path: path)
 
@@ -3688,8 +3688,8 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		witnessSelfArgNotTypeParam(what, typeParamName, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{what}' on type parameter '{typeParamName}' requires an argument of type '{typeParamName}' (the `Self` its constraint provides), not {got}", line: line, column: column, filePath: path)
 		structEqualsResultNotBool(structName, got, op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Operator '{op}' dispatches '{structName}.equals', which returns '{got}' — an equality operator requires the 'bool' result 'Equatable' declares", line: line, column: column, filePath: path)
 		nonBoolCondition(keyword, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{keyword}' requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
-		assignTypeMismatch(place, got, gotNote, expected, expectedNote, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot assign a value of type '{got}'{gotNote} to {place}, which holds '{expected}'{expectedNote}", line: line, column: column, filePath: path)
-		typeMismatchExpectedGot(expected, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: 'expected {expected}, got {got}'", line: line, column: column, filePath: path)
+		assignTypeMismatch(place, got, gotNote, expected, expectedNote, line, column, crossesRange) gives Diagnostic.create(ErrorCode.typeMismatch, message: assignMismatchSentence(place, got: got, gotNote: gotNote, expected: expected, expectedNote: expectedNote, crossesRange: crossesRange), line: line, column: column, filePath: path)
+		typeMismatchExpectedGot(expected, got, line, column, expectedNote, crossesRange) gives Diagnostic.create(ErrorCode.typeMismatch, message: expectedGotSentence(expected, got: got, expectedNote: expectedNote, crossesRange: crossesRange), line: line, column: column, filePath: path)
 
 		// `specs/tuple-assign.md`'s wording verbatim — it says "bindings" of what this compiler calls
 		// targets, and the spec is the language definition here.

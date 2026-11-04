@@ -4937,7 +4937,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:2: argument type mismatch for 'v': expected 'Score', got 'Count'
+error E3005: <fragment>:12:2: argument type mismatch for 'v': expected 'Score', got 'Count' — cast the argument with 'as Score'
 ```
 
 <!-- test: error.a-static-var-adopts-the-brand-of-its-first-branded-store -->

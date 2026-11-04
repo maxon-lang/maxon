@@ -518,7 +518,7 @@ export union SourceParseError implements Error
 	// a fact about where the compiler checks the call, not about what the author did wrong. `print` takes one
 	// parameter, that parameter is called `value` and it is declared `String` — every part of the ordinary
 	// sentence is available, so writing a private one would only make one rejection read two ways.
-	builtinArgumentType(paramName String, expected String, got String, line LineNumber, column ColumnNumber)
+	builtinArgumentType(paramName String, expected String, got String, line LineNumber, column ColumnNumber, expectedNote String, crossesRange bool)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
 
 	// ⭐⭐ **A TUPLE ELEMENT THE WHOLE-PROGRAM INDEX REFUSED — `unsupported`'s payload, under a case of
@@ -815,16 +815,16 @@ export union SourceParseError implements Error
 	// same anchor `assignToImmutable` uses, because it is the same statement failing for the
 	// other reason a binding can refuse a value. See `parseAssignment` for why this one check
 	// is what makes every merge phi's type honest.
-	assignTypeMismatch(place String, got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber)
+	assignTypeMismatch(place String, got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber, crossesRange bool)
 
 	// ⭐ **THE SENTENCE A DECLARED SLOT REACHED THROUGH AN ARGUMENT LIST REFUSES A VALUE IN** — a union
 	// case's payload slot (`Paint.tint(Shade.light)`). It names NEITHER a variable nor a parameter,
 	// and that is the canonical corpus's choice rather than a compiler one: `specs/union-cases.md` and
 	// `specs/enum-full.md` both pin `type mismatch: 'expected <declared>, got <arriving>'` for exactly
 	// this position. A payload slot has no parameter an author could rename and is not a place they
-	// assign to — what they must change is the ARGUMENT — so the sentence states the two types and
-	// nothing else. Renders as E3005; see `SlotMismatchVoice.payloadArgument`.
-	typeMismatchExpectedGot(expected String, got String, line LineNumber, column ColumnNumber)
+	// assign to — what they must change is the ARGUMENT — so the sentence states the two types and, when
+	// `crossesRange`, the cast hint. Renders as E3005; see `SlotMismatchVoice.payloadArgument`.
+	typeMismatchExpectedGot(expected String, got String, line LineNumber, column ColumnNumber, expectedNote String, crossesRange bool)
 
 	// ⭐ A statement-level TUPLE ASSIGNMENT whose target count does not match the tuple's element count
 	// (`(x) = makePair(…)`). Renders as E3005, positioned on the `(` — where the author decided how many
@@ -10315,7 +10315,7 @@ end 'InferredFieldType'
 // mismatch — pinned byte-for-byte by `specs/field-defaults.md`'s `error.inferred-head-mismatch`.
 function returnMismatchError(func IrFunction, got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber, origin ReceiverOrigin) returns SourceParseError
 	if isFieldDefaultHelperName(func.name) 'aFieldDefault'
-		return SourceParseError.typeMismatchExpectedGot("{expected}{expectedNote}", got: "{got}{gotNote}", line: line, column: column)
+		return SourceParseError.typeMismatchExpectedGot(expected, got: "{got}{gotNote}", line: line, column: column, expectedNote: expectedNote, crossesRange: false)
 	end 'aFieldDefault'
 
 	return SourceParseError.returnTypeMismatch(got, gotNote: gotNote, expected: expected, expectedNote: expectedNote, line: line, column: column, origin: origin)
@@ -15726,10 +15726,6 @@ function containerElementSiteAnchor(site ContainerElementSite) returns Token
 		literalElement(element) gives element
 	end 'site'
 end 'containerElementSiteAnchor'
-
-function arrayElementArgumentMismatch(expected String, got String, line LineNumber, column ColumnNumber) returns SourceParseError
-	return SourceParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: expected, got: got, line: line, column: column)
-end 'arrayElementArgumentMismatch'
 
 function containerElementSiteName(site ContainerElementSite) returns ByteArray
 	return match site 'site'
@@ -39023,7 +39019,7 @@ export type Parser
 		if self.signatures.aggregatesConflict(declaredAggregate, expectedTag: declaredTag, expectedNameId: typeNameIdOf(binding.varType), expectedBrand: declaredBrand, got: assignedAggregate, gotTag: valueTag, gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'aggregateReassignMismatch'
 			let declaredShown = self.brandedDisplayTypeName(declaredTag, nameId: typeNameIdOf(binding.varType), brand: declaredBrand)
 			let paired = self.pairedDisplays(value, declaredTag: declaredTag, declaredNameId: typeNameIdOf(binding.varType), declaredBrand: declaredBrand, declaredIdentity: declaredAggregate, declaredShown: declaredShown)
-			try self.refuseUnlessDeferred(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.variable, name: nameTok.value, owner: SlotOwner.unowned), got: paired.got, gotNote: paired.gotNote, expected: paired.declared, expectedNote: paired.declaredNote, line: nameTok.line, column: nameTok.column), value: value)
+			try self.refuseUnlessDeferred(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.variable, name: nameTok.value, owner: SlotOwner.unowned), got: paired.got, gotNote: paired.gotNote, expected: paired.declared, expectedNote: paired.declaredNote, line: nameTok.line, column: nameTok.column, crossesRange: self.signatures.crossesIntegerRange(declaredTag, expected: declaredAggregate, gotTag: valueTag, got: assignedAggregate)), value: value)
 
 			// The local takes the deferred value, so its later reads raise no E3142/E3102 behind the
 			// E3004 the deferral waits for.
@@ -40620,7 +40616,7 @@ export type Parser
 	function requireAssignable(nameTok Token, value ValueTypeTag, valueNameId TypeNameId, valueBrandId TypeNameId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner SlotOwner, voice SlotMismatchVoice) throws SourceParseError
 		match self.declaredSlotVerdict(value, gotNameId: valueNameId, declared: declared, declaredNameId: declaredNameId) 'declared'
 			ok then break
-			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.brandedDisplayTypeName(value, nameId: valueNameId, brand: self.internedName(valueBrandId)), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(declared, nameId: declaredNameId, fallback: typeTagName(declared)), expectedNote: "", declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.brandedDisplayTypeName(value, nameId: valueNameId, brand: self.internedName(valueBrandId)), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(declared, nameId: declaredNameId, fallback: typeTagName(declared)), expectedNote: "", declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column, crossesRange: false)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(self.brandedDisplayTypeName(value, nameId: valueNameId, brand: self.internedName(valueBrandId)), targetType: self.declaredSlotDisplayName(declared, nameId: declaredNameId, fallback: typeTagName(declared)), line: nameTok.line, column: nameTok.column)
 
 			// A FUNCTION VALUE into a NON-function place — the spec's specific E3005 ("cannot
@@ -40661,23 +40657,23 @@ export type Parser
 	// sentence. A ranged or float alias is named by `declaredSlotDisplayName` in every voice. A place whose
 	// declaration spelling was recorded (`placeSpelling`) prints that spelling in every voice
 	// (`declaredPlaceDisplay`).
-	function slotMismatchError(voice SlotMismatchVoice, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner SlotOwner, placeBrand ByteArray, placeSpelling ByteArray, got String, gotNote String, resolvedExpected String, expectedNote String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber) returns SourceParseError
+	function slotMismatchError(voice SlotMismatchVoice, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner SlotOwner, placeBrand ByteArray, placeSpelling ByteArray, got String, gotNote String, resolvedExpected String, expectedNote String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber, crossesRange bool) returns SourceParseError
 		let placeDisplay = self.declaredPlaceDisplay(placeSpelling, brand: placeBrand, tag: declared, nameId: declaredNameId)
-		let slotDisplay = "{placeDisplay}{expectedNote}"
 		let gotDisplay = "{got}{gotNote}"
+
 		return match voice 'v'
-			assignedPlace gives SourceParseError.assignTypeMismatch(assignedPlacePhrase(placeDoor, name: placeName, owner: placeOwner), got: got, gotNote: gotNote, expected: resolvedExpected if placeSpelling.isEmpty() else placeDisplay, expectedNote: expectedNote, line: line, column: column)
-			containerElementArgument gives arrayElementArgumentMismatch(slotDisplay, got: gotDisplay, line: line, column: column)
+			assignedPlace gives SourceParseError.assignTypeMismatch(assignedPlacePhrase(placeDoor, name: placeName, owner: placeOwner), got: got, gotNote: gotNote, expected: resolvedExpected if placeSpelling.isEmpty() else placeDisplay, expectedNote: expectedNote, line: line, column: column, crossesRange: crossesRange)
+			containerElementArgument gives SourceParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: placeDisplay, got: gotDisplay, line: line, column: column, expectedNote: expectedNote, crossesRange: crossesRange)
 
 			// The payload voice quotes no name at all (there is none to quote) and spells the EXPECTED side
 			// through `declaredSlotDisplayName`, the same probe the argument voice makes — which is what puts
 			// `enum-full.md`'s `expected Integer` (a ranged alias) and `union-cases.md`'s `expected Color` (an
 			// enum) under one rule instead of two.
-			payloadArgument gives SourceParseError.typeMismatchExpectedGot(slotDisplay, got: gotDisplay, line: line, column: column)
+			payloadArgument gives SourceParseError.typeMismatchExpectedGot(placeDisplay, got: gotDisplay, line: line, column: column, expectedNote: expectedNote, crossesRange: crossesRange)
 
 			// The argument sentence one voice up, quoting the slot's OWN name — which for a request union's
 			// payload is the message parameter the author declared. See `SlotMismatchVoice.messageArgument`.
-			messageArgument gives SourceParseError.builtinArgumentType(String.from(placeName), expected: slotDisplay, got: gotDisplay, line: line, column: column)
+			messageArgument gives SourceParseError.builtinArgumentType(String.from(placeName), expected: placeDisplay, got: gotDisplay, line: line, column: column, expectedNote: expectedNote, crossesRange: crossesRange)
 		end 'v'
 	end 'slotMismatchError'
 
@@ -69518,7 +69514,7 @@ export type Parser
 			// answers `got 'struct'` for the very struct the arm below answers `got 'Other'` for — one door,
 			// two sentences, sixty lines apart in `specs/arrays.md`. The sentence is `expected 'String', got
 			// 'Item'`.
-			let mismatch = self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: self.valueDisplayTypeName(value), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(wantTag, nameId: typeNameIdOf(storage), fallback: typeTagName(wantTag)), expectedNote: "", declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			let mismatch = self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: self.valueDisplayTypeName(value), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(wantTag, nameId: typeNameIdOf(storage), fallback: typeTagName(wantTag)), expectedNote: "", declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column, crossesRange: false)
 
 			try self.refuseUnlessDeferred(mismatch, value: value)
 			return
@@ -69602,7 +69598,7 @@ export type Parser
 		if self.signatures.aggregatesConflict(wantName, expectedTag: wantTag, expectedNameId: typeNameIdOf(storage), expectedBrand: placeBrand, got: gotName, gotTag: got, gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'nameMismatch'
 			let wantShown = self.brandedDisplayTypeName(wantTag, nameId: typeNameIdOf(storage), brand: placeBrand)
 			let paired = self.pairedDisplays(value, declaredTag: wantTag, declaredNameId: typeNameIdOf(storage), declaredBrand: placeBrand, declaredIdentity: wantName, declaredShown: wantShown)
-			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: paired.got, gotNote: paired.gotNote, resolvedExpected: paired.declared, expectedNote: paired.declaredNote, declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: paired.got, gotNote: paired.gotNote, resolvedExpected: paired.declared, expectedNote: paired.declaredNote, declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column, crossesRange: self.signatures.crossesIntegerRange(wantTag, expected: wantName, gotTag: got, got: gotName))
 		end 'nameMismatch'
 	end 'requireSlotAggregateIdentity'
 
@@ -71539,7 +71535,7 @@ export type Parser
 		let expected = enumRawValueArgumentTag(layout.backing)
 
 		if not self.rawValueArgumentSuits(raw, expected: expected) 'wrongDomain'
-			let mismatch = SourceParseError.typeMismatchExpectedGot(typeTagName(expected), got: self.valueDisplayTypeName(raw), line: argTok.line, column: argTok.column)
+			let mismatch = SourceParseError.typeMismatchExpectedGot(typeTagName(expected), got: self.valueDisplayTypeName(raw), line: argTok.line, column: argTok.column, expectedNote: "", crossesRange: false)
 
 			try self.refuseUnlessDeferred(mismatch, value: raw)
 		end 'wrongDomain'
@@ -71660,7 +71656,7 @@ export type Parser
 		// The argument's domain is `String`, whatever the declaration is — read through the shared
 		// renderer so this position and the literal one cannot come to word one rejection two ways.
 		if not tagIsText(self.tagOf(name)) 'notAString'
-			let mismatch = SourceParseError.typeMismatchExpectedGot(typeTagName(ValueTypeTag.string), got: self.valueDisplayTypeName(name), line: memberTok.line, column: memberTok.column)
+			let mismatch = SourceParseError.typeMismatchExpectedGot(typeTagName(ValueTypeTag.string), got: self.valueDisplayTypeName(name), line: memberTok.line, column: memberTok.column, expectedNote: "", crossesRange: false)
 
 			try self.refuseUnlessDeferred(mismatch, value: name)
 		end 'notAString'
@@ -72838,7 +72834,7 @@ export type Parser
 
 		match self.declaredSlotVerdict(got, gotNameId: self.valueNameId(value), declared: declaredTag, declaredNameId: typeNameIdOf(declaredWithAlias)) 'declared'
 			ok then break
-			mismatch then throw self.slotMismatchError(voice, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.valueDisplayTypeName(value), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(declaredTag, nameId: typeNameIdOf(declaredWithAlias), fallback: typeTagName(declaredTag)), expectedNote: "", declared: declaredTag, declaredNameId: typeNameIdOf(declaredWithAlias), line: argTok.line, column: argTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.valueDisplayTypeName(value), gotNote: "", resolvedExpected: self.declaredSlotDisplayName(declaredTag, nameId: typeNameIdOf(declaredWithAlias), fallback: typeTagName(declaredTag)), expectedNote: "", declared: declaredTag, declaredNameId: typeNameIdOf(declaredWithAlias), line: argTok.line, column: argTok.column, crossesRange: false)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(self.valueDisplayTypeName(value), targetType: self.declaredSlotDisplayName(declaredTag, nameId: typeNameIdOf(declaredWithAlias), fallback: typeTagName(declaredTag)), line: argTok.line, column: argTok.column)
 
 			// A FUNCTION VALUE into a scalar union PAYLOAD whose declared type is NOT a function — the same
@@ -77217,7 +77213,7 @@ export type Parser
 		let value = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		if not tagIsIntegral(self.numberTagOf(value)) 'notInteger'
-			throw SourceParseError.builtinArgumentType(String.from(paramName), expected: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(value), line: methodTok.line, column: methodTok.column)
+			throw SourceParseError.builtinArgumentType(String.from(paramName), expected: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(value), line: methodTok.line, column: methodTok.column, expectedNote: "", crossesRange: false)
 		end 'notInteger'
 
 		return value
@@ -77240,7 +77236,7 @@ export type Parser
 		let value = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		if self.tagOf(value) != ValueTypeTag.cstring 'notACString'
-			throw SourceParseError.builtinArgumentType(String.from(paramName), expected: typeTagName(ValueTypeTag.cstring), got: self.valueDisplayTypeName(value), line: methodTok.line, column: methodTok.column)
+			throw SourceParseError.builtinArgumentType(String.from(paramName), expected: typeTagName(ValueTypeTag.cstring), got: self.valueDisplayTypeName(value), line: methodTok.line, column: methodTok.column, expectedNote: "", crossesRange: false)
 		end 'notACString'
 
 		return value
@@ -77415,7 +77411,7 @@ export type Parser
 			return
 		end 'isByteArray'
 
-		throw SourceParseError.builtinArgumentType(String.from(paramName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
+		throw SourceParseError.builtinArgumentType(String.from(paramName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column, expectedNote: "", crossesRange: false)
 	end 'requireManagedMemoryValue'
 
 	// Is `value` a BYTE-PACKED buffer — the instance `__ManagedMemory` is bound to, the one a `b"…"` literal
@@ -79873,7 +79869,7 @@ export type Parser
 			return
 		end 'aSynthesizedByteBuffer'
 
-		throw SourceParseError.builtinArgumentType(String.from(StringInitManagedParamName), expected: "{String.from(ManagedMemoryTypeName)} with {self.signatures.arrayElementDisplayName(giid)}", got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
+		throw SourceParseError.builtinArgumentType(String.from(StringInitManagedParamName), expected: "{String.from(ManagedMemoryTypeName)} with {self.signatures.arrayElementDisplayName(giid)}", got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column, expectedNote: "", crossesRange: false)
 	end 'requireSameArrayInstance'
 
 	// --- The `create()` static surface the compiler-owned containers SHARE (`Set` / `Map` / `List`) ---
@@ -80231,7 +80227,7 @@ export type Parser
 	end 'arraySourceElement'
 
 	function fromSourceMismatch(source ValueId, expected String, sourceTok Token) returns SourceParseError
-		return SourceParseError.builtinArgumentType(String.from(FromSourceParamName), expected: expected, got: self.valueDisplayTypeName(source), line: sourceTok.line, column: sourceTok.column)
+		return SourceParseError.builtinArgumentType(String.from(FromSourceParamName), expected: expected, got: self.valueDisplayTypeName(source), line: sourceTok.line, column: sourceTok.column, expectedNote: "", crossesRange: false)
 	end 'fromSourceMismatch'
 
 	// ⚠⚠ **A SET MEMBER IS NEVER MOVED AT THE PARSE, AND NO `__set_create(elemDrop)` IS EMITTED.** The corpus
@@ -85309,10 +85305,10 @@ export type Parser
 	// `appendMemory` is never told to fix an `other` it does not declare.
 	function appendArgMismatch(other ValueId, arr ValueId, methodTok Token, bufferSurface bool) returns SourceParseError
 		if bufferSurface 'bufferSentence'
-			return SourceParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
+			return SourceParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column, expectedNote: "", crossesRange: false)
 		end 'bufferSentence'
 
-		return SourceParseError.builtinArgumentType(String.from(appendArgParamName(methodTok.value)), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
+		return SourceParseError.builtinArgumentType(String.from(appendArgParamName(methodTok.value)), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column, expectedNote: "", crossesRange: false)
 	end 'appendArgMismatch'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append` on a CONCRETE-element array.** An element that owes no
@@ -85723,9 +85719,10 @@ export type Parser
 		view expected = self.signatures.rangedIdentityOfSpelling(alias.name, readerFilePath: alias.declFilePath)
 		let gotTag = self.tagOf(value)
 		let gotNameId = self.valueNameId(value)
+		view gotAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: gotTag, nameId: gotNameId, readerFilePath: self.job.path)
 
-		if not tagIsIntegral(gotTag) or self.signatures.aggregatesConflict(expected, expectedTag: ValueTypeTag.named, expectedNameId: UnnamedTypeId, expectedBrand: EmptySourceText, got: aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: gotTag, nameId: gotNameId, readerFilePath: self.job.path), gotTag: gotTag, gotNameId: gotNameId, gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'anotherAlias'
-			throw SourceParseError.builtinArgumentType(String.from(paramName), expected: String.from(sourceSpelledAliasName(alias.name)), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
+		if not tagIsIntegral(gotTag) or self.signatures.aggregatesConflict(expected, expectedTag: ValueTypeTag.named, expectedNameId: UnnamedTypeId, expectedBrand: EmptySourceText, got: gotAggregate, gotTag: gotTag, gotNameId: gotNameId, gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'anotherAlias'
+			throw SourceParseError.builtinArgumentType(String.from(paramName), expected: String.from(sourceSpelledAliasName(alias.name)), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column, expectedNote: "", crossesRange: self.signatures.crossesIntegerRange(ValueTypeTag.named, expected: expected, gotTag: gotTag, got: gotAggregate))
 		end 'anotherAlias'
 
 		self.recordRangedTargetSite(value, target: alias, line: anchor.line, column: anchor.column)
@@ -95161,7 +95158,7 @@ export type Parser
 		let param = try self.declaredInterfaceParamAt(callee, argIndex: argIndex, label: label) otherwise return try self.ownStorageOrScratchCell(value, handedTheCell: handedTheCell, cellType: self.typeOf(value), anchor: anchor)
 
 		if handedTheCell and not maxonTypesDenoteSame(self.typeOf(value), b: param.interfaceType) 'theCellHoldsAnotherType'
-			throw SourceParseError.builtinArgumentType(String.from(param.name), expected: String.from(interfaceNameOfType(param.interfaceType, typeNames: self.artifact.typeNames)), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
+			throw SourceParseError.builtinArgumentType(String.from(param.name), expected: String.from(interfaceNameOfType(param.interfaceType, typeNames: self.artifact.typeNames)), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column, expectedNote: "", crossesRange: false)
 		end 'theCellHoldsAnotherType'
 
 		return try self.ownStorageOrScratchCell(value, handedTheCell: handedTheCell, cellType: param.interfaceType, anchor: anchor)

@@ -125,7 +125,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:16:10: argument type mismatch for 'r': expected 'Row', got 'Count'
+error E3005: <fragment>:16:10: argument type mismatch for 'r': expected 'Row', got 'Count' — cast the argument with 'as Row'
 ```
 
 <!-- test: two-aliases-infer-their-nearest-common-ancestor -->
@@ -183,7 +183,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:21:10: argument type mismatch for 'm': expected 'Meters', got 'Distance'
+error E3005: <fragment>:21:10: argument type mismatch for 'm': expected 'Meters', got 'Distance' — cast the argument with 'as Meters'
 ```
 
 <!-- test: error.sibling-aliases-with-no-common-ancestor -->

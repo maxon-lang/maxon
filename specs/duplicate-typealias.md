@@ -309,7 +309,33 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: pkg/<fragment>:6:21: exported field 'pkg.Holder.code' names file-private typealias 'ExitCode' in its type
-error E3005: app/<fragment>:21:9: argument type mismatch for 'c': expected 'app.ExitCode', got 'pkg.ExitCode'
+error E3005: app/<fragment>:21:9: argument type mismatch for 'c': expected 'app.ExitCode', got 'pkg.ExitCode' — cast the argument with 'as app.ExitCode'
+```
+
+<!-- test: error.two-same-directory-private-aliases-with-a-declared-in-note-are-not-offered-a-cast -->
+```maxon
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+
+module function make() returns Small
+	return 5
+end 'make'
+
+// --- file: b.maxon
+typealias Small = int(0 to 100)
+
+function take(s Small) returns Small
+	return s
+end 'take'
+
+function main() returns ExitCode
+	return take(make()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:10:11: Duplicate typealias 'Small'
+error E3167: <fragment>:5:17: module function 'make' names file-private typealias 'Small' in its return type
+error E3005: <fragment>:17:9: argument type mismatch for 's': expected 'Small' (declared in b.maxon), got 'Small' (declared in a.maxon)
 ```
 
 <!-- test: non-exported-same-name-function-alias-inside-a-generic-instance -->

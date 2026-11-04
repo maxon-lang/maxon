@@ -1674,7 +1674,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/type-casting/error.a-full-range-cast-names-its-value.maxon:11:2: argument type mismatch for 'o': expected 'Other', got 'Integer'
+error E3005: specs/type-casting/error.a-full-range-cast-names-its-value.maxon:11:2: argument type mismatch for 'o': expected 'Other', got 'Integer' — cast the argument with 'as Other'
 ```
 
 <!-- test: error.a-struct-cast-to-its-own-type-is-unneeded -->

@@ -236,6 +236,46 @@ error E3006: <fragment>:5:6: duplicate definition of 'Box' — already declared 
 ```
 
 
+<!-- test: error.a-struct-of-a-name-a-private-alias-also-holds-is-not-offered-a-cast -->
+`lib/main.maxon` means the STRUCT `Box`, while `b.maxon` means its own ranged alias by the same spelling. A `Box` struct handed to a ranged parameter is a record meeting a number, which no `as` converts, so the refusal names no cast.
+```maxon
+// --- file: lib/a.maxon
+module typealias Small = int(0 to 100)
+
+module type Box
+	export var v as Small
+
+	module static function create(v Small) returns Box
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+// --- file: b.maxon
+typealias Box = int(0 to 10)
+
+function useIt() returns Box
+	return 5
+end 'useIt'
+
+module function fromB() returns ExitCode
+	return useIt() as ExitCode
+end 'fromB'
+
+// --- file: lib/main.maxon
+function takesSmall(s Small) returns Small
+	return s
+end 'takesSmall'
+
+function main() returns ExitCode
+	let boxed = Box.create(3)
+
+	return (takesSmall(boxed) as ExitCode) + fromB()
+end 'main'
+```
+```maxoncstderr
+error E3005: lib/<fragment>:32:10: argument type mismatch for 's': expected 'Small', got 'Box'
+```
+
 <!-- test: crossfile-type-and-file-private-typealias-coexist -->
 Across files, with a FILE-PRIVATE alias — and this is the direction file scoping rescues. The struct
 registry is bare, so if it were consulted first `b.maxon`'s own `typealias Box` would be unreachable

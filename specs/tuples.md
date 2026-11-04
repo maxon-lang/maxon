@@ -2775,7 +2775,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:10: cannot assign a value of type 'Integer' to element 0 of tuple (Wide, Wide), which holds 'Wide'
+error E3005: <fragment>:6:10: cannot assign a value of type 'Integer' to element 0 of tuple (Wide, Wide), which holds 'Wide' — cast the value with 'as Wide'
 ```
 
 <!-- test: error.a-tuple-of-one-alias-does-not-pass-as-another -->

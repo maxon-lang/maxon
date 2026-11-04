@@ -3124,7 +3124,7 @@ function checkIndirectArgBrands(project Project, module MaxonModule, func IrFunc
 		end 'theLandedParameterAgrees'
 
 		var signatures = programSignaturesIn(project, asker: "checkIndirectArgBrands")
-		reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchSentence("{i + 1}", expected: signatures.aliasIdentityDisplay(landed.brand), got: signatures.aliasIdentityDisplay(argBrand)), line: callRange.line, column: callRange.column, filePath: filePath)
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchSentence("{i + 1}", expected: signatures.aliasIdentityDisplay(landed.brand), got: signatures.aliasIdentityDisplay(argBrand), expectedNote: "", gotNote: "", crossesRange: false), line: callRange.line, column: callRange.column, filePath: filePath)
 	end 'eachArg'
 end 'checkIndirectArgBrands'
 
@@ -5176,7 +5176,7 @@ function checkUnboundTypeParameterArgs(project Project, func IrFunction, base By
 		end 'claimsNoConcreteIdentity'
 
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkUnboundTypeParameterArgs: paramNames.get OOB at {i}")
-		reportPositioned(project, code: ErrorCode.typeMismatch, message: "{argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: typeTagName(ValueTypeTag.typeParameter), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath))}: {ConcreteValueAtOpaquePlaceSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: "{argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: typeTagName(ValueTypeTag.typeParameter), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath), crossesRange: false)}: {ConcreteValueAtOpaquePlaceSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'eachArg'
 end 'checkUnboundTypeParameterArgs'
@@ -5245,31 +5245,30 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// ⚠ **`aggregatesConflict`, NOT the bare rule — the SAME door every other coercion site uses.**
 		// The wrapper adds the per-instance-alias decay: a PER-INSTANCE alias (`WA.Idx`) meeting a target
 		// that is not one carries no identity claim and decays. Spelled with the bare rule this arm read
-		// a decaying argument's name as an aggregate meeting a SCALAR — `expected` is deliberately empty
-		// for a ranged-alias type argument — and REJECTED a legal program: `takesPlain(t)` and
-		// `IntBox.create(t)` were the same value into the same `Integer`, accepted at the parser and
-		// refused here. One comparison rule, one answer. It also carries the byte-element boundary, and
+		// a decaying argument's name as an aggregate meeting a SCALAR and REJECTED a legal program:
+		// `takesPlain(t)` and `IntBox.create(t)` were the same value into the same `Integer`, accepted at
+		// the parser and refused here. One comparison rule, one answer. It also carries the byte-element boundary, and
 		// that is not theoretical here either: without it `MemBox.create(<a cwd buffer>)` at a `Box with
 		// Bytes` is refused `expected 'Bytes', got 'Array___ManagedByte'`.
 		if signatures.aggregatesConflict(expected, expectedTag: maxonTypeTag(substituted), expectedNameId: typeNameIdOf(substituted), expectedBrand: signatures.instanceArgBrand(gid, position: position), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId), readerFilePath: filePath) 'wrongTypeArgument'
 			// The EXPECTED side names the concrete TYPE ARGUMENT, not the identity that was compared: the
 			// two agree for an aggregate (`typeArgAggregateName`'s nominal arm IS this call), and where
-			// they differ — a scalar / `String` / ranged-alias argument, whose identity is deliberately
-			// empty — this is the only one that can say `String` rather than `type parameter`. It is asked
-			// on the FAILURE path alone, so the rendering costs a rejected program and nothing else.
+			// they differ — a scalar / `String` argument, whose identity is empty — this is the only one
+			// that can say `String` rather than `type parameter`. It is asked on the FAILURE path alone,
+			// so the rendering costs a rejected program and nothing else.
 			//
 			// ⚠ It asks the DISPLAY renderer, so the two halves of this one sentence are spelled the same
 			// way (user ruling, 2026-08-04). The compiled twin read `expected 'Box_Leaf', got 'OtherBox'`
 			// on a program that declares `typealias LeafBox = Box with Leaf` — the `got` side quoting the
 			// author and the `expected` side quoting the mangler.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath), crossesRange: signatures.crossesIntegerRange(maxonTypeTag(substituted), expected: expected, gotTag: argTag, got: got)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongTypeArgument'
 
 		// ⭐⭐ **THE SAME SUBSTITUTION, HANDED TO THE SCALAR RULE — AND THAT HALF WAS A COMPILER PANIC.** The
 		// nominal check above is blind to everything that carries no name: `typeArgAggregateName` answers
-		// `EmptySourceText` for a scalar, a `String` and a ranged alias, deliberately, so `Box with Integer`
-		// keeps accepting a plain `42`. But a FLOAT carries no name either, so `IntBox.create(1.5)` and
+		// `EmptySourceText` for a scalar and a `String`, deliberately, so `Box with Integer` keeps accepting
+		// a plain `42`. But a FLOAT carries no name either, so `IntBox.create(1.5)` and
 		// `StrBox.create(1.5)` passed both walks — `checkOneArgType` asked `checkDeclaredType(float,
 		// typeParameter)`, and a type parameter agrees with everything (`typeClassesAgree`) — and the
 		// XMM-born float reached `X64Backend.emitRegRegMove` headed for a GPR parameter slot, where the
@@ -5491,7 +5490,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
 
 		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: String.from(expected), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: String.from(expected), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath), crossesRange: false), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongInstance'
 	end 'eachArg'
@@ -5852,8 +5851,8 @@ end 'quotedParamLabel'
 // spellings agree today only because those three are reachable from DIRECT calls alone, where a parameter
 // always has a declared name — a property of today's call graph, not an invariant. The day one of those
 // rules serves an indirect call it would name the parameter `''`, and no test would say so.
-function argTypeMismatchMessage(param ArgumentParameter, position ParamCount, expected String, got String, expectedNote String = "", gotNote String = "") returns String
-	return argTypeMismatchSentence(argParamLabel(param, position: position), expected: expected, got: got, expectedNote: expectedNote, gotNote: gotNote)
+function argTypeMismatchMessage(param ArgumentParameter, position ParamCount, expected String, got String, crossesRange bool, expectedNote String = "", gotNote String = "") returns String
+	return argTypeMismatchSentence(argParamLabel(param, position: position), expected: expected, got: got, expectedNote: expectedNote, gotNote: gotNote, crossesRange: crossesRange)
 end 'argTypeMismatchMessage'
 
 // ⭐ **THE SENTENCE ITSELF, GIVEN THE LABEL** — exported for the SIXTH site, which is in another TIER: a
@@ -5866,9 +5865,38 @@ end 'argTypeMismatchMessage'
 // ONE file.
 // ⚠ A note goes OUTSIDE the quotes and the type stays inside. The quoted span is the spelling an author can
 // search their own source for; a fact about WHICH declaration that spelling resolves to is not part of it.
-export function argTypeMismatchSentence(label String, expected String, got String, expectedNote String = "", gotNote String = "") returns String
-	return "argument type mismatch for {label}: expected '{expected}'{expectedNote}, got '{got}'{gotNote}"
+export function argTypeMismatchSentence(label String, expected String, got String, expectedNote String, gotNote String, crossesRange bool) returns String
+	return withRangeCrossingFix("argument type mismatch for {label}: expected '{expected}'{expectedNote}, got '{got}'{gotNote}", subject: RangeCrossingSubject.argument, target: expected, expectedNote: expectedNote, crossesRange: crossesRange)
 end 'argTypeMismatchSentence'
+
+export function assignMismatchSentence(place String, got String, gotNote String, expected String, expectedNote String, crossesRange bool) returns String
+	return withRangeCrossingFix("cannot assign a value of type '{got}'{gotNote} to {place}, which holds '{expected}'{expectedNote}", subject: RangeCrossingSubject.value, target: expected, expectedNote: expectedNote, crossesRange: crossesRange)
+end 'assignMismatchSentence'
+
+export function expectedGotSentence(expected String, got String, expectedNote String, crossesRange bool) returns String
+	return withRangeCrossingFix("type mismatch: 'expected {expected}{expectedNote}, got {got}'", subject: RangeCrossingSubject.value, target: expected, expectedNote: expectedNote, crossesRange: crossesRange)
+end 'expectedGotSentence'
+
+enum RangeCrossingSubject
+	argument
+	value
+end 'RangeCrossingSubject'
+
+// The one tail every refusal of an integer-range crossing gets, so the argument, assignment and expected/got
+// sentences cannot hint two ways. A "declared in" note withholds it: that note exists because two
+// declarations print alike, and in the reader's file `as <target>` could resolve to the other one.
+function withRangeCrossingFix(sentence String, subject RangeCrossingSubject, target String, expectedNote String, crossesRange bool) returns String
+	if not crossesRange or not expectedNote.isEmpty() 'noFixToName'
+		return sentence
+	end 'noFixToName'
+
+	let word = match subject 'subject'
+		argument gives "argument"
+		value gives "value"
+	end 'subject'
+
+	return "{sentence} — cast the {word} with 'as {target}'"
+end 'withRangeCrossingFix'
 
 // ⭐ **THE SAME SENTENCE WITH THE ONE TAIL THAT IS NOT AN "EXPECTED/GOT".** A value refused at an
 // interface-typed position did not have the WRONG type — `NotRunnable` is exactly the type the
@@ -6697,7 +6725,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			var argSignatures = programSignaturesIn(project, asker: "checkOneArgType")
 			let declaredParamBrandOfCall = declaredBrandOf(declaredParamName, paramTag: paramTag)
 			let gotBrandOfCall = valueBrandOf(project, func: func, value: argId)
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: argSignatures.tupleDisplayNoted(expectedDisplay, identity: expectedAggregate, otherShown: gotDisplay, otherIdentity: gotAggregate), got: argSignatures.tupleDisplayNoted(gotDisplay, identity: gotAggregate, otherShown: expectedDisplay, otherIdentity: expectedAggregate), expectedNote: argSignatures.contestedTypeNote(paramTag, nameId: typeNameIdOf(paramType), brand: declaredParamBrandOfCall, identity: expectedAggregate, shown: expectedDisplay, otherShown: gotDisplay), gotNote: argSignatures.contestedTypeNote(argTag, nameId: argNameId, brand: gotBrandOfCall, identity: gotAggregate, shown: gotDisplay, otherShown: expectedDisplay)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: argSignatures.tupleDisplayNoted(expectedDisplay, identity: expectedAggregate, otherShown: gotDisplay, otherIdentity: gotAggregate), got: argSignatures.tupleDisplayNoted(gotDisplay, identity: gotAggregate, otherShown: expectedDisplay, otherIdentity: expectedAggregate), expectedNote: argSignatures.contestedTypeNote(paramTag, nameId: typeNameIdOf(paramType), brand: declaredParamBrandOfCall, identity: expectedAggregate, shown: expectedDisplay, otherShown: gotDisplay), gotNote: argSignatures.contestedTypeNote(argTag, nameId: argNameId, brand: gotBrandOfCall, identity: gotAggregate, shown: gotDisplay, otherShown: expectedDisplay), crossesRange: argSignatures.crossesIntegerRange(paramTag, expected: expectedAggregate, gotTag: argTag, got: gotAggregate)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'
@@ -6795,7 +6823,7 @@ function checkFunctionArgShape(project Project, func IrFunction, declaredShape F
 	let shapesTellThemApart = not declaredShapeText.equals(gotShapeText)
 	let expected = signatures.aliasIdentityDisplay(declaredBrand) if brandsConflict else declaredShapeText
 	let actual = signatures.aliasIdentityDisplay(gotBrand) if brandsConflict else gotShapeText
-	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(param, position: position, expected: expected, got: actual, expectedNote: contestedBrandNote(signatures, brand: declaredBrand, shown: expected, otherShown: actual, shapeText: declaredShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else "", gotNote: contestedBrandNote(signatures, brand: gotBrand, shown: actual, otherShown: expected, shapeText: gotShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""), line: callRange.line, column: callRange.column, filePath: filePath)
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(param, position: position, expected: expected, got: actual, expectedNote: contestedBrandNote(signatures, brand: declaredBrand, shown: expected, otherShown: actual, shapeText: declaredShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else "", gotNote: contestedBrandNote(signatures, brand: gotBrand, shown: actual, otherShown: expected, shapeText: gotShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else "", crossesRange: false), line: callRange.line, column: callRange.column, filePath: filePath)
 	return true
 end 'checkFunctionArgShape'
 
@@ -6823,7 +6851,7 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 
 	match verdict 'declared'
 		ok then break
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath), crossesRange: false), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 
 		// The parameter is NAMED here, unlike the parser's three sites, because the reader's next
 		// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,

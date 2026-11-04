@@ -748,7 +748,7 @@ function takesYear(y Year) returns Year
 end 'takesYear'
 
 function yearOfAge(a Age) returns Year
-	// return takesYear(a)            // E3005: argument type mismatch for 'y': expected 'Year', got 'Age'
+	// return takesYear(a)            // E3005: argument type mismatch for 'y': expected 'Year', got 'Age' — cast the argument with 'as Year'
 	return takesYear(a as Year)       // the cast converts
 end 'yearOfAge'
 
@@ -765,6 +765,11 @@ end 'main'
   each use: a literal, a plain `let` constant, a loop counter between two literal bounds, and a value
   computed from them (see [Variables](#variables)). A named value also fits an unnamed slot. Two
   *different* names conflict unless one implements the other (next section).
+- An **E3005** between two integer-range types (a ranged integer alias or `ExitCode`) ends with the cast
+  that fixes it: `— cast the argument with 'as Year'` at an argument, a builtin's included, and
+  `— cast the value with 'as Year'` at a store (a variable, global, field, tuple element, struct literal
+  or union payload). The hint ends only a diagnostic whose expected type carries no `(declared in <file>)`
+  note.
 - A value keeps its alias wherever it is held: a local or global initialized by a cast has the cast's alias,
   and each tuple element keeps its own, so `(Tally, Tally)` and `(Score, Score)` are two types. Float
   aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
@@ -812,7 +817,7 @@ function main() returns ExitCode
 	let r = try rows.get(head) otherwise 0    // a LoopHead is an ElementIndex
 	let other = 3 as VarId
 	print("{r} {takesBlock(head)} {other}\n")  // 9 1 3
-	// takesBlock(other)                      // E3005: expected 'BlockId', got 'VarId'
+	// takesBlock(other)  // E3005: argument type mismatch for 'b': expected 'BlockId', got 'VarId' — cast the argument with 'as BlockId'
 	return 0
 end 'main'
 ```

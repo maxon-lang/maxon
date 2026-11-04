@@ -4501,7 +4501,39 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:14: argument type mismatch for 'newLength': expected 'ElementIndex', got 'FullRangeInt'
+error E3005: <fragment>:5:14: argument type mismatch for 'newLength': expected 'ElementIndex', got 'FullRangeInt' — cast the argument with 'as ElementIndex'
+```
+
+<!-- test: error.resize-length-from-a-signed-domain-names-the-cast -->
+A length that may be negative is refused with the cast that crosses it.
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+	var wanted = 5 as FullRangeInt
+	wanted = wanted - 10
+	bytes.resize(wanted)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:8: argument type mismatch for 'newLength': expected 'ElementIndex', got 'FullRangeInt' — cast the argument with 'as ElementIndex'
+```
+
+<!-- test: error.reserve-capacity-from-a-signed-domain-names-the-cast -->
+`reserve` shares `resize`'s refusal and its cast.
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+	var wanted = 5 as FullRangeInt
+	wanted = wanted - 10
+	bytes.reserve(wanted)
+
+	return bytes.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:8: argument type mismatch for 'minCapacity': expected 'ElementIndex', got 'FullRangeInt' — cast the argument with 'as ElementIndex'
 ```
 
 <!-- test: create-with-a-capacity-proven-by-a-cast-runs -->

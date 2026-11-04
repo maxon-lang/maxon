@@ -725,7 +725,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'FullRangeInt'
+error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'FullRangeInt' — cast the argument with 'as Score'
 ```
 
 <!-- test: parsable.int-fromstring-refuses-a-value-past-the-int-range -->

@@ -9160,6 +9160,34 @@ end 'main'
 error E3005: <fragment>:23:13: argument type mismatch for 'value': expected 'Integer', got 'Promise with int'
 ```
 
+<!-- test: error.a-send-argument-of-another-alias-names-the-cast -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+
+type Store
+	var n as Wide
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(value Narrow)
+		self.n = value as Wide
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let w = 5 as Wide
+	try h.keep(w) otherwise panic("an open mailbox with room takes the send")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:13: type mismatch: 'expected Narrow, got Wide' — cast the value with 'as Narrow'
+```
+
 <!-- test: error.a-handle-of-another-service-is-refused -->
 Two services' handles are two nominal types, so handing one where the other is expected is the ordinary
 struct-identity mismatch and needs no rule of its own.

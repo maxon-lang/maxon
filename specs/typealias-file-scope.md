@@ -2563,7 +2563,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:19:10: argument type mismatch for 'v': expected 'beta.Integer', got 'alpha.Integer'
+error E3005: <fragment>:19:10: argument type mismatch for 'v': expected 'beta.Integer', got 'alpha.Integer' — cast the argument with 'as beta.Integer'
 ```
 
 <!-- test: a-return-converts-between-two-same-range-declarations -->
@@ -2704,7 +2704,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:8: cannot assign a value of type 'alpha.Integer' to field 'v' of 'Holder', which holds 'beta.Integer'
+error E3005: <fragment>:25:8: cannot assign a value of type 'alpha.Integer' to field 'v' of 'Holder', which holds 'beta.Integer' — cast the value with 'as beta.Integer'
 ```
 
 <!-- test: a-cast-between-two-same-range-declarations-converts -->

@@ -219,5 +219,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'Codepoint'
+error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'Codepoint' — cast the argument with 'as Score'
 ```

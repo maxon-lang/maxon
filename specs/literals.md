@@ -372,7 +372,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/literals/error.a-top-level-cast-gives-the-global-its-alias.maxon:12:2: argument type mismatch for 'points': expected 'Score', got 'Tally'
+error E3005: specs/literals/error.a-top-level-cast-gives-the-global-its-alias.maxon:12:2: argument type mismatch for 'points': expected 'Score', got 'Tally' — cast the argument with 'as Score'
 ```
 
 <!-- test: error.a-top-level-float-cast-gives-the-global-its-alias -->

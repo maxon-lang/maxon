@@ -1482,7 +1482,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Byte', got 'stdlib.Byte'
+error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Byte', got 'stdlib.Byte' — cast the argument with 'as Byte'
 ```
 
 <!-- test: error.a-bits-byte-and-the-librarys-int-byte-are-two-types -->
@@ -1502,7 +1502,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Byte', got 'stdlib.Byte'
+error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Byte', got 'stdlib.Byte' — cast the argument with 'as Byte'
 ```
 
 <!-- test: error.a-library-byte-array-is-not-an-authors-byte-array-field -->
@@ -2295,7 +2295,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 's': expected 'Small', got 'Byte'
+error E3005: <fragment>:11:9: argument type mismatch for 's': expected 'Small', got 'Byte' — cast the argument with 'as Small'
 ```
 
 <!-- test: a-byte-string-literal-beside-an-authors-type-named-byte -->

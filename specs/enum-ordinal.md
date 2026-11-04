@@ -468,7 +468,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:9: argument type mismatch for 'v': expected 'Small', got 'ElementIndex'
+error E3005: <fragment>:23:9: argument type mismatch for 'v': expected 'Small', got 'ElementIndex' — cast the argument with 'as Small'
 ```
 
 <!-- test: enum-ordinal.rawvalue-of-an-integer-enum-is-a-full-range-int -->
@@ -535,5 +535,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:9: argument type mismatch for 'v': expected 'Small', got 'FullRangeInt'
+error E3005: <fragment>:23:9: argument type mismatch for 'v': expected 'Small', got 'FullRangeInt' — cast the argument with 'as Small'
 ```
