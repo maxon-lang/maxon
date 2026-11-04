@@ -2671,7 +2671,7 @@ end 'EnumInterpRendering'
 // cases (`requireEnumBacking` is its only door), so no value of it exists to interpolate and it
 // takes clause 4.
 function enumInterpRendering(layout EnumLayout) returns EnumInterpRendering
-	if layout.isBoxed() 'aPayloadBearingUnion'
+	if layout.carriesPayloads() 'aPayloadBearingUnion'
 		return EnumInterpRendering.caseName
 	end 'aPayloadBearingUnion'
 
@@ -14944,6 +14944,47 @@ union BlockCloserScan
 	unterminated
 end 'BlockCloserScan'
 
+union PayloadSource
+	word
+	slot(offset ByteOffset, storage MaxonType)
+
+	function slotOffset() returns ByteOffset
+		return match self 'source'
+			word panic("PayloadSource.slotOffset: a word payload has no slot — only an existential reads a witness half, and no existential payload is unboxed")
+			slot(offset, _) gives offset
+		end 'source'
+	end 'slotOffset'
+end 'PayloadSource'
+
+union PayloadHolder
+	record(box ValueId)
+	word
+end 'PayloadHolder'
+
+union UnionWritePlace
+	nowhere
+	readOnlyParameter(let name ByteArray)
+	variable(let name ByteArray)
+	slot(box ValueId, offset ByteOffset)
+end 'UnionWritePlace'
+
+typealias UnionWriteMap = Map with (ValueId, UnionWritePlace)
+
+type LastIndirectLoad
+	export var recorded as bool
+	export var result as ValueId
+	export var box as ValueId
+	export var offset as ByteOffset
+
+	static function create() returns Self
+		return Self{recorded: false, result: 0, box: 0, offset: 0}
+	end 'create'
+
+	export function isLoadOf(value ValueId) returns bool
+		return self.recorded and self.result == value
+	end 'isLoadOf'
+end 'LastIndirectLoad'
+
 union LastFieldRead
 	none
 	read(value ValueId, box ValueId, offset ByteOffset)
@@ -16814,6 +16855,20 @@ export function parameterReassignMessage(name String, kind ParameterReassignKind
 	end 'kind'
 end 'parameterReassignMessage'
 
+// The by-value parameter wording is pinned byte-for-byte by `specs/union-unboxed.md`; changing it
+// fails the suite.
+function payloadOfAParameterMessage(payload String, parameter String) returns String
+	if parameter == String.from(ReceiverSourceSpelling) 'theReceiver'
+		return "'{payload}' is a payload of the receiver, so assigning it cannot reach the caller's union; copy the union into a local var"
+	end 'theReceiver'
+
+	return "'{payload}' is a payload of the by-value parameter '{parameter}', so assigning it cannot reach the caller's union; mark '{parameter}' mutable or copy it into a local var"
+end 'payloadOfAParameterMessage'
+
+function payloadOfAnUnreachableUnionMessage(payload String) returns String
+	return "'{payload}' is a payload of a union that is not a local var, a field of a var or a record parameter, or a mutable parameter, so assigning it cannot reach the union; copy the union into a local var"
+end 'payloadOfAnUnreachableUnionMessage'
+
 function parameterReassignError(nameTok Token, kind ParameterReassignKind) returns SourceParseError
 	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: parameterReassignMessage(String.from(nameTok.value), kind: kind), line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
 end 'parameterReassignError'
@@ -17890,6 +17945,9 @@ type FunctionBodyState
 	// the interpolation's internal scratch buffers are freed inside `emitStringInterp`, never tracked here.
 	export var pendingTempDrops as ValueIdArray
 
+	export var unionWritePlaces as UnionWriteMap
+	export var lastIndirectLoad as LastIndirectLoad
+
 	// The last `named` field read, so `throw <boxed-union field>` can move the box out of its
 	// container (`moveOutThrownField` nulls the recorded `(box, offset)`). The thrown value is recognized
 	// by identity against the recorded value, and an equal value id can only have come from this exact
@@ -18876,6 +18934,8 @@ type FunctionBodyState
 			referencedNames: NameRoster.create(),
 			mutabilityExercisedNames: NameRoster.create(),
 			pendingTempDrops: ValueIdArray.create(),
+			unionWritePlaces: UnionWriteMap.create(),
+			lastIndirectLoad: LastIndirectLoad.create(),
 			lastFieldRead: LastFieldRead.none,
 			lastRuntimeRead: LastRuntimeRead.none,
 			loops: LoopContextArray.create(),
@@ -31999,11 +32059,11 @@ export type Parser
 		return EnumBackingFieldDomain.unsupported
 	end 'enumBackingFieldDomainOf'
 
-	// ⛔⛔ **A `named` FIELD IS A WORD ONLY IF ITS DECLARATION IS UNBOXED — AND `enumOf` HOLDS UNIONS TOO.**
-	// `ProgramSignatures.enumTypes` is one registry for `enum` and `union` alike (`isUnion` is a bit on the
-	// layout), and a PAYLOAD-BEARING union is heap-boxed with EVERY case taking the boxed form, payload-free
-	// ones included (`EnumLayout.isBoxed`, and `parseEnumLiteral` says so outright). So its value is a BOX
-	// POINTER and never a tag.
+	// ⛔⛔ **A `named` FIELD IS A WORD ONLY IF ITS DECLARATION IS UNBOXED — AND `enumOf` HOLDS UNIONS
+	// TOO.** `ProgramSignatures.enumTypes` is one registry for `enum` and `union` alike (`isUnion` is
+	// a bit on the layout), and a PAYLOAD-BEARING union is a box or a tagged word, with EVERY case
+	// taking that form, payload-free ones included (`EnumLayout.carriesPayloads`, and
+	// `parseEnumLiteral` says so outright). So its value is never the declaration's bare tag.
 	//
 	// ⛔ **MEASURED, AND IT IS THIS RUNG'S OWN DEFECT CLASS ONE TYPE OVER.** `union Shape circle(r Num)
 	// blank end` + `type Meta export let s as Shape end` + `a = Meta{s: Shape.blank}` COMPILED CLEAN and
@@ -32019,7 +32079,7 @@ export type Parser
 			return EnumBackingFieldDomain.unsupported
 		end 'notADeclaredEnum'
 
-		if requireEnumLayout(declared).isBoxed() 'boxedUnion'
+		if requireEnumLayout(declared).carriesPayloads() 'boxedUnion'
 			return EnumBackingFieldDomain.unsupported
 		end 'boxedUnion'
 
@@ -37576,7 +37636,7 @@ export type Parser
 			return HoldRetainPlan.create(MmOwnDeepName, args: twoArgs(source, second: self.emitCodeAddress(self.deepBoxCloneCallee(source), range: range)))
 		end 'aBoxWithPointerSlots'
 
-		return HoldRetainPlan.create(self.signatures.retainCalleeOf(tag, nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName), args: argsOf(source))
+		return HoldRetainPlan.create(self.signatures.retainCalleeOf(tag, nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName, readerFilePath: self.job.path), args: argsOf(source))
 	end 'holdRetainPlan'
 
 	function holdKindsForWrite() returns HoldKindMap
@@ -39037,6 +39097,10 @@ export type Parser
 	// afterwards). A tuple assignment cannot ask it there — its RHS is evaluated once, ahead of every
 	// target — so it asks it per target, in target order, which is the order its own pins read in.
 	function completeLocalRebind(func IrFunction, binding VarInfo, nameTok Token, written ValueId, rhsBareLocalName SourceBinding) throws SourceParseError
+		if binding.isPayloadBinding() 'aPayloadAssignment'
+			try self.requirePayloadAssignmentLands(binding, nameTok: nameTok)
+		end 'aPayloadAssignment'
+
 		let value = try self.destinationTemporary(written, declared: binding.varType, anchor: nameTok)
 		let declaredTag = maxonTypeTag(binding.varType)
 		let valueTag = self.tagOf(value)
@@ -39116,7 +39180,7 @@ export type Parser
 		// AFTER the rebind, deliberately: the box takes its reference to the value the BINDING ended up
 		// holding, which for a borrowed RHS is the owned copy `reassignBindingValue` promoted it to.
 		if binding.isPayloadBinding() 'writeBackIntoTheBox'
-			self.writeBackPayload(func, binding: binding, nameTok: nameTok)
+			try self.writeBackPayload(func, binding: binding, nameTok: nameTok)
 		end 'writeBackIntoTheBox'
 	end 'completeLocalRebind'
 
@@ -39205,10 +39269,83 @@ export type Parser
 		return binding.varType
 	end 'bindingDeclaredType'
 
+	// Assigning a payload binding replaces the payload its matched union holds, so that union must be
+	// a place this frame may write (`unionWritePlaceOf`); the refusal names the fix rather than drop
+	// or misdirect the write.
+	function requirePayloadAssignmentLands(binding VarInfo, nameTok Token) throws SourceParseError
+		match self.unionWritePlaceFor(binding.payloadScrutBox()) 'place'
+			readOnlyParameter(parameter) then throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: payloadOfAParameterMessage(String.from(nameTok.value), parameter: String.from(parameter)), line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
+			nowhere then throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: payloadOfAnUnreachableUnionMessage(String.from(nameTok.value)), line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
+			variable or
+			slot then break
+		end 'place'
+	end 'requirePayloadAssignmentLands'
+
+	function valueIsAnUnboxedUnion(value ValueId) returns bool
+		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		view decl = self.enumMatchFor(value)
+		return enumMatchIsDeclared(decl) and self.signatures.unionRepresentation(requireEnumLayout(decl)) == UnionRepresentation.word
+	end 'valueIsAnUnboxedUnion'
+
+	function writeBackUnboxedPayload(func IrFunction, binding VarInfo, nameTok Token) throws SourceParseError
+		let range = SourceRange.ofToken(nameTok)
+		let scrut = binding.payloadScrutBox()
+		let payload = binding.boundValue
+
+		self.noteUnionWriteReach(func, scrut: scrut)
+		self.emitIncref(payload, range: range)
+
+		let tag = self.emitWordMask(scrut, mask: UnboxedTagMask, resultType: MaxonType.integer, range: range)
+		let newWord = self.mintValueOfType(self.typeOf(scrut))
+		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(newWord, lhs: payload, rhs: tag, op: MaxonBinOp.bitOr), range: range)
+
+		match self.unionWritePlaceFor(scrut) 'store'
+			nowhere or
+			readOnlyParameter then panic("writeBackUnboxedPayload: requirePayloadAssignmentLands refuses a payload assignment that reaches no union before it gets here")
+			variable(name) then try self.rebindUnionVariable(func, name: name, nameTok: nameTok, word: newWord)
+			slot(box, offset) then self.storeUnionWordIntoSlot(box, offset: offset, scrut: scrut, word: newWord, range: range)
+		end 'store'
+	end 'writeBackUnboxedPayload'
+
+	function noteUnionWriteReach(func IrFunction, scrut ValueId)
+		var written = paramMaskOfValue(func, value: scrut)
+
+		match self.unionWritePlaceFor(scrut) 'place'
+			slot(box, _) then written = written or paramMaskOfValue(func, value: box)
+			nowhere or
+			readOnlyParameter or
+			variable then break
+		end 'place'
+
+		func.writesThroughParamMask = func.writesThroughParamMask or written
+	end 'noteUnionWriteReach'
+
+	function rebindUnionVariable(func IrFunction, name ByteArray, nameTok Token, word ValueId) throws SourceParseError
+		let variableTok = Token.create(nameTok.kind, line: nameTok.line, column: nameTok.column, value: name, startByte: nameTok.startByte, endByte: nameTok.endByte)
+		self.markValueOwnsHeap(word, exclusivity: OwnedHeapExclusivity.coOwned)
+		var target = self.bodyState.scope.getInfo(name)
+		try self.reassignBindingValue(func, binding: target, nameTok: variableTok, value: word, rhsBareLocalName: SourceBinding.none)
+
+		if target.isPayloadBinding() 'anOuterWindow'
+			try self.writeBackPayload(func, binding: target, nameTok: variableTok)
+		end 'anOuterWindow'
+	end 'rebindUnionVariable'
+
+	function storeUnionWordIntoSlot(box ValueId, offset ByteOffset, scrut ValueId, word ValueId, range SourceRange)
+		let displaced = self.emitIndirectLoad(self.typeOf(scrut), box: box, offset: offset, storageType: MaxonType.integer, range: range)
+		self.emitIndirectStore(box, offset: offset, value: word, storageType: MaxonType.integer, range: range)
+		self.emitDecref(displaced, range: range)
+	end 'storeUnionWordIntoSlot'
+
 	// ⭐⭐ **WRITE A MUTATED PAYLOAD BINDING BACK INTO THE SCRUTINEE'S BOX** — the exact inverse of
 	// `emitUnionPayloadLoad`, and the whole of `specs/mutable-enums.md`. It stores through
-	// `emitIndirectStore` (THE one `storeIndirect` emit) at the offset and width the LOAD committed to,
-	// carried on the binding rather than re-derived (see `VarInfo.isPayloadBinding`).
+	// `emitIndirectStore` (THE one `storeIndirect` emit) at the offset and width the LOAD committed
+	// to, carried on the binding rather than re-derived (see `VarInfo.isPayloadBinding`). A word union
+	// has no box to store into: `writeBackUnboxedPayload` rebuilds the word and rebinds the union
+	// variable, or stores the word into the slot that held it.
 	//
 	// ⭐ **THE BOX TAKES ITS OWN REFERENCE; THE BINDING KEEPS ITS OWN.** After the store the value has TWO
 	// owners — the box, whose `__destruct_<U>` cascade releases the slot, and the binding, which
@@ -39226,21 +39363,26 @@ export type Parser
 	// a reassignment cannot change the answer — a scalar binding's declared type refuses a heap RHS), so
 	// membership IS the fact, already single-homed in `bindingIsOwned`. A second column would be free to
 	// disagree with the set that actually emits the drop.
-	function writeBackPayload(func IrFunction, binding VarInfo, nameTok Token)
+	function writeBackPayload(func IrFunction, binding VarInfo, nameTok Token) throws SourceParseError
+		if self.valueIsAnUnboxedUnion(binding.payloadScrutBox()) 'aWordUnion'
+			try self.writeBackUnboxedPayload(func, binding: binding, nameTok: nameTok)
+			return
+		end 'aWordUnion'
+
 		let range = SourceRange.ofToken(nameTok)
 		let value = binding.boundValue
 		let managed = self.bindingIsOwned(binding)
 
-		// ⚖⚖ **THE STORE BELOW WRITES THE SCRUTINEE'S BOX, AND WHERE THE SCRUTINEE IS A PARAMETER THAT BOX IS
-		// THE CALLER'S.** So a body whose arm writes back summarises as writing that parameter's record, and
-		// E3159 can answer at the call — without this seed `bump(s)` whose arm is `n = 42` reports nothing and
-		// mutates a caller's `let` (`specs/mutable-enums.md`'s two `error.let-to-a-callee-that-writes-back-*`).
-		// It is the RECORD-WRITE column and not the narrow receiver column, because a write-back is neither a
-		// container method on the parameter nor a store into a field of `self`: putting it there would refuse a
-		// `let` RECEIVER for a method that writes back its own payload, which is the exemption one tier up.
-		//
-		let writtenParams = paramMaskOfValue(func, value: binding.payloadScrutBox())
-		func.writesThroughParamMask = func.writesThroughParamMask or writtenParams
+		// ⚖⚖ **THE STORE BELOW WRITES THE SCRUTINEE'S BOX, AND WHERE THE SCRUTINEE IS A `mutable`
+		// PARAMETER OR LIVES IN A RECORD PARAMETER'S FIELD THAT BOX IS THE CALLER'S.** So a body whose
+		// arm writes back summarises as writing that parameter's record, and E3159 can answer at the call
+		// — without this seed `bump(s)` whose arm is `n = 42` reports nothing and mutates a caller's
+		// `let` (`specs/mutable-enums.md`'s two `error.let-to-a-callee-that-writes-back-*`). It is the
+		// RECORD-WRITE column and not the narrow receiver column, because a write-back is neither a
+		// container method on the parameter nor a store into a field of `self`: putting it there would
+		// refuse a `let` RECEIVER for a method that writes back its own payload, which is the exemption
+		// one tier up.
+		self.noteUnionWriteReach(func, scrut: binding.payloadScrutBox())
 		self.noteClosureStoreSite(ClosureStoreDestination.field(binding.payloadScrutBox(), base: ClosureStoreBase.unspelled), value: value, at: nameTok)
 
 		if managed 'boxBecomesASecondOwner'
@@ -44206,7 +44348,7 @@ export type Parser
 		self.releaseRefusedReply(sent.reply, range: range)
 		let tagShift = self.sendErrorTagShift(layout)
 
-		if not layout.isBoxed() 'aScalarError'
+		if not layout.carriesPayloads() 'aScalarError'
 			return self.emitAddLiteral(status, addend: tagShift + ErrorFlagOrdinalBias, anchor: anchor)
 		end 'aScalarError'
 
@@ -45915,7 +46057,7 @@ export type Parser
 	// — the table, the ordering, the tag arithmetic — is one operation, and a second copy of it would be a
 	// `match e` arm selected by a table the other half did not build.
 	function fusedErrorUnionInfo(members TryBlockErrorMemberArray, fusedOrdinal ValueId) returns ErrorUnionInfo
-		var layout = EnumLayout.create(SynthesizedErrorUnionName, isUnion: true, conformsTo: NameRoster.create(), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
+		var layout = EnumLayout.create(SynthesizedErrorUnionName, isUnion: true, conformsTo: NameRoster.create(), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer, isSynthesized: true)
 		var caseMembers = TryBlockErrorMemberArray.create()
 
 		for m in 0 upto members.count() 'eachMember'
@@ -45958,7 +46100,7 @@ export type Parser
 	function sentReplyErrorMembers(messageName ByteArray, sendErrorName ByteArray) returns TryBlockErrorMemberArray
 		var members = TryBlockErrorMemberArray.create()
 		let sendLayout = self.requireRoutedErrorLayout(sendErrorName)
-		members.push(TryBlockErrorMember.create(sendErrorName, clause: ThrowsClause.throwing(String.from(sendErrorName)), isBoxed: sendLayout.isBoxed(), layout: sendLayout, placement: serviceSendErrorPlacement(sendLayout)))
+		members.push(TryBlockErrorMember.create(sendErrorName, clause: ThrowsClause.throwing(String.from(sendErrorName)), isBoxed: sendLayout.carriesPayloads(), layout: sendLayout, placement: serviceSendErrorPlacement(sendLayout)))
 
 		let clause = self.signatures.throwsOf(messageName)
 		let errorName = try throwsClauseName(clause) otherwise return members
@@ -46838,7 +46980,7 @@ export type Parser
 		end 'seen'
 
 		let layout = self.requireRoutedErrorLayout(name)
-		let isBoxed = layout.isBoxed()
+		let isBoxed = layout.carriesPayloads()
 		let span = enumTagSpan(layout)
 
 		// A SCALAR member's runtime value is `tag + bias`; a BOXED member's is the tag loaded out of the box.
@@ -47039,13 +47181,16 @@ export type Parser
 		end 'k'
 	end 'tryErrorEnumType'
 
-	// ⭐ **IS THE THROWN/CAUGHT ERROR A BOXED (payload-bearing) UNION?** — the ONE fact the error-flag ABI
-	// turns on, and the derive-once point for it. Read at BOTH ends so the flag round-trips: the throw
-	// ENCODE (`emitThrowError`, which stamps it on the `throwError` op for `lowerThrowError` to write the box
-	// pointer verbatim) and the catch DECODE (`declareCaughtError`, which binds `e` to that pointer verbatim
-	// for BOTH catching constructs). Both funnel through the one `enumInAnyFile(name).isBoxed()` here, so a boxed union cannot be
-	// encoded as a pointer at one end and decoded as an `ordinal + bias` at the other. A SCALAR enum and a
-	// non-`named` type are `false` — their flag is `ordinal + ErrorFlagOrdinalBias`.
+	// ⭐ **IS THE THROWN/CAUGHT ERROR A BOXED (payload-bearing) UNION?** — the ONE fact the error-flag
+	// ABI turns on, and the derive-once point for it. Read at BOTH ends so the flag round-trips: the
+	// throw ENCODE (`emitThrowError`, which stamps it on the `throwError` op for `lowerThrowError` to
+	// write the box pointer verbatim) and the catch DECODE (`declareCaughtError`, which binds `e` to
+	// that pointer verbatim for BOTH catching constructs). Both funnel through the one
+	// `enumInAnyFile(name).carriesPayloads()` here, so a boxed union cannot be encoded as a pointer at
+	// one end and decoded as an `ordinal + bias` at the other. A SCALAR enum and a non-`named` type
+	// are `false` — their flag is `ordinal + ErrorFlagOrdinalBias`. An error union `implements` an
+	// interface, which `unionRepresentationOf` never stores as a word, so a payload-bearing one is
+	// always a box.
 	function throwsTypeIsBoxedUnion(errorType MaxonType) returns bool
 		if maxonTypeTag(errorType) != ValueTypeTag.named 'notNamed'
 			return false
@@ -47053,7 +47198,7 @@ export type Parser
 
 		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(errorType)) otherwise return false
 		return match self.signatures.enumFor(name, readerFilePath: self.job.path) 'e'
-			declared(layout) gives layout.isBoxed()
+			declared(layout) gives layout.carriesPayloads()
 			undeclared gives false
 		end 'e'
 	end 'throwsTypeIsBoxedUnion'
@@ -48594,7 +48739,7 @@ export type Parser
 			return
 		end 'anImmortalRecord'
 
-		self.emitOwnershipRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames, result: RetainResult.discarded), args: argsOf(value), range: range)
+		self.emitOwnershipRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames, result: RetainResult.discarded, readerFilePath: self.job.path), args: argsOf(value), range: range)
 
 		// ⭐ **AND THE OP IS THE FACT: after this line `value`'s allocation has two owners.** The mark rides
 		// here rather than at the named doors above because that is what makes it unforgettable — see
@@ -48786,6 +48931,12 @@ export type Parser
 	// have kept a reference. A send is satisfied by either; the two destructive move-outs are not, which is why
 	// this is a door of its own rather than a widening of the column (see the field header).
 	function valueIsSolelyOwnedHere(value ValueId) returns bool
+		// A payload-free word owns nothing, so it is trivially sole; refusing it would reject a service
+		// method that returns it beside a constructed word (E3137).
+		if self.valueIsAnImmortalImageRecord(value) and self.valueIsAnUnboxedUnion(value) 'aPayloadFreeWord'
+			return true
+		end 'aPayloadFreeWord'
+
 		if self.valueIsHeldByAnEnclosingLoop(value) 'aLoopIteratesIt'
 			return false
 		end 'aLoopIteratesIt'
@@ -49930,7 +50081,7 @@ export type Parser
 		// `__mm_retain` gives `source`'s box a second owner exactly as `__mm_incref` does, so the source is
 		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(source)
-		let retained = self.emitRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(source), nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName), args: argsOf(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		let retained = self.emitRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(source), nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName, readerFilePath: self.job.path), args: argsOf(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 		self.carryFromSharedRecord(retained, from: source, source: self.bodyState, path: ValueCarryPath.copy)
 		return retained
 	end 'emitRetainCall'
@@ -56135,6 +56286,22 @@ export type Parser
 		let matchLabel = labelTok.value
 		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 
+		// The write place is read here, right after the scrutinee expression, while `lastIndirectLoad`
+		// still names the slot load that produced it; an arm's own loads would overwrite it, and a
+		// writable field scrutinee would then be refused as reaching nowhere.
+		if not isErrorUnionMatch and self.valueIsBoxedUnion(scrut) 'aPayloadBearingScrutinee'
+			self.bodyState.unionWritePlaces.upsert(scrut, value: self.unionWritePlaceOf(func, scrutStart: scrutStart, scrut: scrut))
+
+			if self.valueIsAnUnboxedUnion(scrut) 'aWordRebindsItsVariable'
+				match self.unionWritePlaceFor(scrut) 'carryTheVariable'
+					variable(name) then self.carryUnionVariable(carried, name: name)
+					nowhere or
+					readOnlyParameter or
+					slot then break
+				end 'carryTheVariable'
+			end 'aWordRebindsItsVariable'
+		end 'aPayloadBearingScrutinee'
+
 		let entryVals = self.snapshotBindings(carried)
 
 		// Arm-loop state. The first arm's test goes into the block the scrutinee left control in
@@ -56249,8 +56416,7 @@ export type Parser
 		// `scrutineeBindingIsMutable`.
 		// ⚖ Derived ONCE here because two readers ask it — `scrutineeBindingIsMutable`, which states the
 		// ruling, and `declarePayloadBindings`' co-ownership demotion, which must not contradict it.
-		let scrutIsAParameter = valueIsAParameter(scrut, paramCount: func.paramCount)
-		let scrutMutable = self.scrutineeBindingIsMutable(scrut, isAParameter: scrutIsAParameter) or self.matchScrutineeFieldChainIsWritable(scrutStart, scrut: scrut)
+		let scrutMutable = self.scrutineeBindingIsMutable(scrut, isAParameter: valueIsAParameter(scrut, paramCount: func.paramCount)) or self.matchScrutineeFieldChainIsWritable(scrutStart, scrut: scrut) or self.matchScrutineeIsAMutableParameter(scrutStart)
 		let scrutIsAFreshTemporary = scrutSolelyOwned and self.pendingTempsContain(scrut)
 
 		// "Some reaching path left the scrutinee consumed" — the merge-level union of the per-arm bit, which
@@ -56916,10 +57082,11 @@ export type Parser
 	// `identifier` + the match label before the scrutinee is parsed would answer the same for a bare local
 	// only, and would need a second grammar for "what shapes may appear before a match label".
 	//
-	// ⚖ **A UNION-TYPED PARAMETER IS A MUTABLE SCRUTINEE** (user ruling), and it is the only shape that owns
-	// no binding and still answers `true`. A parameter is a borrowed reference to the CALLER's record, which
-	// the callee may already write — a `String` parameter takes `append` — and the caller's argument answers
-	// for that write at the call, by the very E3159 that judges it.
+	// ⚖ **A UNION-TYPED PARAMETER ANSWERS `true` HERE**, and it is the only shape that owns no binding
+	// and still does: a parameter is a borrowed reference to the CALLER's union, so no arm may empty
+	// its slot. That answer is not permission to assign a payload. `unionWritePlaceOf` is, and it
+	// admits a parameter only when it is `mutable`; the caller's argument then answers for the write
+	// at the call, by the very E3159 that judges it.
 	//
 	// ⛔ **A TEMPORARY IS NOT ONE, THOUGH ITS FRAME OWNS IT.** `scrutMutable` is also the move-out's gate
 	// (`scrutSolelyOwned and not scrutMutable`), so admitting a temporary would silently move
@@ -56942,6 +57109,62 @@ export type Parser
 		view owner = try self.bodyState.ownedBindings.get(index) otherwise panic("scrutineeBindingIsMutable: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 		return owner.isMutable()
 	end 'scrutineeBindingIsMutable'
+
+	function matchScrutineeIsAMutableParameter(index ElementIndex) returns bool
+		let name = try self.matchScrutineeBareName(index) otherwise return false
+
+		if not self.bodyState.scope.contains(name) 'notInScope'
+			return false
+		end 'notInScope'
+
+		view info = self.bodyState.scope.getInfo(name)
+		return info.isParameter and info.cellCrossesByReference
+	end 'matchScrutineeIsAMutableParameter'
+
+	function unionWritePlaceOf(func IrFunction, scrutStart ElementIndex, scrut ValueId) returns UnionWritePlace
+		if valueIsAParameter(scrut, paramCount: func.paramCount) and not self.hasLiveOwner(scrut) 'anUnmarkedParameter'
+			return UnionWritePlace.readOnlyParameter(self.tokenAt(scrutStart).value)
+		end 'anUnmarkedParameter'
+
+		if let index = try self.liveOwnerIndexOf(scrut) 'aLocalVariable'
+			view owner = try self.bodyState.ownedBindings.get(index) otherwise panic("unionWritePlaceOf: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+
+			if owner.isMutable() 'writable'
+				return UnionWritePlace.variable(owner.name)
+			end 'writable'
+
+			return UnionWritePlace.nowhere
+		end 'aLocalVariable'
+
+		if not (self.matchScrutineeFieldChainIsWritable(scrutStart, scrut: scrut) or self.matchScrutineeIsAMutableParameter(scrutStart)) 'notWritable'
+			return UnionWritePlace.nowhere
+		end 'notWritable'
+
+		if not self.bodyState.lastIndirectLoad.isLoadOf(scrut) 'notLoadedFromASlot'
+			return UnionWritePlace.nowhere
+		end 'notLoadedFromASlot'
+
+		return UnionWritePlace.slot(self.bodyState.lastIndirectLoad.box, offset: self.bodyState.lastIndirectLoad.offset)
+	end 'unionWritePlaceOf'
+
+	function carryUnionVariable(carried VarInfoArray, name ByteArray)
+		for binding in carried 'alreadyCarried'
+			if binding.name.equals(name) 'theVariable'
+				return
+			end 'theVariable'
+		end 'alreadyCarried'
+
+		for binding in self.bodyState.mutableVars 'eachMutable'
+			if binding.name.equals(name) 'theMutable'
+				carried.push(binding)
+				return
+			end 'theMutable'
+		end 'eachMutable'
+	end 'carryUnionVariable'
+
+	function unionWritePlaceFor(scrutinee ValueId) returns UnionWritePlace
+		return try self.bodyState.unionWritePlaces.get(scrutinee) otherwise UnionWritePlace.nowhere
+	end 'unionWritePlaceFor'
 
 	// Parse ONE arm's body, in one of THREE shapes. An EXPRESSION arm is either a `gives` — a single
 	// expression, whose value feeds the merge phi — or a DIVERGING terminal form (`panic("…")` /
@@ -58608,12 +58831,13 @@ export type Parser
 		return self.tagOf(value) == ValueTypeTag.named and self.numberTagOf(value) == ValueTypeTag.structRef
 	end 'valueIsUnion'
 
-	// Is `value` a payload-bearing (HEAP-BOXED) enum/union — a `named(X)` whose layout `isBoxed`?
-	// `valueIsUnion`'s twin, differing only in the layout bit it reads: `isBoxed` (a heap box exists),
-	// not `isUnion` (a union vs a bare enum). It is what tells a call RESULT that owns a heap box (a
-	// boxed-union `make()`, adopted by the caller) from a payload-free enum value (a bare i64 tag,
-	// dropped by no one) — a distinction the tag alone cannot make, since both are `named`.
-	// The same `named` tag pre-check is the hot-path allocation guard `valueIsUnion` documents.
+	// Is `value` a payload-bearing enum/union (a box or a tagged word) — a `named(X)` whose layout
+	// `carriesPayloads`? `valueIsUnion`'s twin, differing only in the layout bit it reads:
+	// `carriesPayloads` (a record exists), not `isUnion` (a union vs a bare enum). It is what tells a
+	// call RESULT that owns a heap record (a payload-bearing union `make()`, adopted by the caller)
+	// from a payload-free enum value (a bare i64 tag, dropped by no one) — a distinction the tag alone
+	// cannot make, since both are `named`. The same `named` tag pre-check is the hot-path allocation
+	// guard `valueIsUnion` documents.
 	function valueIsBoxedUnion(value ValueId) returns bool
 		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
 			return false
@@ -58630,7 +58854,7 @@ export type Parser
 		end 'mayHaveAsked'
 
 		view decl = self.enumMatchFor(value)
-		let boxed = enumMatchIsDeclared(decl) and requireEnumLayout(decl).isBoxed()
+		let boxed = enumMatchIsDeclared(decl) and requireEnumLayout(decl).carriesPayloads()
 
 		if self.boxedUnionAnswers is self.anchors.boxedUnionAnswers 'firstAnswer'
 			self.boxedUnionAnswers = BoxedUnionAnswerArray.create()
@@ -59347,10 +59571,11 @@ export type Parser
 	// is a fact about the SCRUTINEE and never about the pattern: every binding of a `var` union is
 	// writable and every binding of a `let` one is E2013, whatever the arm spells. A per-binding `var`
 	// keyword may not override an immutable scrutinee, and that is the honest rule — the write is a
-	// store into the scrutinee's box, so the scrutinee's own mutability is the permission being asked
-	// for.
+	// store into the scrutinee's box (or the rebuilt word of a word union), so the scrutinee's own
+	// mutability is the permission being asked for.
 	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutSolelyOwned bool, scrutMutable bool, scrutIsAFreshTemporary bool, layout EnumLayout) returns bool throws SourceParseError
 		var movedManaged = false
+		let unboxed = self.signatures.unionRepresentation(layout) == UnionRepresentation.word
 
 		for binding in bindings 'each'
 			if binding.isDiscard 'discard'
@@ -59373,7 +59598,7 @@ export type Parser
 			// they could not disagree today, but nothing made that a property rather than a coincidence.
 			let offset = layout.payloadSlotOffset(binding.slot)
 			let storage = payloadStorageOf(class)
-			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, offset: offset, valueType: payloadValueTypeOf(class, declared: declared), storage: storage, range: range)
+			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
 			self.brandValue(loaded, brand: self.payloadPlaceBrand(binding.field, layout: layout, resolved: declared))
 
@@ -59414,7 +59639,13 @@ export type Parser
 				self.markValuePromise(loaded)
 				self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, exclusivity: OwnedHeapExclusivity.coOwned, range: range)
 				movedManaged = true
-			end 'aGreenThreadPayload' else if payloadClassIsManaged(class) 'managedPayload'
+			end 'aGreenThreadPayload' else if payloadClassIsManaged(class) and unboxed 'aWordPayload'
+				// A word's payload is never emptied out of it, but the match still consumes a solely-owned
+				// immutable scrutinee on the condition the box's move-out uses, so a later read is E3102 in
+				// either representation.
+				movedManaged = movedManaged or (scrutSolelyOwned and not scrutMutable)
+				self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, bindingWrites: bindingWrites, range: range)
+			end 'aWordPayload' else if payloadClassIsManaged(class) 'managedPayload'
 				// ⭐⭐ **A `var` UNION'S PAYLOAD SLOT IS A PLACE THIS FRAME MAY STILL WRITE, SO THE BIND BORROWS
 				// IT RATHER THAN EMPTYING IT.** The move-out is destructive — it nulls the slot and consumes the
 				// scrutinee — and that is only honest where nothing can ever put a payload back. A `let` union is
@@ -59427,11 +59658,9 @@ export type Parser
 				if scrutSolelyOwned and not scrutMutable and not self.sendErrorSlotIsCoOwnedByType(layout, slotType: declared) 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: layout.name), range: range)
 					movedManaged = true
-				end 'ownedMoveOut' else if not bindingWrites and not self.holdReplacesItsSource(loaded) 'heldRead'
-					_ = self.holdBindingRead(loaded, name: binding.nameTok.value, range: range)
-				end 'heldRead' else 'retainedCoOwn'
-					self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
-				end 'retainedCoOwn'
+				end 'ownedMoveOut' else 'borrowed'
+					self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, bindingWrites: bindingWrites, range: range)
+				end 'borrowed'
 			end 'managedPayload'
 		end 'each'
 
@@ -59521,6 +59750,15 @@ export type Parser
 		self.emitIncref(loaded, range: range)
 		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: OwnedHeapExclusivity.coOwned)
 	end 'retainBorrowedPayload'
+
+	function borrowPayload(bindingInfo VarInfo, loaded ValueId, name ByteArray, bindingWrites bool, range SourceRange)
+		if not bindingWrites and not self.holdReplacesItsSource(loaded) 'heldRead'
+			_ = self.holdBindingRead(loaded, name: name, range: range)
+			return
+		end 'heldRead'
+
+		self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
+	end 'borrowPayload'
 
 	// The half both managed-payload bind paths share: the binding OWNS the payload's reference, however it
 	// was acquired (moved out of a solely-owned box, or retained out of a box with another owner). The
@@ -69276,7 +69514,7 @@ export type Parser
 	end 'valueIsARecordAStoreAliases'
 
 	function requireValueMeetsLetFieldRules(value ValueId, valueStart ElementIndex, place String, into ReadOnlyRootKind, anchor Token) throws SourceParseError
-		if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) 'readOnlyIntoALetField'
+		if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) or self.valueIsAnImmortalImageRecord(value) 'readOnlyIntoALetField'
 			return
 		end 'readOnlyIntoALetField'
 
@@ -71396,13 +71634,15 @@ export type Parser
 			return try self.consumeEnumAccessorHop(layout, tag: self.emitEnumCaseTagConstant(layout, index: index, range: range), anchorTok: typeTok)
 		end 'accessorHop'
 
-		// ⭐ A PAYLOAD-BEARING union is HEAP-BOXED, and EVERY case of it takes the boxed form — a
-		// payload-free case (`Container.empty`) is a bare tag in a box, so the box lifetime is uniform
-		// (`isBoxed` decides once, per the union, not per the case). A payload-free enum/union stays
-		// the bare-i64-tag representation.
-		if layout.isBoxed() 'boxedUnion'
-			return try self.parseEnumBoxConstruct(func, layout: layout, caseIndex: index, caseTok: caseTok, range: range)
-		end 'boxedUnion'
+		// ⭐ A PAYLOAD-BEARING union is a box or a tagged word, and EVERY case of it takes that form — a
+		// payload-free case (`Container.empty`) is a bare tag in a box, or the stored tag alone in a
+		// word, so the lifetime is uniform (`carriesPayloads` decides once, per the union, not per the
+		// case). A payload-free enum/union stays the bare-i64-tag representation.
+		match self.signatures.unionRepresentation(layout) 'representation'
+			box or
+			word then return try self.parseEnumBoxConstruct(func, layout: layout, caseIndex: index, caseTok: caseTok, range: range)
+			bareTag then break
+		end 'representation'
 
 		// A payload-free enum/union case carries no value list. `Color.red(5)` is a payload on a
 		// construct that declares none — refused rather than silently dropped.
@@ -71872,12 +72112,14 @@ export type Parser
 		return self.trackEnumFromNameResult(layout, result: self.emitRuntimeCall(enumFromNameSymbol(layout.name), args: args, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range))
 	end 'emitEnumFromNameCall'
 
-	// ⭐ **A BOXED UNION'S LOOKUP HANDS BACK AN OWNED HEAP RECORD; A PAYLOAD-FREE DECLARATION'S HANDS BACK A
-	// BARE TAG.** The helper allocates the box (`EnumLookupRuntime.emitBoxWithTag`), so the result owes a drop
-	// exactly as a written `Container.empty` does — enrolled through the same door that construct uses, which
-	// is what makes the statement-end drop and the binding's ownership one rule rather than two.
+	// ⭐ **A BOXED UNION'S LOOKUP HANDS BACK AN OWNED HEAP RECORD; A PAYLOAD-FREE DECLARATION'S HANDS
+	// BACK A BARE TAG.** The helper allocates the box (`EnumLookupRuntime.emitBoxWithTag`), so the
+	// result owes a drop exactly as a written `Container.empty` does — enrolled through the same door
+	// that construct uses, which is what makes the statement-end drop and the binding's ownership one
+	// rule rather than two. A word union's helper allocates nothing and is enrolled the same way, so
+	// the one rule covers it too.
 	function trackEnumFromNameResult(layout EnumLayout, result ValueId) returns ValueId
-		if layout.isBoxed() 'ownsARecord'
+		if layout.carriesPayloads() 'ownsARecord'
 			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
 		end 'ownsARecord'
 
@@ -72136,6 +72378,10 @@ export type Parser
 
 		let handBack = try self.transferPayloadsIntoAGreenThread(fill, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
 
+		if payloadFillBuildsAConstruct(fill) and self.signatures.unionRepresentation(layout) == UnionRepresentation.word 'aWordUnion'
+			return (try self.emitUnboxedUnionWordConstruct(layout, fill: fill, caseIndex: caseIndex, classes: classes, args: args, argsBareLocal: argsBareLocal, caseTok: caseTok, range: range), handBack)
+		end 'aWordUnion'
+
 		let box = self.openPayloadRecord(layout, fill: fill, range: range)
 
 		self.emitUnionTagStore(box, tag: layout.tagOfIndex(caseIndex), range: range)
@@ -72147,10 +72393,8 @@ export type Parser
 				continue
 			end 'storedWithItsValue'
 
-			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
 			view class = try classes.get(i) otherwise panic("emitEnumBox: classes.get OOB at {i} — it is filled in lockstep with the fields")
-			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
-			let stored = try self.storedPayloadValue(fill, class: class, arg: arg, argBareLocal: bareLocal, owner: box, caseTok: caseTok, range: range)
+			let stored = try self.storedPayloadAt(fill, index: i, class: class, args: args, argsBareLocal: argsBareLocal, holder: PayloadHolder.record(box), caseTok: caseTok, range: range)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i as PayloadSlotIndex), value: stored, storageType: payloadStorageOf(class), range: range)
 
 			if payloadClassIsExistential(class) 'andItsWitnessHalf'
@@ -72170,6 +72414,25 @@ export type Parser
 
 		return (box, handBack)
 	end 'emitEnumBox'
+
+	function emitUnboxedUnionWordConstruct(layout EnumLayout, fill PayloadFill, caseIndex CaseIndex, classes PayloadClassArray, args ValueIdArray, argsBareLocal BoolArray, caseTok Token, range SourceRange) returns ValueId throws SourceParseError
+		if layout.payloadArityAt(caseIndex) == 0 'payloadFree'
+			return self.emitUnboxedPayloadFreeWord(layout, caseIndex: caseIndex, range: range)
+		end 'payloadFree'
+
+		view class = try classes.get(0) otherwise panic("emitUnboxedUnionWordConstruct: classes.get(0) OOB on a case with one payload")
+		let stored = try self.storedPayloadAt(fill, index: 0, class: class, args: args, argsBareLocal: argsBareLocal, holder: PayloadHolder.word, caseTok: caseTok, range: range)
+		let word = self.emitUnboxedWord(stored, tag: layout.wordTagOfIndex(caseIndex), unionName: layout.name, range: range)
+		self.trackOwnedTemp(word, exclusivity: OwnedHeapExclusivity.sole)
+		return word
+	end 'emitUnboxedUnionWordConstruct'
+
+	function payloadFillBuildsAConstruct(fill PayloadFill) returns bool
+		return match fill 'fill'
+			unionConstruct gives true
+			serviceMessage gives false
+		end 'fill'
+	end 'payloadFillBuildsAConstruct'
 
 	function openPayloadRecord(layout EnumLayout, fill PayloadFill, range SourceRange) returns ValueId
 		match fill 'destination'
@@ -72387,9 +72650,24 @@ export type Parser
 		self.bodyState.deferredProvenance.noteMoveSite(site)
 	end 'fileSharedSendSite'
 
-	// What actually lands in payload slot `i`, per fill. A CONSTRUCT moves in here, where the box exists; a
-	// MESSAGE was transferred before the box did, so this frame has already given up its reference and the
-	// store is the bare word.
+	// A word has no record to own its payload, so `arg` stands in as the owner. That is sound only
+	// because the owner is read solely for an opaque type-parameter payload (`markOpaqueSlotOwner`),
+	// and `unionRepresentationOf` never makes a union with one a word.
+	function storedPayloadAt(fill PayloadFill, index ElementIndex, class PayloadClass, args ValueIdArray, argsBareLocal BoolArray, holder PayloadHolder, caseTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let arg = try args.get(index) otherwise panic("storedPayloadAt: args.get OOB at {index} after the arity check")
+		let bareLocal = try argsBareLocal.get(index) otherwise panic("storedPayloadAt: argsBareLocal.get OOB at {index} — captured in lockstep with the args")
+
+		let owner = match holder 'holder'
+			record(box) gives box
+			word gives arg
+		end 'holder'
+
+		return try self.storedPayloadValue(fill, class: class, arg: arg, argBareLocal: bareLocal, owner: owner, caseTok: caseTok, range: range)
+	end 'storedPayloadAt'
+
+	// What actually lands in payload slot `i`, per fill. A CONSTRUCT moves in here, where its box or
+	// word is built; a MESSAGE was transferred before the box did, so this frame has already given up
+	// its reference and the store is the bare word.
 	function storedPayloadValue(fill PayloadFill, class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, caseTok Token, range SourceRange) returns ValueId throws SourceParseError
 		return match fill 'fill'
 			unionConstruct gives try self.moveInPayload(class, arg: arg, argBareLocal: argBareLocal, owner: owner, anchor: caseTok, range: range)
@@ -72940,10 +73218,39 @@ export type Parser
 		return self.emitIndirectLoad(MaxonType.integer, box: box, offset: UnionTagOffset, storageType: MaxonType.integer, range: range)
 	end 'emitUnionTagLoad'
 
-	// ⭐⭐ **WHERE AN ENUM VALUE'S TAG LIVES — THE ONE ANSWER, read by the `match` DISPATCH and by `.ordinal`.**
-	// A SCALAR enum's value IS its tag (`parseEnumLiteral` emits the tag as the value), so the tag is the
-	// value and this emits nothing. A BOXED union's value is a heap POINTER, so its i64 tag is LOADED from
-	// offset 0 through `emitUnionTagLoad` above.
+	function emitWordMask(word ValueId, mask FullRangeInt, resultType MaxonType, range SourceRange) returns ValueId
+		let maskLiteral = self.emitLiteral(mask, valueType: MaxonType.integer, range: range)
+		let result = self.mintValueOfType(resultType)
+		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(result, lhs: word, rhs: maskLiteral, op: MaxonBinOp.bitAnd), range: range)
+		return result
+	end 'emitWordMask'
+
+	function emitUnboxedTagOf(word ValueId, range SourceRange) returns ValueId
+		let raw = self.emitWordMask(word, mask: UnboxedTagMask, resultType: MaxonType.integer, range: range)
+		let one = self.emitLiteral(1, valueType: MaxonType.integer, range: range)
+		let index = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(index, lhs: raw, rhs: one, op: MaxonBinOp.sub), range: range)
+		return index
+	end 'emitUnboxedTagOf'
+
+	function emitUnboxedWord(payload ValueId, tag FullRangeInt, unionName ByteArray, range SourceRange) returns ValueId
+		let tagLiteral = self.emitLiteral(tag, valueType: MaxonType.integer, range: range)
+		let word = self.mintValue(ValueTypeTag.named, nameId: self.artifact.typeNames.intern(unionName))
+		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(word, lhs: payload, rhs: tagLiteral, op: MaxonBinOp.bitOr), range: range)
+		return word
+	end 'emitUnboxedWord'
+
+	function emitUnboxedPayloadFreeWord(layout EnumLayout, caseIndex CaseIndex, range SourceRange) returns ValueId
+		let word = self.emitEnumTagLiteral(layout.name, tag: layout.wordTagOfIndex(caseIndex), range: range)
+		self.markReadOnly(word, mark: ReadOnlyMark.imageRecord)
+		return word
+	end 'emitUnboxedPayloadFreeWord'
+
+	// ⭐⭐ **WHERE AN ENUM VALUE'S TAG LIVES — THE ONE ANSWER, read by the `match` DISPATCH and by
+	// `.ordinal`.** A SCALAR enum's value IS its tag (`parseEnumLiteral` emits the tag as the value),
+	// so the tag is the value and this emits nothing. A BOXED union's value is a heap POINTER, so its
+	// i64 tag is LOADED from offset 0 through `emitUnionTagLoad` above. A WORD union's value carries
+	// its tag in the low bits, so the tag is masked out and un-biased by `emitUnboxedTagOf`.
 	//
 	// ⚠⚠ **IT IS ONE FUNCTION BECAUSE THE DECISION DRIFTS, NOT ONLY THE OFFSET — AND THE DRIFT IS MEASURED.**
 	// Both readers already shared `emitUnionTagLoad`, so they could never disagree about WHERE in the box a
@@ -72954,9 +73261,10 @@ export type Parser
 	// oracle's 1 and 0 — box addresses, which moved between runs. Reunited here, a reader that forgets the
 	// question cannot be written: there is nowhere to ask it.
 	//
-	// ⚠ **EVERY CASE OF A BOXED UNION IS BOXED, PAYLOAD-FREE ONES INCLUDED** — `isBoxed` decides per UNION
-	// (`maxPayloadArity() > 0`), not per case, so `empty` beside a `value(n)` is a bare tag in a box and its
-	// value is a pointer too. That is why the predicate here is the layout's and never the case's.
+	// ⚠ **EVERY CASE OF A PAYLOAD-BEARING UNION TAKES ITS RECORD FORM, PAYLOAD-FREE ONES INCLUDED** —
+	// `carriesPayloads` decides per UNION (`maxPayloadArity() > 0`), not per case, so `empty` beside a
+	// `value(n)` is a bare tag in a box, or the stored tag alone in a word, and its value is not a
+	// bare tag either way. That is why the predicate here is the layout's and never the case's.
 	//
 	// A caller that has not already established the value IS an enum keeps that guard at its own site — the
 	// `match` dispatch's `isEnumMatch`, which is a question about the SCRUTINEE and not about the layout.
@@ -72978,16 +73286,16 @@ export type Parser
 		// error but compilation succeeded" — while all three `match`/accessor cases stayed green. That case's
 		// whole subject is a file that HOLDS such a value and never opens it, so the wider door deletes it.
 		//
-		// ⚠ Written BEFORE the `isBoxed` split: an UNBOXED enum's value IS its tag and emits nothing, but the
-		// file reached the layout either way. A cure behind the load would pass the union cases and still report
-		// every plain `enum`.
+		// ⚠ Written BEFORE the representation split: a bare-tag enum's value IS its tag and emits
+		// nothing, but the file reached the layout either way. A cure behind the load would pass the
+		// union cases and still report every plain `enum`.
 		try self.requireMembersReachable(layout.name, visibility: layout.visibility, declFilePath: layout.declFilePath, memberTok: anchor)
 
-		if not layout.isBoxed() 'theValueIsTheTag'
-			return value
-		end 'theValueIsTheTag'
-
-		return self.emitUnionTagLoad(value, range: range)
+		match self.signatures.unionRepresentation(layout) 'representation'
+			bareTag then return value
+			word then return self.emitUnboxedTagOf(value, range: range)
+			box then return self.emitUnionTagLoad(value, range: range)
+		end 'representation'
 	end 'emitEnumTagOf'
 
 	// ⭐⭐ **THE SAME QUESTION WHERE THERE IS NO VALUE TO ASK IT OF — a case named through its TYPE
@@ -73012,29 +73320,31 @@ export type Parser
 	function emitEnumCaseTagConstant(layout EnumLayout, index CaseIndex, range SourceRange) returns ValueId
 		let tag = layout.tagOfIndex(index)
 
-		if layout.isBoxed() 'theValueIsNotTheTag'
-			return self.emitLiteral(tag, valueType: MaxonType.integer, range: range)
-		end 'theValueIsNotTheTag'
-
-		return self.emitEnumTagLiteral(layout.name, tag: tag, range: range)
+		match self.signatures.unionRepresentation(layout) 'representation'
+			bareTag then return self.emitEnumTagLiteral(layout.name, tag: tag, range: range)
+			box or
+			word then return self.emitLiteral(tag, valueType: MaxonType.integer, range: range)
+		end 'representation'
 	end 'emitEnumCaseTagConstant'
 
-	// Load a payload field out of the box at `8 + slot*8` — the `emitFieldLoad` split, one op further.
-	// A SCALAR is minted at the field's DECLARED type (so a nested `match dir` sees a `Direction`, and the
-	// shift rule reads a ranged alias's low bound); a MANAGED payload is minted at its concrete storage
-	// type (`structRef`/`string`) so an extracted struct's field access (`b.mass`) resolves and its
-	// ownership is read off the tag; a nested BOXED UNION is minted at its `named(<union>)`, so a `match` on
-	// the extracted payload recognizes it and its drop routes to `__destruct_<U>`. The op itself always
-	// carries a concrete storage WIDTH, which for the boxed-union case is not the value type
-	// (`maxonTypeToStdType` panics on a `named`) — see `payloadStorageOf`.
+	// Load a payload field out of the box at `8 + slot*8`, or out of a word union by masking its tag
+	// off — the `emitFieldLoad` split, one op further. A SCALAR is minted at the field's DECLARED type
+	// (so a nested `match dir` sees a `Direction`, and the shift rule reads a ranged alias's low
+	// bound); a MANAGED payload is minted at its concrete storage type (`structRef`/`string`) so an
+	// extracted struct's field access (`b.mass`) resolves and its ownership is read off the tag; a
+	// nested BOXED UNION is minted at its `named(<union>)`, so a `match` on the extracted payload
+	// recognizes it and its drop routes to `__destruct_<U>`. The op itself always carries a concrete
+	// storage WIDTH, which for the boxed-union case is not the value type (`maxonTypeToStdType` panics
+	// on a `named`) — see `payloadStorageOf`.
 	//
-	// ⚠ **THE ADDRESS, THE WIDTH AND THE VALUE TYPE ARE ALL THE CALLER'S, exactly as they are on the STORE
-	// side (`emitEnumBox`), and that is not a convenience.** `declarePayloadBindings` needs the slot's
-	// `PayloadClass` anyway — to decide managed-vs-scalar ownership, and to record the slot's ADDRESS and
-	// WIDTH on a binding a write-back may later store through — so classifying the slot a SECOND time here
-	// would derive each of the three numbers twice.
-	// mirrors it must agree on the address and the width EXACTLY or the store corrupts the box, so they are
-	// derived ONCE at the caller and passed to everything that emits with them.
+	// ⚠ **THE SOURCE (A SLOT'S ADDRESS AND WIDTH, OR THE WORD) AND THE VALUE TYPE ARE ALL THE
+	// CALLER'S, exactly as they are on the STORE side (`emitEnumBox`), and that is not a
+	// convenience.** `declarePayloadBindings` needs the slot's `PayloadClass` anyway — to decide
+	// managed-vs-scalar ownership, and to record the slot's ADDRESS and WIDTH on a binding a
+	// write-back may later store through — so classifying the slot a SECOND time here would derive
+	// each of the numbers twice. The load and the store must agree on the address and the width
+	// EXACTLY or the store corrupts the box, so they are derived ONCE at the caller and passed to
+	// everything that emits with them.
 	//
 	// A scalar payload's `valueType` is its DECLARED type (an enum payload stays `named(<Enum>)` so a
 	// nested `match` recognizes it) and never the storage: a function-alias payload bound out as a bare
@@ -73042,8 +73352,11 @@ export type Parser
 	// 'unknown'`. The caller reaches it through `payloadValueTypeOf`, off the same `payloadTypeOf`
 	// call that adopts the id into this file's interner — without which the minted value carries a
 	// signatures id `enumMatchFor` would misresolve.
-	function emitUnionPayloadLoad(box ValueId, field PayloadField, offset ByteOffset, valueType MaxonType, storage MaxonType, range SourceRange) returns ValueId
-		let result = self.emitIndirectLoad(valueType, box: box, offset: offset, storageType: storage, range: range)
+	function emitUnionPayloadLoad(box ValueId, field PayloadField, valueType MaxonType, source PayloadSource, range SourceRange) returns ValueId
+		let result = match source 'source'
+			word gives self.emitWordMask(box, mask: UnboxedPointerMask, resultType: valueType, range: range)
+			slot(offset, storage) gives self.emitIndirectLoad(valueType, box: box, offset: offset, storageType: storage, range: range)
+		end 'source'
 
 		// ⭐ **A PAYLOAD DECLARED `__ManagedMemory` BINDS AS THE BUFFER SURFACE** — the declared
 		// SPELLING, which `valueType` cannot carry (the alias resolves to the same `genericInstance` a
@@ -73053,7 +73366,7 @@ export type Parser
 		self.markDeclaredSurface(result, declared: self.signatures.payloadSurfaceOf(field))
 
 		if maxonTypeTag(valueType) == ValueTypeTag.interfaceRef 'andItsWitnessHalf'
-			self.pairInterfaceWitness(result, witness: self.emitIndirectLoad(MaxonType.integer, box: box, offset: offset + InterfaceWitnessHalfOffset, storageType: MaxonType.integer, range: range))
+			self.pairInterfaceWitness(result, witness: self.emitIndirectLoad(MaxonType.integer, box: box, offset: source.slotOffset() + InterfaceWitnessHalfOffset, storageType: MaxonType.integer, range: range))
 		end 'andItsWitnessHalf'
 
 		return result
@@ -73073,13 +73386,15 @@ export type Parser
 		// is deliberately separate (the value is `named(E)` while the op carries `integer`), so the recording
 		// has to be spelled here or the compiler declines to write down a value it has in hand.
 		//
-		// ⚠ **WHAT THAT COST WAS MEASURABLE, and it is the identical measurement `emitLiteralIn`'s float/bool
-		// split carries**: a CONSTANT `[Color.red, Color.green, Color.blue]` could not be recognised as constant
-		// at all, so `enum-narrow-storage`'s six literals could not become the `.rdata` blobs their spec pins.
-		// The domain is INTEGER because a payload-free enum's value IS an i64 tag — the same reading
-		// `emitEnumTagOf` and `TypeResolution` give it — so no float pattern can reach `foldIntBinOp` through
-		// this door. A BOXED union never arrives: `emitEnumCaseTagConstant` sends it to `emitLiteral` at
-		// `integer`, because its value is a box pointer and its tag is not it.
+		// ⚠ **WHAT THAT COST WAS MEASURABLE, and it is the identical measurement `emitLiteralIn`'s
+		// float/bool split carries**: a CONSTANT `[Color.red, Color.green, Color.blue]` could not be
+		// recognised as constant at all, so `enum-narrow-storage`'s six literals could not become the
+		// `.rdata` blobs their spec pins. The domain is INTEGER because a payload-free enum's value IS an
+		// i64 tag — the same reading `emitEnumTagOf` and `TypeResolution` give it — so no float pattern
+		// can reach `foldIntBinOp` through this door. A BOXED union never arrives:
+		// `emitEnumCaseTagConstant` sends it to `emitLiteral` at `integer`, because its value is a box
+		// pointer and its tag is not it. A payload-free case of a WORD union does arrive, with its stored
+		// tag (`wordTagOfIndex`), which is the whole of that value.
 		self.recordConst(result, folded: tag)
 
 		return result
@@ -76092,7 +76407,7 @@ export type Parser
 		// A payload-free enum IS its i64 tag: there is no box to allocate and no slot to deep-copy, so the
 		// cloner `installUnionCascades` would build for it copies nothing. It keeps the undefined-function
 		// refusal the spelling already earns, which is the oracle's answer too (E4006).
-		if not requireEnumLayout(declared).isBoxed() 'payloadFreeEnum'
+		if not requireEnumLayout(declared).carriesPayloads() 'payloadFreeEnum'
 			return DeclaredEnum.undeclared
 		end 'payloadFreeEnum'
 
@@ -88956,6 +89271,10 @@ export type Parser
 	function emitIndirectLoad(declared MaxonType, box ValueId, offset ByteOffset, storageType MaxonType, range SourceRange) returns ValueId
 		let result = self.mintValueOfType(declared)
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.loadIndirect(result, addr: box, offset: offset, valueType: storageType), range: range)
+		self.bodyState.lastIndirectLoad.recorded = true
+		self.bodyState.lastIndirectLoad.result = result
+		self.bodyState.lastIndirectLoad.box = box
+		self.bodyState.lastIndirectLoad.offset = offset
 		return result
 	end 'emitIndirectLoad'
 
@@ -91973,7 +92292,7 @@ export type Parser
 			return true
 		end 'aRangedAlias'
 
-		return not requireEnumLayout(namedEnum).isBoxed()
+		return not requireEnumLayout(namedEnum).carriesPayloads()
 	end 'valueIsAScalar'
 
 	function constValueOfKnown(value ValueId) returns ConstValue
@@ -99368,8 +99687,8 @@ export type Parser
 	//   • a `returns Pair` — a struct box (`resolveNamedStruct` re-tags the `named` signature type to
 	//     `structRef` first, so the result binds a struct and `p.first` resolves — the two-place agreement
 	//     the tolerant sweep's `named` return could not make on its own);
-	//   • a `returns Container` — a payload-bearing (boxed) union/enum box (`valueIsBoxedUnion`):
-	//     a `named` result whose LAYOUT `isBoxed`, indistinguishable by tag from a bare
+	//   • a `returns Container` — a payload-bearing (box or word) union/enum (`valueIsBoxedUnion`):
+	//     a `named` result whose LAYOUT `carriesPayloads`, indistinguishable by tag from a bare
 	//     enum value, which owns no box and is adopted by no one.
 	//
 	// ⚠ **THE ADOPTION ITSELF IS THE CALLER'S, NOT THIS FUNCTION'S — see `enrolOwnedCallTemp`.** Adopting here
@@ -101467,12 +101786,12 @@ export type Parser
 		end 'right'
 	end 'requireNotAnEnumAccessorComparison'
 
-	// ⭐ **QUESTION 3 — HAND A TAG BACK AS A NUMBER RATHER THAN AS A VALUE OF THE ENUM'S TYPE**, and it is a
-	// third question rather than question 1 re-read. It asks what the tag value is TYPED, which is the
-	// predicate spelled — a LOADED tag is already `integer` and is returned as it stands, and the `+ 0` below
-	// is the same obligation where it is not. Reading `isBoxed` for this would be right only while
-	// `emitEnumTagOf`'s load happens to mint `integer`; the type column is what the answer turns on, so it is
-	// what is asked.
+	// ⭐ **QUESTION 3 — HAND A TAG BACK AS A NUMBER RATHER THAN AS A VALUE OF THE ENUM'S TYPE**, and it
+	// is a third question rather than question 1 re-read. It asks what the tag value is TYPED, which
+	// is the predicate spelled — a LOADED tag is already `integer` and is returned as it stands, and
+	// the `+ 0` below is the same obligation where it is not. Reading the representation for this
+	// would be right only while `emitEnumTagOf`'s load happens to mint `integer`; the type column is
+	// what the answer turns on, so it is what is asked.
 	//
 	// ⭐⭐ **THE `+ 0` IS THE MEANING RATHER THAN A TRICK FOR PRODUCING IT.** An enum value IS its tag
 	// (`parseEnumLiteral`), so under the accessor's guard the answer and the value are the same 64 bits, and

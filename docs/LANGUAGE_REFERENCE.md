@@ -2551,8 +2551,10 @@ In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are 
 
 ### Mutable Match Bindings
 
-When the matched value is a `var` (or a union parameter the function may write), assigning to a binding
-writes back into the union:
+Assigning to a binding replaces the payload the matched union holds, so the union must be a place the
+function can write. The scrutinee is a local `var`, a field of a `var` or of a record parameter (`p.shape`),
+or a parameter marked `mutable` (see [Parameter Passing](#parameter-passing)). The assignment writes back into
+that union:
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
@@ -2578,9 +2580,18 @@ function main() returns ExitCode
 end 'main'
 ```
 
-When the matched value is a `let`, the bindings are immutable and assigning to one is **E2013**. They are
-also [read-only](#read-only-values) all the way down, whatever each payload's own declaration, so a write
-through one is **E3159** and binding a record out of one to a `var` is **E3078**.
+Every other scrutinee is **E2013**, and the message names the fix:
+
+- A `let` scrutinee has immutable bindings.
+- An unmarked union parameter: `'value' is a payload of the by-value parameter 'b', so assigning it cannot
+  reach the caller's union; mark 'b' mutable or copy it into a local var`.
+- The receiver `self`: copy the union into a local `var` and match on that.
+- A temporary, or any union nothing holds: copy it into a local `var` first.
+
+The bindings of a `let` scrutinee are also [read-only](#read-only-values) all the way down, whatever each
+payload's own declaration, so a write through one is **E3159** and binding a record out of one to a `var` is
+**E3078**. Writing a field of a parameter's payload record in place (`value.count = value.count + 1`) is not
+an assignment of the binding, and it stays legal.
 
 ### Comparing Union Values
 
@@ -2643,6 +2654,17 @@ As with enums, a method carries its own visibility, and `static function` is not
 `self`, a method reads `self.name`, `self.ordinal`, `self.rawValue` and a
 [struct-backed](#struct-backed-unions) union's backing field; a case's payload (`self.radius`) is
 **E2015**, and `match self` binds it.
+
+### Representation
+
+A union with no payload is a bare tag. A union with at most seven cases, tagged by declaration position,
+whose every case carries no payload or exactly one heap record (a `String`, a `Character`, a struct, or an
+array, map or other generic-instance record), and that declares no `implements` clause, is one machine word:
+the payload's address with the case tag in its low three bits. Constructing one allocates nothing beyond the
+payload, and dropping one releases the payload it holds. Every other union with a payload is a heap box
+holding the tag and one slot per payload field, and a union that declares `implements` is always a box. The
+two forms behave alike: the same ownership, the same `match`, the same diagnostics. The word layout is
+described in `docs/MEMORY_MANAGEMENT.md`.
 
 ### Union Interface Conformance
 
@@ -3209,6 +3231,9 @@ function main() returns ExitCode
 end 'main'
 ```
 
+- A union parameter whose `match` assigns a payload binding is marked `mutable` too, because the assignment
+  replaces the payload the caller's union holds; unmarked, it is **E2013** (see
+  [Mutable Match Bindings](#mutable-match-bindings)).
 - A record-type parameter is never rebound, marked or not: reassigning one is **E2013** (`'r' is a record
   parameter and cannot be reassigned; copy it into a local var`). Writing through it — a field store
   (`p.x = 99`) or a mutating call on a field (`p.items.push(x)`) — is not a reassignment and reaches the

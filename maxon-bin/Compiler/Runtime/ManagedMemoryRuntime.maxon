@@ -6271,25 +6271,26 @@ function buildManagedWalk(module StdModule, name ByteArray, scope WalkScope, wal
 	var walked = emitWalkedRecordBytes(module, func: body.func, cursor: stepped, arr: arr, action: action, ids: body.ids)
 
 	if walksElements 'eachElement'
-		// Read AFTER the detach: it replaces `buffer@0`, so a pointer taken above it would walk the abandoned
-		// allocation.
-		let buffer = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordBufferOffset, ids: body.ids)
-		let length = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordLengthOffset, ids: body.ids)
-		let es = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordElementSizeOffset, ids: body.ids)
-		var afterWalk = emitElementWalkRange(module, func: body.func, cur: walked, base: buffer, count: length, elementSize: es, elementWalk: body.elementWalk(), action: action, ids: body.ids)
-		emitCascadeBranch(module, from: afterWalk, to: body.done)
-	end 'eachElement' else 'noElementWalk'
-		emitCascadeBranch(module, from: walked, to: body.done)
-	end 'noElementWalk'
+		walked = emitWalkedRecordElements(module, func: body.func, cursor: walked, arr: arr, elementWalk: body.elementWalk(), action: action, ids: body.ids)
+	end 'eachElement'
 
+	emitCascadeBranch(module, from: walked, to: body.done)
 	finishWalkBody(module, body: body)
 end 'buildManagedWalk'
+
+export function emitWalkedRecordElements(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
+	let buffer = emitLoadField(module, block: cursor.block, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let length = emitLoadField(module, block: cursor.block, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: cursor.block, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+
+	return emitElementWalkRange(module, func: func, cur: cursor, base: buffer, count: length, elementSize: es, elementWalk: elementWalk, action: action, ids: ids)
+end 'emitWalkedRecordElements'
 
 // ⭐ **WHAT A WALK OWES THE BYTES OF A RECORD IT DESCENDS.** A view's reference to the allocation its bytes live in
 // is met (`WalkMeeting.view`), because that allocation may be a String record the graph also owns; an owner's
 // separate buffer is a share walk's to mark, and no owner reference but the record's reaches it. A
 // move then detaches either, since a move is a write. Answers the cursor the walk continues at.
-function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
+export function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
 	var ownedBytes = module.addBlock(func, label: b"ownbytes", heat: BlockHeat.normal)
 	var viewedBytes = module.addBlock(func, label: b"viewbytes", heat: BlockHeat.normal)
 	var meetParent = module.addBlock(func, label: b"viewparent", heat: BlockHeat.normal)

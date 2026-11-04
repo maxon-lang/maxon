@@ -349,6 +349,11 @@ release's version as its heading when the release is cut.
   and stores it into a stdlib `ByteArray`, or the reverse, crosses two types.
   Fix: write `n as Wide`, or use the stdlib `Byte`. A plain `int`, a value of the element's own alias and an
   `as Wide` cast are accepted.
+- A payload assignment in a `match` must reach its union. Assigning a match binding replaces the payload held
+  by the matched union, so it must be able to write that union: the scrutinee is a local `var`, a field of a
+  `var`, a record parameter's field, or a parameter marked `mutable`. Any other scrutinee (an unmarked
+  parameter, the receiver `self`, a temporary) is E2013, and the message names the fix.
+  Fix: mark the parameter `mutable`, or copy the union into a local `var` and match on that.
 
 ## 0.5.0 — 2026-10-08
 

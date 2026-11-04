@@ -1273,6 +1273,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	var hasLoadOrigin as BoolArray
 	var tracked as BoolArray
 	var namedTypeHoldsARecord as NamedTypeRecordMemo
+	var unboxedWords as UnboxedWordMemo
 	var kindWritability as RecordKindWritability
 	var rootValues as ValueIdArray
 
@@ -1538,7 +1539,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, calls CallSiteCursor, funcCount ElementIndex) returns ProvenanceTracer
 		var noSites = ProvenanceSites.create(ProvenanceColumns.create())
-		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(), rootNames: NameRoster.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), isImmutableBindingValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), callWrittenPlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(), recordWrittenMasks: ParamPositionMaskArray.create(), letRefused: BoolArray.create(), keptRefusedValues: ValueIdArray.create(), keptRefusedAt: PositionKeyArray.create(), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ArgumentParameterArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), landingNotedPositions: ParamCountArray.create(), landingNotedRows: EntryIndexArray.create(), keptArgFuncs: FuncIndexArray.create(), keptArgValues: ValueIdArray.create(), keptArgCalls: SourceRangeArray.create(), keptArgParams: ArgumentParameterArray.create(), keptArgCallees: NameRoster.create(), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(), pendingKeeps: PendingKeepArray.create(), returnedValues: ValueIdArray.create(), keptEscapes: BoolArray.create(), keptReturned: BoolArray.create(), functionHoldings: FunctionHoldingAnswers.create(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(), varDeadFrom: TokenIndexArray.create(), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), incomingStart: EntryIndexArray.create(), incomingLength: EntryIndexArray.create(), incomingComplete: BoolArray.create(), incomingValues: ValueIdArray.create(), pairMerge: ValueIdArray.create(), pairIncoming: ValueIdArray.create(), pairHanded: BoolArray.create(), blockPairStart: EntryIndexArray.create(), useCounts: EntryIndexArray.create(), pathSteps: PathStepArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(), freshMember: BoolArray.create(), freshRequired: BoolArray.create(), freshChecked: BoolArray.create(), freshChanged: false, freshNeeds: FuncIndexArray.create(), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(), permanentOrFreshReturns: BoolArray.create(), permanentNeeds: FuncIndexArray.create(), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(), permanentOrFreshGivenReturns: BoolArray.create(), permanentGivenParams: ParamPositionMaskArray.create(), permanentOrFreshGivenParams: ParamPositionMaskArray.create(), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(), slotAccessNext: StoreSlotKeyArray.create(), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(moduleGlobalTypesOf(project.managedGlobals, vars: true)), swapOperands: ValueIdArray.create(), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(), readOnlyKeptAt: PositionKeyArray.create(), doorAcceptsParameters: false}
+		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), unboxedWords: UnboxedWordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(), rootNames: NameRoster.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), isImmutableBindingValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), callWrittenPlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(), recordWrittenMasks: ParamPositionMaskArray.create(), letRefused: BoolArray.create(), keptRefusedValues: ValueIdArray.create(), keptRefusedAt: PositionKeyArray.create(), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ArgumentParameterArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), landingNotedPositions: ParamCountArray.create(), landingNotedRows: EntryIndexArray.create(), keptArgFuncs: FuncIndexArray.create(), keptArgValues: ValueIdArray.create(), keptArgCalls: SourceRangeArray.create(), keptArgParams: ArgumentParameterArray.create(), keptArgCallees: NameRoster.create(), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(), pendingKeeps: PendingKeepArray.create(), returnedValues: ValueIdArray.create(), keptEscapes: BoolArray.create(), keptReturned: BoolArray.create(), functionHoldings: FunctionHoldingAnswers.create(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(), varDeadFrom: TokenIndexArray.create(), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), incomingStart: EntryIndexArray.create(), incomingLength: EntryIndexArray.create(), incomingComplete: BoolArray.create(), incomingValues: ValueIdArray.create(), pairMerge: ValueIdArray.create(), pairIncoming: ValueIdArray.create(), pairHanded: BoolArray.create(), blockPairStart: EntryIndexArray.create(), useCounts: EntryIndexArray.create(), pathSteps: PathStepArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(), freshMember: BoolArray.create(), freshRequired: BoolArray.create(), freshChecked: BoolArray.create(), freshChanged: false, freshNeeds: FuncIndexArray.create(), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(), permanentOrFreshReturns: BoolArray.create(), permanentNeeds: FuncIndexArray.create(), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(), permanentOrFreshGivenReturns: BoolArray.create(), permanentGivenParams: ParamPositionMaskArray.create(), permanentOrFreshGivenParams: ParamPositionMaskArray.create(), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(), slotAccessNext: StoreSlotKeyArray.create(), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(moduleGlobalTypesOf(project.managedGlobals, vars: true)), swapOperands: ValueIdArray.create(), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(), readOnlyKeptAt: PositionKeyArray.create(), doorAcceptsParameters: false}
 	end 'create'
 
 	function tracesFirst(index ElementIndex) returns bool
@@ -2655,7 +2656,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function fieldNameLoadedBy(func IrFunction, value ValueId) returns ByteArray throws AbsentError
 		self.indexDefinitions(func, ir: self.module)
 		let defining = try self.definingOpIndexOf(value)
-		view op = try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.fieldNameLoadedBy: op {defining} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: defining)
 
 		match slotReadOfOp(op, opIndex: defining) 'read'
 			load(_, addr, offset) then return try self.fieldNameAt(func, record: addr, offset: offset)
@@ -2923,7 +2924,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			for position in order 'eachBlock'
 				let blockRef = try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.walk: position {position} from the walk order is past func.blockRefs")
 				let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.walk: blockRef from func.blockRefs not in module.blocks")
-				self.traceBlock(func, ir: ir, block: block, position: position)
+				self.traceBlock(func, block: block, position: position)
 			end 'eachBlock'
 
 			self.calls.finishPass(index)
@@ -2938,9 +2939,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachReturningBlock'
 	end 'walk'
 
-	function traceBlock(func IrFunction, ir MaxonModule, block IrBlock, position ElementIndex)
+	function traceBlock(func IrFunction, block IrBlock, position ElementIndex)
 		for opIdx in block.bodyOps() 'eachOp'
-			self.traceOp(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.traceBlock: opIdx {opIdx} not in module.ops"), opIdx: opIdx)
+			self.traceOp(func, plainOp: self.memoryOpAt(func, opIdx: opIdx), opIdx: opIdx)
 		end 'eachOp'
 
 		for pair in self.pairsFrom(position) upto self.pairsUpTo(position) 'eachPhi'
@@ -2952,7 +2953,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachPhi'
 	end 'traceBlock'
 
-	function traceOp(func IrFunction, op MaxonOp, opIdx ElementIndex)
+	function traceOp(func IrFunction, plainOp MaxonOp, opIdx ElementIndex)
+		let op = self.wordOpAsMemoryOp(func, op: plainOp)
+
 		match op 'op'
 			loadIndirect(result, addr, offset, _) then self.traceLoad(func, result: result, addr: addr, offset: offset)
 			storeIndirect(addr, offset, value, _) then self.traceStore(func, addr: addr, offset: offset, value: value)
@@ -4525,7 +4528,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.stageParamEdges: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				view op = try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.stageParamEdges: opIdx {opIdx} not in module.ops")
+				view op = self.memoryOpAt(func, opIdx: opIdx)
 				self.addParameterRecordEdgesAt(func, op: op, callerIndex: index)
 				writesARawResource = writesARawResource or opWritesARawResource(op)
 			end 'eachOp'
@@ -5369,7 +5372,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// The op of `__module_init` that defines `value`, which every value a store there names has.
 	function definingOpIn(init IrFunction, value ValueId, subject String) returns MaxonOp
 		return match self.definingOpOf(init, ir: self.module, value: value) 'defined'
-			op(opIndex) gives try self.module.ops.get(opIndex) otherwise panic("ProvenanceTracer.definingOpIn: op {opIndex} not in module.ops")
+			op(opIndex) gives self.memoryOpAt(init, opIdx: opIndex)
 			notAnOp panic("ProvenanceTracer.definingOpIn: {subject} in `__module_init` is defined by no op — every value a store there names is one an op of it defines")
 		end 'defined'
 	end 'definingOpIn'
@@ -5388,9 +5391,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			view block = try self.module.blocks.get(blockRef) otherwise panic("ProvenanceTracer.callMayHandBackAModuleLetsRecord: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				view op = try self.module.ops.get(opIdx) otherwise panic("ProvenanceTracer.callMayHandBackAModuleLetsRecord: opRef {opIdx} not in module.ops")
+				view op = self.memoryOpAt(func, opIdx: opIdx)
 
-				if self.opLoadsALetFieldRecord(func, op: op) 'readsALetField'
+				if self.opLoadsALetFieldRecord(func, plainOp: op) 'readsALetField'
 					return true
 				end 'readsALetField'
 
@@ -5564,7 +5567,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 					continue
 				end 'outsideTheSpan'
 
-				if self.operandsCarryRank(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.rootReachesTheDoorUnhanded: opIdx {opIdx} not in module.ops"), rank: rank) 'handedOn'
+				if self.operandsCarryRank(self.memoryOpAt(func, opIdx: opIdx), rank: rank) 'handedOn'
 					return false
 				end 'handedOn'
 			end 'eachOp'
@@ -5874,7 +5877,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function lowestWritableRankPlacedByTheCall(func IrFunction, value ValueId, kinds HeldRecordKinds, skipped ElementIndex, reach LetReach, bound ElementIndex) returns ElementIndex
 		let defining = try self.definingOpIndexOf(value) otherwise return bound
-		view op = try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.lowestWritableRankPlacedByTheCall: op {defining} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: defining)
 		view callee = try freshCalleeOf(op) otherwise return bound
 
 		match self.calls.resolution.classifyCallee(func, callee: callee) 'calleeClass'
@@ -6285,7 +6288,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			end 'eachArg'
 
 			for opIdx in block.bodyOps() 'eachOp'
-				self.indexDefinition(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.indexDefinitions: op {opIdx} not in module.ops"), opIdx: opIdx, valueCount: valueCount)
+				self.indexDefinition(func, plainOp: self.memoryOpAt(func, opIdx: opIdx), opIdx: opIdx, valueCount: valueCount)
 			end 'eachOp'
 		end 'eachBlock'
 
@@ -6303,7 +6306,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.indexUseCounts: blockRef not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				self.countUsesOf(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.indexUseCounts: op {opIdx} not in module.ops"), valueCount: valueCount)
+				self.countUsesOf(self.memoryOpAt(func, opIdx: opIdx), valueCount: valueCount)
 			end 'eachOp'
 
 			if block.hasTerminatorOp() 'terminated'
@@ -6408,7 +6411,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return value < self.useCounts.count() and (try self.useCounts.get(value) otherwise panic("ProvenanceTracer.valueIsUsedOnce: useCounts.get OOB at v{value}")) == 1
 	end 'valueIsUsedOnce'
 
-	function indexDefinition(op MaxonOp, opIdx ElementIndex, valueCount ElementIndex)
+	function indexDefinition(func IrFunction, plainOp MaxonOp, opIdx ElementIndex, valueCount ElementIndex)
+		if let born = try self.wordConstructionResultOf(func, op: plainOp) 'aWordIsBorn'
+			self.noteRootDefinition(born, opIdx: opIdx, valueCount: valueCount)
+			return
+		end 'aWordIsBorn'
+
+		let op = self.wordOpAsMemoryOp(func, op: plainOp)
+
 		match op 'op'
 			loadIndirect(result, addr, offset, _) then self.noteFieldOp(result, opIdx: opIdx, valueCount: valueCount, base: addr, offset: offset as AccessStep)
 			call(result, callee, args, _, _, _, _, _) then self.indexCallDefinition(result, opIdx: opIdx, valueCount: valueCount, callee: callee, args: args)
@@ -6479,6 +6489,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 	end 'indexCallDefinition'
+
+	function noteWordDefinition(result ValueId, opIdx ElementIndex, valueCount ElementIndex, word ValueId)
+		_ = self.noteDefiningOp(result, opIdx: opIdx, valueCount: valueCount, kind: AccessHopKind.same, base: word)
+	end 'noteWordDefinition'
 
 	function noteHeldDefinition(result ValueId, opIdx ElementIndex, valueCount ElementIndex, held ValueId)
 		_ = self.noteDefiningOp(result, opIdx: opIdx, valueCount: valueCount, kind: AccessHopKind.same, base: held)
@@ -6846,7 +6860,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				same or
 				field then break
 				element then return AccessRoot.computed
-				stop then return self.accessRootOfStop(func, ir: ir, value: current)
+				stop then return self.accessRootOfStop(func, value: current)
 			end 'hop'
 
 			current = self.hopBaseOf(current)
@@ -6855,9 +6869,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return AccessRoot.unknown
 	end 'accessRootOf'
 
-	function accessRootOfStop(func IrFunction, ir MaxonModule, value ValueId) returns AccessRoot
+	function accessRootOfStop(func IrFunction, value ValueId) returns AccessRoot
 		let opIndex = try self.definingOpIndexOf(value) otherwise panic("ProvenanceTracer.accessRootOfStop: a value that takes a stop hop has a defining op")
-		view op = try ir.ops.get(opIndex) otherwise panic("ProvenanceTracer.accessRootOfStop: op {opIndex} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: opIndex)
 		return AccessRoot.computed if self.producerOfOp(func, op: op).isACall() else AccessRoot.ground
 	end 'accessRootOfStop'
 
@@ -6947,7 +6961,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.indexDefinitions(func, ir: ir)
 		let opIndex = try self.definingOpIndexOf(value) otherwise return SlotRead.none
 
-		return self.slotReadThrough(func, ir: ir, read: slotReadOfOp(try ir.ops.get(opIndex) otherwise panic("ProvenanceTracer.slotReadUnder: opIndex {opIndex} not in module.ops"), opIndex: opIndex))
+		return self.slotReadThrough(func, ir: ir, read: slotReadOfOp(self.memoryOpAt(func, opIdx: opIndex), opIndex: opIndex))
 	end 'slotReadUnder'
 
 	function slotReadThrough(func IrFunction, ir MaxonModule, read SlotRead) returns SlotRead
@@ -6976,7 +6990,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 					continue
 				end 'anotherOp'
 
-				match self.scanForSlotRead(ir, block: block, start: (at + 1) as ElementIndex, to: to, addr: addr, offset: offset, rank: rank) 'tail'
+				match self.scanForSlotRead(func, block: block, start: (at + 1) as ElementIndex, to: to, addr: addr, offset: offset, rank: rank) 'tail'
 					reached then return true
 					stored then return false
 					ranOff then collectMaxonBlockSuccessors(ir, block: block, into: worklist)
@@ -7001,7 +7015,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			try visited.set(blockId, value: true) otherwise panic("ProvenanceTracer.slotReachedUnstored: visited.set OOB at block {blockId}")
 			let block = self.blockById(func, ir: ir, blockId: blockId)
 
-			match self.scanForSlotRead(ir, block: block, start: 0, to: to, addr: addr, offset: offset, rank: rank) 'body'
+			match self.scanForSlotRead(func, block: block, start: 0, to: to, addr: addr, offset: offset, rank: rank) 'body'
 				reached then return true
 				stored then continue
 				ranOff then collectMaxonBlockSuccessors(ir, block: block, into: worklist)
@@ -7040,7 +7054,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.rootPutIntoSlotBefore: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				let op = try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.rootPutIntoSlotBefore: opIdx {opIdx} not in module.ops")
+				view op = self.memoryOpAt(func, opIdx: opIdx)
 
 				if opLoadsOrStoresASlot(op) and self.putsRootIntoSlot(slotReadOfOp(op, opIndex: opIdx), rootRead: rootRead, addr: addr, offset: offset, rank: rank) and self.slotReachedUnstored(func, ir: ir, from: opIdx, to: to, addr: addr, offset: offset, rank: rank) 'reachesTheRead'
 					return true
@@ -7065,7 +7079,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	// What `block`'s ops from `start` meet first: op `to`, a store into `(addr, offset)` of a value that cannot be root
 	// `rank`'s record, or neither.
-	function scanForSlotRead(ir MaxonModule, block IrBlock, start ElementIndex, to ElementIndex, addr ValueId, offset ByteOffset, rank ElementIndex) returns SlotScan
+	function scanForSlotRead(func IrFunction, block IrBlock, start ElementIndex, to ElementIndex, addr ValueId, offset ByteOffset, rank ElementIndex) returns SlotScan
 		for i in start upto block.bodyOpCount() 'eachOp'
 			let opIdx = try block.bodyOpAt(i) otherwise panic("ProvenanceTracer.scanForSlotRead: bodyOpAt OOB at {i}")
 
@@ -7073,7 +7087,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				return SlotScan.reached
 			end 'theRead'
 
-			let op = try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.scanForSlotRead: opIdx {opIdx} not in module.ops")
+			view op = self.memoryOpAt(func, opIdx: opIdx)
 
 			if opLoadsOrStoresASlot(op) and self.replacesTheRecordOf(slotReadOfOp(op, opIndex: opIdx), addr: addr, offset: offset, rank: rank) 'thisSlot'
 				return SlotScan.stored
@@ -7322,7 +7336,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let produced = self.producingValueOf(func, ir: ir, value: value)
 
 		let opIndex = try self.definingOpIndexOf(produced) otherwise return self.sharedStorageClause(func, producer: UnattributedProducer, value: produced, producerOperands: singletonValue(produced))
-		view op = try ir.ops.get(opIndex) otherwise panic("ProvenanceTracer.sharedStorageSubjectAtTheDoor: opIndex {opIndex} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: opIndex)
 		return self.sharedStorageClause(func, producer: self.producerOfOp(func, op: op).subject(), value: produced, producerOperands: self.producerOperandsOf(op, value: produced))
 	end 'sharedStorageSubjectAtTheDoor'
 
@@ -7387,7 +7401,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.scratchCellFillOf: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				let filled = match slotReadOfOp(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.scratchCellFillOf: opIdx {opIdx} not in module.ops"), opIndex: opIdx) 'read'
+				let filled = match slotReadOfOp(self.memoryOpAt(func, opIdx: opIdx), opIndex: opIdx) 'read'
 					store(addr, offset, stored) gives stored if addr == cell and offset == ParameterCellValueOffset else cell
 
 					none or
@@ -7865,8 +7879,137 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'valueIsAnImmutableAggregate'
 
 	module function valueGivesAStoreNoWriter(func IrFunction, value ValueId) returns bool
-		return self.valueIsNoRecordAtAll(func, value: value) or not self.valueKindIsWritableState(func, value: value)
+		return self.valueIsNoRecordAtAll(func, value: value) or not self.valueKindIsWritableState(func, value: value) or self.valueIsALiteralWord(func, value: value)
 	end 'valueGivesAStoreNoWriter'
+
+	function valueIsAnUnboxedWord(func IrFunction, value ValueId) returns bool
+		if valueTagOf(func, value: value) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		return self.unboxedWords.nameIdIsAWord(self.signatures, typeNames: self.project.typeNames, nameId: self.nameIdOf(func, value: value), readerFilePath: func.sourceFilePath)
+	end 'valueIsAnUnboxedWord'
+
+	function wordConstructionResultOf(func IrFunction, op MaxonOp) returns ValueId throws AbsentError
+		let kind = try binOpKindOf(op)
+
+		match op 'op'
+			binOp(result, _, _, _) then return try self.wordConstructionResultIn(func, result: result, kind: kind)
+			default panic("ProvenanceTracer.wordConstructionResultOf: `binOpKindOf` answered for an op that is not a `binOp`")
+		end 'op'
+	end 'wordConstructionResultOf'
+
+	function wordConstructionResultIn(func IrFunction, result ValueId, kind MaxonBinOp) returns ValueId throws AbsentError
+		if kind == MaxonBinOp.bitOr and self.valueIsAnUnboxedWord(func, value: result) 'aConstruction'
+			return result
+		end 'aConstruction'
+
+		throw AbsentError.absent
+	end 'wordConstructionResultIn'
+
+	function memoryOpAt(func IrFunction, opIdx ElementIndex) returns MaxonOp
+		return self.wordOpAsMemoryOp(func, op: try self.module.ops.get(opIdx) otherwise panic("ProvenanceTracer.memoryOpAt: op {opIdx} not in module.ops"))
+	end 'memoryOpAt'
+
+	// A word union's payload read, tag read and construction are presented as the slot load, tag load
+	// and slot store of a box, so every judgement written for boxes holds for words. A read of
+	// `module.ops` that bypasses this sees a plain `binOp`, and a negative-proof site that does so
+	// misses the alias.
+	function wordOpAsMemoryOp(func IrFunction, op MaxonOp) returns MaxonOp
+		let kind = try binOpKindOf(op) otherwise return op
+
+		match op 'op'
+			binOp(result, lhs, _, _) then return self.wordBinOpAsMemoryOp(func, op: op, result: result, lhs: lhs, kind: kind)
+			default panic("ProvenanceTracer.wordOpAsMemoryOp: `binOpKindOf` answered for an op that is not a `binOp`")
+		end 'op'
+	end 'wordOpAsMemoryOp'
+
+	function wordBinOpAsMemoryOp(func IrFunction, op MaxonOp, result ValueId, lhs ValueId, kind MaxonBinOp) returns MaxonOp
+		if kind == MaxonBinOp.bitAnd and valueTagOf(func, value: result) != ValueTypeTag.integer and self.valueIsAnUnboxedWord(func, value: lhs) 'aPayloadExtraction'
+			return MaxonOp.loadIndirect(result, addr: lhs, offset: UnboxedPayloadSlotOffset, valueType: MaxonType.integer)
+		end 'aPayloadExtraction'
+
+		if kind == MaxonBinOp.bitAnd and valueTagOf(func, value: result) == ValueTypeTag.integer and self.valueIsAnUnboxedWord(func, value: lhs) 'aTagExtraction'
+			return MaxonOp.loadIndirect(result, addr: lhs, offset: UnionTagOffset, valueType: MaxonType.integer)
+		end 'aTagExtraction'
+
+		if kind == MaxonBinOp.bitOr and self.valueIsAnUnboxedWord(func, value: result) 'aWordConstruction'
+			return MaxonOp.storeIndirect(result, offset: UnboxedPayloadSlotOffset, value: lhs, valueType: MaxonType.integer)
+		end 'aWordConstruction'
+
+		return op
+	end 'wordBinOpAsMemoryOp'
+
+	function valueIsAUnboxedWordMergeOfFreshWords(func IrFunction, merge ValueId, root ValueId, depth ElementIndex, orPermanentRecords bool) returns bool
+		if depth > MaxAccessPathSteps or not self.valueIsAnUnboxedWord(func, value: merge) or self.incomingCountOf(merge) == 0 'notAWordMerge'
+			return false
+		end 'notAWordMerge'
+
+		for k in 0 upto self.incomingCountOf(merge) 'eachIncoming'
+			let incoming = self.incomingAt(merge, k: k)
+
+			if incoming == merge or incoming == root 'aBackEdge'
+				continue
+			end 'aBackEdge'
+
+			if self.isAMerge(incoming) 'nested'
+				if not self.valueIsAUnboxedWordMergeOfFreshWords(func, merge: incoming, root: root, depth: depth + 1, orPermanentRecords: orPermanentRecords) 'notFresh'
+					return false
+				end 'notFresh'
+
+				continue
+			end 'nested'
+
+			if self.valueWasMintedSole(func, value: incoming) or self.valueIsALiteralWord(func, value: incoming) 'aFreshWord'
+				continue
+			end 'aFreshWord'
+
+			if not orPermanentRecords or not self.recordIsPermanentlyReadOnly(func, base: self.sameRecordBase(func, ir: self.module, value: incoming), depth: depth + 1, allowFresh: true) 'notFresh'
+				return false
+			end 'notFresh'
+		end 'eachIncoming'
+
+		return true
+	end 'valueIsAUnboxedWordMergeOfFreshWords'
+
+	function valueIsALiteralWord(func IrFunction, value ValueId) returns bool
+		self.indexDefinitions(func, ir: self.module)
+		return self.valueIsALiteralWordWithin(func, value: value, depth: 0)
+	end 'valueIsALiteralWord'
+
+	function valueIsALiteralWordWithin(func IrFunction, value ValueId, depth ElementIndex) returns bool
+		if depth > MaxAccessPathSteps 'tooDeep'
+			return false
+		end 'tooDeep'
+
+		if self.isAMerge(value) 'aMerge'
+			let count = self.incomingCountOf(value)
+
+			if count == 0 'nothingIncoming'
+				return false
+			end 'nothingIncoming'
+
+			for k in 0 upto count 'eachIncoming'
+				if not self.valueIsALiteralWordWithin(func, value: self.incomingAt(value, k: k), depth: depth + 1) 'notALiteral'
+					return false
+				end 'notALiteral'
+			end 'eachIncoming'
+
+			return true
+		end 'aMerge'
+
+		let opIdx = try self.definingOpIndexOf(value) otherwise return false
+
+		if opIsTheLiteralOf(self.memoryOpAt(func, opIdx: opIdx), value: value) 'aLiteral'
+			return true
+		end 'aLiteral'
+
+		if self.hopKindOf(value) != AccessHopKind.same 'notTheSameRecord'
+			return false
+		end 'notTheSameRecord'
+
+		return self.valueIsALiteralWordWithin(func, value: self.hopBaseOf(value), depth: depth + 1)
+	end 'valueIsALiteralWordWithin'
 
 	function valueHoldsNoRecord(func IrFunction, value ValueId) returns bool
 		return tagIsByteRecord(valueTagOf(func, value: value)) or self.valueIsNoRecordAtAll(func, value: value)
@@ -7910,7 +8053,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.callReadsAReadOnlyInstanceElement(func, callee: maxonOpCalleeName(op), receiver: try self.operands.get(0) otherwise panic("ProvenanceTracer.opReadsAReadOnlyElement: operands.get(0) on a non-empty list"))
 	end 'opReadsAReadOnlyElement'
 
-	function opLoadsALetFieldRecord(func IrFunction, op MaxonOp) returns bool
+	function opLoadsALetFieldRecord(func IrFunction, plainOp MaxonOp) returns bool
+		let op = self.wordOpAsMemoryOp(func, op: plainOp)
 		return match op 'op'
 			loadIndirect(result, addr, offset, _) gives self.valueTagCarriesProvenance(func, value: result) and self.slotIsALetSlot(func, addr: addr, offset: offset, held: result)
 
@@ -8046,7 +8190,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 				try self.freshChecked.set(value, value: true) otherwise panic("ProvenanceTracer.returnsAFreshGraph: freshChecked.set OOB at v{value}")
 
-				if not self.freshOriginHolds(func, ir: ir, value: value as ValueId) 'notFreshAtItsOrigin'
+				if not self.freshOriginHolds(func, value: value as ValueId) 'notFreshAtItsOrigin'
 					return false
 				end 'notFreshAtItsOrigin'
 			end 'eachValue'
@@ -8108,7 +8252,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let block = try ir.blocks.get(try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.sweepFreshGraph: blockRefs.get OOB at {position}")) otherwise panic("ProvenanceTracer.sweepFreshGraph: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				if not self.sweepFreshOp(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.sweepFreshGraph: opIdx {opIdx} not in module.ops")) 'aUseKeepsItElsewhere'
+				if not self.sweepFreshOp(func, plainOp: self.memoryOpAt(func, opIdx: opIdx)) 'aUseKeepsItElsewhere'
 					return false
 				end 'aUseKeepsItElsewhere'
 			end 'eachOp'
@@ -8138,7 +8282,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'aRequiredMerge'
 	end 'joinFreshPhi'
 
-	function sweepFreshOp(func IrFunction, op MaxonOp) returns bool
+	function sweepFreshOp(func IrFunction, plainOp MaxonOp) returns bool
+		let op = self.wordOpAsMemoryOp(func, op: plainOp)
 		maxonOpOperandValues(op, into: self.operands)
 
 		if not self.anOperandIsAFreshMember() 'touchesNoMember'
@@ -8305,7 +8450,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.joinDerivedFreshValue(func, result: result)
 	end 'sweepFreshRuntimeCall'
 
-	function freshOriginHolds(func IrFunction, ir MaxonModule, value ValueId) returns bool
+	function freshOriginHolds(func IrFunction, value ValueId) returns bool
 		if value < valueIdAtParamPosition(func.paramCount) 'aParameter'
 			return false
 		end 'aParameter'
@@ -8318,7 +8463,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return self.isAMerge(value)
 		end 'noDefiningOp'
 
-		let op = try ir.ops.get(defining) otherwise panic("ProvenanceTracer.freshOriginHolds: op {defining} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: defining)
+
+		if opIsTheLiteralOf(op, value: value) and valueTagOf(func, value: value) == ValueTypeTag.named 'aPayloadFreeWord'
+			return true
+		end 'aPayloadFreeWord'
 
 		return match op 'op'
 			loadIndirect(_, addr, _, _) gives self.requireFreshSource(addr)
@@ -8412,7 +8561,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let occupant = self.sameRecordBase(func, ir: ir, value: value)
 		let defining = try self.definingOpIndexOf(occupant) otherwise return false
 
-		match slotReadOfOp(try ir.ops.get(defining) otherwise panic("ProvenanceTracer.valueIsAFreshOccupantOfALocalCell: op {defining} not in module.ops"), opIndex: defining) 'read'
+		match slotReadOfOp(self.memoryOpAt(func, opIdx: defining), opIndex: defining) 'read'
 			load(_, cell, offset) then return offset == ParameterCellValueOffset and self.valueIsALocalCell(cell) and self.cellHoldsOnlyFreshRecords(func, cell: cell, except: singletonValue(occupant), depth: 0)
 
 			none or
@@ -8446,7 +8595,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.cellIsFilledOnlyWithFreshRecords: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				if not self.cellOpFillsOnlyFreshRecords(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.cellIsFilledOnlyWithFreshRecords: opIdx {opIdx} not in module.ops"), cell: cell, aliases: aliases, except: except, depth: depth) 'aForeignFill'
+				if not self.cellOpFillsOnlyFreshRecords(func, plainOp: self.memoryOpAt(func, opIdx: opIdx), cell: cell, aliases: aliases, except: except, depth: depth) 'aForeignFill'
 					return false
 				end 'aForeignFill'
 			end 'eachOp'
@@ -8467,7 +8616,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return true
 	end 'cellIsFilledOnlyWithFreshRecords'
 
-	function cellOpFillsOnlyFreshRecords(func IrFunction, op MaxonOp, cell ValueId, aliases BoolArray, except ValueIdArray, depth ElementIndex) returns bool
+	function cellOpFillsOnlyFreshRecords(func IrFunction, plainOp MaxonOp, cell ValueId, aliases BoolArray, except ValueIdArray, depth ElementIndex) returns bool
+		let op = self.wordOpAsMemoryOp(func, op: plainOp)
+
 		if not self.opNamesTheRecord(func, op: op, record: cell) 'unrelated'
 			return true
 		end 'unrelated'
@@ -8615,7 +8766,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		self.indexDefinitions(func, ir: self.module)
 		let defining = try self.definingOpIndexOf(base) otherwise return false
-		view op = try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.baseIsSwappedOut: op {defining} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: defining)
 
 		if let callee = try freshCalleeOf(op) 'aCall'
 			return self.callResultIsSwappedOut(func, callee: callee, depth: depth)
@@ -8769,7 +8920,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				return OwnerBlockScan.remintsTheOwner
 			end 'theOwnerIsMintedAgain'
 
-			if self.opTouchesTheOwner(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.scanOwnerBlock: opIdx {opIdx} not in module.ops"), opIdx: opIdx, ownerBase: ownerBase, key: key) 'theOwnerIsUsed'
+			if self.opTouchesTheOwner(func, op: self.memoryOpAt(func, opIdx: opIdx), opIdx: opIdx, ownerBase: ownerBase, key: key) 'theOwnerIsUsed'
 				return OwnerBlockScan.touched
 			end 'theOwnerIsUsed'
 		end 'eachOp'
@@ -8871,8 +9022,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 					continue
 				end 'beforeTheLoad'
 
-				view stepOp = try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.loadIsSwappedOut: opIdx {opIdx} not in module.ops")
-				let stepResult = self.windowStepOf(func, op: stepOp, ownerBase: ownerBase, ownerKind: ownerKind, key: key, aliases: aliases)
+				view stepOp = self.memoryOpAt(func, opIdx: opIdx)
+				let stepResult = self.windowStepOf(func, plainOp: stepOp, ownerBase: ownerBase, ownerKind: ownerKind, key: key, aliases: aliases)
 
 				match stepResult 'step'
 					passes then continue
@@ -8889,7 +9040,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return false
 	end 'loadIsSwappedOut'
 
-	function windowStepOf(func IrFunction, op MaxonOp, ownerBase ValueId, ownerKind ByteArray, key StoreSlotKey, aliases BoolArray) returns WindowStep
+	function windowStepOf(func IrFunction, plainOp MaxonOp, ownerBase ValueId, ownerKind ByteArray, key StoreSlotKey, aliases BoolArray) returns WindowStep
+		let op = self.wordOpAsMemoryOp(func, op: plainOp)
+
 		match op 'op'
 			loadIndirect(result, addr, offset, _) then return self.windowLoadStep(func, result: result, addr: addr, offset: offset, key: key, aliases: aliases)
 			storeIndirect(addr, offset, value, _) then return self.windowStoreStep(func, addr: addr, offset: offset, value: value, ownerBase: ownerBase, key: key, aliases: aliases)
@@ -9033,7 +9186,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		view ir = self.module
 		self.indexDefinitions(func, ir: ir)
 
-		if self.baseIsAnImageRecord(self.sameRecordBase(func, ir: ir, value: value)) 'nothingToShare'
+		if self.baseIsAnImageRecord(self.sameRecordBase(func, ir: ir, value: value)) or self.valueIsALiteralWord(func, value: value) 'nothingToShare'
 			return true
 		end 'nothingToShare'
 
@@ -9098,7 +9251,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'indexSlotAccesses'
 
 	function indexSlotAccess(func IrFunction, functionIndex ElementIndex, opIdx ElementIndex)
-		view op = try self.module.ops.get(opIdx) otherwise panic("ProvenanceTracer.indexSlotAccess: opIdx {opIdx} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: opIdx)
 
 		if not opLoadsOrStoresASlot(op) 'neitherLoadsNorStores'
 			return
@@ -9171,7 +9324,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'everyAccessKeepsSlotExclusive'
 
 	function accessKeepsSlotExclusive(func IrFunction, opIdx ElementIndex, key StoreSlotKey) returns bool
-		view op = try self.module.ops.get(opIdx) otherwise panic("ProvenanceTracer.accessKeepsSlotExclusive: opIdx {opIdx} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: opIdx)
 
 		return match slotReadOfOp(op, opIndex: opIdx) 'access'
 			load(loadOp, addr, offset) gives self.loadKeepsSlotExclusive(func, op: op, loadOp: loadOp, addr: addr, offset: offset, key: key)
@@ -9223,11 +9376,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.recordUseOfAliases: blockRef from func.blockRefs not in module.blocks")
 
 				for opIdx in block.bodyOps() 'eachOp'
-					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.recordUseOfAliases: opIdx {opIdx} not in module.ops"), aliases: aliases))
+					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, plainOp: self.memoryOpAt(func, opIdx: opIdx), aliases: aliases))
 				end 'eachOp'
 
 				if block.hasTerminatorOp() 'terminated'
-					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, op: try ir.ops.get(block.terminatorIndex()) otherwise panic("ProvenanceTracer.recordUseOfAliases: terminatorIndex not in module.ops"), aliases: aliases))
+					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, plainOp: try ir.ops.get(block.terminatorIndex()) otherwise panic("ProvenanceTracer.recordUseOfAliases: terminatorIndex not in module.ops"), aliases: aliases))
 				end 'terminated'
 
 				for edge in block.branchEdges 'eachEdge'
@@ -9243,7 +9396,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return worst
 	end 'recordUseOfAliases'
 
-	function useOfAliasIn(func IrFunction, op MaxonOp, aliases BoolArray) returns RecordUse
+	function useOfAliasIn(func IrFunction, plainOp MaxonOp, aliases BoolArray) returns RecordUse
+		let op = self.wordOpAsMemoryOp(func, op: plainOp)
+
 		match op 'op'
 			loadIndirect(_, addr, _, _) then return RecordUse.readOnly if self.isAlias(aliases, value: addr) else RecordUse.dropped
 			storeIndirect(addr, _, value, _) then return RecordUse.kept if self.isAlias(aliases, value: value) else (RecordUse.readOnly if self.isAlias(aliases, value: addr) else RecordUse.dropped)
@@ -9386,8 +9541,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return true
 		end 'minted'
 
+		if self.isAMerge(base) and self.valueIsAUnboxedWordMergeOfFreshWords(func, merge: base, root: base, depth: 0, orPermanentRecords: false) 'aMergeOfWords'
+			return true
+		end 'aMergeOfWords'
+
 		let defining = try self.definingOpIndexOf(base) otherwise return false
-		let op = try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.recordIsMintedHere: op {defining} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: defining)
 
 		if opProducesAnImage(op) 'neverWritten'
 			return true
@@ -9474,11 +9633,15 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'minted'
 
 		if self.isAMerge(base) 'aMerge'
+			if allowFresh and self.valueIsAUnboxedWordMergeOfFreshWords(func, merge: base, root: base, depth: depth, orPermanentRecords: true) 'aMergeOfWords'
+				return true
+			end 'aMergeOfWords'
+
 			return self.mergeMeetsClaim(func, phi: base, depth: depth, claim: RecordClaim.permanentOrFresh if allowFresh else RecordClaim.permanent)
 		end 'aMerge'
 
 		let defining = try self.definingOpIndexOf(base) otherwise return false
-		view op = try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.recordIsPermanentlyReadOnly: op {defining} not in module.ops")
+		view op = self.memoryOpAt(func, opIdx: defining)
 
 		if opProducesAnImage(op) or (maxonOpNamesAGlobalLabel(op) and self.immutableGlobalLabels.contains(maxonOpGlobalLabelName(op))) 'neverWritten'
 			return true
@@ -9613,7 +9776,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let base = self.sameRecordBase(func, ir: self.module, value: receiver)
 		let defining = try self.definingOpIndexOf(base) otherwise return false
 
-		match slotReadOfOp(try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.receiverIsAStoredKeyColumn: op {defining} not in module.ops"), opIndex: defining) 'read'
+		match slotReadOfOp(self.memoryOpAt(func, opIdx: defining), opIndex: defining) 'read'
 			load(_, addr, offset) then return self.fieldHoldsStoredKeys(func, addr: addr, offset: offset)
 
 			none or
@@ -10065,7 +10228,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.scanHandedOutValues: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				match slotReadOfOp(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.scanHandedOutValues: opIdx {opIdx} not in module.ops"), opIndex: opIdx) 'access'
+				match slotReadOfOp(self.memoryOpAt(func, opIdx: opIdx), opIndex: opIdx) 'access'
 					store(addr, offset, value) then self.noteStoreHandsOut(func, addr: addr, offset: offset, value: value)
 
 					none or
@@ -10281,7 +10444,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 			for position in 0 upto block.opCountInRunOrder() 'eachOp'
 				let opIdx = block.opInRunOrderAt(position)
-				view op = try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.judgeInstantiationsIn: opIdx {opIdx} not in module.ops")
+				view op = try self.module.ops.get(opIdx) otherwise panic("ProvenanceTracer.judgeInstantiationsIn: opIdx {opIdx} not in module.ops")
 
 				match op 'op'
 					call(result, callee, args, argLabels, _, _, _, _) then grew = self.judgeNamedInstantiation(caller, callerIndex: callerIndex, opIdx: opIdx, result: result, called: callee, args: args, argLabels: argLabels, reporting: reporting) or grew
@@ -11367,6 +11530,26 @@ end 'slotReadOfOp'
 module function linksANewNodeCallee(callee ByteArray) returns bool
 	return callee.equals(ListAppendName) or callee.equals(ListPrependName) or callee.equals(ListInsertAfterName) or callee.equals(ListInsertBeforeName)
 end 'linksANewNodeCallee'
+
+function binOpKindOf(op MaxonOp) returns MaxonBinOp throws AbsentError
+	match op 'op'
+		binOp(_, _, _, kind) then return kind
+		default throws AbsentError.absent
+	end 'op'
+end 'binOpKindOf'
+
+function literalResultOf(op MaxonOp) returns ValueId throws AbsentError
+	match op 'op'
+		literal(result, _, _) then return result
+		default throws AbsentError.absent
+	end 'op'
+end 'literalResultOf'
+
+function opIsTheLiteralOf(op MaxonOp, value ValueId) returns bool
+	let result = try literalResultOf(op) otherwise return false
+
+	return result == value
+end 'opIsTheLiteralOf'
 
 // What the op defining a value does toward the record it was read out of, as an access path sees it: nothing — the
 // value is a root — a step into a field of its base, an element of it, or the base's own record handed back.

@@ -935,7 +935,7 @@ function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey Byte
 		return ServiceCrossing.acceptable
 	end 'notAnErrorType'
 
-	if serviceReplyErrorLayout(signatures, errorName: errorName.toByteArray()).isBoxed() 'aBoxedUnion'
+	if serviceReplyErrorLayout(signatures, errorName: errorName.toByteArray()).carriesPayloads() 'aBoxedUnion'
 		return ServiceCrossing.refused("a reply that throws `{errorName}`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word holds an `ordinal + bias`, and a pointer is not an ordinal")
 	end 'aBoxedUnion'
 
@@ -1414,7 +1414,7 @@ end 'serviceReplyBlame'
 module function buildServiceRequestUnion(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayout
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 	let declFilePath = layout.declFilePath
-	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: NameRoster.create(), visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
+	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: NameRoster.create(), visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
 		view methodName = layout.messageMethodAt(i)
@@ -1514,7 +1514,7 @@ end 'ServiceReplySlotIndex'
 module function serviceSendErrorPlacement(sendLayout EnumLayout) returns FusedPlacement
 	let span = enumTagSpan(sendLayout)
 
-	if sendLayout.isBoxed() 'loadedFromTheBox'
+	if sendLayout.carriesPayloads() 'loadedFromTheBox'
 		return fusedPlacementAt(0, span: span)
 	end 'loadedFromTheBox'
 
@@ -1944,7 +1944,7 @@ function serviceSendErrorPayloads(payloads PayloadFieldArray) returns PayloadFie
 end 'serviceSendErrorPayloads'
 
 function buildServiceSendErrorUnion(signatures ProgramSignatures, name ByteArray, payloads PayloadFieldArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-	var errors = EnumLayout.create(name, isUnion: payloads.count() > 0, conformsTo: builtinErrorConformance(signatures.interfaceMap()), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
+	var errors = EnumLayout.create(name, isUnion: payloads.count() > 0, conformsTo: builtinErrorConformance(signatures.interfaceMap()), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
 	addServiceRequestCase(errors, caseName: ServiceSendMailboxFullCaseName, payloads: payloads)
 	addServiceRequestCase(errors, caseName: ServiceSendServiceStoppedCaseName, payloads: copiedPayloads(payloads))
 	return errors
@@ -2010,7 +2010,7 @@ function recordInterfaceRequestAndSendErrors(signatures ProgramSignatures, inter
 end 'recordInterfaceRequestAndSendErrors'
 
 function buildInterfaceRequestUnion(signatures ProgramSignatures, interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: NameRoster.create(), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
+	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: NameRoster.create(), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
 	let requirements = try signatures.interfaceRequirementSlots(interfaceName) otherwise CollectedInterfaceMethodArray.create()
 
 	for requirement in requirements 'eachRequirement'

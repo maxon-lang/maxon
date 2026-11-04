@@ -206,6 +206,10 @@ function renderTyped(tree DebugValueTree, memory DebugMemory, symbols DebugSymbo
 		return renderUnion(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, source: source)
 	end 'aCaseWithAPayload'
 
+	if record.kind == MxdbgTypeKindUnionWord 'aTaggedWord'
+		return renderUnionWord(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, source: source)
+	end 'aTaggedWord'
+
 	if record.kind == MxdbgTypeKindManagedRecord 'aPointer'
 		return renderOpaquePointer(tree, name: name, typeName: typeName, kind: kind, source: source)
 	end 'aPointer'
@@ -421,6 +425,17 @@ function renderUnion(tree DebugValueTree, memory DebugMemory, symbols DebugSymbo
 
 	return caseOf(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, tag: tag, payload: DebugValueSource.address(box + (UnionTagBytes as DebugAddress)))
 end 'renderUnion'
+
+function renderUnionWord(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, source DebugValueSource) returns ElementIndex
+	let word = try readRaw(memory, source: source, width: UnionTagBytes) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let storedTag = word and UnboxedTagMask
+
+	if storedTag < UnboxedTagBase 'neverFilled'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
+	end 'neverFilled'
+
+	return caseOf(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, tag: storedTag - UnboxedTagBase, payload: DebugValueSource.word(word - storedTag))
+end 'renderUnionWord'
 
 function renderFoldedUnion(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, first MxdbgIndex) returns ElementIndex
 	let words = symbols.foldedWordsFor(first, count: mxdbgFoldedAggregateWordCount(record.kind, fieldCount: record.fieldCount))

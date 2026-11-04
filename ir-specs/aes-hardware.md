@@ -1406,11 +1406,13 @@ func @Aes.encryptBlockInto {
     x64.prologue 32
     x64.movRegReg rdi, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, 7
+    x64.leaRegRegImm32 rdx, rdx, -1
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, matchnext
   matcharm#1:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rsi, 0
     x64.movRegReg rdx, rdi
     x64.callDirect AesBitsliced.cryptBlockInto
@@ -1421,7 +1423,8 @@ func @Aes.encryptBlockInto {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, matchdead
   matcharm#5:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.movRegReg r8, rcx
+    x64.andRegImm32 r8, rcx, -8
   __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
     x64.cmpRegImm32 rcx, 16
@@ -1487,11 +1490,13 @@ func @Aes.decryptBlockInto {
     x64.prologue 32
     x64.movRegReg rdi, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, 7
+    x64.leaRegRegImm32 rdx, rdx, -1
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, matchnext
   matcharm#1:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rsi, 1
     x64.movRegReg rdx, rdi
     x64.callDirect AesBitsliced.cryptBlockInto
@@ -1502,7 +1507,8 @@ func @Aes.decryptBlockInto {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, matchdead
   matcharm#5:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.movRegReg r8, rcx
+    x64.andRegImm32 r8, rcx, -8
   __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
     x64.cmpRegImm32 rcx, 16
@@ -1835,11 +1841,13 @@ func @Aes.encryptBlockInto {
     x64.prologue 32
     x64.movRegReg rdi, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, 7
+    x64.leaRegRegImm32 rdx, rdx, -1
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, matchnext
   matcharm#1:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rsi, 0
     x64.movRegReg rdx, rdi
     x64.callDirect AesBitsliced.cryptBlockInto
@@ -1850,7 +1858,8 @@ func @Aes.encryptBlockInto {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, matchdead
   matcharm#5:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.movRegReg r8, rcx
+    x64.andRegImm32 r8, rcx, -8
   __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
     x64.cmpRegImm32 rcx, 16
@@ -1916,11 +1925,13 @@ func @Aes.decryptBlockInto {
     x64.prologue 32
     x64.movRegReg rdi, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, 7
+    x64.leaRegRegImm32 rdx, rdx, -1
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, matchnext
   matcharm#1:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rsi, 1
     x64.movRegReg rdx, rdi
     x64.callDirect AesBitsliced.cryptBlockInto
@@ -1931,7 +1942,8 @@ func @Aes.decryptBlockInto {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, matchdead
   matcharm#5:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.movRegReg r8, rcx
+    x64.andRegImm32 r8, rcx, -8
   __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
     x64.cmpRegImm32 rcx, 16
@@ -2282,11 +2294,12 @@ func @Aes.encryptBlockInto {
     arm64.prologue 16
     arm64.movRegReg x5, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.and x1, x0, 7
+    arm64.sub x1, x1, 1
     arm64.cmp x1, 0
     arm64.b.ne matchnext
   matcharm#1:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.and x0, x0, -8
     arm64.movImm x4, 0
     arm64.movRegReg x1, x5
     arm64.bl AesBitsliced.cryptBlockInto
@@ -2297,7 +2310,7 @@ func @Aes.encryptBlockInto {
     arm64.cmp x1, 1
     arm64.b.ne matchdead
   matcharm#5:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.and x6, x0, -8
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
     arm64.cmp x0, 16
@@ -2357,11 +2370,12 @@ func @Aes.decryptBlockInto {
     arm64.prologue 16
     arm64.movRegReg x5, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.and x1, x0, 7
+    arm64.sub x1, x1, 1
     arm64.cmp x1, 0
     arm64.b.ne matchnext
   matcharm#1:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.and x0, x0, -8
     arm64.movImm x4, 1
     arm64.movRegReg x1, x5
     arm64.bl AesBitsliced.cryptBlockInto
@@ -2372,7 +2386,7 @@ func @Aes.decryptBlockInto {
     arm64.cmp x1, 1
     arm64.b.ne matchdead
   matcharm#5:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.and x6, x0, -8
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
     arm64.cmp x0, 16
@@ -2722,11 +2736,12 @@ func @Aes.encryptBlockInto {
     arm64.prologue 16
     arm64.movRegReg x5, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.and x1, x0, 7
+    arm64.sub x1, x1, 1
     arm64.cmp x1, 0
     arm64.b.ne matchnext
   matcharm#1:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.and x0, x0, -8
     arm64.movImm x4, 0
     arm64.movRegReg x1, x5
     arm64.bl AesBitsliced.cryptBlockInto
@@ -2737,7 +2752,7 @@ func @Aes.encryptBlockInto {
     arm64.cmp x1, 1
     arm64.b.ne matchdead
   matcharm#5:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.and x6, x0, -8
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
     arm64.cmp x0, 16
@@ -2797,11 +2812,12 @@ func @Aes.decryptBlockInto {
     arm64.prologue 16
     arm64.movRegReg x5, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.and x1, x0, 7
+    arm64.sub x1, x1, 1
     arm64.cmp x1, 0
     arm64.b.ne matchnext
   matcharm#1:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.and x0, x0, -8
     arm64.movImm x4, 1
     arm64.movRegReg x1, x5
     arm64.bl AesBitsliced.cryptBlockInto
@@ -2812,7 +2828,7 @@ func @Aes.decryptBlockInto {
     arm64.cmp x1, 1
     arm64.b.ne matchdead
   matcharm#5:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.and x6, x0, -8
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
     arm64.cmp x0, 16
@@ -3075,11 +3091,13 @@ func @Aes.encryptBlockInto {
     x64.prologue 32
     x64.movRegReg rdi, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, 7
+    x64.leaRegRegImm32 rdx, rdx, -1
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, matchnext
   matcharm#1:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rsi, 0
     x64.movRegReg rdx, rdi
     x64.callDirect AesBitsliced.cryptBlockInto
@@ -3090,7 +3108,8 @@ func @Aes.encryptBlockInto {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, matchdead
   matcharm#5:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.movRegReg r8, rcx
+    x64.andRegImm32 r8, rcx, -8
   __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
     x64.cmpRegImm32 rcx, 16
@@ -3329,11 +3348,13 @@ func @Aes.encryptBlockInto {
     x64.prologue 32
     x64.movRegReg rdi, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, 7
+    x64.leaRegRegImm32 rdx, rdx, -1
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, matchnext
   matcharm#1:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rsi, 0
     x64.movRegReg rdx, rdi
     x64.callDirect AesBitsliced.cryptBlockInto
@@ -3344,7 +3365,8 @@ func @Aes.encryptBlockInto {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, matchdead
   matcharm#5:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.movRegReg r8, rcx
+    x64.andRegImm32 r8, rcx, -8
   __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
     x64.cmpRegImm32 rcx, 16
@@ -3487,17 +3509,11 @@ func @main {
     arm64.movRegReg x1, x19
     arm64.bl __cpufeat_aes_cipher_expand_key
   __il_cont#30:
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.orr x21, x21, 2
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
     arm64.movRegReg x21, x0
     arm64.b tryok#1
   __il_body#144:
@@ -3530,7 +3546,7 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq tryok#34
   tryerr#35:
-    arm64.movImm x21, 0
+    arm64.movImm x1, 0
     arm64.b __il_cont#32
   tryok#34:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -3816,23 +3832,16 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x22
     arm64.storeBaseDispReg.word64 [x0 + 8], x21
     arm64.movImm x1, 0
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x1
+    arm64.xchgRegReg x1, x0
   __il_cont#32:
     arm64.cmp x0, 0
     arm64.b.ne tryerr#2
   tryok#26:
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.orr x21, x1, 1
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
     arm64.movRegReg x21, x0
   tryok#1:
     arm64.movImm x3, 0
@@ -4225,11 +4234,12 @@ func @Aes.encryptBlockInto {
     arm64.prologue 16
     arm64.movRegReg x5, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.and x1, x0, 7
+    arm64.sub x1, x1, 1
     arm64.cmp x1, 0
     arm64.b.ne matchnext
   matcharm#1:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.and x0, x0, -8
     arm64.movImm x4, 0
     arm64.movRegReg x1, x5
     arm64.bl AesBitsliced.cryptBlockInto
@@ -4240,7 +4250,7 @@ func @Aes.encryptBlockInto {
     arm64.cmp x1, 1
     arm64.b.ne matchdead
   matcharm#5:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.and x6, x0, -8
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
     arm64.cmp x0, 16
@@ -4382,17 +4392,11 @@ func @main {
     arm64.movRegReg x1, x19
     arm64.bl __cpufeat_aes_cipher_expand_key
   __il_cont#30:
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.orr x21, x21, 2
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
     arm64.movRegReg x21, x0
     arm64.b tryok#1
   __il_body#144:
@@ -4425,7 +4429,7 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq tryok#34
   tryerr#35:
-    arm64.movImm x21, 0
+    arm64.movImm x1, 0
     arm64.b __il_cont#32
   tryok#34:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -4711,23 +4715,16 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x22
     arm64.storeBaseDispReg.word64 [x0 + 8], x21
     arm64.movImm x1, 0
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x1
+    arm64.xchgRegReg x1, x0
   __il_cont#32:
     arm64.cmp x0, 0
     arm64.b.ne tryerr#2
   tryok#26:
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.orr x21, x1, 1
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
     arm64.movRegReg x21, x0
   tryok#1:
     arm64.movImm x3, 0
@@ -5120,11 +5117,12 @@ func @Aes.encryptBlockInto {
     arm64.prologue 16
     arm64.movRegReg x5, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.and x1, x0, 7
+    arm64.sub x1, x1, 1
     arm64.cmp x1, 0
     arm64.b.ne matchnext
   matcharm#1:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.and x0, x0, -8
     arm64.movImm x4, 0
     arm64.movRegReg x1, x5
     arm64.bl AesBitsliced.cryptBlockInto
@@ -5135,7 +5133,7 @@ func @Aes.encryptBlockInto {
     arm64.cmp x1, 1
     arm64.b.ne matchdead
   matcharm#5:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.and x6, x0, -8
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x0, [x5 + 8]
     arm64.cmp x0, 16

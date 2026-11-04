@@ -1029,14 +1029,11 @@ end 'main'
 ```mm-trace
 mm_alloc ArrayRecord #1 size=72
 mm_alloc ArrayRecord #2 size=408
-mm_alloc AesBacking #3 size=16
-mm_alloc Aes #4 size=8
-mm_decref Aes #4 rc=0
-mm_decref AesBacking #3 rc=0
+mm_alloc Aes #3 size=8
+mm_decref Aes #3 rc=0
 mm_decref ArrayRecord #2 rc=0
 mm_free ArrayRecord #2
-mm_free AesBacking #3
-mm_free Aes #4
+mm_free Aes #3
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 ```

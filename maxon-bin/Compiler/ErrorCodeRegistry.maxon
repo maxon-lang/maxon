@@ -88,14 +88,22 @@ export enum ErrorCode
 	// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is one of several shapes all three compilers report under it -- others are a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other, a cycle among initializers that run before `main` (a `static` reading another, directly or through a function it calls, or reading its own field), and a circular typealias ('typealias A = Array with A', or a mutual pair), which describes an infinite type with no finite layout. The list is not a roster to keep exhaustive: what the code means is the cycle, not the construct it was found in.
 	parserCircularDependency = "E2012"
 
-	// An assignment targets a binding declared 'let', a loop counter, a parameter, or a field of a `let` tuple. Declare it 'var', or do not reassign it.
-	// A parameter is a `let` binding, whether the statement assigns it, stores a fresh record in it or calls a
-	// method that writes its value in place (`s.append("!")` over a `String` parameter). A parameter of a value
-	// type (a number, `bool`, an enum or `String`) is marked `mutable` before its type to be reassigned, which
-	// makes it a by-reference parameter. A record-type parameter, and a parameter whose type is a generic
-	// body's type parameter, is never rebound, marked or not: copy it into a local `var`, or return the new
-	// value. A field store through a record parameter is not a reassignment.
-	// An assignment to a method, a requirement or a static the compiler provides (`Ops.twice = f`) is refused here too: a method is not a binding, and only a binding is assigned.
+	// An assignment targets a binding declared 'let', a loop counter, a parameter, or a field of a
+	// `let` tuple. Declare it 'var', or do not reassign it. A parameter is a `let` binding, whether
+	// the statement assigns it, stores a fresh record in it or calls a method that writes its value in
+	// place (`s.append("!")` over a `String` parameter). A parameter of a value type (a number,
+	// `bool`, an enum or `String`) is marked `mutable` before its type to be reassigned, which makes
+	// it a by-reference parameter. A record-type parameter, and a parameter whose type is a generic
+	// body's type parameter, is never rebound, marked or not: copy it into a local `var`, or return
+	// the new value. A field store through a record parameter is not a reassignment. A payload binding
+	// of a `match` is a place in the matched union: assigning it replaces the payload that union
+	// holds, so the union must be one the function can write. That is a local `var`, a field of a
+	// `var` or of a record parameter, or a parameter marked `mutable`. A union parameter without the
+	// marker is refused with the parameter named: mark it `mutable`, or copy the union into a local
+	// `var` and match on that. The receiver `self`, a temporary and any other union nothing holds are
+	// refused the same way, and the fix is to copy the union into a local `var`. An assignment to a
+	// method, a requirement or a static the compiler provides (`Ops.twice = f`) is refused here too: a
+	// method is not a binding, and only a binding is assigned.
 	assignToImmutable = "E2013"
 
 	// One parameter list declares the same name twice. The second parameter would be dead and uncallable.

@@ -51,7 +51,9 @@ and the register allocator's bitsets.
 
 **Unions are flat.** A union with any payload-carrying case is a heap box: an 8-byte tag and one 8-byte slot
 per field of its widest case. Every case of such a union is boxed, payload-free ones included, so returning
-a payload-free case still allocates. A union whose cases carry no payload is a bare tag. A nested union costs
+a payload-free case still allocates. A union whose cases carry no payload is a bare tag. A union of at most
+seven cases, each with no payload or one heap record, and no `implements`, is one tagged word and allocates
+nothing beyond the payload ([Unboxed unions](../MEMORY_MANAGEMENT.md#unboxed-unions)). A nested union costs
 one more box per level, so the compiler's own IR unions, such as `StdOp`, are one flat union rather than a
 union of categories.
 

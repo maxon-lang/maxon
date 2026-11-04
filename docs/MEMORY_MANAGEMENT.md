@@ -125,6 +125,18 @@ destructor_Result(ptr):
             if field_ptr != NULL: mm_decref(field_ptr)
 ```
 
+A union stored as one tagged word (see [Unboxed Unions](#unboxed-unions)) takes the word as its argument and switches on the stored tag. A case with no payload, and the empty word, match no case and release nothing:
+
+```
+destructor_Result(word):
+    field_ptr = word & -8
+    switch word & 7:
+        case 1: // success
+            if field_ptr != NULL: mm_decref(field_ptr)
+        case 2: // error
+            if field_ptr != NULL: mm_decref(field_ptr)
+```
+
 ### ManagedList Destructor
 
 For managed lists (`__ManagedList with T`) holding managed elements:
@@ -147,6 +159,32 @@ For arrays (`Array with T`) holding managed struct elements, this function itera
 ### Types With No Managed Fields
 
 Types that contain only primitives (e.g., `Point{x: int, y: int}`) have a NULL destructor. When `mm_decref` drops their refcount to zero, the object is freed directly without calling any destructor.
+
+## Unboxed Unions
+
+A `union` is stored as one 8-byte word, with no box of its own, when all of these hold:
+
+- it has at most seven cases, tagged by declaration position;
+- it declares no `implements` clause;
+- every case carries no payload, or exactly one managed record: a `String`, a `Character`, a struct, or an array, map or other generic-instance record;
+- it is declared in source (the compiler's own request and reply unions are boxes).
+
+Every other union with a payload is a heap box.
+
+The word holds the payload pointer with the stored tag in its low three bits. Payload records are 8-aligned, so those bits are free:
+
+```
+word    = payload_ptr | (case_index + 1)
+tag     = word & 7           // 1 to 7
+payload = word & -8
+```
+
+- **A payload-free case** is the stored tag alone. Its pointer bits are zero, it allocates nothing, and there is nothing to free.
+- **Tag 0 is the empty word.** A zeroed slot (a fresh array element, an unwritten field) is a union that holds nothing: the destructor, retain, clone and share walk read it as vacant and touch nothing. Stored tags run from 1, so the three bits hold seven cases.
+- **Construction** allocates only the payload; the word owns the reference the payload arrived with.
+- **Drop and retain** go through `__destruct_<U>(word)` and `__uretain_<U>(word)`, synthesized per union. Both switch on the tag, mask the pointer out and skip a null payload.
+- **`match`** decodes the tag with `(word & 7) - 1` and the payload with `word & -8`. A payload binding is a hold when the arm cannot write it or displace its source (the compiler lowers the hold to a reference only where an operation in its window may release the payload), and a retained reference when it can.
+- **Assigning a payload binding** builds a new word, `payload | tag`, and stores it where the union lives: a local `var`'s variable, the field or element slot that held it, or a `mutable` parameter's argument. The displaced payload is released. This is why the assignment must reach its union ([Mutable Match Bindings](LANGUAGE_REFERENCE.md#mutable-match-bindings)).
 
 ## Buffers (`__ManagedMemory`)
 
@@ -236,7 +274,7 @@ allocation's payload is 16-byte aligned and 56 is 8 mod 16, so only a co-allocat
 | Arrays (`Array with T`) | Yes | A 48-byte `__ManagedMemory` record with refcount; its element buffer is a separate allocation, or part of the record's own ([co-allocated](#co-allocated-buffers)) |
 | ManagedLists (`__ManagedList with T`) | Yes | Doubly-linked list, each node is a separate allocation |
 | Tuples | Yes | Structs with `_0`, `_1`, etc. fields |
-| Enums (with associated values) | Yes | Tagged enum with payload |
+| Enums (with associated values) | Yes | Tagged enum with payload; a union of single-record cases is a [tagged word](#unboxed-unions) whose only allocation is its payload |
 | Enums (no associated values) | No | Stored as integers |
 | Closures | Yes | Environment block is heap-allocated |
 

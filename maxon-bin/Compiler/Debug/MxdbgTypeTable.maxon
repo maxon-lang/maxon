@@ -427,7 +427,11 @@ function mxdbgDescribeEnum(project Project, signatures ProgramSignatures, layout
 		fields.push(MxdbgFieldDesc.create(layout.caseNameAt(i), offset: mxdbgTagWord(tag), typeName: mxdbgCasePayloadName(project, signatures: signatures, payload: payload)))
 	end 'eachCase'
 
-	return MxdbgTypeDesc.create(MxdbgTypeKindUnion if layout.isUnion else MxdbgTypeKindEnum, size: layout.boxSizeBytes() as MxdbgIndex, align: MxdbgAggregateAlign, fields: fields)
+	match unionRepresentationOf(signatures, typeNames: project.typeNames, layout: layout) 'representation'
+		word then return MxdbgTypeDesc.create(MxdbgTypeKindUnionWord, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: fields)
+		box or
+		bareTag then return MxdbgTypeDesc.create(MxdbgTypeKindUnion if layout.isUnion else MxdbgTypeKindEnum, size: layout.boxSizeBytes() as MxdbgIndex, align: MxdbgAggregateAlign, fields: fields)
+	end 'representation'
 end 'mxdbgDescribeEnum'
 
 // A raw tag as the field record's offset word holds it. A tag outside the word — a negative raw value, or

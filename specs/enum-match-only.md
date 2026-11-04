@@ -196,7 +196,7 @@ error E3066: specs/enum-match-only/error.enum-eq-associated.maxon:13:7: cannot c
 ```
 
 <!-- test: union-return -->
-A payload-bearing union RETURNED across a call. The callee builds an owned heap box and MOVES it out; the caller ADOPTS it (`let c = make()`) — owned, dropped exactly once at scope exit, no leak (a leak is exit 101). The result is recognized as owned via a `named` + `isBoxed` LAYOUT lookup, not the tag: a boxed union and a bare enum both carry the `named` tag, but only the boxed one owns a box the caller must free.
+A payload-bearing union RETURNED across a call. The callee builds an owned heap box and MOVES it out; the caller ADOPTS it (`let c = make()`) — owned, dropped exactly once at scope exit, no leak (a leak is exit 101). The result is recognized as owned via a `named` + `carriesPayloads` LAYOUT lookup, not the tag: a boxed union and a bare enum both carry the `named` tag, but only the boxed one owns a box the caller must free.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

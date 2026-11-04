@@ -3495,10 +3495,11 @@ function promiseOrManagedInstanceClass(signatures ProgramSignatures, typeNames T
 end 'promiseOrManagedInstanceClass'
 
 // A payload whose type is another enum/union: a payload-FREE enum is a scalar (its value is its i64
-// tag, stored inline); a BOXED union is a MANAGED heap pointer carrying the field's own `named(<union>)`
-// type (`fieldType`) — the value tag its move-in/move-out/drop all read.
+// tag, stored inline); a payload-bearing union is MANAGED, a heap pointer or a tagged word,
+// carrying the field's own `named(<union>)` type (`fieldType`) — the value tag its
+// move-in/move-out/drop all read.
 function enumPayloadClass(enumLayout EnumLayout, fieldType MaxonType) returns PayloadClass
-	if enumLayout.isBoxed() 'boxed'
+	if enumLayout.carriesPayloads() 'boxed'
 		return PayloadClass.nestedUnion(fieldType)
 	end 'boxed'
 
@@ -3544,6 +3545,132 @@ module function caseHasManagedField(signatures ProgramSignatures, typeNames Type
 
 	return false
 end 'caseHasManagedField'
+
+typealias UnboxedWordAnswerMap = Map with (TypeNameId, bool)
+
+module type UnboxedWordMemo
+	var answers as UnboxedWordAnswerMap
+
+	module static function create() returns Self
+		return Self{answers: UnboxedWordAnswerMap.create()}
+	end 'create'
+
+	module function nameIdIsAWord(signatures ProgramSignatures, typeNames TypeNameInterner, nameId TypeNameId, readerFilePath FilePath) returns bool
+		let name = try typeNames.nameOf(nameId) otherwise return false
+
+		if signatures.crossKindContested(name) 'readerDecides'
+			return signatures.unionNameIsUnboxedFor(name, readerFilePath: readerFilePath)
+		end 'readerDecides'
+
+		if self.answers.contains(nameId) 'asked'
+			return try self.answers.get(nameId) otherwise panic("UnboxedWordMemo.nameIdIsAWord: name {nameId} left the memo after `contains`")
+		end 'asked'
+
+		let unboxed = signatures.unionNameIsUnboxedFor(name, readerFilePath: readerFilePath)
+		self.answers.upsert(nameId, value: unboxed)
+
+		return unboxed
+	end 'nameIdIsAWord'
+end 'UnboxedWordMemo'
+
+module enum UnboxedPayloadShape
+	leafBox
+	recordBytes
+	recordElements
+	fieldRecord
+end 'UnboxedPayloadShape'
+
+module function unboxedPayloadStorageOf(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, field PayloadField) returns MaxonType throws AbsentError
+	match classifyUnionPayload(signatures, typeNames: typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath) 'class'
+		managed(held, _) then return held
+		scalar or
+		nestedUnion or
+		undeclaredName or
+		existential or
+		typeParam or
+		greenThread then throw AbsentError.absent
+	end 'class'
+end 'unboxedPayloadStorageOf'
+
+module function unboxedPayloadShapeOf(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, field PayloadField) returns UnboxedPayloadShape throws AbsentError
+	let storage = try unboxedPayloadStorageOf(signatures, typeNames: typeNames, layout: layout, field: field)
+
+	match managedFieldCascadeStrategy(signatures, typeNames: typeNames, fieldType: storage, asElement: false, action: CascadeAction.shareWalk) 'strategy'
+		direct(callee) then return try unboxedPayloadShapeOfEntry(callee, storage: storage)
+		managedElements(container, _) then return try unboxedPayloadShapeOfContainer(container)
+		throughWitness or
+		unsupported then throw AbsentError.absent
+	end 'strategy'
+end 'unboxedPayloadShapeOf'
+
+function unboxedPayloadShapeOfContainer(container ByteArray) returns UnboxedPayloadShape throws AbsentError
+	if not container.equals(ManagedShareManagedName) 'notAManagedRecord'
+		throw AbsentError.absent
+	end 'notAManagedRecord'
+
+	return UnboxedPayloadShape.recordElements
+end 'unboxedPayloadShapeOfContainer'
+
+function unboxedPayloadShapeOfEntry(callee ByteArray, storage MaxonType) returns UnboxedPayloadShape throws AbsentError
+	if callee.equals(ManagedShareName) 'aRecord'
+		return UnboxedPayloadShape.recordBytes
+	end 'aRecord'
+
+	if callee.equals(MmShareBoxName) 'aLeaf'
+		return UnboxedPayloadShape.leafBox
+	end 'aLeaf'
+
+	let tag = maxonTypeTag(storage)
+
+	if bytesStartWith(callee, prefix: ShareWalkPrefix) and (tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance) 'aFieldRecord'
+		return UnboxedPayloadShape.fieldRecord
+	end 'aFieldRecord'
+
+	throw AbsentError.absent
+end 'unboxedPayloadShapeOfEntry'
+
+// Derived on every ask and never stored on the layout: eligibility depends on how each payload type
+// classifies, which varies with the reader's file and the signatures, so a stored answer would go
+// stale.
+module function unionRepresentationOf(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns UnionRepresentation
+	if not layout.carriesPayloads() 'noPayloads'
+		return UnionRepresentation.bareTag
+	end 'noPayloads'
+
+	if unionIsUnboxed(signatures, typeNames: typeNames, layout: layout) 'aWord'
+		return UnionRepresentation.word
+	end 'aWord'
+
+	return UnionRepresentation.box
+end 'unionRepresentationOf'
+
+// A word needs every stored tag (declaration index + 1) to fit the mask with 0 left for the empty
+// word, no `implements` clause (a conformer, every error union included, stays a box), a union the
+// author wrote, and per case no payload or one managed record payload that `unboxedPayloadShapeOf`
+// can walk.
+function unionIsUnboxed(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns bool
+	if not layout.carriesPayloads() or layout.conformsTo.count() > 0 or layout.caseCount() > UnboxedMaxCases or not layout.tagsAreDeclarationIndices() 'notEligible'
+		return false
+	end 'notEligible'
+
+	if layout.isSynthesized 'synthesized'
+		return false
+	end 'synthesized'
+
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		let payloads = layout.payloadsAt(ci)
+
+		if payloads.count() > 1 'tooWide'
+			return false
+		end 'tooWide'
+
+		for field in payloads 'eachPayload'
+			_ = try unboxedPayloadShapeOf(signatures, typeNames: typeNames, layout: layout, field: field) otherwise return false
+		end 'eachPayload'
+	end 'eachCase'
+
+	return true
+end 'unionIsUnboxed'
 
 // Is a classified payload a managed (String/struct) one — the single reader of "does this class own a
 // heap drop?", so every site testing it (the predicate above, the destructor synthesis, the usage scan)
@@ -18361,7 +18488,7 @@ export type ProgramSignatures
 			return DefaultSlotKind.value(OwnershipCallee.inert, retainCallee: OwnershipCallee.inert, shareWalk: walk)
 		end 'aValueInTheWord'
 
-		return DefaultSlotKind.value(OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType)), retainCallee: OwnershipCallee.named(self.retainCalleeOf(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), from: self.typeNames, result: RetainResult.sharedRead)), shareWalk: walk)
+		return DefaultSlotKind.value(OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType)), retainCallee: OwnershipCallee.named(self.retainCalleeOf(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), from: self.typeNames, result: RetainResult.sharedRead, readerFilePath: readerFilePath)), shareWalk: walk)
 	end 'registryValueKindOf'
 
 	// ⭐⭐⭐ **WHICH RUNTIME ENTRY TAKES A SECOND OWNER OF A VALUE — the retain side of
@@ -18371,7 +18498,7 @@ export type ProgramSignatures
 	// ⚠ **THE TAG IS TESTED FIRST AND IT IS NOT A MICRO-OPTIMIZATION.** `nameId` is only meaningful
 	// for a value that HAS a declared nominal type; asking it of an integer or a String would be
 	// reading a field that means nothing there.
-	export function retainCalleeOf(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner, result RetainResult) returns ByteArray
+	export function retainCalleeOf(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner, result RetainResult, readerFilePath FilePath) returns ByteArray
 		// ⚠ Only a shared read takes `__str_retain`, which answers a CLONE of an immortal `.rdata` record
 		// — a different pointer. Every in-place door keeps the plain box retain, which on an immortal
 		// record returns without writing; an in-place door must not be handed a retain whose result is
@@ -18394,6 +18521,10 @@ export type ProgramSignatures
 		if self.isSharedValueInstanceAt(tag, nameId: nameId) 'aSharedValue'
 			return SharedValueBoxRetainName
 		end 'aSharedValue'
+
+		if tag == ValueTypeTag.named and self.unionNameIsUnboxedFor(foreignNameOf(from, id: nameId), readerFilePath: readerFilePath) 'aWordUnion'
+			return unionRetainSymbol(foreignNameOf(from, id: nameId))
+		end 'aWordUnion'
 
 		if tag != ValueTypeTag.structRef 'notNominal'
 			return plainBoxRetainCallee(result)
@@ -18505,10 +18636,10 @@ export type ProgramSignatures
 		// ⭐ **AND ITS `unionCases` COMPANION, BECAUSE A REQUEST UNION IS AN ORDINARY UNION.** The
 		// declaration sweep appends one for every author-written boxed union
 		// (`Parser.recordScannedEnum`), through the same builder; a synthesized union that skipped it
-		// would be the one union in the language whose `.unionCases` did not exist. The `isBoxed` gate is
-		// `appendUnionCasesCompanion`'s own and is written rather than asserted: it is that function's
-		// rule, not this caller's, and a union of payload-free messages is not boxed.
-		if layout.isBoxed() 'hasAssociatedValues'
+		// would be the one union in the language whose `.unionCases` did not exist. The `carriesPayloads`
+		// gate is `appendUnionCasesCompanion`'s own and is written rather than asserted: it is that
+		// function's rule, not this caller's, and a union of payload-free messages carries no payloads.
+		if layout.carriesPayloads() 'hasAssociatedValues'
 			self.recordEnum(buildUnionCasesCompanion(layout), declaredByTheCorpus: true)
 		end 'hasAssociatedValues'
 	end 'recordServiceUnion'
@@ -18643,14 +18774,15 @@ export type ProgramSignatures
 	// refusal of a union that has them; the row is withheld from EVERY union, including a payload-free
 	// one — a union is a nominal choice the author made and the conformance is the enum keyword's.
 	//
-	// ⚠ **`isBoxed()` IS A SECOND CONDITION AND NOT A RESTATEMENT OF THE FIRST**: it is the REPRESENTATION
-	// premise the granted impls rest on (`enumConformanceImplName` — the value must BE its i64 tag), and the
-	// keyword alone does not establish it. An `enum` whose case carries a payload is heap-boxed exactly as a
-	// union is, so hashing it as an i64 would hash a POINTER; whether such a declaration is refused earlier is
-	// a question about a diagnostic, and this predicate must not depend on the answer.
+	// ⚠ **`carriesPayloads()` IS A SECOND CONDITION AND NOT A RESTATEMENT OF THE FIRST**: it is the
+	// REPRESENTATION premise the granted impls rest on (`enumConformanceImplName` — the value must BE
+	// its i64 tag), and the keyword alone does not establish it. An `enum` whose case carries a
+	// payload is a box or a tagged word exactly as a union is, so hashing it as an i64 would hash a
+	// POINTER; whether such a declaration is refused earlier is a question about a diagnostic, and
+	// this predicate must not depend on the answer.
 	export function namesAPayloadFreeEnum(name ByteArray) returns bool
 		if let layout = try self.settledDeclarations().enumTypes.get(name) 'declared'
-			return not layout.isUnion and not layout.isBoxed()
+			return not layout.isUnion and not layout.carriesPayloads()
 		end 'declared'
 
 		return false
@@ -24348,7 +24480,7 @@ export type ProgramSignatures
 			undeclared panic("ProgramSignatures.unionCaseLayoutOf: '{String.from(typeName)}' names no declared enum or union, and yet a constant initializer folded '{String.from(caseName)}' as one of its cases")
 		end 'declared'
 
-		if not layout.isBoxed() 'aBareTag'
+		if not layout.carriesPayloads() 'aBareTag'
 			panic("ProgramSignatures.unionCaseLayoutOf: '{String.from(typeName)}' declares no payload-carrying case, so its case '{String.from(caseName)}' is a bare TAG rather than a box — the scalar fold owns that shape")
 		end 'aBareTag'
 
@@ -26162,15 +26294,16 @@ export type ProgramSignatures
 		return isTypeAliasDecl(self.contestedTypeNameKindFor(name, readerFilePath: readerFilePath))
 	end 'aliasShadowsNominalFor'
 
-	// ⭐⭐ **THE LAYOUT DOORS, READER-AWARE — `structInAnyFile` / `enumInAnyFile` WITH THE CONTEST APPLIED.**
-	// The `contains*For` predicates answer "is it one?"; these answer "which one", and a caller that needs
-	// the LAYOUT — a field offset, an enum's `isBoxed()` — must not get another file's.
+	// ⭐⭐ **THE LAYOUT DOORS, READER-AWARE — `structInAnyFile` / `enumInAnyFile` WITH THE CONTEST
+	// APPLIED.** The `contains*For` predicates answer "is it one?"; these answer "which one", and a
+	// caller that needs the LAYOUT — a field offset, an enum's `carriesPayloads()` — must not get
+	// another file's.
 	//
-	// ⛔⛔ **MEASURED, and it is why these exist at all.** `Parser.enumMatchFor` classified a VALUE minted in
-	// the file being parsed by asking `enumInAnyFile`: in a file meaning `typealias Container = int(0 to 5)`
-	// it found ANOTHER file's `union Container`, `isBoxed()` said yes, and the return path emitted
-	// **`__mm_retain` on the integer 1** — a segfault (exit 139) in a function whose own file has no union
-	// in it.
+	// ⛔⛔ **MEASURED, and it is why these exist at all.** `Parser.enumMatchFor` classified a VALUE
+	// minted in the file being parsed by asking `enumInAnyFile`: in a file meaning
+	// `typealias Container = int(0 to 5)` it found ANOTHER file's `union Container`,
+	// `carriesPayloads()` said yes, and the return path emitted **`__mm_retain` on the integer 1** — a
+	// segfault (exit 139) in a function whose own file has no union in it.
 	export function structFor(name ByteArray, readerFilePath FilePath) returns DeclaredStruct
 		if self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'anotherDeclarationAnswersHere'
 			return DeclaredStruct.undeclared
@@ -27230,7 +27363,7 @@ export type ProgramSignatures
 	// every coercion site whose two identities disagree.
 	function isPayloadFreeEnumIdentity(identity ByteArray) returns bool
 		let layout = try self.settledDeclarations().enumTypes.get(identity) otherwise return false
-		return not layout.isBoxed()
+		return not layout.carriesPayloads()
 	end 'isPayloadFreeEnumIdentity'
 
 	// ⭐⭐ **IS `identity` A SCALAR WEARING A NAME?** — a ranged typealias or a per-instance alias. Both are
@@ -32345,11 +32478,11 @@ export type ProgramSignatures
 	//     instance's stride, which is the two-producer shape `arrayElementSize` exists to end.
 	//   • **a PAYLOAD-FREE enum or union** — its value is a bare tag, and `enum-narrow-storage` narrows it to
 	//     the slot that tag set needs.
-	//   • **anything else** — a BOXED union, whose value is a heap POINTER and not a tag at all
-	//     (`specs/array-enum-element-size.md` pins that stride at 8 for exactly such a union), or a name
-	//     no declaration binds. `isBoxed` is asked and not assumed: it is the classifier that decides whether
-	//     the slot holds a tag or an address, and reading a pointer out of a one-byte slot is not a narrower
-	//     answer, it is a wrong one.
+	//   • **anything else** — a payload-bearing union, whose value is a heap POINTER or a tagged word
+	//     and not a bare tag at all (`specs/array-enum-element-size.md` pins that stride at 8 for
+	//     exactly such a union), or a name no declaration binds. `carriesPayloads` is asked and not
+	//     assumed: it is the classifier that decides whether the slot holds a tag or an address, and
+	//     reading a pointer out of a one-byte slot is not a narrower answer, it is a wrong one.
 	// ⚠⚠ **AND A CROSS-KIND CONTESTED NAME CANNOT REACH IT WEARING THE WRONG MEANING, WHICH IS A PROPERTY
 	// OF THE FAMILY RATHER THAN OF THIS DOOR.** It has no reading file — an element stride is read off an
 	// interned instance, which no file owns — so the question is what can ARRIVE here as a bare `named`.
@@ -32373,7 +32506,7 @@ export type ProgramSignatures
 		end 'notANominalDeclaration'
 
 		match self.enumInAnyFile(name) 'declaration'
-			declared(layout) then return StorageSlot.machineWord() if layout.isBoxed() else payloadFreeEnumTagSlot(layout)
+			declared(layout) then return StorageSlot.machineWord() if layout.carriesPayloads() else payloadFreeEnumTagSlot(layout)
 			undeclared then panic("undeclaredNamedElementSlot: containsEnum answered yes for '{String.from(name)}' but enumOf answered undeclared — the two read one registry under one key")
 		end 'declaration'
 	end 'undeclaredNamedElementSlot'
@@ -37061,8 +37194,8 @@ export type ProgramSignatures
 			// RETAIN and not moved, so only a struct that owns managed heap is consumed.
 			structType then return self.structHasManagedField(name)
 
-			// A payload-free enum's value is its i64 tag — nothing to move. `isBoxed` is the same bit the
-			// drop side routes on, through the same reader.
+			// A payload-free enum's value is its i64 tag — nothing to move. `carriesPayloads` is the same
+			// bit the drop side routes on, through the same reader.
 			enumType or
 			unionType then return self.declaredEnumIsBoxed(name)
 
@@ -37990,7 +38123,7 @@ export type ProgramSignatures
 
 	export function enumNameIsBoxed(name ByteArray) returns bool
 		let layout = try self.settledDeclarations().enumTypes.get(name) otherwise return false
-		return layout.isBoxed()
+		return layout.carriesPayloads()
 	end 'enumNameIsBoxed'
 
 	// ⭐ **THE ONE RUNTIME ENTRY THAT DROPS AN OWNED BOX OF UNION `unionName`** — `__destruct_<U>` for a
@@ -38468,6 +38601,12 @@ export type ProgramSignatures
 	// `destroyFunc@40` read one predicate (`instanceArgOwesDrop`), so they cannot differ on that
 	// class.
 	export function typeParamRetainCallee(id GenericInstanceId, position ElementIndex) returns OwnershipCallee
+		let argument = self.canonicalInstanceArgAt(id, position: position)
+
+		if maxonTypeTag(argument) == ValueTypeTag.named and self.unionNameIsUnboxed(foreignNameOf(self.typeNames, id: typeNameIdOf(argument))) 'aWordUnion'
+			return OwnershipCallee.named(unionRetainSymbol(foreignNameOf(self.typeNames, id: typeNameIdOf(argument))))
+		end 'aWordUnion'
+
 		return retainCalleeForProtocol(self.typeParamOwnershipProtocol(id, position: position))
 	end 'typeParamRetainCallee'
 
@@ -39559,9 +39698,9 @@ export type ProgramSignatures
 		match form 'form'
 			structType then panic("ProgramSignatures.declaredNameIsManaged: `declaredFormPastStructTypes('{String.from(name)}')` answered `structType` — that door starts BELOW the struct registry, which the probe above already read")
 
-			// A payload-free enum's value IS its i64 tag — a scalar; a boxed one's is a heap box. `isBoxed`
-			// is the same bit `unionBoxDropCallee` routes on, so what is called managed here is exactly what
-			// gets a drop there.
+			// A payload-free enum's value IS its i64 tag — a scalar; a payload-bearing one's is a heap box
+			// or a tagged word. `carriesPayloads` is the same bit `unionBoxDropCallee` routes on, so what is
+			// called managed here is exactly what gets a drop there.
 			enumType or
 			unionType then return self.declaredEnumIsBoxed(name)
 
@@ -39603,7 +39742,7 @@ export type ProgramSignatures
 	// The declaration is a precondition: only a `declaredFormOf` that answered `enumType`/`unionType` gets here.
 	function declaredEnumIsBoxed(name ByteArray) returns bool
 		let layout = try self.settledDeclarations().enumTypes.get(name) otherwise panic("ProgramSignatures.declaredEnumIsBoxed: `declaredFormOf({String.from(name)})` answered enum/union but `enumTypes.get` failed — the form is derived from that very table")
-		return layout.isBoxed()
+		return layout.carriesPayloads()
 	end 'declaredEnumIsBoxed'
 
 	// Does struct `structName` own droppable heap in ANY field — the union-side `unionHasManagedField`
@@ -39677,6 +39816,24 @@ export type ProgramSignatures
 		view layout = try self.settledDeclarations().enumTypes.get(unionName) otherwise panic("ProgramSignatures.unionHasManagedPayload: no `union {String.from(unionName)}` is declared — the caller asks `enumOf` first")
 		return unionHasManagedField(self, typeNames: self.typeNames, layout: layout)
 	end 'unionHasManagedPayload'
+
+	export function unionNameIsUnboxedFor(unionName ByteArray, readerFilePath FilePath) returns bool
+		match self.enumFor(unionName, readerFilePath: readerFilePath) 'declaration'
+			declared(layout) then return self.unionRepresentation(layout) == UnionRepresentation.word
+			undeclared then return false
+		end 'declaration'
+	end 'unionNameIsUnboxedFor'
+
+	export function unionRepresentation(layout EnumLayout) returns UnionRepresentation
+		return unionRepresentationOf(self, typeNames: self.typeNames, layout: layout)
+	end 'unionRepresentation'
+
+	// Answers for the name's single registry entry whichever file asks, so it is only for a caller
+	// with no reading file; a name two files declare differently needs `unionNameIsUnboxedFor`.
+	export function unionNameIsUnboxed(unionName ByteArray) returns bool
+		view layout = try self.settledDeclarations().enumTypes.get(unionName) otherwise return false
+		return self.unionRepresentation(layout) == UnionRepresentation.word
+	end 'unionNameIsUnboxed'
 
 	function declaredStructLayoutOf(name ByteArray) returns StructLayout throws AbsentError
 		if not self.containsStructInAnyFile(name) 'notAStruct'

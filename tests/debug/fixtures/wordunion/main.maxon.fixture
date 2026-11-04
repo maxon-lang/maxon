@@ -1,0 +1,30 @@
+typealias Amount = int(i64.min to i64.max)
+
+union Parcel
+	empty
+	named(label String)
+end 'Parcel'
+
+function render(seed Amount) returns Amount
+	let parcel = Parcel.named("parcel{seed}")
+	let nothing = Parcel.empty
+
+	let size = match parcel 'kind'
+		empty gives 0
+		named(label) gives label.byteLength() as Amount
+	end 'kind'
+
+	print("{size} {seed}\n") // anchor: rendered
+
+	return size + match nothing 'other'
+		empty gives 0
+		named(label) gives label.byteLength() as Amount
+	end 'other'
+end 'render'
+
+function main() returns ExitCode
+	let answer = render(1) + render(2)
+	print("answer {answer}\n")
+
+	return 0
+end 'main'

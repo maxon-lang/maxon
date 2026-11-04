@@ -466,7 +466,7 @@ end 'asyncSlotsAt'
 // travels as `ordinal + ErrorFlagOrdinalBias` — a small integer that owns nothing and must never be handed
 // to a drop callee — while a boxed union's flag is written to `gt.threw` VERBATIM, with no bias added
 // (`LowerMaxonToStd.lowerThrowError`'s boxed arm), so a non-zero flag there IS the box pointer. `enumInAnyFile(…)
-// .isBoxed()` is the same question `Parser.throwsTypeIsBoxedUnion` asks at the catch site, asked of the same
+// .carriesPayloads()` is the same question `Parser.throwsTypeIsBoxedUnion` asks at the catch site, asked of the same
 // registry, so the encode, the catch and this release cannot come to three different answers.
 //
 // A boxed union with no managed payload still owes a `__mm_decref` — the box itself is heap — which is
@@ -485,7 +485,7 @@ end 'asyncErrorSlotsOf'
 function asyncBoxedErrorSlots(layout EnumLayout, signatures ProgramSignatures, errorName ByteArray) returns AsyncManagedSlotArray
 	var slots = AsyncManagedSlotArray.create()
 
-	if layout.isBoxed() 'boxedError'
+	if layout.carriesPayloads() 'boxedError'
 		slots.push(AsyncManagedSlot.create(GtOffThrew, drop: FieldDropKind.direct(signatures.unionBoxDropCallee(errorName))))
 	end 'boxedError'
 
@@ -531,17 +531,17 @@ function asyncSlotDropCallee(signatures ProgramSignatures, typeNames TypeNameInt
 	return managedFieldDropCallee(signatures, typeNames: typeNames, fieldType: slotType)
 end 'asyncSlotDropCallee'
 
-// Is `aggregateName` the pre-erasure name of a BOXED union? Empty (the overwhelming majority — every
-// parameter whose identity survived resolution) answers false without a registry probe, which keeps the
-// `DeclaredEnum` this would otherwise box off the scalar path. Split out because the two functions above
-// must ask it identically.
+// Is `aggregateName` the pre-erasure name of a payload-bearing union (a box or a word)? Empty (the
+// overwhelming majority — every parameter whose identity survived resolution) answers false without
+// a registry probe, which keeps the `DeclaredEnum` this would otherwise box off the scalar path.
+// Split out because the two functions above must ask it identically.
 function asyncErasedUnionIsBoxed(signatures ProgramSignatures, aggregateName ByteArray) returns bool
 	if aggregateName.isEmpty() 'identitySurvived'
 		return false
 	end 'identitySurvived'
 
 	return match signatures.enumInAnyFile(aggregateName) 'e'
-		declared(layout) gives layout.isBoxed()
+		declared(layout) gives layout.carriesPayloads()
 		undeclared gives false
 	end 'e'
 end 'asyncErasedUnionIsBoxed'

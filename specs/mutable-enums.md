@@ -40,8 +40,9 @@ scrutinee, and a write through one is `E3159`.
 
 A `var` local is one, and so is a union-typed **parameter**: a parameter is a borrowed reference to the
 caller's record, which the callee may already write — `s.append(…)` on a `String` parameter is ordinary
-Maxon — and the caller's argument answers for that write through `E3159`, whether the arm writes a field of
-a payload or assigns the payload outright.
+Maxon — and the caller's argument answers for that write through `E3159`. A union-typed parameter lets an arm
+write a field of a payload record in place; assigning the payload requires the parameter to be `mutable`
+(`E2013` otherwise).
 
 A TEMPORARY is one too: a union constructed at the `match` has no other holder, so a write through its
 payload binding is a write nobody else can see. A `let` local is not, and neither is a read-only value of
@@ -274,8 +275,8 @@ end 'main'
 ```
 
 <!-- test: mutable-payload-of-a-parameter -->
-A union-typed PARAMETER is a mutable scrutinee, so its payload binding takes a field write — and the write
-lands in the caller's record, which is what the exit code reads back.
+A union-typed PARAMETER is a mutable scrutinee for a field write, so its payload binding takes one — and the
+write lands in the caller's record, which is what the exit code reads back.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -314,7 +315,8 @@ end 'main'
 
 <!-- test: parameter-payload-to-a-writing-callee -->
 The cross-function half of the same rule: the payload is handed to a callee that writes a field of it, which
-is `E3159`'s question rather than the arm's own. A parameter scrutinee's payload may fill that position.
+is `E3159`'s question rather than the arm's own. A parameter scrutinee's payload may fill that position, for a
+field write only.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -392,8 +394,8 @@ end 'main'
 
 <!-- test: error.let-to-a-callee-that-writes-back-a-payload -->
 ⚖ The write-back is a store into the SCRUTINEE's box, so a callee whose arm assigns a payload of its
-parameter writes the caller's record — and a `let` may not fill that position. Without this the parameter
-ruling would have handed `bump` a licence its caller never granted.
+`mutable` parameter writes the caller's record — and a `let` may not fill that position. Without this the
+parameter ruling would have handed `bump` a licence its caller never granted.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -402,7 +404,7 @@ union Slot
 	holding(n Integer)
 end 'Slot'
 
-function bump(s Slot)
+function bump(s mutable Slot)
 	match s 'step'
 		holding(n) then n = 42
 		empty then return
@@ -431,7 +433,7 @@ union Named
 	named(name String)
 end 'Named'
 
-function rename(n Named)
+function rename(n mutable Named)
 	match n 'step'
 		named(name) then name = "world"
 		anonymous then return

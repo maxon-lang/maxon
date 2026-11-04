@@ -287,6 +287,7 @@ tests/
     clear-while-another-machine-is-mid-trap.maxtest      a breakpoint cleared with other machines still inside it kills nothing
     gt-breakpoint-in-coroutine.maxtest      a breakpoint inside an `async` body stops on the green thread running it
     values-render.maxtest                   every kind of local renders as itself, an enum by its raw tag
+    values-render-a-word-union.maxtest      a union held in one tagged word renders its case from the low bits and its payload from the high bits
     values-function-render.maxtest          a function value renders as the function it calls, and a closure lists its captures as children
     a-breakpoint-on-line-zero-is-refused.maxtest      `break 0` and `break <file>:0` are each refused, saying lines are numbered from 1
     values-register-local.maxtest           a register local is read out of the stop's register file

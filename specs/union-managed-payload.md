@@ -10,8 +10,9 @@ category: ownership
 ## Documentation
 
 A `union`/`enum` case may carry a **managed** associated value — a `String` or a
-`struct`. The union stays a heap box (`8 + maxArity*8`, i64 tag at offset 0,
-payload slot `i` at `8 + i*8`); a managed payload slot holds an owned heap
+`struct`. A union stays a heap box (`8 + maxArity*8`, i64 tag at offset 0,
+payload slot `i` at `8 + i*8`) unless it is a single-record-case word union
+(`specs/union-unboxed.md`); a managed payload slot holds an owned heap
 pointer.
 
 Ownership is static single-owner, exactly as for a `String` or a struct binding:
@@ -34,6 +35,8 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   clears the box slot. After the match `u` is moved-from (a later read is
   `E3102`). A discard `_`, an unbound tag-only arm, and a payload-free / scalar
   arm bind nothing and leave the box owned — `u` is dropped at scope exit.
+  A word union is never emptied: the match holds or retains the payload and
+  still consumes a solely-owned immutable scrutinee (`E3102` on a later read).
   **Sole ownership is the requirement, not ownership**: a freshly-constructed
   `let u = U.case(s)` qualifies; a box this frame merely holds *a* reference to
   does not — see the co-owned bullet below.
@@ -48,7 +51,8 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   back into the slot, releasing the payload it displaces.
 - **A match binding on a BORROWED union is a RETAIN.** Where the scrutinee is a
   parameter or a method receiver, the box's owner is the caller's local and
-  survives the call, so ownership cannot be moved out of it. The bind emits
+  survives the call, so ownership cannot be moved out of it. Assigning the
+  binding requires a `mutable` parameter. The bind emits
   `__mm_incref` on the loaded payload instead (a binding that cannot be written
   takes the hold described below in its place): the binding owns that *second*
   reference and drops it at the arm's own exit, and **the box slot is left

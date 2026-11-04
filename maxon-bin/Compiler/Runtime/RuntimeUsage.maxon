@@ -1214,6 +1214,11 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.neededDestructors.insert(callee)
 	end 'uniondtor'
 
+	if bytesStartWith(callee, prefix: UnionRetainPrefix) 'unionretain'
+		usage.usesHeap = true
+		usage.neededDestructors.insert(callee)
+	end 'unionretain'
+
 	// A `<Enum>.fromRawValue(raw)` or `<Enum>.fromName(name)` lookup (`__enum_from_raw_<Enum>`,
 	// `__enum_from_name_<Enum>`, `__enum_from_name_<Union>#<case>`). One symbol set, because one installer
 	// builds all three shapes and its `needed` test is by name.

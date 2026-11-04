@@ -1349,7 +1349,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// see. Declared here, in the window every reader of the record requires: `usesHeap` must be final before
 	// `EntryStubCalls.fromUsage` and `withCompilerCalledTierUnreached` below read it, and `usesStrEq` before
 	// `installStringRuntime` does.
-	noteEnumLookupUsage(usage, project: project)
+	noteEnumLookupUsage(usage, project: project, signatures: signatures)
 
 	// ⭐⭐ **`usesHeap` IS FINAL HERE AND NOWHERE EARLIER, WHICH IS WHY THIS CALL AND
 	// `withCompilerCalledTierUnreached` BELOW BOTH SIT PAST THIS LINE.** The trace and DebugStream arms
@@ -1918,7 +1918,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// The per-enum `<Enum>.fromRawValue` lookups — the same already-lowered append, and only the helpers the
 	// module CALLS. See `Runtime/EnumLookupRuntime.maxon` for why this one member of the enum reflection
 	// surface is a function while its four siblings expand in the parser.
-	installEnumLookupHelpers(pipeline.stdModule, project: project, needed: usage.neededEnumLookups)
+	installEnumLookupHelpers(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededEnumLookups)
 
 	// ⭐⭐ **THE DEBUGSTREAM PRODUCER, INSTALLED LAST OF EVERYTHING, BECAUSE IT RENDERS THE TAG BLOB.**
 	// `MXDS_TAGS` is the table the monitor resolves a 16-bit tag index against, and it is written ONCE, from

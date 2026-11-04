@@ -8405,6 +8405,23 @@ export let sharedEmptyEnumBackingFields = EnumBackingFieldArray.create()
 export let UnionTagOffset = 0 as ByteOffset
 let UnionTagBytes = 8
 
+// A word union keeps `payload pointer | (declaration index + UnboxedTagBase)` in one i64, the tag
+// in the low `UnboxedTagBits` bits of an 8-aligned pointer. Stored tag 0 is the empty word a zeroed
+// slot holds, so `UnboxedMaxCases` is the mask value and not one more.
+let UnboxedTagBits = 3
+export let UnboxedTagMask = (1 shl UnboxedTagBits) - 1
+export let UnboxedPointerMask = -(1 shl UnboxedTagBits)
+
+export enum UnionRepresentation
+	bareTag
+	box
+	word
+end 'UnionRepresentation'
+
+export let UnboxedTagBase = 1
+export let UnboxedMaxCases = UnboxedTagMask
+export let UnboxedPayloadSlotOffset = UnionTagBytes as ByteOffset
+
 export let sharedEmptyDeclaredConformances = NameRoster.create()
 
 // ⭐ **ONE `with` ARGUMENT LIST PER INTERFACE NAMED, POSITIONAL AGAINST `conformsTo`.** A clause may
@@ -8843,10 +8860,10 @@ export let ServiceHandleBoxSize = 8 as FullRangeInt
 // the argument's own aggregate name came back empty — and `__enum_from_raw_Shape.unionCases` was never
 // synthesized, taking the x64 backend down at `resolveCallFixups`.
 //
-// ⚠ **ONLY FOR A UNION WITH ASSOCIATED VALUES.** `isBoxed` is that question — a union is boxed exactly when
-// some case declares a payload. The gate lives HERE rather than at either caller, so the two cannot come to
-// disagree about which unions have one, and `UnionCasesMemberName`'s note points at this paragraph instead of
-// keeping a second copy of it.
+// ⚠ **ONLY FOR A UNION WITH ASSOCIATED VALUES.** `carriesPayloads` is that question — it is true
+// exactly when some case declares a payload. The gate lives HERE rather than at either caller, so
+// the two cannot come to disagree about which unions have one, and `UnionCasesMemberName`'s note
+// points at this paragraph instead of keeping a second copy of it.
 //
 // ⛔⛔ **THE REASON IS NOT THAT A PAYLOAD-FREE UNION ALREADY HAS THIS SURFACE — IT HAS NEITHER HALF OF IT.**
 // This comment said so twice and credited the spec both times. `/specs/union-cases.md` says *"Plain ENUMS (no
@@ -8869,7 +8886,7 @@ export let ServiceHandleBoxSize = 8 as FullRangeInt
 // ⚠ It must be called with the layout AFTER every case is read, because the companion's case list IS the
 // union's.
 export function appendUnionCasesCompanion(enums EnumLayoutArray, layout EnumLayout)
-	if not layout.isBoxed() 'noAssociatedValues'
+	if not layout.carriesPayloads() 'noAssociatedValues'
 		return
 	end 'noAssociatedValues'
 
@@ -9150,6 +9167,10 @@ export type EnumLayout
 	// payload-free union.
 	export let isUnion as bool
 
+	// The unions the compiler mints (service request and send-error unions, the fused error union) set
+	// it; `unionRepresentationOf` never makes one a word.
+	export let isSynthesized as bool
+
 	// Parallel arrays, in DECLARATION order: case `i` is named `caseNames[i]`, carries tag
 	// `caseTags[i]` and declares payload fields `casePayloads[i]` (empty for a payload-free case).
 	// NEVER appended to directly — `addCase` is the one writer (see the header).
@@ -9162,10 +9183,11 @@ export type EnumLayout
 	// (`1.1` and `1.10` are one float whatever the source text) and these bytes for a string backing.
 	export var caseRawValues as StringArray
 
-	// Per-case payload fields. `casePayloads[i][j]` is case `i`'s slot-`j` field; its
-	// byte offset in the box is `UnionTagBytes + j * FieldSlotBytes`. Empty for `red`/`stay`; the
-	// box is allocated iff SOME case carries a payload (`isBoxed`), and all cases of a boxed union —
-	// payload-free ones included — take the boxed form (a bare tag in a box).
+	// Per-case payload fields. `casePayloads[i][j]` is case `i`'s slot-`j` field; its byte offset in
+	// the box is `UnionTagBytes + j * FieldSlotBytes`. Empty for `red`/`stay`; the box is allocated
+	// iff SOME case carries a payload (`carriesPayloads`) and the union is not a word, and all cases
+	// of a payload-bearing union — payload-free ones included — take the record form (a bare tag in a
+	// box, or the stored tag alone in a word).
 	export var casePayloads as PayloadFieldArrayArray
 
 	// ⭐ **THE INTERFACE NAMES THIS ENUM/UNION'S `implements` CLAUSE WRITES** — the exact twin of
@@ -9227,8 +9249,8 @@ export type EnumLayout
 	// caller that pushed a name and forgot this would shift every later case's backing onto the wrong case.
 	export var caseBackingFields as EnumBackingFieldArrayArray
 
-	export static function create(name ByteArray, isUnion bool, conformsTo NameRoster, visibility Visibility, declFilePath FilePath, backing EnumBacking) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: NameRoster.create(), caseTags: FullRangeIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create()}
+	export static function create(name ByteArray, isUnion bool, conformsTo NameRoster, visibility Visibility, declFilePath FilePath, backing EnumBacking, isSynthesized bool = false) returns EnumLayout
+		return Self{name: name, isUnion: isUnion, isSynthesized: isSynthesized, caseNames: NameRoster.create(), caseTags: FullRangeIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create()}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
@@ -9309,13 +9331,13 @@ export type EnumLayout
 		return widest
 	end 'maxPayloadArity'
 
-	// Is this a HEAP-BOXED union — does SOME case carry a payload? A payload-free enum/union keeps
-	// the bare-i64-tag representation; only a payload-bearing one is boxed
-	// (`8 + maxArity*8` bytes, tag@0). The one decider, so construct and match cannot disagree about
-	// whether a value is a box or a bare tag.
-	export function isBoxed() returns bool
+	// Does SOME case carry a payload? A payload-free enum/union keeps the bare-i64-tag representation;
+	// a payload-bearing one is a box (`8 + maxArity*8` bytes, tag@0) or a one-word union, and
+	// `unionRepresentationOf` says which. The one decider of bare tag versus record, so construct and
+	// match cannot disagree about it.
+	export function carriesPayloads() returns bool
 		return self.maxPayloadArity() > 0
-	end 'isBoxed'
+	end 'carriesPayloads'
 
 	export function everyPayloadIsLet() returns bool
 		for caseIndex in 0 upto self.caseCount() 'eachCase'
@@ -9356,6 +9378,10 @@ export type EnumLayout
 	export function tagOfIndex(index CaseIndex) returns FullRangeInt
 		return try self.caseTags.get(index) otherwise panic("EnumLayout.tagOfIndex: caseTags.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'tagOfIndex'
+
+	export function wordTagOfIndex(index CaseIndex) returns FullRangeInt
+		return self.tagOfIndex(index) + UnboxedTagBase
+	end 'wordTagOfIndex'
 
 	// ⭐⭐ **DOES THIS DECLARATION'S TAG COLUMN CARRY THE RAW VALUES, OR ONLY DECLARATION INDICES?** — ONE
 	// fact, needed by two readers with nothing else in common: E3031's collision test
@@ -9409,11 +9435,12 @@ export type EnumLayout
 	// `Parser.emitEnumCaseConstantSelect` emits. This predicate is what picks between those two routes, and
 	// nothing else reads it — so it is a COST question, not a support question.
 	//
-	// ⚠⚠ **IT ANSWERS ONLY WHETHER A TAG IS ITS INDEX — NEVER WHERE THE TAG IS, AND READING IT AS BOTH IS A
-	// MEASURED WRONG ANSWER.** "An enum value IS its tag" above is true of a SCALAR enum and false of a
-	// BOXED union, whose value is the box pointer; a boxed union's tags are `0,1,2,…` so this answers true
-	// for one, and `.ordinal` used that as permission to skip the tag load and add zero to an address. Ask
-	// `isBoxed` for where the tag lives and this for what the tag means — see `Parser.parseEnumAccessor`.
+	// ⚠⚠ **IT ANSWERS ONLY WHETHER A TAG IS ITS INDEX — NEVER WHERE THE TAG IS, AND READING IT AS BOTH
+	// IS A MEASURED WRONG ANSWER.** "An enum value IS its tag" above is true of a SCALAR enum and
+	// false of a BOXED union, whose value is the box pointer; a boxed union's tags are `0,1,2,…` so
+	// this answers true for one, and `.ordinal` used that as permission to skip the tag load and add
+	// zero to an address. Ask `unionRepresentationOf` for where the tag lives and this for what the
+	// tag means — see `Parser.parseEnumAccessor`.
 	//
 	// A FLOAT-backed enum answers false unless its bit patterns happen to be 0,1,2,… — which no float
 	// backing produces — so it always takes the computed route, without being named here.
@@ -9477,6 +9504,7 @@ export type EnumLayout
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
 		writer.flag(self.isUnion)
+		writer.flag(self.isSynthesized)
 		cacheWriteNameRoster(writer, value: self.caseNames)
 		cacheWriteFullRangeIntArray(writer, value: self.caseTags)
 		cacheWriteStringArray(writer, value: self.caseRawValues)
@@ -9495,6 +9523,7 @@ export type EnumLayout
 	static function cacheRead(reader LibraryCacheReader) returns EnumLayout throws LibraryCacheDamage
 		let f_name = try reader.bytes()
 		let f_isUnion = try reader.flag()
+		let f_isSynthesized = try reader.flag()
 		let f_caseNames = try cacheReadNameRoster(reader)
 		let f_caseTags = try cacheReadFullRangeIntArray(reader)
 		let f_caseRawValues = try cacheReadStringArray(reader)
@@ -9509,11 +9538,11 @@ export type EnumLayout
 		let f_backingStruct = try cacheReadEnumBackingStruct(reader)
 		let f_caseBackingFields = try cacheReadEnumBackingFieldArrayArray(reader)
 
-		return Self{name: f_name, isUnion: f_isUnion, caseNames: f_caseNames, caseTags: f_caseTags, caseRawValues: f_caseRawValues, casePayloads: f_casePayloads, conformsTo: f_conformsTo, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn, backing: f_backing, declaresRawValues: f_declaresRawValues, backingStruct: f_backingStruct, caseBackingFields: f_caseBackingFields}
+		return Self{name: f_name, isUnion: f_isUnion, isSynthesized: f_isSynthesized, caseNames: f_caseNames, caseTags: f_caseTags, caseRawValues: f_caseRawValues, casePayloads: f_casePayloads, conformsTo: f_conformsTo, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn, backing: f_backing, declaresRawValues: f_declaresRawValues, backingStruct: f_backingStruct, caseBackingFields: f_caseBackingFields}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize120
-		return sizeof(EnumLayout) as CacheSize120
+	static function cacheLayoutBytes() returns CacheSize128
+		return sizeof(EnumLayout) as CacheSize128
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

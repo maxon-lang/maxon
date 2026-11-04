@@ -355,6 +355,12 @@ export function destructorSymbol(unionName ByteArray) returns ByteArray
 	return "{String.from(DestructorPrefix)}{String.from(unionName)}".toByteArray()
 end 'destructorSymbol'
 
+export let UnionRetainPrefix = b"__uretain_"
+
+export function unionRetainSymbol(unionName ByteArray) returns ByteArray
+	return "{String.from(UnionRetainPrefix)}{String.from(unionName)}".toByteArray()
+end 'unionRetainSymbol'
+
 // ⭐⭐⭐ **THE NAME OF A DECLARATION VIEW'S *DICTIONARY* DESTRUCTOR — `__destruct_dict_<mangled>(descriptor,
 // box)`.** The `__destruct_<mangled>` a CONCRETE instance gets is a one-argument cascade whose every
 // field drop is a symbol; a DECLARATION VIEW (`BagIter with Element` inside `type Bag uses Element`) has a
@@ -3159,19 +3165,269 @@ end 'emitCurrentThreadOrZero'
 // for a struct box), routed off the SAME classifier the construct's move-in reads. The tag switch drops
 // only the LIVE case's managed fields; a moved-out slot is null and its null-guard skips it (so a match
 // that bound a payload OUT does not double-free it here).
+//
+// A word union's `__destruct_<U>(word)` masks the pointer out of the word and switches on the
+// stored tag; its retain twin `__uretain_<U>(word)` is synthesized when the module references it.
 export function installUnionDestructors(module StdModule, project Project, signatures ProgramSignatures, needed DestructorSet)
 	for (_, layout) in project.enumTypes 'each'
 		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout) 'noManaged'
 			continue
 		end 'noManaged'
 
+		let representation = unionRepresentationOf(signatures, typeNames: project.typeNames, layout: layout)
+
+		if representation == UnionRepresentation.word and needed.contains(unionRetainSymbol(layout.name)) 'retainReferenced'
+			synthesizeUnboxedPayloadStepper(module, layout: layout, project: project, signatures: signatures, step: UnboxedPayloadStep.retain)
+		end 'retainReferenced'
+
 		if not needed.contains(destructorSymbol(layout.name)) 'notReferenced'
 			continue
 		end 'notReferenced'
 
-		synthesizeUnionDestructor(module, layout: layout, project: project, signatures: signatures)
+		match representation 'representation'
+			word then synthesizeUnboxedPayloadStepper(module, layout: layout, project: project, signatures: signatures, step: UnboxedPayloadStep.release)
+			box then synthesizeUnionDestructor(module, layout: layout, project: project, signatures: signatures)
+			bareTag then panic("installUnionDestructors: the bare-tag union `{String.from(layout.name)}` owns a managed field")
+		end 'representation'
 	end 'each'
 end 'installUnionDestructors'
+
+function emitUnboxedTagAndPointer(module StdModule, block IrBlock, word ValueId, ids ValueMinter) returns (ValueId, ValueId)
+	let tagMask = emitConst(module, block: block, value: UnboxedTagMask, ids: ids)
+	let tag = emitBin(module, block: block, a: word, b: tagMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let pointerMask = emitConst(module, block: block, value: UnboxedPointerMask, ids: ids)
+	let pointer = emitBin(module, block: block, a: word, b: pointerMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	return (tag, pointer)
+end 'emitUnboxedTagAndPointer'
+
+function unboxedCasePayload(layout EnumLayout, ci CaseIndex) returns PayloadField
+	return try layout.payloadsAt(ci).get(0) otherwise panic("unboxedCasePayload: case {ci} of the unboxed union `{String.from(layout.name)}` carries no payload — the caller asks only a case `caseHasManagedField` accepted")
+end 'unboxedCasePayload'
+
+typealias CaseIndexArray = Array with CaseIndex
+
+function unboxedManagedCases(layout EnumLayout, project Project, signatures ProgramSignatures) returns CaseIndexArray
+	var cases = CaseIndexArray.create()
+
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		if caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci) 'aPayloadCase'
+			cases.push(ci)
+		end 'aPayloadCase'
+	end 'eachCase'
+
+	return cases
+end 'unboxedManagedCases'
+
+function emitUnboxedCaseTest(module StdModule, func IrFunction, from IrBlock, hit IrBlock, tag ValueId, layout EnumLayout, ci CaseIndex, ids ValueMinter) returns IrBlock
+	var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
+	emitBranchOnCompare(module, block: from, value: tag, pred: StdCmpPred.eq, against: layout.wordTagOfIndex(ci), whenTrue: hit, whenFalse: nextTest, ids: ids)
+
+	return nextTest
+end 'emitUnboxedCaseTest'
+
+function emitUnboxedPresenceTest(module StdModule, from IrBlock, pointer ValueId, present IrBlock, vacant IrBlock, ids ValueMinter)
+	let nonNull = emitCompareWithConstant(module, block: from, value: pointer, pred: StdCmpPred.ne, against: 0, ids: ids)
+	module.setTerminator(from, op: StdOp.condBranch(nonNull, thenBlockId: present.id, elseBlockId: vacant.id))
+end 'emitUnboxedPresenceTest'
+
+enum UnboxedPayloadStep
+	release
+	retain
+end 'UnboxedPayloadStep'
+
+function unboxedStepSymbol(step UnboxedPayloadStep, layout EnumLayout) returns ByteArray
+	return match step 'step'
+		release gives destructorSymbol(layout.name)
+		retain gives unionRetainSymbol(layout.name)
+	end 'step'
+end 'unboxedStepSymbol'
+
+function unboxedStepReturnType(step UnboxedPayloadStep) returns StdReturnType
+	return match step 'step'
+		release gives StdReturnType.void
+		retain gives StdReturnType.value(StdType.i64)
+	end 'step'
+end 'unboxedStepReturnType'
+
+function unboxedStepDropKind(step UnboxedPayloadStep, layout EnumLayout, ci CaseIndex, project Project, signatures ProgramSignatures) returns FieldDropKind
+	let field = unboxedCasePayload(layout, ci: ci)
+
+	match step 'step'
+		release then return payloadDropKind(signatures, typeNames: project.typeNames, field: field, class: classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath))
+		retain then return FieldDropKind.direct(unboxedPayloadRetainCallee(layout, ci: ci, project: project, signatures: signatures))
+	end 'step'
+end 'unboxedStepDropKind'
+
+function synthesizeUnboxedPayloadStepper(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, step UnboxedPayloadStep)
+	var func = IrFunction.createFromStd(unboxedStepSymbol(step, layout: layout), returnType: unboxedStepReturnType(step), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: step == UnboxedPayloadStep.release)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let word = 0
+	let (tag, pointer) = emitUnboxedTagAndPointer(module, block: entry, word: word, ids: ids)
+	var chain = entry
+
+	for ci in unboxedManagedCases(layout, project: project, signatures: signatures) 'eachCase'
+		var caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
+		chain = emitUnboxedCaseTest(module, func: func, from: chain, hit: caseBlock, tag: tag, layout: layout, ci: ci, ids: ids)
+
+		var continuation = emitNullGuardedDropOfValue(module, cur: caseBlock, ptr: pointer, box: word, offset: 0, kind: unboxedStepDropKind(step, layout: layout, ci: ci, project: project, signatures: signatures), ids: ids, func: func)
+		module.setTerminator(continuation, op: StdOp.branch(done.id))
+	end 'eachCase'
+
+	module.setTerminator(chain, op: StdOp.branch(done.id))
+
+	match step 'step'
+		release then module.setTerminator(done, op: StdOp.retVoid)
+		retain then module.setTerminator(done, op: StdOp.ret(word))
+	end 'step'
+
+	module.functions.push(func)
+end 'synthesizeUnboxedPayloadStepper'
+
+function unboxedPayloadRetainCallee(layout EnumLayout, ci CaseIndex, project Project, signatures ProgramSignatures) returns ByteArray
+	let field = unboxedCasePayload(layout, ci: ci)
+
+	return match classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath) 'class'
+		managed(storage, _) gives signatures.retainCalleeOf(maxonTypeTag(storage), nameId: typeNameIdOf(storage), from: project.typeNames, result: RetainResult.discarded, readerFilePath: layout.declFilePath)
+		scalar or
+		nestedUnion or
+		undeclaredName or
+		existential or
+		typeParam or
+		greenThread panic("unboxedPayloadRetainCallee: case {ci} of `{String.from(layout.name)}` is not a plain managed record — `unionIsUnboxed` admits no other payload")
+	end 'class'
+end 'unboxedPayloadRetainCallee'
+
+function synthesizeUnboxedUnionCascade(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
+	match action 'action'
+		clone then synthesizeUnboxedUnionCloner(module, layout: layout, project: project, signatures: signatures)
+		soleWalk or
+		shareWalk then synthesizeUnboxedUnionWalk(module, layout: layout, project: project, signatures: signatures, action: action)
+	end 'action'
+end 'synthesizeUnboxedUnionCascade'
+
+function synthesizeUnboxedUnionCloner(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
+	var func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let word = 0
+	var done = emitCascadeJoin(module, func: func, label: b"done", template: argsOf(word), ids: ids)
+	let (tag, pointer) = emitUnboxedTagAndPointer(module, block: entry, word: word, ids: ids)
+	var chain = entry
+
+	for ci in unboxedManagedCases(layout, project: project, signatures: signatures) 'eachCase'
+		var caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
+		var visit = module.addBlock(func, label: b"clonefld", heat: BlockHeat.normal)
+		var vacant = module.addBlock(func, label: b"vacant", heat: BlockHeat.normal)
+		chain = emitUnboxedCaseTest(module, func: func, from: chain, hit: caseBlock, tag: tag, layout: layout, ci: ci, ids: ids)
+		emitUnboxedPresenceTest(module, from: caseBlock, pointer: pointer, present: visit, vacant: vacant, ids: ids)
+
+		let field = unboxedCasePayload(layout, ci: ci)
+		let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: CascadeAction.clone)
+		let copy = emitCloneCall(module, block: visit, oldPtr: pointer, strategy: strategy, ids: ids)
+		let tagBits = emitConst(module, block: visit, value: layout.wordTagOfIndex(ci), ids: ids)
+		let cloned = emitBin(module, block: visit, a: copy, b: tagBits, opcode: StdBinOpcode.bitOr, ids: ids)
+		emitBranchCarrying(module, from: visit, to: done.block, values: argsOf(cloned))
+		emitBranchCarrying(module, from: vacant, to: done.block, values: argsOf(word))
+	end 'eachCase'
+
+	emitBranchCarrying(module, from: chain, to: done.block, values: argsOf(word))
+	module.setTerminator(done.block, op: StdOp.ret(try done.carried.get(0) otherwise panic("synthesizeUnboxedUnionCloner: the join carries the one result word")))
+	module.functions.push(func)
+end 'synthesizeUnboxedUnionCloner'
+
+function unboxedCasePayloadShape(layout EnumLayout, field PayloadField, project Project, signatures ProgramSignatures) returns UnboxedPayloadShape
+	return try unboxedPayloadShapeOf(signatures, typeNames: project.typeNames, layout: layout, field: field) otherwise panic("unboxedCasePayloadShape: payload '{String.from(field.name)}' of the unboxed union '{String.from(layout.name)}' has no descent; unionIsUnboxed admits only a payload unboxedPayloadShapeOf accepts")
+end 'unboxedCasePayloadShape'
+
+function emitUnboxedPayloadBelowHeader(module StdModule, func IrFunction, cursor CascadeCursor, pointer ValueId, layout EnumLayout, field PayloadField, project Project, signatures ProgramSignatures, action CascadeAction, ids ValueMinter) returns CascadeCursor
+	match unboxedCasePayloadShape(layout, field: field, project: project, signatures: signatures) 'shape'
+		leafBox then return cursor
+		recordBytes then return emitWalkedRecordBytes(module, func: func, cursor: cursor, arr: pointer, action: action, ids: ids)
+		recordElements then return emitUnboxedRecordElementsBelowHeader(module, func: func, cursor: cursor, pointer: pointer, strategy: managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action), action: action, ids: ids)
+		fieldRecord then return emitFieldCascadesBelowHeader(module, func: func, cur: cursor, box: pointer, walks: payloadFieldCascades(layout, field: field, project: project, signatures: signatures, action: action), action: action, ids: ids)
+	end 'shape'
+end 'emitUnboxedPayloadBelowHeader'
+
+function emitUnboxedRecordElementsBelowHeader(module StdModule, func IrFunction, cursor CascadeCursor, pointer ValueId, strategy ManagedCascadeStrategy, action CascadeAction, ids ValueMinter) returns CascadeCursor
+	match strategy 'strategy'
+		managedElements(_, elementWalk) then return emitRecordBytesAndElements(module, func: func, cursor: cursor, pointer: pointer, elementWalk: elementWalk, action: action, ids: ids)
+		direct or
+		throughWitness or
+		unsupported then panic("emitUnboxedRecordElementsBelowHeader: a recordElements payload strategy is a managedElements one")
+	end 'strategy'
+end 'emitUnboxedRecordElementsBelowHeader'
+
+function emitRecordBytesAndElements(module StdModule, func IrFunction, cursor CascadeCursor, pointer ValueId, elementWalk ByteArray, action CascadeAction, ids ValueMinter) returns CascadeCursor
+	var bytesWalked = emitWalkedRecordBytes(module, func: func, cursor: cursor, arr: pointer, action: action, ids: ids)
+	let elementFn = ids.mint()
+	module.appendOp(bytesWalked.block, op: StdOp.funcAddr(elementFn, funcName: elementWalk))
+
+	return emitWalkedRecordElements(module, func: func, cursor: bytesWalked, arr: pointer, elementWalk: elementFn, action: action, ids: ids)
+end 'emitRecordBytesAndElements'
+
+function payloadFieldCascades(layout EnumLayout, field PayloadField, project Project, signatures ProgramSignatures, action CascadeAction) returns ManagedFieldCascadeArray
+	let storage = try unboxedPayloadStorageOf(signatures, typeNames: project.typeNames, layout: layout, field: field) otherwise panic("payloadFieldCascades: payload '{String.from(field.name)}' of '{String.from(layout.name)}' is no managed payload")
+
+	if maxonTypeTag(storage) == ValueTypeTag.genericInstance 'anInstance'
+		return instanceManagedFieldCascades(genericInstanceIdOf(storage), signatures: signatures, action: action)
+	end 'anInstance'
+
+	let name = try project.typeNames.nameOf(typeNameIdOf(storage)) otherwise panic("payloadFieldCascades: the payload type id is not in the project interner")
+
+	for entry in structRuntimeRoster(project, signatures: signatures) 'eachStruct'
+		if entry.layout.name.equals(name) 'theStruct'
+			return structManagedFieldCascades(entry.layout, typeNames: entry.typeNames, signatures: signatures, action: action)
+		end 'theStruct'
+	end 'eachStruct'
+
+	panic("payloadFieldCascades: the payload struct '{String.from(name)}' is in no struct roster; unboxedPayloadShapeOf admits only a declared struct or a base-layout instance")
+end 'payloadFieldCascades'
+
+function synthesizeUnboxedUnionWalk(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
+	var body = beginWalkBody(module, name: perTypeCascadeSymbol(action, typeName: layout.name), scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
+	let word = WalkBoxParam
+	let visits = body.entry.visits()
+	let meeting = ownMeetingOfShareWalk(action, immutable: signatures.aggregateTypeIsImmutable(layout.name))
+	let (tag, pointer) = emitUnboxedTagAndPointer(module, block: body.entry.block, word: word, ids: body.ids)
+	var chain = body.entry.block
+
+	for ci in unboxedManagedCases(layout, project: project, signatures: signatures) 'eachCase'
+		var caseBlock = module.addBlock(body.func, label: b"case", heat: BlockHeat.normal)
+		var visit = module.addBlock(body.func, label: cascadeFieldBlockLabel(action), heat: BlockHeat.normal)
+		var vacant = module.addBlock(body.func, label: b"vacant", heat: BlockHeat.normal)
+		chain = emitUnboxedCaseTest(module, func: body.func, from: chain, hit: caseBlock, tag: tag, layout: layout, ci: ci, ids: body.ids)
+		emitUnboxedPresenceTest(module, from: caseBlock, pointer: pointer, present: visit, vacant: vacant, ids: body.ids)
+
+		let field = unboxedCasePayload(layout, ci: ci)
+		var resume = CascadeCursor.create(visit, carried: argsOf(visits))
+
+		// The payload header is met once, with the union's meeting, and the walk then descends below the
+		// header. Entering the payload's own walker would step the same header again, find it already
+		// marked, and stop, leaving the payload's managed fields unshared across threads.
+		if meeting == WalkMeeting.view 'sharedPayload'
+			resume = emitBoxWalkStep(module, func: body.func, cursor: resume, box: pointer, action: action, meeting: meeting, stop: body.done, ids: body.ids)
+			resume = emitUnboxedPayloadBelowHeader(module, func: body.func, cursor: resume, pointer: pointer, layout: layout, field: field, project: project, signatures: signatures, action: action, ids: body.ids)
+			emitCascadeBranch(module, from: resume, to: body.done)
+		end 'sharedPayload' else 'ownedPayload'
+			let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action)
+			let walked = emitWalkCall(module, block: resume.block, ptr: pointer, visits: resume.visits(), strategy: strategy, ids: body.ids)
+			emitBranchCarrying(module, from: resume.block, to: body.done.block, values: argsOf(walked))
+		end 'ownedPayload'
+
+		emitBranchCarrying(module, from: vacant, to: body.done.block, values: argsOf(visits))
+	end 'eachCase'
+
+	emitBranchCarrying(module, from: chain, to: body.done.block, values: argsOf(visits))
+	finishWalkBody(module, body: body)
+end 'synthesizeUnboxedUnionWalk'
 
 // ⭐ **NOTE WHAT THE REFERENCED DESTRUCTORS TRANSITIVELY NEED**, for both structs and unions — their
 // `__str_decref`/`__mm_free`/nested-`__destruct_<T>` calls live in Std bodies the Maxon-module
@@ -3225,6 +3481,11 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 			usage.usesHeap = true
 			declareUnionPayloadDropNeeds(usage, layout: layout, project: project, signatures: signatures)
 		end 'referenced'
+
+		if usage.neededDestructors.contains(unionRetainSymbol(layout.name)) 'retainReferenced'
+			usage.usesHeap = true
+			declareUnboxedUnionRetainNeeds(usage, layout: layout, project: project, signatures: signatures)
+		end 'retainReferenced'
 	end 'eachUnion'
 
 	// A REFERENCED managed generic instance's `__destruct_<mangled>` frees its box (`__mm_free` —
@@ -3253,6 +3514,12 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 		end 'dictionaryReferenced'
 	end 'eachInstance'
 end 'declareDestructorCascadeNeeds'
+
+function declareUnboxedUnionRetainNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures)
+	for ci in unboxedManagedCases(layout, project: project, signatures: signatures) 'eachCase'
+		recordCallUsage(unboxedPayloadRetainCallee(layout, ci: ci, project: project, signatures: signatures), usage: usage)
+	end 'eachCase'
+end 'declareUnboxedUnionRetainNeeds'
 
 function declareStructLayoutDropNeeds(usage RuntimeUsage, entry StructRosterEntry, signatures ProgramSignatures)
 	if usage.neededDestructors.contains(destructorSymbol(entry.layout.name)) 'referenced'
@@ -4238,6 +4505,11 @@ end 'emitManagedFieldDrops'
 export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, kind FieldDropKind, ids ValueMinter, func IrFunction) returns IrBlock
 	let ptr = ids.mint()
 	module.appendOp(cur, op: StdOp.loadIndirect(ptr, addrId: box, offset: offset, valueType: StdType.i64))
+
+	return emitNullGuardedDropOfValue(module, cur: cur, ptr: ptr, box: box, offset: offset, kind: kind, ids: ids, func: func)
+end 'emitNullGuardedDrop'
+
+function emitNullGuardedDropOfValue(module StdModule, cur IrBlock, ptr ValueId, box ValueId, offset ByteOffset, kind FieldDropKind, ids ValueMinter, func IrFunction) returns IrBlock
 	let zero = ids.mint()
 	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
 	let nonNull = ids.mint()
@@ -4257,7 +4529,7 @@ export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, 
 	module.setTerminator(dropBlock, op: StdOp.branch(contBlock.id))
 
 	return contBlock
-end 'emitNullGuardedDrop'
+end 'emitNullGuardedDropOfValue'
 
 // Load the WITNESS half beside an already-live value half and release the pair through
 // `__drop_existential(witness, value)`. Its own function because a `match` arm
@@ -4956,15 +5228,24 @@ end 'emitManagedElementsFieldClone'
 // shared box and at a record an earlier meeting already descended — which is what makes a second
 // share of one graph cost one box step, and a record reached twice cost one descent.
 
-// One declared union's cascade for `action`. The bodies differ in what they leave behind — a fresh box or
-// nothing — and share the tag-guard chain and the payload list through `emitUnionManagedCaseChain`.
+// One declared union's cascade for `action`: a word union's own, else a box's. The box bodies
+// differ in what they leave behind — a fresh box or nothing — and share the tag-guard chain and the
+// payload list through `emitUnionManagedCaseChain`.
 function synthesizeUnionCascade(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
+	match unionRepresentationOf(signatures, typeNames: project.typeNames, layout: layout) 'representation'
+		word then synthesizeUnboxedUnionCascade(module, layout: layout, project: project, signatures: signatures, action: action)
+		box then synthesizeBoxedUnionCascade(module, layout: layout, project: project, signatures: signatures, action: action)
+		bareTag then panic("synthesizeUnionCascade: the bare-tag union `{String.from(layout.name)}` has no cascade")
+	end 'representation'
+end 'synthesizeUnionCascade'
+
+function synthesizeBoxedUnionCascade(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
 	match action 'action'
 		clone then synthesizeUnionCloner(module, layout: layout, project: project, signatures: signatures)
 		soleWalk or
 		shareWalk then synthesizeUnionWalk(module, layout: layout, project: project, signatures: signatures, action: action)
 	end 'action'
-end 'synthesizeUnionCascade'
+end 'synthesizeBoxedUnionCascade'
 
 // A managed-element record's ONE-ARGUMENT thunk for `action`. Every body is the FIELD-position strategy of
 // the same instance, read here so the entry points cannot resolve it two ways.
@@ -4994,14 +5275,21 @@ end 'synthesizeElementRecordWalk'
 function emitFieldCascadeWalk(module StdModule, symbolName ByteArray, walks ManagedFieldCascadeArray, action CascadeAction, meeting WalkMeeting)
 	var body = beginWalkBody(module, name: symbolName, scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
 	var cur = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: meeting, stop: body.done, ids: body.ids)
-
-	for spec in walks 'eachField'
-		cur = emitManagedFieldCascade(module, func: body.func, cur: cur, box: WalkBoxParam, offset: spec.offset, strategy: spec.strategy, action: action, ids: body.ids)
-	end 'eachField'
+	cur = emitFieldCascadesBelowHeader(module, func: body.func, cur: cur, box: WalkBoxParam, walks: walks, action: action, ids: body.ids)
 
 	emitCascadeBranch(module, from: cur, to: body.done)
 	finishWalkBody(module, body: body)
 end 'emitFieldCascadeWalk'
+
+function emitFieldCascadesBelowHeader(module StdModule, func IrFunction, cur CascadeCursor, box ValueId, walks ManagedFieldCascadeArray, action CascadeAction, ids ValueMinter) returns CascadeCursor
+	var next = cur
+
+	for spec in walks 'eachField'
+		next = emitManagedFieldCascade(module, func: func, cur: next, box: box, offset: spec.offset, strategy: spec.strategy, action: action, ids: ids)
+	end 'eachField'
+
+	return next
+end 'emitFieldCascadesBelowHeader'
 
 // Emit `__sole_<Union>(box, visits)` / `__share_<Union>(box, visits)`: the box's own walk step, then — behind the
 // tag-guard chain `synthesizeUnionCloner` walks — the LIVE case's managed payloads. A scalar-only union is the

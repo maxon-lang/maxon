@@ -88,6 +88,7 @@ type HoldJudge
 	var typeNames as TypeNameInterner
 	export let byName as FuncIndexByName
 	var filePath as FilePath
+	var unboxedWords as UnboxedWordMemo
 	export var valueTags as ValueTypeTagArray
 	export var valueNameIds as TypeNameIdArray
 	var operands as ValueIdArray
@@ -102,7 +103,7 @@ type HoldJudge
 	let columnContainers as NameRoster
 
 	static function create(signatures ProgramSignatures, typeNames TypeNameInterner, byName FuncIndexByName, functions IrFunctionArray, columnContainers NameRoster) returns HoldJudge
-		return Self{instKind: Instantiation.displaces, instKeys: HoldKeyColumn.create(), columnContainers: columnContainers, signatures: signatures, typeNames: typeNames, byName: byName, effectCandidates: NameRoster.create(), dispatch: WitnessDispatchTargets.create(signatures, functions: functions), filePath: FilePath from "", valueTags: ValueTypeTagArray.create(), valueNameIds: TypeNameIdArray.create(), operands: ValueIdArray.create(), paramCount: 0, byRefParams: NoParamPositions, effectKey: UnknownRecord, effectCallee: 0}
+		return Self{instKind: Instantiation.displaces, instKeys: HoldKeyColumn.create(), columnContainers: columnContainers, signatures: signatures, typeNames: typeNames, byName: byName, effectCandidates: NameRoster.create(), dispatch: WitnessDispatchTargets.create(signatures, functions: functions), filePath: FilePath from "", unboxedWords: UnboxedWordMemo.create(), valueTags: ValueTypeTagArray.create(), valueNameIds: TypeNameIdArray.create(), operands: ValueIdArray.create(), paramCount: 0, byRefParams: NoParamPositions, effectKey: UnknownRecord, effectCallee: 0}
 	end 'create'
 
 	function beginFunction(func IrFunction)
@@ -125,6 +126,7 @@ type HoldJudge
 			holdEnd gives HoldOpClass.markerEnd
 			storeIndirect gives HoldOpClass.store
 			loadIndirect gives HoldOpClass.load
+			binOp(result, lhs, _, kind) gives self.binOpClassOf(result, lhs: lhs, kind: kind)
 			witnessDispatch or
 			witnessTryDispatch gives HoldOpClass.dispatch
 			ret or
@@ -132,7 +134,6 @@ type HoldJudge
 			throwError or
 			propagateError gives HoldOpClass.exit
 			literal or
-			binOp or
 			unaryOp or
 			compare or
 			condBranch or
@@ -160,6 +161,22 @@ type HoldJudge
 			rawIntrinsic gives HoldOpClass.loud
 		end 'op'
 	end 'classify'
+
+	function binOpClassOf(result ValueId, lhs ValueId, kind MaxonBinOp) returns HoldOpClass
+		if kind == MaxonBinOp.bitAnd and self.valueIsAnUnboxedWord(lhs) and (try self.valueTags.get(result) otherwise return HoldOpClass.inert) != ValueTypeTag.integer 'aPayloadExtraction'
+			return HoldOpClass.load
+		end 'aPayloadExtraction'
+
+		return HoldOpClass.inert
+	end 'binOpClassOf'
+
+	function valueIsAnUnboxedWord(value ValueId) returns bool
+		if (try self.valueTags.get(value) otherwise return false) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		return self.unboxedWords.nameIdIsAWord(self.signatures, typeNames: self.typeNames, nameId: try self.valueNameIds.get(value) otherwise return false, readerFilePath: self.filePath)
+	end 'valueIsAnUnboxedWord'
 
 	function effectOf(op MaxonOp, opClass HoldOpClass) returns HoldEffect
 		return match opClass 'class'
@@ -1345,6 +1362,7 @@ type HoldResolver
 	function recordLoadDef(op MaxonOp, opIdx ElementIndex)
 		match op 'op'
 			loadIndirect(result, _, _, _) then self.recordDef(result, opIdx: opIdx)
+			binOp(result, _, _, _) then self.recordDef(result, opIdx: opIdx)
 			default panic("HoldResolver.recordLoadDef: handed an op that is not a load")
 		end 'op'
 	end 'recordLoadDef'
@@ -1896,6 +1914,7 @@ type HoldResolver
 	function hopThroughDef(defOp MaxonOp) returns bool
 		return match defOp 'def'
 			loadIndirect(_, addr, offset, _) gives self.hopThroughLoad(addr, offset: offset)
+			binOp(_, word, _, _) gives self.hopThroughWord(word)
 			call(_, callee, args, _, _, _, _, _) gives self.hopThroughCall(callee, args: args)
 			tryCall(_, _, _, args, _, _, _, _, _) gives self.hopThroughElementRead(args)
 			default panic("HoldResolver.hopThroughDef: a recorded definition is neither a load nor a borrowed call")
@@ -1989,6 +2008,7 @@ type HoldResolver
 
 		match op 'op'
 			loadIndirect(result, addr, offset, _) then self.pushReceiverLoad(result, addr: addr, offset: offset)
+			binOp then break
 			default panic("HoldResolver.noteReceiverLoad: handed an op that is not a load")
 		end 'op'
 	end 'noteReceiverLoad'
@@ -2040,6 +2060,12 @@ type HoldResolver
 		self.chainCursor = addr
 		return true
 	end 'hopThroughLoad'
+
+	function hopThroughWord(word ValueId) returns bool
+		self.nodeKeys.push(self.judge.recordKeyOfValue(word))
+		self.chainCursor = word
+		return true
+	end 'hopThroughWord'
 
 	function hopThroughElementRead(args ValueIdArray) returns bool
 		if not self.noteElementHop(args) 'unknownArray'

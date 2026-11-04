@@ -3422,7 +3422,7 @@ instead is a compiler panic — *"a `named` type must be resolved to a primitive
 the op's valueType is a STORAGE question and `named` is not an answer to it.
 
 ⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE IS A CONSTANT TOO — AND THE KEYWORD DECIDES WHERE ITS BOX LIVES.**
-`isBoxed` means SOME case carries a payload, and then EVERY case — payload-free ones included — is a box
+`carriesPayloads` means SOME case carries a payload, and then EVERY case — payload-free ones included — is a box
 rather than a bare tag; the compiler's own `SemanticCheck.maxon:719` says so about its own binding (*"a payload-free
 union case is still a heap object in Maxon"*). But that settles what the value IS, never where it comes
 from, and the two keywords answer that differently:

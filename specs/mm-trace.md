@@ -877,3 +877,202 @@ mm_alloc ArrayRecord #1 size=376
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 ```
+
+<!-- test: an-unboxed-union-local-costs-no-box -->
+⭐ **A UNION OF ONE MANAGED RECORD IS A WORD, NOT A BOX.** `Holder` has one case that carries a `Body` and one
+that carries nothing, so a value of it is the `Body` pointer tagged with its case. Constructing it allocates
+the `Body` and nothing else, and dropping it releases the `Body`: no `Holder` appears in the trace.
+<!-- MmTrace -->
+```maxon
+typealias Mass = int(0 to 100)
+
+type Body
+	export var mass as Mass
+
+	static function create(mass Mass) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Holder
+	empty
+	holding(body Body)
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.holding(Body.create(5))
+
+	return match h 'probe'
+		holding(b) gives b.mass as ExitCode
+		empty gives 0
+	end 'probe'
+end 'main'
+```
+```exitcode
+5
+```
+```mm-trace
+mm_alloc Body #1 size=8
+mm_decref Body #1 rc=0
+mm_free Body #1
+```
+
+<!-- test: an-unboxed-union-record-field-costs-no-box -->
+The same word stored in a record field: the record and the `Body` are the only allocations.
+<!-- MmTrace -->
+```maxon
+typealias Mass = int(0 to 100)
+
+type Body
+	export var mass as Mass
+
+	static function create(mass Mass) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Holder
+	empty
+	holding(body Body)
+end 'Holder'
+
+type Shelf
+	export var held as Holder
+
+	static function create() returns Self
+		return Self{held: Holder.holding(Body.create(6))}
+	end 'create'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = Shelf.create()
+
+	return match shelf.held 'probe'
+		holding(b) gives b.mass as ExitCode
+		empty gives 0
+	end 'probe'
+end 'main'
+```
+```exitcode
+6
+```
+```mm-trace
+mm_alloc Body #1 size=8
+mm_alloc Shelf #2 size=8
+mm_decref Shelf #2 rc=0
+mm_decref Body #1 rc=0
+mm_free Body #1
+mm_free Shelf #2
+```
+
+<!-- test: an-unboxed-union-array-element-costs-no-box -->
+The same word as an array element: the array, its buffer and the `Body` are the only allocations.
+<!-- MmTrace -->
+```maxon
+typealias Mass = int(0 to 100)
+
+type Body
+	export var mass as Mass
+
+	static function create(mass Mass) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Holder
+	empty
+	holding(body Body)
+end 'Holder'
+
+typealias HolderArray = Array with Holder
+
+function main() returns ExitCode
+	var all = HolderArray.create()
+	all.push(Holder.holding(Body.create(7)))
+	all.push(Holder.empty)
+
+	let first = try all.get(0) otherwise return 99
+
+	return match first 'probe'
+		holding(b) gives b.mass as ExitCode
+		empty gives 0
+	end 'probe'
+end 'main'
+```
+```exitcode
+7
+```
+```mm-trace
+mm_alloc ArrayRecord #1 size=48
+mm_alloc Body #2 size=8
+mm_alloc ElementBuffer #3 size=32
+mm_decref ArrayRecord #1 rc=0
+mm_decref Body #2 rc=0
+mm_free Body #2
+mm_decref ElementBuffer #3 rc=0
+mm_free ElementBuffer #3
+mm_free ArrayRecord #1
+```
+
+<!-- test: aes-key-setup-allocates-no-backing-box -->
+`Aes` holds its key schedule in a union of one record per implementation. The word form leaves `AesBacking`
+out of the trace.
+<!-- MmTrace -->
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create()
+
+	for i in 0 upto 16 'eachByte'
+		key.push(i as Byte)
+	end 'eachByte'
+
+	let aes = try Aes.create(key) otherwise return 99
+	var block = ByteArray.create()
+
+	for _ in 0 upto 16 'eachBlockByte'
+		block.push(0)
+	end 'eachBlockByte'
+
+	let out = try aes.encryptBlock(block) otherwise return 98
+
+	return out.count() as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+```mm-trace
+mm_alloc ArrayRecord #1 size=48
+mm_alloc ElementBuffer #2 size=4
+mm_alloc ElementBuffer #3 size=8
+mm_decref ElementBuffer #2 rc=0
+mm_free ElementBuffer #2
+mm_alloc ElementBuffer #4 size=16
+mm_decref ElementBuffer #3 rc=0
+mm_free ElementBuffer #3
+mm_alloc ArrayRecord #5 size=408
+mm_alloc Aes #6 size=8
+mm_alloc ArrayRecord #7 size=48
+mm_alloc ElementBuffer #8 size=4
+mm_alloc ElementBuffer #9 size=8
+mm_decref ElementBuffer #8 rc=0
+mm_free ElementBuffer #8
+mm_alloc ElementBuffer #10 size=16
+mm_decref ElementBuffer #9 rc=0
+mm_free ElementBuffer #9
+mm_alloc ArrayRecord #11 size=72
+mm_decref ArrayRecord #11 rc=0
+mm_free ArrayRecord #11
+mm_decref ArrayRecord #7 rc=0
+mm_decref ElementBuffer #10 rc=0
+mm_free ElementBuffer #10
+mm_free ArrayRecord #7
+mm_decref Aes #6 rc=0
+mm_decref ArrayRecord #5 rc=0
+mm_free ArrayRecord #5
+mm_free Aes #6
+mm_decref ArrayRecord #1 rc=0
+mm_decref ElementBuffer #4 rc=0
+mm_free ElementBuffer #4
+mm_free ArrayRecord #1
+```

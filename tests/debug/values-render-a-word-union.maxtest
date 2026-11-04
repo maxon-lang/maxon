@@ -1,0 +1,34 @@
+let WordUnionCaseLabel = "values-render-a-word-union"
+let WordUnionFixtureName = "wordunion"
+
+let WordParcelLocalName = "parcel"
+let WordNothingLocalName = "nothing"
+let WordNamedCaseName = "named"
+let WordEmptyCaseName = "empty"
+let WordPayloadRendering = "named=\"parcel1\" (len=7)"
+
+test 'a union held in one tagged word renders the case its low bits name and the payload its high bits address'
+	let staged = builtFixture(WordUnionCaseLabel, fixture: WordUnionFixtureName)
+	let renderedAt = anchorLine(staged.join(StagedProgramFileName), anchor: "rendered")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(renderedAt)}", RunCommand, LocalsCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let listings = eventsOfKind(events, kind: LocalsEventName)
+
+	Expect.equal(listings.count(), expected: 1, message: "`{LocalsCommand}` at a stop printed no `{LocalsEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let listed = eventAt(listings, index: 0)
+	let rows = listedLines(valueRows(listed, node: listed.root, key: LocalsKey))
+
+	let parcelValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: WordParcelLocalName)
+	Expect.equal(parcelValues.count(), expected: 1, message: "the union local `{WordParcelLocalName}` is not in the listing. The locals were: {rows}. {said}")
+	Expect.equal(textOf(listed, node: nodeAt(parcelValues, index: 0), key: DisplayKey), expected: WordNamedCaseName, message: "a union held as a tagged word reads its case from the word's low three bits; read as a box pointer it names no case at all. The locals were: {rows}. {said}")
+
+	let parcelChildren = listedLines(valueRows(listed, node: nodeAt(parcelValues, index: 0), key: ChildrenKey))
+	Expect.contains(parcelChildren, needle: WordPayloadRendering, message: "the payload is the word with its tag bits cleared, a String record. `{WordParcelLocalName}`'s children were: {parcelChildren}. {said}")
+
+	let nothingValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: WordNothingLocalName)
+	Expect.equal(nothingValues.count(), expected: 1, message: "the union local `{WordNothingLocalName}` is not in the listing. The locals were: {rows}. {said}")
+	Expect.equal(textOf(listed, node: nodeAt(nothingValues, index: 0), key: DisplayKey), expected: WordEmptyCaseName, message: "a payload-free case is the bare tag word, with no payload address behind it. The locals were: {rows}. {said}")
+end 'a union held in one tagged word renders the case its low bits name and the payload its high bits address'

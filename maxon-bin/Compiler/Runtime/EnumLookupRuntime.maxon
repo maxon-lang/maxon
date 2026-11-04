@@ -38,8 +38,9 @@ export function enumFromRawValueSymbol(enumName ByteArray) returns ByteArray
 	return "{String.from(EnumFromRawValuePrefix)}{String.from(enumName)}".toByteArray()
 end 'enumFromRawValueSymbol'
 
-// `__enum_from_name_<Enum>` — the general name lookup: the whole case list for a payload-free declaration,
-// and the PAYLOAD-FREE cases only for a boxed union (see `synthesizeEnumFromName`).
+// `__enum_from_name_<Enum>` — the general name lookup: the whole case list for a payload-free
+// declaration, and the PAYLOAD-FREE cases only for a payload-bearing union (see
+// `synthesizeEnumFromName`).
 export function enumFromNameSymbol(enumName ByteArray) returns ByteArray
 	return "{String.from(EnumFromNamePrefix)}{String.from(enumName)}".toByteArray()
 end 'enumFromNameSymbol'
@@ -175,17 +176,18 @@ end 'verifyEnumLookupErrorOrdinals'
 // ⚠ **THE HEAP BIT IS PER-DECLARATION AND NOT PER-FAMILY.** A payload-free enum's helper returns a bare
 // tag and allocates nothing, so `Color.fromName(s)` must not drag the allocator — and the leak gate — into
 // a program that never allocates. Only a BOXED union's helper builds a record.
-export function noteEnumLookupUsage(usage RuntimeUsage, project Project)
+export function noteEnumLookupUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
 	if usage.neededEnumLookups.count() == 0 'noLookupInThisProgram'
 		return
 	end 'noLookupInThisProgram'
 
 	for (_, layout) in project.enumTypes 'each'
+		let representation = unionRepresentationOf(signatures, typeNames: project.typeNames, layout: layout)
 		var buildsABox = false
 
 		if usage.neededEnumLookups.contains(enumFromNameSymbol(layout.name)) 'generalReferenced'
 			usage.usesStrEq = true
-			buildsABox = layout.isBoxed()
+			buildsABox = representation == UnionRepresentation.box
 		end 'generalReferenced'
 
 		// ⚠ **`fromRawValue` NEEDS `__str_eq` FOR EXACTLY THE BACKINGS WHOSE RAW VALUE IS BYTES** — a
@@ -203,8 +205,9 @@ export function noteEnumLookupUsage(usage RuntimeUsage, project Project)
 
 			usage.usesStrEq = true
 
-			// A per-case helper exists only for a payload-bearing case, which is what makes its union boxed.
-			buildsABox = true
+			// A per-case helper exists only for a payload-bearing case, which makes its union a box or a
+			// word; only a box allocates.
+			buildsABox = representation == UnionRepresentation.box
 		end 'eachCase'
 
 		if buildsABox 'allocatesARecord'
@@ -213,15 +216,16 @@ export function noteEnumLookupUsage(usage RuntimeUsage, project Project)
 	end 'each'
 end 'noteEnumLookupUsage'
 
-// ⭐⭐ **HOW FAR THE PER-CASE SYMBOL SCAN HAS TO GO — the whole case list, or NOT AT ALL.** Both walkers below
-// ask a MEMBERSHIP question keyed by a symbol they have to BUILD, and building one allocates; a declaration
-// that cannot own a per-case helper must therefore not be asked about, case by case, on every compile.
-// `enumFromNameCaseSymbol` is minted at exactly one site (`Parser.parseEnumFromNameCase`), reached only when
-// the named case declares a payload — which is precisely what makes its declaration boxed. So this is an
-// EXACT bound and not a heuristic: a plain enum has no per-case symbol to find, and scanning it would build
-// one string per case of every enum in the program to learn that.
+// ⭐⭐ **HOW FAR THE PER-CASE SYMBOL SCAN HAS TO GO — the whole case list, or NOT AT ALL.** Both
+// walkers below ask a MEMBERSHIP question keyed by a symbol they have to BUILD, and building one
+// allocates; a declaration that cannot own a per-case helper must therefore not be asked about,
+// case by case, on every compile. `enumFromNameCaseSymbol` is minted at exactly one site
+// (`Parser.parseEnumFromNameCase`), reached only when the named case declares a payload — which is
+// precisely what makes its declaration payload-bearing. So this is an EXACT bound and not a
+// heuristic: a plain enum has no per-case symbol to find, and scanning it would build one string
+// per case of every enum in the program to learn that.
 function perCaseSymbolScanBound(layout EnumLayout) returns CaseIndex
-	return layout.caseCount() if layout.isBoxed() else 0 as CaseIndex
+	return layout.caseCount() if layout.carriesPayloads() else 0 as CaseIndex
 end 'perCaseSymbolScanBound'
 
 // ⭐ Synthesize `__enum_from_raw_<Enum>(raw)`, `__enum_from_name_<Enum>(name)` and any
@@ -231,18 +235,20 @@ end 'perCaseSymbolScanBound'
 // ⚠ **THE PER-CASE HELPERS ARE ASKED FOR BY NAME, CASE BY CASE, NOT DERIVED FROM "the union is
 // referenced".** A program writing `Container.fromName("value", 42)` needs exactly that one case's helper;
 // building every case's would put a dead constructor per case into every such program.
-export function installEnumLookupHelpers(module StdModule, project Project, needed EnumLookupSet)
+export function installEnumLookupHelpers(module StdModule, project Project, signatures ProgramSignatures, needed EnumLookupSet)
 	if needed.count() == 0 'noLookupInThisProgram'
 		return
 	end 'noLookupInThisProgram'
 
 	for (_, layout) in project.enumTypes 'each'
+		let representation = unionRepresentationOf(signatures, typeNames: project.typeNames, layout: layout)
+
 		if needed.contains(enumFromRawValueSymbol(layout.name)) 'fromRawValueReferenced'
 			synthesizeEnumFromRawValue(module, layout: layout, project: project)
 		end 'fromRawValueReferenced'
 
 		if needed.contains(enumFromNameSymbol(layout.name)) 'fromNameReferenced'
-			synthesizeEnumFromName(module, layout: layout, project: project)
+			synthesizeEnumFromName(module, layout: layout, project: project, representation: representation)
 		end 'fromNameReferenced'
 
 		for i in 0 upto perCaseSymbolScanBound(layout) 'eachCase'
@@ -250,7 +256,7 @@ export function installEnumLookupHelpers(module StdModule, project Project, need
 				continue
 			end 'caseNotReferenced'
 
-			synthesizeEnumFromNameCase(module, layout: layout, caseIndex: i, project: project)
+			synthesizeEnumFromNameCase(module, layout: layout, caseIndex: i, project: project, representation: representation)
 		end 'eachCase'
 	end 'each'
 end 'installEnumLookupHelpers'
@@ -345,12 +351,13 @@ end 'enumRawValueIsBytes'
 // index for the rest), which is exactly what `Parser.emitEnumTagLiteral` emits for a written `Color.red`. So
 // the ARGUMENT type is what makes its sibling refuse backings, and this member's argument is always a String.
 //
-// ⭐⭐ **A BOXED UNION RETURNS A FRESH BOX, AND ONLY ITS PAYLOAD-FREE CASES ARE IN THE CHAIN.** A name
-// alone cannot say what a payload-bearing case's slots hold, so a dynamic name matching one has nothing to
-// build — it falls through to the throw. The LITERAL form that CAN supply payloads is routed to
-// `synthesizeEnumFromNameCase` instead. A union all of whose cases carry payloads therefore gets a body
-// that is one error return, which is the honest answer rather than an absent function.
-function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Project)
+// ⭐⭐ **A BOXED UNION RETURNS A FRESH BOX (A WORD UNION ITS STORED TAG), AND ONLY ITS PAYLOAD-FREE
+// CASES ARE IN THE CHAIN.** A name alone cannot say what a payload-bearing case's slots hold, so a
+// dynamic name matching one has nothing to build — it falls through to the throw. The LITERAL form
+// that CAN supply payloads is routed to `synthesizeEnumFromNameCase` instead. A union all of whose
+// cases carry payloads therefore gets a body that is one error return, which is the honest answer
+// rather than an absent function.
+function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Project, representation UnionRepresentation)
 	var func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(1)
 
@@ -368,7 +375,7 @@ function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Pro
 		var hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
 		var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		emitNameTestBranch(module, block: cur, name: name, caseName: layout.caseNameAt(i), globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
-		emitCaseValueReturn(module, block: hit, layout: layout, caseIndex: i, project: project, ids: ids)
+		emitCaseValueReturn(module, block: hit, layout: layout, caseIndex: i, project: project, representation: representation, ids: ids)
 		cur = nextTest
 	end 'eachCase'
 
@@ -391,7 +398,7 @@ end 'synthesizeEnumFromName'
 //
 // ⚠ **NO COMMITTED CASE COVERS A MANAGED PAYLOAD THROUGH THIS MEMBER**, so the suite would not catch a
 // regression here; the consuming discipline at the call site is the whole of what keeps it correct.
-function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseIndex CaseIndex, project Project)
+function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseIndex CaseIndex, project Project, representation UnionRepresentation)
 	let arity = layout.payloadArityAt(caseIndex)
 	let paramCount = (1 + arity) as ParamCount
 	var paramTypes = StdTypeArray.create()
@@ -410,6 +417,15 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 	var build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
 	var miss = module.addBlock(func, label: b"nocase", heat: BlockHeat.normal)
 	emitNameTestBranch(module, block: entry, name: name, caseName: layout.caseNameAt(caseIndex), globalData: project.globalData, hit: build, miss: miss, ids: ids)
+
+	if representation == UnionRepresentation.word 'aWord'
+		let tagBits = emitConst(module, block: build, value: layout.wordTagOfIndex(caseIndex), ids: ids)
+		let word = emitBin(module, block: build, a: 1, b: tagBits, opcode: StdBinOpcode.bitOr, ids: ids)
+		emitOkReturn(module, block: build, value: word, ids: ids)
+		emitErrorReturn(module, block: miss, flag: EnumLookupNoSuchCaseNameFlag, ids: ids)
+		module.functions.push(func)
+		return
+	end 'aWord'
 
 	let box = emitBoxWithTag(module, block: build, layout: layout, caseIndex: caseIndex, project: project, ids: ids)
 
@@ -451,15 +467,19 @@ function emitNameTestBranch(module StdModule, block IrBlock, name ValueId, caseN
 	module.setTerminator(block, op: StdOp.condBranch(isThisCase, thenBlockId: hit.id, elseBlockId: miss.id))
 end 'emitNameTestBranch'
 
-// The ok return of a matched PAYLOAD-FREE case: its bare tag, or — when the declaration is a boxed union,
-// where even a payload-free case takes the boxed form (`EnumLayout.isBoxed`) — a fresh box carrying that tag
-// and nothing else.
-function emitCaseValueReturn(module StdModule, block IrBlock, layout EnumLayout, caseIndex CaseIndex, project Project, ids ValueMinter)
-	if not layout.isBoxed() 'bareTag'
-		emitOkReturn(module, block: block, value: emitConst(module, block: block, value: layout.tagOfIndex(caseIndex), ids: ids), ids: ids)
-		return
-	end 'bareTag'
+// The ok return of a matched PAYLOAD-FREE case, by the declaration's representation: its bare tag;
+// for a word union, the stored tag (declaration index + `UnboxedTagBase`) as an empty word; for a
+// box union, where even a payload-free case takes the boxed form, a fresh box carrying that tag and
+// nothing else.
+function emitCaseValueReturn(module StdModule, block IrBlock, layout EnumLayout, caseIndex CaseIndex, project Project, representation UnionRepresentation, ids ValueMinter)
+	match representation 'representation'
+		bareTag then emitOkReturn(module, block: block, value: emitConst(module, block: block, value: layout.tagOfIndex(caseIndex), ids: ids), ids: ids)
+		word then emitOkReturn(module, block: block, value: emitConst(module, block: block, value: layout.wordTagOfIndex(caseIndex), ids: ids), ids: ids)
+		box then emitBoxedCaseValueReturn(module, block: block, layout: layout, caseIndex: caseIndex, project: project, ids: ids)
+	end 'representation'
+end 'emitCaseValueReturn'
 
+function emitBoxedCaseValueReturn(module StdModule, block IrBlock, layout EnumLayout, caseIndex CaseIndex, project Project, ids ValueMinter)
 	let box = emitBoxWithTag(module, block: block, layout: layout, caseIndex: caseIndex, project: project, ids: ids)
 
 	for j in 0 upto layout.maxPayloadArity() 'zeroFill'
@@ -467,7 +487,7 @@ function emitCaseValueReturn(module StdModule, block IrBlock, layout EnumLayout,
 	end 'zeroFill'
 
 	emitOkReturn(module, block: block, value: box, ids: ids)
-end 'emitCaseValueReturn'
+end 'emitBoxedCaseValueReturn'
 
 // Allocate a boxed union's record and stamp its tag — the Std-tier twin of `Parser.emitEnumBox`'s first two
 // steps, and it agrees with that door on all three constants that matter: the SIZE is the union-wide
