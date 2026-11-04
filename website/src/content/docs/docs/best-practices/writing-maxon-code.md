@@ -807,8 +807,8 @@ arr.push(42)                              // append
 let n = arr.count()                       // length
 let val = try arr.get(0) otherwise 0      // access (ALWAYS use try)
 try arr.set(0, value: 100) otherwise ignore  // modify (throws)
-var sized = IntArray.create(50)           // 50 zero elements, one allocation
-var roomy = IntArray.create(100, zeroed: false)  // empty, room for 100, one allocation
+var sized = IntArray.create(50)           // 50 zero elements, one allocation up to 256 bytes
+var roomy = IntArray.create(100, zeroed: false)  // empty, room for 100, one allocation up to 256 bytes
 arr.reserve(100)                          // pre-allocate an existing array
 arr.resize(50)                            // set length
 let last = try arr.pop() otherwise 0      // remove last (throws)

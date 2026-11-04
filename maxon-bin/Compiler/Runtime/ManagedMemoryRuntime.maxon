@@ -34,10 +34,11 @@
 //
 // An array's element buffer is either its own allocation or the tail of the record's. The 48-byte record is
 // `__mm_alloc`'d, a managed box with the MM header + refcount before it. `buffer@0` points at a separate raw
-// `__mm_alloc`'d span (destructor 0), or, for an array created with a known capacity of at most
-// `CoAllocationMaxBytes`, at bytes inside the record's own allocation (`BufferOwnership.
-// coAllocatedBufferOffset` owns that layout). `__managed_decref` releases the record and a separate buffer;
-// a co-allocated buffer is freed with the record.
+// `__mm_alloc`'d span (destructor 0), or, for an array created with a known capacity, at bytes inside
+// the record's own allocation (`BufferOwnership.coAllocatedBufferOffset` owns that layout): at most
+// `CoAllocationMaxBytes` of them for a growable array, any number for a FixedArray made by `create()`.
+// `__managed_decref` releases the record and a separate buffer; a co-allocated buffer is freed with
+// the record.
 //
 // ⭐⭐ **A SEPARATE BUFFER IS WHAT MAKES A ZERO-COPY SLICE POSSIBLE.** Because that buffer is its OWN
 // `__mm_alloc` allocation, it has its OWN refcount word, and a non-zero count there says
@@ -370,11 +371,20 @@ let EaseDivisor = 4
 // stay disjoint: they are two prefix TESTS installing two different runtimes.
 export let ManagedCreateName = b"__managed_create"
 export let ManagedCreateSizedName = b"__managed_create_sized"
+
+// A FixedArray's create is the same body as `__managed_create_sized` with `BufferPlacement.always`,
+// so its buffer is co-allocated at any size.
+export let ManagedCreateFixedName = b"__managed_create_fixed"
 export let SizedCreateSizingCount = 2
+
+export function isManagedSizedCreateCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedCreateSizedName) or callee.equals(ManagedCreateFixedName)
+end 'isManagedSizedCreateCallee'
 
 // Growing past a co-allocated buffer's capacity moves the elements to an allocation of their own and leaves
 // the inline bytes unused until the record dies, so an array that outgrows its first buffer carries up to
-// this many dead bytes for its whole life.
+// this many dead bytes for its whole life. A FixedArray cannot outgrow its buffer through its API and
+// is not bound by this.
 let CoAllocationMaxBytes = 256
 export let ManagedPushName = b"__managed_push"
 export let PushedElementCount = 1
@@ -1263,7 +1273,8 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	buildManagedGrownCap(module)
 	buildManagedGrow(module)
 	buildManagedCreate(module)
-	buildManagedCreateSized(module)
+	buildManagedCreateSized(module, name: ManagedCreateSizedName, placement: BufferPlacement.bounded)
+	buildManagedCreateSized(module, name: ManagedCreateFixedName, placement: BufferPlacement.always)
 	buildManagedPush(module)
 	buildManagedGet(module, greenThreads: usage.usesGt)
 	buildManagedGetUnchecked(module)
@@ -3973,10 +3984,44 @@ function emitMintRecord(module StdModule, block IrBlock, allocBytes ValueId, ele
 	return record
 end 'emitMintRecord'
 
+// Which buffers `buildManagedCreateSized` allocates with the record. `bounded` stops at
+// `CoAllocationMaxBytes`, for arrays that can grow. `always` is for a FixedArray, which never strands
+// its inline bytes by growing; one that is frozen for sharing and then written detaches to a buffer
+// of its own and leaves them unused until the record dies.
+enum BufferPlacement
+	bounded
+	always
+end 'BufferPlacement'
+
+type SizedCreateFrame
+	module var func as IrFunction
+	module var emptyArm as IrBlock
+	module var measure as IrBlock
+	module var coAllocatedArm as IrBlock
+	module var alloc as IrBlock
+	module var coPublish as IrBlock
+	module var done as IrBlock
+	module let recordBytes as ValueId
+	module let noBuffer as ValueId
+	module let bytes as ValueId
+	module let room as ValueId
+	module let coAllocatedBytes as ValueId
+	module let allocBytes as ValueId
+	module let reservedRoom as ValueId
+	module let elementSize as ValueId
+	module let elementDestroy as ValueId
+	module let length as ValueId
+
+	static function create(func IrFunction, emptyArm IrBlock, measure IrBlock, coAllocatedArm IrBlock, alloc IrBlock, coPublish IrBlock, done IrBlock, recordBytes ValueId, noBuffer ValueId, bytes ValueId, room ValueId, coAllocatedBytes ValueId, allocBytes ValueId, reservedRoom ValueId, elementSize ValueId, elementDestroy ValueId, length ValueId) returns SizedCreateFrame
+		return Self{func: func, emptyArm: emptyArm, measure: measure, coAllocatedArm: coAllocatedArm, alloc: alloc, coPublish: coPublish, done: done, recordBytes: recordBytes, noBuffer: noBuffer, bytes: bytes, room: room, coAllocatedBytes: coAllocatedBytes, allocBytes: allocBytes, reservedRoom: reservedRoom, elementSize: elementSize, elementDestroy: elementDestroy, length: length}
+	end 'create'
+end 'SizedCreateFrame'
+
 // `__managed_create_sized(elementSize, capacity, length, elementDestroy) -> arrPtr` — a record with room for
 // `capacity` elements (at least `MinimumCapacity`, or none when `capacity` is 0) and `length` of them
-// published, zero-filled because `__mm_alloc` zeroes. A buffer of at most `CoAllocationMaxBytes` is
-// allocated with the record; `BufferOwnership.coAllocatedBufferOffset` owns the layout.
+// published, zero-filled because `__mm_alloc` zeroes. `placement` decides which buffers are allocated
+// with the record; `BufferOwnership.coAllocatedBufferOffset` owns the layout. `__managed_create_fixed`
+// has the same signature.
 //
 // A negative `capacity` is a capacity overflow (`arrayCapacityOverflow`), refused before the floor lifts it to
 // `MinimumCapacity`, so no caller can publish a negative `length`.
@@ -3984,8 +4029,8 @@ end 'emitMintRecord'
 // ⚠ It runs without a green-thread stack check, so E5004 prices every chain of unguarded functions below it.
 // It allocates through `__mm_alloc` itself: a chain through `__managed_reserve` and `__managed_grow` under
 // `__managed_clone` overruns the guard margin.
-function buildManagedCreateSized(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCreateSizedName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+function buildManagedCreateSized(module StdModule, name ByteArray, placement BufferPlacement)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
 	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3998,12 +4043,9 @@ function buildManagedCreateSized(module StdModule)
 	var fit = module.addBlock(func, label: b"fit", heat: BlockHeat.normal)
 	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.cold)
 	var measure = module.addBlock(func, label: b"measure", heat: BlockHeat.normal)
-	var separateArm = module.addBlock(func, label: b"separm", heat: BlockHeat.normal)
 	var coAllocatedArm = module.addBlock(func, label: b"coarm", heat: BlockHeat.normal)
 	var alloc = module.addBlock(func, label: b"alloc", heat: BlockHeat.normal)
 	var coPublish = module.addBlock(func, label: b"copublish", heat: BlockHeat.normal)
-	var checkSeparate = module.addBlock(func, label: b"chksep", heat: BlockHeat.normal)
-	var separatePublish = module.addBlock(func, label: b"seppublish", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
@@ -4018,8 +4060,6 @@ function buildManagedCreateSized(module StdModule)
 
 	let allocBytes = ids.mint()
 	alloc.blockArgs.push(IrBlockArg.create(allocBytes, argType: StdType.i64))
-	let bufferBytes = ids.mint()
-	alloc.blockArgs.push(IrBlockArg.create(bufferBytes, argType: StdType.i64))
 	let reservedRoom = ids.mint()
 	alloc.blockArgs.push(IrBlockArg.create(reservedRoom, argType: StdType.i64))
 
@@ -4030,7 +4070,6 @@ function buildManagedCreateSized(module StdModule)
 	emitBranchOnCompare(module, block: checkSign, value: capacity, pred: StdCmpPred.eq, against: 0, whenTrue: emptyArm, whenFalse: floorCapacity, ids: ids)
 
 	let noBuffer = emitConst(module, block: emptyArm, value: 0, ids: ids)
-	emitBranchCarrying(module, from: emptyArm, to: alloc, values: threeArgs(recordBytes, second: noBuffer, third: noBuffer))
 
 	emitBranchOnCompare(module, block: floorCapacity, value: capacity, pred: StdCmpPred.lt, against: MinimumCapacity, whenTrue: takeMinimum, whenFalse: takeAsk, ids: ids)
 
@@ -4041,38 +4080,70 @@ function buildManagedCreateSized(module StdModule)
 	emitRuntimeAbort(module, func: func, block: sizeOverflow, abort: RuntimeAbort.arrayCapacityOverflow, ids: ids)
 
 	let bytes = emitCheckedByteLength(module, func: func, cur: fit, count: room, es: elementSize, fits: measure, overflow: sizeOverflow, ids: ids)
-	emitBranchOnCompare(module, block: measure, value: bytes, pred: StdCmpPred.gt, against: CoAllocationMaxBytes, whenTrue: separateArm, whenFalse: coAllocatedArm, ids: ids)
-
-	emitBranchCarrying(module, from: separateArm, to: alloc, values: threeArgs(recordBytes, second: bytes, third: room))
 
 	let leadBytes = emitConst(module, block: coAllocatedArm, value: coAllocatedBufferOffset(), ids: ids)
 	let coAllocatedBytes = emitBin(module, block: coAllocatedArm, a: leadBytes, b: bytes, opcode: StdBinOpcode.add, ids: ids)
-	let coAllocatedNoBuffer = emitConst(module, block: coAllocatedArm, value: 0, ids: ids)
-	emitBranchCarrying(module, from: coAllocatedArm, to: alloc, values: threeArgs(coAllocatedBytes, second: coAllocatedNoBuffer, third: room))
 
-	let record = emitMintRecord(module, block: alloc, allocBytes: allocBytes, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
-	emitBranchOnCompareValues(module, block: alloc, a: allocBytes, pred: StdCmpPred.gt, b: recordBytes, whenTrue: coPublish, whenFalse: checkSeparate, ids: ids)
+	var frame = SizedCreateFrame.create(func, emptyArm: emptyArm, measure: measure, coAllocatedArm: coAllocatedArm, alloc: alloc, coPublish: coPublish, done: done, recordBytes: recordBytes, noBuffer: noBuffer, bytes: bytes, room: room, coAllocatedBytes: coAllocatedBytes, allocBytes: allocBytes, reservedRoom: reservedRoom, elementSize: elementSize, elementDestroy: elementDestroy, length: length)
 
-	let leadOffset = emitConst(module, block: coPublish, value: coAllocatedBufferOffset(), ids: ids)
-	let coBuffer = emitBin(module, block: coPublish, a: record, b: leadOffset, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: coPublish, record: record, offset: ManagedRecordBufferOffset, value: coBuffer)
-	emitStoreField(module, block: coPublish, record: record, offset: ManagedRecordCapacityOffset, value: reservedRoom)
-	module.setTerminator(coPublish, op: StdOp.branch(done.id))
+	match placement 'placement'
+		bounded then placeBufferUpToTheBound(module, frame: frame, ids: ids)
+		always then placeBufferAlongsideTheRecord(module, frame: frame, ids: ids)
+	end 'placement'
 
-	emitBranchOnCompare(module, block: checkSeparate, value: bufferBytes, pred: StdCmpPred.ne, against: 0, whenTrue: separatePublish, whenFalse: done, ids: ids)
+	module.functions.push(func)
+end 'buildManagedCreateSized'
+
+function placeBufferUpToTheBound(module StdModule, frame SizedCreateFrame, ids ValueMinter)
+	var separateArm = module.addBlock(frame.func, label: b"separm", heat: BlockHeat.normal)
+	var checkSeparate = module.addBlock(frame.func, label: b"chksep", heat: BlockHeat.normal)
+	var separatePublish = module.addBlock(frame.func, label: b"seppublish", heat: BlockHeat.normal)
+
+	let bufferBytes = ids.mint()
+	frame.alloc.blockArgs.insert(1, value: IrBlockArg.create(bufferBytes, argType: StdType.i64))
+
+	emitBranchCarrying(module, from: frame.emptyArm, to: frame.alloc, values: threeArgs(frame.recordBytes, second: frame.noBuffer, third: frame.noBuffer))
+	emitBranchOnCompare(module, block: frame.measure, value: frame.bytes, pred: StdCmpPred.gt, against: CoAllocationMaxBytes, whenTrue: separateArm, whenFalse: frame.coAllocatedArm, ids: ids)
+	emitBranchCarrying(module, from: separateArm, to: frame.alloc, values: threeArgs(frame.recordBytes, second: frame.bytes, third: frame.room))
+
+	let coAllocatedNoBuffer = emitConst(module, block: frame.coAllocatedArm, value: 0, ids: ids)
+	emitBranchCarrying(module, from: frame.coAllocatedArm, to: frame.alloc, values: threeArgs(frame.coAllocatedBytes, second: coAllocatedNoBuffer, third: frame.room))
+
+	let record = emitMintRecord(module, block: frame.alloc, allocBytes: frame.allocBytes, elementSize: frame.elementSize, elementDestroy: frame.elementDestroy, ids: ids)
+	emitBranchOnCompareValues(module, block: frame.alloc, a: frame.allocBytes, pred: StdCmpPred.gt, b: frame.recordBytes, whenTrue: frame.coPublish, whenFalse: checkSeparate, ids: ids)
+	emitBranchOnCompare(module, block: checkSeparate, value: bufferBytes, pred: StdCmpPred.ne, against: 0, whenTrue: separatePublish, whenFalse: frame.done, ids: ids)
 
 	let bufferDestructor = emitConst(module, block: separatePublish, value: TrivialDestructor, ids: ids)
 	let separateBuffer = ids.mint()
 	emitMmAllocCall(module, block: separatePublish, result: separateBuffer, size: bufferBytes, destructor: bufferDestructor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 	emitStoreField(module, block: separatePublish, record: record, offset: ManagedRecordBufferOffset, value: separateBuffer)
-	emitStoreField(module, block: separatePublish, record: record, offset: ManagedRecordCapacityOffset, value: reservedRoom)
-	module.setTerminator(separatePublish, op: StdOp.branch(done.id))
+	emitStoreField(module, block: separatePublish, record: record, offset: ManagedRecordCapacityOffset, value: frame.reservedRoom)
+	module.setTerminator(separatePublish, op: StdOp.branch(frame.done.id))
 
-	emitStoreField(module, block: done, record: record, offset: ManagedRecordLengthOffset, value: length)
-	module.setTerminator(done, op: StdOp.ret(record))
+	emitCoAllocatedPublishAndReturn(module, frame: frame, record: record, ids: ids)
+end 'placeBufferUpToTheBound'
 
-	module.functions.push(func)
-end 'buildManagedCreateSized'
+function placeBufferAlongsideTheRecord(module StdModule, frame SizedCreateFrame, ids ValueMinter)
+	emitBranchCarrying(module, from: frame.emptyArm, to: frame.alloc, values: twoArgs(frame.recordBytes, second: frame.noBuffer))
+	module.setTerminator(frame.measure, op: StdOp.branch(frame.coAllocatedArm.id))
+	emitBranchCarrying(module, from: frame.coAllocatedArm, to: frame.alloc, values: twoArgs(frame.coAllocatedBytes, second: frame.room))
+
+	let record = emitMintRecord(module, block: frame.alloc, allocBytes: frame.allocBytes, elementSize: frame.elementSize, elementDestroy: frame.elementDestroy, ids: ids)
+	emitBranchOnCompareValues(module, block: frame.alloc, a: frame.allocBytes, pred: StdCmpPred.gt, b: frame.recordBytes, whenTrue: frame.coPublish, whenFalse: frame.done, ids: ids)
+
+	emitCoAllocatedPublishAndReturn(module, frame: frame, record: record, ids: ids)
+end 'placeBufferAlongsideTheRecord'
+
+function emitCoAllocatedPublishAndReturn(module StdModule, frame SizedCreateFrame, record ValueId, ids ValueMinter)
+	let leadOffset = emitConst(module, block: frame.coPublish, value: coAllocatedBufferOffset(), ids: ids)
+	let coBuffer = emitBin(module, block: frame.coPublish, a: record, b: leadOffset, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: frame.coPublish, record: record, offset: ManagedRecordBufferOffset, value: coBuffer)
+	emitStoreField(module, block: frame.coPublish, record: record, offset: ManagedRecordCapacityOffset, value: frame.reservedRoom)
+	module.setTerminator(frame.coPublish, op: StdOp.branch(frame.done.id))
+
+	emitStoreField(module, block: frame.done, record: record, offset: ManagedRecordLengthOffset, value: frame.length)
+	module.setTerminator(frame.done, op: StdOp.ret(record))
+end 'emitCoAllocatedPublishAndReturn'
 
 // `__managed_push(arr, value)` — append `value`, growing first if the buffer is full.
 function buildManagedPush(module StdModule)

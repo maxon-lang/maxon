@@ -42,7 +42,7 @@ buffer. `counterBlock` is a `ByteArray` of exactly 16 bytes: a 12-byte nonce, th
 counts: it wraps at 2^32 and never carries into the nonce, so a caller that must refuse a wrap checks it first. A
 group is 1, 2, 4 or 8 blocks; a longer message is walked in groups, the widest first.
 
-`schedule` is a `ByteArray` of exactly `32 * (rounds + 1)` bytes, `rounds` being 10, 12 or 14 for a 16-, 24- or
+`schedule` is a `ByteArray` or a `FixedArray with Byte` of exactly `32 * (rounds + 1)` bytes, `rounds` being 10, 12 or 14 for a 16-, 24- or
 32-byte key: the first half is the encryption round keys, the second half the decryption round keys of the
 equivalent inverse cipher. The block calls read the round count from the schedule's length. Every call checks its
 buffers once on entry: a key or schedule of another size, or a block that does not lie inside its array, ends the
@@ -474,7 +474,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:13: '__Builtins.aesEncryptBlock' requires an argument of type ByteArray, but its argument is String
+error E3005: <fragment>:5:13: '__Builtins.aesEncryptBlock' requires an argument of type ByteArray or FixedArray with Byte, but its argument is String
 ```
 
 <!-- test: aes-hardware.error.refused-outside-the-library-tiers -->
@@ -1727,7 +1727,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:3:13: '__Builtins.aesGcmSeal' requires an argument of type int, but its argument is String
-error E3005: <fragment>:7:20: '__Builtins.aesGcmOpen' requires an argument of type ByteArray, but its argument is String
+error E3005: <fragment>:7:20: '__Builtins.aesGcmOpen' requires an argument of type ByteArray or FixedArray with Byte, but its argument is String
 ```
 
 <!-- test: aes-hardware.gcm-large-messages-match-the-software-backing -->
@@ -1779,4 +1779,136 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: aes-hardware.a-runtime-sized-fixed-array-is-a-buffer -->
+<!-- tier: stdlib -->
+Every buffer position takes a `FixedArray with Byte` as well as a `ByteArray`: the schedule, the key block, the output
+of a block call, a counter-mode buffer, the output of a Galois-mode seal and the sealed input of an open give the bytes
+the `ByteArray` calls give.
+```maxon
+typealias Bytes = FixedArray with Byte
+
+function bytesFor(seed Count, count Count) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for index in 0 upto count 'eachByte'
+		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
+		bytes.push(((mixed shr 11) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'bytesFor'
+
+function blank(count Count) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.resize(count)
+
+	return bytes
+end 'blank'
+
+function fixed(count Count) returns Bytes
+	return Bytes.create(count)
+end 'fixed'
+
+function same(left Bytes, right ByteArray) returns bool
+	if left.count() != right.count() 'length'
+		return false
+	end 'length'
+
+	for position in 0 upto right.count() 'eachByte'
+		let a = try left.get(position) otherwise return false
+		let b = try right.get(position) otherwise return false
+
+		if a != b 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'same'
+
+function main() returns ExitCode
+	let key = bytesFor(1, count: 16)
+	let plain = bytesFor(2, count: 16)
+	let counterBlock = bytesFor(3, count: 16)
+	let nonce = bytesFor(4, count: 12)
+	let additional = bytesFor(5, count: 20)
+	let message = bytesFor(6, count: 40)
+
+	var byteSchedule = blank(352)
+	__Builtins.aesExpandKey(byteSchedule, key)
+	var fixedSchedule = fixed(352)
+	__Builtins.aesExpandKey(fixedSchedule, key)
+	print("schedule {same(fixedSchedule, right: byteSchedule)}\n")
+
+	var byteSealed = blank(16)
+	__Builtins.aesEncryptBlock(byteSealed, 0, byteSchedule, plain, 0)
+	var fixedSealed = fixed(16)
+	__Builtins.aesEncryptBlock(fixedSealed, 0, fixedSchedule, plain, 0)
+	print("encrypt {same(fixedSealed, right: byteSealed)}\n")
+
+	var opened = fixed(16)
+	__Builtins.aesDecryptBlock(opened, 0, fixedSchedule, fixedSealed, 0)
+	print("decrypt {same(opened, right: plain)}\n")
+
+	var byteStream = blank(32)
+	__Builtins.aesCtrXor(byteStream, 0, byteSchedule, counterBlock, 0, 2)
+	var fixedStream = fixed(32)
+	__Builtins.aesCtrXor(fixedStream, 0, fixedSchedule, counterBlock, 0, 2)
+	print("ctr {same(fixedStream, right: byteStream)}\n")
+
+	var byteKeys = blank(432)
+	__Builtins.aesGcmInit(byteKeys, byteSchedule)
+	var fixedKeys = fixed(432)
+	__Builtins.aesGcmInit(fixedKeys, fixedSchedule)
+	print("keys {same(fixedKeys, right: byteKeys)}\n")
+
+	var byteBox = blank(56)
+	__Builtins.aesGcmSeal(byteBox, 0, byteKeys, nonce, additional, message)
+	var fixedBox = fixed(56)
+	__Builtins.aesGcmSeal(fixedBox, 0, fixedKeys, nonce, additional, message)
+	print("seal {same(fixedBox, right: byteBox)}\n")
+
+	var recovered = fixed(40)
+	let authentic = __Builtins.aesGcmOpen(recovered, 0, fixedKeys, nonce, additional, fixedBox)
+	print("open {authentic} {same(recovered, right: message)}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+schedule true
+encrypt true
+decrypt true
+ctr true
+keys true
+seal true
+open true true
+```
+```exitcode
+0
+```
+
+<!-- test: aes-hardware.error.a-fixed-array-of-wider-elements-is-not-a-buffer -->
+<!-- tier: stdlib -->
+A buffer position takes a fixed array only of bytes.
+```maxon
+typealias Word = bits(64)
+typealias Words = FixedArray with Word
+
+function words(count Count) returns Words
+	return Words.create(count)
+end 'words'
+
+function main() returns ExitCode
+	var schedule = words(44)
+	var key = ByteArray.create()
+	__Builtins.aesExpandKey(schedule, key)
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:13: '__Builtins.aesExpandKey' requires an argument of type ByteArray or FixedArray with Byte, but its argument is Words
 ```

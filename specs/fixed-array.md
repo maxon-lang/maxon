@@ -1059,7 +1059,7 @@ error E3159: <fragment>:7:4: cannot pass 'v', which is read-only (a `let` bindin
 ⭐⭐ **THE DECLARED GENERIC'S ROAD, NOT THE BUILTIN ARM.** With `create` declared,
 `instanceCreateIsDeclared` routes a top-level `var g = Vec3.create()` through
 `requireDeclaredGenericGlobalCreate` rather than `containerCreateCall`'s BUILTIN arm (a runtime
-`__managed_create_sized` handed the strides it cannot look up, which sizes the
+`__managed_create_fixed` handed the strides it cannot look up, which sizes the
 record). Its three premises are the ones
 [top-level-factory-globals](top-level-factory-globals.md) pins for every declared generic: the `create()`
 must EXIST, be NAMEABLE from its declaring file, and return `Self`. `__module_init` then emits a bare

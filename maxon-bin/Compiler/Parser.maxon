@@ -77576,6 +77576,11 @@ export type Parser
 		return self.signatures.isBytePackedArrayInstance(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'valueIsByteArray'
 
+	// A ByteArray or a one-byte-stride FixedArray: the buffers the AES intrinsics accept.
+	function valueIsByteBuffer(value ValueId) returns bool
+		return self.signatures.isBytePackedBufferRecordInstance(self.tagOf(value), nameId: self.valueNameId(value))
+	end 'valueIsByteBuffer'
+
 	function pairedDisplays(value ValueId, declaredTag ValueTypeTag, declaredNameId TypeNameId, declaredBrand ByteArray, declaredIdentity ByteArray, declaredShown String) returns PairedDisplays
 		let gotShown = self.valueDisplayTypeName(value)
 		view gotIdentity = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(value), nameId: self.valueNameId(value), readerFilePath: self.job.path)
@@ -79697,10 +79702,10 @@ export type Parser
 	// Emit `__managed_create(elementSize, elementDestroy)` for instance `giid`, yielding the array
 	// record — the shared producer for a literal and an `IntArray.create()`. A non-empty `sizing` (the
 	// capacity and the length) makes it `__managed_create_sized(elementSize, capacity, length,
-	// elementDestroy)`, the record of a sized container. Element size is a
-	// compile-time constant here (a concrete instance). The element destructor is the ADDRESS of the
+	// elementDestroy)`, or `__managed_create_fixed` for a FixedArray: the record of a sized container.
+	// Element size is a compile-time constant here (a concrete instance). The element destructor is the ADDRESS of the
 	// element's drop callee for an element that owes a drop, stamped into `element_destroy@40` before any
-	// element move (both creates store it inside their bodies, so it is set at birth); 0 for a
+	// element move (every create stores it inside its body, so it is set at birth); 0 for a
 	// trivial element. NOT tracked owned — the caller decides that (a literal tracks after its pushes,
 	// a `create()` immediately). A create whose element is composed over the enclosing type's parameters
 	// (`containerCreateRoute`'s `composedFromTheCaller`) is emitted without the destructor argument, and the
@@ -79730,16 +79735,16 @@ export type Parser
 		args.append(sizing)
 		args.append(trailing)
 
-		return self.emitRuntimeCall(arrayCreateCallee(sizing), args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+		return self.emitRuntimeCall(self.arrayCreateCallee(giid, sizing: sizing), args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
 	end 'emitArrayCreateCall'
 
-	function arrayCreateCallee(sizing ValueIdArray) returns ByteArray
+	function arrayCreateCallee(giid GenericInstanceId, sizing ValueIdArray) returns ByteArray
 		if sizing.count() == 0 'unsized'
 			return ManagedCreateName
 		end 'unsized'
 
 		if sizing.count() == SizedCreateSizingCount 'sized'
-			return ManagedCreateSizedName
+			return ManagedCreateFixedName if self.signatures.isFixedArrayInstance(giid) else ManagedCreateSizedName
 		end 'sized'
 
 		panic("arrayCreateCallee: a sizing names {sizing.count()} values, and an array create takes none or the capacity and the length")
@@ -80136,7 +80141,7 @@ export type Parser
 		return container
 	end 'emitOwnedContainerRecord'
 
-	// ⭐ **THE RECORD IS BORN WITH ITS SLOTS PUBLISHED** — one `__managed_create_sized(elementSize,
+	// ⭐ **THE RECORD IS BORN WITH ITS SLOTS PUBLISHED** — one `__managed_create_fixed(elementSize,
 	// count, count, elementDestroy)` yields a zeroed buffer of `count` elements and a length of
 	// `count`, which together are exactly *"zero-initialized, N elements"*. `count` is the type's, or
 	// for a runtime-sized instance the `create(n)` argument carried in `sizing`. `element_destroy@40`
@@ -80148,7 +80153,7 @@ export type Parser
 	// is THROWING (`isManagedMemoryMemberCallee` — it reports `invalidAllocation` for a size the allocator
 	// cannot use), so a `create()` built on it is **E3057 throwing function requires try: 'create'** on
 	// every one of `/specs/fixed-array.md`'s cases, which write a bare `create()`.
-	// `__managed_create_sized` throws nothing.
+	// `__managed_create_fixed` throws nothing.
 	//
 	// ⚠⚠ **IT PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayGrowthHasZeroElement`, WHOSE E3106 IS
 	// THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** A published slot of a MANAGED element is
@@ -81621,7 +81626,7 @@ export type Parser
 
 	// ⭐ **WHAT A FIXED ARRAY MAY HOLD.** Its slot is an inline word of the element's own stride, so any element the
 	// managed-memory runtime already strides fits — an integer of any declared range, a `bool`, a `float`. What it may
-	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__managed_create_sized`) while
+	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__managed_create_fixed`) while
 	// `element_destroy@40` stays 0, so a managed element would leak at teardown and every `set` would
 	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one.
 	//
@@ -93944,9 +93949,9 @@ export type Parser
 					throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWordAt(operand, tag: operandTag), line: calleeTok.line, column: calleeTok.column)
 				end 'notAnInteger'
 			end 'anOffset' else 'aBuffer'
-				if not self.valueIsByteArray(operand) 'notAByteArray'
+				if not self.valueIsByteBuffer(operand) 'notAByteBuffer'
 					throw SourceParseError.builtinOperandType(String.from(callee), required: AesCipherBufferRequirement, got: self.valueDisplayTypeName(operand), line: calleeTok.line, column: calleeTok.column)
-				end 'notAByteArray'
+				end 'notAByteBuffer'
 			end 'aBuffer'
 		end 'eachOperand'
 

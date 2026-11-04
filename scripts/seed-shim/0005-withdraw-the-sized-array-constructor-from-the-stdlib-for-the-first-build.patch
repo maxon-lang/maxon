@@ -1518,7 +1518,7 @@ index 8a3c28f85..54679d04d 100644
  	for (iter, part) in parts.withIterator() 'eachPart'
  		if iter.index() > 0 and iter.index() + 1 < parts.count() and part.isEmpty() 'empty'
 diff --git b/stdlib/helpers/crypto/Aes.maxon a/stdlib/helpers/crypto/Aes.maxon
-index cb3021c65..ea32001c2 100644
+index d7b09fae4..a1bd73f10 100644
 --- b/stdlib/helpers/crypto/Aes.maxon
 +++ a/stdlib/helpers/crypto/Aes.maxon
 @@ -55,7 +55,7 @@ public type Aes
@@ -1579,20 +1579,20 @@ index 51be7c007..e0caa76ad 100644
  
  		return output
 diff --git b/stdlib/helpers/crypto/AesGcmHardware.maxon a/stdlib/helpers/crypto/AesGcmHardware.maxon
-index 822bd87e4..d90d01af5 100644
+index 4b91e635f..7955792d7 100644
 --- b/stdlib/helpers/crypto/AesGcmHardware.maxon
 +++ a/stdlib/helpers/crypto/AesGcmHardware.maxon
-@@ -7,7 +7,8 @@
- 	let aesGcmHardwareScheduleHalfShift = 1
- 
- 	export function aesGcmHardwareKeys(schedule ByteArray) returns ByteArray
+@@ -10,7 +10,8 @@
+ 	// 16-aligned. A FixedArray's buffer is co-allocated at record + 56, which is 8 mod 16, and this
+ 	// block is larger than a ByteArray co-allocates, so its buffer has an allocation of its own.
+ 	export function aesGcmHardwareKeys(schedule AesSchedule) returns ByteArray
 -		var keys = ByteArray.create(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
 +		var keys = ByteArray.create()
 +		keys.resize(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
  		__Builtins.aesGcmInit(keys, schedule)
  
  		return keys
-@@ -24,7 +25,8 @@
+@@ -27,7 +28,8 @@
  	end 'aesGcmHardwareSealInto'
  
  	export function aesGcmHardwareOpen(keys ByteArray, nonce ByteArray, sealed ByteArray, additionalData ByteArray, ciphertextBytes Count) returns ByteArray throws AeadError
@@ -1603,20 +1603,28 @@ index 822bd87e4..d90d01af5 100644
  		if not __Builtins.aesGcmOpen(plaintext, aesHardwareFirstByte, keys, nonce, additionalData, sealed) 'forged'
  			throw AeadError.authenticationFailed
 diff --git b/stdlib/helpers/crypto/AesHardware.maxon a/stdlib/helpers/crypto/AesHardware.maxon
-index 383368996..61a19a7bc 100644
+index 6da0cafe2..0fa17db35 100644
 --- b/stdlib/helpers/crypto/AesHardware.maxon
 +++ a/stdlib/helpers/crypto/AesHardware.maxon
-@@ -10,7 +10,8 @@
+@@ -1,6 +1,5 @@
+ #if arch(x64) or arch(arm64)
+-	// Runtime-sized, so `create(n)` is one allocation; the schedule is built once and never grown.
+-	export typealias AesSchedule = FixedArray with Byte
++	export typealias AesSchedule = Array with Byte
+ 
+ 	let aesHardwareKeyWordShift = 2
+ 	let aesHardwareScheduleRoundBytes = 32
+@@ -13,7 +12,8 @@
  	// the decryption keys of a 16-, 24- or 32-byte `key`.
- 	export function aesHardwareSchedule(key ByteArray) returns ByteArray
+ 	export function aesHardwareSchedule(key ByteArray) returns AesSchedule
  		let rounds = (key.count() shr aesHardwareKeyWordShift) + aesRoundsOverKeyWords
--		var schedule = ByteArray.create((rounds + 1) * aesHardwareScheduleRoundBytes)
-+		var schedule = ByteArray.create()
+-		var schedule = AesSchedule.create((rounds + 1) * aesHardwareScheduleRoundBytes)
++		var schedule = AesSchedule.create()
 +		schedule.resize((rounds + 1) * aesHardwareScheduleRoundBytes)
  		__Builtins.aesExpandKey(schedule, key)
  
  		return schedule
-@@ -58,7 +59,8 @@
+@@ -61,7 +61,8 @@
  			throw AesKeyStreamError.counterOverflow
  		end 'overflow'
  
@@ -1626,17 +1634,17 @@ index 383368996..61a19a7bc 100644
  		block.append(nonce)
  		let counterWord = first as AesWord
  		__Builtins.appendBigEndian(block, counterWord as OrderedWord, aesHardwareCounterBytes)
-@@ -99,7 +101,7 @@
+@@ -102,7 +103,7 @@
  	end 'aesHardwareXorKeyStreamAppend'
  
- 	module function aesHardwareXorKeyStream(schedule ByteArray, nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
+ 	module function aesHardwareXorKeyStream(schedule AesSchedule, nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
 -		var output = ByteArray.create(0)
 +		var output = ByteArray.create()
  		try aesHardwareXorKeyStreamAppend(output, schedule: schedule, nonce: nonce, counter: counter, data: data)
  
  		return output
-@@ -108,7 +110,8 @@
- 	module function aesHardwareXorKeyStreamPastFirstBlock(schedule ByteArray, nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
+@@ -111,7 +112,8 @@
+ 	module function aesHardwareXorKeyStreamPastFirstBlock(schedule AesSchedule, nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
  		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift
  		let counterBlock = try aesHardwareCounterBlock(nonce, firstCounter: counter, streamBlocks: blocks + aesHardwareMaskLead)
 -		var mask = ByteArray.create(aesBlockBytes)

@@ -6,7 +6,10 @@
 	let aesGcmHardwareTagBytes = 16
 	let aesGcmHardwareScheduleHalfShift = 1
 
-	export function aesGcmHardwareKeys(schedule ByteArray) returns ByteArray
+	// The key block is a ByteArray, not a FixedArray: its 256-byte product table must start
+	// 16-aligned. A FixedArray's buffer is co-allocated at record + 56, which is 8 mod 16, and this
+	// block is larger than a ByteArray co-allocates, so its buffer has an allocation of its own.
+	export function aesGcmHardwareKeys(schedule AesSchedule) returns ByteArray
 		var keys = ByteArray.create(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
 		__Builtins.aesGcmInit(keys, schedule)
 

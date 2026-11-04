@@ -198,10 +198,11 @@ The `parent` field is the address of the separate allocation the record owes a r
 
 ### Co-allocated buffers
 
-An array created with a known capacity of at most 256 bytes holds its elements in the same allocation as its
-record, so creating it is one allocation and dropping it is one free. A `FixedArray`, the deep copy of an array
-of managed elements, and a `__ManagedMemory` created with a capacity are such creations; see
-[co-allocated-arrays](../specs/co-allocated-arrays.md).
+An array created with a known capacity holds its elements in the same allocation as its record, so creating it
+is one allocation and dropping it is one free. A `FixedArray` made by `create()` or `create(n)` is co-allocated
+at every size, because its length is fixed. The deep copy of an array of managed elements and a
+`__ManagedMemory` created with a capacity are co-allocated up to 256 bytes of elements, the bound for arrays
+that can grow; see [co-allocated-arrays](../specs/co-allocated-arrays.md).
 
 ```
 [48-byte record][8-byte refcount word][element bytes ...]
@@ -215,11 +216,14 @@ allocation's payload is 16-byte aligned and 56 is 8 mod 16, so only a co-allocat
 - Dropping the record frees the elements with it; a separate buffer is released with `mm_decref`.
 - Growing past the capacity allocates a buffer of its own, copies the elements, and leaves the inline bytes
   unused until the record dies. The 256-byte limit bounds that unused space.
+- A `FixedArray` built from a literal (`from [a, b, c]`), and the result of `clone`, `slice` or a copy-on-write
+  detach of one, follow the 256-byte limit.
 - `clone` and `slice` of a co-allocated array copy the window into a new array, because the bytes end with their
   record and a view can outlive it. The copy owns its buffer, so `capacity()` reports the larger of its length and
   4 (0 for an empty copy) where a view reports -1.
 - A record frozen for sharing with other threads has its refcount word marked like any other buffer's, so it
-  detaches to a buffer of its own before any write.
+  detaches to a buffer of its own before any write. A large `FixedArray` detached this way leaves its inline
+  bytes unused until the record dies.
 
 ## What Gets Heap-Allocated
 

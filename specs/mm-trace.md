@@ -821,3 +821,59 @@ end 'main'
 
 ```mm-trace
 ```
+
+<!-- test: a-runtime-sized-fixed-array-is-one-allocation -->
+A fixed array never grows, so its buffer sits in its record's allocation at any size: 352 bytes is the 48-byte
+record, the 8-byte refcount word of the buffer and 352 bytes of elements in ONE `mm_alloc`. **If an `ElementBuffer`
+line appears here, the buffer has an allocation of its own.**
+<!-- MmTrace -->
+```maxon
+typealias Bytes = FixedArray with Byte
+
+function build(count Count) returns Bytes
+	var bytes = Bytes.create(count)
+	try bytes.set(0, value: 7) otherwise panic("set")
+
+	return bytes
+end 'build'
+
+function main() returns ExitCode
+	let bytes = build(352)
+
+	return (try bytes.get(0) otherwise panic("get")) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+```mm-trace
+mm_alloc ArrayRecord #1 size=408
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+```
+
+<!-- test: a-type-sized-fixed-array-above-256-bytes-is-one-allocation -->
+The same for a type that states its length: 40 words are 320 bytes, past the growable array's co-allocation bound,
+and still one `mm_alloc`.
+<!-- MmTrace -->
+```maxon
+typealias Word = bits(64)
+typealias Wide = FixedArray with 40 Word
+
+function main() returns ExitCode
+	var wide = Wide.create()
+	wide.set(39, value: 5)
+
+	return wide.get(39) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+```mm-trace
+mm_alloc ArrayRecord #1 size=376
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+```

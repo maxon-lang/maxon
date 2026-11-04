@@ -45,8 +45,8 @@ Output: `1 5 9` and `4 9 -1 true`.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `Array.create()` | `Array` | An empty array; `Array.create(0)` is the same array. |
-| `Array.create(n)` | `Array` | `n` zero-valued elements, in one allocation. `n` is an `ElementIndex`. Refused at compile time (E3106) for an element type with no zero value — a struct, a `String`, a nested container, or a ranged alias that excludes 0; create those with `create(n, zeroed: false)`. |
-| `Array.create(n, zeroed: false)` | `Array` | An empty array with room for `n` elements, in one allocation; append with `push`. `n` is an `ElementIndex` and `zeroed:` is a literal `true` or `false`. Available for every element type. |
+| `Array.create(n)` | `Array` | `n` zero-valued elements, in one allocation when they take at most 256 bytes. `n` is an `ElementIndex`. Refused at compile time (E3106) for an element type with no zero value — a struct, a `String`, a nested container, or a ranged alias that excludes 0; create those with `create(n, zeroed: false)`. |
+| `Array.create(n, zeroed: false)` | `Array` | An empty array with room for `n` elements, in one allocation when they take at most 256 bytes; append with `push`. `n` is an `ElementIndex` and `zeroed:` is a literal `true` or `false`. Available for every element type. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
 | `clone()` | `Array` | An independent copy. Each record, `String` or union element is cloned; an array of scalars shares its storage copy-on-write, which separates on the first write to either, unless the storage was created at a known size of at most 256 bytes, which is copied at once. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is refused (an element slot is one machine word). A copy of an element that is or holds a promise is E3141, here and at `slice` and `append`. |
 | `Array.from(source Iterable)` | `Array` | Collect every element of an iterable, called through an alias (`ScoreArray.from(range)`). The iterable must bind `Element` to the alias's own element (E3127). |
@@ -279,8 +279,8 @@ implements `Iterable`. The growable array is [`Array`](#array).
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0. A pure call: discarding the result with `_ =` is E3064. A fixed array of at most 256 bytes of elements is one allocation. Called through an alias that states a count (`Vec3.create()`); a length argument is **E3194**. |
-| `FixedArray.create(n)` | `FixedArray` | Through a runtime-sized alias (`typealias Buf = FixedArray with Coord`): `n` zero elements in one heap record, `n` an `ElementIndex`. A constant `n` gives the sized type `FixedArray with n Coord`. The length is fixed at creation, so `push` and `reserve` are refused; a second argument, or no `n`, is **E3194**. |
+| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0. A pure call: discarding the result with `_ =` is E3064. A fixed array is one allocation at any size. Called through an alias that states a count (`Vec3.create()`); a length argument is **E3194**. |
+| `FixedArray.create(n)` | `FixedArray` | Through a runtime-sized alias (`typealias Buf = FixedArray with Coord`): `n` zero elements in one allocation, `n` an `ElementIndex`. A constant `n` gives the sized type `FixedArray with n Coord`. The length is fixed at creation, so `push` and `reserve` are refused; a second argument, or no `n`, is **E3194**. |
 | `FixedArray from [a, b, c]` | `FixedArray` | A literal; the count is the literal's length, through a runtime-sized alias too. |
 | `count()` | `Count` | The fixed size: answered from the type, and for a runtime-sized value read from the record's length. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past the fixed size, unless the index is proven inside it. |

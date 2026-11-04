@@ -552,7 +552,7 @@ end 'handle'
 
 ### Create Arrays at Their Known Size
 
-When you know how many elements you will add, create the array with that capacity to avoid repeated reallocations. `create(n, zeroed: false)` makes an empty array with room for `n` elements in one allocation; `reserve` grows an array that already exists.
+When you know how many elements you will add, create the array with that capacity to avoid repeated reallocations. `create(n, zeroed: false)` makes an empty array with room for `n` elements, in one allocation when they take at most 256 bytes; `reserve` grows an array that already exists.
 
 ```maxon
 var results = ResultArray.create(inputCount, zeroed: false)

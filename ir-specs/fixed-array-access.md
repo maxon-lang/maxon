@@ -90,7 +90,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 1
@@ -230,7 +230,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 1
@@ -365,7 +365,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 1
@@ -501,7 +501,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 1
@@ -693,7 +693,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 4
@@ -849,7 +849,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 4
@@ -997,7 +997,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 4
@@ -1146,7 +1146,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 4
@@ -1367,7 +1367,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.leaRegGlobal rax, __data_writer
@@ -1503,7 +1503,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.leaRegGlobal rax, __data_writer
@@ -1631,7 +1631,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.leaGlobal x0, __data_writer
@@ -1759,7 +1759,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.leaGlobal x0, __data_writer
@@ -1874,7 +1874,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.leaRegGlobal rax, __data_measure
@@ -1951,7 +1951,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.leaRegGlobal rax, __data_measure
@@ -2022,7 +2022,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.leaGlobal x0, __data_measure
@@ -2094,7 +2094,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.leaGlobal x0, __data_measure
@@ -2180,7 +2180,7 @@ func @lengthOfEight {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
   __il_body:
     x64.movRegImm32 rbx, 8
   __il_cont:
@@ -2256,7 +2256,7 @@ func @lengthOfEight {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
   __il_body:
     x64.movRegImm32 rbx, 8
   __il_cont:
@@ -2327,7 +2327,7 @@ func @lengthOfEight {
     arm64.movImm x0, 8
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
   __il_body:
     arm64.movImm x19, 8
   __il_cont:
@@ -2395,7 +2395,7 @@ func @lengthOfEight {
     arm64.movImm x0, 8
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
   __il_body:
     arm64.movImm x19, 8
   __il_cont:

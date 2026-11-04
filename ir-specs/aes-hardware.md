@@ -3481,7 +3481,7 @@ func @main {
     arm64.movImm x0, 1
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
@@ -4376,7 +4376,7 @@ func @main {
     arm64.movImm x0, 1
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19

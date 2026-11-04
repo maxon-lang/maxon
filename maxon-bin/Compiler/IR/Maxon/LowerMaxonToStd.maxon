@@ -1119,7 +1119,7 @@ function stampedContainerCreateArity(callee ByteArray) returns ParamCount
 		return ManagedCreateArity
 	end 'anArrayCreate'
 
-	if callee.equals(ManagedCreateSizedName) 'aSizedArrayCreate'
+	if isManagedSizedCreateCallee(callee) 'aSizedArrayCreate'
 		return ManagedCreateSizedArity
 	end 'aSizedArrayCreate'
 
@@ -5732,7 +5732,7 @@ type MaxonToStdLowering
 	// Emit an opaque-`T` container create: load the element destructor from the enclosing instance's layout
 	// descriptor `destroyFunc@40` slot, then call the runtime entry with it as the LAST argument —
 	// `__managed_create(element_size, element_destroy)` for an array,
-	// `__managed_create_sized(element_size, capacity, length, element_destroy)` for a fixed array,
+	// `__managed_create_fixed(element_size, capacity, length, element_destroy)` for a fixed array,
 	// `__list_create(element_drop)` for a chain, which states its whole argument list in that one word.
 	function appendOpaqueContainerCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		self.requireImplicitLayout("appendOpaqueContainerCreate of '{String.from(callee)}'")

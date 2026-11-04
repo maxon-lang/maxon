@@ -1005,3 +1005,38 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: aes.hardware-key-setup-allocates-the-schedule-once -->
+<!-- unsupported-targets: wasm32-wasi -->
+On a host with AES instructions the key schedule is a fixed array of 352 bytes for a 128-bit key, so it is ONE
+allocation: the cipher costs its schedule, the backing box and the `Aes` record after the 16-byte key, three
+allocations where a growable schedule would cost four. **If an `ElementBuffer` line appears here, the schedule has
+a buffer of its own.**
+<!-- MmTrace -->
+```maxon
+function main() returns ExitCode
+	let key = ByteArray.create(16)
+	let aes = try Aes.create(key) otherwise panic("the key is valid")
+	_ = aes
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+```mm-trace
+mm_alloc ArrayRecord #1 size=72
+mm_alloc ArrayRecord #2 size=408
+mm_alloc AesBacking #3 size=16
+mm_alloc Aes #4 size=8
+mm_decref Aes #4 rc=0
+mm_decref AesBacking #3 rc=0
+mm_decref ArrayRecord #2 rc=0
+mm_free ArrayRecord #2
+mm_free AesBacking #3
+mm_free Aes #4
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+```

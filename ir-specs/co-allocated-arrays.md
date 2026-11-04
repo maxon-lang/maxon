@@ -12,7 +12,7 @@ Each case pins the Target IR its program compiles to, on every native lane that 
 ## Tests
 
 <!-- test: a-fixed-array-creation-is-one-sized-create -->
-Creating a `FixedArray` is one call to `__managed_create_sized`, which hands back a record whose slots are
+Creating a `FixedArray` is one call to `__managed_create_fixed`, which hands back a record whose slots are
 published; there is no `__managed_create` followed by a `__managed_resize`. `make` is reached through a function
 value so that its body stays in the program.
 ```maxon
@@ -63,7 +63,7 @@ func @make {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
   __il_cont:
     x64.epilogue 32
     x64.popReg rbp
@@ -137,7 +137,7 @@ func @make {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
   __il_cont:
     x64.epilogue 32
     x64.popReg rbp
@@ -207,7 +207,7 @@ func @make {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -275,7 +275,7 @@ func @make {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -329,12 +329,12 @@ buffer's refcount word and bytes are one `__mm_alloc`, and the second `__mm_allo
 reached only by a buffer past the limit.
 ```maxon
 typealias Word = bits(64)
-typealias Planes = FixedArray with 8 Word
+typealias Planes = Array with Word
 
 function main() returns ExitCode
-	let planes = Planes.create()
+	let planes = Planes.create(8)
 
-	if planes.get(7) == 0 'zero'
+	if (try planes.get(7) otherwise 1) == 0 'zero'
 		return 0
 	end 'zero'
 
@@ -365,16 +365,18 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rax, 8
-    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
-  __il_body:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
     x64.callDirect __managed_create_sized
-  __il_cont:
+    x64.movRegImm32 rdx, 7
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.cmpRegImm32 rax, 7
+    x64.jcc belowEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 56]
-  __im_cont:
+  tryok:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ifcont
   zero:
@@ -395,6 +397,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, ifcont
+    x64.jmp tryok
 }
 
 func @__managed_create_sized {
@@ -555,16 +566,18 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rax, 8
-    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
-  __il_body:
     x64.movRegImm32 rcx, 8
-    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
     x64.callDirect __managed_create_sized
-  __il_cont:
+    x64.movRegImm32 rdx, 7
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.cmpRegImm32 rax, 7
+    x64.jcc belowEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 56]
-  __im_cont:
+  tryok:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ifcont
   zero:
@@ -585,6 +598,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, ifcont
+    x64.jmp tryok
 }
 
 func @__managed_create_sized {
@@ -739,34 +761,44 @@ data {
 func @main {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x2, 8
-    arm64.leaRdata x1, __layout_FixedArray_N8_Word
-  __il_body:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movImm x3, 0
     arm64.movRegReg x1, x2
     arm64.bl __managed_create_sized
-  __il_cont:
+    arm64.movImm x1, 7
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 7
+    arm64.b.ls __im_slow
+  __im_load:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 56]
-  __im_cont:
+  tryok:
     arm64.cmp x1, 0
     arm64.b.ne ifcont
   zero:
     arm64.movImm x19, 0
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
   ifcont:
     arm64.movImm x19, 1
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
+  __im_slow:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne ifcont
+    arm64.b tryok
 }
 
 func @__managed_create_sized {
@@ -918,34 +950,44 @@ data {
 func @main {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x2, 8
-    arm64.leaRdata x1, __layout_FixedArray_N8_Word
-  __il_body:
     arm64.movImm x0, 8
-    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movImm x3, 0
     arm64.movRegReg x1, x2
     arm64.bl __managed_create_sized
-  __il_cont:
+    arm64.movImm x1, 7
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 7
+    arm64.b.ls __im_slow
+  __im_load:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 56]
-  __im_cont:
+  tryok:
     arm64.cmp x1, 0
     arm64.b.ne ifcont
   zero:
     arm64.movImm x19, 0
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
   ifcont:
     arm64.movImm x19, 1
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
+  __im_slow:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne ifcont
+    arm64.b tryok
 }
 
 func @__managed_create_sized {
@@ -1080,6 +1122,662 @@ func @__managed_create_sized {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.epilogue 80
+    arm64.ret
+}
+```
+
+<!-- test: the-fixed-create-places-the-record-and-its-buffer-together-at-any-size -->
+`__managed_create_fixed` is `__managed_create_sized` without the co-allocation limit: a fixed array never grows, so
+the record and the buffer's refcount word and bytes are always one `__mm_alloc`, and there is no `seppublish` block.
+```maxon
+typealias Word = bits(64)
+typealias Planes = FixedArray with 8 Word
+
+function main() returns ExitCode
+	let planes = Planes.create()
+
+	if planes.get(7) == 0 'zero'
+		return 0
+	end 'zero'
+
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredRuntime
+__managed_create_fixed
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 8
+    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_fixed
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 56]
+  __im_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont
+  zero:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__managed_create_fixed {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.cmpRegImm32 rbx, 0
+    x64.movRegImm32 r14, 48
+    x64.jcc notEqual, chkcap
+  badsize:
+    x64.leaRegRdata rcx, [rip + __abort_msg_74]  ; "fatal error: runtime abort 74 (arrayElementSizeZero)\x0a"
+    x64.movRegImm32 rdx, 53
+    x64.movRegImm32 rax, 74
+    x64.callDirect __rt_abort
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  chkcap:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, overflow
+  chksign:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, floorcap
+  emptyarm:
+    x64.movRegImm32 r15, 0
+    x64.jmp alloc
+  floorcap:
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc greaterEqual, takeask
+  takemin:
+    x64.movRegImm32 rcx, 4
+    x64.jmp __il_body#18
+  takeask:
+    x64.movRegReg rcx, rdx
+  __il_body#18:
+    x64.movRegReg rax, rbx
+    x64.sarRegImm8 rax, rbx, 63
+    x64.movRegReg rdx, rax
+    x64.xorRegImm32 rdx, rax, -1
+    x64.movRegImm32 rsi, 0
+    x64.subRegReg rsi, rsi, rbx
+    x64.movRegReg rdi, rbx
+    x64.shlRegImm8 rdi, rbx, 3
+    x64.andRegReg rsi, rsi, rax
+    x64.andRegReg rdi, rdi, rdx
+    x64.orRegReg rsi, rsi, rdi
+  __il_cont#17:
+    x64.movRegReg rax, rcx
+    x64.imulRegReg rax, rcx, rsi
+  __il_body#19:
+    x64.leaRegRegImm32 rdi, rax, 7
+    x64.shrRegImm8 rdi, rdi, 3
+  __il_cont#16:
+    x64.movRegReg rdx, rcx
+    x64.orRegReg rdx, rcx, rsi
+    x64.shrRegImm8 rdx, rdx, 31
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, wide
+  coarm:
+    x64.leaRegRegImm32 r14, rdi, 56
+    x64.movRegReg r15, rcx
+  alloc:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 24], rbx
+    x64.storeBaseDispReg.word64 [r8 + 40], r13
+    x64.cmpRegImm32 r14, 48
+    x64.jcc lessEqual, done
+  copublish:
+    x64.leaRegRegImm32 rax, r8, 56
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 16], r15
+  done:
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  wide:
+    x64.cqo
+    x64.idivReg rsi
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, coarm
+  overflow:
+    x64.leaRegRdata rcx, [rip + __abort_msg_71]  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 71
+    x64.callDirect __rt_abort
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 8
+    x64.leaRegRdata rdx, [rip + __layout_FixedArray_N8_Word]
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 r9, [rdx + 40]
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_create_fixed
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 56]
+  __im_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont
+  zero:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__managed_create_fixed {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.cmpRegImm32 rbx, 0
+    x64.movRegImm32 r14, 48
+    x64.jcc notEqual, chkcap
+  badsize:
+    x64.leaRegRdata rcx, [rip + __abort_msg_74]  ; "fatal error: runtime abort 74 (arrayElementSizeZero)\x0a"
+    x64.movRegImm32 rdx, 53
+    x64.movRegImm32 rax, 74
+    x64.callDirect __rt_abort
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  chkcap:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, overflow
+  chksign:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, floorcap
+  emptyarm:
+    x64.movRegImm32 r15, 0
+    x64.jmp alloc
+  floorcap:
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc greaterEqual, takeask
+  takemin:
+    x64.movRegImm32 rcx, 4
+    x64.jmp __il_body#18
+  takeask:
+    x64.movRegReg rcx, rdx
+  __il_body#18:
+    x64.movRegReg rax, rbx
+    x64.sarRegImm8 rax, rbx, 63
+    x64.movRegReg rdx, rax
+    x64.xorRegImm32 rdx, rax, -1
+    x64.movRegImm32 rsi, 0
+    x64.subRegReg rsi, rsi, rbx
+    x64.movRegReg rdi, rbx
+    x64.shlRegImm8 rdi, rbx, 3
+    x64.andRegReg rsi, rsi, rax
+    x64.andRegReg rdi, rdi, rdx
+    x64.orRegReg rsi, rsi, rdi
+  __il_cont#17:
+    x64.movRegReg rax, rcx
+    x64.imulRegReg rax, rcx, rsi
+  __il_body#19:
+    x64.leaRegRegImm32 rdi, rax, 7
+    x64.shrRegImm8 rdi, rdi, 3
+  __il_cont#16:
+    x64.movRegReg rdx, rcx
+    x64.orRegReg rdx, rcx, rsi
+    x64.shrRegImm8 rdx, rdx, 31
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, wide
+  coarm:
+    x64.leaRegRegImm32 r14, rdi, 56
+    x64.movRegReg r15, rcx
+  alloc:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 24], rbx
+    x64.storeBaseDispReg.word64 [r8 + 40], r13
+    x64.cmpRegImm32 r14, 48
+    x64.jcc lessEqual, done
+  copublish:
+    x64.leaRegRegImm32 rax, r8, 56
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 16], r15
+  done:
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  wide:
+    x64.cqo
+    x64.idivReg rsi
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, coarm
+  overflow:
+    x64.leaRegRdata rcx, [rip + __abort_msg_71]  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 71
+    x64.callDirect __rt_abort
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x2, 8
+    arm64.leaRdata x1, __layout_FixedArray_N8_Word
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_fixed
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 56]
+  __im_cont:
+    arm64.cmp x1, 0
+    arm64.b.ne ifcont
+  zero:
+    arm64.movImm x19, 0
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @__managed_create_fixed {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.cmp x19, 0
+    arm64.movImm x22, 48
+    arm64.b.ne chkcap
+  badsize:
+    arm64.leaRdata x0, __abort_msg_74  ; "fatal error: runtime abort 74 (arrayElementSizeZero)\x0a"
+    arm64.movImm x1, 53
+    arm64.movImm x2, 74
+    arm64.bl __rt_abort
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  chkcap:
+    arm64.cmp x1, 0
+    arm64.b.lt overflow
+  chksign:
+    arm64.cmp x1, 0
+    arm64.b.ne floorcap
+  emptyarm:
+    arm64.movImm x23, 0
+    arm64.b alloc
+  floorcap:
+    arm64.cmp x1, 4
+    arm64.b.ge takeask
+  takemin:
+    arm64.movImm x0, 4
+    arm64.b __il_body#18
+  takeask:
+    arm64.movRegReg x0, x1
+  __il_body#18:
+    arm64.asr x1, x19, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x2, x1, x16
+    arm64.movImm x3, 0
+    arm64.sub x3, x3, x19
+    arm64.lsl x4, x19, 3
+    arm64.and x1, x3, x1
+    arm64.and x2, x4, x2
+    arm64.orr x1, x1, x2
+  __il_cont#17:
+    arm64.mul x2, x0, x1
+  __il_body#19:
+    arm64.add x3, x2, 7
+    arm64.lsr x3, x3, 3
+  __il_cont#16:
+    arm64.orr x4, x0, x1
+    arm64.lsr x4, x4, 31
+    arm64.cmp x4, 0
+    arm64.b.ne wide
+  coarm:
+    arm64.add x22, x3, 56
+    arm64.movRegReg x23, x0
+  alloc:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 24], x19
+    arm64.storeBaseDispReg.word64 [x0 + 40], x21
+    arm64.cmp x22, 48
+    arm64.b.le done
+  copublish:
+    arm64.add x1, x0, 56
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x23
+  done:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  wide:
+    arm64.sdiv x1, x2, x1
+    arm64.cmp x1, x0
+    arm64.b.eq coarm
+  overflow:
+    arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 71
+    arm64.bl __rt_abort
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x2, 8
+    arm64.leaRdata x1, __layout_FixedArray_N8_Word
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create_fixed
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 56]
+  __im_cont:
+    arm64.cmp x1, 0
+    arm64.b.ne ifcont
+  zero:
+    arm64.movImm x19, 0
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @__managed_create_fixed {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.cmp x19, 0
+    arm64.movImm x22, 48
+    arm64.b.ne chkcap
+  badsize:
+    arm64.leaRdata x0, __abort_msg_74  ; "fatal error: runtime abort 74 (arrayElementSizeZero)\x0a"
+    arm64.movImm x1, 53
+    arm64.movImm x2, 74
+    arm64.bl __rt_abort
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  chkcap:
+    arm64.cmp x1, 0
+    arm64.b.lt overflow
+  chksign:
+    arm64.cmp x1, 0
+    arm64.b.ne floorcap
+  emptyarm:
+    arm64.movImm x23, 0
+    arm64.b alloc
+  floorcap:
+    arm64.cmp x1, 4
+    arm64.b.ge takeask
+  takemin:
+    arm64.movImm x0, 4
+    arm64.b __il_body#18
+  takeask:
+    arm64.movRegReg x0, x1
+  __il_body#18:
+    arm64.asr x1, x19, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x2, x1, x16
+    arm64.movImm x3, 0
+    arm64.sub x3, x3, x19
+    arm64.lsl x4, x19, 3
+    arm64.and x1, x3, x1
+    arm64.and x2, x4, x2
+    arm64.orr x1, x1, x2
+  __il_cont#17:
+    arm64.mul x2, x0, x1
+  __il_body#19:
+    arm64.add x3, x2, 7
+    arm64.lsr x3, x3, 3
+  __il_cont#16:
+    arm64.orr x4, x0, x1
+    arm64.lsr x4, x4, 31
+    arm64.cmp x4, 0
+    arm64.b.ne wide
+  coarm:
+    arm64.add x22, x3, 56
+    arm64.movRegReg x23, x0
+  alloc:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 24], x19
+    arm64.storeBaseDispReg.word64 [x0 + 40], x21
+    arm64.cmp x22, 48
+    arm64.b.le done
+  copublish:
+    arm64.add x1, x0, 56
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x23
+  done:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  wide:
+    arm64.sdiv x1, x2, x1
+    arm64.cmp x1, x0
+    arm64.b.eq coarm
+  overflow:
+    arm64.leaRdata x0, __abort_msg_71  ; "fatal error: runtime abort 71 (arrayCapacityOverflow)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 71
+    arm64.bl __rt_abort
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 ```
@@ -2988,7 +3686,7 @@ func @main {
 ```
 
 <!-- test: a-runtime-sized-creation-is-one-sized-create -->
-`Cells.create(n)` over an element with no count in its type is one call to `__managed_create_sized` with the capacity and the length both `n`; there is no `__managed_create` followed by a grow or a `setLength`. `make` is reached through a function value so that its body stays in the program.
+`Cells.create(n)` over an element with no count in its type is one call to `__managed_create_fixed` with the capacity and the length both `n`; there is no `__managed_create` followed by a grow or a `setLength`. `make` is reached through a function value so that its body stays in the program.
 ```maxon
 typealias Word = bits(64)
 typealias Cells = FixedArray with Word
@@ -3031,7 +3729,7 @@ func @make {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -3104,7 +3802,7 @@ func @make {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -3172,7 +3870,7 @@ func @make {
     arm64.movImm x0, 8
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.epilogue 16
     arm64.ret
 }
@@ -3238,7 +3936,7 @@ func @make {
     arm64.movImm x0, 8
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.epilogue 16
     arm64.ret
 }
@@ -3287,7 +3985,7 @@ func @main {
 ```
 
 <!-- test: a-constant-length-creation-is-one-sized-create-at-the-constant -->
-`Cells.create(8)` has the length 8 in its type, so the call is `__managed_create_sized` with the constants 8 and 8, exactly as `Planes.create()` over a `FixedArray with 8` is. The result is returned as a `Cells`, which a sized array widens to.
+`Cells.create(8)` has the length 8 in its type, so the call is `__managed_create_fixed` with the constants 8 and 8, exactly as `Planes.create()` over a `FixedArray with 8` is. The result is returned as a `Cells`, which a sized array widens to.
 ```maxon
 typealias Word = bits(64)
 typealias Cells = FixedArray with Word
@@ -3330,7 +4028,7 @@ func @make {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -3402,7 +4100,7 @@ func @make {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 r9, 0
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -3469,7 +4167,7 @@ func @make {
     arm64.movImm x0, 8
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.epilogue 16
     arm64.ret
 }
@@ -3534,7 +4232,7 @@ func @make {
     arm64.movImm x0, 8
     arm64.movImm x3, 0
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.epilogue 16
     arm64.ret
 }

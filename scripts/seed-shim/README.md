@@ -152,7 +152,8 @@ message (E3167), so `C1` only serves one connection at a time. The `spawn` stays
 ⭐ **A STDLIB CALL-SITE SPELLING THE SEED'S PARSER CANNOT READ IS THE ELEVENTH CASE.** The tree's `stdlib/` sizes
 an array where it creates it — `create(n)` and `create(n, zeroed: false)` — a call the seed's parser reads only as
 `create()`, so the library linked into `C1` is refused. The patch writes each such site back as `create()` followed
-by `resize(n)` or `reserve(n)`, and `create(0)` as `create()`. Only the library's call sites change: the compiler's
+by `resize(n)` or `reserve(n)`, and `create(0)` as `create()`. It also writes the AES hardware schedule's
+runtime-sized `FixedArray` back to `Array with Byte`. Only the library changes: the compiler's
 own parse of the form stays, which is what lets `C1` compile the unshimmed library. It is hand-written and numbered
 `0005`, below the generated patch, because the generator computes its hunks over every other patch here and refuses
 one that sorts after it.

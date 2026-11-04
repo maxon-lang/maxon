@@ -117,7 +117,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 0
@@ -287,7 +287,7 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
-    x64.callDirect __managed_create_sized
+    x64.callDirect __managed_create_fixed
     x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rax, 0
@@ -450,7 +450,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 0
@@ -613,7 +613,7 @@ func @main {
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
-    arm64.bl __managed_create_sized
+    arm64.bl __managed_create_fixed
     arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 0

@@ -3708,8 +3708,8 @@ end 'main'
 ```
 
 **Sizing an array.** `create()` and `create(0)` make an empty array. `create(n)` makes `n` zero elements and
-`create(n, zeroed: false)` an empty array with room for `n`, each in one allocation; `n` is an `ElementIndex`
-and `zeroed:` a literal `true` or `false`. `push(value)` appends; `reserve(n)` grows the capacity of an existing
+`create(n, zeroed: false)` an empty array with room for `n`, each in one allocation when the elements take at
+most 256 bytes; `n` is an `ElementIndex` and `zeroed:` a literal `true` or `false`. `push(value)` appends; `reserve(n)` grows the capacity of an existing
 array without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so `resize` and
 `create(n)` are available only for elements stored inline — integers, floats, `bool`, payload-free enums —
 whose type admits zero. For an array of records, strings or other managed values, or of an alias whose range

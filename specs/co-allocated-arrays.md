@@ -9,8 +9,10 @@ category: memory
 ## Documentation
 
 An array created with a known capacity of at most 256 bytes holds its element buffer in the same allocation as
-its record: creating it is one allocation and dropping it is one free. A `FixedArray`, the deep copy of an
-array of managed elements, and a `__ManagedMemory` created with a capacity are such creations.
+its record: creating it is one allocation and dropping it is one free. The deep copy of an array of managed
+elements and a `__ManagedMemory` created with a capacity are such creations. A `FixedArray` created by `create()`
+or `create(n)` never grows, so its buffer is in its record's allocation at every size. One built from a literal,
+and the result of `clone`, `slice` or a copy-before-write of one, follows the 256-byte bound.
 
 The buffer stays an ordinary buffer to everything that reads the record. Writing it in place, growing it past its
 capacity (which moves it to an allocation of its own), detaching it and releasing it all behave as they do for an
@@ -58,8 +60,9 @@ end 'main'
 0
 ```
 
-<!-- test: a-fixed-array-above-the-co-allocation-limit-keeps-two-allocations -->
-512 bytes is past the limit, so the buffer is its own allocation and every other behaviour is the same.
+<!-- test: a-fixed-array-above-256-bytes-is-one-allocation -->
+A fixed array created by `create()` never grows, so its buffer shares its record's allocation at 512 bytes as it
+does at 64.
 ```maxon
 typealias Word = bits(64)
 typealias Wide = FixedArray with 64 Word
@@ -82,15 +85,303 @@ function main() returns ExitCode
 		return 1
 	end 'value'
 
-	if allocs != 2 'allocs'
+	if allocs != 1 'allocs'
 		return 2
 	end 'allocs'
 
-	if frees != 2 'frees'
+	if frees != 1 'frees'
 		return 3
 	end 'frees'
 
 	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-runtime-sized-fixed-array-is-one-allocation-at-any-size -->
+A runtime-sized fixed array is one allocation at 352 bytes, and at 40000 bytes, past the largest slab class, where the
+record and its buffer live in one operating-system mapping. Both ends of the large one are zero and writable.
+```maxon
+typealias Bytes = FixedArray with Byte
+
+function churn(count Count) returns Byte
+	var bytes = Bytes.create(count)
+	let first = try bytes.get(0) otherwise panic("first")
+	let last = try bytes.get(count - 1) otherwise panic("last")
+	try bytes.set(count - 1, value: 9) otherwise panic("set")
+
+	return first + last + (try bytes.get(count - 1) otherwise panic("read"))
+end 'churn'
+
+function allocationsOf(count Count) returns (Byte, HeapCount, HeapCount)
+	let allocsBefore = HeapStats.threadAllocations()
+	let freesBefore = HeapStats.threadFrees()
+	let value = churn(count)
+
+	return (value, HeapStats.threadAllocations() - allocsBefore, HeapStats.threadFrees() - freesBefore)
+end 'allocationsOf'
+
+function main() returns ExitCode
+	let (smallValue, smallAllocs, smallFrees) = allocationsOf(352)
+	let (largeValue, largeAllocs, largeFrees) = allocationsOf(40000)
+
+	if smallValue != 9 or largeValue != 9 'value'
+		return 1
+	end 'value'
+
+	if smallAllocs != 1 or largeAllocs != 1 'allocs'
+		return 2
+	end 'allocs'
+
+	if smallFrees != 1 or largeFrees != 1 'frees'
+		return 3
+	end 'frees'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-recycled-fixed-array-reads-zero-at-a-slab-class-and-past-the-slabs -->
+A freed fixed array's allocation is handed to the next creation. At 400 bytes it is a slab class and at 40000 bytes
+it is an operating-system mapping; either way the new array must not see the old one's elements.
+```maxon
+typealias Word = bits(64)
+typealias Cells = FixedArray with Word
+
+function dirty(count ElementIndex) returns Word
+	var cells = Cells.create(count)
+	try cells.set(0, value: 0xFFFF) otherwise panic("set")
+	try cells.set(count - 1, value: 0xEEEE) otherwise panic("set")
+
+	return try cells.get(0) otherwise panic("get")
+end 'dirty'
+
+function seenInFresh(count ElementIndex) returns Word
+	let cells = Cells.create(count)
+	var seen = 0 as Word
+
+	for at in 0 upto count 'each'
+		seen = seen or (try cells.get(at) otherwise panic("get"))
+	end 'each'
+
+	return seen
+end 'seenInFresh'
+
+function check(count ElementIndex) returns ExitCode
+	var round = 0 as Count
+
+	while round < 20 'rounds'
+		if dirty(count) != 0xFFFF 'dirty'
+			return 1
+		end 'dirty'
+
+		if seenInFresh(count) != 0 'fresh'
+			return 2
+		end 'fresh'
+
+		round = round + 1
+	end 'rounds'
+
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	let slabClass = check(50)
+
+	if slabClass != 0 'slabClass'
+		return slabClass
+	end 'slabClass'
+
+	return check(5000)
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-clone-and-a-slice-of-a-large-fixed-array-copy-their-window -->
+<!-- tier: stdlib -->
+A clone of a record holding a fixed array, and a slice of the fixed array, copy rather than view, at 400 bytes and at
+40000: writing or clearing either side leaves the other alone, and the slice outlives the array it was cut from.
+```maxon
+typealias Word = bits(64)
+typealias Cells = FixedArray with Word
+
+extension FixedArray
+	function windowCount(start ElementIndex, stop ElementIndex) returns ElementIndex
+		let window = try managed.slice(start, stop) otherwise panic("slice")
+
+		return window.length() as ElementIndex
+	end 'windowCount'
+
+	function clearedWindowLeavesTheArray(start ElementIndex, stop ElementIndex) returns bool
+		var window = try managed.slice(start, stop) otherwise panic("slice")
+		let before = managed.length()
+		window.clear()
+
+		return window.length() == 0 and managed.length() == before
+	end 'clearedWindowLeavesTheArray'
+end 'FixedArray'
+
+type Holder
+	export var cells as Cells
+
+	static function around(count ElementIndex) returns Self
+		var cells = Cells.create(count)
+		try cells.set(1, value: 5) otherwise panic("set")
+		try cells.set(count - 1, value: 6) otherwise panic("set")
+
+		return Self{cells: cells}
+	end 'around'
+end 'Holder'
+
+function check(count ElementIndex) returns ExitCode
+	var original = Holder.around(count)
+	var copy = original.clone()
+
+	try copy.cells.set(1, value: 99) otherwise panic("set")
+	try original.cells.set(count - 1, value: 77) otherwise panic("set")
+
+	if (try original.cells.get(1) otherwise 0) != 5 or (try original.cells.get(count - 1) otherwise 0) != 77 'original'
+		return 1
+	end 'original'
+
+	if (try copy.cells.get(1) otherwise 0) != 99 or (try copy.cells.get(count - 1) otherwise 0) != 6 'copy'
+		return 2
+	end 'copy'
+
+	if original.cells.windowCount(2, stop: count) != count - 2 'sliceLength'
+		return 3
+	end 'sliceLength'
+
+	if not original.cells.clearedWindowLeavesTheArray(2, stop: count) 'sliceIndependent'
+		return 4
+	end 'sliceIndependent'
+
+	if (try original.cells.get(count - 1) otherwise 0) != 77 'untouched'
+		return 5
+	end 'untouched'
+
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	let slabClass = check(50)
+
+	if slabClass != 0 'slabClass'
+		return slabClass
+	end 'slabClass'
+
+	return check(5000)
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-published-large-fixed-array-is-copied-before-it-is-written -->
+A fixed array published through a `SharedValue` is frozen at 400 bytes and at 40000: a reader that wants to write
+copies it first, and the published one keeps its elements.
+```maxon
+typealias Word = bits(64)
+typealias Cells = FixedArray with Word
+
+type Config
+	export var cells as Cells
+
+	static function create(count ElementIndex) returns Self
+		var cells = Cells.create(count)
+		try cells.set(1, value: 5) otherwise panic("set")
+
+		return Self{cells: cells}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function check(count ElementIndex) returns ExitCode
+	let cell = ConfigCell.create(Config.create(count))
+	var mine = cell.current().clone()
+
+	try mine.cells.set(1, value: 9) otherwise panic("set")
+	try mine.cells.set(2, value: 4) otherwise panic("set")
+
+	let published = cell.current()
+
+	if (try published.cells.get(1) otherwise 0) != 5 or (try published.cells.get(2) otherwise 1) != 0 'frozen'
+		return 1
+	end 'frozen'
+
+	if (try mine.cells.get(1) otherwise 0) != 9 or (try mine.cells.get(2) otherwise 0) != 4 'copy'
+		return 2
+	end 'copy'
+
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	let slabClass = check(50)
+
+	if slabClass != 0 'slabClass'
+		return slabClass
+	end 'slabClass'
+
+	return check(5000)
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-large-fixed-array-crosses-to-a-service-and-is-written-there -->
+A move proves the record sole, so a fixed array of 400 bytes or of 40000 crosses to a service with its elements, the
+service writes it in place, and it is released there once.
+```maxon
+typealias Word = bits(64)
+typealias Cells = FixedArray with Word
+
+type Keeper
+	var cells as Cells
+
+	static function create() returns Self
+		return Self{cells: Cells.create(1)}
+	end 'create'
+
+	export function adopt(incoming Cells, last ElementIndex) returns Word
+		self.cells = incoming
+		try self.cells.set(last, value: 7) otherwise panic("set")
+
+		return (try self.cells.get(1) otherwise 0) + (try self.cells.get(last) otherwise 0)
+	end 'adopt'
+end 'Keeper'
+
+function check(count ElementIndex) returns ExitCode
+	let keeper = spawn Keeper.create()
+	var cells = Cells.create(count)
+	try cells.set(1, value: 5) otherwise panic("set")
+
+	let total = try await keeper.adopt(cells, last: count - 1) otherwise 0
+
+	if total != 12 'total'
+		return 1
+	end 'total'
+
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	let slabClass = check(50)
+
+	if slabClass != 0 'slabClass'
+		return slabClass
+	end 'slabClass'
+
+	return check(5000)
 end 'main'
 ```
 ```exitcode
@@ -595,19 +886,18 @@ end 'main'
 32 words, 256 bytes, are one allocation; one word more is two.
 ```maxon
 typealias Word = bits(64)
-typealias AtLimit = FixedArray with 32 Word
-typealias PastLimit = FixedArray with 33 Word
+typealias Planes = Array with Word
 
 function atLimit() returns Word
-	let planes = AtLimit.create()
+	let planes = Planes.create(32)
 
-	return planes.get(31)
+	return try planes.get(31) otherwise 1
 end 'atLimit'
 
 function pastLimit() returns Word
-	let planes = PastLimit.create()
+	let planes = Planes.create(33)
 
-	return planes.get(32)
+	return try planes.get(32) otherwise 1
 end 'pastLimit'
 
 function main() returns ExitCode
