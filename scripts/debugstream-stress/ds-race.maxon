@@ -47,6 +47,8 @@
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
+typealias TraceName = int(0 to 65535)
+typealias DoublingCount = int(0 to 32)
 
 let threadCount = 12
 let textsPerThread = 600
@@ -98,8 +100,8 @@ function parseDecimal(text String, fallback Integer) returns Integer
 		return fallback
 	end 'empty'
 
-	var value = 0
-	var i = 0
+	var value = 0 as Integer
+	var i = 0 as BytePos
 	let n = text.byteLength()
 
 	// One view for the whole scan: `String.addressableBytes()` is stdlib-internal, so code out here
@@ -126,7 +128,7 @@ end 'parseDecimal'
 // flood the ring with mm events that have nothing to do with what is being tested.
 function buildTextPad() returns String
 	var pad = "A"
-	var i = 0
+	var i = 0 as DoublingCount
 
 	// Doubling, not appending: growing to 16 KB one character at a time is quadratic in copies.
 	while i < padDoublings 'grow'
@@ -140,8 +142,8 @@ end 'buildTextPad'
 // The pacer. Returns its accumulator so the call has a live result and cannot be dropped as dead by
 // purity analysis — a pacer that gets optimised away is not a pacer.
 function burnCycles(n Integer) returns Integer
-	var acc = 0
-	var i = 0
+	var acc = 0 as Integer
+	var i = 0 as Integer
 
 	while i < n 'burn'
 		acc = acc + i
@@ -158,13 +160,13 @@ function emitBurst(idx Integer, events Integer, texts Integer, pad String, spin 
 
 	// Interned at COMPILE time into the MXDS_STRS blob, so the loop below builds no name and the
 	// only thing racing on the ring is the event write itself.
-	let name = __DebugStream.nameId("stress")
+	let name = __DebugStream.nameId("stress") as TraceName
 	let unit = idx + 1
 
-	var seq = 0
-	var textSeq = 0
-	var sinceText = 0
-	var sink = 0
+	var seq = 0 as Integer
+	var textSeq = 0 as Integer
+	var sinceText = 0 as Integer
+	var sink = 0 as Integer
 
 	while seq < events 'emit'
 		let a0 = 1 + idx * seqBase + seq
@@ -201,7 +203,7 @@ end 'emitBurst'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var spin = defaultSpin
+	var spin = defaultSpin as Integer
 
 	if args.count() > spinArgIndex 'pacer'
 		let raw = try args.get(spinArgIndex) otherwise panic("CommandLine.args: get OOB — index < count invariant")
@@ -218,7 +220,7 @@ function main() returns ExitCode
 		promises.push(async emitBurst(i, events: eventsPerThread, texts: textsPerThread, pad: pad.clone(), spin: spin))
 	end 'spawn'
 
-	var emitted = 0
+	var emitted = 0 as Integer
 
 	for p in promises 'await'
 		emitted = emitted + await p
