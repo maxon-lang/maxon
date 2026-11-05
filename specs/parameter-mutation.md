@@ -352,7 +352,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function copyInto(src IntArray, dest IntArray)
-	dest.push(src.count())
+	dest.push(src.count() as Integer)
 end 'copyInto'
 
 function main() returns ExitCode
@@ -374,7 +374,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function copyInto(dest IntArray, src IntArray)
-	dest.push(src.count())
+	dest.push(src.count() as Integer)
 end 'copyInto'
 
 function main() returns ExitCode

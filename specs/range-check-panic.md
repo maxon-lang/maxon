@@ -1514,10 +1514,12 @@ Stack trace:
 
 <!-- test: range-check-panic.an-uncontained-element-store-is-still-guarded -->
 ⚠ The negative control for the array-element door, whose guard stands at the STORE rather than at
-the callee's entry — so the elision has to leave that one standing too.
+the callee's entry — so the elision has to leave that one standing too. The pushed value carries no
+alias (`-loose()`, whose range `0 to 2000` is not inside `Wide`), because a value of another named alias
+is E3005 at the `push` and a value cast `as Wide` is guarded at the cast.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Loose = int(0 to 2000)
+typealias Loose = int(-2000 to 0)
 typealias Wide = int(0 to 1000)
 typealias Wides = Array with Wide
 
@@ -1526,12 +1528,12 @@ function opaque(n Integer) returns Integer
 end 'opaque'
 
 function loose() returns Loose
-  return opaque(1001)
+  return opaque(-1001)
 end 'loose'
 
 function main() returns ExitCode
   var a = Wides.create()
-  a.push(loose())
+  a.push(-loose())
   let v = try a.get(0) otherwise panic("no slot")
   print("v={v}\n")
   return 0

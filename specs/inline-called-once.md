@@ -245,7 +245,7 @@ end 'inner'
 
 function outer(a IntArray, n Integer) returns Integer
 	for i in 0 upto a.count() 'fill'
-		try a.set(i as ElementIndex, value: i + 1) otherwise panic("outer: i < a.count()")
+		try a.set(i as ElementIndex, value: (i + 1) as Integer) otherwise panic("outer: i < a.count()")
 	end 'fill'
 
 	let before = inner(a, n: n)
@@ -329,7 +329,7 @@ typealias NonZero = int(1 to i64.max)
 
 function divide(scratch IntArray, a NonZero) returns NonZero
 	for i in 0 upto scratch.count() 'fill'
-		try scratch.set(i, value: i) otherwise panic("divide: i < scratch.count()")
+		try scratch.set(i, value: i as Integer) otherwise panic("divide: i < scratch.count()")
 	end 'fill'
 
 	return a - a
