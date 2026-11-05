@@ -356,7 +356,7 @@ release's version as its heading when the release is cut.
   Fix: mark the parameter `mutable`, or copy the union into a local `var` and match on that.
 - A call that fills array slots with zero is E3106 for an element that is a payload-free enum or union whose
   raw values (tags) include no 0, as it is for a ranged alias that excludes 0: `Array.create(n)` and
-  `create(n, zeroed: true)`, `resize`, `FixedArray.create` and `setLength`. Zero named no case, so a `match`
+  `create(n, zeroed: true)`, `resize` and `FixedArray.create`. Zero named no case, so a `match`
   over such an element was not exhaustive. In a generic body, where the element is a type parameter, the
   instantiations decide: `create(n)` over the parameter and a `FixedArray with N <type parameter>`'s
   `create()` are refused when any instantiation of the type is at a managed type, at such an enum or at a

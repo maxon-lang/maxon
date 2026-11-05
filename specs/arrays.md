@@ -4733,7 +4733,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:8:22: 'create(n)' cannot publish zeroed slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+error E3106: <fragment>:8:22: 'create(n)' cannot publish zeroed slots of a type parameter: 'StringPool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
 ```
 
 <!-- test: error.create-with-capacity-in-a-generic-body-is-refused-for-an-enum-instantiation -->
@@ -4766,7 +4766,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:13:22: 'create(n)' cannot publish zeroed slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+error E3106: <fragment>:13:22: 'create(n)' cannot publish zeroed slots of a type parameter: 'LevelPool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
 ```
 
 <!-- test: error.create-with-capacity-in-a-generic-body-is-refused-for-a-zero-excluding-alias-instantiation -->
@@ -4796,7 +4796,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:10:22: 'create(n)' cannot publish zeroed slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+error E3106: <fragment>:10:22: 'create(n)' cannot publish zeroed slots of a type parameter: 'PercentPool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
 ```
 
 <!-- test: error.resize-in-a-user-generic-body-is-refused-for-a-managed-instantiation -->
@@ -4830,7 +4830,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:12:9: 'resize' cannot grow an array of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
+error E3106: <fragment>:12:9: 'resize' cannot grow an array of a type parameter: 'StringPool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
 ```
 
 <!-- test: error.resize-in-a-user-generic-body-is-refused-for-an-enum-instantiation -->
@@ -4868,7 +4868,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:17:9: 'resize' cannot grow an array of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
+error E3106: <fragment>:17:9: 'resize' cannot grow an array of a type parameter: 'LevelPool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
 ```
 
 <!-- test: error.resize-in-a-user-generic-body-is-refused-for-a-zero-excluding-alias-instantiation -->
@@ -4903,7 +4903,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:14:9: 'resize' cannot grow an array of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
+error E3106: <fragment>:14:9: 'resize' cannot grow an array of a type parameter: 'PercentPool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
 ```
 
 <!-- test: error.one-zero-excluding-instantiation-refuses-a-generic-body-that-resizes -->
@@ -4945,7 +4945,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:17:9: 'resize' cannot grow an array of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
+error E3106: <fragment>:17:9: 'resize' cannot grow an array of a type parameter: 'LevelPool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
 ```
 
 <!-- test: a-generic-body-that-zero-fills-is-accepted-when-every-instantiation-admits-zero -->
@@ -5046,6 +5046,118 @@ end 'main'
 ```
 ```stdout
 4 10
+```
+
+<!-- test: error.create-with-capacity-in-a-library-tier-generic-body-is-refused-for-an-enum-instantiation -->
+<!-- tier: stdlib -->
+The refusal of `create(n)` over a type parameter holds in every tier: only a library body's `resize` is trusted.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(3)}
+	end 'create'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias LevelPool = Pool with Level
+
+function main() returns ExitCode
+	let pool = LevelPool.create()
+
+	return pool.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:13:22: 'create(n)' cannot publish zeroed slots of a type parameter: 'LevelPool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-that-a-contested-alias-excludes-zero-is-refused -->
+`Count` is the standard library's `int(0 to u64.max)`, which admits 0, and this program declares its own `Count` that does not. The concrete `create(n)` means the program's declaration, as the instantiation of a generic body does.
+```maxon
+typealias Count = int(1 to 9)
+typealias CountArray = Array with Count
+
+function main() returns ExitCode
+	let counts = CountArray.create(3)
+
+	return counts.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:6:15: 'create(n)' cannot publish zeroed slots of 'Count': zero is not a value of 'Count'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-cannot-hold-a-record-with-a-zero-excluding-field -->
+A record with a field whose range excludes 0 is not a packed word (only zero-based ranges pack), so it is a heap record and a zeroed slot of it is a null pointer.
+```maxon
+typealias Rank = int(1 to 13)
+typealias Suit = int(0 to 3)
+
+type Card
+	export let rank as Rank
+	export let suit as Suit
+
+	static function create(rank Rank, suit Suit) returns Self
+		return Self{rank: rank, suit: suit}
+	end 'create'
+end 'Card'
+
+typealias CardArray = Array with Card
+
+function main() returns ExitCode
+	let cards = CardArray.create(2)
+
+	return cards.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:17:14: 'create(n)' cannot publish zeroed slots of 'Card': zero is not a value of 'Card'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: create-with-capacity-holds-a-packed-record-whose-fields-admit-zero -->
+A packed record whose fields are all zero-based is a word, and the zero word is a valid record, so the zeroed form is accepted.
+```maxon
+typealias Octet = int(0 to 255)
+typealias Suit = int(0 to 3)
+
+type Pixel
+	export let red as Octet
+	export let suit as Suit
+	export let lit as bool
+
+	static function create(red Octet, suit Suit, lit bool) returns Self
+		return Self{red: red, suit: suit, lit: lit}
+	end 'create'
+end 'Pixel'
+
+typealias PixelArray = Array with Pixel
+
+function main() returns ExitCode
+	let pixels = PixelArray.create(2)
+	let pixel = try pixels.get(1) otherwise Pixel.create(9, suit: 3, lit: true)
+
+	print("{pixel.red} {pixel.suit} {pixel.lit}\n")
+
+	return pixels.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+0 0 false
 ```
 
 <!-- test: error.create-zeroed-must-be-a-literal -->

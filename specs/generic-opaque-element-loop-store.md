@@ -508,3 +508,266 @@ end 'main'
 ```stdout
 a filled string long enough to force a heap allocation
 ```
+
+### The same stores through a user-written fill
+
+A user-written body cannot `resize` its type parameter, so the identical loop stores run through `growFilled`
+with a seed and then `set` each slot. Each case below is the user-tier twin of the library-tier case named
+beside it.
+
+<!-- test: a-user-written-fill-stores-one-opaque-value-into-three-slots -->
+Twin of `one-opaque-value-written-into-three-slots`.
+```maxon
+typealias Idx = int(0 to u64.max) implements ElementIndex
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function count() returns Idx
+		return items.count()
+	end 'count'
+
+	function fillTo(newLength Idx, value Element, seed Element)
+		items.growFilled(newLength, value: seed)
+
+		var n = 0 as Idx
+		while n < newLength 'fill'
+			try items.set(n, value: value) otherwise 'setErr'
+				panic("Bag.fillTo: set OOB — the length was just grown to newLength")
+			end 'setErr'
+			n = n + 1
+		end 'fill'
+	end 'fillTo'
+
+	function at(i Idx) returns Element throws ArrayError
+		return try items.get(i)
+	end 'at'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	let s = "a filled string long enough to force a heap allocation"
+	b.fillTo(3, value: s, seed: "a seed string long enough to force a heap allocation")
+	let first = try b.at(0) otherwise return 1
+	let last = try b.at(2) otherwise return 1
+	print("{first}\n")
+	print("{last}\n")
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+a filled string long enough to force a heap allocation
+a filled string long enough to force a heap allocation
+```
+
+<!-- test: a-user-written-fill-that-never-runs-still-releases-the-value -->
+Twin of `a-loop-that-never-runs-still-releases-the-value`.
+```maxon
+typealias Idx = int(0 to u64.max) implements ElementIndex
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function count() returns Idx
+		return items.count()
+	end 'count'
+
+	function fillTo(newLength Idx, value Element, seed Element)
+		items.growFilled(newLength, value: seed)
+
+		var n = 0 as Idx
+		while n < newLength 'fill'
+			try items.set(n, value: value) otherwise 'setErr'
+				panic("Bag.fillTo: set OOB — the length was just grown to newLength")
+			end 'setErr'
+			n = n + 1
+		end 'fill'
+	end 'fillTo'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	let s = "an unstored string long enough to force a heap allocation"
+	b.fillTo(0, value: s, seed: "a seed string long enough to force a heap allocation")
+	print("{s}\n")
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+an unstored string long enough to force a heap allocation
+```
+
+<!-- test: a-user-written-fill-stores-one-opaque-value-into-a-hundred-slots -->
+Twin of `one-opaque-value-written-into-a-hundred-slots`.
+```maxon
+typealias Idx = int(0 to u64.max) implements ElementIndex
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function count() returns Idx
+		return items.count()
+	end 'count'
+
+	function fillTo(newLength Idx, value Element, seed Element)
+		items.growFilled(newLength, value: seed)
+
+		var n = 0 as Idx
+		while n < newLength 'fill'
+			try items.set(n, value: value) otherwise 'setErr'
+				panic("Bag.fillTo: set OOB — the length was just grown to newLength")
+			end 'setErr'
+			n = n + 1
+		end 'fill'
+	end 'fillTo'
+
+	function at(i Idx) returns Element throws ArrayError
+		return try items.get(i)
+	end 'at'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	b.fillTo(100, value: "a repeated string long enough to force a heap allocation", seed: "a seed string long enough to force a heap allocation")
+	let middle = try b.at(50) otherwise return 1
+	print("{middle}\n")
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+100
+```
+```stdout
+a repeated string long enough to force a heap allocation
+```
+
+<!-- test: a-user-written-fill-leaves-the-value-readable-after-the-loop -->
+Twin of `the-filled-value-is-still-readable-after-the-loop`.
+```maxon
+typealias Idx = int(0 to u64.max) implements ElementIndex
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function count() returns Idx
+		return items.count()
+	end 'count'
+
+	function fillTo(newLength Idx, value Element, seed Element) returns Element
+		items.growFilled(newLength, value: seed)
+
+		var n = 0 as Idx
+		while n < newLength 'fill'
+			try items.set(n, value: value) otherwise 'setErr'
+				panic("Bag.fillTo: set OOB — the length was just grown to newLength")
+			end 'setErr'
+			n = n + 1
+		end 'fill'
+		return value
+	end 'fillTo'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	let echoed = b.fillTo(2, value: "a re-read string long enough to force a heap allocation", seed: "a seed string long enough to force a heap allocation")
+	print("{echoed}\n")
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+a re-read string long enough to force a heap allocation
+```
+
+<!-- test: a-user-written-copy-stores-a-borrowed-element-with-a-reference-per-slot -->
+Twin of `a-borrowed-element-stored-in-a-loop-takes-a-reference-per-slot`.
+```maxon
+typealias Idx = int(0 to u64.max) implements ElementIndex
+typealias Strs = Array with String
+
+type Bag uses Element
+	export typealias Items = Array with Element
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function copyFrom(other Items, upTo Idx, seed Element)
+		items.growFilled(upTo, value: seed)
+
+		var n = 0 as Idx
+		while n < upTo 'copy'
+			let borrowed = try other.get(n) otherwise 'getErr'
+				break
+			end 'getErr'
+			try items.set(n, value: borrowed) otherwise 'setErr'
+				panic("Bag.copyFrom: set OOB — the length was just grown")
+			end 'setErr'
+			n = n + 1
+		end 'copy'
+	end 'copyFrom'
+
+	function at(i Idx) returns Element throws ArrayError
+		return try items.get(i)
+	end 'at'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	var source = Strs.create()
+	source.push("a source string long enough to force a heap allocation")
+	source.push("a second source string, also long enough to force a heap allocation")
+	b.copyFrom(source, upTo: 2, seed: "a seed string long enough to force a heap allocation")
+	let copied = try b.at(1) otherwise return 1
+	let original = try source.get(1) otherwise return 1
+	print("{copied}\n")
+	print("{original}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a second source string, also long enough to force a heap allocation
+a second source string, also long enough to force a heap allocation
+```

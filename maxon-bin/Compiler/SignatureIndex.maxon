@@ -37561,8 +37561,14 @@ export type ProgramSignatures
 	function innerAliasExcludesZero(name ByteArray) returns bool
 		match self.innerAliasOf(name) 'inner'
 			declared(alias) then return aliasExcludesZero(alias)
-			undeclared then return false
+			undeclared then break
 		end 'inner'
+
+		if self.nameIsAnUndeclaredByteElement(name) 'theByteAnArrayLiteralMints'
+			return false
+		end 'theByteAnArrayLiteralMints'
+
+		panic("ProgramSignatures.innerAliasExcludesZero: '{String.from(name)}' is a `named` type no registry holds and not the byte element a `b\"…\"` literal mints — every other named element is a declared alias, enum or union")
 	end 'innerAliasExcludesZero'
 
 	// The element-copy refusal fires only for an `Array` instance some code copies, directly or through a

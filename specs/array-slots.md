@@ -341,7 +341,8 @@ end 'main'
 The loop reads element 0, then meets the slot `setLength` published and nothing filled. It panics with
 the empty-slot message instead of dereferencing the null the slot holds. A struct element cannot be `resize`d into
 existence (`error.resize-struct-element`), so the raw buffer is the only way to open an empty slot under a body that
-is not generic; `for-over-an-empty-slot-in-a-generic-body-panics` opens one through `resize`.
+is not generic; `for-over-an-empty-slot-in-a-generic-body-panics` opens one through `resize` in a library-tier
+body, the only generic body that may `resize` its type parameter.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

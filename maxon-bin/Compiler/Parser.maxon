@@ -1795,7 +1795,7 @@ export union SourceParseError implements Error
 	// the slot empty. `elementType` names the element, which is the whole point of refusing HERE: the
 	// runtime cannot name it and the caller cannot see it.
 	arrayResizeManagedElement(elementType String, line LineNumber, column ColumnNumber)
-	zeroOutsideElement(refusal ZeroElementRefusal, element ZeroElementHolder, line LineNumber, column ColumnNumber)
+	zeroOutsideElement(refusal ZeroElementRefusal, subject ZeroElementSubject, line LineNumber, column ColumnNumber)
 	literalsShareNoIntegerType(negativeValue FullRangeInt, unsignedPattern FullRangeInt, line LineNumber, column ColumnNumber)
 
 	// ⭐ THE BUFFER SURFACE'S `set` ON A MANAGED ELEMENT — `arr.managed.set(i, value: x)` where the element
@@ -2238,10 +2238,11 @@ export enum ZeroElementRefusal
 	bufferSetLength
 end 'ZeroElementRefusal'
 
-export union ZeroElementHolder
+export union ZeroElementSubject
 	named(elementType String)
+	instantiatedAs(instance String)
 	instantiated
-end 'ZeroElementHolder'
+end 'ZeroElementSubject'
 
 function zeroElementRefusalTrustsSparseColumns(refusal ZeroElementRefusal) returns bool
 	return match refusal 'refusal'
@@ -84960,7 +84961,7 @@ export type Parser
 			let element = self.signatures.arrayElementDisplayName(giid)
 
 			match refusal 'managedRefusal'
-				arrayCreateZeroed then throw SourceParseError.zeroOutsideElement(refusal, element: ZeroElementHolder.named(element), line: tok.line, column: tok.column)
+				arrayCreateZeroed then throw SourceParseError.zeroOutsideElement(refusal, subject: ZeroElementSubject.named(element), line: tok.line, column: tok.column)
 				arrayResize then throw SourceParseError.arrayResizeManagedElement(element, line: tok.line, column: tok.column)
 				default panic("requireArrayGrowthHasZeroElement: only `create` and `resize` publish zeroed slots of a growing array")
 			end 'managedRefusal'
@@ -84980,7 +84981,7 @@ export type Parser
 			return
 		end 'zeroIsAnElement'
 
-		throw SourceParseError.zeroOutsideElement(refusal, element: ZeroElementHolder.named(self.signatures.arrayElementDisplayName(giid)), line: tok.line, column: tok.column)
+		throw SourceParseError.zeroOutsideElement(refusal, subject: ZeroElementSubject.named(self.signatures.arrayElementDisplayName(giid)), line: tok.line, column: tok.column)
 	end 'requireZeroIsAnElement'
 
 	function requireEveryInstantiationHasAZero(giid GenericInstanceId, tok Token, refusal ZeroElementRefusal) throws SourceParseError
@@ -84990,11 +84991,18 @@ export type Parser
 
 		match self.signatures.genericTypeFieldNoZeroInstantiation(typeParamIdOf(self.signatures.containerElementType(giid))) 'noZeroInstantiation'
 			noInstance then return
-			instance(site) then self.blameLibraryRefusalOnInstantiation(site)
+			instance(site) then throw self.instantiationRefusal(refusal, site: site, tok: tok)
 		end 'noZeroInstantiation'
-
-		throw SourceParseError.zeroOutsideElement(refusal, element: ZeroElementHolder.instantiated, line: tok.line, column: tok.column)
 	end 'requireEveryInstantiationHasAZero'
+
+	function instantiationRefusal(refusal ZeroElementRefusal, site InstantiationSiteLookup, tok Token) returns SourceParseError
+		self.blameLibraryRefusalOnInstantiation(site)
+
+		return match site 'written'
+			unwritten gives SourceParseError.zeroOutsideElement(refusal, subject: ZeroElementSubject.instantiated, line: tok.line, column: tok.column)
+			written(instantiation) gives SourceParseError.zeroOutsideElement(refusal, subject: ZeroElementSubject.instantiatedAs(String.from(self.signatures.instanceDisplayName(instantiation.gid))), line: tok.line, column: tok.column)
+		end 'written'
+	end 'instantiationRefusal'
 
 	// ⭐⭐ **THE BUFFER `set` MUST OWN WHAT IT STORES, SO A MANAGED ELEMENT IS REFUSED (E3109).**
 	// ⚖ USER RULING, 2026-07-30: the buffer surface's `set` is bounded by CAPACITY, which is what makes the

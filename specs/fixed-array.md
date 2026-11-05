@@ -1265,7 +1265,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:15:21: 'FixedArray.create' cannot publish slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+error E3106: <fragment>:15:21: 'FixedArray.create' cannot publish slots of a type parameter: 'LevelHolder' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: error.a-zero-excluding-alias-instantiation-refuses-a-fixed-array-field -->
@@ -1295,7 +1295,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:11:21: 'FixedArray.create' cannot publish slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+error E3106: <fragment>:11:21: 'FixedArray.create' cannot publish slots of a type parameter: 'PercentHolder' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: an-enum-instantiation-with-a-zero-case-keeps-a-fixed-array-field -->
@@ -1366,7 +1366,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:15:21: 'FixedArray.create' cannot publish slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+error E3106: <fragment>:15:21: 'FixedArray.create' cannot publish slots of a type parameter: 'LevelHolder' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: a-fixed-array-literal-publishes-no-zero-slot -->
@@ -1422,7 +1422,92 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:10:21: 'FixedArray.create' cannot publish slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+error E3106: <fragment>:10:21: 'FixedArray.create' cannot publish slots of a type parameter: 'CountHolder' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+```
+
+<!-- test: error.a-library-tier-fixed-array-field-is-refused-for-a-zero-excluding-instantiation -->
+<!-- tier: stdlib -->
+The refusal of a `FixedArray with N <type parameter>` field holds in every tier.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Holder uses Element
+	typealias Slot = FixedArray with 4 Element
+
+	var slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias LevelHolder = Holder with Level
+
+function main() returns ExitCode
+	var h = LevelHolder.create()
+	return h.size()
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:15:21: 'FixedArray.create' cannot publish slots of a type parameter: 'LevelHolder' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+```
+
+<!-- test: error.a-nested-generic-instantiation-refuses-the-inner-fixed-array-field -->
+`Outer` holds a `Holder with T` and is itself instantiated at `Level`; the only `Holder` row that exists is the one `Outer with Level` substitutes into its inner alias, which no author wrote.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Holder uses Element
+	typealias Slot = FixedArray with 4 Element
+
+	var slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+type Outer uses Item
+	typealias Inner = Holder with Item
+
+	var inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create()}
+	end 'create'
+
+	function size() returns Int
+		return inner.size()
+	end 'size'
+end 'Outer'
+
+typealias LevelOuter = Outer with Level
+
+function main() returns ExitCode
+	var o = LevelOuter.create()
+	return o.size()
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:15:21: 'FixedArray.create' cannot publish slots of a type parameter: 'LevelOuter' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: error.one-managed-instantiation-refuses-the-shared-body -->

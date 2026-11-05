@@ -50,8 +50,7 @@ export type OptionalIndexColumn uses Entry
 
 	export function push(value Entry)
 		if self.present.count() < self.length 'absentTail'
-			self.values.growFilled(self.length + 1, value: value)
-			self.present.growFilled(self.length, value: EntryPresence.absent)
+			self.fillAbsentRun(self.length + 1, value: value)
 		end 'absentTail' else 'nothingAbsent'
 			self.values.push(value)
 		end 'nothingAbsent'
@@ -68,8 +67,7 @@ export type OptionalIndexColumn uses Entry
 		self.requireInside(at, reader: "set")
 
 		if at >= self.present.count() 'notMaterializedYet'
-			self.values.growFilled(self.length, value: value)
-			self.present.growFilled(self.length, value: EntryPresence.absent)
+			self.fillAbsentRun(self.length, value: value)
 		end 'notMaterializedYet' else 'materialized'
 			try self.values.set(at, value: value) otherwise panic("OptionalIndexColumn.set: entry {at} is past the {self.values.count()} values materialized for a column of {self.length}")
 		end 'materialized'
@@ -101,6 +99,11 @@ export type OptionalIndexColumn uses Entry
 
 		return try self.values.get(at) otherwise panic("OptionalIndexColumn.get: entry {at} is held past the {self.values.count()} values materialized")
 	end 'get'
+
+	function fillAbsentRun(valueCount ElementIndex, value Entry)
+		self.values.growFilled(valueCount, value: value)
+		self.present.growFilled(self.length, value: EntryPresence.absent)
+	end 'fillAbsentRun'
 
 	function requireInside(at ElementIndex, reader String)
 		if at >= self.length 'pastTheColumn'
