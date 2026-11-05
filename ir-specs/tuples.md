@@ -4254,7 +4254,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#41:
-    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:497: "
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -4405,7 +4405,7 @@ func @main {
     x64.jcc notEqual, tryerr#53
     x64.jmp tryok#52
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -4533,7 +4533,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#41:
-    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:497: "
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -4684,7 +4684,7 @@ func @main {
     x64.jcc notEqual, tryerr#53
     x64.jmp tryok#52
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -4813,7 +4813,7 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
   __il_body#41:
-    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:497: "
+    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -4963,7 +4963,7 @@ func @main {
     arm64.b.ne tryerr#53
     arm64.b tryok#52
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_38  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_38  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -5099,7 +5099,7 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
   __il_body#41:
-    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:497: "
+    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -5249,7 +5249,7 @@ func @main {
     arm64.b.ne tryerr#53
     arm64.b tryok#52
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_38  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_38  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -5418,7 +5418,7 @@ func @xorKeyStream {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#56:
-    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:497: "
+    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -5588,7 +5588,7 @@ func @xorKeyStream {
     x64.jcc notEqual, tryerr#68
     x64.jmp tryok#67
   __rc_panic#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -5930,7 +5930,7 @@ func @xorKeyStream {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#56:
-    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:497: "
+    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -6100,7 +6100,7 @@ func @xorKeyStream {
     x64.jcc notEqual, tryerr#68
     x64.jmp tryok#67
   __rc_panic#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -6440,7 +6440,7 @@ func @xorKeyStream {
     arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
   __il_body#56:
-    arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:497: "
+    arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -6604,7 +6604,7 @@ func @xorKeyStream {
     arm64.b.ne tryerr#68
     arm64.b tryok#67
   __rc_panic#30:
-    arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -6955,7 +6955,7 @@ func @xorKeyStream {
     arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
   __il_body#56:
-    arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:497: "
+    arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -7119,7 +7119,7 @@ func @xorKeyStream {
     arm64.b.ne tryerr#68
     arm64.b tryok#67
   __rc_panic#30:
-    arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -7581,7 +7581,7 @@ func @xorKeyStream {
     x64.jcc notEqual, tryerr#36
     x64.jmp tryok#35
   __rc_panic#28:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg r14
@@ -7829,7 +7829,7 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok#24
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -8032,7 +8032,7 @@ func @xorKeyStream {
     x64.jcc notEqual, tryerr#36
     x64.jmp tryok#35
   __rc_panic#28:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg r14
@@ -8280,7 +8280,7 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok#24
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -8474,7 +8474,7 @@ func @xorKeyStream {
     arm64.b.ne tryerr#36
     arm64.b tryok#35
   __rc_panic#28:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -8717,7 +8717,7 @@ func @main {
     arm64.b.ne tryerr
     arm64.b tryok#24
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -8916,7 +8916,7 @@ func @xorKeyStream {
     arm64.b.ne tryerr#36
     arm64.b tryok#35
   __rc_panic#28:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -9159,7 +9159,7 @@ func @main {
     arm64.b.ne tryerr
     arm64.b tryok#24
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
