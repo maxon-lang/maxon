@@ -14624,7 +14624,7 @@ type ErrorUnionInfo
 	export var members as TryBlockErrorMemberArray
 
 	// The dispatch subject: the fused ordinal every routed edge computed, merged through the error block's
-	// last phi. `match e` reads THIS where an ordinary enum match reads `emitEnumTagOf(scrut)`.
+	// last phi. `match e` reads THIS where an ordinary enum match reads `emitEnumDispatchKey(scrut)`.
 	export let fusedOrdinal as ValueId
 
 	static function create(layout EnumLayout, caseMembers TryBlockErrorMemberArray, members TryBlockErrorMemberArray, fusedOrdinal ValueId) returns ErrorUnionInfo
@@ -14944,8 +14944,10 @@ union BlockCloserScan
 	unterminated
 end 'BlockCloserScan'
 
+// `word`'s `tag` is the stored tag of the one case the arm covers: the payload is `word - tag`, which is
+// the pointer only for a word holding that case (an arm that binds a payload covers exactly one, E3129).
 union PayloadSource
-	word
+	word(tag FullRangeInt)
 	slot(offset ByteOffset, storage MaxonType)
 
 	function slotOffset() returns ByteOffset
@@ -17011,6 +17013,20 @@ type DispatchInterval
 end 'DispatchInterval'
 
 typealias DispatchIntervalArray = Array with DispatchInterval
+
+type DispatchMiss
+	export var targetBlockId as BlockId
+	export var edgeArgs as ValueIdArray
+
+	// True only when every subject value lies in some interval (an exhaustive match with no `default`);
+	// `emitDispatchChain` then omits its last interval's test, so a subject outside every interval would
+	// take that interval's arm.
+	export var isUnreachable as bool
+
+	static function create(targetBlockId BlockId, edgeArgs ValueIdArray, isUnreachable bool) returns DispatchMiss
+		return Self{targetBlockId: targetBlockId, edgeArgs: edgeArgs, isUnreachable: isUnreachable}
+	end 'create'
+end 'DispatchMiss'
 
 // Stamp every interval one arm contributed — `intervals[from…]` — with the block its dispatch edge enters and
 // the phi args that ride the edge. An or-arm or a split range reaches one arm through several intervals.
@@ -19813,7 +19829,7 @@ export type Parser
 	// the access).
 	//
 	// ⭐ **TWO WRITERS, ONE PER FAMILY OF REACH, AND NEITHER IS A WALK** — `requireFieldAccessible` for
-	// a STRUCT's field, `emitEnumTagOf` for an ENUM/UNION's tag. Each states its own rule at its own
+	// a STRUCT's field, `emitEnumDispatchKey` for an ENUM/UNION's tag. Each states its own rule at its own
 	// site; both are the line the compile ALREADY had to reach to emit the access, so neither
 	// re-derives anything. A `match` on another file's union names its CASES and never its type, which is
 	// the enum half of the same reach.
@@ -27120,7 +27136,7 @@ export type Parser
 
 	// ⭐ **A TYPE THIS FILE REACHED INTO — `recordTypeNameUse`'s twin for the fact a written name cannot
 	// carry.** Two call sites, one per family of reach and each stating its own rule: `requireFieldAccessible`
-	// (a struct's field) and `emitEnumTagOf` (an enum's or union's tag). The copy-on-write shape and the
+	// (a struct's field) and `emitEnumDispatchKey` (an enum's or union's tag). The copy-on-write shape and the
 	// `isTheReportingWalk` gate are its twin's, for its twin's reason — `parseModule` is the only walk whose
 	// artifact anyone reads these sets off, so any other one would hash into a set it discards.
 	// Sharing ONE empty singleton with `usedTypeNames` is deliberate: the seed is an identity test, so a
@@ -39298,9 +39314,8 @@ export type Parser
 		self.noteUnionWriteReach(func, scrut: scrut)
 		self.emitIncref(payload, range: range)
 
-		let tag = self.emitWordMask(scrut, mask: UnboxedTagMask, resultType: MaxonType.integer, range: range)
-		let newWord = self.mintValueOfType(self.typeOf(scrut))
-		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(newWord, lhs: payload, rhs: tag, op: MaxonBinOp.bitOr), range: range)
+		let tag = self.emitMachineWordBinOp(scrut, rhs: self.emitLiteral(UnboxedTagMask, valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitAnd, resultType: MaxonType.integer, range: range)
+		let newWord = self.emitMachineWordBinOp(payload, rhs: tag, op: MaxonBinOp.bitOr, resultType: self.typeOf(scrut), range: range)
 
 		match self.unionWritePlaceFor(scrut) 'store'
 			nowhere or
@@ -56361,12 +56376,13 @@ export type Parser
 			end 'eachCase'
 		end 'initEnumCoverage'
 
-		// The DISPATCH SUBJECT — what each arm's tag compare reads — through `emitEnumTagOf`, the one
-		// place that answers where an enum value's tag lives (`.ordinal` reads the same door; see there
-		// for the wrong answer their separate copies of this decision produced). For a boxed union that
-		// is a load emitted ONCE here, into the first test block, which dominates every arm; for a scalar
-		// enum it is the scrutinee itself and nothing is emitted. The scrutinee `scrut` stays the BOX
-		// either way, which is what a payload binding reads its slots out of.
+		// The DISPATCH SUBJECT — what each arm's tag compare reads — through `emitEnumDispatchKey`, the one
+		// place that answers where an enum value's tag lives (`.ordinal` reads the same door through
+		// `emitEnumTagOf`; see there for the wrong answer their separate copies of this decision produced).
+		// For a boxed union that is a load emitted ONCE here, into the first test block, which dominates
+		// every arm; for a word union it is the stored tag, `word & 7`; for a scalar enum it is the
+		// scrutinee itself and nothing is emitted. The scrutinee `scrut` stays the BOX (or word) either
+		// way, which is what a payload binding reads its payload out of.
 		//
 		// The `isEnumMatch` guard stays HERE and is not the helper's: it is a question about the SCRUTINEE
 		// (does this value belong to a declared enum at all?), where the helper's is about the LAYOUT. A
@@ -56378,7 +56394,7 @@ export type Parser
 			// member was statically known, which is the only place a boxed member's tag COULD be read.
 			dispatchSubject = requireErrorUnionInfo(errorUnion).fusedOrdinal
 		end 'fusedOrdinalIsTheSubject' else if isEnumMatch 'enumDispatchSubject'
-			dispatchSubject = try self.emitEnumTagOf(scrut, layout: requireEnumLayout(enumMatch), anchor: matchTok, range: SourceRange.ofToken(matchTok))
+			dispatchSubject = try self.emitEnumDispatchKey(scrut, layout: requireEnumLayout(enumMatch), anchor: matchTok, range: SourceRange.ofToken(matchTok))
 		end 'enumDispatchSubject'
 
 		// ⭐ **MATCH-CONSUME BOOKKEEPING.** A managed payload BINDING takes its field out of
@@ -56474,7 +56490,8 @@ export type Parser
 		// and the whole dispatch is emitted after the loop, into `dispatchEntryId` (the block holding
 		// `dispatchSubject`, which every compare then reads). `planMissBlockId`/`planMissArgs` name where
 		// a value in no interval goes: the `default` body (set when the default arm is parsed) or a
-		// `dead` block for an exhaustive enum (created after the loop).
+		// `dead` block for an exhaustive enum (created after the loop). `planMissIsUnreachable` is set
+		// for the dead block only, and the three travel to the dispatch as one `DispatchMiss`.
 		let usePlan = self.matchUsesIntervalPlan(isEnumMatch, scrut: scrut)
 
 		// ⭐ **THE ENTRY BLOCK IS HELD BY ITS `BlockId`, NOT AS A SECOND NAME FOR `currentTestBlock`** —
@@ -56491,6 +56508,7 @@ export type Parser
 		// block), and a scalar match with no default throws E2026 before then.
 		var planMissBlockId = dispatchEntryId
 		var planMissArgs = ValueIdArray.create()
+		var planMissIsUnreachable = false
 
 		// ⭐ **`--coverage`: THIS CONSTRUCT BECOMES THE BRANCH THE ARMS BELOW GROUP UNDER.** Entered after the
 		// scrutinee so a `match` nested inside one groups its own arms; popped once the loop is done.
@@ -56882,6 +56900,7 @@ export type Parser
 			// unreachable (every value matches some arm).
 			if usePlan 'planDeadMiss'
 				planMissBlockId = self.newDeadBlock(func, label: b"matchdead").id
+				planMissIsUnreachable = true
 			end 'planDeadMiss' else 'chainDeadMiss'
 				currentTestBlock.terminator = Terminator.dead
 			end 'chainDeadMiss'
@@ -56950,7 +56969,7 @@ export type Parser
 		// already wired its dispatch inline, so this runs only for a planned match.
 		if usePlan 'emitPlan'
 			var normalized = self.normalizeDispatchIntervals(dispatchIntervals)
-			try self.emitMatchDispatch(func, entryId: dispatchEntryId, subject: dispatchSubject, intervals: normalized, missTarget: planMissBlockId, missArgs: planMissArgs, opTok: matchTok)
+			try self.emitMatchDispatch(func, entryId: dispatchEntryId, subject: dispatchSubject, intervals: normalized, miss: DispatchMiss.create(planMissBlockId, edgeArgs: planMissArgs, isUnreachable: planMissIsUnreachable), opTok: matchTok)
 		end 'emitPlan'
 
 		// ⭐⭐ **DRAIN THE BREAK EXITS INTO THE REACHING SET — BEFORE `finalizeMatchMerge` COUNTS IT.**
@@ -58969,7 +58988,7 @@ export type Parser
 		end 'eachInterval'
 
 		for j in 0 upto layout.caseCount() 'eachCase'
-			let tag = layout.tagOfIndex(j)
+			let tag = self.dispatchTagOfIndex(layout, index: j)
 
 			if tag < loTag or tag > hiTag 'outsideTheSpan'
 				continue
@@ -59114,14 +59133,12 @@ export type Parser
 	// The tag the dispatch plan holds for case `index` of the arm's payload layout: the case's own tag for a
 	// declared enum, shifted onto the fused line for an error union's one member.
 	function armDispatchTagOf(arm EnumPatternArm, payloadLayout EnumLayout, index CaseIndex) returns FullRangeInt
-		let tag = payloadLayout.tagOfIndex(index)
-
 		if arm.members.count() == 0 'aDeclaredEnum'
-			return tag
+			return self.dispatchTagOfIndex(payloadLayout, index: index)
 		end 'aDeclaredEnum'
 
 		let member = try arm.members.get(0) otherwise panic("armDispatchTagOf: members.get OOB at 0 after the count guard")
-		return fusedCaseTag(tag, offset: member.fusedTagOffset)
+		return fusedCaseTag(payloadLayout.tagOfIndex(index), offset: member.fusedTagOffset)
 	end 'armDispatchTagOf'
 
 	// Does this tag route to THIS arm — i.e. does it fall in one of the intervals the arm just contributed?
@@ -59186,7 +59203,7 @@ export type Parser
 		end 'payloadBind'
 
 		try self.markEnumCovered(covered, index: lowIndex, layout: layout, patternTok: patternTok)
-		let tag = layout.tagOfIndex(lowIndex)
+		let tag = self.dispatchTagOfIndex(layout, index: lowIndex)
 		into.push(DispatchInterval.create(tag, hi: tag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
 	end 'collectEnumPatternAtomIntervals'
 
@@ -59598,7 +59615,7 @@ export type Parser
 			// they could not disagree today, but nothing made that a property rather than a coincidence.
 			let offset = layout.payloadSlotOffset(binding.slot)
 			let storage = payloadStorageOf(class)
-			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
+			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word(layout.wordTagOfIndex(binding.caseIndex)) if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
 			self.brandValue(loaded, brand: self.payloadPlaceBrand(binding.field, layout: layout, resolved: declared))
 
@@ -60221,23 +60238,23 @@ export type Parser
 	// chosen. Below `MinIntervalsForDispatch` intervals it is a linear compare chain; at or above it a
 	// balanced binary search over the sorted disjoint intervals. Every compare reads `subject` (loaded
 	// once, in `entry`, and left in a register across the whole tree); a value in NO interval reaches
-	// `missTarget` (the `default` body, or a `dead` block for an exhaustive enum). NO new IR op — internal
+	// `miss.targetBlockId` (the `default` body, or a `dead` block for an exhaustive enum). NO new IR op — internal
 	// nodes compare `subject < pivot` and leaves test their interval, all with the same `compare`/
 	// `condBranch` the chain used, so the backend and every later pass are untouched.
-	function emitMatchDispatch(func IrFunction, entryId BlockId, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws SourceParseError
+	function emitMatchDispatch(func IrFunction, entryId BlockId, subject ValueId, intervals DispatchIntervalArray, miss DispatchMiss, opTok Token) throws SourceParseError
 		var entry = try self.artifact.module.getBlockByIdIn(func, id: entryId) otherwise panic("emitMatchDispatch: the dispatch entry block {entryId} is not in its own function")
-		try self.emitDispatchRange(func, from: 0, to: intervals.count(), block: entry, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+		try self.emitDispatchRange(func, from: 0, to: intervals.count(), block: entry, subject: subject, intervals: intervals, miss: miss, opTok: opTok)
 	end 'emitMatchDispatch'
 
 	// The recursion. `[from, to)` is a contiguous slice of the sorted disjoint intervals. A short slice is
 	// a chain; a long one splits on the median interval's lower bound — every interval below the pivot lies
 	// in the left half and every one at or above it in the right (sorted + disjoint), so both halves are
 	// non-empty (the count is at least `MinIntervalsForDispatch`) and the recursion terminates.
-	function emitDispatchRange(func IrFunction, from ElementIndex, to ElementIndex, block IrBlock, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws SourceParseError
+	function emitDispatchRange(func IrFunction, from ElementIndex, to ElementIndex, block IrBlock, subject ValueId, intervals DispatchIntervalArray, miss DispatchMiss, opTok Token) throws SourceParseError
 		let count = to - from
 
 		if count < MinIntervalsForDispatch 'chain'
-			try self.emitDispatchChain(func, from: from, to: to, block: block, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+			try self.emitDispatchChain(func, from: from, to: to, block: block, subject: subject, intervals: intervals, miss: miss, opTok: opTok)
 			return
 		end 'chain'
 
@@ -60247,7 +60264,7 @@ export type Parser
 		let table = self.planDispatchTable(from, to: to, intervals: intervals)
 
 		if table.isTable 'dense'
-			self.emitDispatchTable(from, to: to, block: block, subject: subject, intervals: intervals, plan: table, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+			self.emitDispatchTable(from, to: to, block: block, subject: subject, intervals: intervals, plan: table, miss: miss, opTok: opTok)
 			return
 		end 'dense'
 
@@ -60265,8 +60282,8 @@ export type Parser
 		// carried-var phi (both are dominated by `entry`, where the pre-match values still hold), so the
 		// branch records no edge args.
 		self.emitCondBranch(block, cond: cond, thenId: lowerBlock.id, elseId: upperBlock.id, ifTok: opTok)
-		try self.emitDispatchRange(func, from: from, to: mid, block: lowerBlock, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
-		try self.emitDispatchRange(func, from: mid, to: to, block: upperBlock, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+		try self.emitDispatchRange(func, from: from, to: mid, block: lowerBlock, subject: subject, intervals: intervals, miss: miss, opTok: opTok)
+		try self.emitDispatchRange(func, from: mid, to: to, block: upperBlock, subject: subject, intervals: intervals, miss: miss, opTok: opTok)
 	end 'emitDispatchRange'
 
 	// ⭐ **DECIDE WHETHER A DENSE RUN IS WORTH A JUMP TABLE**, reporting the bias (its minimum) and the
@@ -60338,7 +60355,7 @@ export type Parser
 	// slots; holes are the default), record the phi edges for the distinct arm bodies and the default, then
 	// emit the `switch` terminator. The bias subtract is elided when the minimum is 0 (a zero-based enum or
 	// scalar match), so `match Color` over `red=0…` biases nothing.
-	function emitDispatchTable(from ElementIndex, to ElementIndex, block IrBlock, subject ValueId, intervals DispatchIntervalArray, plan DispatchTablePlan, missTarget BlockId, missArgs ValueIdArray, opTok Token)
+	function emitDispatchTable(from ElementIndex, to ElementIndex, block IrBlock, subject ValueId, intervals DispatchIntervalArray, plan DispatchTablePlan, miss DispatchMiss, opTok Token)
 		self.bodyState.currentBlock = block
 
 		var index = subject
@@ -60351,7 +60368,7 @@ export type Parser
 		// `or`-list simply fills several slots. `growFilled` from an empty array fills every one of `span`
 		// slots with the default.
 		var targets = BlockIdArray.create()
-		targets.growFilled(plan.span as ElementIndex, value: missTarget)
+		targets.growFilled(plan.span as ElementIndex, value: miss.targetBlockId)
 
 		for i in from upto to 'eachInterval'
 			let interval = try intervals.get(i) otherwise panic("emitDispatchTable: intervals.get OOB at {i}")
@@ -60369,11 +60386,11 @@ export type Parser
 
 		// The phi args each dispatch edge carries. An arm body is a phi target only when it is a fall-through
 		// target (`setupFallthroughTargetPhis` stamped its intervals' `edgeArgs`); the default carries
-		// `missArgs`. `recordBranchEdge` is a no-op for an empty arg list, so a phi-less table costs nothing
+		// `miss.edgeArgs`. `recordBranchEdge` is a no-op for an empty arg list, so a phi-less table costs nothing
 		// here. Recorded ONCE per distinct target — an or-arm or a split range reaches one body through
 		// several intervals, all carrying the SAME snapshot, so a second edge to it would double-apply the
 		// copy at SSA destruction.
-		self.recordBranchEdge(block, targetId: missTarget, argIds: missArgs)
+		self.recordBranchEdge(block, targetId: miss.targetBlockId, argIds: miss.edgeArgs)
 		var seen = BlockIdSet.create()
 
 		for i in from upto to 'eachEdge'
@@ -60385,7 +60402,7 @@ export type Parser
 			end 'firstEdge'
 		end 'eachEdge'
 
-		self.emitBodyTerminator(block, op: MaxonOp.switch(index, denseTargetBlockIds: targets, defaultBlockId: missTarget), range: SourceRange.ofToken(opTok))
+		self.emitBodyTerminator(block, op: MaxonOp.switch(index, denseTargetBlockIds: targets, defaultBlockId: miss.targetBlockId), range: SourceRange.ofToken(opTok))
 	end 'emitDispatchTable'
 
 	// The zero-based table index `subject − bias`, emitted as a RAW `binOp(sub)` that MINTS an `integer`
@@ -60404,17 +60421,18 @@ export type Parser
 	end 'emitBiasIndex'
 
 	// A leaf region: test each interval in turn, branching to its arm body on a hit and to the next test
-	// (or `missTarget` after the last) on a miss. `recordBranchEdge` is a no-op for an empty arg list, so
+	// (or `miss.targetBlockId` after the last) on a miss. When `miss.isUnreachable` the last interval
+	// is not tested: its arm is entered unconditionally. `recordBranchEdge` is a no-op for an empty arg list, so
 	// the internal chain edges (no phis) and a phi-less body/miss cost nothing.
-	function emitDispatchChain(func IrFunction, from ElementIndex, to ElementIndex, block IrBlock, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws SourceParseError
+	function emitDispatchChain(func IrFunction, from ElementIndex, to ElementIndex, block IrBlock, subject ValueId, intervals DispatchIntervalArray, miss DispatchMiss, opTok Token) throws SourceParseError
 		// A default-only planned match (`match x 'c' default gives … end`) collects NO intervals — every
 		// value is a miss — so the entry unconditionally branches to the default, with no compare. The
 		// tree recursion never reaches here empty (it splits only at count >= 4 into two non-empty halves),
 		// so this is the top-level empty plan alone, but handling it here keeps the terminator obligation in
 		// one place.
 		if from == to 'noIntervals'
-			self.recordBranchEdge(block, targetId: missTarget, argIds: missArgs)
-			self.emitBranch(block, targetId: missTarget)
+			self.recordBranchEdge(block, targetId: miss.targetBlockId, argIds: miss.edgeArgs)
+			self.emitBranch(block, targetId: miss.targetBlockId)
 			return
 		end 'noIntervals'
 
@@ -60422,12 +60440,19 @@ export type Parser
 
 		for i in from upto to 'each'
 			var interval = try intervals.get(i) otherwise panic("emitDispatchChain: intervals.get OOB at {i}")
+			let isLast = i == to - 1
+
+			if isLast and miss.isUnreachable 'lastTestIsImplied'
+				self.recordBranchEdge(current, targetId: interval.targetBlockId, argIds: interval.edgeArgs)
+				self.emitBranch(current, targetId: interval.targetBlockId)
+				return
+			end 'lastTestIsImplied'
+
 			self.bodyState.currentBlock = current
 			let cond = try self.emitIntervalHitTest(subject, lo: interval.lo, hi: interval.hi, opTok: opTok)
 
-			let isLast = i == to - 1
-			var elseTarget = missTarget
-			var elseArgs = missArgs
+			var elseTarget = miss.targetBlockId
+			var elseArgs = miss.edgeArgs
 
 			// ⚠ **THE CURSOR ADVANCES BY ID, NOT BY A SECOND NAME FOR `current`.** `var nextBlock = current`
 			// would MOVE the loop-carried block out of the loop (E2015); a `BlockId` is a scalar and carries
@@ -72422,7 +72447,7 @@ export type Parser
 
 		view class = try classes.get(0) otherwise panic("emitUnboxedUnionWordConstruct: classes.get(0) OOB on a case with one payload")
 		let stored = try self.storedPayloadAt(fill, index: 0, class: class, args: args, argsBareLocal: argsBareLocal, holder: PayloadHolder.word, caseTok: caseTok, range: range)
-		let word = self.emitUnboxedWord(stored, tag: layout.wordTagOfIndex(caseIndex), unionName: layout.name, range: range)
+		let word = self.emitMachineWordBinOp(stored, rhs: self.emitLiteral(layout.wordTagOfIndex(caseIndex), valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitOr, resultType: MaxonType.named(self.artifact.typeNames.intern(layout.name)), range: range)
 		self.trackOwnedTemp(word, exclusivity: OwnedHeapExclusivity.sole)
 		return word
 	end 'emitUnboxedUnionWordConstruct'
@@ -73218,39 +73243,30 @@ export type Parser
 		return self.emitIndirectLoad(MaxonType.integer, box: box, offset: UnionTagOffset, storageType: MaxonType.integer, range: range)
 	end 'emitUnionTagLoad'
 
-	function emitWordMask(word ValueId, mask FullRangeInt, resultType MaxonType, range SourceRange) returns ValueId
-		let maskLiteral = self.emitLiteral(mask, valueType: MaxonType.integer, range: range)
-		let result = self.mintValueOfType(resultType)
-		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(result, lhs: word, rhs: maskLiteral, op: MaxonBinOp.bitAnd), range: range)
-		return result
-	end 'emitWordMask'
-
-	function emitUnboxedTagOf(word ValueId, range SourceRange) returns ValueId
-		let raw = self.emitWordMask(word, mask: UnboxedTagMask, resultType: MaxonType.integer, range: range)
-		let one = self.emitLiteral(1, valueType: MaxonType.integer, range: range)
-		let index = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(index, lhs: raw, rhs: one, op: MaxonBinOp.sub), range: range)
-		return index
-	end 'emitUnboxedTagOf'
-
-	function emitUnboxedWord(payload ValueId, tag FullRangeInt, unionName ByteArray, range SourceRange) returns ValueId
-		let tagLiteral = self.emitLiteral(tag, valueType: MaxonType.integer, range: range)
-		let word = self.mintValue(ValueTypeTag.named, nameId: self.artifact.typeNames.intern(unionName))
-		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(word, lhs: payload, rhs: tagLiteral, op: MaxonBinOp.bitOr), range: range)
-		return word
-	end 'emitUnboxedWord'
-
 	function emitUnboxedPayloadFreeWord(layout EnumLayout, caseIndex CaseIndex, range SourceRange) returns ValueId
 		let word = self.emitEnumTagLiteral(layout.name, tag: layout.wordTagOfIndex(caseIndex), range: range)
 		self.markReadOnly(word, mark: ReadOnlyMark.imageRecord)
 		return word
 	end 'emitUnboxedPayloadFreeWord'
 
-	// ⭐⭐ **WHERE AN ENUM VALUE'S TAG LIVES — THE ONE ANSWER, read by the `match` DISPATCH and by
-	// `.ordinal`.** A SCALAR enum's value IS its tag (`parseEnumLiteral` emits the tag as the value),
-	// so the tag is the value and this emits nothing. A BOXED union's value is a heap POINTER, so its
-	// i64 tag is LOADED from offset 0 through `emitUnionTagLoad` above. A WORD union's value carries
-	// its tag in the low bits, so the tag is masked out and un-biased by `emitUnboxedTagOf`.
+	// A case's declaration index, read by `.ordinal` and the enum accessors: the dispatch key, less
+	// `UnboxedTagBase` for a word union (stored tags run from 1).
+	function emitEnumTagOf(value ValueId, layout EnumLayout, anchor Token, range SourceRange) returns ValueId throws SourceParseError
+		let key = try self.emitEnumDispatchKey(value, layout: layout, anchor: anchor, range: range)
+
+		match self.signatures.unionRepresentation(layout) 'representation'
+			word then return self.emitMachineWordBinOp(key, rhs: self.emitLiteral(UnboxedTagBase, valueType: MaxonType.integer, range: range), op: MaxonBinOp.sub, resultType: MaxonType.integer, range: range)
+			bareTag or
+			box then return key
+		end 'representation'
+	end 'emitEnumTagOf'
+
+	// ⭐⭐ **WHERE AN ENUM VALUE'S TAG LIVES — THE ONE ANSWER, read by the `match` DISPATCH and, through
+	// `emitEnumTagOf`, by `.ordinal`.** A SCALAR enum's value IS its tag (`parseEnumLiteral` emits the tag
+	// as the value), so the tag is the value and this emits nothing. A BOXED union's value is a heap
+	// POINTER, so its i64 tag is LOADED from offset 0 through `emitUnionTagLoad` above. A WORD union's
+	// value carries its stored tag (declaration index + `UnboxedTagBase`) in the low bits, so the key is
+	// `word & 7`.
 	//
 	// ⚠⚠ **IT IS ONE FUNCTION BECAUSE THE DECISION DRIFTS, NOT ONLY THE OFFSET — AND THE DRIFT IS MEASURED.**
 	// Both readers already shared `emitUnionTagLoad`, so they could never disagree about WHERE in the box a
@@ -73268,7 +73284,7 @@ export type Parser
 	//
 	// A caller that has not already established the value IS an enum keeps that guard at its own site — the
 	// `match` dispatch's `isEnumMatch`, which is a question about the SCRUTINEE and not about the layout.
-	function emitEnumTagOf(value ValueId, layout EnumLayout, anchor Token, range SourceRange) returns ValueId throws SourceParseError
+	function emitEnumDispatchKey(value ValueId, layout EnumLayout, anchor Token, range SourceRange) returns ValueId throws SourceParseError
 		// ⭐⭐ **THIS FILE REACHED INTO A VALUE OF `layout.name`, AND THIS IS THE ONE LINE THAT KNOWS IT** —
 		// `requireFieldAccessible`'s twin for enums and unions, recorded through the same one-writer channel and
 		// for the same reason. A `match` arm spells CASE names (`small`, `big(n)`), `.ordinal` spells a member,
@@ -73293,13 +73309,24 @@ export type Parser
 
 		match self.signatures.unionRepresentation(layout) 'representation'
 			bareTag then return value
-			word then return self.emitUnboxedTagOf(value, range: range)
+			word then return self.emitMachineWordBinOp(value, rhs: self.emitLiteral(UnboxedTagMask, valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitAnd, resultType: MaxonType.integer, range: range)
 			box then return self.emitUnionTagLoad(value, range: range)
 		end 'representation'
-	end 'emitEnumTagOf'
+	end 'emitEnumDispatchKey'
+
+	// The tag a dispatch plan holds for a case, which is what `emitEnumDispatchKey` yields for a value of
+	// that case: a word union's stored tag, never its declaration index, or the arm would be keyed off by
+	// `UnboxedTagBase`.
+	function dispatchTagOfIndex(layout EnumLayout, index CaseIndex) returns FullRangeInt
+		return match self.signatures.unionRepresentation(layout) 'representation'
+			word gives layout.wordTagOfIndex(index)
+			bareTag or
+			box gives layout.tagOfIndex(index)
+		end 'representation'
+	end 'dispatchTagOfIndex'
 
 	// ⭐⭐ **THE SAME QUESTION WHERE THERE IS NO VALUE TO ASK IT OF — a case named through its TYPE
-	// (`Preset.large`, `TestOp.mul`), whose tag is a COMPILE-TIME CONSTANT.** It sits beside `emitEnumTagOf`
+	// (`Preset.large`, `TestOp.mul`), whose tag is a COMPILE-TIME CONSTANT.** It sits beside `emitEnumDispatchKey`
 	// because it is the third answer to that function's one question, and the split between its two arms is
 	// exactly the split there: for an UNBOXED declaration a case's tag IS its value, so the enum-typed literal
 	// this mints serves both readers — the construct `Color.red` evaluates to and the tag an accessor selects
@@ -73327,8 +73354,8 @@ export type Parser
 		end 'representation'
 	end 'emitEnumCaseTagConstant'
 
-	// Load a payload field out of the box at `8 + slot*8`, or out of a word union by masking its tag
-	// off — the `emitFieldLoad` split, one op further. A SCALAR is minted at the field's DECLARED type
+	// Load a payload field out of the box at `8 + slot*8`, or out of a word union by subtracting the
+	// arm's stored tag from the word — the `emitFieldLoad` split, one op further. A SCALAR is minted at the field's DECLARED type
 	// (so a nested `match dir` sees a `Direction`, and the shift rule reads a ranged alias's low
 	// bound); a MANAGED payload is minted at its concrete storage type (`structRef`/`string`) so an
 	// extracted struct's field access (`b.mass`) resolves and its ownership is read off the tag; a
@@ -73354,7 +73381,7 @@ export type Parser
 	// signatures id `enumMatchFor` would misresolve.
 	function emitUnionPayloadLoad(box ValueId, field PayloadField, valueType MaxonType, source PayloadSource, range SourceRange) returns ValueId
 		let result = match source 'source'
-			word gives self.emitWordMask(box, mask: UnboxedPointerMask, resultType: valueType, range: range)
+			word(tag) gives self.emitMachineWordBinOp(box, rhs: self.emitLiteral(tag, valueType: MaxonType.integer, range: range), op: MaxonBinOp.sub, resultType: valueType, range: range)
 			slot(offset, storage) gives self.emitIndirectLoad(valueType, box: box, offset: offset, storageType: storage, range: range)
 		end 'source'
 
@@ -77784,6 +77811,7 @@ export type Parser
 		let count = try args.get(0) otherwise panic("parseManagedMemoryCreate: the two-int arg list returned fewer than two values")
 		let elementSize = try args.get(1) otherwise panic("parseManagedMemoryCreate: the two-int arg list returned fewer than two values")
 		let instance = try self.managedMemoryCreateInstance(typeTok, elementSize: elementSize, argStart: elementSizeStart)
+
 		// The program states a stride; a signed narrow instance is created with its stamp instead, so its
 		// record carries the signed-slot flag.
 		let signedNarrowInstance = self.signatures.arrayElementStamp(instance) as FullRangeInt != self.constOf(elementSize) and self.signatures.arrayElementSize(instance) as FullRangeInt == self.constOf(elementSize)
@@ -101616,8 +101644,9 @@ export type Parser
 	// ⭐⭐ **IT ASKS THREE INDEPENDENT QUESTIONS, IN THIS ORDER, AND THEY MUST NEVER BE FUSED INTO ONE.**
 	//
 	//   1. **WHERE IS THE TAG?** Not asked here at all — asked by each CALLER, through one of the two
-	//      functions that answer it: `emitEnumTagOf` for a value (which the `match` dispatch also asks, so
-	//      the accessor and the `match` agree about where a union keeps its tag by construction) or
+	//      functions that answer it: `emitEnumTagOf` for a value (which asks `emitEnumDispatchKey`, the
+	//      door the `match` dispatch also asks, so the accessor and the `match` agree about where a union
+	//      keeps its tag by construction) or
 	//      `emitEnumCaseTagConstant` for a case named through its type. The two sit together and neither
 	//      rule is spelled out anywhere else.
 	//   2. **IS THAT TAG THE ORDINAL, OR ONLY A KEY TO IT?** Where the tag column is `0,1,2,…` the ordinal

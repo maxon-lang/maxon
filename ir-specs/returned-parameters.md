@@ -1935,7 +1935,7 @@ func @main {
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __il_body#10:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#15
+    x64.jcc notEqual, matchnext
   matcharm#11:
     x64.movRegReg rcx, rbx
     x64.callDirect keepCells
@@ -1945,9 +1945,9 @@ func @main {
   critsplit#22:
     x64.movRegReg r8, rbx
     x64.jmp forstep
-  matchnext#15:
+  matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#16
+    x64.jcc notEqual, matcharm#13
   matcharm#12:
     x64.callDirect freshCells
     x64.movRegReg r14, r8
@@ -1956,9 +1956,6 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, r14
     x64.jmp forstep
-  matchnext#16:
-    x64.cmpRegImm32 rax, 2
-    x64.jcc notEqual, matchdead
   matcharm#13:
     x64.movRegReg rcx, rbx
     x64.callDirect keepCells
@@ -1975,8 +1972,6 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r13, rax
     x64.jcc less, each
-    x64.jmp forexit
-  matchdead:
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -2180,7 +2175,7 @@ func @main {
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __il_body#10:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#15
+    x64.jcc notEqual, matchnext
   matcharm#11:
     x64.movRegReg rcx, rbx
     x64.callDirect keepCells
@@ -2190,9 +2185,9 @@ func @main {
   critsplit#22:
     x64.movRegReg r8, rbx
     x64.jmp forstep
-  matchnext#15:
+  matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#16
+    x64.jcc notEqual, matcharm#13
   matcharm#12:
     x64.callDirect freshCells
     x64.movRegReg r14, r8
@@ -2201,9 +2196,6 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, r14
     x64.jmp forstep
-  matchnext#16:
-    x64.cmpRegImm32 rax, 2
-    x64.jcc notEqual, matchdead
   matcharm#13:
     x64.movRegReg rcx, rbx
     x64.callDirect keepCells
@@ -2220,8 +2212,6 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r13, rax
     x64.jcc less, each
-    x64.jmp forexit
-  matchdead:
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -2416,7 +2406,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
   __il_body#10:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#15
+    arm64.b.ne matchnext
   matcharm#11:
     arm64.movRegReg x0, x19
     arm64.bl keepCells
@@ -2426,9 +2416,9 @@ func @main {
   critsplit#22:
     arm64.movRegReg x0, x19
     arm64.b forstep
-  matchnext#15:
+  matchnext:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#16
+    arm64.b.ne matcharm#13
   matcharm#12:
     arm64.bl freshCells
     arm64.movRegReg x22, x0
@@ -2437,9 +2427,6 @@ func @main {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.b forstep
-  matchnext#16:
-    arm64.cmp x0, 2
-    arm64.b.ne matchdead
   matcharm#13:
     arm64.movRegReg x0, x19
     arm64.bl keepCells
@@ -2455,8 +2442,6 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x21, x0
     arm64.b.lt each
-    arm64.b forexit
-  matchdead:
   forexit:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
@@ -2652,7 +2637,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
   __il_body#10:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#15
+    arm64.b.ne matchnext
   matcharm#11:
     arm64.movRegReg x0, x19
     arm64.bl keepCells
@@ -2662,9 +2647,9 @@ func @main {
   critsplit#22:
     arm64.movRegReg x0, x19
     arm64.b forstep
-  matchnext#15:
+  matchnext:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#16
+    arm64.b.ne matcharm#13
   matcharm#12:
     arm64.bl freshCells
     arm64.movRegReg x22, x0
@@ -2673,9 +2658,6 @@ func @main {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.b forstep
-  matchnext#16:
-    arm64.cmp x0, 2
-    arm64.b.ne matchdead
   matcharm#13:
     arm64.movRegReg x0, x19
     arm64.bl keepCells
@@ -2691,8 +2673,6 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x21, x0
     arm64.b.lt each
-    arm64.b forexit
-  matchdead:
   forexit:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref

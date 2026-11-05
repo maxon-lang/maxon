@@ -212,19 +212,16 @@ func @main {
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __il_body#40:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#45
+    x64.jcc notEqual, matchnext
   matcharm#42:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#12
-  matchnext#45:
+  matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#46
+    x64.jcc notEqual, matcharm#43
   matcharm#41:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#12
-  matchnext#46:
-    x64.cmpRegImm32 rax, 2
-    x64.jcc notEqual, matchdead
   matcharm#43:
     x64.movRegImm32 rax, 0
   __il_cont#12:
@@ -293,7 +290,14 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
+  __im_slow:
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#19
+  critsplit#50:
+    x64.movRegReg rax, r8
+    x64.jmp __il_body#40
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_52]  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     x64.callDirect mrt_panic
@@ -305,14 +309,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow:
-    x64.movRegReg rdx, r8
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#19
-  critsplit#50:
-    x64.movRegReg rax, r8
-    x64.jmp __il_body#40
   tryerr#19:
     x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     x64.callDirect mrt_panic
@@ -470,19 +466,16 @@ func @main {
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __il_body#40:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#45
+    x64.jcc notEqual, matchnext
   matcharm#42:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#12
-  matchnext#45:
+  matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#46
+    x64.jcc notEqual, matcharm#43
   matcharm#41:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#12
-  matchnext#46:
-    x64.cmpRegImm32 rax, 2
-    x64.jcc notEqual, matchdead
   matcharm#43:
     x64.movRegImm32 rax, 0
   __il_cont#12:
@@ -551,7 +544,14 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
+  __im_slow:
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#19
+  critsplit#50:
+    x64.movRegReg rax, r8
+    x64.jmp __il_body#40
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_52]  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     x64.callDirect mrt_panic
@@ -563,14 +563,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow:
-    x64.movRegReg rdx, r8
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#19
-  critsplit#50:
-    x64.movRegReg rax, r8
-    x64.jmp __il_body#40
   tryerr#19:
     x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     x64.callDirect mrt_panic
@@ -728,19 +720,16 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
   __il_body#40:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#45
+    arm64.b.ne matchnext
   matcharm#42:
     arm64.movImm x0, 0
     arm64.b __il_cont#12
-  matchnext#45:
+  matchnext:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#46
+    arm64.b.ne matcharm#43
   matcharm#41:
     arm64.movImm x0, 1
     arm64.b __il_cont#12
-  matchnext#46:
-    arm64.cmp x0, 2
-    arm64.b.ne matchdead
   matcharm#43:
     arm64.movImm x0, 0
   __il_cont#12:
@@ -802,7 +791,11 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  matchdead:
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#19
+    arm64.b __il_body#40
   __rc_panic:
     arm64.leaRdata x0, __str_blob_52  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     arm64.bl mrt_panic
@@ -813,10 +806,6 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq __il_body#40
   tryerr#19:
     arm64.leaRdata x0, __str_blob_24  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     arm64.bl mrt_panic
@@ -976,19 +965,16 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
   __il_body#40:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#45
+    arm64.b.ne matchnext
   matcharm#42:
     arm64.movImm x0, 0
     arm64.b __il_cont#12
-  matchnext#45:
+  matchnext:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#46
+    arm64.b.ne matcharm#43
   matcharm#41:
     arm64.movImm x0, 1
     arm64.b __il_cont#12
-  matchnext#46:
-    arm64.cmp x0, 2
-    arm64.b.ne matchdead
   matcharm#43:
     arm64.movImm x0, 0
   __il_cont#12:
@@ -1050,7 +1036,11 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  matchdead:
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#19
+    arm64.b __il_body#40
   __rc_panic:
     arm64.leaRdata x0, __str_blob_52  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     arm64.bl mrt_panic
@@ -1061,10 +1051,6 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq __il_body#40
   tryerr#19:
     arm64.leaRdata x0, __str_blob_24  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     arm64.bl mrt_panic

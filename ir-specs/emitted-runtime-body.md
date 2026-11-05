@@ -3681,7 +3681,7 @@ func @main {
     arm64.bl urlDecimalWithin
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.ne matchnext
+    arm64.b.ne matcharm#352
   matcharm#350:
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.cmp x23, 0
@@ -3695,13 +3695,6 @@ func @main {
   exitterminal#351:
     arm64.movImm x24, 0
     arm64.b __il_cont#348
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.cset x2, ge
-    arm64.cmp x1, 2
-    arm64.cset x1, le
-    arm64.and x1, x2, x1
-    arm64.cbz x1, matchdead
   matcharm#352:
     arm64.bl __mm_decref
   exitterminal#353:
@@ -3822,7 +3815,6 @@ func @main {
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x19
     arm64.b ifcont#213
-  matchdead:
   critsplit#778:
     arm64.loadRegSlot x0, slot10
     arm64.loadRegSlot x1, slot17
@@ -7197,7 +7189,7 @@ func @main {
     arm64.bl urlDecimalWithin
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.ne matchnext
+    arm64.b.ne matcharm#352
   matcharm#350:
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.cmp x23, 0
@@ -7211,13 +7203,6 @@ func @main {
   exitterminal#351:
     arm64.movImm x24, 0
     arm64.b __il_cont#348
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.cset x2, ge
-    arm64.cmp x1, 2
-    arm64.cset x1, le
-    arm64.and x1, x2, x1
-    arm64.cbz x1, matchdead
   matcharm#352:
     arm64.bl __mm_decref
   exitterminal#353:
@@ -7338,7 +7323,6 @@ func @main {
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x19
     arm64.b ifcont#213
-  matchdead:
   critsplit#778:
     arm64.loadRegSlot x0, slot10
     arm64.loadRegSlot x1, slot17

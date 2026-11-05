@@ -183,7 +183,7 @@ payload = word & -8
 - **Tag 0 is the empty word.** A zeroed slot (a fresh array element, an unwritten field) is a union that holds nothing: the destructor, retain, clone and share walk read it as vacant and touch nothing. Stored tags run from 1, so the three bits hold seven cases.
 - **Construction** allocates only the payload; the word owns the reference the payload arrived with.
 - **Drop and retain** go through `__destruct_<U>(word)` and `__uretain_<U>(word)`, synthesized per union. Both switch on the tag, mask the pointer out and skip a null payload.
-- **`match`** decodes the tag with `(word & 7) - 1` and the payload with `word & -8`. A payload binding is a hold when the arm cannot write it or displace its source (the compiler lowers the hold to a reference only where an operation in its window may release the payload), and a retained reference when it can.
+- **`match`** dispatches on the stored tag, `word & 7`. An arm that binds a payload covers exactly one case, so it takes the payload as `word - tag` with that case's tag. `.ordinal` answers the declaration index, `(word & 7) - 1`. A payload binding is a hold when the arm cannot write it or displace its source (the compiler lowers the hold to a reference only where an operation in its window may release the payload), and a retained reference when it can.
 - **Assigning a payload binding** builds a new word, `payload | tag`, and stores it where the union lives: a local `var`'s variable, the field or element slot that held it, or a `mutable` parameter's argument. The displaced payload is released. This is why the assignment must reach its union ([Mutable Match Bindings](LANGUAGE_REFERENCE.md#mutable-match-bindings)).
 
 ## Buffers (`__ManagedMemory`)

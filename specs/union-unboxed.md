@@ -1011,3 +1011,167 @@ end 'main'
 ```exitcode
 5
 ```
+
+<!-- test: every-stored-tag-binds-its-own-payload-through-both-dispatch-shapes -->
+`Wide` fills all seven stored tags, so its seven-interval `match` dispatches through a search or a table, and the payload cases at stored tags three to six bind a struct, a `ByteArray`, a `String` and a struct. `Trio` has three intervals and dispatches through a compare chain. The values are built out of declaration order, so a binding that read the wrong tag's payload would hand the arm a misaligned pointer.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export let x as Integer
+	export let y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+union Wide
+	empty
+	text(value String)
+	point(at Point)
+	bytes(data ByteArray)
+	label(value String)
+	spot(at Point)
+	blob(data ByteArray)
+end 'Wide'
+
+union Trio
+	first(value String)
+	second(at Point)
+	third(data ByteArray)
+end 'Trio'
+
+function bytesOf(count Integer) returns ByteArray
+	var data = ByteArray.create()
+	data.resize(count as ElementIndex)
+
+	return data
+end 'bytesOf'
+
+function weighWide(w Wide) returns Integer
+	return match w 'wide'
+		empty gives 0
+		text(value) gives value.byteLength() as Integer
+		point(at) gives at.x + at.y
+		bytes(data) gives data.count() as Integer
+		label(value) gives value.byteLength() as Integer + 100
+		spot(at) gives at.x * at.y
+		blob(data) gives data.count() as Integer + 200
+	end 'wide'
+end 'weighWide'
+
+function weighTrio(t Trio) returns Integer
+	return match t 'trio'
+		first(value) gives value.byteLength() as Integer
+		second(at) gives at.x * 10 + at.y
+		third(data) gives data.count() as Integer
+	end 'trio'
+end 'weighTrio'
+
+function main() returns ExitCode
+	let spot = Wide.spot(Point.create(7, y: 8))
+	let blob = Wide.blob(bytesOf(11))
+	let text = Wide.text("ab{1}")
+	let empty = Wide.empty
+	let label = Wide.label("hello{2}")
+	let point = Wide.point(Point.create(4, y: 5))
+	let bytes = Wide.bytes(bytesOf(6))
+
+	print("{weighWide(spot)} {weighWide(blob)} {weighWide(text)} {weighWide(empty)} {weighWide(label)} {weighWide(point)} {weighWide(bytes)}\n")
+
+	let third = Trio.third(bytesOf(4))
+	let first = Trio.first("xy{3}")
+	let second = Trio.second(Point.create(2, y: 3))
+
+	print("{weighTrio(third)} {weighTrio(first)} {weighTrio(second)}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+56 211 3 0 106 9 6
+4 3 23
+```
+```exitcode
+0
+```
+
+<!-- test: a-default-throws-over-a-word-union-still-tests-its-last-listed-case -->
+A `default throws` leaves the miss reachable, so the match keeps the test of its last listed case: `third`, which no arm names, reaches the default and throws instead of running `second`'s arm on its payload.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export let x as Integer
+	export let y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+union Trio
+	first(value String)
+	second(at Point)
+	third(data ByteArray)
+end 'Trio'
+
+enum Unmatched
+	unhandled
+end 'Unmatched'
+
+function weigh(t Trio) returns Integer throws Unmatched
+	return match t 'trio'
+		first(value) gives value.byteLength() as Integer
+		second(at) gives at.x * 10 + at.y
+		default throws Unmatched.unhandled
+	end 'trio'
+end 'weigh'
+
+function main() returns ExitCode
+	let a = try weigh(Trio.first("xy{3}")) otherwise -1
+	let b = try weigh(Trio.second(Point.create(2, y: 3))) otherwise -1
+	let c = try weigh(Trio.third(ByteArray.create())) otherwise -1
+
+	print("{a} {b} {c}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+3 23 -1
+```
+```exitcode
+0
+```
+
+<!-- test: an-exhaustive-plain-enum-match-names-every-case-once -->
+The twin of the word-union chain over a plain `enum`: the last case's arm is reached without a test of its own, and each of the three values still reaches its own arm.
+```maxon
+enum Level
+	low
+	mid
+	high
+end 'Level'
+
+function rank(level Level) returns ExitCode
+	return match level 'level'
+		low gives 1
+		mid gives 2
+		high gives 3
+	end 'level'
+end 'rank'
+
+function main() returns ExitCode
+	print("{rank(Level.high)} {rank(Level.low)} {rank(Level.mid)}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+3 1 2
+```
+```exitcode
+0
+```

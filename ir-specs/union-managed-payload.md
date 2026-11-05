@@ -14,7 +14,7 @@ The cases of `specs/union-managed-payload.md` whose subject is the emitted code.
 <!-- test: a-read-only-payload-bound-for-one-call-costs-no-count -->
 `Reader.stampInto` matches a union held in a `let` field and binds each case's `ByteArray` payload for one call that
 writes a byte of another array. Nothing the call can reach releases the box, the reader or the payload, so the
-bindings are borrowed: in the pin, `matcharm#19` and `matcharm#20` each load the payload and call `stamp`, with no
+bindings are borrowed: in the pin, `matcharm#15` and `matcharm#16` each take the payload out of the word and call `stamp`, with no
 `__managed_incref`, `__managed_retain` or `__managed_decref` around the call. The next case is the same match over a
 callee that can release its owner, and keeps both.
 ```maxon
@@ -180,21 +180,15 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
-    x64.leaRegRegImm32 rcx, rcx, -1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, matchnext
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matcharm#16
   matcharm#15:
-    x64.movRegReg rcx, rax
-    x64.andRegImm32 rcx, rax, -8
+    x64.leaRegRegImm32 rcx, rax, -1
     x64.movRegReg rdx, r12
     x64.callDirect stamp
     x64.jmp __il_cont#10
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchdead
   matcharm#16:
-    x64.movRegReg rcx, rax
-    x64.andRegImm32 rcx, rax, -8
+    x64.leaRegRegImm32 rcx, rax, -2
     x64.movRegReg rdx, r12
     x64.callDirect stamp
   __il_cont#10:
@@ -229,7 +223,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
   __im_slow:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
@@ -363,21 +356,15 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
-    x64.leaRegRegImm32 rcx, rcx, -1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, matchnext
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matcharm#16
   matcharm#15:
-    x64.movRegReg rcx, rax
-    x64.andRegImm32 rcx, rax, -8
+    x64.leaRegRegImm32 rcx, rax, -1
     x64.movRegReg rdx, r12
     x64.callDirect stamp
     x64.jmp __il_cont#10
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchdead
   matcharm#16:
-    x64.movRegReg rcx, rax
-    x64.andRegImm32 rcx, rax, -8
+    x64.leaRegRegImm32 rcx, rax, -2
     x64.movRegReg rdx, r12
     x64.callDirect stamp
   __il_cont#10:
@@ -412,7 +399,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
   __im_slow:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
@@ -537,19 +523,15 @@ func @main {
   __il_body#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.and x1, x0, 7
-    arm64.sub x1, x1, 1
-    arm64.cmp x1, 0
-    arm64.b.ne matchnext
+    arm64.cmp x1, 1
+    arm64.b.ne matcharm#16
   matcharm#15:
-    arm64.and x0, x0, -8
+    arm64.sub x0, x0, 1
     arm64.movRegReg x1, x20
     arm64.bl stamp
     arm64.b __il_cont#10
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.b.ne matchdead
   matcharm#16:
-    arm64.and x0, x0, -8
+    arm64.sub x0, x0, 2
     arm64.movRegReg x1, x20
     arm64.bl stamp
   __il_cont#10:
@@ -583,7 +565,6 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  matchdead:
   __im_slow:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
@@ -709,19 +690,15 @@ func @main {
   __il_body#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.and x1, x0, 7
-    arm64.sub x1, x1, 1
-    arm64.cmp x1, 0
-    arm64.b.ne matchnext
+    arm64.cmp x1, 1
+    arm64.b.ne matcharm#16
   matcharm#15:
-    arm64.and x0, x0, -8
+    arm64.sub x0, x0, 1
     arm64.movRegReg x1, x20
     arm64.bl stamp
     arm64.b __il_cont#10
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.b.ne matchdead
   matcharm#16:
-    arm64.and x0, x0, -8
+    arm64.sub x0, x0, 2
     arm64.movRegReg x1, x20
     arm64.bl stamp
   __il_cont#10:
@@ -755,7 +732,6 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  matchdead:
   __im_slow:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
@@ -884,12 +860,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
-    x64.leaRegRegImm32 rcx, rcx, -1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, matchnext
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matcharm#8
   matcharm#7:
-    x64.movRegReg r12, rax
-    x64.andRegImm32 r12, rax, -8
+    x64.leaRegRegImm32 r12, rax, -1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_retain
     x64.movRegReg r14, r8
@@ -909,9 +883,6 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
     x64.jmp __il_cont#5
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchdead
   matcharm#8:
     x64.movRegImm32 r12, 0
   __il_cont#5:
@@ -935,7 +906,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -1023,12 +993,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
-    x64.leaRegRegImm32 rcx, rcx, -1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, matchnext
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matcharm#8
   matcharm#7:
-    x64.movRegReg r12, rax
-    x64.andRegImm32 r12, rax, -8
+    x64.leaRegRegImm32 r12, rax, -1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_retain
     x64.movRegReg r14, r8
@@ -1048,9 +1016,6 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
     x64.jmp __il_cont#5
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchdead
   matcharm#8:
     x64.movRegImm32 r12, 0
   __il_cont#5:
@@ -1073,7 +1038,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -1153,11 +1117,10 @@ func @main {
   __il_body#6:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.and x1, x0, 7
-    arm64.sub x1, x1, 1
-    arm64.cmp x1, 0
-    arm64.b.ne matchnext
+    arm64.cmp x1, 1
+    arm64.b.ne matcharm#8
   matcharm#7:
-    arm64.and x20, x0, -8
+    arm64.sub x20, x0, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_retain
     arm64.movRegReg x22, x0
@@ -1178,9 +1141,6 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.b __il_cont#5
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.b.ne matchdead
   matcharm#8:
     arm64.movImm x20, 0
   __il_cont#5:
@@ -1202,7 +1162,6 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  matchdead:
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -1284,11 +1243,10 @@ func @main {
   __il_body#6:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.and x1, x0, 7
-    arm64.sub x1, x1, 1
-    arm64.cmp x1, 0
-    arm64.b.ne matchnext
+    arm64.cmp x1, 1
+    arm64.b.ne matcharm#8
   matcharm#7:
-    arm64.and x20, x0, -8
+    arm64.sub x20, x0, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_retain
     arm64.movRegReg x22, x0
@@ -1309,9 +1267,6 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.b __il_cont#5
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.b.ne matchdead
   matcharm#8:
     arm64.movImm x20, 0
   __il_cont#5:
@@ -1333,7 +1288,6 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  matchdead:
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -1438,12 +1392,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
-    x64.leaRegRegImm32 rcx, rcx, -1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, matchnext
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matcharm#12
   matcharm#11:
-    x64.movRegReg r12, rax
-    x64.andRegImm32 r12, rax, -8
+    x64.leaRegRegImm32 r12, rax, -1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_retain
     x64.movRegReg r14, r8
@@ -1460,9 +1412,6 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
     x64.jmp __il_cont#9
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchdead
   matcharm#12:
     x64.movRegImm32 r12, 0
   __il_cont#9:
@@ -1488,7 +1437,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-overwrites-the-field-that-holds-it.test:33: Range check failed: value outside typealias 'ExitCod"...
     x64.callDirect mrt_panic
@@ -1548,12 +1496,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
-    x64.leaRegRegImm32 rcx, rcx, -1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, matchnext
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matcharm#12
   matcharm#11:
-    x64.movRegReg r12, rax
-    x64.andRegImm32 r12, rax, -8
+    x64.leaRegRegImm32 r12, rax, -1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_retain
     x64.movRegReg r14, r8
@@ -1570,9 +1516,6 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
     x64.jmp __il_cont#9
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchdead
   matcharm#12:
     x64.movRegImm32 r12, 0
   __il_cont#9:
@@ -1597,7 +1540,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-overwrites-the-field-that-holds-it.test:33: Range check failed: value outside typealias 'ExitCod"...
     x64.callDirect mrt_panic
@@ -1652,11 +1594,10 @@ func @main {
   __il_body#10:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.and x1, x0, 7
-    arm64.sub x1, x1, 1
-    arm64.cmp x1, 0
-    arm64.b.ne matchnext
+    arm64.cmp x1, 1
+    arm64.b.ne matcharm#12
   matcharm#11:
-    arm64.and x20, x0, -8
+    arm64.sub x20, x0, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_retain
     arm64.movRegReg x22, x0
@@ -1673,9 +1614,6 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.b __il_cont#9
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.b.ne matchdead
   matcharm#12:
     arm64.movImm x20, 0
   __il_cont#9:
@@ -1700,7 +1638,6 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  matchdead:
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-overwrites-the-field-that-holds-it.test:33: Range check failed: value outside typealias 'ExitCod"...
     arm64.bl mrt_panic
@@ -1758,11 +1695,10 @@ func @main {
   __il_body#10:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.and x1, x0, 7
-    arm64.sub x1, x1, 1
-    arm64.cmp x1, 0
-    arm64.b.ne matchnext
+    arm64.cmp x1, 1
+    arm64.b.ne matcharm#12
   matcharm#11:
-    arm64.and x20, x0, -8
+    arm64.sub x20, x0, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_retain
     arm64.movRegReg x22, x0
@@ -1779,9 +1715,6 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.b __il_cont#9
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.b.ne matchdead
   matcharm#12:
     arm64.movImm x20, 0
   __il_cont#9:
@@ -1806,7 +1739,6 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  matchdead:
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-overwrites-the-field-that-holds-it.test:33: Range check failed: value outside typealias 'ExitCod"...
     arm64.bl mrt_panic
