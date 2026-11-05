@@ -672,8 +672,8 @@ type BuildJob
 		return Self{inputPaths: inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines}
 	end 'create'
 
-	function recordRequestFor(output FilePath) returns BuildRecordRequest
-		return BuildRecordRequest.create(output, target: self.target, inputPaths: self.inputPaths, debugInfo: self.debugInfo, coverage: self.args.coverage, debugStream: self.args.debugStream, asyncTrace: self.args.asyncTrace, poisonFreed: self.args.poisonFreed, productVersion: self.productVersion, defines: self.defines)
+	function recordRequestFor(output FilePath, sourceOrder SourceOrder) returns BuildRecordRequest
+		return BuildRecordRequest.create(output, target: self.target, inputPaths: self.inputPaths, debugInfo: self.debugInfo, coverage: self.args.coverage, debugStream: self.args.debugStream, asyncTrace: self.args.asyncTrace, poisonFreed: self.args.poisonFreed, sourceOrder: sourceOrder, productVersion: self.productVersion, defines: self.defines)
 	end 'recordRequestFor'
 
 	function firstInputPath() returns FilePath
@@ -716,7 +716,7 @@ function buildUnlessUpToDate(job BuildJob, session CompileSession) returns Build
 		return compileWithoutRecord(job, output: output, identity: identity, reason: "the output is the running compiler", session: session)
 	end 'rebuildsTheCompiler'
 
-	match buildRecordOf(job.recordRequestFor(identity)) 'recordability'
+	match buildRecordOf(job.recordRequestFor(identity, sourceOrder: session.sourceOrder)) 'recordability'
 		unrecordable(why) then return compileWithoutRecord(job, output: output, identity: identity, reason: "{NoBuildRecordReason}: {why}", session: session)
 		recordable(record) then return buildKeepingRecord(job, record: record, output: output, session: session)
 	end 'recordability'

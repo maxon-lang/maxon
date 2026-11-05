@@ -3110,6 +3110,27 @@ end 'InnerAliasRoster'
 
 let noInnerAliases = InnerAliasRoster.unwritten
 
+union ScannedAliasNames
+	unwritten
+	entries(names NameRoster)
+
+	function declared() returns NameRoster
+		return match self 'state'
+			unwritten gives NameRoster.create()
+			entries(names) gives names
+		end 'state'
+	end 'declared'
+
+	function holds(name ByteArray) returns bool
+		return match self 'state'
+			unwritten gives false
+			entries(names) gives names.contains(name)
+		end 'state'
+	end 'holds'
+end 'ScannedAliasNames'
+
+let noScannedAliasNames = ScannedAliasNames.unwritten
+
 // The ranged typealias each value's declared type NAMES - the source half of E3010's "is this cast
 // unneeded?" and of every range guard's death test.
 union ValueDeclaredAliasTable
@@ -19565,7 +19586,11 @@ export type Parser
 	// `enclosingInnerAliases` leaves out. Read only by the real parse's redeclaration check.
 	var declaredNestedAliases as InnerAliasRoster
 
-	var bodyFunctionAliasMembers as NameRoster
+	var scannedPerInstanceAliases as ScannedAliasNames
+
+	var scannedFunctionAliases as ScannedAliasNames
+
+	var bodyAliasesScanned as bool
 
 	// ⭐⭐ **THE GENERIC-INSTANCE TYPEALIASES OF THE `interface` CURRENTLY BEING READ** —
 	// `typealias ElementArray = Array with Element` inside `interface Holder uses Element`. It is the RHS,
@@ -20132,7 +20157,9 @@ export type Parser
 			sentLeg: SentLegSlot.none,
 			enclosingInnerAliases: noInnerAliases,
 			declaredNestedAliases: noInnerAliases,
-			bodyFunctionAliasMembers: NameRoster.create(),
+			scannedPerInstanceAliases: noScannedAliasNames,
+			scannedFunctionAliases: noScannedAliasNames,
+			bodyAliasesScanned: false,
 			interfaceAliasScratch: anchors.interfaceAliases,
 			innerAliasesFromIndex: false,
 			filedTupleNames: noFiledTupleNames,
@@ -25067,7 +25094,7 @@ export type Parser
 		let visibility = self.visibilityBefore(self.pos)
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enterTypeScope(nameTok.value, isEnum: false)
-		self.openBodyFunctionAliasScope()
+		self.scanBodyNestedAliases()
 
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.job.path)
 		layout.declLine = nameTok.line
@@ -25537,10 +25564,12 @@ export type Parser
 		self.pos = site.tokenPos
 		view header = try self.readExtensionHeader() otherwise return
 
-		var members = NameRoster.create()
-		var functionMembers = NameRoster.create()
-		self.collectNestedAliasMembersInBody(members, functionInto: functionMembers)
+		self.scanBodyNestedAliases()
 		let siteIsTheLibrarys = index.declaredByTheCorpus(self.job.path)
+
+		var members = self.scannedPerInstanceAliases.declared()
+		var functionMembers = self.scannedFunctionAliases.declared()
+		self.clearBodyAliasScan()
 
 		if members.isEmpty() and functionMembers.isEmpty() 'declaresNone'
 			return
@@ -25630,6 +25659,8 @@ export type Parser
 		// Where each conformer's pass restarts — read ONCE, exactly as `parseExtensionDeclaration` does it, so
 		// the header is not re-parsed per conformer and the two passes agree about where a body begins.
 		let bodyStart = self.pos
+		self.scanBodyNestedAliases()
+		var functionAliasesOfTheBody = self.scannedFunctionAliases
 
 		// The whole `where` clause, rendered ONCE per declaration rather than per withheld method: it is a
 		// property of the extension, and every skip this fold files quotes the same sentence.
@@ -25638,6 +25669,7 @@ export type Parser
 		for conformer in extensionTargetConformers(header.target) 'eachConformer'
 			self.pos = bodyStart
 			self.enterTypeScope(conformer, isEnum: false)
+			self.scannedFunctionAliases = functionAliasesOfTheBody
 			self.openExtensionBodyScope(header, conformer: conformer, index: index)
 
 			// ⭐⭐ **THE CONFORMANCE THIS EXTENSION DECLARES IS FILED WHOLE-PROGRAM HERE, *BEFORE* THE VERDICT,
@@ -25796,6 +25828,7 @@ export type Parser
 			self.closeTypeParamScope()
 		end 'eachConformer'
 
+		self.clearBodyAliasScan()
 		self.publishPendingBareAliases(functionAliasOut)
 
 		// Folded through `ProgramSignatures.foldFile` — the SAME door a file's own declarations go through, so
@@ -26268,7 +26301,7 @@ export type Parser
 		self.enclosingTypeParams = self.emptyTypeParams
 		self.enclosingInnerAliases = noInnerAliases
 		self.declaredNestedAliases = noInnerAliases
-		self.bodyFunctionAliasMembers = self.emptyTypeParams
+		self.clearBodyAliasScan()
 		self.innerAliasesFromIndex = false
 		self.enclosingWhereConstraints = WhereConstraintArray.create()
 		self.enclosingExtensionConstraints = WhereConstraintArray.create()
@@ -26410,7 +26443,7 @@ export type Parser
 		// nothing, exactly as `emptyTypeParams` restores.
 		self.enclosingInnerAliases = noInnerAliases
 		self.declaredNestedAliases = noInnerAliases
-		self.bodyFunctionAliasMembers = self.emptyTypeParams
+		self.clearBodyAliasScan()
 
 		// Restored in lockstep for the same reason, one layer up: a drained default's index-scoped answer must
 		// not survive into the next declaration, where the set above is the only truth again.
@@ -28397,14 +28430,19 @@ export type Parser
 			return
 		end 'bindsNothingToResolve'
 
-		let resume = self.pos
-		var members = NameRoster.create()
-		self.collectNestedAliasMembersInBody(members, functionInto: NameRoster.create())
-		self.pos = resume
+		let scannedByTheSweep = self.bodyAliasesScanned
 
-		for member in members 'eachMember'
+		if not scannedByTheSweep 'notYetScanned'
+			self.scanBodyNestedAliases()
+		end 'notYetScanned'
+
+		for member in self.scannedPerInstanceAliases.declared() 'eachMember'
 			self.recordInnerAliasName(member)
 		end 'eachMember'
+
+		if not scannedByTheSweep 'scanIsOnlyForTheClause'
+			self.clearBodyAliasScan()
+		end 'scanIsOnlyForTheClause'
 	end 'openConformanceClauseAliasScope'
 
 	export function methodKeysOfAnUndeclaredExtension(site ExtensionDeclSite, into NameRoster)
@@ -28456,7 +28494,7 @@ export type Parser
 	// file-scope name written inside a body and never enters the per-instance scope (`readNestedTypeAlias`'s
 	// own arm says why). The test is the one token `readTypeAliasDeclaration` discriminates the form on, asked
 	// of the same position.
-	function collectNestedAliasMembersInBody(into NameRoster, functionInto NameRoster)
+	function collectNestedAliasMembersInBody()
 		var depth = 1 as BlockDepth
 
 		while not self.isEof() 'walk'
@@ -28468,9 +28506,11 @@ export type Parser
 
 			if let member = try self.nestedAliasNameAt(self.pos) 'aNestedAlias'
 				if depth == 1 and not self.nestedAliasRhsBeginsWith(self.pos, kind: TokenKind.function) 'perInstanceNestedAlias'
-					into.push(member)
+					var perInstance = self.scannedPerInstanceAliasesForWrite()
+					perInstance.push(member)
 				end 'perInstanceNestedAlias' else if depth == 1 'aFunctionNestedAlias'
-					functionInto.push(member)
+					var functionForm = self.scannedFunctionAliasesForWrite()
+					functionForm.push(member)
 				end 'aFunctionNestedAlias'
 			end 'aNestedAlias'
 
@@ -28483,6 +28523,42 @@ export type Parser
 			end 'closesTheDeclaration'
 		end 'walk'
 	end 'collectNestedAliasMembersInBody'
+
+	function scanBodyNestedAliases()
+		let resume = self.pos
+		self.clearBodyAliasScan()
+		self.collectNestedAliasMembersInBody()
+		self.pos = resume
+		self.bodyAliasesScanned = true
+	end 'scanBodyNestedAliases'
+
+	function clearBodyAliasScan()
+		self.scannedPerInstanceAliases = noScannedAliasNames
+		self.scannedFunctionAliases = noScannedAliasNames
+		self.bodyAliasesScanned = false
+	end 'clearBodyAliasScan'
+
+	function scannedPerInstanceAliasesForWrite() returns NameRoster
+		match self.scannedPerInstanceAliases 'state'
+			unwritten then break
+			entries(names) then return names
+		end 'state'
+
+		let fresh = NameRoster.create()
+		self.scannedPerInstanceAliases = ScannedAliasNames.entries(fresh)
+		return fresh
+	end 'scannedPerInstanceAliasesForWrite'
+
+	function scannedFunctionAliasesForWrite() returns NameRoster
+		match self.scannedFunctionAliases 'state'
+			unwritten then break
+			entries(names) then return names
+		end 'state'
+
+		let fresh = NameRoster.create()
+		self.scannedFunctionAliases = ScannedAliasNames.entries(fresh)
+		return fresh
+	end 'scannedFunctionAliasesForWrite'
 
 	// Does the nested `typealias` declaration starting at `index` — one `nestedAliasNameAt` has already
 	// recognized — have a right-hand side beginning with `kind`? A PEEK, walking the same header shape that
@@ -28530,14 +28606,6 @@ export type Parser
 
 		return false
 	end 'implementsClauseBindsAnything'
-
-	function openBodyFunctionAliasScope()
-		let resume = self.pos
-		var functionMembers = NameRoster.create()
-		self.collectNestedAliasMembersInBody(NameRoster.create(), functionInto: functionMembers)
-		self.pos = resume
-		self.bodyFunctionAliasMembers = functionMembers
-	end 'openBodyFunctionAliasScope'
 
 	// Put the shared empty set back after the clause — see the door above for why the pre-scanned names are
 	// deliberately NOT left in scope for the body.
@@ -36011,7 +36079,7 @@ export type Parser
 		// **E3009 `Cannot cast from int to function`** instead of the E3063 that names both candidates. The
 		// question is "could this reference mean more than one declaration", which is prior to what any one
 		// of them denotes.
-		if self.bodyFunctionAliasMembers.contains(name) 'sweptBodyFunctionAlias'
+		if self.scannedFunctionAliases.holds(name) 'sweptBodyFunctionAlias'
 			return MaxonType.named(self.artifact.typeNames.intern(self.innerAliasKey(name)))
 		end 'sweptBodyFunctionAlias'
 

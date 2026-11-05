@@ -3526,6 +3526,244 @@ end 'main'
 18 6
 ```
 
+<!-- test: an-extension-default-names-the-alias-of-the-extension-declared-before-another -->
+Two types each extended with a `Transform` of their own, the one that spells `Count` first and the one that spells `Level` last. Each default fills its own extension's alias.
+```maxon
+typealias Level = int(0 to 125)
+
+function triple(x Count) returns Count
+	return x * 3
+end 'triple'
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Plain uses U
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Plain'
+
+extension Plain
+	typealias Transform = function(Count) returns Count
+
+	function twice(n Count, f Transform = triple) returns Count
+		return f(f(n))
+	end 'twice'
+end 'Plain'
+
+type Leveled uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Leveled'
+
+extension Leveled
+	typealias Transform = function(Level) returns Level
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Leveled'
+
+typealias LevelLeveled = Leveled with Level
+typealias LevelPlain = Plain with Level
+
+function main() returns ExitCode
+	let l = LevelLeveled.create(3)
+	let p = LevelPlain.create(3)
+	print("{p.twice(2)} {p.twice(2, f: function(x) gives x + 1)} {l.run(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18 4 6
+```
+
+<!-- test: an-extension-default-names-the-alias-of-the-extension-declared-after-another -->
+The same two extensions with the order swapped, so the one that spells `Count` is declared last.
+```maxon
+typealias Level = int(0 to 125)
+
+function triple(x Count) returns Count
+	return x * 3
+end 'triple'
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Plain uses U
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Plain'
+
+type Leveled uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Leveled'
+
+extension Leveled
+	typealias Transform = function(Level) returns Level
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Leveled'
+
+extension Plain
+	typealias Transform = function(Count) returns Count
+
+	function twice(n Count, f Transform = triple) returns Count
+		return f(f(n))
+	end 'twice'
+end 'Plain'
+
+typealias LevelLeveled = Leveled with Level
+typealias LevelPlain = Plain with Level
+
+function main() returns ExitCode
+	let l = LevelLeveled.create(3)
+	let p = LevelPlain.create(3)
+	print("{p.twice(2)} {p.twice(2, f: function(x) gives x + 1)} {l.run(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18 4 6
+```
+
+<!-- test: an-alias-over-the-type-parameter-types-a-field-and-a-parameter-beside-another-types -->
+An alias over the type parameter, a field typed with it and a parameter typed with it, in two generic types that name the member `Step`.
+```maxon
+typealias Level = int(0 to 125)
+
+type Pipe uses T
+	typealias Step = function(T) returns T
+	var step as Step
+
+	static function create(step Step) returns Self
+		return Self{step: step}
+	end 'create'
+
+	function through(x T) returns T
+		let f = self.step
+		return f(x)
+	end 'through'
+
+	function chain(x T, g Step) returns T
+		let f = self.step
+		return g(f(x))
+	end 'chain'
+end 'Pipe'
+
+type Gate uses U
+	typealias Step = function(U) returns U
+	var step as Step
+
+	static function create(step Step) returns Self
+		return Self{step: step}
+	end 'create'
+
+	function through(x U) returns U
+		let f = self.step
+		return f(x)
+	end 'through'
+end 'Gate'
+
+typealias CountPipe = Pipe with Count
+typealias LevelGate = Gate with Level
+
+function main() returns ExitCode
+	let p = CountPipe.create(function(x Count) gives x * 3)
+	let g = LevelGate.create(function(x Level) gives x + 1)
+	print("{p.through(2)} {p.chain(2, g: function(x Count) gives x + 1)} {g.through(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 7 6
+```
+
+<!-- test: a-default-names-its-own-types-alias-when-the-other-type-is-in-another-file -->
+The two types in two files, so the file order the loader walks decides which `Transform` is last.
+```maxon
+// --- file: a.maxon
+export typealias Level = int(0 to 125)
+
+function triple(x Count) returns Count
+	return x * 3
+end 'triple'
+
+export type Other uses U
+	export typealias Transform = function(Count) returns Count
+	export var item as U
+
+	export static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function twice(n Count, f Transform = triple) returns Count
+		return f(f(n))
+	end 'twice'
+end 'Other'
+
+// --- file: b.maxon
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+export type Box uses T
+	export typealias Transform = function(Level) returns Level
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Box'
+
+// --- file: main.maxon
+typealias LevelBox = Box with Level
+typealias LevelOther = Other with Level
+
+function main() returns ExitCode
+	let b = LevelBox.create(3)
+	let o = LevelOther.create(3)
+	print("{o.twice(2)} {o.twice(2, f: function(x) gives x + 1)} {b.run(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18 4 6
+```
+
 <!-- test: the-default-of-a-second-method-is-filled-at-a-call-from-main -->
 ```maxon
 typealias Level = int(0 to 125)

@@ -46,6 +46,8 @@ enum RecordLabel
 	file
 end 'RecordLabel'
 
+let NaturalSourceOrderText = "natural"
+
 enum RecordOption
 	target
 	debugInfo
@@ -53,6 +55,7 @@ enum RecordOption
 	debugStream
 	asyncTrace
 	poisonFreed
+	sourceOrder
 	version
 end 'RecordOption'
 
@@ -118,11 +121,12 @@ export type BuildRecordRequest
 	export let debugStream as bool
 	export let asyncTrace as bool
 	export let poisonFreed as bool
+	export let sourceOrder as SourceOrder
 	export var productVersion as VersionComponentArray
 	export var defines as DefineArray
 
-	export static function create(output FilePath, target Target, inputPaths MaxonSourcePathArray, debugInfo bool, coverage bool, debugStream bool, asyncTrace bool, poisonFreed bool, productVersion VersionComponentArray, defines DefineArray) returns BuildRecordRequest
-		return Self{output: output, target: target, inputPaths: inputPaths, debugInfo: debugInfo, coverage: coverage, debugStream: debugStream, asyncTrace: asyncTrace, poisonFreed: poisonFreed, productVersion: productVersion, defines: defines}
+	export static function create(output FilePath, target Target, inputPaths MaxonSourcePathArray, debugInfo bool, coverage bool, debugStream bool, asyncTrace bool, poisonFreed bool, sourceOrder SourceOrder, productVersion VersionComponentArray, defines DefineArray) returns BuildRecordRequest
+		return Self{output: output, target: target, inputPaths: inputPaths, debugInfo: debugInfo, coverage: coverage, debugStream: debugStream, asyncTrace: asyncTrace, poisonFreed: poisonFreed, sourceOrder: sourceOrder, productVersion: productVersion, defines: defines}
 	end 'create'
 end 'BuildRecordRequest'
 
@@ -255,9 +259,18 @@ function recordOptionValueOf(option RecordOption, request BuildRecordRequest) re
 		debugStream gives "{request.debugStream}"
 		asyncTrace gives "{request.asyncTrace}"
 		poisonFreed gives "{request.poisonFreed}"
+		sourceOrder gives sourceOrderText(request.sourceOrder)
 		version gives versionText(request.productVersion)
 	end 'which'
 end 'recordOptionValueOf'
+
+function sourceOrderText(order SourceOrder) returns String
+	return match order 'order'
+		natural gives NaturalSourceOrderText
+		reversed gives ReversedSourceOrderValue
+		unrecognized(text) gives text
+	end 'order'
+end 'sourceOrderText'
 
 function definesOf(request BuildRecordRequest) returns NamedValueArray
 	var defines = NamedValueArray.create()
