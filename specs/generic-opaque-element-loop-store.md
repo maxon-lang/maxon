@@ -50,6 +50,7 @@ so a store that took no reference double-frees and a store that took one too man
 gate reports the second as exit 101 while the program still prints the right answer.
 
 <!-- test: one-opaque-value-written-into-three-slots -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Idx = int(0 to u64.max) implements ElementIndex
 
@@ -110,6 +111,7 @@ still owes exactly one release — the half a parse-time move gets wrong by deci
 TEXT that the store happened.
 
 <!-- test: a-loop-that-never-runs-still-releases-the-value -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Idx = int(0 to u64.max) implements ElementIndex
 
@@ -162,6 +164,7 @@ any N; one taken and never released is a hundred leaked records, and one release
 the poison byte.
 
 <!-- test: one-opaque-value-written-into-a-hundred-slots -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Idx = int(0 to u64.max) implements ElementIndex
 
@@ -270,6 +273,7 @@ The binding was never moved, so reading it after the fill is legal — the prope
 takes away, and the one a body that fills a column and then reports what it filled with needs.
 
 <!-- test: the-filled-value-is-still-readable-after-the-loop -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Idx = int(0 to u64.max) implements ElementIndex
 
@@ -324,6 +328,7 @@ containers are destroyed at the end of `main`, so a missing retain is a double f
 release is exit 101.
 
 <!-- test: a-borrowed-element-stored-in-a-loop-takes-a-reference-per-slot -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Strs = Array with String

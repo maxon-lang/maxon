@@ -656,7 +656,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `Array.create()` | `Array` | An empty array; `Array.create(0)` is the same array. |
-| `Array.create(n)` | `Array` | `n` zero-valued elements, in one allocation when they take at most 256 bytes. `n` is an `ElementIndex`. Refused at compile time (E3106) for an element type with no zero value — a struct, a `String`, a nested container, or a ranged alias that excludes 0; create those with `create(n, zeroed: false)`. |
+| `Array.create(n)` | `Array` | `n` zero-valued elements, in one allocation when they take at most 256 bytes. `n` is an `ElementIndex`. Refused at compile time (E3106) for an element type with no zero value — a struct, a `String`, a nested container, a ranged alias that excludes 0, or an enum or union whose raw values include no 0; create those with `create(n, zeroed: false)`. `create(n, zeroed: true)` follows the same rule. |
 | `Array.create(n, zeroed: false)` | `Array` | An empty array with room for `n` elements, in one allocation when they take at most 256 bytes; append with `push`. `n` is an `ElementIndex` and `zeroed:` is a literal `true` or `false`. Available for every element type. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
 | `clone()` | `Array` | An independent copy. Each record, `String` or union element is cloned; an array of scalars shares its storage copy-on-write, which separates on the first write to either, unless the storage was created at a known size of at most 256 bytes, which is copied at once. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is refused (an element slot is one machine word). A copy of an element that is or holds a promise is E3141, here and at `slice` and `append`. |
@@ -696,7 +696,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | Member | Description |
 |--------|-------------|
 | `reserve(minCapacity)` | Ensure an existing array has at least `minCapacity` slots; a new array is sized by `create(n, zeroed: false)`. A capacity no allocation can satisfy (`u64.max`) panics. |
-| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container — and for a ranged alias that excludes 0, as `create(n)` is. Use `growFilled` or `truncate` for those. |
+| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container — and for a ranged alias that excludes 0 or an enum or union whose raw values include no 0, as `create(n)` is. Use `growFilled` or `truncate` for those. |
 | `truncate(newLength)` | Shorten to `newLength`, releasing the removed elements. A longer `newLength` does nothing. |
 | `growFilled(newLength, value Element)` | Lengthen to `newLength`, setting only the added elements to `value`. Grows capacity geometrically, so repeated small extensions stay amortized linear. A shorter `newLength` does nothing. |
 | `refill(newLength, value Element)` | Set the length to `newLength` and write `value` into every element, growing or shrinking. |
@@ -890,7 +890,7 @@ implements `Iterable`. The growable array is [`Array`](#array).
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0. A pure call: discarding the result with `_ =` is E3064. A fixed array is one allocation at any size. Called through an alias that states a count (`Vec3.create()`); a length argument is **E3194**. |
+| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0 and for an enum or union whose raw values include no 0. A pure call: discarding the result with `_ =` is E3064. A fixed array is one allocation at any size. Called through an alias that states a count (`Vec3.create()`); a length argument is **E3194**. |
 | `FixedArray.create(n)` | `FixedArray` | Through a runtime-sized alias (`typealias Buf = FixedArray with Coord`): `n` zero elements in one allocation, `n` an `ElementIndex`. A constant `n` gives the sized type `FixedArray with n Coord`. The length is fixed at creation, so `push` and `reserve` are refused; a second argument, or no `n`, is **E3194**. |
 | `FixedArray from [a, b, c]` | `FixedArray` | A literal; the count is the literal's length, through a runtime-sized alias too. |
 | `count()` | `Count` | The fixed size: answered from the type, and for a runtime-sized value read from the record's length. |

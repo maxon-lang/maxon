@@ -4365,6 +4365,689 @@ end 'main'
 error E3106: <fragment>:6:11: 'create(n)' cannot publish zeroed slots of 'Percent': zero is not a value of 'Percent'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
 ```
 
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-an-enum-whose-raw-values-exclude-zero -->
+A payload-free enum is stored as its raw value, so a zeroed slot of an enum whose raw values exclude 0 holds a value that names no case, and `match` over it is not exhaustive. The default (zeroed) form is refused as it is for a ranged alias that excludes zero.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+typealias LevelArray = Array with Level
+
+function main() returns ExitCode
+	let levels = LevelArray.create(3)
+
+	return levels.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:15: 'create(n)' cannot publish zeroed slots of 'Level': zero is not a value of 'Level'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-explicitly-zeroed-cannot-hold-an-enum-whose-raw-values-exclude-zero -->
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+typealias LevelArray = Array with Level
+
+function main() returns ExitCode
+	let levels = LevelArray.create(3, zeroed: true)
+
+	return levels.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:15: 'create(n)' cannot publish zeroed slots of 'Level': zero is not a value of 'Level'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.resize-cannot-grow-an-array-of-an-enum-whose-raw-values-exclude-zero -->
+Growing exposes zero-filled slots, so `resize` is refused for an enum whose raw values exclude 0; `growFilled` supplies a case.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+typealias LevelArray = Array with Level
+
+function main() returns ExitCode
+	var levels = LevelArray.create()
+	levels.resize(2)
+
+	return levels.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:11:9: 'resize' cannot grow an array of 'Level': the grown slots are zero and zero is not a value of 'Level'. Append with 'push(value)' or 'growFilled(n, value:)'
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-payload-free-union-whose-tags-exclude-zero -->
+A payload-free union is stored as its tag exactly as an enum is, so an explicit tag set without 0 is refused the same way.
+```maxon
+union Phase
+	early = 3
+	late = 4
+end 'Phase'
+
+typealias PhaseArray = Array with Phase
+
+function main() returns ExitCode
+	let phases = PhaseArray.create(2)
+
+	return phases.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:15: 'create(n)' cannot publish zeroed slots of 'Phase': zero is not a value of 'Phase'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-word-union -->
+A union whose payload cases each carry one managed pointer is one word, and the zero word is the empty word that names no case, so it is refused as any managed element is.
+```maxon
+union Held
+	text(value String)
+	nothing
+end 'Held'
+
+typealias HeldArray = Array with Held
+
+function main() returns ExitCode
+	let held = HeldArray.create(2)
+
+	return held.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:13: 'create(n)' cannot publish zeroed slots of 'Held': zero is not a value of 'Held'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: create-with-capacity-zeroed-holds-an-enum-whose-first-case-is-zero -->
+A plain enum numbers its first case 0, an explicit raw value of 0 names a case too, and a string-backed enum stores declaration indices, so each admits the zeroed form and its zeroed slots read as the case numbered 0.
+```maxon
+enum Plain
+	first
+	second
+end 'Plain'
+
+enum Gauge
+	idle = 0
+	busy = 5
+end 'Gauge'
+
+enum Mime
+	json = "application/json"
+	html = "text/html"
+end 'Mime'
+
+typealias PlainArray = Array with Plain
+typealias GaugeArray = Array with Gauge
+typealias MimeArray = Array with Mime
+
+function main() returns ExitCode
+	let plain = PlainArray.create(2)
+	let gauges = GaugeArray.create(2, zeroed: true)
+	var mimes = MimeArray.create()
+	mimes.resize(2)
+
+	let first = try plain.get(1) otherwise Plain.second
+	let second = try gauges.get(1) otherwise Gauge.busy
+	let third = try mimes.get(1) otherwise Mime.html
+
+	print("{first.name} {second.name} {third.name}\n")
+
+	return (plain.count() + gauges.count() + mimes.count()) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+first idle json
+```
+
+<!-- test: an-enum-whose-raw-values-exclude-zero-is-filled-with-a-case -->
+`create(0)`, `create(n, zeroed: false)`, `push` and `growFilled` publish no zero slot, so they stay legal for an enum whose raw values exclude 0.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+typealias LevelArray = Array with Level
+
+function main() returns ExitCode
+	let none = LevelArray.create(0)
+	var roomy = LevelArray.create(4, zeroed: false)
+	roomy.push(Level.high)
+	var filled = LevelArray.create()
+	filled.growFilled(3, value: Level.low)
+
+	let tail = try filled.get(2) otherwise Level.high
+
+	print("{none.count()} {roomy.count()} {filled.count()} {tail.rawValue}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 1 3 10
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-tag-set-without-zero-at-any-backing -->
+The slot is the tag, and the test is whether 0 is one of the declared tags. A tag set that straddles 0 without containing it, an all-negative one, a float backing without `0.0` and a character backing without `'\0'` each exclude it, and each function below is refused on its own.
+```maxon
+enum Straddle
+	below = -1
+	above = 1
+end 'Straddle'
+
+enum Negative
+	deep = -2
+	shallow = -1
+end 'Negative'
+
+enum Ratio
+	half = 0.5
+	whole = 1.0
+end 'Ratio'
+
+enum Mark
+	first = 'a'
+	second = 'b'
+end 'Mark'
+
+typealias StraddleArray = Array with Straddle
+typealias NegativeArray = Array with Negative
+typealias RatioArray = Array with Ratio
+typealias MarkArray = Array with Mark
+
+function straddle() returns Count
+	let xs = StraddleArray.create(2)
+
+	return xs.count()
+end 'straddle'
+
+function negative() returns Count
+	let xs = NegativeArray.create(2)
+
+	return xs.count()
+end 'negative'
+
+function ratio() returns Count
+	let xs = RatioArray.create(2)
+
+	return xs.count()
+end 'ratio'
+
+function mark() returns Count
+	let xs = MarkArray.create(2)
+
+	return xs.count()
+end 'mark'
+
+function main() returns ExitCode
+	return (straddle() + negative() + ratio() + mark()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:28:11: 'create(n)' cannot publish zeroed slots of 'Straddle': zero is not a value of 'Straddle'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+error E3106: <fragment>:34:11: 'create(n)' cannot publish zeroed slots of 'Negative': zero is not a value of 'Negative'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+error E3106: <fragment>:40:11: 'create(n)' cannot publish zeroed slots of 'Ratio': zero is not a value of 'Ratio'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+error E3106: <fragment>:46:11: 'create(n)' cannot publish zeroed slots of 'Mark': zero is not a value of 'Mark'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: create-with-capacity-zeroed-holds-an-enum-with-a-zero-tag-at-any-backing -->
+A tag of 0 is a case whichever way it arrives: an auto-increment that lands on 0, a float `0.0`, a character `'\0'`, and a struct or function backing, whose tags are declaration indices. A zeroed slot reads as the case that owns 0.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Meta
+	export let latency as Integer
+
+	static function create(latency Integer) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'Meta'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function triple(x Integer) returns Integer
+	return x * 3
+end 'triple'
+
+enum Climb
+	below = -1
+	zero
+	above
+end 'Climb'
+
+enum Ratio
+	none = 0.0
+	whole = 1.0
+end 'Ratio'
+
+enum Mark
+	nul = '\0'
+	letter = 'a'
+end 'Mark'
+
+enum Timing
+	fast = Meta.create(1)
+	slow = Meta.create(5)
+end 'Timing'
+
+enum Op
+	doubleOp = double
+	tripleOp = triple
+end 'Op'
+
+typealias ClimbArray = Array with Climb
+typealias RatioArray = Array with Ratio
+typealias MarkArray = Array with Mark
+typealias TimingArray = Array with Timing
+typealias OpArray = Array with Op
+
+function main() returns ExitCode
+	let climbs = ClimbArray.create(2)
+	let ratios = RatioArray.create(2)
+	let marks = MarkArray.create(2)
+	let timings = TimingArray.create(2)
+	let ops = OpArray.create(2)
+
+	let climb = try climbs.get(1) otherwise Climb.above
+	let ratio = try ratios.get(1) otherwise Ratio.whole
+	let mark = try marks.get(1) otherwise Mark.letter
+	let timing = try timings.get(1) otherwise Timing.slow
+	let op = try ops.get(1) otherwise Op.tripleOp
+
+	print("{climb.name} {ratio.name} {mark.name} {timing.name} {op.name}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+zero none nul fast doubleOp
+```
+
+<!-- test: a-map-keyed-by-an-enum-whose-raw-values-exclude-zero-still-compiles -->
+A `Map` or `Set` slot table is sparse: occupancy lives in a parallel column and an unwritten slot is never read, so the library's `resize` over its opaque key column stays legal at an enum that excludes 0.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+typealias LevelMap = Map with (Level, Integer)
+
+function main() returns ExitCode
+	var m = LevelMap.create()
+	m.upsert(Level.high, value: 7)
+	m.upsert(Level.low, value: 3)
+
+	let sum = (try m.get(Level.high) otherwise 0) + (try m.get(Level.low) otherwise 0)
+
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: error.create-with-capacity-in-a-generic-body-is-refused-for-a-managed-instantiation -->
+A generic body is compiled once for every instantiation, so `create(n)` over its type parameter publishes zeroed slots of whatever the instantiation is, and a `String` instantiation makes them null pointers.
+```maxon
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(3)}
+	end 'create'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias StringPool = Pool with String
+
+function main() returns ExitCode
+	let pool = StringPool.create()
+
+	return pool.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:8:22: 'create(n)' cannot publish zeroed slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-in-a-generic-body-is-refused-for-an-enum-instantiation -->
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(3)}
+	end 'create'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias LevelPool = Pool with Level
+
+function main() returns ExitCode
+	let pool = LevelPool.create()
+
+	return pool.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:13:22: 'create(n)' cannot publish zeroed slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-in-a-generic-body-is-refused-for-a-zero-excluding-alias-instantiation -->
+```maxon
+typealias Percent = int(1 to 100)
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(3)}
+	end 'create'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias PercentPool = Pool with Percent
+
+function main() returns ExitCode
+	let pool = PercentPool.create()
+
+	return pool.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:22: 'create(n)' cannot publish zeroed slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.resize-in-a-user-generic-body-is-refused-for-a-managed-instantiation -->
+A library body may `resize` an opaque column it fills before reading, but a user-written generic body cannot promise that, so `resize` over its type parameter is refused when an instantiation has no zero value.
+```maxon
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function fill()
+		items.resize(3)
+	end 'fill'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias StringPool = Pool with String
+
+function main() returns ExitCode
+	var pool = StringPool.create()
+	pool.fill()
+
+	return pool.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:12:9: 'resize' cannot grow an array of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
+```
+
+<!-- test: error.resize-in-a-user-generic-body-is-refused-for-an-enum-instantiation -->
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function fill()
+		items.resize(3)
+	end 'fill'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias LevelPool = Pool with Level
+
+function main() returns ExitCode
+	var pool = LevelPool.create()
+	pool.fill()
+
+	return pool.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:17:9: 'resize' cannot grow an array of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
+```
+
+<!-- test: error.resize-in-a-user-generic-body-is-refused-for-a-zero-excluding-alias-instantiation -->
+```maxon
+typealias Percent = int(1 to 100)
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function fill()
+		items.resize(3)
+	end 'fill'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias PercentPool = Pool with Percent
+
+function main() returns ExitCode
+	var pool = PercentPool.create()
+	pool.fill()
+
+	return pool.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:14:9: 'resize' cannot grow an array of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
+```
+
+<!-- test: error.one-zero-excluding-instantiation-refuses-a-generic-body-that-resizes -->
+The instantiations are judged together: one type that admits 0 beside one that does not still refuses the body.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function fill()
+		items.resize(3)
+	end 'fill'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias CountPool = Pool with Count
+typealias LevelPool = Pool with Level
+
+function main() returns ExitCode
+	var a = CountPool.create()
+	var b = LevelPool.create()
+	a.fill()
+	b.fill()
+
+	return (a.size() + b.size()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:17:9: 'resize' cannot grow an array of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'
+```
+
+<!-- test: a-generic-body-that-zero-fills-is-accepted-when-every-instantiation-admits-zero -->
+`create(n)` and `resize` over the type parameter are accepted while every instantiation has a zero value: a plain integer alias and an enum with a case whose raw value is 0.
+```maxon
+enum Gauge
+	idle = 0
+	busy = 5
+end 'Gauge'
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(3)}
+	end 'create'
+
+	function grow()
+		items.resize(5)
+	end 'grow'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+
+	function first() returns Element
+		return try items.get(0) otherwise panic("a zeroed slot")
+	end 'first'
+end 'Pool'
+
+typealias CountPool = Pool with Count
+typealias GaugePool = Pool with Gauge
+
+function main() returns ExitCode
+	var counts = CountPool.create()
+	var gauges = GaugePool.create()
+	counts.grow()
+	gauges.grow()
+
+	print("{counts.size()} {gauges.size()} {counts.first()} {gauges.first().name}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 5 0 idle
+```
+
+<!-- test: a-generic-body-that-appends-is-accepted-at-an-enum-that-excludes-zero -->
+`push` and `growFilled` publish no zero slot, so a generic body that uses them is accepted at every instantiation, an enum whose raw values exclude 0 included.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function fill(head Element, tail Element)
+		items.growFilled(3, value: head)
+		items.push(tail)
+	end 'fill'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+
+	function last() returns Element
+		return try items.get(3) otherwise panic("a pushed slot")
+	end 'last'
+end 'Pool'
+
+typealias LevelPool = Pool with Level
+
+function main() returns ExitCode
+	var pool = LevelPool.create()
+	pool.fill(Level.high, tail: Level.low)
+
+	print("{pool.size()} {pool.last().rawValue}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 10
+```
+
 <!-- test: error.create-zeroed-must-be-a-literal -->
 ```maxon
 function main() returns ExitCode

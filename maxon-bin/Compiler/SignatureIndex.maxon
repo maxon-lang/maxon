@@ -2685,10 +2685,15 @@ export enum TypeArgInstantiationKind
 	// `T` may not be given away (E3141). Apart from
 	// `greenThreadElement` because it must also see an instantiation reached through a declaration view.
 	greenThreadFeed
+
+	// Zero is no value of the argument: a managed type, or one `typeExcludesZero` answers for. The front-end
+	// reject for a shared body that zeroes slots of a type parameter (`FixedArray with N <type parameter>`'s
+	// `create()`, `Array.create(n)`, a user-tier `resize`), so one such instantiation refuses the body (E3106).
+	noZeroElement
 end 'TypeArgInstantiationKind'
 
 // @generated library-cache begin
-let CacheCasesTypeArgInstantiationKind = [TypeArgInstantiationKind.consumeMoved, TypeArgInstantiationKind.uncopyableElement, TypeArgInstantiationKind.managedElement, TypeArgInstantiationKind.retainedFeed, TypeArgInstantiationKind.greenThreadElement, TypeArgInstantiationKind.greenThreadFeed]
+let CacheCasesTypeArgInstantiationKind = [TypeArgInstantiationKind.consumeMoved, TypeArgInstantiationKind.uncopyableElement, TypeArgInstantiationKind.managedElement, TypeArgInstantiationKind.retainedFeed, TypeArgInstantiationKind.greenThreadElement, TypeArgInstantiationKind.greenThreadFeed, TypeArgInstantiationKind.noZeroElement]
 
 function cacheReadTypeArgInstantiationKind(reader LibraryCacheReader) returns TypeArgInstantiationKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -2746,6 +2751,7 @@ function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 		retainedFeed then return false
 		uncopyableElement or
 		managedElement or
+		noZeroElement or
 		greenThreadElement or
 		greenThreadFeed then return true
 	end 'kind'
@@ -2774,6 +2780,7 @@ function kindFollowsADeclarationView(kind TypeArgInstantiationKind) returns bool
 		greenThreadFeed then return true
 		uncopyableElement or
 		managedElement or
+		noZeroElement or
 		greenThreadElement then return false
 	end 'kind'
 end 'kindFollowsADeclarationView'
@@ -37433,6 +37440,7 @@ export type ProgramSignatures
 			consumeMoved then return self.typeArgIsOwned(t)
 			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 			managedElement then return self.typeArgIsManagedElement(t)
+			noZeroElement then return self.typeArgIsManagedElement(t) or self.typeExcludesZero(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
 			greenThreadElement or
 			greenThreadFeed then return self.sourceCloneVerdictOfType(t) == SourceCloneVerdict.holdsAGreenThread
@@ -37525,6 +37533,38 @@ export type ProgramSignatures
 		return self.typeIsManaged(t, from: self.typeNames)
 	end 'typeArgIsManagedElement'
 
+	export function typeExcludesZero(t MaxonType) returns bool
+		if maxonTypeTag(t) != ValueTypeTag.named 'namesNoDeclaration'
+			return false
+		end 'namesNoDeclaration'
+
+		let name = self.indexSpaceTypeName(t)
+		let form = try self.declaredFormInAnyFile(name) otherwise return self.innerAliasExcludesZero(name)
+
+		match form 'form'
+			enumType or
+			unionType then return self.enumNameExcludesZero(name)
+			rangedAlias then return try self.settledDeclarations().typeAliases.excludesZeroInEveryFile(name) otherwise panic("ProgramSignatures.typeExcludesZero: `declaredFormInAnyFile` answered `rangedAlias` for '{String.from(name)}', which the alias registry holds")
+			structType or
+			interfaceType or
+			functionAlias or
+			genericAlias or
+			tupleAlias then return false
+		end 'form'
+	end 'typeExcludesZero'
+
+	function enumNameExcludesZero(name ByteArray) returns bool
+		let layout = try self.settledDeclarations().enumTypes.get(name) otherwise panic("ProgramSignatures.enumNameExcludesZero: `declaredFormInAnyFile` answered enum or union for '{String.from(name)}', which `enumTypes` holds")
+		return not layout.declaresZeroTag()
+	end 'enumNameExcludesZero'
+
+	function innerAliasExcludesZero(name ByteArray) returns bool
+		match self.innerAliasOf(name) 'inner'
+			declared(alias) then return aliasExcludesZero(alias)
+			undeclared then return false
+		end 'inner'
+	end 'innerAliasExcludesZero'
+
 	// The element-copy refusal fires only for an `Array` instance some code copies, directly or through a
 	// generic body that copies an array of its own parameter.
 	function arrayInstanceMayBeCopied(id GenericInstanceId) returns bool
@@ -37545,6 +37585,7 @@ export type ProgramSignatures
 
 			consumeMoved or
 			managedElement or
+			noZeroElement or
 			retainedFeed or
 			greenThreadFeed then return false
 		end 'kind'
@@ -37637,6 +37678,10 @@ export type ProgramSignatures
 	export function genericTypeFieldManagedElementInstantiation(param TypeParamId) returns TypeArgKindMatch
 		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.managedElement)
 	end 'genericTypeFieldManagedElementInstantiation'
+
+	export function genericTypeFieldNoZeroInstantiation(param TypeParamId) returns TypeArgKindMatch
+		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.noZeroElement)
+	end 'genericTypeFieldNoZeroInstantiation'
 
 	// ⭐⭐ **WHERE THE PROGRAM WROTE THIS INSTANTIATION — the source anchor a library-body refusal is blamed
 	// at (BLAME).** `genericAliasSites` is the whole-program list of every WRITTEN `Base with Args` carrying a

@@ -354,6 +354,17 @@ release's version as its heading when the release is cut.
   `var`, a record parameter's field, or a parameter marked `mutable`. Any other scrutinee (an unmarked
   parameter, the receiver `self`, a temporary) is E2013, and the message names the fix.
   Fix: mark the parameter `mutable`, or copy the union into a local `var` and match on that.
+- A call that fills array slots with zero is E3106 for an element that is a payload-free enum or union whose
+  raw values (tags) include no 0, as it is for a ranged alias that excludes 0: `Array.create(n)` and
+  `create(n, zeroed: true)`, `resize`, `FixedArray.create` and `setLength`. Zero named no case, so a `match`
+  over such an element was not exhaustive. In a generic body, where the element is a type parameter, the
+  instantiations decide: `create(n)` over the parameter and a `FixedArray with N <type parameter>`'s
+  `create()` are refused when any instantiation of the type is at a managed type, at such an enum or at a
+  ranged alias that excludes 0, and so is `resize` in a body you wrote (a standard library body may still
+  `resize` a column it fills before reading, as `Map` and `Set` do).
+  Fix: build the array with `create(n, zeroed: false)` and `push` each element, or with `growFilled(n, value:)`
+  naming a case, or give the enum a case whose raw value is 0. In a generic body, hold the elements with `push`
+  or `growFilled(n, value:)`, or instantiate the type only at elements that admit 0.
 
 ## 0.5.0 — 2026-10-08
 

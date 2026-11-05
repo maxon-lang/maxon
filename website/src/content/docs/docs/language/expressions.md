@@ -263,10 +263,12 @@ end 'main'
 `create(n, zeroed: false)` an empty array with room for `n`, each in one allocation when the elements take at
 most 256 bytes; `n` is an `ElementIndex` and `zeroed:` a literal `true` or `false`. `push(value)` appends; `reserve(n)` grows the capacity of an existing
 array without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so `resize` and
-`create(n)` are available only for elements stored inline — integers, floats, `bool`, payload-free enums —
-whose type admits zero. For an array of records, strings or other managed values, or of an alias whose range
-excludes 0 (`int(1 to 100)`), `resize` and `create(n)` are **E3106**; create with `create(n, zeroed: false)`,
-grow with `push` or `growFilled(n, value:)` and shrink with `truncate(n)`:
+`create(n)` are available only for elements stored inline — integers, floats, `bool`, payload-free enums and
+unions — whose type admits zero. For an array of records, strings or other managed values, of an alias whose
+range excludes 0 (`int(1 to 100)`), or of an enum or union whose raw values (tags) include no 0, `resize` and
+`create(n)` are **E3106**, as are `create(n, zeroed: true)`, `FixedArray.create` and `setLength`; create with
+`create(n, zeroed: false)`, grow with `push` or `growFilled(n, value:)` naming a case, and shrink with
+`truncate(n)`:
 
 ```maxon
 typealias Names = Array with String
@@ -280,6 +282,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+
+A generic body is compiled once for every instantiation, so it is judged by all of them: `create(n)` over its
+type parameter is **E3106** when any instantiation of the type is at an element with no zero value, and so is
+`resize` in a body you write. The standard library's own `resize` is not refused, because `Map` and `Set` fill
+the slots they read.
 
 ## Fixed Arrays and Proven Indices
 
@@ -341,7 +348,9 @@ runtime-sized array, so both need `try` (a bare call is **E3057**).
   bound to a constant, a top-level `let`, a folded `countof(...)` expression, or a `var` read where it holds a
   constant. A constant `0`, or one above `4294967295`, is **E2069**.
 - **The element** is an integer, a `bool` or a float. A managed element is **E2015**, and an element whose
-  range excludes 0 is **E3106**, because every slot starts as zero.
+  range excludes 0, or an enum or union whose raw values include no 0, is **E3106**, because every slot
+  starts as zero. A generic type holding a `FixedArray with N T` over its type parameter `T` is **E3106** at
+  its `create()` when any instantiation of it is at such an element.
 - **A sized array widens to a runtime-sized one.** A `FixedArray with N T` is accepted where a
   `FixedArray with T` is declared, in an argument, a return or a field store; the reverse is **E3005**. A
   conditional, a `match`, a `try ... otherwise` and the type arguments inferred for a generic type that meet

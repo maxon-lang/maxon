@@ -1724,6 +1724,13 @@ export function aliasIsFloat(alias RangedTypeAlias) returns bool
 	return tagIsFloat(maxonTypeTag(alias.underlying))
 end 'aliasIsFloat'
 
+// The alias half of "is zero a value of this element"; `ProgramSignatures.typeExcludesZero` is the one
+// question every zero-fill refusal (E3106) asks, and it asks this for a ranged alias and
+// `EnumLayout.declaresZeroTag` for an enum or union.
+export function aliasExcludesZero(alias RangedTypeAlias) returns bool
+	return rangeExcludesZero(alias.low, high: alias.high, isFloat: aliasIsFloat(alias))
+end 'aliasExcludesZero'
+
 // ⭐ **THE STRIDE A VALUE OF THIS ALIAS OCCUPIES AS AN ARRAY ELEMENT.** The alias-keyed twin of
 // `SignatureIndex.arrayElementSize`, which asks the same question of a container INSTANCE — and both compose
 // it through the one `elementStrideOf`, so a stride cannot mean one thing on the value that fills an element

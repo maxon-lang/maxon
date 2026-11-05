@@ -3698,6 +3698,33 @@ module function varShouldBeLetMessage(name String) returns String
 	return "variable '{name}' is never reassigned; use 'let' instead of 'var'"
 end 'varShouldBeLetMessage'
 
+function zeroOutsideElementMessage(refusal ZeroElementRefusal, element ZeroElementHolder) returns String
+	return match element 'holder'
+		named(elementType) gives zeroOutsideNamedElementMessage(refusal, elementType: elementType)
+		instantiated gives zeroOutsideInstantiatedElementMessage(refusal)
+	end 'holder'
+end 'zeroOutsideElementMessage'
+
+function zeroOutsideNamedElementMessage(refusal ZeroElementRefusal, elementType String) returns String
+	return match refusal 'refusal'
+		arrayResize gives "'resize' cannot grow an array of '{elementType}': the grown slots are zero and zero is not a value of '{elementType}'. Append with 'push(value)' or 'growFilled(n, value:)'"
+		arrayCreateZeroed gives "'create(n)' cannot publish zeroed slots of '{elementType}': zero is not a value of '{elementType}'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'"
+		bufferSetLength gives "'setLength' cannot publish slots of '{elementType}': a slot nothing wrote is zero and zero is not a value of '{elementType}'"
+		fixedArrayCreate gives "'FixedArray.create' cannot publish slots of '{elementType}': every slot is zero and zero is not a value of '{elementType}'"
+	end 'refusal'
+end 'zeroOutsideNamedElementMessage'
+
+function zeroOutsideInstantiatedElementMessage(refusal ZeroElementRefusal) returns String
+	let reason = "this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0)"
+
+	return match refusal 'refusal'
+		arrayResize gives "'resize' cannot grow an array of a type parameter: {reason}, so the grown slots are zero and zero is not a value of it. Append with 'push(value)' or 'growFilled(n, value:)'"
+		arrayCreateZeroed gives "'create(n)' cannot publish zeroed slots of a type parameter: {reason}. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'"
+		bufferSetLength gives "'setLength' cannot publish slots of a type parameter: {reason}, and a slot nothing wrote is zero"
+		fixedArrayCreate gives "'FixedArray.create' cannot publish slots of a type parameter: {reason}, and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'"
+	end 'refusal'
+end 'zeroOutsideInstantiatedElementMessage'
+
 function reportParseError(project Project, path FilePath, error SourceParseError)
 	reportDiagnostic(project, diagnostic: parseErrorDiagnostic(error, path: path, keywords: project.keywords))
 end 'reportParseError'
@@ -4121,13 +4148,8 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		managedTypeInRuntimeSource(typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "managed type '{typeName}' is not allowed in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
 		managedValueBuiltInRuntimeSource(typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "a managed value of type '{typeName}' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
 
-		// Omits the `growFilled`/`truncate` suggestions: The compiler synthesizes neither method, so naming them
-		// would send the reader to something that is not there.
-		arrayResizeZeroOutsideElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'resize' cannot grow an array of '{elementType}': the grown slots are zero and zero is not a value of '{elementType}'. Append with 'push(value)' or 'growFilled(n, value:)'", line: line, column: column, filePath: path)
+		zeroOutsideElement(refusal, element, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: zeroOutsideElementMessage(refusal, element: element), line: line, column: column, filePath: path)
 		literalsShareNoIntegerType(negativeValue, unsignedPattern, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "no common integer type for {negativeValue} and {unsignedScalarText(unsignedPattern)}: cast the elements to an alias", line: line, column: column, filePath: path)
-		arrayCreateZeroedOutsideElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'create(n)' cannot publish zeroed slots of '{elementType}': zero is not a value of '{elementType}'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'", line: line, column: column, filePath: path)
-		bufferSetLengthZeroOutsideElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'setLength' cannot publish slots of '{elementType}': a slot nothing wrote is zero and zero is not a value of '{elementType}'", line: line, column: column, filePath: path)
-		fixedArrayCreateZeroOutsideElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'FixedArray.create' cannot publish slots of '{elementType}': every slot is zero and zero is not a value of '{elementType}'", line: line, column: column, filePath: path)
 		arrayResizeManagedElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'resize' cannot grow an array of '{elementType}': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'", line: line, column: column, filePath: path)
 
 		// ⭐ It names the REPLACEMENT, not just the refusal, because there is an exact one: the array

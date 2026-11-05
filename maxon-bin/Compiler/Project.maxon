@@ -3073,6 +3073,8 @@ end 'cacheReadUnderlyingContestedAliasSet'
 
 // @generated library-cache end
 
+typealias DeclarationTest = function(RangedTypeAlias) returns bool
+
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
 	// whole-program behaviour, which is what makes the bare probe safe to keep.
@@ -3561,18 +3563,7 @@ export type RangedAliasRegistry
 	// ⚠ Asked only after two aggregate names have already DISAGREED — a rejected program's path — so the walk
 	// over one name's declarations costs every compiling program nothing, exactly as its twin does.
 	export function spansEveryIntInEveryFile(name ByteArray) returns bool throws MapError
-		if let byFile = try self.multiplyDeclared.get(name) 'declaredByMoreThanOneFile'
-			for (_, alias) in byFile 'eachDeclaringFile'
-				if not rangeSpansEveryInt(alias.low, high: alias.high) 'thisFilesDeclarationDoesNot'
-					return false
-				end 'thisFilesDeclarationDoesNot'
-			end 'eachDeclaringFile'
-
-			return true
-		end 'declaredByMoreThanOneFile'
-
-		let sole = try self.byName.get(name)
-		return rangeSpansEveryInt(sole.low, high: sole.high)
+		return try self.everyDeclarationOf(name, satisfies: function(alias) gives rangeSpansEveryInt(alias.low, high: alias.high))
 	end 'spansEveryIntInEveryFile'
 
 	// ⭐⭐ **CAN A VALUE OF `name` HOLD EVERY BYTE — 0 THROUGH 255 — WHICHEVER FILE'S DECLARATION YOU
@@ -3597,19 +3588,29 @@ export type RangedAliasRegistry
 	// what the compiler's own two byte elements are worth is the caller's to state, not this index's
 	// to invent.
 	export function holdsEveryByteInEveryFile(name ByteArray) returns bool throws MapError
+		return try self.everyDeclarationOf(name, satisfies: function(alias) gives rangeHoldsEveryByte(alias.low, high: alias.high))
+	end 'holdsEveryByteInEveryFile'
+
+	// Demands "excludes 0" of EVERY declaration of a contested name, like its siblings above, so a refusal
+	// off an instantiation argument (which names no file) never rejects a program whose other file's
+	// spelling admits 0.
+	export function excludesZeroInEveryFile(name ByteArray) returns bool throws MapError
+		return try self.everyDeclarationOf(name, satisfies: function(alias) gives aliasExcludesZero(alias))
+	end 'excludesZeroInEveryFile'
+
+	function everyDeclarationOf(name ByteArray, satisfies DeclarationTest) returns bool throws MapError
 		if let byFile = try self.multiplyDeclared.get(name) 'declaredByMoreThanOneFile'
 			for (_, alias) in byFile 'eachDeclaringFile'
-				if not rangeHoldsEveryByte(alias.low, high: alias.high) 'thisFilesDeclarationCannot'
+				if not satisfies(alias) 'thisFilesDeclarationFails'
 					return false
-				end 'thisFilesDeclarationCannot'
+				end 'thisFilesDeclarationFails'
 			end 'eachDeclaringFile'
 
 			return true
 		end 'declaredByMoreThanOneFile'
 
-		let sole = try self.byName.get(name)
-		return rangeHoldsEveryByte(sole.low, high: sole.high)
-	end 'holdsEveryByteInEveryFile'
+		return satisfies(try self.byName.get(name))
+	end 'everyDeclarationOf'
 
 	// ⭐⭐ **DECIDE WHICH NAMES ARE RANGE-CONTESTED, AND MINT THE QUALIFIED DECLARATION EACH DISTINCT RANGE
 	// GETS** — the answer the door above cannot give, made once, after every declaration is in.
@@ -9174,6 +9175,8 @@ export enum EnumRawValueIdentity
 	incomparable
 end 'EnumRawValueIdentity'
 
+let ZeroSlotTag = 0
+
 export type EnumLayout
 	export let name as ByteArray
 
@@ -9470,6 +9473,16 @@ export type EnumLayout
 
 		return true
 	end 'tagsAreDeclarationIndices'
+
+	export function declaresZeroTag() returns bool
+		for tag in self.caseTags 'each'
+			if tag == ZeroSlotTag 'found'
+				return true
+			end 'found'
+		end 'each'
+
+		return false
+	end 'declaresZeroTag'
 
 	export function tagRange() returns ProvenIntRange
 		var lowest = self.tagOfIndex(0)

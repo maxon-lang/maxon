@@ -10,8 +10,8 @@ category: memory-safety
 
 An `Array` is DENSE: every index in `[0, count())` holds an element. `resize` grows the live
 range by exposing zero-initialized slots, and a zero is a real element only when the element is
-stored INLINE — an `int`, a `float`, a `bool`, a `byte`, a ranged typealias over one of those, a
-payload-free enum. A MANAGED element (a struct, a `String`, a nested container, a boxed union) is
+stored INLINE and 0 is one of its values — an `int`, a `float`, a `bool`, a `byte`, a ranged typealias
+whose range includes 0, a payload-free enum or union with a case whose raw value is 0. A MANAGED element (a struct, a `String`, a nested container, a boxed union) is
 stored as a POINTER, so a zeroed slot is a NULL: an absence, not a value. Maxon has no default
 constructor, so there is nothing correct for `resize` to put there.
 
@@ -380,6 +380,7 @@ Stack trace:
 ```
 
 <!-- test: for-over-an-empty-slot-in-a-generic-body-panics -->
+<!-- tier: stdlib -->
 ### A `for` element read of an empty slot panics in a body compiled once for every element type
 `Bag` is generic, so `visit` is one compiled body for every `Element`, and its loop cannot ask at compile time
 whether the element owns a record. The array's own record says so at run time: `pad` grows `Bag with String` over
@@ -546,6 +547,29 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'ArrayError', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
+```
+
+<!-- test: error.set-length-cannot-publish-slots-of-an-enum-whose-raw-values-exclude-zero -->
+<!-- tier: stdlib -->
+`setLength` is refused for an enum element whose raw values exclude 0 as it is for a ranged alias: the unwritten slot is zero, which names no case.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+typealias LevelArray = Array with Level
+
+function main() returns ExitCode
+	var levels = LevelArray.create()
+	levels.reserve(1)
+	try levels.managed.setLength(1) otherwise panic("setLength: capacity just reserved for 1")
+
+	return levels.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:12:21: 'setLength' cannot publish slots of 'Level': a slot nothing wrote is zero and zero is not a value of 'Level'
 ```
 
 <!-- test: error.set-length-cannot-publish-slots-of-an-element-that-excludes-zero -->

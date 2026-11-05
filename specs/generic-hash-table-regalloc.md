@@ -49,6 +49,7 @@ is confined and nothing there moves.
 ## Tests
 
 <!-- test: generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters -->
+<!-- tier: stdlib -->
 The reproducer, and the reason this file exists. `Tbl.grow`'s rehash loop holds 16 GPR values at
 one op against a pool of 14; two of them are the `Hashable` and `Equatable` witness parameters,
 forwarded to `insertAtSlot` inside the loop, and a third is a `try` call's compiler-synthetic error

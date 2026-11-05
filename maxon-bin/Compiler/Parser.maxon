@@ -1795,10 +1795,7 @@ export union SourceParseError implements Error
 	// the slot empty. `elementType` names the element, which is the whole point of refusing HERE: the
 	// runtime cannot name it and the caller cannot see it.
 	arrayResizeManagedElement(elementType String, line LineNumber, column ColumnNumber)
-	arrayResizeZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
-	fixedArrayCreateZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
-	arrayCreateZeroedOutsideElement(elementType String, line LineNumber, column ColumnNumber)
-	bufferSetLengthZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
+	zeroOutsideElement(refusal ZeroElementRefusal, element ZeroElementHolder, line LineNumber, column ColumnNumber)
 	literalsShareNoIntegerType(negativeValue FullRangeInt, unsignedPattern FullRangeInt, line LineNumber, column ColumnNumber)
 
 	// ⭐ THE BUFFER SURFACE'S `set` ON A MANAGED ELEMENT — `arr.managed.set(i, value: x)` where the element
@@ -2234,12 +2231,26 @@ union CheckedBindingNames
 	end 'covers'
 end 'CheckedBindingNames'
 
-enum ZeroElementRefusal
+export enum ZeroElementRefusal
 	fixedArrayCreate
 	arrayResize
 	arrayCreateZeroed
 	bufferSetLength
 end 'ZeroElementRefusal'
+
+export union ZeroElementHolder
+	named(elementType String)
+	instantiated
+end 'ZeroElementHolder'
+
+function zeroElementRefusalTrustsSparseColumns(refusal ZeroElementRefusal) returns bool
+	return match refusal 'refusal'
+		arrayResize or
+		bufferSetLength gives true
+		fixedArrayCreate or
+		arrayCreateZeroed gives false
+	end 'refusal'
+end 'zeroElementRefusalTrustsSparseColumns'
 
 enum LiteralEntryShape
 	element
@@ -64755,9 +64766,7 @@ export type Parser
 	// local (`x as Byte`, `x as Percent`, `x as AsciiCode`) would start MINTING a value where it is a
 	// byte-for-byte no-op today, which is the property the header above exists to protect.
 	function aliasChangesTheDivisionProof(value ValueId, alias RangedTypeAlias) returns bool
-		let isFloat = aliasIsFloat(alias)
-
-		if not rangeExcludesZero(alias.low, high: alias.high, isFloat: isFloat) 'admitsZero'
+		if not aliasExcludesZero(alias) 'admitsZero'
 			return false
 		end 'admitsZero'
 
@@ -81991,7 +82000,9 @@ export type Parser
 	// managed-memory runtime already strides fits — an integer of any declared range, a `bool`, a `float`. What it may
 	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__managed_create_fixed`) while
 	// `element_destroy@40` stays 0, so a managed element would leak at teardown and every `set` would
-	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one.
+	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one. An
+	// element whose zero is no value (a ranged alias that excludes 0, an enum whose raw values include no 0)
+	// is refused for the zeroing itself, by `requireZeroIsAnElement` (E3106).
 	//
 	// ⭐⭐ **AN OPAQUE `T` IS ADMITTED, AND WHAT IT IS JUDGED BY IS THE INSTANTIATION SET.** *"A fixed array
 	// inside a generic body has no statically known element stride to size its storage with"* is **false**:
@@ -82050,7 +82061,8 @@ export type Parser
 	// instantiation, and `create()` publishes all N slots by zeroing them — so the slots are elements for a
 	// trivial instantiation and null pointers for a managed one. The shared body cannot branch on that, so
 	// admitting the construct means every instantiation must be trivial, and one managed instantiation
-	// refuses the body.
+	// refuses the body. A literal door asks only this; the zeroing `create()` also asks
+	// `requireZeroIsAnElement`, which refuses an instantiation whose zero names no value (E3106).
 	//
 	// ⛔ **MEASURED, BOTH SYMPTOMS, without this gate** — `type Holder uses Element` with
 	// `typealias Slot = FixedArray with 4 Element`, at `typealias StrHolder = Holder with String`: `slot.count()`
@@ -84925,14 +84937,15 @@ export type Parser
 	// so a zeroed slot is NULL — an absence, not a value — and Maxon has no default constructor to make one.
 	// The array that comes back answers `count()` = N while `get(0)` takes the empty-slot branch of
 	// `emitLoadElemAndOkReturn`: a `count()` that does not agree with `get()`, which is a silent wrong answer
-	// rather than a missing feature. `push(value)` is the growth that supplies the element.
+	// rather than a missing feature. `push(value)` is the growth that supplies the element. An inline element
+	// whose zero is no value (a ranged alias that excludes 0, an enum whose raw values include no 0) is refused
+	// the same way, by `requireZeroIsAnElement`.
 	//
-	// An OPAQUE-`T` element is NOT gated, and that is the rule's scope rather than a gap in it: one shared
-	// generic body serves every instantiation, so there is no element type to name and no single answer to
-	// give — and a deliberately SPARSE slot table (a hash map's key column, which tracks occupancy in a
-	// parallel state column and never reads a slot it did not write) is built through exactly that path.
-	// `containerElementIsManaged` already answers false for a type parameter, so the carve-out needs no second
-	// test written here.
+	// An OPAQUE-`T` element has no element type to name, so it is judged by the instantiation set
+	// (`requireEveryInstantiationHasAZero`): `create(n)` in any generic body, and `resize` in a user-tier one,
+	// are refused when some instantiation has no zero value. A library body's `resize` is trusted, because a
+	// deliberately SPARSE slot table (a hash map's key column, which tracks occupancy in a parallel state
+	// column and never reads a slot it did not write) is built through exactly that path.
 	//
 	// ⚠⚠ **A SECOND THING DEPENDS ON THIS REFUSAL, IN ANOTHER FILE.**
 	// `__managed_get_unchecked` — the element read a `for x in arr` loop makes — OMITS the empty-slot arm
@@ -84947,7 +84960,7 @@ export type Parser
 			let element = self.signatures.arrayElementDisplayName(giid)
 
 			match refusal 'managedRefusal'
-				arrayCreateZeroed then throw SourceParseError.arrayCreateZeroedOutsideElement(element, line: tok.line, column: tok.column)
+				arrayCreateZeroed then throw SourceParseError.zeroOutsideElement(refusal, element: ZeroElementHolder.named(element), line: tok.line, column: tok.column)
 				arrayResize then throw SourceParseError.arrayResizeManagedElement(element, line: tok.line, column: tok.column)
 				default panic("requireArrayGrowthHasZeroElement: only `create` and `resize` publish zeroed slots of a growing array")
 			end 'managedRefusal'
@@ -84957,26 +84970,31 @@ export type Parser
 	end 'requireArrayGrowthHasZeroElement'
 
 	function requireZeroIsAnElement(giid GenericInstanceId, tok Token, refusal ZeroElementRefusal) throws SourceParseError
-		if not self.containerElementExcludesZero(giid) 'zeroIsAnElement'
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
+			try self.requireEveryInstantiationHasAZero(giid, tok: tok, refusal: refusal)
+
+			return
+		end 'opaqueElement'
+
+		if not self.signatures.typeExcludesZero(self.signatures.containerElementType(giid)) 'zeroIsAnElement'
 			return
 		end 'zeroIsAnElement'
 
-		let element = self.signatures.arrayElementDisplayName(giid)
-
-		match refusal 'refusal'
-			fixedArrayCreate then throw SourceParseError.fixedArrayCreateZeroOutsideElement(element, line: tok.line, column: tok.column)
-			arrayResize then throw SourceParseError.arrayResizeZeroOutsideElement(element, line: tok.line, column: tok.column)
-			arrayCreateZeroed then throw SourceParseError.arrayCreateZeroedOutsideElement(element, line: tok.line, column: tok.column)
-			bufferSetLength then throw SourceParseError.bufferSetLengthZeroOutsideElement(element, line: tok.line, column: tok.column)
-		end 'refusal'
+		throw SourceParseError.zeroOutsideElement(refusal, element: ZeroElementHolder.named(self.signatures.arrayElementDisplayName(giid)), line: tok.line, column: tok.column)
 	end 'requireZeroIsAnElement'
 
-	function containerElementExcludesZero(giid GenericInstanceId) returns bool
-		return match self.declaredAliasOfIndexSpaceType(self.signatures.containerElementType(giid)) 'element'
-			declared(alias) gives rangeExcludesZero(alias.low, high: alias.high, isFloat: aliasIsFloat(alias))
-			undeclared gives false
-		end 'element'
-	end 'containerElementExcludesZero'
+	function requireEveryInstantiationHasAZero(giid GenericInstanceId, tok Token, refusal ZeroElementRefusal) throws SourceParseError
+		if zeroElementRefusalTrustsSparseColumns(refusal) and self.job.livesUnderStdlibDirectory 'aLibraryBodysSparseColumn'
+			return
+		end 'aLibraryBodysSparseColumn'
+
+		match self.signatures.genericTypeFieldNoZeroInstantiation(typeParamIdOf(self.signatures.containerElementType(giid))) 'noZeroInstantiation'
+			noInstance then return
+			instance(site) then self.blameLibraryRefusalOnInstantiation(site)
+		end 'noZeroInstantiation'
+
+		throw SourceParseError.zeroOutsideElement(refusal, element: ZeroElementHolder.instantiated, line: tok.line, column: tok.column)
+	end 'requireEveryInstantiationHasAZero'
 
 	// ⭐⭐ **THE BUFFER `set` MUST OWN WHAT IT STORES, SO A MANAGED ELEMENT IS REFUSED (E3109).**
 	// ⚖ USER RULING, 2026-07-30: the buffer surface's `set` is bounded by CAPACITY, which is what makes the

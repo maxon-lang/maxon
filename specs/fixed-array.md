@@ -1233,6 +1233,198 @@ end 'main'
 error E2015: <fragment>:10:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
+<!-- test: error.an-enum-instantiation-whose-raw-values-exclude-zero-refuses-a-fixed-array-field -->
+The shared body publishes zeroed slots for every instantiation, so an instantiation at an enum whose raw values exclude 0 refuses it as a concrete `FixedArray with 4 Level` is refused.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Holder uses Element
+	typealias Slot = FixedArray with 4 Element
+
+	var slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias LevelHolder = Holder with Level
+
+function main() returns ExitCode
+	var h = LevelHolder.create()
+	return h.size()
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:15:21: 'FixedArray.create' cannot publish slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+```
+
+<!-- test: error.a-zero-excluding-alias-instantiation-refuses-a-fixed-array-field -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Percent = int(1 to 100)
+
+type Holder uses Element
+	typealias Slot = FixedArray with 4 Element
+
+	var slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias PercentHolder = Holder with Percent
+
+function main() returns ExitCode
+	var h = PercentHolder.create()
+	return h.size()
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:11:21: 'FixedArray.create' cannot publish slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+```
+
+<!-- test: an-enum-instantiation-with-a-zero-case-keeps-a-fixed-array-field -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+enum Gauge
+	idle = 0
+	busy = 5
+end 'Gauge'
+
+type Holder uses Element
+	typealias Slot = FixedArray with 4 Element
+
+	var slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias GaugeHolder = Holder with Gauge
+
+function main() returns ExitCode
+	var h = GaugeHolder.create()
+	return h.size()
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.one-zero-excluding-instantiation-refuses-the-shared-body -->
+The rule is existential here as it is for a managed instantiation: a trivial instantiation that admits 0 standing beside the enum does not buy the body back.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+type Holder uses Element
+	typealias Slot = FixedArray with 4 Element
+
+	var slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias IntHolder = Holder with Int
+typealias LevelHolder = Holder with Level
+
+function main() returns ExitCode
+	var a = IntHolder.create()
+	var b = LevelHolder.create()
+	return a.size() + b.size()
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:15:21: 'FixedArray.create' cannot publish slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+```
+
+<!-- test: a-fixed-array-literal-publishes-no-zero-slot -->
+A `FixedArray from [..]` writes every slot, so an enum whose raw values exclude 0 is accepted as its element, where `Level.create()` over the same element is refused.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+typealias Pair = FixedArray with 2 Level
+
+function main() returns ExitCode
+	let literal = FixedArray from [Level.low, Level.high]
+	let named = Pair from [Level.high, Level.low]
+
+	print("{literal.get(1).name} {named.get(0).name}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+high high
+```
+
+<!-- test: error.a-contested-alias-instantiation-that-excludes-zero-refuses-a-fixed-array-field -->
+`Count` is the standard library's `int(0 to u64.max)`, which admits 0, and this program declares its own `Count` that does not. The program's instantiation means its own declaration, so the body is refused although the library's declaration of the name admits 0.
+```maxon
+typealias Count = int(1 to 9)
+
+type Holder uses Element
+	typealias Slot = FixedArray with 4 Element
+
+	var slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	function size() returns Count
+		return 4
+	end 'size'
+end 'Holder'
+
+typealias CountHolder = Holder with Count
+
+function main() returns ExitCode
+	var h = CountHolder.create()
+	return h.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:21: 'FixedArray.create' cannot publish slots of a type parameter: this generic type is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
+```
+
 <!-- test: error.one-managed-instantiation-refuses-the-shared-body -->
 The body is compiled ONCE and serves every instantiation, so the rule is EXISTENTIAL: one managed
 instantiation refuses it, and a trivial instantiation standing beside it does not buy it back.
@@ -2933,6 +3125,51 @@ end 'main'
 ```
 ```maxoncstderr
 error E3106: <fragment>:6:12: 'FixedArray.create' cannot publish slots of 'Positive': every slot is zero and zero is not a value of 'Positive'
+```
+
+<!-- test: error.an-enum-element-whose-raw-values-exclude-zero-under-create-n -->
+The slots of `create(n)` are zero, and zero names no case of `Level`.
+```maxon
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+typealias Buf = FixedArray with Level
+
+function main() returns ExitCode
+	let buf = Buf.create(4)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:12: 'FixedArray.create' cannot publish slots of 'Level': every slot is zero and zero is not a value of 'Level'
+```
+
+<!-- test: an-enum-element-with-a-zero-case-under-create-n -->
+```maxon
+enum Gauge
+	idle = 0
+	busy = 5
+end 'Gauge'
+
+typealias Buf = FixedArray with Gauge
+
+function main() returns ExitCode
+	let buf = Buf.create(4)
+	let gauge = buf.get(3)
+
+	print("{gauge.name}\n")
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+idle
 ```
 
 <!-- test: error.a-managed-element-under-create-n -->

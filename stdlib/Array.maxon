@@ -57,7 +57,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	public typealias ElementIterator = Iterator with Element
 	public typealias ElementIterable = Iterable with (Element, ElementIterator)
 
-	/// Create an empty array. The compiler also reads two argument forms, each one allocation: `create(n)` builds `n` zero elements, and `create(n, zeroed: false)` builds an empty array with room for `n`. `n` is an `ElementIndex` and `zeroed:` a literal `true` or `false`. `create(0)` is the same as `create()`. `create(n)` over an element with no zero value (a managed element, or a ranged alias that excludes 0) is E3106; `zeroed: false` and `create(0)` are legal for every element
+	/// Create an empty array. The compiler also reads two argument forms, each one allocation: `create(n)` builds `n` zero elements, and `create(n, zeroed: false)` builds an empty array with room for `n`. `n` is an `ElementIndex` and `zeroed:` a literal `true` or `false`. `create(0)` is the same as `create()`. `create(n)` over an element with no zero value (a managed element, a ranged alias that excludes 0, or an enum or union whose raw values include no 0) is E3106; `zeroed: false` and `create(0)` are legal for every element
 	public static function create() returns Self
 		return Self{}
 	end 'create'
@@ -335,8 +335,9 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	///
 	/// Growing exposes ZERO-INITIALIZED elements, and a zero is an ELEMENT only while the element
 	/// lives INLINE in the buffer — an int, a float, a bool, a byte, a ranged typealias over one of
-	/// those, a payload-free enum. That holds whether the new slots are fresh capacity or slots this
-	/// array used before and gave up: the buffer's slots above `length` are always zero, because
+	/// those, a payload-free enum — and 0 is one of its values (a case's raw value, or inside the
+	/// range). That holds whether the new slots are fresh capacity or slots this array used before
+	/// and gave up: the buffer's slots above `length` are always zero, because
 	/// every operation that vacates a slot (`clear`, `remove`/`pop`, and a shrinking `resize`)
 	/// erases it on the way out. See THE CAPACITY-SLOT INVARIANT in maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon.
 	///
@@ -346,18 +347,20 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// back answers `count()` = N while `get(0)` throws `emptySlot`. **A managed element type is
 	/// refused at COMPILE TIME (E3106)**, naming the type: grow with `push(value)` or
 	/// `growFilled(newLength, value:)`, which make the caller supply the element the type cannot
-	/// invent, and shrink with `truncate(newLength)`.
+	/// invent, and shrink with `truncate(newLength)`. An inline element with no zero value — a ranged
+	/// alias whose range excludes 0, an enum or union whose raw values include no 0 — is refused the same way.
 	///
 	/// The refusal covers the whole call and not only the growing half, because which half this is
 	/// cannot be known until it runs: `newLength` is compared against a length, and a compiler holds
 	/// neither. That is exactly why `truncate` is a separate method — a name can say the direction
 	/// where an argument cannot.
 	///
-	/// The refusal reaches only element types the compiler KNOWS. Inside a generic body the element
-	/// is still a parameter, one body serves every instantiation, and `Map`/`Set` build their slot
-	/// tables through exactly that path — they track occupancy in a parallel `states` column and
-	/// never read a slot they did not write. `__ManagedMemory.setLength` is the layer where an
-	/// unwritten slot is a defined state, and it stays available for that.
+	/// Inside a generic body the element is a parameter and one body serves every instantiation, so
+	/// a body you write is refused when any instantiation of its type has no zero value. A standard
+	/// library body is not: `Map`/`Set` build their slot tables through exactly this call — they
+	/// track occupancy in a parallel `states` column and never read a slot they did not write.
+	/// `__ManagedMemory.setLength` is the layer where an unwritten slot is a defined state, and it
+	/// stays available for that.
 	///
 	/// Shrinking releases the elements that leave the live range.
 	public function resize(newLength ElementIndex)

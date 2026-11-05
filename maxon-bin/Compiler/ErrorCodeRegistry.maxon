@@ -1181,12 +1181,20 @@ export enum ErrorCode
 	// no default constructor, so there is nothing correct to put there, and the array it hands
 	// back is one whose `count()` does not agree with its `get()` -- `count()` says N while
 	// `get(0)` throws. Refused at the call site, naming the element type.
-	// The same call is refused for an inline element whose range excludes zero (`int(1 to 100)`): the grown
-	// slots hold zero, which is not a value of the element. So are the other producers of slots nothing
+	// The same call is refused for an inline element that has no zero value: a ranged alias whose range
+	// excludes zero (`int(1 to 100)`), or a payload-free enum or union whose raw values (tags) include no 0.
+	// The grown slots hold zero, which is not a value of the element; for an enum or union it names no case,
+	// so a `match` over the element would not be exhaustive. So are the other producers of slots nothing
 	// wrote, over such an element: `__ManagedMemory.setLength` and `FixedArray.create`.
 	// `Array.create(n)` and `create(n, zeroed: true)` over such an element are refused the same way, because
 	// they publish `n` zeroed slots. `create(0)` is legal for every element, and `create(n, zeroed: false)`
-	// reserves room for `n` elements and publishes none; append with `push(value)`.
+	// reserves room for `n` elements and publishes none; append with `push(value)`, or fill with
+	// `growFilled(newLength, value:)` naming a case. An enum or union that gains a case whose raw value is 0 admits
+	// the zeroed forms.
+	// In a generic body the element is a type parameter and one body serves every instantiation, so the
+	// instantiations decide: `create(n)` over the parameter and a `FixedArray with N <type parameter>`'s
+	// `create()` are refused when any instantiation of the type is at such an element or a managed one, and
+	// so is `resize` in a body you wrote, because that one call zeroes the slots for every instantiation.
 	// The refusal covers the WHOLE call and not only its growing half, because which half a
 	// `resize(n)` is cannot be known until it runs: `n` is compared against a length, and a
 	// compiler holds neither. The two halves therefore split by NAME. Growing supplies the element
@@ -1195,11 +1203,10 @@ export enum ErrorCode
 	// available for every element type. All three are stdlib/Array.maxon's, and BOTH compilers compile
 	// that file -- The compiler loads all of stdlib/ -- so the cures are the same
 	// on both. the compiler's message text still names only `push`, which understates the other two.
-	// It is refused only where the element type is KNOWN. An element that is still an unbound
-	// type parameter is not: one generic body serves every instantiation, and the deliberately
-	// sparse slot tables in `stdlib/Map.maxon` and `stdlib/Set.maxon` are built exactly that way
-	// -- they track occupancy in a parallel `states` column and never read a slot they did not
-	// write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
+	// A standard library body's `resize` over an unbound type parameter is not refused: the
+	// deliberately sparse slot tables in `stdlib/Map.maxon` and `stdlib/Set.maxon` are built exactly
+	// that way -- they track occupancy in a parallel `states` column and never read a slot they did
+	// not write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
 	// and it stays available for every element that admits zero.
 	semanticArrayResizeManagedElement = "E3106"
 
