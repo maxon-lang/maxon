@@ -391,6 +391,7 @@ facts worth knowing before you get there:
   the change touched; the full corpora are CI's. Every other corpus runs only when someone names it, but CI BUILDS every one of them on every lane (`scripts/build-test-corpora.sh`: `maxon test tests/<corpus> --list --build` for each tracked directory directly under `tests/` that holds a `.maxtest`), so a corpus that stops compiling fails the run that broke it.
   Both also run `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory,
   and `maxon check-stdlib`, which compiles every `stdlib/` function for every target whether or not a program calls it.
+  CI also runs a filtered spec suite with `MAXON_SOURCE_ORDER=reversed`, the knob that checks the compiler does not depend on file or declaration order (see `StdlibLoader.maxon`'s header).
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing

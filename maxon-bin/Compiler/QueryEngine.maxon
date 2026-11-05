@@ -151,7 +151,9 @@ let FlagRadix = 2
 // filtered for — see `SharedBuildView`.
 export function buildKeyOf(project Project) returns BuildKey
 	let flagDigit = 1 if project.debugStream else 0
-	return ((((project.target.cpu.ordinal * Os.allCases.count()) + project.target.os.ordinal) * FlagRadix) + flagDigit) as BuildKey
+	let orderDigit = 1 if project.session.sourceOrder.reversesTheWalk() else 0
+	let flagged = (((project.target.cpu.ordinal * Os.allCases.count()) + project.target.os.ordinal) * FlagRadix) + flagDigit
+	return ((flagged * FlagRadix) + orderDigit) as BuildKey
 end 'buildKeyOf'
 
 // What the `#if` filter is evaluated against for this project — the same facts `buildKeyOf` packs.

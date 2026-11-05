@@ -9421,7 +9421,7 @@ let ByteViewMethod = b"bytes"
 // `Parser.atModuleModifier` for the measurement that forbids a `KeywordTable` entry.
 // `module` and not file-private: `maxon fmt` has to recognize the same contextual keyword to know that
 // `module function f()` opens a block, and it holds no `Parser` to ask. See `Formatter.emitRealToken`.
-let ModuleModifierName = b"module"
+module let ModuleModifierName = b"module"
 
 module function spellsModuleModifier(kind TokenKind, value ByteArray) returns bool
 	return kind == TokenKind.identifier and value.equals(ModuleModifierName)
@@ -19638,6 +19638,7 @@ export type Parser
 
 	var genericBindings = GenericBindingScope.empty()
 	var genericInstanceName = GenericInstanceBody.none
+	var pendingBareAliases = ConformerBareAliasArray.create()
 
 	// A REUSED sink for the REAL parse's generic-instance typealiases. The whole-program index
 	// records every generic alias in the SWEEP (`foldFile`), so the real parse's `readTypeAliasDeclaration`
@@ -25163,7 +25164,7 @@ export type Parser
 					// Into the FILE's function-alias array, the one a top-level `typealias Fn = function(…)`
 					// lands in — under BOTH its bare name and `<Type>.<member>`, because a nested one declares
 					// both scopes (see `publishNestedFunctionAlias`).
-					functionAlias(alias) then self.publishNestedFunctionAlias(alias, into: functionAliasOut)
+					functionAlias(alias) then self.publishNestedFunctionAlias(alias, keys: NestedAliasKeys.bareAndQualified, into: functionAliasOut)
 				end 'nested'
 
 				continue
@@ -25724,7 +25725,7 @@ export type Parser
 						// the file-scope reading a top-level `typealias Fn = function(…)` has, and the
 						// `<conformer>.<member>` one is what the body resolves — the same `<Type>.<member>` key
 						// the three per-instance forms above take, for the same reason.
-						functionAlias(alias) then self.publishNestedFunctionAlias(alias, into: functionAliasOut)
+						functionAlias(alias) then self.publishNestedFunctionAlias(alias, keys: self.nestedAliasKeys(self.extendedInterfaceName(header)), into: functionAliasOut)
 					end 'nested'
 
 					continue
@@ -25778,6 +25779,8 @@ export type Parser
 
 			self.closeTypeParamScope()
 		end 'eachConformer'
+
+		self.publishPendingBareAliases(functionAliasOut)
 
 		// Folded through `ProgramSignatures.foldFile` — the SAME door a file's own declarations go through, so
 		// there is one place that decides what a scanned signature means. Everything an extension does not
@@ -28624,25 +28627,45 @@ export type Parser
 	// probes the qualified key only after the BARE one has hit, which is sound precisely because a nested
 	// declaration always files both. See there.
 	//
-	// The bare key stays LAST-WINS across declarations, unchanged and deliberately so: that is the cross-file
-	// "two function aliases with different signatures" case `specs/type-name-collision.md` calls out of
-	// scope. Nothing here narrows or widens it.
+	// The bare key stays LAST-WINS across declarations: that is the cross-file "two function aliases with
+	// different signatures" case `specs/type-name-collision.md` calls out of scope. An interface extension
+	// is the exception in WHICH one wins: its bare entries, one per conformer, are held in
+	// `pendingBareAliases` and published by `publishPendingBareAliases` sorted by conformer name, so the
+	// winner does not depend on library file order or declaration order.
 	//
 	// ⚠ **THE NON-EMPTY PRECONDITION IS CHECKED, NOT MERELY WRITTEN DOWN** — `namespaceQualifiedName`'s guard
 	// for its reason. All three callers are inside a type or extension body and cannot reach here otherwise,
 	// which is exactly why a fourth that forgot would file `.Fn` — a key no source can spell, unreachable
 	// behind the read door's own `isEmpty` gate, and red nowhere. Once per DECLARATION, so the test is free.
-	function publishNestedFunctionAlias(alias FunctionTypeAlias, into FunctionTypeAliasArray)
+	function publishNestedFunctionAlias(alias FunctionTypeAlias, keys NestedAliasKeys, into FunctionTypeAliasArray)
 		if not self.enclosingType.isType() 'noEnclosingType'
 			panic("publishNestedFunctionAlias: nested function typealias '{String.from(alias.name)}' was published with an EMPTY enclosing type — every caller reads a `type`/`extension` BODY, where `enterTypeScope` has set one")
 		end 'noEnclosingType'
 
 		let qualified = self.innerAliasKey(alias.name)
 
-		into.push(alias)
+		match keys 'keys'
+			bareAndQualified then into.push(alias)
+			bareInCanonicalOrder then self.pendingBareAliases.push(ConformerBareAlias.create(self.enclosingTypeName(), alias: alias))
+		end 'keys'
+
 		into.push(alias.underName(qualified))
 		self.signatures.recordNestedFunctionAlias(qualified)
 	end 'publishNestedFunctionAlias'
+
+	function nestedAliasKeys(extendedInterface InterfaceName) returns NestedAliasKeys
+		return NestedAliasKeys.bareInCanonicalOrder if extendedInterface.isNamed() else NestedAliasKeys.bareAndQualified
+	end 'nestedAliasKeys'
+
+	function publishPendingBareAliases(into FunctionTypeAliasArray)
+		self.pendingBareAliases.sortBy(function(left, right) gives compareBytesOrdinally(left.conformer, right: right.conformer))
+
+		for pending in self.pendingBareAliases 'eachPending'
+			into.push(pending.alias)
+		end 'eachPending'
+
+		self.pendingBareAliases.clear()
+	end 'publishPendingBareAliases'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS** — `typealias IntBox = Box with Integer`. The cursor
 	// sits on the base identifier. It RECORDS the instance into `genericOut` (which `foldFile` interns
@@ -30438,6 +30461,7 @@ export type Parser
 			self.extensionInterfaceName = InterfaceName.none
 		end 'eachConformer'
 
+		self.publishPendingBareAliases(self.artifact.functionTypeAliases)
 		self.pos = bodyStart
 		self.advanceToOutermostBlockEnd()
 		try self.consumeBlockEnd(header.nameTok.value, labelIsRequired: false)
@@ -32628,7 +32652,7 @@ export type Parser
 				ranged or
 				genericInstance or
 				tupleAlias then return
-				functionAlias(alias) then self.publishNestedFunctionAlias(alias, into: self.artifact.functionTypeAliases)
+				functionAlias(alias) then self.publishNestedFunctionAlias(alias, keys: self.nestedAliasKeys(self.extensionInterfaceName), into: self.artifact.functionTypeAliases)
 			end 'nested'
 
 			return
@@ -89180,7 +89204,7 @@ export type Parser
 			return declared
 		end 'theInstanceFixesNothingHere'
 
-		let viewName = self.signatures.instanceViewAliasName(alias.name, gid: gid)
+		let viewName = self.signatures.instanceViewAliasName(alias, gid: gid)
 
 		if not self.instanceViewAliasAt.contains(viewName) 'firstViewInThisFile'
 			self.instanceViewAliasAt.upsert(viewName.clone(), value: self.artifact.functionTypeAliases.count())

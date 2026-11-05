@@ -6430,6 +6430,20 @@ export type FunctionAliasRegistry
 		return names
 	end 'multiplyDeclaredNames'
 
+	export function sharesItsNameWithACorpusDeclaration(name ByteArray) returns bool
+		if not self.multiplyDeclared.contains(name) 'declaredByOneFile'
+			return false
+		end 'declaredByOneFile'
+
+		for (declPath, _) in self.declarationsOf(name) 'eachDeclaringFile'
+			if self.provenance.declaresInTheCorpus(declPath) 'aCorpusDeclaration'
+				return true
+			end 'aCorpusDeclaration'
+		end 'eachDeclaringFile'
+
+		return false
+	end 'sharesItsNameWithACorpusDeclaration'
+
 	function anAuthorDeclares(byFile FunctionAliasByDeclaringFile) returns bool
 		var declPaths = StringArray.create()
 
@@ -12636,16 +12650,54 @@ export union CompileInterest
 	end 'stillWanted'
 end 'CompileInterest'
 
+export let SourceOrderVariable = "MAXON_SOURCE_ORDER"
+export let ReversedSourceOrderValue = "reversed"
+
+export union SourceOrder
+	natural
+	reversed
+	unrecognized(let text String)
+
+	export function reversesTheWalk() returns bool
+		return match self 'order'
+			natural gives false
+			reversed gives true
+			unrecognized gives false
+		end 'order'
+	end 'reversesTheWalk'
+end 'SourceOrder'
+
+export function sourceOrderFromEnvironment() returns SourceOrder
+	let text = try Process.environmentVariable(SourceOrderVariable) otherwise (e) 'unset'
+		match e 'error'
+			variableUnset then return SourceOrder.natural
+			environmentUnreadable then return SourceOrder.natural
+			pathUnavailable then return SourceOrder.natural
+		end 'error'
+	end 'unset'
+
+	if text.isEmpty() 'emptyIsNatural'
+		return SourceOrder.natural
+	end 'emptyIsNatural'
+
+	if text == ReversedSourceOrderValue 'reversedWalk'
+		return SourceOrder.reversed
+	end 'reversedWalk'
+
+	return SourceOrder.unrecognized(text)
+end 'sourceOrderFromEnvironment'
+
 export type CompileSession
 	export var diagnostics as DiagnosticSink
 	export var fileMemos as SharedFileMemoMap
 	export var treeLock as LockHold
+	export let sourceOrder as SourceOrder
 	var interest as CompileInterest
 	var interestAskedMs as InstantMs
 	var abandoned as bool
 
 	export static function create(diagnostics DiagnosticSink, fileMemos SharedFileMemoMap, treeLock LockHold) returns CompileSession
-		return Self{diagnostics: diagnostics, fileMemos: fileMemos, treeLock: treeLock, interest: CompileInterest.always, interestAskedMs: Clock.nowMs(), abandoned: false}
+		return Self{diagnostics: diagnostics, fileMemos: fileMemos, treeLock: treeLock, sourceOrder: sourceOrderFromEnvironment(), interest: CompileInterest.always, interestAskedMs: Clock.nowMs(), abandoned: false}
 	end 'create'
 
 	export static function printing() returns CompileSession

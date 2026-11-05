@@ -1115,6 +1115,19 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// The position is required. The guest contends for the same tree lock file, so the host must not
 	// hold it yet; `requireRunnerAvailable` is the delegation's preflight, and `refuseIfStale` proves
 	// the binary that builds the guest's compiler current.
+	let delegated = match runStrategyFor(effectiveTarget) 'delegation'
+		inGuest gives true
+		individually or
+		wslBatch or
+		orbBatch or
+		noneHere gives false
+	end 'delegation'
+
+	if delegated and sourceOrderFromEnvironment().reversesTheWalk() 'aGuestWouldReadNaturalOrder'
+		printError("error: {SourceOrderVariable} reaches the compiler on this host and not the one inside the guest that runs the {targetToString(effectiveTarget)} suite, so the run would read natural order whatever it was asked. Run the suite inside the guest, or unset {SourceOrderVariable}\n")
+		return OwnFailureExit
+	end 'aGuestWouldReadNaturalOrder'
+
 	match runStrategyFor(effectiveTarget) 'lane'
 		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, resultTarget: resultTarget)
 		individually or
@@ -1634,6 +1647,8 @@ module function reportCompileError(e CompileError, sink DiagnosticSink = Diagnos
 		invalidOutputPath or
 		stdlibNotFound or
 		runtimeNotFound or
+		sourceOrderUnrecognized or
+		sourceNotReorderable or
 		runtimeTierIsNotAProgram or
 		runtimeIrNameAbsent or
 		unidentifiablePath or
@@ -1657,6 +1672,8 @@ module function driverErrorSentence(e CompileError) returns String
 		readError(p) gives "could not read {p}"
 		stdlibNotFound gives "could not locate the stdlib/ directory (every compile loads stdlib source)"
 		runtimeNotFound gives "could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)"
+		sourceNotReorderable(p, line) gives "{p}:{line}: {SourceOrderVariable}={ReversedSourceOrderValue} reverses top-level declarations, and it cannot place the top-level declaration at this line: a declaration is a line's first token and its block closes with an `end` in the same column as that first token. Align them, or unset {SourceOrderVariable}"
+		sourceOrderUnrecognized(text) gives "{SourceOrderVariable} is '{text}', and its only value is 'reversed'. Unset it, or set it to 'reversed'"
 		runtimeTierIsNotAProgram(r) gives "{r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it"
 		runtimeIrNameAbsent(name) gives "this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the pin would pin nothing, and neither would {EmitIrRuntimeFlagPrefix}{name} render anything. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, and an unreached stdlib body is eliminated"
 		unidentifiablePath(reason) gives reason

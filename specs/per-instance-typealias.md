@@ -2125,6 +2125,136 @@ end 'main'
 0
 ```
 
+<!-- test: an-interface-extension-member-of-the-programs-wins-over-the-librarys-on-the-programs-own-conformer -->
+`Zebra` is a generic conformer of the program's own whose name sorts after every library conformer's, so the
+bare `ElementTransform` key holds its element in both declarations. `map` still takes the library's one parameter
+and `combine` the program's two.
+```maxon
+// --- file: ext.maxon
+export extension Iterable
+	export typealias ElementTransform = function(Element, Element) returns Element
+
+	export function combine(transform ElementTransform, seed Element) returns Element
+		var total = seed
+
+		for item in self 'each'
+			total = transform(total, item)
+		end 'each'
+
+		return total
+	end 'combine'
+end 'Iterable'
+
+// --- file: main.maxon
+typealias Quantum = int(0 to 99)
+
+type Zebra uses Item implements Iterable with (Item, ZebraCursor)
+	typealias ZebraCursor = ArrayIterator with Item
+	typealias ZebraItems = Array with Item
+	var items as ZebraItems
+
+	static function make() returns Self
+		return Self{items: ZebraItems.create()}
+	end 'make'
+
+	function add(item Item)
+		self.items.push(item)
+	end 'add'
+
+	function createIterator() returns ZebraCursor throws IterationError
+		return try self.items.createIterator()
+	end 'createIterator'
+end 'Zebra'
+
+typealias QuantumZebra = Zebra with Quantum
+
+function main() returns ExitCode
+	var sack = QuantumZebra.make()
+	sack.add(3)
+	sack.add(1)
+
+	var mapped = sack.map(function(n) gives n)
+	mapped.push(5)
+
+	let total = sack.combine(function(a, b) gives (a + b) as Quantum, seed: 0)
+	print("{mapped.count()} {total}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 4
+```
+```exitcode
+0
+```
+
+<!-- test: an-interface-extension-member-of-the-programs-wins-for-a-plain-array-beside-a-conformer-that-sorts-last -->
+The same declarations with the receivers swapped for the original shape: the program's `Zebra` still sorts after
+every library conformer, and a plain `Array` is the receiver of `map` and of `combine`.
+```maxon
+// --- file: ext.maxon
+export extension Iterable
+	export typealias ElementTransform = function(Element, Element) returns Element
+
+	export function combine(transform ElementTransform, seed Element) returns Element
+		var total = seed
+
+		for item in self 'each'
+			total = transform(total, item)
+		end 'each'
+
+		return total
+	end 'combine'
+end 'Iterable'
+
+// --- file: main.maxon
+typealias Quantum = int(0 to 99)
+typealias Quantums = Array with Quantum
+
+type Zebra uses Item implements Iterable with (Item, ZebraCursor)
+	typealias ZebraCursor = ArrayIterator with Item
+	typealias ZebraItems = Array with Item
+	var items as ZebraItems
+
+	static function make() returns Self
+		return Self{items: ZebraItems.create()}
+	end 'make'
+
+	function add(item Item)
+		self.items.push(item)
+	end 'add'
+
+	function createIterator() returns ZebraCursor throws IterationError
+		return try self.items.createIterator()
+	end 'createIterator'
+end 'Zebra'
+
+typealias QuantumZebra = Zebra with Quantum
+
+function main() returns ExitCode
+	var zebra = QuantumZebra.make()
+	zebra.add(2)
+
+	var xs = Quantums.create()
+	xs.push(3)
+	xs.push(1)
+
+	var mapped = xs.map(function(n) gives n)
+	mapped.push(5)
+
+	let total = xs.combine(function(a, b) gives (a + b) as Quantum, seed: 0)
+	let zebraTotal = zebra.combine(function(a, b) gives (a + b) as Quantum, seed: 0)
+	print("{mapped.count()} {total} {zebraTotal}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 4 2
+```
+```exitcode
+0
+```
+
 <!-- test: an-extension-that-declares-no-member-reads-the-librarys -->
 The control: no program declaration of `ElementArray`, so the program's `extension Array` spells the
 library's, an `Array`.

@@ -1,0 +1,30 @@
+let ClosedLiteralCaseDirName = "a-reversed-source-order-keeps-a-literal-closed-in-column-one"
+let ClosedLiteralOrderVariable = "MAXON_SOURCE_ORDER"
+let ClosedLiteralReversed = "reversed"
+let ClosedLiteralOutputFlagPrefix = "--output="
+let ClosedLiteralEmitIrFlag = "--emit-ir"
+let ClosedLiteralIrSuffix = ".ir"
+let ClosedLiteralSource = "typealias Weight = int(0 to 99)\n\nlet table = [\n\t3,\n\t4,\n\t5\n]\n\nfunction total() returns Weight\n\tvar sum = 0 as Weight\n\n\tfor w in table 'each'\n\t\tsum = (sum + w) as Weight\n\tend 'each'\n\n\treturn sum\nend 'total'\n\nfunction main() returns ExitCode\n\treturn total() as ExitCode\nend 'main'\n"
+
+function buildClosedLiteral(dir FilePath, stem String, order String) returns CollectedOutput
+	let output = dir.join(stem)
+	return spawnCompiler([BuildCommandWord, dir.toString(), "{ClosedLiteralOutputFlagPrefix}{output.toString()}", ClosedLiteralEmitIrFlag], staged: dir, environment: Environment.inheritUpdating([ClosedLiteralOrderVariable: order]))
+end 'buildClosedLiteral'
+
+test 'reversing the declarations of a file keeps a multi-line literal whose closing bracket is in column one'
+	let dir = freshCaseDir(ClosedLiteralCaseDirName)
+	writeStagedFile(dir.join(StagedProgramFileName), content: ClosedLiteralSource)
+
+	let natural = buildClosedLiteral(dir, stem: "natural", order: "")
+	let naturalSaid = "It wrote to stdout: {natural.stdout} and to stderr: {natural.stderr}"
+	Expect.equal(natural.exitCode(), expected: 0, message: "the natural build failed. {naturalSaid}")
+
+	let reversed = buildClosedLiteral(dir, stem: "reversed", order: ClosedLiteralReversed)
+	let reversedSaid = "It wrote to stdout: {reversed.stdout} and to stderr: {reversed.stderr}"
+	Expect.equal(reversed.exitCode(), expected: 0, message: "the reversed build failed. {reversedSaid}")
+
+	let naturalIr = File.readText(dir.join("natural{ClosedLiteralIrSuffix}"))
+	let reversedIr = File.readText(dir.join("reversed{ClosedLiteralIrSuffix}"))
+	Expect.isFalse(naturalIr.isEmpty(), message: "the natural build wrote no Target IR. {naturalSaid}")
+	Expect.isTrue(naturalIr == reversedIr, message: "reversing the declarations changed the Target IR of a file holding a literal closed in column one")
+end 'reversing the declarations of a file keeps a multi-line literal whose closing bracket is in column one'

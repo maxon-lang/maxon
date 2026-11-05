@@ -1,0 +1,16 @@
+let AnUnrecognizedSourceOrderIsRefusedCaseDirName = "an-unrecognized-source-order-is-refused"
+let UnrecognizedOrderVariableName = "MAXON_SOURCE_ORDER"
+let UnrecognizedOrder = "sideways"
+let UnrecognizedOrderRefusal = "its only value is 'reversed'"
+let UnrecognizedOrderProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'an unrecognized source order is refused naming the one value there is'
+	let dir = freshCaseDir(AnUnrecognizedSourceOrderIsRefusedCaseDirName)
+	let source = dir.join(StagedProgramFileName)
+	writeStagedFile(source, content: UnrecognizedOrderProgramSource)
+
+	let build = spawnCompiler([BuildCommandWord, source.toString()], staged: dir, environment: Environment.inheritUpdating([UnrecognizedOrderVariableName: UnrecognizedOrder]))
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+	Expect.equal(build.exitCode(), expected: 1, message: "`{UnrecognizedOrderVariableName}={UnrecognizedOrder}` did not exit 1. {said}")
+	Expect.contains(build.stderr, needle: UnrecognizedOrderRefusal, message: "the refusal does not name the value there is. {said}")
+end 'an unrecognized source order is refused naming the one value there is'

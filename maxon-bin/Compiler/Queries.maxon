@@ -180,7 +180,8 @@ module function queryActiveTokens(project Project, path FilePath, lexing LexSour
 	// callers per file with no error gate between them, so anything not cached here would be computed
 	// — and reported — twice. Caching is sound because the key is the file's content hash, so the
 	// empty stream can only ever be served back for the bytes that produced it.
-	let filtered = activeTokensOrReported(project, path: path, tokens: tokens, lexing: lexing)
+	let resolved = activeTokensOrReported(project, path: path, tokens: tokens, lexing: lexing)
+	let filtered = FilteredTokens.create(try declarationsInSourceOrder(path, tokens: resolved.value, order: project.session.sourceOrder), filtered: resolved.filtered)
 
 	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(filtered.value, keyHash: entry.contentHash))
 
@@ -222,6 +223,160 @@ function activeTokensOrReported(project Project, path FilePath, tokens TokenArra
 
 	return FilteredTokens.create(active, filtered: true)
 end 'activeTokensOrReported'
+
+typealias DeclarationStartArray = Array with ElementIndex
+
+function declarationsInSourceOrder(path FilePath, tokens TokenArray, order SourceOrder) returns TokenArray throws CompileError
+	if not order.reversesTheWalk() 'asWritten'
+		return tokens
+	end 'asWritten'
+
+	let starts = try topLevelDeclarationStarts(path, tokens: tokens)
+
+	if starts.isEmpty() 'nothingToReorder'
+		return tokens
+	end 'nothingToReorder'
+
+	var reordered = TokenArray.create()
+	let lastToken = try tokens.get(tokens.count() - 1) otherwise panic("declarationsInSourceOrder: a stream holding declarations is not empty")
+	var chunkEnd = ((tokens.count() - 1) if lastToken.kind == TokenKind.eof else tokens.count()) as ElementIndex
+	let firstStart = try starts.get(0) otherwise panic("declarationsInSourceOrder: starts is not empty")
+
+	for position in 0 upto firstStart 'eachLeadingToken'
+		reordered.push(try tokens.get(position) otherwise panic("declarationsInSourceOrder: position {position} is outside the {tokens.count()} tokens"))
+	end 'eachLeadingToken'
+
+	var chunk = starts.count()
+
+	while chunk > 0 'eachChunkFromTheLast'
+		chunk = chunk - 1
+		let chunkStart = try starts.get(chunk) otherwise panic("declarationsInSourceOrder: chunk {chunk} is outside the {starts.count()} starts")
+
+		for position in chunkStart upto chunkEnd 'eachChunkToken'
+			reordered.push(try tokens.get(position) otherwise panic("declarationsInSourceOrder: position {position} is outside the {tokens.count()} tokens"))
+		end 'eachChunkToken'
+
+		let closing = try tokens.get(chunkEnd - 1) otherwise panic("declarationsInSourceOrder: a chunk holds at least its first token")
+
+		if closing.kind != TokenKind.newline 'unterminatedChunk'
+			reordered.push(Token.create(TokenKind.newline, line: closing.line, column: closing.column))
+		end 'unterminatedChunk'
+
+		chunkEnd = chunkStart
+	end 'eachChunkFromTheLast'
+
+	if lastToken.kind == TokenKind.eof 'endOfFile'
+		reordered.push(lastToken)
+	end 'endOfFile'
+
+	return reordered
+end 'declarationsInSourceOrder'
+
+// A block declaration ends at the first `end` in its own first token's column at bracket depth 0. A
+// top-level line that starts no declaration, or a block never so closed, throws `sourceNotReorderable`:
+// a guessed split would move tokens between declarations without any diagnostic.
+function topLevelDeclarationStarts(path FilePath, tokens TokenArray) returns DeclarationStartArray throws CompileError
+	var starts = DeclarationStartArray.create()
+	var bracketDepth = 0 as NestingDepth
+	var openBlockColumn = 0 as ColumnNumber
+	var lastLine = 0 as LineNumber
+
+	for position in 0 upto tokens.count() 'eachToken'
+		view token = try tokens.get(position) otherwise panic("topLevelDeclarationStarts: position {position} is outside the {tokens.count()} tokens")
+		let startsALine = position == 0 or tokenKindAt(tokens, index: position - 1) == TokenKind.newline
+		lastLine = token.line
+
+		if openBlockColumn != 0 'insideABlockDeclaration'
+			if bracketDepth == 0 and token.column == openBlockColumn and labelledBlockCloserAt(tokens, index: position) 'itsOwnCloser'
+				openBlockColumn = 0
+			end 'itsOwnCloser'
+		end 'insideABlockDeclaration' else if bracketDepth == 0 and startsALine and not tokenNeverStartsAStatement(token) 'aStatementStart'
+			if not startsATopLevelDeclaration(tokens, position: position) 'notADeclaration'
+				throw CompileError.sourceNotReorderable(path, line: token.line)
+			end 'notADeclaration'
+
+			starts.push(declarationStartWithItsDocComments(tokens, position: position))
+
+			if declarationOpensABlock(tokens, position: position) 'closedByAnAlignedEnd'
+				openBlockColumn = token.column
+			end 'closedByAnAlignedEnd'
+		end 'aStatementStart'
+
+		if tokenOpensABracket(token) 'opens'
+			bracketDepth = bracketDepth + 1
+		end 'opens' else if tokenClosesABracket(token) 'closes'
+			bracketDepth = bracketDepth - 1
+		end 'closes'
+	end 'eachToken'
+
+	if openBlockColumn != 0 'aDeclarationNeverClosed'
+		throw CompileError.sourceNotReorderable(path, line: lastLine)
+	end 'aDeclarationNeverClosed'
+
+	return starts
+end 'topLevelDeclarationStarts'
+
+function declarationOpensABlock(tokens TokenArray, position ElementIndex) returns bool
+	if testDeclarationAt(tokens, index: position) 'aTest'
+		return true
+	end 'aTest'
+
+	var at = position
+
+	while at < tokens.count() 'eachModifier'
+		let kind = tokenKindAt(tokens, index: at)
+
+		if kind == TokenKind.export or kind == TokenKind.public or kind == TokenKind.at or (kind == TokenKind.identifier and modifierOpensADeclaration(tokens, position: at)) 'aModifier'
+			at = at + 1
+			continue
+		end 'aModifier'
+
+		return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.extension
+	end 'eachModifier'
+
+	return false
+end 'declarationOpensABlock'
+
+function tokenNeverStartsAStatement(token Token) returns bool
+	return token.kind == TokenKind.newline or token.kind == TokenKind.eof or token.kind == TokenKind.docComment or token.kind == TokenKind.end
+end 'tokenNeverStartsAStatement'
+
+function tokenOpensABracket(token Token) returns bool
+	return token.kind == TokenKind.leftParen or token.kind == TokenKind.leftBracket or token.kind == TokenKind.leftBrace or token.kind == TokenKind.stringInterpStart
+end 'tokenOpensABracket'
+
+function tokenClosesABracket(token Token) returns bool
+	return token.kind == TokenKind.rightParen or token.kind == TokenKind.rightBracket or token.kind == TokenKind.rightBrace or token.kind == TokenKind.stringInterpEnd
+end 'tokenClosesABracket'
+
+function startsATopLevelDeclaration(tokens TokenArray, position ElementIndex) returns bool
+	let kind = tokenKindAt(tokens, index: position)
+
+	if kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.extension 'aKeywordDeclaration'
+		return true
+	end 'aKeywordDeclaration'
+
+	if kind == TokenKind.typealias or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.export or kind == TokenKind.public or kind == TokenKind.at or kind == TokenKind.default 'aBindingOrModifier'
+		return true
+	end 'aBindingOrModifier'
+
+	return testDeclarationAt(tokens, index: position) or (kind == TokenKind.identifier and modifierOpensADeclaration(tokens, position: position))
+end 'startsATopLevelDeclaration'
+
+function modifierOpensADeclaration(tokens TokenArray, position ElementIndex) returns bool
+	let word = try tokens.get(position) otherwise return false
+	return word.value.equals(ModuleModifierName) and tokenKindAt(tokens, index: position + 1) != TokenKind.newline
+end 'modifierOpensADeclaration'
+
+function declarationStartWithItsDocComments(tokens TokenArray, position ElementIndex) returns ElementIndex
+	var start = position
+
+	while start >= 2 and tokenKindAt(tokens, index: start - 1) == TokenKind.newline and tokenKindAt(tokens, index: start - 2) == TokenKind.docComment 'eachDocCommentLine'
+		start = start - 2
+	end 'eachDocCommentLine'
+
+	return start
+end 'declarationStartWithItsDocComments'
 
 function filteredTokens(project Project, tokens TokenArray, lexing LexSource) returns TokenArray throws DirectiveError
 	return match lexing 'source'

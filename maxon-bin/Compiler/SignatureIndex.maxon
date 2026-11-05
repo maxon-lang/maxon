@@ -13168,6 +13168,22 @@ end 'MethodInnerAliasParamEntry'
 
 export typealias MethodInnerAliasParamEntryArray = Array with MethodInnerAliasParamEntry
 
+module enum NestedAliasKeys
+	bareAndQualified
+	bareInCanonicalOrder
+end 'NestedAliasKeys'
+
+module type ConformerBareAlias
+	module let conformer as ByteArray
+	module let alias as FunctionTypeAlias
+
+	module static function create(conformer ByteArray, alias FunctionTypeAlias) returns ConformerBareAlias
+		return Self{conformer: conformer, alias: alias}
+	end 'create'
+end 'ConformerBareAlias'
+
+module typealias ConformerBareAliasArray = Array with ConformerBareAlias
+
 export union InterfaceName
 	none
 	named(let name ByteArray)
@@ -27624,9 +27640,19 @@ export type ProgramSignatures
 		return files
 	end 'functionValueArmDeclaringFiles'
 
-	export function instanceViewAliasName(name ByteArray, gid GenericInstanceId) returns ByteArray
-		return instanceQualifiedAliasName(name, canonicalInstance: self.canonicalInstanceName(gid))
+	export function instanceViewAliasName(alias FunctionTypeAlias, gid GenericInstanceId) returns ByteArray
+		return instanceQualifiedAliasName(self.viewedAliasName(alias), canonicalInstance: self.canonicalInstanceName(gid))
 	end 'instanceViewAliasName'
+
+	// A program alias whose bare name a library declaration also holds is viewed under a minted name, so
+	// the two declarations' views of one instance stay separate entries rather than sharing one.
+	function viewedAliasName(alias FunctionTypeAlias) returns ByteArray
+		if self.declaredByTheCorpus(alias.declFilePath) or not self.settledDeclarations().functionTypeAliases.sharesItsNameWithACorpusDeclaration(alias.name) 'nothingToTellApart'
+			return alias.name
+		end 'nothingToTellApart'
+
+		return qualifiedMintName(alias.name, qualifier: AuthorExtensionMemberQualifier)
+	end 'viewedAliasName'
 
 	export function functionAliasScopedName(name ByteArray, readerFilePath FilePath) returns ByteArray
 		return self.settledDeclarations().functionTypeAliases.shapeScopedName(name, readerFilePath: readerFilePath)

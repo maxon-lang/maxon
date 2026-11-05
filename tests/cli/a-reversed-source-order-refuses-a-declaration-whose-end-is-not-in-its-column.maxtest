@@ -1,0 +1,20 @@
+let UnalignedEndCaseDirName = "a-reversed-source-order-refuses-a-declaration-whose-end-is-not-in-its-column"
+let UnalignedEndOrderVariable = "MAXON_SOURCE_ORDER"
+let UnalignedEndReversed = "reversed"
+let UnalignedEndSource = "function main() returns ExitCode\n\treturn 0\n\tend 'main'\n"
+let UnalignedEndRefusal = "in the same column as that first token"
+
+test 'a reversed source order refuses a declaration whose end is not in its column rather than reading the file as written'
+	let dir = freshCaseDir(UnalignedEndCaseDirName)
+	let source = dir.join(StagedProgramFileName)
+	writeStagedFile(source, content: UnalignedEndSource)
+
+	let natural = spawnCompiler([BuildCommandWord, source.toString()], staged: dir)
+	let naturalSaid = "It wrote to stdout: {natural.stdout} and to stderr: {natural.stderr}"
+	Expect.equal(natural.exitCode(), expected: 0, message: "the natural build of a declaration with an indented end failed. {naturalSaid}")
+
+	let reversed = spawnCompiler([BuildCommandWord, source.toString()], staged: dir, environment: Environment.inheritUpdating([UnalignedEndOrderVariable: UnalignedEndReversed]))
+	let reversedSaid = "It wrote to stdout: {reversed.stdout} and to stderr: {reversed.stderr}"
+	Expect.equal(reversed.exitCode(), expected: 1, message: "the reversed build did not refuse the unaligned end. {reversedSaid}")
+	Expect.contains(reversed.stderr, needle: UnalignedEndRefusal, message: "the refusal does not name the alignment rule. {reversedSaid}")
+end 'a reversed source order refuses a declaration whose end is not in its column rather than reading the file as written'

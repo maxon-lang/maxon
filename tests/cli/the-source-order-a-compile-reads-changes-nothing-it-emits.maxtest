@@ -1,0 +1,35 @@
+let TheSourceOrderCaseDirName = "the-source-order-a-compile-reads-changes-nothing-it-emits"
+let SourceOrderVariableName = "MAXON_SOURCE_ORDER"
+let ReversedOrder = "reversed"
+let SourceOrderEmitIrFlag = "--emit-ir"
+let OutputFlagPrefix = "--output="
+let NaturalOutputStem = "natural"
+let ReversedOutputStem = "reversed"
+let SourceOrderIrSuffix = ".ir"
+let ExtensionFileName = "ext.maxon"
+let ExtensionSource = "export extension Iterable\n\texport typealias ElementTransform = function(Element, Element) returns Element\n\n\texport function combine(transform ElementTransform, seed Element) returns Element\n\t\tvar total = seed\n\n\t\tfor item in self 'each'\n\t\t\ttotal = transform(total, item)\n\t\tend 'each'\n\n\t\treturn total\n\tend 'combine'\nend 'Iterable'\n"
+let OrderSensitiveMainSource = "typealias Number = int(0 to 99)\ntypealias Numbers = Array with Number\n\nfunction main() returns ExitCode\n\tvar xs = Numbers.create()\n\txs.push(3)\n\txs.push(1)\n\n\tvar mapped = xs.map(function(n) gives n)\n\tmapped.push(5)\n\n\tlet total = xs.combine(function(a, b) gives (a + b) as Number, seed: 0)\n\tprint(\"\{mapped.count()} \{total}\\n\")\n\treturn 0\nend 'main'\n"
+
+function buildEmittingIr(dir FilePath, outputStem String, order String) returns CollectedOutput
+	let output = dir.join(outputStem)
+	return spawnCompiler([BuildCommandWord, dir.toString(), "{OutputFlagPrefix}{output.toString()}", SourceOrderEmitIrFlag], staged: dir, environment: Environment.inheritUpdating([SourceOrderVariableName: order]))
+end 'buildEmittingIr'
+
+test 'the order a compile reads its sources in changes no byte of the Target IR it emits'
+	let dir = freshCaseDir(TheSourceOrderCaseDirName)
+	writeStagedFile(dir.join(ExtensionFileName), content: ExtensionSource)
+	writeStagedFile(dir.join(StagedProgramFileName), content: OrderSensitiveMainSource)
+
+	let natural = buildEmittingIr(dir, outputStem: NaturalOutputStem, order: "")
+	let naturalSaid = "It wrote to stdout: {natural.stdout} and to stderr: {natural.stderr}"
+	Expect.equal(natural.exitCode(), expected: 0, message: "the build with {SourceOrderVariableName} unset failed. {naturalSaid}")
+
+	let reversed = buildEmittingIr(dir, outputStem: ReversedOutputStem, order: ReversedOrder)
+	let reversedSaid = "It wrote to stdout: {reversed.stdout} and to stderr: {reversed.stderr}"
+	Expect.equal(reversed.exitCode(), expected: 0, message: "the build with {SourceOrderVariableName}={ReversedOrder} failed. {reversedSaid}")
+
+	let naturalIr = File.readText(dir.join("{NaturalOutputStem}{SourceOrderIrSuffix}"))
+	let reversedIr = File.readText(dir.join("{ReversedOutputStem}{SourceOrderIrSuffix}"))
+	Expect.isFalse(naturalIr.isEmpty(), message: "the build with {SourceOrderVariableName} unset wrote no Target IR. {naturalSaid}")
+	Expect.isTrue(naturalIr == reversedIr, message: "the Target IR differs between the natural source order and {SourceOrderVariableName}={ReversedOrder}: the compiler's output depends on the order its files and declarations are read in")
+end 'the order a compile reads its sources in changes no byte of the Target IR it emits'

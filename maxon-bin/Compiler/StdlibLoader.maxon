@@ -26,7 +26,9 @@
 // not depend on file order to work correctly**, and the way that stays true is by not constraining the
 // input, so any dependence surfaces where it can be fixed. Where an ORDER genuinely matters it is
 // canonicalized at the point of emission, from something stable — never by constraining what the
-// loader was handed.
+// loader was handed. `MAXON_SOURCE_ORDER=reversed` (`SourceOrder`) is how that is checked: it reverses
+// the user and library file walks and each file's top-level declaration order, and CI runs a spec
+// suite under it.
 //
 // ⭐ MEASURED, not assumed, by running the loaders in raw `Directory.list` order and again in
 // DELIBERATELY REVERSED order:
@@ -320,7 +322,7 @@ function loadLibraryRoot(project Project, root FilePath, usersOwn MaxonSourcePat
 		return false
 	end 'contributedNothing'
 
-	for path in found 'each'
+	for path in inSourceOrder(found, order: project.session.sourceOrder) 'each'
 		if usersOwn.contains(path) 'theUsersOwnFile'
 			continue
 		end 'theUsersOwnFile'

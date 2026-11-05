@@ -795,6 +795,12 @@ export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdl
 		armAllocTally(project, phases: tallyPhases)
 	end 'tallied'
 
+	match project.session.sourceOrder 'order'
+		unrecognized(text) then throw CompileError.sourceOrderUnrecognized(text)
+		natural or
+		reversed then break
+	end 'order'
+
 	if rootIsUnder(project, libraryRoot: project.runtimeDir, cwd: Directory.currentPath()) 'aRuntimeTierRoot'
 		throw CompileError.runtimeTierIsNotAProgram(project.rootPath)
 	end 'aRuntimeTierRoot'
@@ -2030,7 +2036,7 @@ end 'reportBindingHygieneDiagnostics'
 // rather than surface it (see `StdlibLoader`'s header); where an order matters it is canonicalized
 // at the point of emission.
 function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection SourceSelection) throws CompileError
-	for path in try namedSourceFiles(paths, selection: selection) 'eachSource'
+	for path in inSourceOrder(try namedSourceFiles(paths, selection: selection), order: project.session.sourceOrder) 'eachSource'
 		try loadOneSourceFile(project, path: path)
 	end 'eachSource'
 
@@ -2038,6 +2044,20 @@ function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection 
 		throw CompileError.noSourceFiles(project.rootPath)
 	end 'noFiles'
 end 'loadSourceFiles'
+
+export function inSourceOrder(paths MaxonSourcePathArray, order SourceOrder) returns MaxonSourcePathArray
+	if not order.reversesTheWalk() 'asTheWalkFoundThem'
+		return paths
+	end 'asTheWalkFoundThem'
+
+	var reversed = MaxonSourcePathArray.create()
+
+	for position in 0 upto paths.count() 'eachPosition'
+		reversed.push(try paths.get(paths.count() - 1 - position) otherwise panic("inSourceOrder: position {position} is outside the {paths.count()} paths being reversed"))
+	end 'eachPosition'
+
+	return reversed
+end 'inSourceOrder'
 
 // A source reached twice — named directly, named through a link, or found again under a directory
 // that contains it — is listed once, at its first position, by physical identity. That is what
