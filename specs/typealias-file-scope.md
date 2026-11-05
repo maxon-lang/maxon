@@ -791,10 +791,10 @@ from that argument's instance, so each pass of the contest adds one nesting leve
 declaration graph by its depth, and unbounded on a cyclic one. `a.maxon` closes a cycle between its own
 `P` and `Q`, and the contest does not converge.
 
-⚠ **THE CYCLE WALK CANNOT CATCH IT.** `buildInstanceArgGraph` resolves a `named`
-argument through the bare LAST-WINS map, where `Q` means `main.maxon`'s `Array with P` and `P` means its
-`Array with High` — an ACYCLIC view of a program that cycles as soon as each file's declarations are read
-as that file's own. The non-convergence IS the detection.
+⚠ **THE CYCLE WALK CANNOT CATCH IT.** `buildInstanceArgGraph` gives a `named`
+argument whose name is contested no edge, and `P` and `Q` each mean a different type in `a.maxon` and in
+`main.maxon` — so the graph has no edge through either, though the program cycles as soon as each file's
+declarations are read as that file's own. The non-convergence IS the detection.
 ```maxon
 // --- file: a/a.maxon
 typealias P = Array with Q
@@ -816,6 +816,32 @@ end 'main'
 ```
 ```maxoncstderr
 error E3091: a/<fragment>:3:11: typealias 'P' forms a type cycle: its type arguments refer back to 'P'
+```
+
+<!-- test: error.cross-file-generic-alias-cycle-through-one-contested-name -->
+A cycle through exactly one contested name. `a.maxon` closes `A` and `B` over each other and `main.maxon` declares
+its own `B`, so `B` is the only contested name in the loop. The cycle is reported against the declaration in
+`a.maxon`, whichever order the files and declarations are read in.
+```maxon
+// --- file: a/a.maxon
+typealias A = Array with B
+typealias B = Array with A
+
+export function fromA() returns ExitCode
+	return 1
+end 'fromA'
+
+// --- file: main.maxon
+typealias High = int(1000 to 2000)
+typealias B = Array with High
+
+function main() returns ExitCode
+	var b = B.create()
+	return fromA() + (b.count() as ExitCode)
+end 'main'
+```
+```maxoncstderr
+error E2012: a/<fragment>:4:11: Circular typealias dependency: B
 ```
 
 

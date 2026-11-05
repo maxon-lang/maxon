@@ -12824,7 +12824,34 @@ typealias AliasHopCount = int(0 to u32.max)
 export union AliasCycleResult
 	at(index FieldIndex)
 	none
+
+	function blamedIndex() returns FieldIndex throws AbsentError
+		match self 'result'
+			at(index) then return index
+			none then throw AbsentError.absent
+		end 'result'
+	end 'blamedIndex'
 end 'AliasCycleResult'
+
+function aliasDeclaredBefore(candidate GenericAliasEntry, held GenericAliasEntry) returns bool
+	let byFile = comparePathIdentity(candidate.filePath, other: held.filePath)
+
+	if byFile != Ordering.equalTo 'differentFiles'
+		return byFile == Ordering.lessThan
+	end 'differentFiles'
+
+	let candidateLine = try aliasNameLine(candidate) otherwise return false
+	let heldLine = try aliasNameLine(held) otherwise return true
+
+	return candidateLine < heldLine
+end 'aliasDeclaredBefore'
+
+function aliasNameLine(entry GenericAliasEntry) returns LineNumber throws AbsentError
+	match entry.anchor 'anchor'
+		unanchored then throw AbsentError.absent
+		declaredAt(nameLine, _, _, _) then return nameLine
+	end 'anchor'
+end 'aliasNameLine'
 
 // @generated library-cache begin
 function cacheWriteAliasCycleResult(writer LibraryCacheWriter, value AliasCycleResult)
@@ -16802,10 +16829,10 @@ export type ProgramSignatures
 	// program that produces it is a program with a type cycle and **E3091 is the answer it is owed**.
 	//
 	// ⚠ **IT IS NOT REDUNDANT WITH THAT WALK, AND THE CASE THAT PROVES IT WAS MEASURED.** `buildInstanceArgGraph`
-	// resolves a `named` argument through `denotedInstance`, which reads the bare LAST-WINS map — so two files
-	// declaring `P = Array with Q` / `Q = Array with P` between them, where one file's `P` is `Array with High`,
-	// present an ACYCLIC last-wins view while the per-file view cycles. The graph walk answers `none` there and
-	// the fixpoint is the only thing that can see it.
+	// resolves a `named` argument through `denotedInstanceUnlessContested`, which gives a contested name no
+	// edge — so two files declaring `P = Array with Q` / `Q = Array with P` between them, where one file's `P`
+	// is `Array with High`, leave the graph without the edges through `P` and `Q` while the per-file view
+	// cycles. The graph walk answers `none` there and the fixpoint is the only thing that can see it.
 	var divergedGenericAliasDecl as AliasCycleResult
 
 	// The nested cascade walks in flight, innermost last, and the shallowest optimistic break any of them has
@@ -33230,20 +33257,34 @@ export type ProgramSignatures
 		self.resolveRecordedGenericAliasTypes()
 	end 'settleGenericAliasContest'
 
-	// The first declaration of a name the contest condemned — E3091's anchor when the fixpoint gives up. A
+	// The earliest declaration of a name the contest condemned — E3091's anchor when the fixpoint gives up. A
 	// contested name is by construction one whose declarations the walk was still re-minting, so any of them
-	// names a real participant in the cycle; the FIRST is chosen so the diagnostic is walk-order-free.
+	// names a real participant in the cycle; the EARLIEST by file path, then line, is chosen so the
+	// diagnostic does not depend on the order the files were folded in.
 	function firstContestedDeclaration() returns AliasCycleResult
+		var blamed = AliasCycleResult.none
+
 		for i in 0 upto self.settledDeclarations().genericAliasDecls.count() 'eachDeclaration'
 			let entry = try self.settledDeclarations().genericAliasDecls.get(i) otherwise panic("ProgramSignatures.firstContestedDeclaration: genericAliasDecls.get OOB at {i}")
 
 			if self.genericAliasSpellingIsSuperseded(entry.aliasName) 'itsNameIsContested'
-				return AliasCycleResult.at(i as FieldIndex)
+				blamed = self.earlierBlame(blamed, candidate: i)
 			end 'itsNameIsContested'
 		end 'eachDeclaration'
 
-		panic("ProgramSignatures.firstContestedDeclaration: the contest fixpoint ran past its bound with no contested name — a round only continues after filing one")
+		match blamed 'blamed'
+			at then return blamed
+			none then panic("ProgramSignatures.firstContestedDeclaration: the contest fixpoint ran past its bound with no contested name — a round only continues after filing one")
+		end 'blamed'
 	end 'firstContestedDeclaration'
+
+	function earlierBlame(held AliasCycleResult, candidate ElementIndex) returns AliasCycleResult
+		let heldIndex = (try held.blamedIndex() otherwise return AliasCycleResult.at(candidate as FieldIndex)) as ElementIndex
+		let heldEntry = try self.settledDeclarations().genericAliasDecls.get(heldIndex) otherwise panic("ProgramSignatures.earlierBlame: genericAliasDecls.get OOB at {heldIndex}")
+		let candidateEntry = try self.settledDeclarations().genericAliasDecls.get(candidate) otherwise panic("ProgramSignatures.earlierBlame: genericAliasDecls.get OOB at {candidate}")
+
+		return AliasCycleResult.at(candidate as FieldIndex) if aliasDeclaredBefore(candidateEntry, held: heldEntry) else held
+	end 'earlierBlame'
 
 	// One round of the fixpoint: group every declaration by name over the instance it means in its own file,
 	// and (re)file every disagreeing name. A name two files declare where an author takes part is filed too:
@@ -35504,7 +35545,8 @@ export type ProgramSignatures
 	//
 	// ⚠ **THE EDGE IS `denotedInstance`'S AND IS NOT SPELLED AGAIN HERE.** "Which instance does
 	// this type argument denote?" is ONE fact with three readers — this name, the identity + (tag, nameId)
-	// pair `checkTypeParameterArgsAt` reads through `canonicalTypeArg`, and the E3091 cycle graph's edge.
+	// pair `checkTypeParameterArgsAt` reads through `canonicalTypeArg`, and the E3091 cycle graph's edge
+	// (through `denotedInstanceUnlessContested`).
 	// Written out three times, a reader that learns an arm the others do not would call
 	// `Box with Bytes` and `Box with (Array with Byte)` two types where another calls them one, silently,
 	// in a name that mangled symbols are built from.
@@ -35884,15 +35926,15 @@ export type ProgramSignatures
 	// `throws` is `Map.get`'s own channel: "this argument denotes no instance" is the ordinary answer for a
 	// scalar, a `String`, a struct or a plain ranged alias, and it is the caller's to interpret — the two
 	// id readers skip the edge, and `canonicalTypeArg` hands the argument back unchanged.
-	// ⚠ **IT IS THE ONE REMAINING LAST-WINS READER OF A CONTESTED NAME, AND THAT IS DELIBERATE.**
-	// It bypasses `genericAliasInstance`'s refusal and `scopedGenericAliasInstance`'s tiers alike, and it has
-	// to: `buildInstanceArgGraph` walks EVERY interned instance, including the pre-re-key ones and the ones
-	// earlier contest rounds superseded, whose arguments are still the bare spellings the sweep left. A door
-	// that refused a contested name there would abort the cycle check on the very programs it exists for.
+	// ⚠ **FOR A CONTESTED NAME THIS ANSWERS THE LAST-WINS DECLARATION, AND THAT IS DELIBERATE.**
+	// It bypasses `genericAliasInstance`'s refusal and `scopedGenericAliasInstance`'s tiers alike.
+	// `buildInstanceArgGraph` walks EVERY interned instance, including the pre-re-key ones and the ones
+	// earlier contest rounds superseded, whose arguments are still the bare spellings the sweep left, so it
+	// asks `denotedInstanceUnlessContested` instead: a contested name means a different instance in each
+	// file declaring it, and the last-wins one would be a stranger's edge.
 	//
-	// What it answers is which instance a type ARGUMENT denotes, for two structural readers — the canonical
-	// type-argument name and that cycle graph's edge — and for a contested name it answers the LAST-WINS
-	// declaration. It is written
+	// What it answers is which instance a type ARGUMENT denotes, for the structural readers — the canonical
+	// type-argument name and the identity reads. It is written
 	// down here rather than left to be rediscovered: this is the one place the "no plausible
 	// answer without a file" rule is not applied, and the reason is that its callers have no file and no
 	// program type to be wrong about.
@@ -35910,13 +35952,22 @@ export type ProgramSignatures
 		return try self.settledDeclarations().genericAliases.get(self.nameOfId(typeNameIdOf(arg)))
 	end 'denotedInstance'
 
+	function denotedInstanceUnlessContested(arg MaxonType) returns GenericInstanceId throws MapError
+		if maxonTypeTag(arg) == ValueTypeTag.named and self.genericAliasSpellingIsSuperseded(self.nameOfId(typeNameIdOf(arg))) 'meansDifferentThingsInDifferentFiles'
+			throw MapError.keyNotFound
+		end 'meansDifferentThingsInDifferentFiles'
+
+		return try self.denotedInstance(arg)
+	end 'denotedInstanceUnlessContested'
+
 	// ⭐ **THE FIRST GENERIC ALIAS WHOSE TYPE ARGUMENTS LEAD BACK TO IT (E3091).** `typealias A = Box
 	// with A` and the mutual `A = Box with B` / `B = Box with A` describe INFINITE types — no finite layout,
 	// no finite compiled name — and without this check both compile clean and SEGFAULT at run time.
 	//
 	// Asked once per compile over the FINISHED table, so it needs none of the sweep's ordering: an alias
-	// reaches itself or it does not, whatever order the files were swept in. The BLAME is read in
-	// declaration-record order so the alias reported is a property of the program, not of a map's iteration.
+	// reaches itself or it does not, whatever order the files were swept in. The BLAME is the cyclic alias
+	// declared earliest (file path, then line), so the alias reported is a property of the program, not of
+	// fold order or a map's iteration.
 	//
 	// ⚠ **THE CYCLE SET IS COMPUTED ONCE FOR THE WHOLE GRAPH, NOT ONCE PER ALIAS — AND THAT IS A CUBIC
 	// AVOIDED, NOT A TIDY-UP.** A per-alias reachability sweep walks, for every alias, the
@@ -35938,16 +35989,16 @@ export type ProgramSignatures
 			return AliasCycleResult.none
 		end 'noAliasCanCloseACycle'
 
-		// ⭐ **A CYCLE THE GRAPH BELOW STRUCTURALLY CANNOT SEE** — its edges resolve a `named`
-		// argument through the bare LAST-WINS map, so a cycle that exists only once each file's declarations
-		// are read as that file's own is invisible here and is found instead by the contest fixpoint failing
-		// to converge. Asked FIRST because it is a fact already established, not a walk.
+		// ⭐ **A CYCLE THE GRAPH BELOW STRUCTURALLY CANNOT SEE** — it gives a `named` argument whose name
+		// is contested no edge, so a cycle that exists only once each file's declarations are read as that
+		// file's own is invisible here and is found instead by the contest fixpoint failing to converge. Asked FIRST because it is a fact already established, not a walk.
 		match self.divergedGenericAliasDecl 'contestDiverged'
 			at then return self.divergedGenericAliasDecl
 			none then break
 		end 'contestDiverged'
 
 		let onCycle = nodesOnACycle(self.buildInstanceArgGraph())
+		var blamed = AliasCycleResult.none
 
 		for i in 0 upto self.settledDeclarations().genericAliasDecls.count() 'eachDecl'
 			view entry = try self.settledDeclarations().genericAliasDecls.get(i) otherwise panic("firstCyclicAliasDecl: genericAliasDecls.get OOB at {i}")
@@ -35959,16 +36010,17 @@ export type ProgramSignatures
 			let gid = entry.internedInstance()
 
 			if (try onCycle.get(gid) otherwise panic("firstCyclicAliasDecl: alias '{String.from(entry.aliasName)}' names instance {gid}, outside the interner's own instance space")) 'cyclic'
-				return AliasCycleResult.at(i as FieldIndex)
+				blamed = self.earlierBlame(blamed, candidate: i)
 			end 'cyclic'
 		end 'eachDecl'
 
-		return AliasCycleResult.none
+		return blamed
 	end 'firstCyclicAliasDecl'
 
 	// The "instance ⇒ the instances its type arguments denote" graph, over the dense `GenericInstanceId`
 	// space. BOTH edge kinds — a nested `genericInstance` argument, and a `named` leaf that names an alias —
-	// are the one question `denotedInstance` answers, so this walk asks it rather than restating the alias
+	// are the one question `denotedInstance` answers, so this walk asks it (through
+	// `denotedInstanceUnlessContested`, which drops a contested name) rather than restating the alias
 	// lookup: the cycle check and the identity read traverse ONE graph rather than two views of it, and a
 	// `named` leaf the alias door starts (or stops) resolving cannot become an edge here and not there.
 	//
@@ -35980,7 +36032,7 @@ export type ProgramSignatures
 
 		for gid in 0 upto self.genericInstances.count() 'eachInstance'
 			for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
-				if let denoted = try self.denotedInstance(self.substitutedInstanceArg(gid, position: position)) 'denotesAnInstance'
+				if let denoted = try self.denotedInstanceUnlessContested(self.substitutedInstanceArg(gid, position: position)) 'denotesAnInstance'
 					argOf.push(gid as CsrIndex)
 					denotes.push(denoted as CsrIndex)
 				end 'denotesAnInstance'
@@ -35997,8 +36049,8 @@ export type ProgramSignatures
 	// for each. A message naming only the alias it was reported against says identical words for both.
 	//
 	// ⚠ **AN EMPTY ANSWER IS A REAL ANSWER, AND IT SELECTS THE OTHER DIAGNOSTIC.** `firstCyclicAliasDecl` has
-	// a second door — a CROSS-FILE cycle this graph structurally cannot see, because its edges resolve a
-	// `named` argument through the last-wins map, caught instead by the contest fixpoint failing to converge
+	// a second door — a CROSS-FILE cycle this graph structurally cannot see, because it gives a contested
+	// `named` argument no edge, caught instead by the contest fixpoint failing to converge
 	// (`divergedGenericAliasDecl`). Nothing there proves a cycle or names its members, so there is no path to
 	// render and `checkGenericAliasCycles` keeps E3091 and the sentence that says what IS known. The code and
 	// the words follow from what the compiler can prove, and this function is what knows which.

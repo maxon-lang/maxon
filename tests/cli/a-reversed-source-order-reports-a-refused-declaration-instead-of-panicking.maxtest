@@ -1,0 +1,23 @@
+let RefusedDeclarationCaseDirName = "a-reversed-source-order-reports-a-refused-declaration-instead-of-panicking"
+let RefusedDeclarationOrderVariable = "MAXON_SOURCE_ORDER"
+let RefusedDeclarationReversed = "reversed"
+let RefusedDeclarationDiagnostic = "a function type's parameter declared at the interface type 'Shape'"
+let RefusedDeclarationPanicMarker = "panic at"
+let RefusedDeclarationSource = "typealias Integer = int(i64.min to i64.max)\n\ninterface Shape\n\tfunction area() returns Integer\nend 'Shape'\n\ntype Sq implements Shape\n\tlet s as Integer\n\n\tfunction area() returns Integer\n\t\treturn self.s\n\tend 'area'\n\n\tstatic function create(s Integer) returns Self\n\t\treturn Self\{s: s}\n\tend 'create'\nend 'Sq'\n\ntypealias ShapeFn = function(Shape) returns Integer\n\nfunction apply(f ShapeFn, v Shape) returns Integer\n\treturn f(v)\nend 'apply'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'a refused declaration is reported, not tripped over, when the declarations that follow it are read before it'
+	let dir = freshCaseDir(RefusedDeclarationCaseDirName)
+	let source = dir.join(StagedProgramFileName)
+	writeStagedFile(source, content: RefusedDeclarationSource)
+
+	let natural = spawnCompiler([BuildCommandWord, source.toString()], staged: dir)
+	let naturalSaid = "It wrote to stdout: {natural.stdout} and to stderr: {natural.stderr}"
+	Expect.equal(natural.exitCode(), expected: 1, message: "the natural build did not refuse the program. {naturalSaid}")
+	Expect.contains(natural.stderr, needle: RefusedDeclarationDiagnostic, message: "the natural build did not report the refusal. {naturalSaid}")
+
+	let reversed = spawnCompiler([BuildCommandWord, source.toString()], staged: dir, environment: Environment.inheritUpdating([RefusedDeclarationOrderVariable: RefusedDeclarationReversed]))
+	let reversedSaid = "It wrote to stdout: {reversed.stdout} and to stderr: {reversed.stderr}"
+	Expect.equal(reversed.exitCode(), expected: 1, message: "the reversed build did not exit 1. {reversedSaid}")
+	Expect.isFalse(reversed.stderr.contains(RefusedDeclarationPanicMarker), message: "the reversed build panicked instead of reporting the refusal. {reversedSaid}")
+	Expect.contains(reversed.stderr, needle: RefusedDeclarationDiagnostic, message: "the reversed build did not report the refusal. {reversedSaid}")
+end 'a refused declaration is reported, not tripped over, when the declarations that follow it are read before it'

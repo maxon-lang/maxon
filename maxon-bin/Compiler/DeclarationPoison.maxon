@@ -477,33 +477,37 @@ function fileHeadUnder(table PoisonedDeclarationsByName, head DeclarationHead, f
 	table.upsert(head.name, value: held)
 end 'fileHeadUnder'
 
-function enclosingRegionAt(tokens TokenArray, line LineNumber) returns EnclosingRegion throws AbsentError
-	var enclosing = EnclosingRegion.lostHead(ByteArray.create())
-	var named = false
+// Scans every token rather than stopping at the first greater line: the stream's lines need not
+// ascend (`MAXON_SOURCE_ORDER=reversed` keeps the original line numbers), so an early exit would
+// settle on a head that is not the nearest.
+function enclosingHeadPositionAt(tokens TokenArray, line LineNumber) returns ElementIndex throws AbsentError
+	var head = 0 as ElementIndex
+	var headLine = 0 as LineNumber
+	var found = false
 
 	for position in 0 upto tokens.count() 'eachToken'
-		view token = try tokens.get(position) otherwise panic("enclosingRegionAt: tokens.get OOB at {position} below count {tokens.count()}")
+		view token = try tokens.get(position) otherwise panic("enclosingHeadPositionAt: tokens.get OOB at {position} below count {tokens.count()}")
 
-		if token.line > line 'pastTheLine'
-			break
-		end 'pastTheLine'
-
-		if tokenKindIsSkippedLayout(token.kind) 'layoutBetweenLines'
+		if token.line > line or token.column != DeclarationHeadColumn or tokenKindIsSkippedLayout(token.kind) 'notAHeadAtOrBeforeTheLine'
 			continue
-		end 'layoutBetweenLines'
+		end 'notAHeadAtOrBeforeTheLine'
 
-		if token.column == DeclarationHeadColumn 'aDeclarationHead'
-			named = false
-			enclosing = try regionHeadAt(tokens, position: position) otherwise continue
-			named = true
-		end 'aDeclarationHead'
+		if not found or token.line >= headLine 'theNearestHeadSoFar'
+			head = position
+			headLine = token.line
+			found = true
+		end 'theNearestHeadSoFar'
 	end 'eachToken'
 
-	if not named 'noDeclarationEncloses'
+	if not found 'noDeclarationEncloses'
 		throw AbsentError.absent
 	end 'noDeclarationEncloses'
 
-	return enclosing
+	return head
+end 'enclosingHeadPositionAt'
+
+function enclosingRegionAt(tokens TokenArray, line LineNumber) returns EnclosingRegion throws AbsentError
+	return try regionHeadAt(tokens, position: try enclosingHeadPositionAt(tokens, line: line))
 end 'enclosingRegionAt'
 
 function regionHeadAt(tokens TokenArray, position ElementIndex) returns EnclosingRegion throws AbsentError
@@ -529,32 +533,27 @@ end 'lostFunctionHeadAt'
 function enclosingMemberAt(tokens TokenArray, line LineNumber) returns ByteArray throws AbsentError
 	var member = ByteArray.create()
 	var named = false
+	var memberLine = 0 as LineNumber
 	var lineStartColumn = 1 as ColumnNumber
 	var previousLine = 0 as LineNumber
+	let headLine = (try tokens.get(try enclosingHeadPositionAt(tokens, line: line)) otherwise throw AbsentError.absent).line
 
 	for position in 0 upto tokens.count() 'eachToken'
 		view token = try tokens.get(position) otherwise panic("enclosingMemberAt: tokens.get OOB at {position} below count {tokens.count()}")
 
-		if token.line > line 'pastTheLine'
-			break
-		end 'pastTheLine'
-
-		if tokenKindIsSkippedLayout(token.kind) 'layoutBetweenLines'
+		if token.line > line or token.line < headLine or tokenKindIsSkippedLayout(token.kind) 'outsideTheEnclosingDeclaration'
 			continue
-		end 'layoutBetweenLines'
+		end 'outsideTheEnclosingDeclaration'
 
 		if token.line != previousLine 'aLineStarts'
 			previousLine = token.line
 			lineStartColumn = token.column
-
-			if token.column == DeclarationHeadColumn 'aDeclarationHead'
-				named = false
-			end 'aDeclarationHead'
 		end 'aLineStarts'
 
-		if token.kind == TokenKind.function and lineStartColumn > DeclarationHeadColumn and functionDeclarationShapeIn(tokens, index: position) 'aNestedFunction'
+		if token.kind == TokenKind.function and lineStartColumn > DeclarationHeadColumn and token.line >= memberLine and functionDeclarationShapeIn(tokens, index: position) 'aNestedFunction'
 			view name = try tokens.get(position + 1) otherwise panic("enclosingMemberAt: the name of the function at {position} is missing, though its shape was just read")
 			member = name.value.clone()
+			memberLine = token.line
 			named = true
 		end 'aNestedFunction'
 	end 'eachToken'
