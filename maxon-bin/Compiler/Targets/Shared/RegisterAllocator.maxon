@@ -1381,7 +1381,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 
 	// After the rewrite, which drops self-moves without renumbering: a run harvested before it would
 	// span ops that never reach the encoder, and every window would name code that is not there.
-	harvestDebugValueRanges(module, func: func, liveness: liveness, roster: debugValues, into: debugRanges)
+	harvestDebugValueRanges(module, func: func, liveness: liveness, roster: debugValues, locations: debugLocations, into: debugRanges)
 	costs.record(RegAllocPhase.rewrite.ordinal, probe: rewriteProbe)
 end 'allocateFunctionCore'
 
@@ -1426,7 +1426,7 @@ type DebugTouches
 	end 'byAnchor'
 end 'DebugTouches'
 
-function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, roster DebugValueRoster, into DebugValueRangeArray)
+function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, into DebugValueRangeArray)
 	if roster.valueIds.count() == 0 'nothingNamed'
 		return
 	end 'nothingNamed'
@@ -1521,6 +1521,8 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 			endOrd.clear(slot)
 		end 'eachRun'
 	end 'eachBlocksRuns'
+
+	appendSlotExtensions(into, liveness: liveness, roster: roster, locations: locations, names: names, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst, blockLast: blockLast, blockIdOfPlace: blockIdOfPlace, siteKeyOfPlace: siteKeyOfPlace)
 end 'harvestDebugValueRanges'
 
 // `byValue` lists each value's names in ascending site key — `over` feeds them site by site and
@@ -1601,6 +1603,17 @@ type DebugNameIndex
 	function siteKeyOf(name CsrIndex) returns DebugSiteKey
 		return debugSiteKeyAt(self.siteKeys, at: name)
 	end 'siteKeyOf'
+
+	function appliesAt(slot DebugNamedSlot, siteKey DebugSiteKey) returns bool
+		let own = self.siteKeyOf(slot as CsrIndex)
+		var enclosing = siteKey
+
+		while enclosing != own and enclosing != FunctionTextSiteKey 'climbs'
+			enclosing = debugSiteKeyAt(self.siteParents, at: enclosing as ElementIndex)
+		end 'climbs'
+
+		return enclosing == own
+	end 'appliesAt'
 end 'DebugNameIndex'
 
 function siteParentsOf(roster DebugValueRoster) returns DebugSiteKeyColumn
@@ -1644,6 +1657,172 @@ function openDebugRun(active DebugNamedSlotColumn, startOrd DebugAnchorColumn, e
 		endOrd.set(slot, value: at)
 	end 'widens'
 end 'openDebugRun'
+
+type DebugDefSite
+	export let local as ElementIndex
+	export let anchor as DebugOpAnchor
+	export let anchorKnown as bool
+
+	static function at(local ElementIndex, anchor DebugOpAnchor) returns DebugDefSite
+		return Self{local: local, anchor: anchor, anchorKnown: true}
+	end 'at'
+
+	static function somewhereIn(local ElementIndex) returns DebugDefSite
+		return Self{local: local, anchor: 0, anchorKnown: false}
+	end 'somewhereIn'
+end 'DebugDefSite'
+
+function debugDefSiteOf(index UseIndex, value ValueId, ordinalOfOp DebugAnchorColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn) returns DebugDefSite
+	return match index.defKindOf(value) 'def'
+		none gives debugDefSiteAtBlockStart(EntryBlockLocal, placeOfLocal: placeOfLocal, blockFirst: blockFirst)
+		opDef gives debugDefSiteOfOp(index, value: value, ordinalOfOp: ordinalOfOp)
+		phiDef gives debugDefSiteAtBlockStart(index.defBlockOf(value), placeOfLocal: placeOfLocal, blockFirst: blockFirst)
+	end 'def'
+end 'debugDefSiteOf'
+
+function debugDefSiteOfOp(index UseIndex, value ValueId, ordinalOfOp DebugAnchorColumn) returns DebugDefSite
+	let anchor = try ordinalOfOp.get(index.requireDefOp(value)) otherwise return DebugDefSite.somewhereIn(index.defBlockOf(value))
+	return DebugDefSite.at(index.defBlockOf(value), anchor: anchor)
+end 'debugDefSiteOfOp'
+
+function debugDefSiteAtBlockStart(local ElementIndex, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn) returns DebugDefSite
+	let place = try placeOfLocal.get(local) otherwise return DebugDefSite.somewhereIn(local)
+	let anchor = try blockFirst.get(place) otherwise return DebugDefSite.somewhereIn(local)
+	return DebugDefSite.at(local, anchor: anchor)
+end 'debugDefSiteAtBlockStart'
+
+function appendSlotExtensions(into DebugValueRangeArray, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, ordinalOfOp DebugAnchorColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn, blockLast DebugAnchorColumn, blockIdOfPlace BlockIdColumn, siteKeyOfPlace DebugSiteKeyColumn)
+	var anySpilled = false
+
+	for location in locations 'eachLocation'
+		anySpilled = anySpilled or location.kind == DebugValueInSpillSlot
+	end 'eachLocation'
+
+	if not anySpilled 'nothingSpilled'
+		return
+	end 'nothingSpilled'
+
+	let index = liveness.useIndex
+	let topo = liveness.cfg.topo
+	let dom = DominatorTree.of(topo)
+	var defLocal = CfgIndexArray.create()
+	var defAt = DebugAnchorColumn.absent(roster.valueIds.count())
+	var groupOfOrdinal = CsrColumn.create()
+	var ordinals = CsrColumn.create()
+	var groupCount = 0 as CsrIndex
+
+	for (iter, value) in roster.valueIds.withIterator() 'eachNamedValue'
+		defLocal.push(EntryBlockLocal)
+
+		if value >= liveness.valueCount 'notInThisFunction'
+			continue
+		end 'notInThisFunction'
+
+		let site = debugDefSiteOf(index, value: value, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst)
+		try defLocal.set(iter.index(), value: site.local) otherwise panic("appendSlotExtensions: defLocal.set OOB at {iter.index()}")
+
+		if site.anchorKnown 'anAnchoredDefinition'
+			defAt.set(iter.index(), value: site.anchor)
+		end 'anAnchoredDefinition'
+
+		let group = (try roster.groups.get(iter.index()) otherwise panic("appendSlotExtensions: roster.groups.get OOB at {iter.index()}")) as CsrIndex
+		groupOfOrdinal.push(group)
+		ordinals.push(iter.index() as CsrIndex)
+
+		if group + 1 > groupCount 'moreGroups'
+			groupCount = group + 1
+		end 'moreGroups'
+	end 'eachNamedValue'
+
+	let byGroup = buildCsr(groupOfOrdinal, to: ordinals, nodeCount: groupCount)
+	var shadowed = CfgIndexArray.create()
+	shadowed.refill(topo.numBlocks, value: 0)
+	var pending = CfgIndexArray.create()
+
+	for (iter, location) in locations.withIterator() 'eachSpilledVersion'
+		if location.kind == DebugValueInSpillSlot 'spilled'
+			extendSpilledVersion(into, ordinal: iter.index(), byGroup: byGroup, roster: roster, topo: topo, dom: dom, names: names, placeOfLocal: placeOfLocal, defLocal: defLocal, defAt: defAt, blockFirst: blockFirst, blockLast: blockLast, blockIdOfPlace: blockIdOfPlace, siteKeyOfPlace: siteKeyOfPlace, shadowed: shadowed, pending: pending)
+		end 'spilled'
+	end 'eachSpilledVersion'
+end 'appendSlotExtensions'
+
+function extendSpilledVersion(into DebugValueRangeArray, ordinal ElementIndex, byGroup CsrGraph, roster DebugValueRoster, topo FuncTopology, dom DominatorTree, names DebugNameIndex, placeOfLocal DebugPlaceColumn, defLocal CfgIndexArray, defAt DebugAnchorColumn, blockFirst DebugAnchorColumn, blockLast DebugAnchorColumn, blockIdOfPlace BlockIdColumn, siteKeyOfPlace DebugSiteKeyColumn, shadowed CfgIndexArray, pending CfgIndexArray)
+	let own = try roster.valueIds.get(ordinal) otherwise panic("extendSpilledVersion: roster.valueIds.get OOB at {ordinal}")
+	let ownLocal = try defLocal.get(ordinal) otherwise panic("extendSpilledVersion: defLocal.get OOB at {ordinal}")
+	let group = (try roster.groups.get(ordinal) otherwise panic("extendSpilledVersion: roster.groups.get OOB at {ordinal}")) as CsrIndex
+	let stamp = ordinal + 1
+
+	for k in 0 upto byGroup.degree(group) 'eachRival'
+		let rival = byGroup.neighbour(group, k: k)
+		let rivalLocal = try defLocal.get(rival) otherwise panic("extendSpilledVersion: defLocal.get OOB at {rival}")
+
+		if (try roster.valueIds.get(rival) otherwise panic("extendSpilledVersion: roster.valueIds.get OOB at {rival}")) == own 'theSameVersion'
+			continue
+		end 'theSameVersion'
+
+		if rivalLocal == ownLocal 'sharesTheDefinitionBlock'
+			return
+		end 'sharesTheDefinitionBlock'
+
+		if dom.dominates(ownLocal, y: rivalLocal) 'aLaterVersionBelow'
+			markShadowedBy(rivalLocal, ownLocal: ownLocal, stamp: stamp, topo: topo, dom: dom, shadowed: shadowed, pending: pending)
+		end 'aLaterVersionBelow'
+	end 'eachRival'
+
+	let first = dom.preorderOf(ownLocal)
+
+	for step in 0 upto dom.dominatedCount(ownLocal) 'eachDominatedBlock'
+		let local = try dom.blockAt.get(first + step) otherwise panic("extendSpilledVersion: blockAt.get OOB at {first + step}")
+		let place = try placeOfLocal.get(local) otherwise continue
+		let opening = try blockFirst.get(place) otherwise continue
+		let closing = try blockLast.get(place) otherwise continue
+
+		if not names.appliesAt(ordinal as DebugNamedSlot, siteKey: debugSiteKeyAt(siteKeyOfPlace, at: place)) 'notThisSite'
+			continue
+		end 'notThisSite'
+
+		let blockId = try blockIdOfPlace.get(place) otherwise panic("extendSpilledVersion: blockIdOfPlace.get OOB at {place}")
+
+		if local == ownLocal 'theDefinitionBlock'
+			if defAt.holds(ordinal) 'aKnownDefinition'
+				into.push(DebugValueRange.create(ordinal, blockId: blockId, first: try defAt.get(ordinal) otherwise panic("extendSpilledVersion: defAt.get OOB at {ordinal}"), last: closing, fromBlockEntry: false))
+			end 'aKnownDefinition'
+
+			continue
+		end 'theDefinitionBlock'
+
+		if (try shadowed.get(local) otherwise panic("extendSpilledVersion: shadowed.get OOB at {local}")) == stamp 'aLaterVersionReachesIt'
+			continue
+		end 'aLaterVersionReachesIt'
+
+		into.push(DebugValueRange.create(ordinal, blockId: blockId, first: opening, last: closing, fromBlockEntry: true))
+	end 'eachDominatedBlock'
+end 'extendSpilledVersion'
+
+function markShadowedBy(rivalLocal ElementIndex, ownLocal ElementIndex, stamp ElementIndex, topo FuncTopology, dom DominatorTree, shadowed CfgIndexArray, pending CfgIndexArray)
+	if (try shadowed.get(rivalLocal) otherwise panic("markShadowedBy: shadowed.get OOB at {rivalLocal}")) == stamp 'alreadyMarked'
+		return
+	end 'alreadyMarked'
+
+	try shadowed.set(rivalLocal, value: stamp) otherwise panic("markShadowedBy: shadowed.set OOB at {rivalLocal}")
+	pending.clear()
+	pending.push(rivalLocal)
+
+	while pending.count() > 0 'untilNothingIsPending'
+		let block = try pending.pop() otherwise panic("markShadowedBy: pending.pop on a non-empty list failed")
+
+		for k in 0 upto topo.succ.degree(block as CsrIndex) 'eachSuccessor'
+			let next = topo.succ.neighbour(block as CsrIndex, k: k)
+
+			if next == ownLocal or not dom.dominates(ownLocal, y: next) or (try shadowed.get(next) otherwise panic("markShadowedBy: shadowed.get OOB at {next}")) == stamp 'notToBeVisited'
+				continue
+			end 'notToBeVisited'
+
+			try shadowed.set(next, value: stamp) otherwise panic("markShadowedBy: shadowed.set OOB at {next}")
+			pending.push(next)
+		end 'eachSuccessor'
+	end 'untilNothingIsPending'
+end 'markShadowedBy'
 
 function collectDebugTouches(touches DebugTouches, liveness LivenessResult, names DebugNameIndex, ordinalOfOp DebugAnchorColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
 	let index = liveness.useIndex

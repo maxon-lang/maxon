@@ -172,6 +172,9 @@ end 'inlineSiteOfKey'
 
 export typealias DebugSiteKey = int(0 to u32.max)
 export typealias DebugSiteKeyColumn = Array with DebugSiteKey
+export typealias DebugNameGroup = int(0 to u32.max) implements ElementIndex
+export typealias DebugNameGroupColumn = Array with DebugNameGroup
+typealias DebugNameGroupByKey = Map with String, DebugNameGroup
 
 export let FunctionTextSiteKey = 0 as DebugSiteKey
 let DebugSiteKeyBias = 1
@@ -212,6 +215,7 @@ export type DebugValueRoster
 	export var valueIds as ValueIdArray
 	export var siteKeys as DebugSiteKeyColumn
 	export var parentKeys as DebugSiteKeyColumn
+	export var groups as DebugNameGroupColumn
 
 	export static function of(func IrFunction) returns DebugValueRoster
 		let tally = debugValueTallyOf(func)
@@ -222,19 +226,31 @@ export type DebugValueRoster
 
 		var valueIds = ValueIdArray.create()
 		var siteKeys = DebugSiteKeyColumn.create()
+		var groups = DebugNameGroupColumn.create()
+		var groupByNameAndSite = DebugNameGroupByKey.create()
 		valueIds.reserve(tally)
 		siteKeys.reserve(tally)
+		groups.reserve(tally)
 
 		for local in func.debugLocals 'eachBinding'
 			let key = debugSiteKeyOf(local.inlineSite)
+			let groupKey = "{String.from(local.name)}:{key}"
+			var group = groupByNameAndSite.count() as DebugNameGroup
+
+			if let known = try groupByNameAndSite.get(groupKey) 'knownGroup'
+				group = known
+			end 'knownGroup' else 'freshGroup'
+				groupByNameAndSite.upsert(groupKey, value: group)
+			end 'freshGroup'
 
 			for v in local.valueIds 'eachValue'
 				valueIds.push(v)
 				siteKeys.push(key)
+				groups.push(group)
 			end 'eachValue'
 		end 'eachBinding'
 
-		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: siteParentKeysOf(func)}
+		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: siteParentKeysOf(func), groups: groups}
 	end 'of'
 
 	export function siteKeyCount() returns ElementIndex
@@ -242,7 +258,7 @@ export type DebugValueRoster
 	end 'siteKeyCount'
 
 	export static function empty() returns DebugValueRoster
-		return Self{valueIds: ValueIdArray.create(), siteKeys: DebugSiteKeyColumn.create(), parentKeys: DebugSiteKeyColumn.create()}
+		return Self{valueIds: ValueIdArray.create(), siteKeys: DebugSiteKeyColumn.create(), parentKeys: DebugSiteKeyColumn.create(), groups: DebugNameGroupColumn.create()}
 	end 'empty'
 end 'DebugValueRoster'
 

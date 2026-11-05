@@ -1,0 +1,34 @@
+let SiblingArmCaseLabel = "sidecar-a-sibling-arm-does-not-see-a-slot-local-of-the-other"
+
+let OtherArmsLocalName = "thenOnly"
+let NotLiveHereAnswer = "not-live-here"
+let SlotMark = "[rbp-"
+
+test 'a stop in one arm of an if reads a slot local of the other arm as not live here'
+	let staged = builtFixture(SiblingArmCaseLabel, fixture: SiblingArmsFixtureName)
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotRows = 0 as Count
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		slotRows = slotRows + 1 if firstToken(row) == OtherArmsLocalName and row.contains(SlotMark) else slotRows
+	end 'eachLocal'
+
+	Expect.notEqual(slotRows, expected: 0, message: "`{OtherArmsLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED local of a sibling arm. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let elseArmAt = anchorLine(staged.join(StagedProgramFileName), anchor: "else-arm")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(elseArmAt)}", RunCommand, "{PrintCommand} {OtherArmsLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {OtherArmsLocalName}` printed no `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	Expect.equal(unavailable.count(), expected: 1, message: "the stop is in the arm that did NOT define `{OtherArmsLocalName}`, whose slot holds nothing of it. Printing a number here shows stack garbage under that name. {said}")
+	Expect.equal(stringAt(answered, node: nodeAt(unavailable, index: 0)), expected: NotLiveHereAnswer, message: "the answer is `{NotLiveHereAnswer}`: the name exists in the function and no row of it covers this stop. {said}")
+end 'a stop in one arm of an if reads a slot local of the other arm as not live here'

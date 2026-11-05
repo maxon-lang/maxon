@@ -355,30 +355,18 @@ function mxdbgRowHasALocation(locKind MxdbgIndex) returns bool
 end 'mxdbgRowHasALocation'
 
 function collectPlacedRows(rows MxdbgLocalRowArray, project Project, func IrFunction, range DebugFunctionRange, runs DebugRunsByOrdinal, first ElementIndex, past ElementIndex)
-	var ordinal = first
-
-	while ordinal < past 'eachValue'
+	for ordinal in first upto past 'eachValue'
 		let location = mxdbgLocationAt(func, at: ordinal)
 
 		if location.kind == DebugValueNowhere 'notInTheCode'
-			ordinal = ordinal + 1
 			continue
 		end 'notInTheCode'
 
 		let placement = mxdbgPlacementOf(project, location: location, range: range)
-		let spans = mergedLiveRanges(range, runs: runs, ordinal: ordinal)
 
-		// A spill slot belongs to one lineage and is never written by another value (`SplitLiveRanges`),
-		// so the bits in it stay that value's after liveness has let go of it: its last run is extended
-		// to the end of the function rather than stopping at the last use.
-		let holdsToTheEnd = location.kind == DebugValueInSpillSlot
-
-		for (iter, span) in spans.withIterator() 'eachSpan'
-			let last = iter.index() == spans.count() - 1
-			rows.push(MxdbgLocalRow.create(placement, codeStart: span.codeStart, codeEnd: range.codeEnd if last and holdsToTheEnd else span.codeEnd))
+		for span in mergedLiveRanges(range, runs: runs, ordinal: ordinal) 'eachSpan'
+			rows.push(MxdbgLocalRow.create(placement, codeStart: span.codeStart, codeEnd: span.codeEnd))
 		end 'eachSpan'
-
-		ordinal = ordinal + 1
 	end 'eachValue'
 end 'collectPlacedRows'
 

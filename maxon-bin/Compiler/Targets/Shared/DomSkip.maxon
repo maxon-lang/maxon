@@ -2,18 +2,146 @@ let SkipMinBlocks = 48
 let SkipMinSpan = 4
 export let EntryBlockLocal = 0 as ElementIndex
 
+export type DominatorTree
+	var pre as CfgIndexArray
+	var size as CfgIndexArray
+	var reached as BoolArray
+	export var blockAt as CfgIndexArray
+
+	export static function empty() returns DominatorTree
+		return Self{pre: CfgIndexArray.create(), size: CfgIndexArray.create(), reached: BoolArray.create(), blockAt: CfgIndexArray.create()}
+	end 'empty'
+
+	export static function of(topo FuncTopology) returns DominatorTree
+		let n = topo.numBlocks
+		var visited = BoolArray.create()
+		visited.resize(n)
+		var postorder = CfgIndexArray.create()
+		postorder.reserve(n)
+		rpoDfs(topo, root: EntryBlockLocal, visited: visited, postorder: postorder)
+
+		var postIndex = CfgIndexArray.create()
+		postIndex.refill(n, value: 0)
+
+		for (position, block) in postorder.withIterator() 'eachReached'
+			try postIndex.set(block, value: position.index()) otherwise panic("DominatorTree.of: postIndex.set OOB at {block}")
+		end 'eachReached'
+
+		var idom = CfgIndexArray.create()
+		idom.refill(n, value: EntryBlockLocal)
+		var settled = BoolArray.create()
+		settled.resize(n)
+		try settled.set(EntryBlockLocal, value: true) otherwise panic("DominatorTree.of: settled.set OOB at the entry")
+		var changed = true
+
+		while changed 'untilStable'
+			changed = false
+
+			for ri in 0 upto postorder.count() 'eachInReversePostorder'
+				let block = try postorder.get(postorder.count() - 1 - ri) otherwise panic("DominatorTree.of: postorder.get OOB")
+
+				if block == EntryBlockLocal 'theEntry'
+					continue
+				end 'theEntry'
+
+				var candidate = 0 as ElementIndex
+				var haveCandidate = false
+
+				for k in 0 upto topo.pred.degree(block as CsrIndex) 'eachPredecessor'
+					let pred = topo.pred.neighbour(block as CsrIndex, k: k)
+
+					if not (try settled.get(pred) otherwise panic("DominatorTree.of: settled.get OOB at {pred}")) 'notYetReached'
+						continue
+					end 'notYetReached'
+
+					if not haveCandidate 'theFirst'
+						candidate = pred
+						haveCandidate = true
+						continue
+					end 'theFirst'
+
+					candidate = intersectDominators(idom, postIndex: postIndex, a: pred, b: candidate)
+				end 'eachPredecessor'
+
+				if not (try settled.get(block) otherwise panic("DominatorTree.of: settled.get OOB at {block}")) or (try idom.get(block) otherwise panic("DominatorTree.of: idom.get OOB at {block}")) != candidate 'moved'
+					try idom.set(block, value: candidate) otherwise panic("DominatorTree.of: idom.set OOB at {block}")
+					try settled.set(block, value: true) otherwise panic("DominatorTree.of: settled.set OOB at {block}")
+					changed = true
+				end 'moved'
+			end 'eachInReversePostorder'
+		end 'untilStable'
+
+		var childOf = CsrColumn.create()
+		var children = CsrColumn.create()
+
+		for block in postorder 'eachDominated'
+			if block != EntryBlockLocal 'notTheEntry'
+				childOf.push((try idom.get(block) otherwise panic("DominatorTree.of: idom.get OOB at {block}")) as CsrIndex)
+				children.push(block as CsrIndex)
+			end 'notTheEntry'
+		end 'eachDominated'
+
+		let tree = buildCsr(childOf, to: children, nodeCount: n as CsrIndex)
+		var pre = CfgIndexArray.create()
+		pre.refill(n, value: 0)
+		var size = CfgIndexArray.create()
+		size.refill(n, value: 1)
+		var blockAt = CfgIndexArray.create()
+		blockAt.reserve(postorder.count())
+		var stack = CfgIndexArray.create()
+		stack.push(EntryBlockLocal)
+
+		while stack.count() > 0 'preorder'
+			let node = try stack.pop() otherwise panic("DominatorTree.of: stack.pop on a non-empty stack failed")
+			try pre.set(node, value: blockAt.count()) otherwise panic("DominatorTree.of: pre.set OOB at {node}")
+			blockAt.push(node)
+
+			for k in 0 upto tree.degree(node as CsrIndex) 'eachChild'
+				stack.push(tree.neighbour(node as CsrIndex, k: tree.degree(node as CsrIndex) - 1 - k))
+			end 'eachChild'
+		end 'preorder'
+
+		for ri in 0 upto blockAt.count() 'eachSubtree'
+			let block = try blockAt.get(blockAt.count() - 1 - ri) otherwise panic("DominatorTree.of: blockAt.get OOB")
+
+			if block != EntryBlockLocal 'notTheEntryEither'
+				let parent = try idom.get(block) otherwise panic("DominatorTree.of: idom.get OOB at {block}")
+				try size.set(parent, value: (try size.get(parent) otherwise panic("DominatorTree.of: size.get OOB at {parent}")) + (try size.get(block) otherwise panic("DominatorTree.of: size.get OOB at {block}"))) otherwise panic("DominatorTree.of: size.set OOB at {parent}")
+			end 'notTheEntryEither'
+		end 'eachSubtree'
+
+		return Self{pre: pre, size: size, reached: settled, blockAt: blockAt}
+	end 'of'
+
+	export function dominates(x ElementIndex, y ElementIndex) returns bool
+		if not (try self.reached.get(x) otherwise panic("DominatorTree.dominates: block {x} out of range")) or not (try self.reached.get(y) otherwise panic("DominatorTree.dominates: block {y} out of range")) 'unreached'
+			return false
+		end 'unreached'
+
+		let preX = try self.pre.get(x) otherwise panic("DominatorTree.dominates: block {x} out of range")
+		let preY = try self.pre.get(y) otherwise panic("DominatorTree.dominates: block {y} out of range")
+		return preX <= preY and preY < preX + (try self.size.get(x) otherwise panic("DominatorTree.dominates: block {x} out of range"))
+	end 'dominates'
+
+	export function dominatedCount(x ElementIndex) returns ElementIndex
+		return try self.size.get(x) otherwise panic("DominatorTree.dominatedCount: block {x} out of range")
+	end 'dominatedCount'
+
+	export function preorderOf(x ElementIndex) returns ElementIndex
+		return try self.pre.get(x) otherwise panic("DominatorTree.preorderOf: block {x} out of range")
+	end 'preorderOf'
+end 'DominatorTree'
+
 // Lets a liveness walk mark a value live over a stretch of blocks in one step (`coversUpTo`). Block
 // indices are assumed to be a layout in which every reachable block has an earlier predecessor; a
 // CFG that breaks that disables the skip.
 export type DomSkip
 	export var enabled as bool
-	var idom as CfgIndexArray
-	var pre as CfgIndexArray
-	var size as CfgIndexArray
+	export var tree as DominatorTree
 	export var bounds as LayoutBounds
 
 	export static function disabled() returns DomSkip
-		return Self{enabled: false, idom: CfgIndexArray.create(), pre: CfgIndexArray.create(), size: CfgIndexArray.create(), bounds: LayoutBounds.none()}
+		return Self{enabled: false, tree: DominatorTree.empty(), bounds: LayoutBounds.none()}
 	end 'disabled'
 
 	export static function build(topo FuncTopology, force bool) returns DomSkip
@@ -23,76 +151,21 @@ export type DomSkip
 			return DomSkip.disabled()
 		end 'tooSmallToPay'
 
-		var idom = CfgIndexArray.create()
-		idom.refill(n, value: 0)
-		var processed = BoolArray.create()
-		processed.resize(n)
-		try processed.set(0, value: true) otherwise panic("DomSkip.build: processed.set OOB")
-		var changed = true
+		for b in 1 upto n 'eachBlock'
+			var haveForward = false
 
-		while changed 'untilStable'
-			changed = false
+			for k in 0 upto topo.pred.degree(b as CsrIndex) 'eachPred'
+				if topo.pred.neighbour(b as CsrIndex, k: k) < b 'aForwardPred'
+					haveForward = true
+				end 'aForwardPred'
+			end 'eachPred'
 
-			for b in 1 upto n 'eachBlock'
-				var candidate = 0 as ElementIndex
-				var haveForward = false
-				let deg = topo.pred.degree(b as CsrIndex)
+			if not haveForward 'unreachableByLayout'
+				return DomSkip.disabled()
+			end 'unreachableByLayout'
+		end 'eachBlock'
 
-				for k in 0 upto deg 'firstForwardPred'
-					let p = topo.pred.neighbour(b as CsrIndex, k: k)
-
-					if not haveForward and p < b and (try processed.get(p) otherwise panic("DomSkip.build: processed.get OOB")) 'aForwardPred'
-						candidate = p
-						haveForward = true
-					end 'aForwardPred'
-				end 'firstForwardPred'
-
-				if not haveForward 'unreachableByLayout'
-					return DomSkip.disabled()
-				end 'unreachableByLayout'
-
-				for k in 0 upto deg 'eachPred'
-					let p = topo.pred.neighbour(b as CsrIndex, k: k)
-
-					if p != candidate and (try processed.get(p) otherwise panic("DomSkip.build: processed.get OOB")) 'aProcessedPred'
-						candidate = intersectDominators(idom, a: p, b: candidate)
-					end 'aProcessedPred'
-				end 'eachPred'
-
-				if not (try processed.get(b) otherwise panic("DomSkip.build: processed.get OOB")) or (try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")) != candidate 'moved'
-					try idom.set(b, value: candidate) otherwise panic("DomSkip.build: idom.set OOB")
-					try processed.set(b, value: true) otherwise panic("DomSkip.build: processed.set OOB")
-					changed = true
-				end 'moved'
-			end 'eachBlock'
-		end 'untilStable'
-
-		let bounds = LayoutBounds.build(topo)
-
-		var size = CfgIndexArray.create()
-		size.refill(n, value: 1)
-
-		for ri in 1 upto n 'eachSubtree'
-			let b = n - ri
-			let a = try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")
-			try size.set(a, value: (try size.get(a) otherwise panic("DomSkip.build: size.get OOB")) + (try size.get(b) otherwise panic("DomSkip.build: size.get OOB"))) otherwise panic("DomSkip.build: size.set OOB")
-		end 'eachSubtree'
-
-		var pre = CfgIndexArray.create()
-		pre.refill(n, value: 0)
-		var cursor = CfgIndexArray.create()
-		cursor.refill(n, value: 0)
-		try cursor.set(0, value: 1) otherwise panic("DomSkip.build: cursor.set OOB")
-
-		for b in 1 upto n 'eachPreorder'
-			let a = try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")
-			let at = try cursor.get(a) otherwise panic("DomSkip.build: cursor.get OOB")
-			try pre.set(b, value: at) otherwise panic("DomSkip.build: pre.set OOB")
-			try cursor.set(a, value: at + (try size.get(b) otherwise panic("DomSkip.build: size.get OOB"))) otherwise panic("DomSkip.build: cursor.set OOB")
-			try cursor.set(b, value: at + 1) otherwise panic("DomSkip.build: cursor.set OOB")
-		end 'eachPreorder'
-
-		return Self{enabled: true, idom: idom, pre: pre, size: size, bounds: bounds}
+		return Self{enabled: true, tree: DominatorTree.of(topo), bounds: LayoutBounds.build(topo)}
 	end 'build'
 
 	// Every block of `(floor, b]` reaches `b` by forward edges and has no predecessor at or beyond
@@ -115,29 +188,23 @@ export type DomSkip
 
 		return (true, limit)
 	end 'coverFloor'
-
-	export function dominates(x ElementIndex, y ElementIndex) returns bool
-		let preX = try self.pre.get(x) otherwise panic("DomSkip.dominates: block {x} out of range")
-		let preY = try self.pre.get(y) otherwise panic("DomSkip.dominates: block {y} out of range")
-		return preX <= preY and preY < preX + (try self.size.get(x) otherwise panic("DomSkip.dominates: block {x} out of range"))
-	end 'dominates'
 end 'DomSkip'
 
-function intersectDominators(idom CfgIndexArray, a ElementIndex, b ElementIndex) returns ElementIndex
-	var left = a
-	var right = b
+function intersectDominators(idom CfgIndexArray, postIndex CfgIndexArray, a ElementIndex, b ElementIndex) returns ElementIndex
+	var finger = a
+	var other = b
 
-	while left != right 'untilTheyMeet'
-		while left > right 'leftClimbs'
-			left = try idom.get(left) otherwise panic("intersectDominators: idom.get OOB")
-		end 'leftClimbs'
+	while finger != other 'untilTheyMeet'
+		while (try postIndex.get(finger) otherwise panic("intersectDominators: postIndex.get OOB at {finger}")) < (try postIndex.get(other) otherwise panic("intersectDominators: postIndex.get OOB at {other}")) 'fingerClimbs'
+			finger = try idom.get(finger) otherwise panic("intersectDominators: idom.get OOB at {finger}")
+		end 'fingerClimbs'
 
-		while right > left 'rightClimbs'
-			right = try idom.get(right) otherwise panic("intersectDominators: idom.get OOB")
-		end 'rightClimbs'
+		while (try postIndex.get(other) otherwise panic("intersectDominators: postIndex.get OOB at {other}")) < (try postIndex.get(finger) otherwise panic("intersectDominators: postIndex.get OOB at {finger}")) 'otherClimbs'
+			other = try idom.get(other) otherwise panic("intersectDominators: idom.get OOB at {other}")
+		end 'otherClimbs'
 	end 'untilTheyMeet'
 
-	return left
+	return finger
 end 'intersectDominators'
 
 export type LayoutBounds

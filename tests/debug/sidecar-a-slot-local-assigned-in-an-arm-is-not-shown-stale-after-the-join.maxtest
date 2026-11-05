@@ -1,0 +1,32 @@
+let ArmRivalCaseLabel = "sidecar-a-slot-local-assigned-in-an-arm-is-not-shown-stale-after-the-join"
+
+let ArmRivalLocalName = "limit"
+let ArmRivalStaleValue = "5"
+let ArmRivalSlotMark = "[rbp-"
+
+test 'a var held in a stack slot that one arm assigns again is not read as its old value after the join'
+	let staged = builtFixture(ArmRivalCaseLabel, fixture: RivalArmFixtureName)
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotRows = 0 as Count
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		slotRows = slotRows + 1 if firstToken(row) == ArmRivalLocalName and row.contains(ArmRivalSlotMark) else slotRows
+	end 'eachLocal'
+
+	Expect.notEqual(slotRows, expected: 0, message: "`{ArmRivalLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let tailAt = anchorLine(staged.join(StagedProgramFileName), anchor: "tail")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(tailAt)}", RunCommand, "{PrintCommand} {ArmRivalLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {ArmRivalLocalName}` printed no `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	Expect.notEqual(textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey), expected: ArmRivalStaleValue, message: "the arm ran and assigned `{ArmRivalLocalName}` again, and nothing reads it after the join, so the join's own phi was pruned and no row names the new version there. The OLD version's slot still holds {ArmRivalStaleValue}, and a row that covers the join answers with it: the previous value wearing the current name. {said}")
+end 'a var held in a stack slot that one arm assigns again is not read as its old value after the join'

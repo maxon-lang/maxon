@@ -1,0 +1,32 @@
+let LoopRivalCaseLabel = "sidecar-a-slot-local-assigned-in-a-loop-is-not-shown-stale-after-it"
+
+let LoopRivalLocalName = "limit"
+let LoopRivalStaleValue = "5"
+let LoopRivalSlotMark = "[rbp-"
+
+test 'a var held in a stack slot that a later loop assigns again is not read as its old value after the loop'
+	let staged = builtFixture(LoopRivalCaseLabel, fixture: RivalLoopFixtureName)
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotRows = 0 as Count
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		slotRows = slotRows + 1 if firstToken(row) == LoopRivalLocalName and row.contains(LoopRivalSlotMark) else slotRows
+	end 'eachLocal'
+
+	Expect.notEqual(slotRows, expected: 0, message: "`{LoopRivalLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let afterLoopAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after-loop")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(afterLoopAt)}", RunCommand, "{PrintCommand} {LoopRivalLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {LoopRivalLocalName}` printed no `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	Expect.notEqual(textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey), expected: LoopRivalStaleValue, message: "the loop assigned `{LoopRivalLocalName}` three times and nothing reads it afterwards, so the loop header's phi was pruned and no row names the last version at the exit. The version the first loop left in the slot is {LoopRivalStaleValue}, and a row that covers the exit answers with it. {said}")
+end 'a var held in a stack slot that a later loop assigns again is not read as its old value after the loop'
