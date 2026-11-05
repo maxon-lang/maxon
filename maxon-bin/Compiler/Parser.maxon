@@ -19565,6 +19565,8 @@ export type Parser
 	// `enclosingInnerAliases` leaves out. Read only by the real parse's redeclaration check.
 	var declaredNestedAliases as InnerAliasRoster
 
+	var bodyFunctionAliasMembers as NameRoster
+
 	// ⭐⭐ **THE GENERIC-INSTANCE TYPEALIASES OF THE `interface` CURRENTLY BEING READ** —
 	// `typealias ElementArray = Array with Element` inside `interface Holder uses Element`. It is the RHS,
 	// and only the RHS, that says what a requirement written `absorb(value ElementArray)` actually requires;
@@ -20130,6 +20132,7 @@ export type Parser
 			sentLeg: SentLegSlot.none,
 			enclosingInnerAliases: noInnerAliases,
 			declaredNestedAliases: noInnerAliases,
+			bodyFunctionAliasMembers: NameRoster.create(),
 			interfaceAliasScratch: anchors.interfaceAliases,
 			innerAliasesFromIndex: false,
 			filedTupleNames: noFiledTupleNames,
@@ -25064,6 +25067,7 @@ export type Parser
 		let visibility = self.visibilityBefore(self.pos)
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enterTypeScope(nameTok.value, isEnum: false)
+		self.openBodyFunctionAliasScope()
 
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.job.path)
 		layout.declLine = nameTok.line
@@ -26264,6 +26268,7 @@ export type Parser
 		self.enclosingTypeParams = self.emptyTypeParams
 		self.enclosingInnerAliases = noInnerAliases
 		self.declaredNestedAliases = noInnerAliases
+		self.bodyFunctionAliasMembers = self.emptyTypeParams
 		self.innerAliasesFromIndex = false
 		self.enclosingWhereConstraints = WhereConstraintArray.create()
 		self.enclosingExtensionConstraints = WhereConstraintArray.create()
@@ -26405,6 +26410,7 @@ export type Parser
 		// nothing, exactly as `emptyTypeParams` restores.
 		self.enclosingInnerAliases = noInnerAliases
 		self.declaredNestedAliases = noInnerAliases
+		self.bodyFunctionAliasMembers = self.emptyTypeParams
 
 		// Restored in lockstep for the same reason, one layer up: a drained default's index-scoped answer must
 		// not survive into the next declaration, where the set above is the only truth again.
@@ -28524,6 +28530,14 @@ export type Parser
 
 		return false
 	end 'implementsClauseBindsAnything'
+
+	function openBodyFunctionAliasScope()
+		let resume = self.pos
+		var functionMembers = NameRoster.create()
+		self.collectNestedAliasMembersInBody(NameRoster.create(), functionInto: functionMembers)
+		self.pos = resume
+		self.bodyFunctionAliasMembers = functionMembers
+	end 'openBodyFunctionAliasScope'
 
 	// Put the shared empty set back after the clause — see the door above for why the pre-scanned names are
 	// deliberately NOT left in scope for the body.
@@ -35997,6 +36011,10 @@ export type Parser
 		// **E3009 `Cannot cast from int to function`** instead of the E3063 that names both candidates. The
 		// question is "could this reference mean more than one declaration", which is prior to what any one
 		// of them denotes.
+		if self.bodyFunctionAliasMembers.contains(name) 'sweptBodyFunctionAlias'
+			return MaxonType.named(self.artifact.typeNames.intern(self.innerAliasKey(name)))
+		end 'sweptBodyFunctionAlias'
+
 		if self.namesThisBodysNestedFunctionAlias(name) 'thisBodysOwnFunctionAlias'
 			return self.functionAliasType(self.innerAliasKey(name), readerFilePath: self.job.path)
 		end 'thisBodysOwnFunctionAlias'

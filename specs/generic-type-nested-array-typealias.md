@@ -3413,6 +3413,119 @@ end 'main'
 6 7 18
 ```
 
+<!-- test: a-default-names-the-alias-of-the-type-declared-before-another-types-alias -->
+The same two types with the default on the one declared first. `Other.twice` fills `triple`, a `function(Count)`, and `Box.run` still takes the `function(Level)` of the type declared last.
+```maxon
+typealias Level = int(0 to 125)
+
+function triple(x Count) returns Count
+	return x * 3
+end 'triple'
+
+type Other uses U
+	typealias Transform = function(Count) returns Count
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function twice(n Count, f Transform = triple) returns Count
+		return f(f(n))
+	end 'twice'
+end 'Other'
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Box uses T
+	typealias Transform = function(Level) returns Level
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Box'
+
+typealias LevelBox = Box with Level
+typealias LevelOther = Other with Level
+
+function main() returns ExitCode
+	let b = LevelBox.create(3)
+	let o = LevelOther.create(3)
+	print("{o.twice(2)} {o.twice(2, f: function(x) gives x + 1)} {b.run(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18 4 6
+```
+
+<!-- test: a-default-names-an-alias-declared-below-the-method-that-spells-it -->
+The member `typealias` written after the method whose parameter spells it, in the type declared first.
+```maxon
+typealias Level = int(0 to 125)
+
+function triple(x Count) returns Count
+	return x * 3
+end 'triple'
+
+type Late uses U
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function twice(n Count, f Transform = triple) returns Count
+		return f(f(n))
+	end 'twice'
+
+	typealias Transform = function(Count) returns Count
+end 'Late'
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Early uses T
+	typealias Transform = function(Level) returns Level
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Early'
+
+typealias LevelEarly = Early with Level
+typealias LevelLate = Late with Level
+
+function main() returns ExitCode
+	let e = LevelEarly.create(3)
+	let l = LevelLate.create(3)
+	print("{l.twice(2)} {e.run(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18 6
+```
+
 <!-- test: the-default-of-a-second-method-is-filled-at-a-call-from-main -->
 ```maxon
 typealias Level = int(0 to 125)
