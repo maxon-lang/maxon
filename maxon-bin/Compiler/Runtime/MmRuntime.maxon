@@ -987,6 +987,23 @@ export function emitLoadField(module StdModule, block IrBlock, record ValueId, o
 	return v
 end 'emitLoadField'
 
+// The whole 64-bit `element_size@24` stamp, signed-slot flag included. A stride is taken from it only by
+// `emitStrideOfStamp`; `ManagedMemoryRuntime`'s header says which readers want the whole word.
+export function emitLoadElementStamp(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	return emitLoadField(module, block: block, record: record, offset: ManagedRecordElementSizeOffset, ids: ids)
+end 'emitLoadElementStamp'
+
+export function emitStrideOfStamp(module StdModule, block IrBlock, stamp ValueId, ids ValueMinter) returns ValueId
+	let width = emitConst(module, block: block, value: ElementStampStrideBits, ids: ids)
+	let high = emitBin(module, block: block, a: stamp, b: width, opcode: StdBinOpcode.shl, ids: ids)
+
+	return emitBin(module, block: block, a: high, b: width, opcode: StdBinOpcode.shr, ids: ids)
+end 'emitStrideOfStamp'
+
+export function emitLoadElementStride(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	return emitStrideOfStamp(module, block: block, stamp: emitLoadElementStamp(module, block: block, record: record, ids: ids), ids: ids)
+end 'emitLoadElementStride'
+
 // Store `value` into `record`'s field at `offset`.
 export function emitStoreField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, value ValueId)
 	module.appendOp(block, op: StdOp.storeIndirect(record, offset: offset, valueId: value, valueType: StdType.i64))

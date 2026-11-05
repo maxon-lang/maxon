@@ -1570,16 +1570,52 @@ end 'encodeReturnTransfer'
 // flag-free `lea`); `jmp r10`. `N` (≤ 4096) fits the `cmp` imm32. The `jae` files a chunk-local rel32 fixup
 // to the default block; the `lea` to the table files an `.rdata` reloc (patched to point at the blob); the
 // per-slot block-address relocations are recorded in `jumpTables` and resolved after the block loop.
-function encodeX64JumpTable(code ByteArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, indexReg X64Register, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
+function encodeX64JumpTable(code ByteArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spans JumpTableSpans, indexReg X64Register, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
 	assertOperandOffEncoderScratch(indexReg, scratch: x64JumpTableScratchMask(), opName: "x64JumpTable")
+	let pairStart = codeHere(code)
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: indexReg, imm: caseTargets.count() as Imm32)
 	encodeJcc(code, rel32Fixups: rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: defaultTarget)
+	let pairEnd = codeHere(code)
 	encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: JumpTableBaseReg, label: tableLabel)
 	encodeMovsxdRegBaseIndexScale4(code, dest: JumpTableEntryReg, base: JumpTableBaseReg, index: indexReg)
 	encodeLeaRegBaseIndexScale(code, dest: JumpTableBaseReg, base: JumpTableBaseReg, index: JumpTableEntryReg, scale: MemoryIndexScale.byOne)
+	let jumpStart = codeHere(code)
 	encodeJmpReg(code, reg: JumpTableBaseReg)
+	let jumpEnd = codeHere(code)
+
+	if jumpEnd - pairStart > JumpTableSequenceMaxBytes 'wider'
+		panic("encodeX64JumpTable: the sequence is {jumpEnd - pairStart} bytes, past the {JumpTableSequenceMaxBytes} the branch-window padding is proven for (cmp 7, jae 6, lea 7, movsxd 4, lea 4, jmp 3)")
+	end 'wider'
+
+	spans.note(pairStart, pairUntil: pairEnd, jumpAt: jumpStart, jumpUntil: jumpEnd)
+
 	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
 end 'encodeX64JumpTable'
+
+// Where the branches of the last jump-table sequence `encodeX64JumpTable` emitted sit, in chunk-local
+// offsets: the `cmp`/`jae` pair and the `jmp`. `emitUnit` consults it only for a `jumpTable` unit, and the
+// sequence re-notes it each time it is encoded, so a re-emission after a pad is measured at its new place.
+type JumpTableSpans
+	export var pairStart as CodeOffset
+	export var pairEnd as CodeOffset
+	export var jumpStart as CodeOffset
+	export var jumpEnd as CodeOffset
+
+	static function empty() returns JumpTableSpans
+		return Self{pairStart: 0, pairEnd: 0, jumpStart: 0, jumpEnd: 0}
+	end 'empty'
+
+	function note(pairAt CodeOffset, pairUntil CodeOffset, jumpAt CodeOffset, jumpUntil CodeOffset)
+		self.pairStart = pairAt
+		self.pairEnd = pairUntil
+		self.jumpStart = jumpAt
+		self.jumpEnd = jumpUntil
+	end 'note'
+
+	function movedBy(pad CodeOffset) returns JumpTableSpans
+		return Self{pairStart: self.pairStart + pad, pairEnd: self.pairEnd + pad, jumpStart: self.jumpStart + pad, jumpEnd: self.jumpEnd + pad}
+	end 'movedBy'
+end 'JumpTableSpans'
 
 // The jump table's clobber, as the allocator's currency — the ONE statement of which registers the sequence
 // destroys: `TargetOp.x64JumpTable`'s inline `implicitDefs` literal is checked against it by
@@ -2286,7 +2322,7 @@ end 'slotDisplacement'
 // every block's offset is known (see resolveChunkRel32Fixups). `spillBaseDisp` is the
 // function's spill-area base offset from rsp (see spillSlotBaseDisp), added to each
 // spill/reload slot displacement.
-function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment)
+function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment)
 	match op 'emit'
 		// `probeScratchIsFree` is certified here and NOWHERE ELSE. Both minters of this op stand at
 		// a function ENTRY — `insertPrologueAtEntry` (X64PrologueEpilogue) and `prependEntryStub`'s
@@ -2506,7 +2542,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// The dense-match jump table: the full cmp/jae/lea/movsxd/lea/jmp sequence, its default-edge rel32
 		// and table-address rdata reloc filed inline, its per-slot block-address relocs recorded in
 		// `jumpTables` (resolved after the block loop). The arm64 jump table never reaches the x64 encoder.
-		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then encodeX64JumpTable(code, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, indexReg: resolveGpr(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then encodeX64JumpTable(code, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spans: jumpSpans, indexReg: resolveGpr(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		arm64JumpTable then panic("emitTargetOp: an arm64 jump table reached the x64 encoder — the arm64 backend encodes `arm64JumpTable`")
 
 		// The byte-fill size ladder. Its two operands are already in rdi/rcx (the isel's pre-moves), so
@@ -2635,14 +2671,17 @@ end 'memoryDestinationGrp1Ext'
 // the address's window wherever the writer places `.text` on one (PE: RVA 0x1000).
 //
 // Scope: the TargetOps of compiled functions. A hand-assembled sequence — the runtime chunks, the GT
-// system-stack shim an `iatCall` becomes under the scheduler, the prologue's probe walk, the jump table —
-// places its own branches through the shared primitives and stays byte-exact.
+// system-stack shim an `iatCall` becomes under the scheduler, the prologue's probe walk — places its own
+// branches through the shared primitives and stays byte-exact. The dense-match jump table is a TargetOp and
+// is one unit (`BranchWindowRole.jumpTable`): its `cmp`/`jae` pair and its `jmp` are each kept off a window
+// edge, and the `lea`/`movsxd`/`lea` between them are not branches.
 //
 // arm64 needs nothing of this: its instructions are four bytes on four-byte alignment, so none straddles
 // a fetch line, and its cores carry no such erratum.
 // Exported for the ELF writer: its `.text` file offset must start on a window too, or every window the
 // padding computed from chunk-local offsets is shifted in the loaded image.
 export let BranchWindowBytes = 32
+let JumpTableSequenceMaxBytes = (BranchWindowBytes - 1) as CodeOffset
 
 // A pad reaches the next boundary from inside a window, so it is at most a window less a byte: a unit that
 // would need a whole window is wider than the window itself, which `emitUnit` refuses.
@@ -2697,6 +2736,32 @@ function straddlesBranchWindow(start CodeOffset, unitEnd CodeOffset) returns boo
 	return start / BranchWindowBytes != unitEnd / BranchWindowBytes
 end 'straddlesBranchWindow'
 
+function jumpTableHitsBranchWindow(spans JumpTableSpans) returns bool
+	return straddlesBranchWindow(spans.pairStart, unitEnd: spans.pairEnd) or straddlesBranchWindow(spans.jumpStart, unitEnd: spans.jumpEnd)
+end 'jumpTableHitsBranchWindow'
+
+function unitHitsBranchWindow(isJumpTable bool, spans JumpTableSpans, start CodeOffset, unitEnd CodeOffset) returns bool
+	if isJumpTable 'sequence'
+		return jumpTableHitsBranchWindow(spans)
+	end 'sequence'
+
+	return straddlesBranchWindow(start, unitEnd: unitEnd)
+end 'unitHitsBranchWindow'
+
+function branchWindowPadBytes(isJumpTable bool, spans JumpTableSpans, start CodeOffset) returns BranchPadBytes
+	if not isJumpTable 'single'
+		return (BranchWindowBytes - start mod BranchWindowBytes) as BranchPadBytes
+	end 'single'
+
+	for pad in 1 upto BranchWindowBytes 'eachPad'
+		if not jumpTableHitsBranchWindow(spans.movedBy(pad as CodeOffset)) 'clear'
+			return pad as BranchPadBytes
+		end 'clear'
+	end 'eachPad'
+
+	panic("branchWindowPadBytes: no pad up to a window clears the jump-table sequence's branches — a window-aligned start always does, so the sequence is wider than a window")
+end 'branchWindowPadBytes'
+
 // What the erratum makes of a TargetOp. `iatCall` is told apart from the other calls because under the GT
 // scheduler it is the system-stack shim rather than one `call`; a fusible ALU op is a unit only as the
 // front half of a pair with the `jcc` right after it.
@@ -2707,6 +2772,7 @@ enum BranchWindowRole
 	call
 	importCall
 	fusibleAlu
+	jumpTable
 end 'BranchWindowRole'
 
 // Every op the encoder has, so a new one is classified here or does not compile.
@@ -2720,6 +2786,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		callReg or
 		callMem gives BranchWindowRole.call
 		iatCall gives BranchWindowRole.importCall
+		x64JumpTable gives BranchWindowRole.jumpTable
 		subRegReg or
 		cmpRegReg or
 		cmpRegImm32 or
@@ -2839,7 +2906,6 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		arm64Fcsel or
 		leaRegFunc or
 		x64Syscall or
-		x64JumpTable or
 		arm64JumpTable or
 		arm64StoreOutgoingArg or
 		arm64LoadIncomingArg or
@@ -2876,7 +2942,8 @@ function isBranchWindowUnit(role BranchWindowRole, usesGt bool) returns bool
 	return match role 'unit'
 		jump or
 		condBranch or
-		call gives true
+		call or
+		jumpTable gives true
 		importCall gives not usesGt
 		other or
 		fusibleAlu gives false
@@ -2929,13 +2996,13 @@ function opRefAt(block IrBlock, pos ElementIndex) returns ElementIndex
 end 'opRefAt'
 
 // Emit `first`, then `last` when it is a second op, returning where the unit's last op begins.
-function emitUnitOps(module TargetModule, first ElementIndex, last ElementIndex, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment) returns CodeOffset
+function emitUnitOps(module TargetModule, first ElementIndex, last ElementIndex, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment) returns CodeOffset
 	var lastStart = code.count()
-	emitTargetOp(opAt(module, opIdx: first), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+	emitTargetOp(opAt(module, opIdx: first), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
 	if last != first 'pair'
 		lastStart = code.count()
-		emitTargetOp(opAt(module, opIdx: last), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+		emitTargetOp(opAt(module, opIdx: last), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 	end 'pair'
 
 	return lastStart
@@ -2943,30 +3010,34 @@ end 'emitUnitOps'
 
 // Emit a unit — `first` alone, or `first` and `last` as a fused pair — where the erratum allows. It is
 // emitted first and measured after, so no encoder's width is tabled: only a `covered` unit that straddles a
-// window is rolled back, padded to the next boundary and emitted again. A unit's line row starts at the pad
+// window is rolled back, padded and emitted again — to the next boundary, or for a jump table by the
+// smallest pad that clears both of its branches. A unit's line row starts at the pad
 // that aligns it: the pad is the unit's own code, and a step landing on it must read the unit's line.
-function emitUnit(module TargetModule, first ElementIndex, last ElementIndex, covered bool, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, runOffsets DebugRunOffsets, captureSpans bool)
+function emitUnit(module TargetModule, first ElementIndex, last ElementIndex, role BranchWindowRole, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, runOffsets DebugRunOffsets, captureSpans bool)
+	let covered = last != first or isBranchWindowUnit(role, usesGt: usesGt)
+	let isJumpTable = role == BranchWindowRole.jumpTable
+
 	if covered 'markable'
 		mark.take(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
 	end 'markable'
 
 	var firstStart = code.count()
 	let rowStart = firstStart
-	var lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+	var lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
-	if covered and straddlesBranchWindow(firstStart as CodeOffset, unitEnd: codeHere(code)) 'straddles'
+	if covered and unitHitsBranchWindow(isJumpTable, spans: jumpSpans, start: firstStart as CodeOffset, unitEnd: codeHere(code)) 'straddles'
 		let width = code.count() - firstStart
 
 		if width >= BranchWindowBytes 'tooWide'
-			panic("emitUnit: a {width}-byte unit cannot sit inside a {BranchWindowBytes}-byte window — no jump, call, return or fused pair is that wide, so branchWindowRoleOf classified a macro-op sequence as one")
+			panic("emitUnit: a {width}-byte unit cannot sit inside a {BranchWindowBytes}-byte window — no jump, call, return or fused pair is that wide, and the jump-table sequence is at most {JumpTableSequenceMaxBytes} bytes (cmp 7, jae 6, lea 7, movsxd 4, lea 4, jmp 3), so an encoder grew by more than that or branchWindowRoleOf classified a macro-op sequence as one")
 		end 'tooWide'
 
 		mark.rollBack(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
-		encodeNopPad(code, bytes: (BranchWindowBytes - firstStart mod BranchWindowBytes) as BranchPadBytes)
+		encodeNopPad(code, bytes: branchWindowPadBytes(isJumpTable, spans: jumpSpans, start: firstStart as CodeOffset))
 		firstStart = code.count()
-		lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+		lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
-		if straddlesBranchWindow(firstStart as CodeOffset, unitEnd: codeHere(code)) 'stillStraddles'
+		if unitHitsBranchWindow(isJumpTable, spans: jumpSpans, start: firstStart as CodeOffset, unitEnd: codeHere(code)) 'stillStraddles'
 			panic("emitUnit: a unit re-emitted on a window boundary still straddles it — an encoder emitted different bytes at a different offset")
 		end 'stillStraddles'
 	end 'straddles'
@@ -3046,6 +3117,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 	let threadPointerSegment = x64ThreadPointerSegment(target.os)
 	var mark = EmitMark.create()
+	var jumpSpans = JumpTableSpans.empty()
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitFunctionChunk: blockRef from func.blockRefs not in module.blocks")
@@ -3075,7 +3147,6 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 			let opIdx = opRefAt(block, pos: opPos)
 			let role = branchWindowRoleOf(opAt(module, opIdx: opIdx))
 			var last = opIdx
-			var covered = isBranchWindowUnit(role, usesGt: usesGt)
 
 			// One lookahead: a fusible ALU op and the `jcc` right after it macro-fuse, so the erratum reads
 			// the pair as one jump and it is placed as one unit.
@@ -3084,17 +3155,16 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 				if branchWindowRoleOf(opAt(module, opIdx: nextIdx)) == BranchWindowRole.condBranch 'fuses'
 					last = nextIdx
-					covered = true
 				end 'fuses'
 			end 'lookahead'
 
-			emitUnit(module, first: opIdx, last: last, covered: covered, mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
+			emitUnit(module, first: opIdx, last: last, role: role, mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
 			opPos = opPos + (2 if last != opIdx else 1)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termIdx = block.terminatorIndex()
-			emitUnit(module, first: termIdx, last: termIdx, covered: isBranchWindowUnit(branchWindowRoleOf(opAt(module, opIdx: termIdx)), usesGt: usesGt), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
+			emitUnit(module, first: termIdx, last: termIdx, role: branchWindowRoleOf(opAt(module, opIdx: termIdx)), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
 		end 'hasTerm'
 
 		chunkBlockEnds.place(block.id, value: codeHere(code))

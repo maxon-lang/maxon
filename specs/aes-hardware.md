@@ -1890,6 +1890,93 @@ open true true
 0
 ```
 
+<!-- test: aes-hardware.a-byte-array-a-generic-body-created-is-a-buffer -->
+<!-- tier: stdlib -->
+The `Array with Byte` a `Bag with Byte` creates inside its shared generic body strides one byte per element, as a
+`ByteArray` created in a concrete body does, so the intrinsics, which treat a buffer as raw bytes, read and write it as
+the bytes it holds. The FIPS-197 appendix C.1 vector goes through such an array in every buffer position and comes out
+as the published cipher text, and back to the plain text.
+```maxon
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function add(value Element)
+		items.push(value)
+	end 'add'
+end 'Bag'
+
+typealias ByteBag = Bag with Byte
+
+function bagOf(bytes ByteArray) returns ByteBag
+	var bag = ByteBag.create()
+
+	for byte in bytes 'each'
+		bag.add(byte)
+	end 'each'
+
+	return bag
+end 'bagOf'
+
+function zeros(count Count) returns ByteBag
+	var bag = ByteBag.create()
+
+	for _ in 0 upto count 'each'
+		bag.add(0)
+	end 'each'
+
+	return bag
+end 'zeros'
+
+function dump(label String, bag ByteBag)
+	print(label)
+
+	for byte in bag.items 'each'
+		print(" {byte}")
+	end 'each'
+
+	print("\n")
+end 'dump'
+
+function main() returns ExitCode
+	var key = ByteArray.create()
+	var plain = ByteArray.create()
+
+	for index in 0 upto 16 'eachByte'
+		key.push(index as Byte)
+		plain.push((index * 17) as Byte)
+	end 'eachByte'
+
+	let keyBag = bagOf(key)
+	let plainBag = bagOf(plain)
+	var schedule = zeros(352)
+	var sealed = zeros(16)
+	var opened = zeros(16)
+
+	__Builtins.aesExpandKey(schedule.items, keyBag.items)
+	__Builtins.aesEncryptBlock(sealed.items, 0, schedule.items, plainBag.items, 0)
+	__Builtins.aesDecryptBlock(opened.items, 0, schedule.items, sealed.items, 0)
+
+	print("stride {schedule.items.managed.elementSize()} {sealed.items.managed.elementSize()}\n")
+	dump("sealed", bag: sealed)
+	dump("opened", bag: opened)
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stride 1 1
+sealed 105 196 224 216 106 123 4 48 216 205 183 128 112 180 197 90
+opened 0 17 34 51 68 85 102 119 136 153 170 187 204 221 238 255
+```
+
 <!-- test: aes-hardware.a-sized-fixed-array-is-a-buffer -->
 <!-- tier: stdlib -->
 A fixed array whose type states its length is a buffer in every position a `ByteArray` is, and gives the same bytes: it

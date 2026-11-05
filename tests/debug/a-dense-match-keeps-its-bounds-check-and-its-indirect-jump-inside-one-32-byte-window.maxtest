@@ -1,0 +1,136 @@
+let JumpTableWindowCaseLabel = "jump-table-window"
+let JumpTablesFixtureName = "jumptables"
+
+let BranchWindowBytes = 32
+let MinimumTablesPerImage = 6
+
+let CompareBytes = 7
+let ConditionalJumpBytes = 6
+let TableAddressBytes = 7
+let EntryLoadBytes = 4
+let TargetAddBytes = 4
+let JumpBytes = 3
+
+let BoundsCheckBytes = CompareBytes + ConditionalJumpBytes
+let BoundsCheckDistance = BoundsCheckBytes + TableAddressBytes + EntryLoadBytes + TargetAddBytes
+
+let CompareStart = BoundsCheckDistance
+let ConditionalJumpStart = BoundsCheckDistance - CompareBytes
+let TableAddressStart = BoundsCheckDistance - BoundsCheckBytes
+let EntryLoadStart = EntryLoadBytes + TargetAddBytes
+let TargetAddStart = TargetAddBytes
+
+let JumpR10Prefix = 0x49
+let JumpIndirectOpcode = 0xFF
+let JumpR10ModRm = 0xE2
+
+type ByteExpectation
+	export let distance as PrintedNumber
+	export let mask as PrintedNumber
+	export let value as PrintedNumber
+
+	static function create(distance PrintedNumber, mask PrintedNumber, value PrintedNumber) returns ByteExpectation
+		return Self{distance: distance, mask: mask, value: value}
+	end 'create'
+end 'ByteExpectation'
+
+typealias ByteExpectationArray = Array with ByteExpectation
+
+// The bytes of the sequence `encodeX64JumpTable` emits, each `distance` bytes before the `jmp r10`; `mask`
+// hides the bits that vary with the allocated index register.
+function sequenceExpectations() returns ByteExpectationArray
+	var expectations = ByteExpectationArray.create()
+
+	expectations.push(ByteExpectation.create(CompareStart, mask: 0xFE, value: 0x48))
+	expectations.push(ByteExpectation.create(CompareStart - 1, mask: 0xFF, value: 0x81))
+	expectations.push(ByteExpectation.create(CompareStart - 2, mask: 0xF8, value: 0xF8))
+	expectations.push(ByteExpectation.create(ConditionalJumpStart, mask: 0xFF, value: 0x0F))
+	expectations.push(ByteExpectation.create(ConditionalJumpStart - 1, mask: 0xFF, value: 0x83))
+	expectations.push(ByteExpectation.create(TableAddressStart, mask: 0xFF, value: 0x4C))
+	expectations.push(ByteExpectation.create(TableAddressStart - 1, mask: 0xFF, value: 0x8D))
+	expectations.push(ByteExpectation.create(TableAddressStart - 2, mask: 0xFF, value: 0x15))
+	expectations.push(ByteExpectation.create(EntryLoadStart, mask: 0xFD, value: 0x4D))
+	expectations.push(ByteExpectation.create(EntryLoadStart - 1, mask: 0xFF, value: 0x63))
+	expectations.push(ByteExpectation.create(EntryLoadStart - 2, mask: 0xFF, value: 0x1C))
+	expectations.push(ByteExpectation.create(TargetAddStart, mask: 0xFF, value: 0x4F))
+	expectations.push(ByteExpectation.create(TargetAddStart - 1, mask: 0xFF, value: 0x8D))
+	expectations.push(ByteExpectation.create(TargetAddStart - 2, mask: 0xFF, value: 0x14))
+	expectations.push(ByteExpectation.create(TargetAddStart - 3, mask: 0xFF, value: 0x1A))
+
+	return expectations
+end 'sequenceExpectations'
+
+function byteAt(image ByteArray, position PrintedNumber) returns PrintedNumber
+	let byte = try image.get(position as ElementIndex) otherwise panic("the gate could not run - the scan read byte {position} of a {image.count()}-byte image")
+
+	return byte as PrintedNumber
+end 'byteAt'
+
+function jumpR10At(image ByteArray, position PrintedNumber) returns bool
+	return byteAt(image, position: position) == JumpR10Prefix and byteAt(image, position: position + 1) == JumpIndirectOpcode and byteAt(image, position: position + 2) == JumpR10ModRm
+end 'jumpR10At'
+
+function jumpTableSequenceEndsAt(image ByteArray, jump PrintedNumber, expectations ByteExpectationArray) returns bool
+	if not jumpR10At(image, position: jump) 'noJump'
+		return false
+	end 'noJump'
+
+	for expectation in expectations 'eachByte'
+		if (byteAt(image, position: jump - expectation.distance) and expectation.mask) != expectation.value 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'jumpTableSequenceEndsAt'
+
+function straddlesWindow(start PrintedNumber, limit PrintedNumber) returns bool
+	return start / BranchWindowBytes != limit / BranchWindowBytes
+end 'straddlesWindow'
+
+test 'a dense match keeps its fused bounds check and its indirect jump each inside one 32-byte window on every x64 target'
+	let targets = nativeTargets()
+	let expectations = sequenceExpectations()
+	var findings = StringArray.create()
+	var checkedTargets = 0 as PrintedNumber
+
+	for target in targets 'eachTarget'
+		if not target.startsWith(X64TargetPrefix) 'notX64'
+			continue
+		end 'notX64'
+
+		checkedTargets = checkedTargets + 1
+
+		let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "{JumpTableWindowCaseLabel}-{target}", fixture: JumpTablesFixtureName)
+		let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: "{JumpTablesFixtureName} for {target}", extraArguments: ["{TargetOptionPrefix}{target}"])
+		let image = fileBytes(executable)
+		let text = imageText(image, target: target)
+		var tables = 0 as PrintedNumber
+
+		for jump in (text.fileOffset + BoundsCheckDistance) upto (text.fileOffset + text.byteCount - JumpBytes) 'eachCandidate'
+			if not jumpTableSequenceEndsAt(image, jump: jump, expectations: expectations) 'notOne'
+				continue
+			end 'notOne'
+
+			tables = tables + 1
+
+			let relativeJump = jump - text.fileOffset
+			let boundsCheck = relativeJump - BoundsCheckDistance
+
+			if straddlesWindow(boundsCheck, limit: boundsCheck + BoundsCheckBytes) 'boundsCheckHits'
+				findings.push("{target}: the cmp/jae pair at .text+0x{boundsCheck:x} spans [{boundsCheck mod BranchWindowBytes}, {boundsCheck mod BranchWindowBytes + BoundsCheckBytes}) of its 32-byte window")
+			end 'boundsCheckHits'
+
+			if straddlesWindow(relativeJump, limit: relativeJump + JumpBytes) 'jumpHits'
+				findings.push("{target}: the jmp r10 at .text+0x{relativeJump:x} spans [{relativeJump mod BranchWindowBytes}, {relativeJump mod BranchWindowBytes + JumpBytes}) of its 32-byte window")
+			end 'jumpHits'
+		end 'eachCandidate'
+
+		if tables < MinimumTablesPerImage 'tooFew'
+			findings.push("{target}: the scan found {tables} jump-table sequences in the image, fewer than the {MinimumTablesPerImage} the fixture's matches alone lay out, so the byte pattern it looks for no longer matches what the encoder emits")
+		end 'tooFew'
+	end 'eachTarget'
+
+	try Expect.notEqual(checkedTargets, expected: 0, message: "{TargetsTablePath} lists no x64 target, so this case would assert nothing.")
+	try Expect.isEmpty(joined(findings, separator: LineFeed), message: "the jump-table sequence of a dense match was laid out across a 32-byte boundary. Intel's Skylake-family microcode cannot cache the decoded µops of a jump, or of a cmp/jcc pair that macro-fuses into one, whose bytes cross a 32-byte boundary or end on one, so a loop that dispatches through the table runs from the legacy decoder, and how fast it runs depends on the size of everything laid out before it.")
+end 'a dense match keeps its fused bounds check and its indirect jump each inside one 32-byte window on every x64 target'

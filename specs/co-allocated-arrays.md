@@ -592,6 +592,94 @@ mm_decref ArrayRecord #5 rc=0
 mm_free ArrayRecord #5
 ```
 
+<!-- test: a-generic-born-array-is-as-large-as-its-elements-at-every-width -->
+An array a shared generic body creates with a known capacity is the 56-byte header and its elements at the width the
+instantiation binds, the size the same array has when a concrete body creates it: a hundred bytes, a hundred 16-bit
+elements, a hundred `bool`s and a hundred 2-bit elements take 156, 256, 69 and 81 bytes. **If a shared body stamps a
+machine word per element instead, each record is eight times as large in its elements and the buffer leaves the
+record's allocation.**
+<!-- MmTrace -->
+```maxon
+typealias Half = int(0 to 65535)
+typealias Crumb = int(0 to 3)
+
+type Cells uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(100, zeroed: false)}
+	end 'create'
+end 'Cells'
+
+typealias ByteCells = Cells with Byte
+typealias HalfCells = Cells with Half
+typealias FlagCells = Cells with bool
+typealias CrumbCells = Cells with Crumb
+
+function bytes() returns bool
+	let cells = ByteCells.create()
+
+	return cells.items.capacity() >= 100
+end 'bytes'
+
+function halves() returns bool
+	let cells = HalfCells.create()
+
+	return cells.items.capacity() >= 100
+end 'halves'
+
+function flags() returns bool
+	let cells = FlagCells.create()
+
+	return cells.items.capacity() >= 100
+end 'flags'
+
+function crumbs() returns bool
+	let cells = CrumbCells.create()
+
+	return cells.items.capacity() >= 100
+end 'crumbs'
+
+function main() returns ExitCode
+	if not bytes() or not halves() or not flags() or not crumbs() 'capacities'
+		return 1
+	end 'capacities'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+```mm-trace
+mm_alloc ArrayRecord #1 size=156
+mm_alloc Cells #2 size=8
+mm_decref Cells #2 rc=0
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+mm_free Cells #2
+mm_alloc ArrayRecord #3 size=256
+mm_alloc Cells #4 size=8
+mm_decref Cells #4 rc=0
+mm_decref ArrayRecord #3 rc=0
+mm_free ArrayRecord #3
+mm_free Cells #4
+mm_alloc ArrayRecord #5 size=69
+mm_alloc Cells #6 size=8
+mm_decref Cells #6 rc=0
+mm_decref ArrayRecord #5 rc=0
+mm_free ArrayRecord #5
+mm_free Cells #6
+mm_alloc ArrayRecord #7 size=81
+mm_alloc Cells #8 size=8
+mm_decref Cells #8 rc=0
+mm_decref ArrayRecord #7 rc=0
+mm_free ArrayRecord #7
+mm_free Cells #8
+```
+
 <!-- test: a-sized-memory-is-one-allocation -->
 <!-- tier: stdlib -->
 `__ManagedMemory.create(capacity, elementSize)` is the sized creation the standard library's own buffers use.

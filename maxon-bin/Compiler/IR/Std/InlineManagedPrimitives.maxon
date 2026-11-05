@@ -41,11 +41,11 @@
 // first for a store (`AbsentBuffer`). That ordering is a REQUIREMENT, not a preference.
 //
 // ⭐⭐ The width-independent guards come first and the stride fork last, just before the access. Asked once
-// above the fork, the guards are emitted once per site instead of once per width, and the word and byte
-// paths execute the same instructions either way. The price is paid by an element the fork refuses (a 2-
-// or 4-byte element, an unset stride, every sub-byte-packed width): it runs every guard ahead of the call
-// it was always going to make. Only a `runtimeFork` site can pay it, because a site whose stamp names such
-// a stride is `noFastArm` and is not expanded. Among a store's guards `element_destroy@40 != 0` goes first
+// above the fork, the guards are emitted once per site instead of once per width, and every arm executes
+// the same guards either way. The price is paid by an element the fork refuses (a stamp the site's
+// roster names no arm for, such as the unset 0): it runs every guard ahead of the call it was always going
+// to make. Only a `runtimeFork` site can pay it, because a site whose stamp names such a stride is
+// `noFastArm` and is not expanded. Among a store's guards `element_destroy@40 != 0` goes first
 // and refuses every managed-element array, whose occupant is the runtime's to destroy — asked at run time
 // only where the lowering could not answer it (see the ownership stamp below).
 //
@@ -67,60 +67,51 @@
 // The values that genuinely span the region are the call's own arguments, which are live across the call
 // this replaces, and the buffer (and a push's length) the guards load for the store below the fork.
 
-// ⭐⭐ **THE TWO STRIDES THESE FAST ARMS ARE THE WHOLE OF: ONE MACHINE WORD, AND ONE BYTE.**
-// `element_size@24` is SIGNED and runtime-valued — a byte stride when positive, `-(bits per element)` when
-// the elements are sub-byte packed (`ManagedMemoryRuntime`'s header) — and a fast arm moves exactly two of
-// those widths in ONE memory op (`emitStrideDispatch`'s header states the list).
-// Every other stride (2, 4, the unset 0, and every packed one) goes to the runtime, whose
-// `emitLoadElemAt`/`emitStoreElemAt` own that arithmetic and its zero-extension rules.
+// ⭐⭐ **THE STRIDES THESE FAST ARMS SERVE ARE `SingleOpStride`'S, AND THE LIST IS NOT THIS FILE'S.**
+// `element_size@24` is runtime-valued: a byte stride when positive, `-(bits per element)` when the elements
+// are sub-byte packed, with a signed-slot flag above the stride (`ManagedMemoryRuntime`'s header). A fast
+// arm moves one of those in straight-line code: a word, 1, 2 and 4 bytes, three packed widths, and a signed
+// 1-, 2- or 4-byte slot (`emitStrideChain` emits the compares). A stamp none of them names, the unset 0,
+// goes to the runtime.
 //
-// ⭐ **THE BYTE ARM IS NOT A GENERALIZATION — IT IS A MEASURED FAMILY.** Without it every
-// `ByteArray` access and every 1-byte enum slot (`enum-narrow-storage`) misses the word arm and pays the
-// whole runtime call: `__managed_get`'s slow arm reached from `Map.findSlot` alone is 2% of a stage-2
-// self-compile, and the body it lands in walks an eight-trip byte loop to move one byte.
-//
-// ⚠ **NEITHER WIDTH IS SPELLED IN THIS FILE, AND THAT IS THE POINT.** Each
-// arm below names a `ManagedMemoryRuntime.SingleOpStride`, which carries the `element_size@24` stamp AND
-// the Std memory type an access at that stamp uses as ONE fact — see its header for the wrong answers a
-// site able to name the two separately can produce. A `WordElementStride` derived here from
-// `MachineWordBytes` would be a second derivation of a width the runtime already derives, paired by
-// hand with `StdType.i64` at each of three call sites and with `StdType.u8` at three more.
+// ⚠ **NO WIDTH IS SPELLED IN THIS FILE, AND THAT IS THE POINT.** Each arm below names a
+// `ManagedMemoryRuntime.SingleOpStride`, which carries the `element_size@24` stamp AND the Std memory type
+// an access at that stamp uses as ONE fact — see its header for the wrong answers a site able to name the
+// two separately can produce. A stride derived here from `MachineWordBytes` would be a second derivation of
+// a width the runtime already derives, paired by hand with its access type at each call site.
 
 // ⭐⭐ **THE FORK IS NOT EMITTED WHERE THE COMPILER ALREADY KNOWS THE ANSWER.** `Array with
 // Integer` stamps `element_size@24` with 8 in every program that ever runs, so emitting a
 // `loadIndirect` of that field, two compares and two branches AT EVERY ELEMENT ACCESS IN EVERY PROGRAM is
 // a runtime dispatch on a compile-time constant. `LowerMaxonToStd.recordStaticElementFacts` writes the
-// stamp down against the Std op index of the call it is appending (`Project.stdOpElementStrides`), and
+// stride down against the Std op index of the call it is appending (`Project.stdOpElementStrides`), and
 // `stridePlanFor` reads it back here. What follows from the answer:
 //
 //   • **`singleArm`** — ONE arm is emitted, INTO THE SITE'S OWN BLOCK. No fork, no `element_size@24` load,
 //     no second arm, and no branch into the arm either, because with one successor the arm IS the block.
-//   • **`noFastArm`** — a 2- or 4-byte element, an unset stride, or a sub-byte PACKED one. Every fast arm
-//     is dead, so nothing is expanded at all and the runtime call stands exactly as the lowering wrote it.
-//     That is strictly better than expanding: expanding makes such a site pay the load and both compares
+//   • **`noFastArm`** — an unset stride, or any other value no `SingleOpStride` names. Every fast arm is
+//     dead, so nothing is expanded at all and the runtime call stands exactly as the lowering wrote it.
+//     That is strictly better than expanding: expanding makes such a site pay the load and the compares
 //     to reach the very call it was always going to make.
 //   • **`runtimeFork`** — an opaque `T` element in a shared generic body (`Array with T` and
-//     `__ManagedMemory with T` are ONE `GenericInstanceId`, and one body serves every width), an array
-//     reached through an interface or an existential, AND every BYTE-stamped site. `emitStrideDispatch`
-//     emits the fork.
+//     `__ManagedMemory with T` are ONE `GenericInstanceId`, and one body serves every width), or an array
+//     reached through an interface or an existential. `emitStrideChain` emits the fork over the roster
+//     `forkRosterStrides` names.
 //
-// ⛔⛔ **THAT LAST CLAUSE IS THE ROW'S ONE MEASURED WRONG ANSWER, AND IT IS NOT THIS FILE'S TO DECIDE.**
-// A byte-stamped record may still be word-strided — a container declared over a type parameter is created
-// at the machine-word slot inside a shared body and handed back under a SUBSTITUTED concrete type — so a
-// byte stamp does not fix the width. `strideDispatchPlanForStamp` is where that reading lives, with the
-// program that measured it; this file acts on the plan and asks no stride question of its own.
+// ⛔⛔ **WHICH ARM A STRIDE SELECTS IS NOT THIS FILE'S TO DECIDE.** `strideDispatchPlanForStamp` is where
+// that reading lives, with the argument that a static stride is the record's; this file acts on the plan
+// and asks no stride question of its own.
 //
-// ⭐⭐ **THE OWNERSHIP STAMP RIDES THE SAME KEY, AND UNLIKE THE STRIDE IT IS ALWAYS THE RECORD'S.** The
+// ⭐⭐ **THE OWNERSHIP STAMP RIDES THE SAME KEY, AND LIKE THE STRIDE IT IS ALWAYS THE RECORD'S.** The
 // same door records, in `Project.stdOpTrivialElementSites`, every site whose element the lowering knows owes
 // no drop, and the two checked expanders read it back: such a site's store arm omits the `element_destroy@40`
 // load, compare and branch, and its checked-get tail omits them and the `__im_empty` block with them. The
 // opaque-`T` caveat does not apply because every writer of `element_destroy@40` stamps the element type of the
 // record's OWN instance — a concrete creation from `containerElementOwesDrop`, a creation inside a shared
 // generic body from the threaded descriptor's `destroyFunc@40` (0 for a trivial instantiation), an
-// image-data record from `columnDestroyStamp`, and a view or clone from its source's slot. The slot WIDTH
-// inside a shared body is the body's; the element's OWNERSHIP is the instantiation's, and the descriptor
-// carries that per instantiation. The refusal direction is the stride's: an opaque `T` records nothing, and
-// its site keeps both guards.
+// image-data record from `columnDestroyStamp`, and a view or clone from its source's slot. The element's
+// OWNERSHIP is the instantiation's, and the descriptor carries that per instantiation. The refusal
+// direction is the stride's: an opaque `T` records nothing, and its site keeps both guards.
 //
 // ⭐ **AND FOR `__managed_get_unchecked` A KNOWN STRIDE REMOVES THE SLOW ARM WITH THE FORK**, because the
 // fork is that expansion's ONLY precondition — see `expandUncheckedGetUnguarded`. The loop body of a
@@ -152,14 +143,15 @@ let InlineDetachedLabel = b"__im_detached"
 let InlineMissingLabel = b"__im_missing"
 let MissingBufferPanicText = b"fatal error: an element store found no buffer behind a record that holds elements\n"
 
-// The stride fork's own three: the block that asks the SECOND of `emitStrideDispatch`'s two questions, and
-// the entry of each accepted arm. Named here rather than left to the runtime's `esbyte` default so every
-// block this pass puts inside a user function still reads as this pass's.
+// The stride fork's labels: `InlineStrideLabel` names each block that asks the next compare of
+// `emitStrideChain`, and `InlineArmLabelPrefix` starts the label of each accepted arm. Named here so every
+// block this pass puts inside a user function still reads as this pass's. `InlineByteLabel` names the
+// block after `guardByteStride`.
 let InlineStrideLabel = b"__im_stride"
-let InlineWordLabel = b"__im_word"
+let InlineArmLabelPrefix = b"__im_"
 let InlineByteLabel = b"__im_byte"
 
-// Where the two widths of a checked `get` or a cursor `current` rejoin, carrying the loaded element as a block arg.
+// Where the arms of a checked `get` or a cursor `current` rejoin, carrying the loaded element as a block arg.
 let InlineLoadedLabel = b"__im_loaded"
 
 // How many sites the pass expanded — a diagnostic counter, reported once per compile.
@@ -251,6 +243,21 @@ type StrideArm
 end 'StrideArm'
 
 typealias StrideArmArray = Array with StrideArm
+
+enum ForkRoster
+	element
+	cursor
+end 'ForkRoster'
+
+// A cursor's `current` forks over the word and byte arms only: the `ArrayIterator.current` leaf has to stay
+// within the inliner's leaf budget (`InlineLeaves.MaxInlinedLeafOps`), and every other stamp reaches the
+// slow arm, the runtime call.
+function forkRosterStrides(roster ForkRoster) returns SingleOpStrideArray
+	return match roster 'roster'
+		element gives SingleOpStride.allCases
+		cursor gives [SingleOpStride.word, SingleOpStride.byte] as SingleOpStrideArray
+	end 'roster'
+end 'forkRosterStrides'
 
 type GuardedBuffer
 	export let blockRef as ElementIndex
@@ -677,7 +684,7 @@ type PrimitiveInliner
 
 	// `__managed_get_unchecked(arr, index) -> value`: each accepted stride is a slot address and one load, at
 	// its own width. There is nothing above the widths to share, so the stride fork IS the whole guard chain
-	// and neither arm costs the other anything.
+	// and no arm costs another anything.
 	// There is deliberately NO bounds check and NO empty-slot check here — not because they are cheap to
 	// omit, but because `__managed_get_unchecked`'s body does not have them either: the `for`-in header
 	// re-reads the length live on every trip and a managed array cannot hold an empty slot inside
@@ -701,7 +708,7 @@ type PrimitiveInliner
 
 		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 
-		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
+		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan, roster: ForkRoster.element, forStore: false) 'eachArm'
 			self.emitLoadArmToCont(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, cont: frame.carve.cont)
 		end 'eachArm'
 
@@ -763,7 +770,7 @@ type PrimitiveInliner
 		// The fast arm reads every element; the slow arm is an index out of range or an empty managed slot.
 		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 		var inRange = self.guardIndexInRange(self.blockAt(blockRef), arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: frame.slow, next: InlineLoadLabel)
-		let arms = self.openStrideArms(registeredBlockRef(self.module, func: self.func, block: inRange), arr: arr, slow: frame.slow.id, plan: plan)
+		let arms = self.openStrideArms(registeredBlockRef(self.module, func: self.func, block: inRange), arr: arr, slow: frame.slow.id, plan: plan, roster: ForkRoster.element, forStore: false)
 		let loaded = self.emitLoadArms(arms, arr: arr, index: index)
 
 		var tail = self.blockAt(loaded.blockRef)
@@ -774,8 +781,8 @@ type PrimitiveInliner
 	end 'expandCheckedGet'
 
 	// ⭐ **ONE ARM NEEDS NO JOIN, AND THE JOIN IS THE ONLY REASON THE TAIL IS NOT WRITTEN IN PLACE.**
-	// With two widths the tail reads a value TWO blocks produced, so the arms rejoin at `loaded` and carry
-	// it as a block arg; with one there is exactly one producer and the tail simply follows it — one block
+	// With several widths the tail reads a value SEVERAL blocks produced, so the arms rejoin at `loaded` and
+	// carry it as a block arg; with one there is exactly one producer and the tail simply follows it — one block
 	// and one branch fewer, on every element read whose stride the compiler knows.
 	function emitLoadArms(arms StrideArmArray, arr ValueId, index ValueId) returns LoadedElement
 		if arms.count() == 1 'oneKnownWidth'
@@ -807,7 +814,14 @@ type PrimitiveInliner
 
 	function expandCursorCurrent(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId) returns ElementIndex
 		let cursor = argAt(args, index: 0, callee: callee)
-		let plan = StrideDispatchPlan.runtimeFork
+		let site = self.opIndexAt(blockRef, pos: pos)
+		let plan = self.stridePlanFor(site)
+
+		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
+			return blockRef
+		end 'noSingleOpArmSurvives'
+
+		let trivialElement = self.trivialElements.contains(site)
 
 		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 
@@ -815,10 +829,10 @@ type PrimitiveInliner
 		let position = emitLoadField(self.module, block: head, record: cursor, offset: CursorPositionOffset, ids: self.valueIds())
 		let source = emitLoadField(self.module, block: head, record: cursor, offset: CursorSourceOffset, ids: self.valueIds())
 		var inRange = self.guardCursorInRange(head, source: source, position: position, slow: frame.slow, next: InlineLoadLabel)
-		let arms = self.openStrideArms(registeredBlockRef(self.module, func: self.func, block: inRange), arr: source, slow: frame.slow.id, plan: plan)
+		let arms = self.openStrideArms(registeredBlockRef(self.module, func: self.func, block: inRange), arr: source, slow: frame.slow.id, plan: plan, roster: ForkRoster.cursor, forStore: false)
 		let loaded = self.emitLoadArms(arms, arr: source, index: position)
 
-		self.emitElementReadTail(self.blockAt(loaded.blockRef), arr: source, value: loaded.value, frame: frame, trivialElement: false, exit: ElementReadExit.valueOnly)
+		self.emitElementReadTail(self.blockAt(loaded.blockRef), arr: source, value: loaded.value, frame: frame, trivialElement: trivialElement, exit: ElementReadExit.valueOnly)
 
 		return self.finish(frame.carve)
 	end 'expandCursorCurrent'
@@ -847,7 +861,7 @@ type PrimitiveInliner
 
 	// The shared tail of a checked element read (`get`, and a cursor's `current`): an empty MANAGED slot
 	// leaves for the slow arm, which throws (`get`) or panics (`current`), and everything else is the answer.
-	// `cur` holds the loaded element — as its own block arg when the two widths rejoined there, and as the
+	// `cur` holds the loaded element — as its own block arg when the arms rejoined there, and as the
 	// value the one arm's load defined otherwise.
 	//
 	// ⭐ **WHERE THE LOWERING RECORDED THAT THE ELEMENT OWES NO DROP, THE TAIL IS THE EDGE AND NOTHING
@@ -922,9 +936,9 @@ type PrimitiveInliner
 		view frame = self.openStoreFrame(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: slowHeat, refusalOnly: storesOnTheFastArmOnly)
 		let guarded = self.emitDetachingStoreGuards(self.blockAt(blockRef), arr: arr, index: index, bound: bound, slow: frame.slow, occupantOwesNoDrop: trivialElement)
 
-		for arm in self.openStrideArms(guarded.blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
+		for arm in self.openStrideArms(guarded.blockRef, arr: arr, slow: frame.slow.id, plan: plan, roster: ForkRoster.element, forStore: true) 'eachArm'
 			var armBlock = self.blockAt(arm.blockRef)
-			self.emitSlotStore(armBlock, buffer: guarded.buffer, index: index, value: value, stride: arm.stride)
+			emitStrideSlotStore(self.module, block: armBlock, buffer: guarded.buffer, index: index, value: value, stride: arm.stride, ids: self.valueIds())
 			self.emitVoidOkExit(armBlock, cont: frame.carve.cont, errorFlagId: errorFlagId)
 		end 'eachArm'
 
@@ -937,7 +951,7 @@ type PrimitiveInliner
 
 		let joined = self.emitDetachUnlessOwned(self.blockAt(blockRef), arr: arr, absent: self.missingBufferExit().id)
 		var store = self.blockAt(joined.blockRef)
-		self.emitSlotStore(store, buffer: joined.buffer, index: index, value: value, stride: stride)
+		emitStrideSlotStore(self.module, block: store, buffer: joined.buffer, index: index, value: value, stride: stride, ids: self.valueIds())
 		self.emitVoidOkExit(store, cont: carve.cont, errorFlagId: errorFlagId)
 
 		return self.finish(carve)
@@ -974,7 +988,7 @@ type PrimitiveInliner
 		var load = self.guardByteStride(spanned, arr: arr, slow: frame.slow)
 
 		let buffer = emitLoadField(self.module, block: load, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
-		let slot = self.emitSlotAt(load, buffer: buffer, index: at, stride: SingleOpStride.byte)
+		let slot = emitSlotAddr(self.module, block: load, buffer: buffer, index: at, elementSize: emitConst(self.module, block: load, value: singleOpStrideBytes(SingleOpStride.byte), ids: self.valueIds()), ids: self.valueIds())
 		let raw = self.valueIds().mint()
 		self.module.appendOp(load, op: StdOp.loadIndirect(raw, addrId: slot, offset: 0, valueType: wordAccessType(entry.width)))
 
@@ -1000,7 +1014,7 @@ type PrimitiveInliner
 		let guarded = self.emitElementStoreGuards(head, arr: arr, index: lastIndex, slow: frame.slow, occupantOwesNoDrop: true)
 		var store = self.guardByteStride(self.blockAt(guarded.blockRef), arr: arr, slow: frame.slow)
 
-		let slot = self.emitSlotAt(store, buffer: guarded.buffer, index: length, stride: SingleOpStride.byte)
+		let slot = emitSlotAddr(self.module, block: store, buffer: guarded.buffer, index: length, elementSize: emitConst(self.module, block: store, value: singleOpStrideBytes(SingleOpStride.byte), ids: self.valueIds()), ids: self.valueIds())
 		let stored = self.inOrder(store, word: word, order: entry.order, width: entry.width)
 		self.module.appendOp(store, op: StdOp.storeIndirect(slot, offset: 0, valueId: stored, valueType: wordAccessType(entry.width)))
 		self.emitAppendExit(store, arr: arr, length: length, appended: wordByteCount(entry.width), frame: frame)
@@ -1018,8 +1032,9 @@ type PrimitiveInliner
 		return next
 	end 'guardWordSpan'
 
+	// Compares the whole stamp, so a signed one-byte slot (flag set) takes the slow arm.
 	function guardByteStride(cur IrBlock, arr ValueId, slow IrBlock) returns IrBlock
-		let elementSize = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: self.valueIds())
+		let elementSize = emitLoadElementStamp(self.module, block: cur, record: arr, ids: self.valueIds())
 		let notBytes = emitCompareWithConstant(self.module, block: cur, value: elementSize, pred: StdCmpPred.ne, against: singleOpStrideBytes(SingleOpStride.byte), ids: self.valueIds())
 
 		return self.guard(cur, refused: notBytes, slow: slow, next: InlineByteLabel)
@@ -1179,7 +1194,7 @@ type PrimitiveInliner
 		// `__managed_push` stores there without asking `element_destroy@40`.
 		let guarded = self.emitElementStoreGuards(head, arr: arr, index: length, slow: frame.slow, occupantOwesNoDrop: true)
 
-		for arm in self.openStrideArms(guarded.blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
+		for arm in self.openStrideArms(guarded.blockRef, arr: arr, slow: frame.slow.id, plan: plan, roster: ForkRoster.element, forStore: true) 'eachArm'
 			self.emitPushArm(self.blockAt(arm.blockRef), arr: arr, buffer: guarded.buffer, length: length, value: value, stride: arm.stride, frame: frame)
 		end 'eachArm'
 
@@ -1187,7 +1202,7 @@ type PrimitiveInliner
 	end 'expandPush'
 
 	function emitPushArm(cur IrBlock, arr ValueId, buffer ValueId, length ValueId, value ValueId, stride SingleOpStride, frame InlineFrame)
-		self.emitSlotStore(cur, buffer: buffer, index: length, value: value, stride: stride)
+		emitStrideSlotStore(self.module, block: cur, buffer: buffer, index: length, value: value, stride: stride, ids: self.valueIds())
 		self.emitAppendExit(cur, arr: arr, length: length, appended: PushedElementCount, frame: frame)
 	end 'emitPushArm'
 
@@ -1198,26 +1213,16 @@ type PrimitiveInliner
 		self.emitVoidOkExit(cur, cont: frame.carve.cont, errorFlagId: ManagedCallFlag.none)
 	end 'emitAppendExit'
 
-	function emitSlotStore(cur IrBlock, buffer ValueId, index ValueId, value ValueId, stride SingleOpStride)
-		let slot = self.emitSlotAt(cur, buffer: buffer, index: index, stride: stride)
-		self.module.appendOp(cur, op: StdOp.storeIndirect(slot, offset: 0, valueId: value, valueType: singleOpStrideAccessType(stride)))
-	end 'emitSlotStore'
-
-	function emitSlotAt(cur IrBlock, buffer ValueId, index ValueId, stride SingleOpStride) returns ValueId
-		let strideValue = emitConst(self.module, block: cur, value: singleOpStrideBytes(stride), ids: self.valueIds())
-		return emitSlotAddr(self.module, block: cur, buffer: buffer, index: index, elementSize: strideValue, ids: self.valueIds())
-	end 'emitSlotAt'
-
 	// --- the shared pieces every carved expansion is built from ---
 
-	// ⭐⭐ **WHAT THIS SITE KNOWS ABOUT ITS ELEMENT STRIDE** — the recorded `element_size@24` stamp, read
-	// back through `strideDispatchPlanForStamp` so that *which arm a stamp selects* is answered in ONE place,
+	// ⭐⭐ **WHAT THIS SITE KNOWS ABOUT ITS ELEMENT STRIDE** — the recorded element stride, read
+	// back through `strideDispatchPlanForStamp` so that *which arm a stride selects* is answered in ONE place,
 	// beside the runtime compares it is the compile-time twin of.
 	//
 	// ⚠ **AN ABSENT ENTRY IS "NOT KNOWN", WHICH IS THE ONLY SAFE DIRECTION AND THE COMMON ONE.** Nothing is
 	// recorded for an opaque `T` element in a shared generic body (one body serves every width), for an
 	// array reached through an interface or an existential, or for any call the lowering could not type. Those
-	// sites keep `emitStrideDispatch`.
+	// sites keep the runtime stride fork.
 	//
 	// ⚠ The key is the call's op index, which is the block's to give only until the carve moves the call —
 	// every expander reads its site facts (this plan and `trivialElements`) before it carves.
@@ -1237,45 +1242,24 @@ type PrimitiveInliner
 	// into, or the site's own where there are none. With one successor there is no fork to branch from,
 	// so the access is emitted there, the block is not terminated here at all, and the arm costs neither
 	// a block nor a jump. It is a ref and not an `IrBlock` for the reason `StrideArm` gives.
-	function openStrideArms(blockRef ElementIndex, arr ValueId, slow BlockId, plan StrideDispatchPlan) returns StrideArmArray
+	function openStrideArms(blockRef ElementIndex, arr ValueId, slow BlockId, plan StrideDispatchPlan, roster ForkRoster, forStore bool) returns StrideArmArray
 		match plan 'plan'
 			runtimeFork then break
 			singleArm(stride) then return singleStrideArm(blockRef, stride: stride)
 			noFastArm then panic("openStrideArms: a `noFastArm` plan reached the arm builder — every expander must answer it and return BEFORE its carve, because there is no arm to emit and nothing left for a frame to serve")
 		end 'plan'
 
-		// ⚠ Each ref is read the instant its block is minted: `registeredBlockRef` is O(1) exactly because it
-		// asks for the LAST-registered block, and the second `addBlock` is what ends that for the first.
-		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel, heat: BlockHeat.normal)
-		let wordRef = registeredBlockRef(self.module, func: self.func, block: wordArm)
-		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel, heat: BlockHeat.normal)
-		let byteRef = registeredBlockRef(self.module, func: self.func, block: byteArm)
-		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: slow)
+		let stamp = emitLoadElementStamp(self.module, block: self.blockAt(blockRef), record: arr, ids: self.valueIds())
+		let chain = emitStrideChain(self.module, func: self.func, cur: self.blockAt(blockRef), stamp: stamp, strides: forkRosterStrides(roster), signedSharesUnsignedArm: forStore, other: slow, armLabelPrefix: InlineArmLabelPrefix, checkLabel: InlineStrideLabel, ids: self.valueIds())
 
 		var arms = StrideArmArray.create()
-		arms.push(StrideArm.create(wordRef, stride: SingleOpStride.word))
-		arms.push(StrideArm.create(byteRef, stride: SingleOpStride.byte))
+
+		for arm in chain 'eachArm'
+			arms.push(StrideArm.create(arm.ref, stride: arm.stride))
+		end 'eachArm'
+
 		return arms
 	end 'openStrideArms'
-
-	// ⭐ THE ONE PRECONDITION EVERY FAST ARM SHARES — the element is one whole machine word or one byte, so
-	// the access is a single `loadIndirect`/`storeIndirect` at that width. Every other stride leaves for the
-	// slow arm here; the file header says why that is the last test rather than the first.
-	//
-	// ⛔⛔ **THE TWO COMPARES ARE `emitStrideDispatch`'s, NOT THIS FILE'S.** The list of strides a target
-	// moves in one memory op is the runtime's — it is the same list `emitLoadElemAt`/`emitStoreElemAt` route
-	// their own fast arms on — and a pass that re-spelled it here would be the drifting checklist this
-	// file's header rejects, one predicate further out than the one review already caught
-	// (`emitElementIsManaged`). If the tier ever moves a 2- or 4-byte element in one op, that fact changes
-	// in one place and both tiers learn it.
-	//
-	// `openStrideArms` MINTS the two arm blocks and hands their ids in, rather than taking them back from
-	// here: it hands them on to an expander that emits into both, and a block emitted into is a `var`
-	// binding under this compiler's own ownership rules.
-	function dispatchOnStride(cur IrBlock, arr ValueId, wordArm BlockId, byteArm BlockId, slow BlockId)
-		let elementSize = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: self.valueIds())
-		emitStrideDispatch(self.module, func: self.func, cur: cur, es: elementSize, wordArm: wordArm, byteArm: byteArm, otherArm: slow, ids: self.valueIds(), checkByteLabel: InlineStrideLabel)
-	end 'dispatchOnStride'
 
 	// The index bound, through `emitIndexOutOfRange` — the ONE home of "reject this index", which is
 	// a single UNSIGNED compare and carries the NEGATIVE half in it (a negative index reinterpreted as
@@ -1317,23 +1301,18 @@ type PrimitiveInliner
 		return ok
 	end 'guard'
 
-	// The single-op element read: `[buffer@0 + index · stride]` at the arm's own width. The address is
-	// `emitSlotAddr`'s — the runtime's one home of "where does element `index` start" — and the load is a
-	// plain `loadIndirect` rather than `emitLoadElemAt`, because collapsing that byte loop IS this arm.
+	// The single-op element read at the arm's own stride, which is `emitStrideSlotLoad` — the runtime's one
+	// element read for a stride, and the one `emitLoadElemAt`'s arms call — so this arm and the runtime body
+	// agree by construction.
 	//
-	// ⭐ **THE TWO AGREE BY CONSTRUCTION AT BOTH STRIDES, AND THE SECOND HALF OF THAT IS A RULE RATHER THAN
-	// AN IDENTITY.** At `es == 8` `emitLoadElemAt` accumulates the eight little-endian bytes and masks with
-	// `AllBitsSet`, which is the identity for a 64-bit field. At `es == 1` it loads one `u8` — ZERO-extended
-	// (`movzx` on x64, `ldrb` on arm64, `i32.load8_u` on wasm) — and masks with `0xFF`, which is that same
-	// zero-extended byte; the zero-extension is what `SignatureIndex.arrayElementSize` and
-	// `LayoutDescriptor.rangedAliasPackedBits`' `low == 0` rule both rest on, and the parser re-signs a
-	// narrow slot from there. So a `u8` load is precisely what the runtime body itself would have answered.
+	// ⭐ **AN UNSIGNED NARROW SLOT ARRIVES ZERO-EXTENDED** (`movzx` on x64, `ldrb` on arm64, `i32.load8_u` on
+	// wasm), and that is a rule rather than an identity: `SignatureIndex.arrayElementSize` and
+	// `LayoutDescriptor.rangedAliasPackedBits`' `low == 0` rule both rest on it. A signed slot is extended by
+	// a constant shift pair inside the arm that serves it.
 	function emitElementLoad(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride) returns ValueId
 		let buffer = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
-		let slot = self.emitSlotAt(cur, buffer: buffer, index: index, stride: stride)
-		let value = self.valueIds().mint()
-		self.module.appendOp(cur, op: StdOp.loadIndirect(value, addrId: slot, offset: 0, valueType: singleOpStrideAccessType(stride)))
-		return value
+
+		return emitStrideSlotLoad(self.module, block: cur, buffer: buffer, index: index, stride: stride, ids: self.valueIds())
 	end 'emitElementLoad'
 
 	// Carve the call out of its block and build the frame around it: `head` keeps everything BEFORE the

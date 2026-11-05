@@ -1,29 +1,9 @@
 let AlignmentCaseLabel = "entry-alignment"
 let FunctionsSection = "functions"
-let TargetOptionPrefix = "--target="
 
-let X64TargetPrefix = "x64-"
 let Arm64TargetPrefix = "arm64-"
 let X64EntryAlignmentBytes = 32
 let Arm64EntryAlignmentBytes = 16
-
-let MachOMagicLowByte = 0xCF
-let MachOMagicSecondByte = 0xFA
-let ElfMagicLowByte = 0x7F
-let ElfMagicSecondByte = 0x45
-let PeMagicLowByte = 0x4D
-let PeMagicSecondByte = 0x5A
-
-let MachOTextSectionName = "__text"
-let MachOSectionAddressOffset = 32
-let MachOHeaderScanBytes = 4096
-let ElfEntryAddressOffset = 24
-let PeNewHeaderPointerOffset = 60
-let PeEntryPointFromNewHeader = 40
-
-let WordBytes = 8
-let DwordBytes = 4
-let ByteValues = 256
 
 function entryAlignmentOf(target String) returns PrintedNumber
 	if target.startsWith(X64TargetPrefix) 'anX64Lane'
@@ -43,67 +23,6 @@ function entryIsAligned(row String, alignment PrintedNumber) returns bool
 		range(start, _) gives (start and (alignment - 1)) == 0
 	end 'range'
 end 'entryIsAligned'
-
-function startsWithMagic(bytes ByteArray, low Byte, second Byte) returns bool
-	let first = try bytes.get(0) otherwise return false
-	let next = try bytes.get(1) otherwise return false
-
-	return first == low and next == second
-end 'startsWithMagic'
-
-function bytesSpell(bytes ByteArray, at ElementIndex, name ByteArray) returns bool
-	for (iter, expected) in name.withIterator() 'eachByte'
-		let actual = try bytes.get(at + iter.index()) otherwise return false
-
-		if actual != expected 'differs'
-			return false
-		end 'differs'
-	end 'eachByte'
-
-	return true
-end 'bytesSpell'
-
-function littleEndianAt(bytes ByteArray, at PrintedNumber, width PrintedNumber) returns PrintedNumber
-	var value = 0 as PrintedNumber
-
-	for index in 0 upto width 'eachByte'
-		let byte = try bytes.get((at + (width - 1 - index)) as ElementIndex) otherwise panic("the gate could not run - the image ends inside a {width}-byte header field at {at}")
-		value = value * ByteValues + (byte as PrintedNumber)
-	end 'eachByte'
-
-	return value
-end 'littleEndianAt'
-
-function machOTextAddress(bytes ByteArray) returns PrintedNumber
-	let name = MachOTextSectionName.toByteArray()
-
-	for at in 0 upto MachOHeaderScanBytes 'eachOffset'
-		if bytesSpell(bytes, at: at, name: name) 'theSectionHeader'
-			return littleEndianAt(bytes, at: (at + MachOSectionAddressOffset) as PrintedNumber, width: WordBytes)
-		end 'theSectionHeader'
-	end 'eachOffset'
-
-	panic("the gate could not run - no {MachOTextSectionName} section header in the first {MachOHeaderScanBytes} bytes of a Mach-O image")
-end 'machOTextAddress'
-
-// The ELF and PE entry points are the entry stub's address, which leads `.text`, so each names its base.
-function textBaseAddress(image ByteArray, target String) returns PrintedNumber
-	if startsWithMagic(image, low: MachOMagicLowByte, second: MachOMagicSecondByte) 'aMachO'
-		return machOTextAddress(image)
-	end 'aMachO'
-
-	if startsWithMagic(image, low: ElfMagicLowByte, second: ElfMagicSecondByte) 'anElf'
-		return littleEndianAt(image, at: ElfEntryAddressOffset, width: WordBytes)
-	end 'anElf'
-
-	if startsWithMagic(image, low: PeMagicLowByte, second: PeMagicSecondByte) 'aPe'
-		let newHeader = littleEndianAt(image, at: PeNewHeaderPointerOffset, width: DwordBytes)
-
-		return littleEndianAt(image, at: newHeader + PeEntryPointFromNewHeader, width: DwordBytes)
-	end 'aPe'
-
-	panic("the gate could not run - the {target} image is neither a Mach-O, an ELF nor a PE")
-end 'textBaseAddress'
 
 test 'every function the sidecar lists starts on the entry boundary of its target, and so does the .text that holds them'
 	let targets = nativeTargets()

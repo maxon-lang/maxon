@@ -180,11 +180,13 @@ tests/
   debug/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader
     ImageIdentity.maxon                     the byte-identity half: one source and one output path built repeatedly, each image kept aside and compared
+    ImageHeaders.maxon                      the image-format half: where an ELF, a PE or a Mach-O puts `.text`, read from the file's own headers
     sidecar-dump.maxtest                    the sidecar says something TRUE about the binary beside it
     byte-identical-debug-info.maxtest       the sidecar never decides an instruction, so the image is the same with and without it
     byte-identical-debug-info-under-inlining.maxtest      a program full of spliced bodies with folded and dead locals builds the same image with and without its sidecar
     dump-info-sections.maxtest              a word that is not a section is refused by name, and a real list prints only itself
     every-function-entry-is-aligned-on-every-native-target.maxtest   every function the sidecar lists starts on its target's entry boundary (x64 32, arm64 16), and the image's `.text` begins on one
+    a-dense-match-keeps-its-bounds-check-and-its-indirect-jump-inside-one-32-byte-window.maxtest      every dense match's jump-table sequence, found in the x64 images by its bytes, keeps its fused cmp/jae pair and its `jmp r10` each inside one 32-byte window
     sidecar-local-types.maxtest             every local of a two-file program is described under its own type
     sidecar-local-live-range.maxtest        a local row is scoped to the code it is live over
     sidecar-no-local-is-live-across-the-prologue.maxtest      a local of a parameterless function is placed from its first instruction on

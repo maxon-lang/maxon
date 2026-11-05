@@ -54,8 +54,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 64
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -77,32 +76,42 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r12, 0
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rdx, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
     x64.jmp whilehdr
   read:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
   tryerr:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
     x64.jmp trycont
+  __im_load:
+    x64.imulRegRegImm32 rdi, rdx, 2
+    x64.movRegReg r8, rdi
+    x64.shrRegImm8 r8, rdi, 3
+    x64.movRegReg rcx, rdi
+    x64.andRegImm32 rcx, rdi, 7
+    x64.leaRegRegReg rdi, rsi, r8
+    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
+    x64.shrRegCl rdi, rdi
+    x64.andRegImm32 rdi, rdi, 3
   tryok:
-    x64.movRegReg rax, r8
+    x64.movRegReg rcx, rdi
   trycont:
-    x64.leaRegRegReg r12, r12, rax
-    x64.leaRegRegImm32 r13, r13, 1
+    x64.leaRegRegReg r12, r12, rcx
+    x64.leaRegRegImm32 rdx, rdx, 1
   whilehdr:
-    x64.cmpRegImm32 r13, 4
+    x64.cmpRegImm32 rdx, 4
     x64.jcc below, read
   whileexit:
     x64.cmpRegImm32 r12, 0
@@ -115,18 +124,30 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rdx
+    x64.storeSlotReg slot2, rsi
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rdx, slot1
+    x64.loadRegSlot rsi, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  critsplit:
+    x64.movRegReg rdi, r8
+    x64.jmp tryok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -150,8 +171,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 64
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -173,32 +193,42 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r12, 0
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rdx, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
     x64.jmp whilehdr
   read:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
   tryerr:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
     x64.jmp trycont
+  __im_load:
+    x64.imulRegRegImm32 rdi, rdx, 2
+    x64.movRegReg r8, rdi
+    x64.shrRegImm8 r8, rdi, 3
+    x64.movRegReg rcx, rdi
+    x64.andRegImm32 rcx, rdi, 7
+    x64.leaRegRegReg rdi, rsi, r8
+    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
+    x64.shrRegCl rdi, rdi
+    x64.andRegImm32 rdi, rdi, 3
   tryok:
-    x64.movRegReg rax, r8
+    x64.movRegReg rcx, rdi
   trycont:
-    x64.leaRegRegReg r12, r12, rax
-    x64.leaRegRegImm32 r13, r13, 1
+    x64.leaRegRegReg r12, r12, rcx
+    x64.leaRegRegImm32 rdx, rdx, 1
   whilehdr:
-    x64.cmpRegImm32 r13, 4
+    x64.cmpRegImm32 rdx, 4
     x64.jcc below, read
   whileexit:
     x64.cmpRegImm32 r12, 0
@@ -210,18 +240,30 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rdx
+    x64.storeSlotReg slot2, rsi
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rdx, slot1
+    x64.loadRegSlot rsi, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  critsplit:
+    x64.movRegReg rdi, r8
+    x64.jmp tryok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -239,10 +281,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x20
+    arm64.storeSlotReg slot3, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -264,28 +305,37 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.epilogue 64
     arm64.ret
   ifcont:
     arm64.movImm x20, 0
-    arm64.movImm x21, 0
+    arm64.movImm x1, 0
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b whilehdr
   read:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq trycont
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow
+    arm64.b __im_load
   tryerr:
-    arm64.movImm x0, 0
+    arm64.movImm x3, 0
+    arm64.b trycont
+  __im_load:
+    arm64.lsl x3, x1, 1
+    arm64.lsr x4, x3, 3
+    arm64.and x3, x3, 7
+    arm64.add x4, x2, x4
+    arm64.loadRegBaseDisp.byte x4, [x4 + 0]
+    arm64.lsrv x3, x4, x3
+    arm64.and x3, x3, 3
   trycont:
-    arm64.add x20, x20, x0
-    arm64.add x21, x21, 1
+    arm64.add x20, x20, x3
+    arm64.add x1, x1, 1
   whilehdr:
-    arm64.cmp x21, 4
+    arm64.cmp x1, 4
     arm64.b.lo read
   whileexit:
     arm64.cmp x20, 0
@@ -297,19 +347,30 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.epilogue 64
     arm64.ret
+  __im_slow:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b trycont
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 ```
@@ -327,10 +388,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x20
+    arm64.storeSlotReg slot3, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -352,28 +412,37 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.epilogue 64
     arm64.ret
   ifcont:
     arm64.movImm x20, 0
-    arm64.movImm x21, 0
+    arm64.movImm x1, 0
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b whilehdr
   read:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq trycont
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow
+    arm64.b __im_load
   tryerr:
-    arm64.movImm x0, 0
+    arm64.movImm x3, 0
+    arm64.b trycont
+  __im_load:
+    arm64.lsl x3, x1, 1
+    arm64.lsr x4, x3, 3
+    arm64.and x3, x3, 7
+    arm64.add x4, x2, x4
+    arm64.loadRegBaseDisp.byte x4, [x4 + 0]
+    arm64.lsrv x3, x4, x3
+    arm64.and x3, x3, 3
   trycont:
-    arm64.add x20, x20, x0
-    arm64.add x21, x21, 1
+    arm64.add x20, x20, x3
+    arm64.add x1, x1, 1
   whilehdr:
-    arm64.cmp x21, 4
+    arm64.cmp x1, 4
     arm64.b.lo read
   whileexit:
     arm64.cmp x20, 0
@@ -385,19 +454,30 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.epilogue 64
     arm64.ret
+  __im_slow:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b trycont
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 ```
@@ -439,7 +519,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 48
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -461,55 +541,90 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#4
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#15
+    x64.jmp __im_load#16
   tryerr#5:
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
     x64.jmp trycont#6
-  tryok#4:
-    x64.movRegReg r12, r8
+  __im_load#16:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.andRegImm32 rax, rax, 15
   trycont#6:
     x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#7
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc belowEqual, __im_slow#18
+    x64.jmp __im_load#19
   tryerr#8:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
     x64.jmp trycont#9
-  tryok#7:
-    x64.movRegReg rax, r8
+  __im_load#19:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.byte rcx, [rcx + 1]
+    x64.shrRegImm8 rcx, rcx, 4
+    x64.andRegImm32 rcx, rcx, 15
   trycont#9:
-    x64.leaRegRegReg r12, r12, rax
+    x64.leaRegRegReg rax, rax, rcx
     x64.movRegImm32 rdx, 4
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#10
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc belowEqual, __im_slow#21
+    x64.jmp __im_load#22
   tryerr#11:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
     x64.jmp trycont#12
-  tryok#10:
-    x64.movRegReg rax, r8
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.byte rcx, [rcx + 2]
+    x64.andRegImm32 rcx, rcx, 15
   trycont#12:
-    x64.leaRegRegReg r12, r12, rax
+    x64.leaRegRegReg r12, rax, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#15:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#5
+  critsplit#23:
+    x64.movRegReg rax, r8
+    x64.jmp trycont#6
+  __im_slow#18:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  critsplit#24:
+    x64.movRegReg rcx, r8
+    x64.jmp trycont#9
+  __im_slow#21:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#11
+  critsplit#25:
+    x64.movRegReg rcx, r8
+    x64.jmp trycont#12
 }
 ```
 
@@ -529,7 +644,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 48
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -551,55 +666,90 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#4
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#15
+    x64.jmp __im_load#16
   tryerr#5:
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
     x64.jmp trycont#6
-  tryok#4:
-    x64.movRegReg r12, r8
+  __im_load#16:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.andRegImm32 rax, rax, 15
   trycont#6:
     x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#7
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc belowEqual, __im_slow#18
+    x64.jmp __im_load#19
   tryerr#8:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
     x64.jmp trycont#9
-  tryok#7:
-    x64.movRegReg rax, r8
+  __im_load#19:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.byte rcx, [rcx + 1]
+    x64.shrRegImm8 rcx, rcx, 4
+    x64.andRegImm32 rcx, rcx, 15
   trycont#9:
-    x64.leaRegRegReg r12, r12, rax
+    x64.leaRegRegReg rax, rax, rcx
     x64.movRegImm32 rdx, 4
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#10
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc belowEqual, __im_slow#21
+    x64.jmp __im_load#22
   tryerr#11:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
     x64.jmp trycont#12
-  tryok#10:
-    x64.movRegReg rax, r8
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.byte rcx, [rcx + 2]
+    x64.andRegImm32 rcx, rcx, 15
   trycont#12:
-    x64.leaRegRegReg r12, r12, rax
+    x64.leaRegRegReg r12, rax, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#15:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#5
+  critsplit#23:
+    x64.movRegReg rax, r8
+    x64.jmp trycont#6
+  __im_slow#18:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  critsplit#24:
+    x64.movRegReg rcx, r8
+    x64.jmp trycont#9
+  __im_slow#21:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#11
+  critsplit#25:
+    x64.movRegReg rcx, r8
+    x64.jmp trycont#12
 }
 ```
 
@@ -613,9 +763,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -637,47 +787,84 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
     arm64.ret
   ifcont:
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#15
+    arm64.b __im_load#16
   tryerr#5:
-    arm64.movImm x20, 0
+    arm64.movImm x0, 0
     arm64.b trycont#6
-  tryok:
-    arm64.movRegReg x20, x0
+  __im_load#16:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.and x0, x0, 15
   trycont#6:
     arm64.movImm x1, 3
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq trycont#9
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x2, 3
+    arm64.b.ls __im_slow#18
+    arm64.b __im_load#19
   tryerr#8:
-    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b trycont#9
+  __im_load#19:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x1, [x1 + 1]
+    arm64.lsr x1, x1, 4
+    arm64.and x1, x1, 15
   trycont#9:
-    arm64.add x20, x20, x0
+    arm64.add x0, x0, x1
     arm64.movImm x1, 4
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq trycont#12
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x2, 4
+    arm64.b.ls __im_slow#21
+    arm64.b __im_load#22
   tryerr#11:
-    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b trycont#12
+  __im_load#22:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x1, [x1 + 2]
+    arm64.and x1, x1, 15
   trycont#12:
-    arm64.add x20, x20, x0
+    arm64.add x20, x0, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
     arm64.ret
+  __im_slow#15:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#5
+    arm64.b trycont#6
+  __im_slow#18:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#8
+    arm64.b trycont#9
+  __im_slow#21:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#11
+    arm64.b trycont#12
 }
 ```
 
@@ -694,9 +881,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -718,47 +905,84 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
     arm64.ret
   ifcont:
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#15
+    arm64.b __im_load#16
   tryerr#5:
-    arm64.movImm x20, 0
+    arm64.movImm x0, 0
     arm64.b trycont#6
-  tryok:
-    arm64.movRegReg x20, x0
+  __im_load#16:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.and x0, x0, 15
   trycont#6:
     arm64.movImm x1, 3
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq trycont#9
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x2, 3
+    arm64.b.ls __im_slow#18
+    arm64.b __im_load#19
   tryerr#8:
-    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b trycont#9
+  __im_load#19:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x1, [x1 + 1]
+    arm64.lsr x1, x1, 4
+    arm64.and x1, x1, 15
   trycont#9:
-    arm64.add x20, x20, x0
+    arm64.add x0, x0, x1
     arm64.movImm x1, 4
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq trycont#12
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x2, 4
+    arm64.b.ls __im_slow#21
+    arm64.b __im_load#22
   tryerr#11:
-    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b trycont#12
+  __im_load#22:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x1, [x1 + 2]
+    arm64.and x1, x1, 15
   trycont#12:
-    arm64.add x20, x20, x0
+    arm64.add x20, x0, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
     arm64.ret
+  __im_slow#15:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#5
+    arm64.b trycont#6
+  __im_slow#18:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#8
+    arm64.b trycont#9
+  __im_slow#21:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#11
+    arm64.b trycont#12
 }
 ```
 

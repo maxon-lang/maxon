@@ -1132,9 +1132,10 @@ export enum MaxonUnaryOp
 	// (`enum-narrow-storage`).** `signExtendI8` reads a word whose low 8 bits are an i8 and answers the i64
 	// that i8 denotes; the other two do the same at 16 and 32 bits. Compiler-inserted, never written by a
 	// user: `Parser.emitSignExtendFromSlot` is the only emit site, reached only for an array element the
-	// storage ladder put in a narrow SIGNED slot (`ProgramSignatures.narrowSignedSlotOf`). The
-	// shared element load zero-extends and the record has no signedness to consult, so this is where the
-	// sign the COMPILER knows about reaches the value.
+	// storage ladder put in a narrow SIGNED slot (`ProgramSignatures.narrowSignedSlotOf`). The runtime's
+	// element load sign-extends only a record stamped with `SignedElementStampFlag`, so this is where the
+	// sign the COMPILER knows about reaches a value read by any other road; on a value already extended it
+	// is the identity.
 	//
 	// ⭐⭐ **THREE ARMS AND NOT ONE OP CARRYING A WIDTH, BECAUSE THIS IS A BARE ENUM — the same forcing
 	// `MaxonBinOp`'s `divUnsigned`/`modUnsigned` pair states.** There is nowhere for a width to live here.
@@ -1600,11 +1601,11 @@ end 'HoldPolicy'
 // and the address of one `.rdata` object written into another is a data-to-data relocation — so a slot is
 // describable exactly when the object it names is one of the shapes below.
 export union ImmortalBoxSlotValue
-	// An empty `Array with T` record. Its `element_size@24`, which for a column over one of the base's own
-	// type parameters is the fixed opaque slot the SHARED body builds it at and not the argument's own
-	// width; and the element's drop callee, `inert` when the element owns nothing —
+	// An empty `Array with T` record. Its `element_size@24` stamp, which for a column over one of the base's
+	// own type parameters is the argument's stamp the SHARED body's create reads from its descriptor; and
+	// the element's drop callee, `inert` when the element owns nothing —
 	// `ImmortalRecordKind.emptyContainer`'s encoding, for its reason.
-	emptyArray(elementSize ElementStride, elementDestroy OwnershipCallee)
+	emptyArray(elementSize ElementStamp, elementDestroy OwnershipCallee)
 
 	// ⭐⭐ **ANOTHER IMAGED BOX — a nested struct, a `Map`/`Set` box, a payload-free union case's tag box.**
 	// An INDEX into the op's node arena rather than the node itself, because a union carrying one would make
@@ -1622,7 +1623,7 @@ function cacheWriteImmortalBoxSlotValue(writer LibraryCacheWriter, value Immorta
 	end 'payload'
 end 'cacheWriteImmortalBoxSlotValue'
 
-function cacheWriteImmortalBoxSlotValueEmptyArray(writer LibraryCacheWriter, a0 ElementStride, a1 OwnershipCallee)
+function cacheWriteImmortalBoxSlotValueEmptyArray(writer LibraryCacheWriter, a0 ElementStamp, a1 OwnershipCallee)
 	writer.signed(a0 as CacheSigned)
 	cacheWriteOwnershipCallee(writer, value: a1)
 end 'cacheWriteImmortalBoxSlotValueEmptyArray'
@@ -1642,7 +1643,7 @@ function cacheReadImmortalBoxSlotValue(reader LibraryCacheReader) returns Immort
 end 'cacheReadImmortalBoxSlotValue'
 
 function cacheReadImmortalBoxSlotValueEmptyArray(reader LibraryCacheReader) returns ImmortalBoxSlotValue throws LibraryCacheDamage
-	let a0 = (try reader.boundedSigned(-4, high: 8)) as ElementStride
+	let a0 = (try reader.boundedSigned(-4, high: 4294967304)) as ElementStamp
 	let a1 = try cacheReadOwnershipCallee(reader)
 
 	return ImmortalBoxSlotValue.emptyArray(a0, elementDestroy: a1)

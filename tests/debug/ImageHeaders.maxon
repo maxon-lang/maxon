@@ -1,0 +1,185 @@
+export let TargetOptionPrefix = "--target="
+export let X64TargetPrefix = "x64-"
+
+let MachOMagicLowByte = 0xCF
+let MachOMagicSecondByte = 0xFA
+let ElfMagicLowByte = 0x7F
+let ElfMagicSecondByte = 0x45
+let PeMagicLowByte = 0x4D
+let PeMagicSecondByte = 0x5A
+
+let MachOTextSectionName = "__text"
+let MachOSectionAddressOffset = 32
+let MachOHeaderScanBytes = 4096
+let ElfEntryAddressOffset = 24
+let ElfProgramHeaderTableOffset = 32
+let ElfProgramHeaderSizeOffset = 54
+let ElfProgramHeaderCountOffset = 56
+let ElfLoadSegmentType = 1
+let ElfExecutableFlag = 1
+let ElfSegmentTypeOffset = 0
+let ElfSegmentFlagsOffset = 4
+let ElfSegmentFileOffsetOffset = 8
+let ElfSegmentAddressOffset = 16
+let ElfSegmentFileSizeOffset = 32
+let PeNewHeaderPointerOffset = 60
+let PeEntryPointFromNewHeader = 40
+let PeSectionCountFromNewHeader = 6
+let PeOptionalHeaderSizeFromNewHeader = 20
+let PeSectionTableFromNewHeader = 24
+let PeSectionHeaderBytes = 40
+let PeSectionVirtualSizeOffset = 8
+let PeSectionRawSizeOffset = 16
+let PeSectionRawOffsetOffset = 20
+let PeSectionNameBytes = 8
+let PeTextSectionName = ".text"
+
+let WordBytes = 8
+let DwordBytes = 4
+let HalfBytes = 2
+let ByteValues = 256
+
+export type ImageText
+	export let fileOffset as PrintedNumber
+	export let byteCount as PrintedNumber
+
+	export static function create(fileOffset PrintedNumber, byteCount PrintedNumber) returns ImageText
+		return Self{fileOffset: fileOffset, byteCount: byteCount}
+	end 'create'
+end 'ImageText'
+
+function startsWithMagic(bytes ByteArray, low Byte, second Byte) returns bool
+	let first = try bytes.get(0) otherwise return false
+	let next = try bytes.get(1) otherwise return false
+
+	return first == low and next == second
+end 'startsWithMagic'
+
+function bytesSpell(bytes ByteArray, at ElementIndex, name ByteArray) returns bool
+	for (iter, expected) in name.withIterator() 'eachByte'
+		let actual = try bytes.get(at + iter.index()) otherwise return false
+
+		if actual != expected 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'bytesSpell'
+
+function littleEndianAt(bytes ByteArray, at PrintedNumber, width PrintedNumber) returns PrintedNumber
+	var value = 0 as PrintedNumber
+
+	for index in 0 upto width 'eachByte'
+		let byte = try bytes.get((at + (width - 1 - index)) as ElementIndex) otherwise panic("the gate could not run - the image ends inside a {width}-byte header field at {at}")
+		value = value * ByteValues + (byte as PrintedNumber)
+	end 'eachByte'
+
+	return value
+end 'littleEndianAt'
+
+function machOTextAddress(bytes ByteArray) returns PrintedNumber
+	let name = MachOTextSectionName.toByteArray()
+
+	for at in 0 upto MachOHeaderScanBytes 'eachOffset'
+		if bytesSpell(bytes, at: at, name: name) 'theSectionHeader'
+			return littleEndianAt(bytes, at: (at + MachOSectionAddressOffset) as PrintedNumber, width: WordBytes)
+		end 'theSectionHeader'
+	end 'eachOffset'
+
+	panic("the gate could not run - no {MachOTextSectionName} section header in the first {MachOHeaderScanBytes} bytes of a Mach-O image")
+end 'machOTextAddress'
+
+enum ImageFormat
+	machO
+	elf
+	pe
+end 'ImageFormat'
+
+function imageFormatOf(image ByteArray, target String) returns ImageFormat
+	if startsWithMagic(image, low: MachOMagicLowByte, second: MachOMagicSecondByte) 'aMachO'
+		return ImageFormat.machO
+	end 'aMachO'
+
+	if startsWithMagic(image, low: ElfMagicLowByte, second: ElfMagicSecondByte) 'anElf'
+		return ImageFormat.elf
+	end 'anElf'
+
+	if startsWithMagic(image, low: PeMagicLowByte, second: PeMagicSecondByte) 'aPe'
+		return ImageFormat.pe
+	end 'aPe'
+
+	panic("the gate could not run - the {target} image is neither a Mach-O, an ELF nor a PE")
+end 'imageFormatOf'
+
+function peEntryAddress(image ByteArray) returns PrintedNumber
+	let newHeader = littleEndianAt(image, at: PeNewHeaderPointerOffset, width: DwordBytes)
+
+	return littleEndianAt(image, at: newHeader + PeEntryPointFromNewHeader, width: DwordBytes)
+end 'peEntryAddress'
+
+// The ELF and PE entry points are the entry stub's address, which leads `.text`, so each names its base.
+export function textBaseAddress(image ByteArray, target String) returns PrintedNumber
+	return match imageFormatOf(image, target: target) 'format'
+		machO gives machOTextAddress(image)
+		elf gives littleEndianAt(image, at: ElfEntryAddressOffset, width: WordBytes)
+		pe gives peEntryAddress(image)
+	end 'format'
+end 'textBaseAddress'
+
+function peText(image ByteArray) returns ImageText
+	let newHeader = littleEndianAt(image, at: PeNewHeaderPointerOffset, width: DwordBytes)
+	let sectionCount = littleEndianAt(image, at: newHeader + PeSectionCountFromNewHeader, width: HalfBytes)
+	let optionalHeaderBytes = littleEndianAt(image, at: newHeader + PeOptionalHeaderSizeFromNewHeader, width: HalfBytes)
+	let name = PeTextSectionName.toByteArray()
+
+	for index in 0 upto sectionCount 'eachSection'
+		let header = newHeader + PeSectionTableFromNewHeader + optionalHeaderBytes + index * PeSectionHeaderBytes
+
+		if bytesSpell(image, at: header as ElementIndex, name: name) 'theTextSection'
+			let virtualBytes = littleEndianAt(image, at: header + PeSectionVirtualSizeOffset, width: DwordBytes)
+			let rawBytes = littleEndianAt(image, at: header + PeSectionRawSizeOffset, width: DwordBytes)
+			let rawOffset = littleEndianAt(image, at: header + PeSectionRawOffsetOffset, width: DwordBytes)
+
+			return ImageText.create(rawOffset, byteCount: virtualBytes if virtualBytes < rawBytes else rawBytes)
+		end 'theTextSection'
+	end 'eachSection'
+
+	panic("the gate could not run - the PE image has no {PeTextSectionName} section")
+end 'peText'
+
+function elfText(image ByteArray) returns ImageText
+	let entry = littleEndianAt(image, at: ElfEntryAddressOffset, width: WordBytes)
+	let tableOffset = littleEndianAt(image, at: ElfProgramHeaderTableOffset, width: WordBytes)
+	let entryBytes = littleEndianAt(image, at: ElfProgramHeaderSizeOffset, width: HalfBytes)
+	let entryCount = littleEndianAt(image, at: ElfProgramHeaderCountOffset, width: HalfBytes)
+
+	for index in 0 upto entryCount 'eachSegment'
+		let header = tableOffset + index * entryBytes
+		let segmentType = littleEndianAt(image, at: header + ElfSegmentTypeOffset, width: DwordBytes)
+		let flags = littleEndianAt(image, at: header + ElfSegmentFlagsOffset, width: DwordBytes)
+		let fileOffset = littleEndianAt(image, at: header + ElfSegmentFileOffsetOffset, width: WordBytes)
+		let address = littleEndianAt(image, at: header + ElfSegmentAddressOffset, width: WordBytes)
+		let segmentBytes = littleEndianAt(image, at: header + ElfSegmentFileSizeOffset, width: WordBytes)
+
+		if segmentType == ElfLoadSegmentType and (flags and ElfExecutableFlag) != 0 and entry >= address and entry < address + segmentBytes 'theCodeSegment'
+			let skipped = entry - address
+
+			return ImageText.create(fileOffset + skipped, byteCount: segmentBytes - skipped)
+		end 'theCodeSegment'
+	end 'eachSegment'
+
+	panic("the gate could not run - no executable load segment of the ELF image holds its entry point")
+end 'elfText'
+
+function noX64MachOText(target String) returns ImageText
+	panic("the gate could not run - the {target} image is a Mach-O, which is not one of the two x64 image formats (ELF and PE)")
+end 'noX64MachOText'
+
+export function imageText(image ByteArray, target String) returns ImageText
+	return match imageFormatOf(image, target: target) 'format'
+		machO gives noX64MachOText(target)
+		elf gives elfText(image)
+		pe gives peText(image)
+	end 'format'
+end 'imageText'

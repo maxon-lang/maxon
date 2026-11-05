@@ -6688,8 +6688,9 @@ export typealias PayloadSlotIndex = int(0 to 65535) implements ElementIndex
 //   • **NO TARGET CAN LOAD A SIGNED ONE.** `Targets/Shared/StdLoweringShared.accessWidthFor` PANICS for
 //     `i8`, `i16` and `i32`, and every narrow load each backend has zero-extends. So this is three new
 //     sign-extending access widths in three backends —
-//     and the array half needed NONE of that, because the element load is byte-granular and strides the
-//     record at run time (`ManagedMemoryRuntime.emitLoadElemAt`). A field read has no such indirection.
+//     and the array half needed NONE of that, because the element load sign-extends an unsigned load
+//     with a shift pair and strides the record at run time (`ManagedMemoryRuntime.emitStrideSlotLoad`).
+//     A field read has no such indirection.
 //
 // ⇒ it is a CROSS-TARGET CODEGEN change with a cross-target gate, and two of its three lanes cannot be
 // executed on the host that would write it (arm64 needs the Mac, wasm needs the vendored wasmtime sweep).
@@ -12377,10 +12378,10 @@ export type Project
 	// `CalleeMint`, which records only how the callee was spelled.
 	export var provenFixedArrayAccesses as ProvenFixedArrayAccessMap
 
-	// ⭐⭐ **THE COMPILE-TIME `element_size@24` STAMP OF A MANAGED-PRIMITIVE CALL'S CONTAINER** —
-	// what lets `inlineManagedPrimitives` emit ONE of `emitStrideDispatch`'s arms instead of forking on a
-	// stride the compiler already knows. `Array with Integer` is 8 at compile time and the pass was emitting a
-	// `loadIndirect` of the field, two compares and two branches at every element access in every program.
+	// ⭐⭐ **THE COMPILE-TIME ELEMENT STRIDE OF A MANAGED-PRIMITIVE CALL'S CONTAINER** —
+	// what lets `inlineManagedPrimitives` emit ONE of `emitStrideChain`'s arms instead of forking on a
+	// stride the compiler already knows. `Array with Integer` is 8 at compile time and a fork would emit a
+	// `loadIndirect` of the field and a chain of compares and branches at every element access in every program.
 	//
 	// ⚠⚠ **IT IS KEYED BY AN INDEX INTO THE *STD* MODULE'S `ops`, WHICH THE THREE MAPS ABOVE ARE NOT.**
 	// `asyncSpawnSites` / `allocTagSites` / `debugStreamNameSites` are written by the PARSER against MAXON op
@@ -12404,15 +12405,13 @@ export type Project
 	// table has been read and spent — so a splice cannot reach a live key at all. The order alone protects
 	// it: a leaf's calls in cold blocks are cloned with its body.
 	//
-	// ⚠⚠ **A STAMP IS RECORDED, NOT A VERDICT — AND THE STAMP IS NOT ALWAYS THE RECORD'S.** What may be
-	// concluded from it is `strideDispatchPlanForStamp`'s to say, and the answer is not simply "this width":
-	// a container declared over a TYPE PARAMETER is created at the machine-word slot inside a shared generic
-	// body and read back under a SUBSTITUTED concrete type, so what is provable is
-	// `actual ∈ {stamp, MachineWordBytes}`. That function carries the measurement (a byte-typed field
-	// answering 0 where 7 is correct) and the three answers that survive it. The sign is part of the value
-	// too (`LayoutDescriptor.elementStrideOf`: negative is `-(bits per element)`, a SUB-BYTE PACKED element
-	// that must still go to the runtime) — a reader treating a negative stamp as an error rather than as a
-	// width would specialize a packed array onto a byte access.
+	// ⚠⚠ **A STRIDE IS RECORDED, NOT A VERDICT.** What may be concluded from it is
+	// `strideDispatchPlanForStamp`'s to say, and the stride carries no signed-slot flag. A container declared
+	// over a TYPE PARAMETER is created inside a shared generic body at the stride its descriptor names, so a
+	// read back under a SUBSTITUTED concrete type agrees with it. The sign is part of the value too
+	// (`LayoutDescriptor.elementStrideOf`: negative is `-(bits per element)`, a SUB-BYTE PACKED element with
+	// arms of its own) — a reader treating a negative stride as a byte width would specialize a packed
+	// array onto a byte access.
 	export var stdOpElementStrides as StdOpElementStrideMap
 
 	// ⭐⭐ **THE SITES WHOSE CONTAINER'S ELEMENT OWES NO DROP** — what lets `inlineManagedPrimitives` omit
@@ -12427,14 +12426,12 @@ export type Project
 	// element-access site in every program; a `Set` of the trivial sites costs a word per site and nothing
 	// for the sites that are not.
 	//
-	// ⭐ **UNLIKE THE STRIDE, THIS STAMP IS ALWAYS THE RECORD'S.** Every writer of `element_destroy@40`
+	// ⭐ **LIKE THE STRIDE, THIS STAMP IS ALWAYS THE RECORD'S.** Every writer of `element_destroy@40`
 	// stamps it from the element type of the record's own instance: a concrete creation site from
 	// `containerElementOwesDrop`, a creation inside a shared generic body from the threaded layout
 	// descriptor's `destroyFunc@40` (0 for a trivial instantiation), an image-data record from
-	// `columnDestroyStamp`, and a view or clone copies its source's slot. So the reading that keeps a
-	// byte stride from fixing a width does not arise: the slot WIDTH inside a shared body is the body's,
-	// but the element's OWNERSHIP is the instantiation's, and the descriptor carries that per
-	// instantiation.
+	// `columnDestroyStamp`, and a view or clone copies its source's slot. The element's OWNERSHIP is the
+	// instantiation's, and the descriptor carries that per instantiation, as it carries the stride.
 	export var stdOpTrivialElementSites as StdOpTrivialElementSiteSet
 
 	// (funcIndex, ValueId) -> Maxon op index for every op-defined value in the

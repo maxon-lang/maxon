@@ -73,62 +73,50 @@ func @stamp {
     x64.movRegReg rbp, rsp
     x64.prologue 48
     x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
-    x64.cmpRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rsi, 255
+    x64.cmpRegImm32 rcx, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc belowEqual, __im_slow
   __im_buffer:
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_missing
   __im_owned:
-    x64.loadRegBaseDisp.word64 rdi, [rdx + 16]
-    x64.cmpRegImm32 rdi, 0
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 16]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_detach
   __im_viewed:
-    x64.leaRegRegImm32 rdi, rcx, -16
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
-    x64.cmpRegImm32 rdi, 0
+    x64.leaRegRegImm32 rsi, rax, -16
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __im_detach
   __im_detached:
-    x64.loadRegBaseDisp.word64 rdi, [rdx + 24]
-    x64.cmpRegImm32 rdi, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.storeBaseDispReg.word64 [rcx + 0], rsi
-    x64.jmp tryok
-  __im_stride:
-    x64.cmpRegImm32 rdi, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
-    x64.storeBaseDispReg.byte [rcx + 0], rsi
-    x64.jmp tryok
-  __im_slow:
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.movRegReg rax, rsi
-    x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
+    x64.storeBaseDispReg.byte [rax + 0], rcx
   tryok:
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_index_refused
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
   __im_detach:
-    x64.storeSlotReg slot0, rdx
-    x64.storeSlotReg slot1, rsi
+    x64.storeSlotReg slot0, rcx
+    x64.storeSlotReg slot1, rdx
     x64.movRegReg rcx, rdx
     x64.callDirect __managed_cow_detach
-    x64.movRegImm32 rax, 0
-    x64.loadRegSlot rdx, slot0
-    x64.loadRegSlot rsi, slot1
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rdx, slot1
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.jmp __im_detached
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: Range check failed: value outside typealias 'Byte'\x0a"
@@ -136,14 +124,14 @@ func @stamp {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  __im_missing:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
+  __im_missing:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg rbp
@@ -170,7 +158,7 @@ func @main {
     x64.callDirect __managed_retain
     x64.movRegReg r12, r8
     x64.orRegImm32 r12, r8, 2
-  __il_body#16:
+  __il_body#12:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -180,7 +168,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 0], r12
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Backing
-  __il_cont#15:
+  __il_cont#11:
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -188,57 +176,39 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_resize
-  __il_body#18:
+  __il_body#14:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, matchnext
-  matcharm#19:
+  matcharm#15:
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, -8
     x64.movRegReg rdx, r12
     x64.callDirect stamp
-    x64.jmp __il_cont#14
+    x64.jmp __il_cont#10
   matchnext:
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, matchdead
-  matcharm#20:
+  matcharm#16:
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, -8
     x64.movRegReg rdx, r12
     x64.callDirect stamp
-  __il_cont#14:
+  __il_cont#10:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
-  __im_load:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.jmp tryok
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp tryok
-  __im_slow:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
+    x64.jmp __im_load
   tryerr:
     x64.movRegImm32 r14, 0
     x64.jmp trycont
-  critsplit:
-    x64.movRegReg rax, r8
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
   tryok:
     x64.movRegReg r14, rax
   trycont:
@@ -260,6 +230,14 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdead:
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp tryok
 }
 ```
 ```TargetIr:x64-linux
@@ -278,62 +256,50 @@ func @stamp {
     x64.movRegReg rbp, rsp
     x64.prologue 48
     x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
-    x64.cmpRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rsi, 255
+    x64.cmpRegImm32 rcx, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc belowEqual, __im_slow
   __im_buffer:
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_missing
   __im_owned:
-    x64.loadRegBaseDisp.word64 rdi, [rdx + 16]
-    x64.cmpRegImm32 rdi, 0
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 16]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_detach
   __im_viewed:
-    x64.leaRegRegImm32 rdi, rcx, -16
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
-    x64.cmpRegImm32 rdi, 0
+    x64.leaRegRegImm32 rsi, rax, -16
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __im_detach
   __im_detached:
-    x64.loadRegBaseDisp.word64 rdi, [rdx + 24]
-    x64.cmpRegImm32 rdi, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.storeBaseDispReg.word64 [rcx + 0], rsi
-    x64.jmp tryok
-  __im_stride:
-    x64.cmpRegImm32 rdi, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
-    x64.storeBaseDispReg.byte [rcx + 0], rsi
-    x64.jmp tryok
-  __im_slow:
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.movRegReg rax, rsi
-    x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
+    x64.storeBaseDispReg.byte [rax + 0], rcx
   tryok:
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_index_refused
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
   __im_detach:
-    x64.storeSlotReg slot0, rdx
-    x64.storeSlotReg slot1, rsi
+    x64.storeSlotReg slot0, rcx
+    x64.storeSlotReg slot1, rdx
     x64.movRegReg rcx, rdx
     x64.callDirect __managed_cow_detach
-    x64.movRegImm32 rax, 0
-    x64.loadRegSlot rdx, slot0
-    x64.loadRegSlot rsi, slot1
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rdx, slot1
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.jmp __im_detached
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: Range check failed: value outside typealias 'Byte'\x0a"
@@ -341,14 +307,14 @@ func @stamp {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  __im_missing:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
+  __im_missing:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg rbp
@@ -375,7 +341,7 @@ func @main {
     x64.callDirect __managed_retain
     x64.movRegReg r12, r8
     x64.orRegImm32 r12, r8, 2
-  __il_body#16:
+  __il_body#12:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -385,7 +351,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 0], r12
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Backing
-  __il_cont#15:
+  __il_cont#11:
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -393,57 +359,39 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_resize
-  __il_body#18:
+  __il_body#14:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, matchnext
-  matcharm#19:
+  matcharm#15:
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, -8
     x64.movRegReg rdx, r12
     x64.callDirect stamp
-    x64.jmp __il_cont#14
+    x64.jmp __il_cont#10
   matchnext:
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, matchdead
-  matcharm#20:
+  matcharm#16:
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, -8
     x64.movRegReg rdx, r12
     x64.callDirect stamp
-  __il_cont#14:
+  __il_cont#10:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
-  __im_load:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.jmp tryok
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp tryok
-  __im_slow:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
+    x64.jmp __im_load
   tryerr:
     x64.movRegImm32 r14, 0
     x64.jmp trycont
-  critsplit:
-    x64.movRegReg rax, r8
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
   tryok:
     x64.movRegReg r14, rax
   trycont:
@@ -465,6 +413,14 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdead:
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp tryok
 }
 ```
 ```TargetIr:arm64-macos
@@ -479,74 +435,65 @@ func @stamp {
   entry:
     arm64.prologue 32
     arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.cmp x3, 0
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x3, 255
+    arm64.cmp x0, 255
     arm64.b.gt __rc_panic
   __rc_ok:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.cmp x3, 0
     arm64.b.ls __im_slow
   __im_buffer:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.cmp x2, 0
     arm64.b.eq __im_missing
   __im_owned:
-    arm64.loadRegBaseDisp.word64 x4, [x1 + 16]
-    arm64.cmp x4, 0
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 16]
+    arm64.cmp x3, 0
     arm64.b.lt __im_detach
   __im_viewed:
-    arm64.sub x4, x0, 16
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
-    arm64.cmp x4, 0
+    arm64.sub x3, x2, 16
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
+    arm64.cmp x3, 0
     arm64.b.ne __im_detach
-  __im_detached:
-    arm64.loadRegBaseDisp.word64 x4, [x1 + 24]
-    arm64.cmp x4, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.storeBaseDispReg.word64 [x0 + 0], x3
-    arm64.b tryok
-  __im_stride:
-    arm64.cmp x4, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.storeBaseDispReg.byte [x0 + 0], x3
-    arm64.b tryok
-  __im_slow:
-    arm64.movRegReg x0, x1
+  critsplit:
     arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.bl __managed_set
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr
+  __im_detached:
+    arm64.storeBaseDispReg.byte [x1 + 0], x0
   tryok:
     arm64.epilogue 32
     arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_index_refused
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok
   __im_detach:
-    arm64.storeSlotReg slot0, x1
-    arm64.storeSlotReg slot1, x3
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x1
     arm64.bl __managed_cow_detach
-    arm64.loadRegSlot x1, slot0
-    arm64.movImm x2, 0
-    arm64.loadRegSlot x3, slot1
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.b __im_detached
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 32
     arm64.ret
-  __im_missing:
-    arm64.leaRdata x0, __str_blob_5  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 32
     arm64.ret
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
+  __im_missing:
+    arm64.leaRdata x0, __str_blob_5  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 32
     arm64.ret
@@ -569,7 +516,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_retain
     arm64.orr x20, x0, 2
-  __il_body#16:
+  __il_body#12:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -579,7 +526,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 0], x20
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Backing
-  __il_cont#15:
+  __il_cont#11:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -587,52 +534,36 @@ func @main {
     arm64.movImm x1, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_resize
-  __il_body#18:
+  __il_body#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.and x1, x0, 7
     arm64.sub x1, x1, 1
     arm64.cmp x1, 0
     arm64.b.ne matchnext
-  matcharm#19:
+  matcharm#15:
     arm64.and x0, x0, -8
     arm64.movRegReg x1, x20
     arm64.bl stamp
-    arm64.b __il_cont#14
+    arm64.b __il_cont#10
   matchnext:
     arm64.cmp x1, 1
     arm64.b.ne matchdead
-  matcharm#20:
+  matcharm#16:
     arm64.and x0, x0, -8
     arm64.movRegReg x1, x20
     arm64.bl stamp
-  __il_cont#14:
+  __il_cont#10:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
     arm64.b.ls __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b tryok
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b tryok
-  __im_slow:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b __im_load
   tryerr:
     arm64.movImm x22, 0
     arm64.b trycont
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
   tryok:
     arm64.movRegReg x22, x0
   trycont:
@@ -653,6 +584,12 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   matchdead:
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok
 }
 ```
 ```TargetIr:arm64-linux
@@ -670,74 +607,65 @@ func @stamp {
   entry:
     arm64.prologue 32
     arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.cmp x3, 0
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x3, 255
+    arm64.cmp x0, 255
     arm64.b.gt __rc_panic
   __rc_ok:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.cmp x3, 0
     arm64.b.ls __im_slow
   __im_buffer:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.cmp x2, 0
     arm64.b.eq __im_missing
   __im_owned:
-    arm64.loadRegBaseDisp.word64 x4, [x1 + 16]
-    arm64.cmp x4, 0
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 16]
+    arm64.cmp x3, 0
     arm64.b.lt __im_detach
   __im_viewed:
-    arm64.sub x4, x0, 16
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
-    arm64.cmp x4, 0
+    arm64.sub x3, x2, 16
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
+    arm64.cmp x3, 0
     arm64.b.ne __im_detach
-  __im_detached:
-    arm64.loadRegBaseDisp.word64 x4, [x1 + 24]
-    arm64.cmp x4, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.storeBaseDispReg.word64 [x0 + 0], x3
-    arm64.b tryok
-  __im_stride:
-    arm64.cmp x4, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.storeBaseDispReg.byte [x0 + 0], x3
-    arm64.b tryok
-  __im_slow:
-    arm64.movRegReg x0, x1
+  critsplit:
     arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.bl __managed_set
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr
+  __im_detached:
+    arm64.storeBaseDispReg.byte [x1 + 0], x0
   tryok:
     arm64.epilogue 32
     arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_index_refused
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok
   __im_detach:
-    arm64.storeSlotReg slot0, x1
-    arm64.storeSlotReg slot1, x3
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x1
     arm64.bl __managed_cow_detach
-    arm64.loadRegSlot x1, slot0
-    arm64.movImm x2, 0
-    arm64.loadRegSlot x3, slot1
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.b __im_detached
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 32
     arm64.ret
-  __im_missing:
-    arm64.leaRdata x0, __str_blob_5  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 32
     arm64.ret
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at a-read-only-payload-bound-for-one-call-costs-no-count.test:8: the output holds a byte\x0a"
+  __im_missing:
+    arm64.leaRdata x0, __str_blob_5  ; "fatal error: an element store found no buffer behind a record that holds elements\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 32
     arm64.ret
@@ -760,7 +688,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_retain
     arm64.orr x20, x0, 2
-  __il_body#16:
+  __il_body#12:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -770,7 +698,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 0], x20
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Backing
-  __il_cont#15:
+  __il_cont#11:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -778,52 +706,36 @@ func @main {
     arm64.movImm x1, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_resize
-  __il_body#18:
+  __il_body#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.and x1, x0, 7
     arm64.sub x1, x1, 1
     arm64.cmp x1, 0
     arm64.b.ne matchnext
-  matcharm#19:
+  matcharm#15:
     arm64.and x0, x0, -8
     arm64.movRegReg x1, x20
     arm64.bl stamp
-    arm64.b __il_cont#14
+    arm64.b __il_cont#10
   matchnext:
     arm64.cmp x1, 1
     arm64.b.ne matchdead
-  matcharm#20:
+  matcharm#16:
     arm64.and x0, x0, -8
     arm64.movRegReg x1, x20
     arm64.bl stamp
-  __il_cont#14:
+  __il_cont#10:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
     arm64.b.ls __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b tryok
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b tryok
-  __im_slow:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b __im_load
   tryerr:
     arm64.movImm x22, 0
     arm64.b trycont
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
   tryok:
     arm64.movRegReg x22, x0
   trycont:
@@ -844,6 +756,12 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   matchdead:
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok
 }
 ```
 

@@ -24,9 +24,10 @@
 //                                 2-int Pair=16); the slot `sizeof(T)` reads
 //   +64  retainFunc         u64   0 when the type ARGUMENT owns nothing; how a shared body takes a
 //                                 REFERENCE to a borrowed opaque `T` it stores
-//   +72  elementStride      u64   `elementStrideOf` encoding for an array whose element is the block's
-//                                 type arg (positive byte width, negative packed bits); the slot an
-//                                 opaque `FixedArray.create` stamps as its `element_size`
+//   +72  elementStride      u64   `ElementStamp` of an array whose element is the block's type arg (low
+//                                 32 bits: positive byte width or negative packed bits; bit 32: a signed
+//                                 narrow slot); the word an opaque `Array` or `FixedArray` create stamps
+//                                 as its `element_size`
 //
 // ⭐⭐ **THE TENTH WORD IS APPENDED, NOT SLOTTED INTO A RESERVED ONE, AND THAT IS DELIBERATE.**
 // `flags@24` and `fieldOffsetsPtr@48` are both still 0 and both still MEAN something; taking one
@@ -138,7 +139,7 @@ module let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
 // one machine word whatever the argument, which is DISTINCT from `elementLogicalSize@56` (the argument's
 // full SOURCE size). For a `bool` argument they diverge (8 vs 1), exactly where the descriptor header
 // says the two concepts must stay separate.
-export let LAYOUT_TYPE_PARAM_SLOT_BYTES = 8 as MachineWord
+module let LAYOUT_TYPE_PARAM_SLOT_BYTES = 8 as MachineWord
 
 // The MACHINE WORD every value with no narrower home occupies — a bare `int`, a `float`, a function
 // pointer, a managed box's pointer, and a ranged alias whose range does not fit a narrower slot. Named
@@ -388,14 +389,44 @@ end 'inlineFieldBits'
 // is what leaves the sign free to mean this.
 //
 // ⚠ **THE ENCODING IS NOT the compiler's TO CHOOSE** — `specs/ranged-int-bit-packing.md` and `specs/bool-bit-packing.md`
-// both state it, and `arr.managed.elementSize()` hands the raw field to a program that then compares it
+// both state it, and `arr.managed.elementSize()` hands the stride to a program that then compares it
 // against `-1`/`-2`/`-4`. It is a language-visible fact, not an implementation detail.
 export typealias ElementStride = int(-4 to 8)
 
-// Join the two ladders into the one stamp. The SOLE arithmetic that turns "how wide is this element" into
-// the number stored at `element_size@24`, so no producer of that field can spell the encoding differently
-// from another (`ProgramSignatures.arrayElementSize` is the sole producer of the ANSWER; this is the sole
-// producer of its FORM).
+// The word `element_size@24` and the descriptor's `elementStride@72` hold: an `ElementStride` in the low
+// `ElementStampStrideBits` bits, read sign-extended, and `SignedElementStampFlag` above them for a signed
+// 1-, 2- or 4-byte slot. A body compiled once over an opaque element cannot tell that the slot is signed,
+// so the flag is what makes its reads sign-extend; `Map.findSlot` compares keys read there.
+export let ElementStampStrideBits = 32 as FullRangeInt
+
+export let SignedElementStampFlag = (1 as FullRangeInt) shl ElementStampStrideBits
+
+export typealias ElementStamp = int(-4 to 4294967304)
+
+export function elementStampOf(stride ElementStride, signed bool) returns ElementStamp
+	if signed 'aSignedNarrowSlot'
+		if stride <= 0 or (stride as FullRangeInt) >= (MachineWordBytes as FullRangeInt) 'notANarrowSlot'
+			panic("elementStampOf: stride {stride} was asked to be signed — only a slot of 1 to 7 bytes is sign-extended on read; a word, a pointer and a packed field have no sign to extend")
+		end 'notANarrowSlot'
+
+		return ((stride as FullRangeInt) + SignedElementStampFlag) as ElementStamp
+	end 'aSignedNarrowSlot'
+
+	return stride as ElementStamp
+end 'elementStampOf'
+
+module function elementStrideOfStamp(stamp ElementStamp) returns ElementStride
+	if stamp < 0 'subBytePacked'
+		return stamp as ElementStride
+	end 'subBytePacked'
+
+	return ((stamp as FullRangeInt) and (SignedElementStampFlag - 1)) as ElementStride
+end 'elementStrideOfStamp'
+
+// Join the two ladders into the one stride. The SOLE arithmetic that turns "how wide is this element" into
+// the stride half of the number stored at `element_size@24`, so no producer of that field can spell the
+// encoding differently from another (`ProgramSignatures.arrayElementSize` is the sole producer of the
+// ANSWER; this is the sole producer of its FORM).
 export function elementStrideOf(packing ElementPacking, storageBytes ByteOffset) returns ElementStride
 	if let packedBits = try packedWidthOf(packing) 'subBytePacked'
 		return -packedBits
@@ -510,7 +541,7 @@ let ByteMask = 0xFF as MachineWord
 // `ranged-int-bit-packing.static-2bit-cast-packed` pins, and a claim about the ORDER that no round-tripped
 // value could make (every bit order reads the same values back out through its own accessors).
 //
-// ⚠⚠ **IT MUST AGREE WITH `ManagedMemoryRuntime.emitFieldPlacement` TO THE BIT.** This is where a constant array is
+// ⚠⚠ **IT MUST AGREE WITH `ManagedMemoryRuntime.emitPackedFieldSlot` TO THE BIT.** This is where a constant array is
 // WRITTEN and that is where every array is READ, and between them they are the only two statements of this
 // layout — a program builds its literal here and then reads it with the ordinary `get`. The two are kept
 // honest by the spec pins rather than by a shared expression, because one is compile-time arithmetic over
@@ -543,11 +574,12 @@ function packConstantElements(values FullRangeIntArray, packedBits PackedBitWidt
 	return out
 end 'packConstantElements'
 
-// The smallest value ANY slot holds, whatever its width: zero, because the shared element load
-// ZERO-EXTENDS (`ManagedMemoryRuntime.emitLoadElem` — one compiled byte loop with no signedness in the record to
-// consult). Named beside the maximum below so a reader stating a slot's value set states both ends from one
-// place. It is deliberately NOT `Project.ByteValueSetLow`, which is the low bound of a BYTE's declared value
-// set: the two are the same number for different reasons, and a slot's reason is the loader's.
+// The smallest value ANY unsigned slot holds, whatever its width: zero, because the load of an unsigned
+// slot ZERO-EXTENDS (`ManagedMemoryRuntime.emitStrideSlotLoad`; only a stamp carrying
+// `SignedElementStampFlag` sign-extends). Named beside the maximum below so a reader stating a slot's
+// value set states both ends from one place. It is deliberately NOT `Project.ByteValueSetLow`, which is
+// the low bound of a BYTE's declared value set: the two are the same number for different reasons, and a
+// slot's reason is the loader's.
 export let SlotUnsignedMin = 0 as FullRangeInt
 
 // ⭐⭐ **THE LARGEST UNSIGNED VALUE A `slotBytes`-WIDE SLOT HOLDS — the LADDER ABOVE READ BACKWARDS.**
@@ -712,10 +744,10 @@ end 'LayoutDescriptor'
 
 module type ArgumentDictionary
 	export let logicalSize as ByteOffset
-	export let elementStride as ElementStride
+	export let elementStamp as ElementStamp
 
-	module static function create(logicalSize ByteOffset, elementStride ElementStride) returns ArgumentDictionary
-		return Self{logicalSize: logicalSize, elementStride: elementStride}
+	module static function create(logicalSize ByteOffset, elementStamp ElementStamp) returns ArgumentDictionary
+		return Self{logicalSize: logicalSize, elementStamp: elementStamp}
 	end 'create'
 end 'ArgumentDictionary'
 
@@ -746,7 +778,7 @@ module function encodeLayoutDescriptor(d LayoutDescriptor, dictionaries Argument
 			appendLittleEndianScalar(buf, value: 0, byteCount: LAYOUT_FIELD_BYTES)
 		end 'tailZeroSlots'
 
-		appendLittleEndianScalar(buf, value: dictionary.elementStride as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
+		appendLittleEndianScalar(buf, value: dictionary.elementStamp as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
 	end 'eachTypeParam'
 
 	if (buf.count() as ByteOffset) != layoutDescriptorBytesFor(dictionaries.count() as ElementIndex) 'blockSizeDrift'

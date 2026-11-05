@@ -30,8 +30,9 @@ places it at RVA `0x1000`.
 The scope is the TargetOps of compiled functions. A hand-assembled sequence places its own branches
 through the shared `encodeJcc`/`encodeJmp` primitives and is left byte-exact: the runtime chunks
 (`ir-specs/emitted-runtime-body.md` pins their bytes), the system-stack shim an `iatCall` becomes in a
-program with the green-thread scheduler, the prologue's stack-probe walk, and the dense-match jump
-table. arm64 needs none of this: its instructions are four bytes on four-byte alignment, so none
+program with the green-thread scheduler, and the prologue's stack-probe walk. The dense-match jump table
+is one padded unit: its `cmp`/`jae` pair and its `jmp` are each kept off a window edge, and the
+`lea`/`movsxd`/`lea` between them are not branches. arm64 needs none of this: its instructions are four bytes on four-byte alignment, so none
 straddles a fetch line, and its cores carry no such erratum.
 
 The padding is bytes, not ops. The rendered Target IR shows TargetOps, so it shows the shape of the

@@ -1113,6 +1113,7 @@ let ContainerElementPosition = 0
 let ManagedCreateArity = 2
 let ManagedCreateSizedArity = 4
 let ListCreateArity = 1
+let OpaqueArrayCreateOmittedWords = 2
 
 function stampedContainerCreateArity(callee ByteArray) returns ParamCount
 	if callee.equals(ManagedCreateName) 'anArrayCreate'
@@ -2498,6 +2499,8 @@ type MaxonToStdLowering
 	// Only the FOUR non-zero fields are stamped: `parent@32` and `element_destroy@40` come pre-zeroed from
 	// `__mm_alloc`'s zeroing contract (the same one `__managed_create` relies on to leave them unwritten).
 	function lowerConstArrayLiteral(result ValueId, elementSize ElementStride, elementCount FullRangeInt, bytes ByteArray, dstBlock IrBlock)
+		let stamp = self.constArrayElementStamp(result, stride: elementSize)
+
 		// ⭐⭐ **A MODULE-LEVEL MANAGED CONSTANT'S READ IS IMAGE DATA, AND IT IS `lowerStringLiteral` EXACTLY**
 		// — the RECORD lives in `.rdata` beside its blob (`capacity@16 = ImmortalRecordCapacity`), so the read is
 		// ONE address: nothing allocated, no refcount, nothing to drop. A `let` reserves no storage, so this is
@@ -2514,8 +2517,8 @@ type MaxonToStdLowering
 		// at all and carries its element's destructor — two records the op cannot tell apart.
 		if let kind = try self.immortalConstArraySites.get(self.currentMaxonOpIndex) 'imageData'
 			let label = match kind 'shape'
-				constBlob gives registerImmortalByteArrayRecord(self.globalData, elementSize: elementSize, elementCount: elementCount, bytes: bytes, debugStream: self.debugStream)
-				emptyContainer(elementDestroy) gives self.ensureImmortalEmptyArrayRecord(elementSize, elementDestroy: elementDestroy)
+				constBlob gives registerImmortalByteArrayRecord(self.globalData, elementSize: stamp, elementCount: elementCount, bytes: bytes, debugStream: self.debugStream)
+				emptyContainer(elementDestroy) gives self.ensureImmortalEmptyArrayRecord(stamp, elementDestroy: elementDestroy)
 				stringTable panic("lowerConstArrayLiteral: a `constArrayLiteral` site is marked as a STRING TABLE, whose payload is N separate literals this op cannot carry — `Parser.emitImageRecordRead` emits `immortalStringTable` for that shape and files no mark")
 				containerBox panic("lowerConstArrayLiteral: a `constArrayLiteral` site is marked as a CONTAINER BOX, which is a struct box and not a `__ManagedMemory` record — `Parser.emitImageRecordRead` emits `immortalStructRecord` for that shape and files no mark")
 			end 'shape'
@@ -2553,9 +2556,26 @@ type MaxonToStdLowering
 		// element_size@24 — 1 for a `b"…"` (a byte is one byte, so `.get(i)` strides by 1), a NEGATIVE bit
 		// width for a packed literal (`.get(i)` then reads its field out of a byte it shares).
 		let elementSizeId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: elementSize as FullRangeInt, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: stamp as FullRangeInt, valueType: StdType.i64))
 		self.emitConstArrayField(result, offset: ManagedRecordElementSizeOffset, value: elementSizeId, dstBlock: dstBlock)
 	end 'lowerConstArrayLiteral'
+
+	function constArrayElementStamp(result ValueId, stride ElementStride) returns ElementStamp
+		let tag = self.valueTagOf(result)
+
+		if tag != ValueTypeTag.genericInstance 'notAnArrayInstance'
+			panic("constArrayElementStamp: constant array value v{result} is a {tag.name} value and not a generic instance — a stamp built from the stride alone would drop the signed flag of a signed narrow enum element")
+		end 'notAnArrayInstance'
+
+		let instance = try self.valueNameIds.get(result) otherwise panic("constArrayElementStamp: constant array value v{result} has no instance id — the two type columns are dense and in lockstep")
+		let stamp = self.signatures.arrayElementStamp(instance as GenericInstanceId)
+
+		if elementStrideOfStamp(stamp) != stride 'strideDisagrees'
+			panic("constArrayElementStamp: the constant array literal v{result} carries stride {stride} where its instance's element stamps {stamp} — the blob and the record would stride differently")
+		end 'strideDisagrees'
+
+		return stamp
+	end 'constArrayElementStamp'
 
 	// ⭐⭐ **THE ONE `.rdata` RECORD EVERY READ OF EVERY EMPTY `Array with T` OF THIS SHAPE SHARES** — the
 	// `ensureLayoutDescriptor` pattern, and here for its two reasons: the registration is idempotent by
@@ -2567,7 +2587,7 @@ type MaxonToStdLowering
 	// construction, and with it the `functionRef` that would otherwise be the callee's only compile-time mention —
 	// `MmRuntime.noteRelocatedFunctionUsage` installs every callee an `.rdata` relocation names, so recording
 	// one here is what keeps the symbol the writer resolves against in the program at all.
-	function ensureImmortalEmptyArrayRecord(elementSize ElementStride, elementDestroy OwnershipCallee) returns String
+	function ensureImmortalEmptyArrayRecord(elementSize ElementStamp, elementDestroy OwnershipCallee) returns String
 		let label = registerImmortalEmptyArrayRecord(self.globalData, elementSize: elementSize, elementDestroy: elementDestroy, debugStream: self.debugStream)
 
 		if self.emittedImmortalEmptyArrays.contains(label) 'alreadyStamped'
@@ -4991,8 +5011,8 @@ type MaxonToStdLowering
 
 	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
 	// box size, alignment, the T-slot storage width, and in each parameter's block the source-level
-	// `elementLogicalSize` that `sizeof` of that parameter reads and the `elementStride` an array of that
-	// argument strides by. Every function-pointer slot is 0 on
+	// `elementLogicalSize` that `sizeof` of that parameter reads and the `elementStride` stamp an array of
+	// that argument is born with. Every function-pointer slot is 0 on
 	// disk; when `gid` holds an opaque-`T` `Array` or bare field whose SUBSTITUTED argument owns a
 	// record (`Container with String`), a `funcAbs64InRdata` relocation is recorded so the x64 writer
 	// patches `destroyFunc@40` with that
@@ -5021,7 +5041,7 @@ type MaxonToStdLowering
 		var dictionaries = ArgumentDictionaryArray.create()
 
 		for position in 0 upto paramCount 'eachArgument'
-			dictionaries.push(ArgumentDictionary.create(self.signatures.genericInstanceArgLogicalSize(gid, position: position), elementStride: self.signatures.genericInstanceArgElementStride(gid, position: position)))
+			dictionaries.push(ArgumentDictionary.create(self.signatures.genericInstanceArgLogicalSize(gid, position: position), elementStamp: self.signatures.genericInstanceArgElementStamp(gid, position: position)))
 		end 'eachArgument'
 
 		view filed = self.tableOfBase(gid)
@@ -5559,9 +5579,9 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: callArgs))
 	end 'appendRuntimeCall'
 
-	// ⭐⭐ **WRITE DOWN WHAT THIS TIER KNOWS ABOUT THIS CALL'S CONTAINER ELEMENT: ITS `element_size@24`
-	// STAMP AND WHETHER IT OWES A DROP** — the two facts `inlineManagedPrimitives` needs to emit ONE
-	// of `emitStrideDispatch`'s arms instead of forking on a stride that is fixed by the element type, and to
+	// ⭐⭐ **WRITE DOWN WHAT THIS TIER KNOWS ABOUT THIS CALL'S CONTAINER ELEMENT: ITS STRIDE AND WHETHER IT
+	// OWES A DROP** — the two facts `inlineManagedPrimitives` needs to emit ONE
+	// of `emitStrideChain`'s arms instead of forking on a stride that is fixed by the element type, and to
 	// omit the `element_destroy@40` guard where the element type fixes that too. `Array with Integer` is 8
 	// bytes and owes nothing in every program that ever runs, and the pass was loading both fields and
 	// comparing them at EVERY element access.
@@ -5588,12 +5608,10 @@ type MaxonToStdLowering
 	// refused under the same gate: `containerElementOwesDrop` of a type parameter is not the instantiation's
 	// answer either.
 	//
-	// ⚠ **THE STRIDE IS A STAMP AND NOT A VERDICT, and the difference is load-bearing.** The stamp is the one
-	// `ProgramSignatures.arrayElementSize` gives this INSTANCE; whether the record reaching the call actually
-	// carries it is `strideDispatchPlanForStamp`'s question, and its answer is not "yes" for every width —
-	// see there for the shape that made a byte-typed field answer 0 where 7 is correct. The ownership fact
-	// carries no such caveat — see `Project.stdOpTrivialElementSites` for why every writer of
-	// `element_destroy@40` stamps the instantiation's answer.
+	// ⚠ **THE STRIDE IS A FACT AND NOT A VERDICT, and it carries no signed-slot flag.** It is the one
+	// `ProgramSignatures.arrayElementSize` gives this INSTANCE; which arm it selects is
+	// `strideDispatchPlanForStamp`'s question. The ownership fact is the instantiation's answer — see
+	// `Project.stdOpTrivialElementSites` for why every writer of `element_destroy@40` stamps it.
 	//
 	// ⚠ Both type columns are read PERMISSIVELY. They are dense over the values the PARSER minted, and this
 	// tier mints its own (`mintStdValueId` — a layout descriptor, a destructor slot); such a value can never be
@@ -5612,7 +5630,7 @@ type MaxonToStdLowering
 			return
 		end 'noNameId'
 
-		if not self.signatures.isManagedBufferRecordInstanceAt(tag, nameId: instance) 'notAnArrayRecord'
+		if not self.signatures.isManagedBufferRecordInstanceAt(tag, nameId: instance) and not self.signatures.isManagedMemoryCursorInstanceAt(tag, nameId: instance) 'notAnArrayRecord'
 			return
 		end 'notAnArrayRecord'
 
@@ -5735,8 +5753,8 @@ type MaxonToStdLowering
 	// `__managed_create(element_size, element_destroy)` for an array,
 	// `__managed_create_fixed(element_size, capacity, length, element_destroy)` for a fixed array,
 	// `__list_create(element_drop)` for a chain, which states its whole argument list in that one word.
-	// A fixed array's element_size is the descriptor's `elementStride@72`, loaded here and not stated by
-	// the parser.
+	// An array's element_size, fixed or not, is the descriptor's `elementStride@72`, loaded here and not
+	// stated by the parser.
 	function appendOpaqueContainerCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		self.requireImplicitLayout("appendOpaqueContainerCreate of '{String.from(callee)}'")
 
@@ -5747,8 +5765,8 @@ type MaxonToStdLowering
 		var fullArgs = ValueIdArray.create()
 
 		if opaqueCreateReadsStrideFromDescriptor(callee) 'strideFromTheDescriptor'
-			if args.count() != SizedCreateSizingCount 'notShortTheStride'
-				panic("appendOpaqueContainerCreate: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' arrived with {args.count()} arguments — the parser leaves the element stride and the element destructor off an opaque fixed create and states only the capacity and the length, and this lowering reads both off the same reservation")
+			if args.count() + OpaqueArrayCreateOmittedWords != stampedContainerCreateArity(callee) 'notShortTheStride'
+				panic("appendOpaqueContainerCreate: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' arrived with {args.count()} arguments — the parser leaves the element stride and the element destructor off an opaque array create and states nothing else for an unsized one, only the capacity and the length for a sized one, and this lowering reads both off the same reservation")
 			end 'notShortTheStride'
 
 			fullArgs.push(self.loadOpaqueContainerWord(result, field: LAYOUT_OFFSET_ELEMENT_STRIDE, dstBlock: dstBlock))

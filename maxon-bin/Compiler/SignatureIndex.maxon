@@ -8101,7 +8101,7 @@ end 'inclusiveRangeContains'
 // `ProgramSignatures.elementAdmitsEverySlotValue`, spelled apart from it because it is a statement about a
 // RANGE and not about an instance — `Project.rangeHoldsEveryByte`'s own arrangement, which this is the
 // general form of, and whose ONE-BYTE case it therefore asks rather than re-spelling. The slot's value set
-// is UNSIGNED because the shared element load zero-extends (`ManagedMemoryRuntime.emitLoadElem`).
+// is UNSIGNED because the load of an unsigned slot zero-extends (`ManagedMemoryRuntime.emitStrideSlotLoad`).
 //
 // ⚠⚠ **THE WHOLE MACHINE WORD IS THE ONE SLOT TWO DIFFERENT DECLARATIONS FILL, AND NEITHER CAN BE ORDERED
 // AGAINST IT.** `int(i64.min to i64.max)` fills it from the signed side and `int(0 to u64.max)` from the
@@ -23035,7 +23035,7 @@ export type ProgramSignatures
 			return ContainerBoxSlot.notImageable
 		end 'aSharedBodysColumn'
 
-		return ContainerBoxSlot.column(ImmortalBoxColumn.create(offset, value: ImmortalBoxSlotValue.emptyArray(self.arrayElementSize(giid), elementDestroy: self.imageElementDestroyOf(giid))))
+		return ContainerBoxSlot.column(ImmortalBoxColumn.create(offset, value: ImmortalBoxSlotValue.emptyArray(self.arrayElementStamp(giid), elementDestroy: self.imageElementDestroyOf(giid))))
 	end 'constructionContainerSlot'
 
 	function constructionHelperDefaultSlot(callee ByteArray, layout StructLayout, index FieldIndex, declared MaxonType, arena ImmortalBoxNodeArray) returns ContainerBoxSlot
@@ -23331,7 +23331,7 @@ export type ProgramSignatures
 	end 'boxSlot'
 
 	function concreteColumnSlot(column GenericInstanceId, layout StructLayout, index FieldIndex) returns ContainerBoxSlot
-		return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), value: ImmortalBoxSlotValue.emptyArray(self.arrayElementSize(column), elementDestroy: self.imageElementDestroyOf(column))))
+		return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), value: ImmortalBoxSlotValue.emptyArray(self.arrayElementStamp(column), elementDestroy: self.imageElementDestroyOf(column))))
 	end 'concreteColumnSlot'
 
 	function nestedRecordBoxSlot(layout StructLayout, index FieldIndex, declared MaxonType, walk BoxImageWalk) returns ContainerBoxSlot
@@ -23403,11 +23403,11 @@ export type ProgramSignatures
 
 	// ⭐⭐ **A COLUMN SLOT, IN THE TERMS THE SHARED BODY BUILDS IT** — which is the one thing this whole shape
 	// turns on. A generic's `create()` is compiled ONCE for every instantiation, so a column over one of the
-	// base's own type parameters is born at the fixed opaque slot width and takes its `element_destroy@40`
-	// from the caller's layout descriptor at RUN TIME (`Parser.emitOpaqueArrayCreateOp`). The image has to BE
-	// that record and not a record over the substituted argument: a `Map with (Byte, Byte)`'s key column is
-	// eight-byte-strided, and imaging it at the argument's own one-byte stride would hand the shared body a
-	// record it indexes by a different geometry.
+	// base's own type parameters takes its `element_size@24` and `element_destroy@40` from the caller's layout
+	// descriptor at RUN TIME (`Parser.emitArrayCreateOp`'s `opaqueElement` route). The image has to BE that
+	// record: the key column of a `Map with (Byte, Byte)` must carry the stamp the shared body's own create
+	// reads from the descriptor (`genericInstanceArgElementStamp`), or the body would index an imaged record
+	// by a different geometry than one it created.
 	//
 	// A CONCRETE column — a `Map`'s `states`, whose element is a declared enum — is born at its own stride
 	// with its own destructor, so it reads the two facts every other imaged empty container reads.
@@ -23452,7 +23452,9 @@ export type ProgramSignatures
 			return ContainerBoxSlot.notImageable
 		end 'notThisDeclarationsParameter'
 
-		return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), value: ImmortalBoxSlotValue.emptyArray(LAYOUT_TYPE_PARAM_SLOT_BYTES as ElementStride, elementDestroy: self.typeParamDropCallee(giid, position: self.opaqueTypeParamPosition(element)))))
+		let position = self.opaqueTypeParamPosition(element)
+
+		return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), value: ImmortalBoxSlotValue.emptyArray(self.genericInstanceArgElementStamp(giid, position: position), elementDestroy: self.typeParamDropCallee(giid, position: position))))
 	end 'genericOpaqueColumnSlot'
 
 	// ⭐ **THE CONTEST COLUMNS' READ AND INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is
@@ -31674,12 +31676,13 @@ export type ProgramSignatures
 		return self.typeDisplayName(element)
 	end 'tupleElementDisplayName'
 
-	// ⭐ **THE SOLE PRODUCER OF `element_size@24`** — the number every `__managed_create` is stamped with, every
-	// array helper strides by at run time, and every same-shape check compares. A MANAGED element (String /
-	// struct / union / instance / nested Array) is a heap box stored as an 8-byte POINTER
+	// ⭐ **THE SOLE PRODUCER OF THE STRIDE HALF OF `element_size@24`** — the number every array helper strides
+	// by at run time and every same-shape check compares; `arrayElementStamp` adds the signed-slot flag to it
+	// and is the sole producer of the whole word every `__managed_create` is stamped with. A MANAGED element
+	// (String / struct / union / instance / nested Array) is a heap box stored as an 8-byte POINTER
 	// (`ManagedArrayElementBytes`), so its slot is the pointer, NOT the element's full logical size — the
 	// drop walk destroys the pointer, the accessors load/store it. A TRIVIAL element is stored inline, at
-	// the width `trivialElementSlot` gives it. `genericInstanceArgElementStride` asks the same question of a
+	// the width `trivialElementSlot` gives it. `genericInstanceArgElementStamp` asks the same question of a
 	// descriptor's type argument through `elementStrideOfType`, so the two cannot differ.
 	//
 	// ⚠ **IT IS NOT THE SOURCE `sizeof`, AND IT DOES NOT ROUTE THROUGH THE LOGICAL-SIZE DOOR.** Both of the
@@ -31689,8 +31692,9 @@ export type ProgramSignatures
 	//
 	// ⚠⚠ **ITS ANSWER IS SIGNED, BECAUSE `element_size@24` CARRIES TWO LADDERS IN ONE FIELD** — a positive
 	// byte stride, or a NEGATIVE sub-byte bit width (`elementStrideOf`, which owns the encoding). Every
-	// caller of this function wants the stamp and not the unpacked byte width, which is what keeps it one
-	// function: the two create sites stamp it, `isBytePackedArrayInstance` asks `== 1` and must answer NO
+	// caller of this function wants the stride and not the unpacked byte width, which is what keeps it one
+	// function: `arrayElementStamp` carries it into the stamp every create site writes,
+	// `isBytePackedArrayInstance` asks `== 1` and must answer NO
 	// for a packed element, `arrayElementIsMachineWord` asks `== 8`, the append same-shape test compares
 	// two of them, and the raw-byte doors have to refuse a slot that is not byte-addressable at all. A
 	// second "unpacked byte width" accessor beside this one would be a second producer of a stride, which
@@ -31699,9 +31703,28 @@ export type ProgramSignatures
 		return self.elementStrideOfType(self.containerElementType(id))
 	end 'arrayElementSize'
 
-	export function genericInstanceArgElementStride(id GenericInstanceId, position ElementIndex) returns ElementStride
-		return self.elementStrideOfType(self.descriptorArgumentAt(id, position: position))
-	end 'genericInstanceArgElementStride'
+	export function arrayElementStamp(id GenericInstanceId) returns ElementStamp
+		return self.elementStampOfType(self.containerElementType(id))
+	end 'arrayElementStamp'
+
+	export function genericInstanceArgElementStamp(id GenericInstanceId, position ElementIndex) returns ElementStamp
+		return self.elementStampOfType(self.descriptorArgumentAt(id, position: position))
+	end 'genericInstanceArgElementStamp'
+
+	function elementStampOfType(element MaxonType) returns ElementStamp
+		return elementStampOf(self.elementStrideOfType(element), signed: self.elementIsSignedNarrow(element))
+	end 'elementStampOfType'
+
+	function elementIsSignedNarrow(element MaxonType) returns bool
+		if maxonTypeTag(element) != ValueTypeTag.named 'notANamedLeaf'
+			return false
+		end 'notANamedLeaf'
+
+		return match self.narrowSignedSlotOf(self.nameOfId(typeNameIdOf(element))) 'slot'
+			fromBytes gives true
+			notASignExtension gives false
+		end 'slot'
+	end 'elementIsSignedNarrow'
 
 	function elementStrideOfType(element MaxonType) returns ElementStride
 		// ⚠ **THE STORAGE QUESTION AND NOT THE REFCOUNT ONE** — see `typeOccupiesAPointerSlot`,
@@ -31713,12 +31736,11 @@ export type ProgramSignatures
 		return elementStrideOf(self.elementPackingOfType(element), storageBytes: self.trivialElementSlot(element).bytes)
 	end 'elementStrideOfType'
 
-	// ⭐⭐ **IS THIS TYPE STORED IN A NARROW SIGNED SLOT, AND HOW WIDE? (`enum-narrow-storage`.)** The shared
-	// element load is ONE compiled byte loop shared by every array in the program, strided by the record's
-	// runtime `element_size@24`, and it ZERO-EXTENDS (`ManagedMemoryRuntime.emitLoadElemAt` ends in a shift and a
-	// width mask). There is no signedness in the record for it to consult and there could not be — the stamp
-	// is one signed field already carrying two ladders — so a narrow SIGNED value's sign has to reach the read
-	// from the COMPILER. This is that fact, asked where the width was decided.
+	// ⭐⭐ **IS THIS TYPE STORED IN A NARROW SIGNED SLOT, AND HOW WIDE? (`enum-narrow-storage`.)** The runtime's
+	// element load is shared by every array in the program, and it sign-extends a slot only when the record's
+	// stamp carries `SignedElementStampFlag` (`elementStampOfType` sets it from this answer); every other slot
+	// zero-extends. The parser asks the same question again for the reads it re-signs itself. This is that
+	// fact, asked where the width was decided.
 	//
 	// ⭐⭐ **IT IS A QUESTION ABOUT THE TYPE AND NOT ABOUT THE CONTAINER, WHICH IS WHAT LETS TWO DOORS SHARE
 	// IT — AND THE REASON IS THAT THE EXTENSION IS THE IDENTITY ON A CORRECT VALUE.** The slot was chosen to
@@ -32353,8 +32375,8 @@ export type ProgramSignatures
 	// question the buffer surface's RAW-BYTE WRITER has to ask, and it is one question at every stride:
 	// `setByte` addresses a byte OFFSET, so on a record striding more than a byte it writes a FRAGMENT of an
 	// element, and what the ARRAY surface reads back afterwards is an arbitrary UNSIGNED value of the whole
-	// slot — the shared element load zero-extends (`ManagedMemoryRuntime.emitLoadElem`), which is what makes the
-	// slot's value set unsigned and makes this comparable at all.
+	// slot — the load of an unsigned slot zero-extends (`ManagedMemoryRuntime.emitStrideSlotLoad`), which is what
+	// makes the slot's value set unsigned and makes this comparable at all.
 	//
 	// ⚠⚠ **IT IS NOT `rangeHoldsEveryByte` WIDENED, AND THE DIFFERENCE IS A MEASURED WRONG ANSWER IN EACH
 	// DIRECTION.** "Admits every BYTE" is this answer at a ONE-byte slot and nothing more general: asked at a
@@ -32420,7 +32442,7 @@ export type ProgramSignatures
 	// puts SIGNED values in narrow slots (`i8[] -1, 0, 1` is three bytes), and a reader of such a slot has to
 	// sign-extend or it reads `255` for `-1`. Deriving the width here and the signedness somewhere else would
 	// be one decision made twice over the same bounds, free to disagree precisely where it matters — so both
-	// readers (`arrayElementSize` for the stamp, `narrowSignedSlotOf` for the read) come through this.
+	// readers (`arrayElementStamp` for the stamp, `narrowSignedSlotOf` for the read) come through this.
 	function trivialElementSlot(t MaxonType) returns StorageSlot
 		let tag = maxonTypeTag(t)
 
@@ -32544,7 +32566,7 @@ export type ProgramSignatures
 	// ⭐ **AN OPAQUE COLUMN IS SERVED BY A BRANCH AT EACH CALLER, NOT BY A DIFFERENT ANSWER HERE.** An
 	// opaque `create` reads `destroyFunc@40` off the enclosing instance's
 	// threaded layout descriptor at RUN TIME
-	// (`Parser.emitOpaqueArrayCreateOp`/`emitOpaqueChainCreateOp` →
+	// (`Parser.emitArrayCreateOp`'s `opaqueElement` route and `emitOpaqueChainCreateOp` →
 	// `LowerMaxonToStd.appendOpaqueContainerCreate`), so whoever holds an opaque instance takes that
 	// road *before* asking for a stamp. This panic is what makes "the caller branched" a checked
 	// property of every caller rather than a convention one of them could drift out of — the same

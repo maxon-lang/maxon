@@ -418,11 +418,11 @@ end 'main'
 800 400 0
 ```
 
-<!-- test: builtins-byte-order.a-word-strided-byte-array-reads-and-appends-element-wise -->
+<!-- test: builtins-byte-order.a-generic-born-byte-array-reads-and-appends-as-bytes -->
 <!-- tier: stdlib -->
-`Bag with Byte`'s `items` is created inside a shared generic body, so its record is word-strided (`elementSize()`
-is 8) however its type reads. The access is over ELEMENTS, not over the buffer's bytes: a four-byte read from index 2
-sees elements 2 to 5, and an append adds one element per byte.
+`Bag with Byte`'s `items` is created inside a shared generic body, and its record strides one byte (`elementSize()`
+is 1) as a `ByteArray` created in a concrete body does. The built-ins see the bytes the array holds: a four-byte read
+from index 2 sees bytes 2 to 5, and an append adds one byte per byte.
 ```maxon
 type Bag uses Element
 	typealias Items = Array with Element
@@ -464,7 +464,7 @@ end 'main'
 0
 ```
 ```stdout
-8 100992003 515
+1 100992003 515
 12: 1 2 3 4 5 6 7 8 9 10 11 12
 ```
 

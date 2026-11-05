@@ -8,15 +8,16 @@ category: codegen
 
 ## Documentation
 
-`ManagedMemoryRuntime.emitStrideDispatch` forks an element access on `element_size@24` — a **runtime**
-field of the array record — into a machine-word arm, a single-byte arm, and everything else.
+`ManagedMemoryRuntime.emitStrideChain` forks an element access on `element_size@24` — a **runtime**
+field of the array record — into one arm per stride a target moves in a single memory operation: a machine
+word, a byte, 16 and 32 bits, and a 1-, 2- or 4-bit packed field.
 `InlineManagedPrimitives` puts that fork inline at every array read and write in every program,
 so without a known stride an `Array with Integer` element access pays, per access:
 
 ```
 mov rax, [rbx + 24]      ; element_size@24
 cmp rax, 8
-jne __im_stride          ; ... which compares against 1 and falls through to a runtime CALL
+jne __im_stride          ; ... which compares against the other widths in turn
 ```
 
 `Array with Integer` stamps that field with 8 in every program that ever runs. The stamp is
@@ -38,37 +39,38 @@ and never ops.
 been read and spent — so a splice cannot reach a live key at all. A leaf may carry a call in a cold block, which a splice
 clones with the body, so this key relies on that order alone.
 
-### THE STATIC STAMP IS NOT ALWAYS THE RECORD'S STAMP
+### THE STATIC STAMP IS THE RECORD'S STAMP
 
-A container declared over a TYPE PARAMETER is created inside a SHARED GENERIC BODY, where every `T`
-occupies one machine word: `Parser.emitOpaqueArrayCreateOp` stamps `LAYOUT_TYPE_PARAM_SLOT_BYTES` and
-not the concrete element's width, because the one compiled body moves elements as words whatever the
-instantiation. Read back through a concrete receiver, that same record wears a SUBSTITUTED type
-(`Parser.slotTypeThroughReceiver`) — a `Bag with Byte`'s `Array with Element` field is typed
-`Array with Byte`, stride 1, while its record stamps 8.
+A container declared over a TYPE PARAMETER is created inside a SHARED GENERIC BODY, and it stamps the
+concrete element's stride all the same: the stride is a word of the instantiation's layout descriptor
+(`elementStride@72`), which the shared body's create reads at run time
+(`opaqueCreateReadsStrideFromDescriptor`). Read back through a concrete receiver, that same record wears a
+SUBSTITUTED type (`Parser.slotTypeThroughReceiver`) — a `Bag with Byte`'s `Array with Element` field is typed
+`Array with Byte`, stride 1, and its record stamps 1.
 
-So what is provable is **`actual` ∈ {`static stamp`, `MachineWordBytes`}**: every other producer of
-`element_size@24` stamps `ProgramSignatures.arrayElementSize` of the value's own instance
-(`__ManagedMemory.create` is CHECKED against its instance by `requireManagedMemoryElementSize`;
-clone and slice copy their source), and the one that does not stamps the machine word.
+So what is provable is **`actual` = `static stamp`**: every producer of `element_size@24` stamps
+`ProgramSignatures.arrayElementSize` of the value's own instance, or the descriptor's word for that same
+element type (`__ManagedMemory.create` is CHECKED against its instance by `requireManagedMemoryElementSize`;
+clone and slice copy their source). An element stored in a SIGNED narrow slot (an enum with a negative raw
+value) strides its slot like any other; the signed flag the stamp carries above its stride tells a shared body the slot is
+signed, and the body sign-extends what it reads.
 
-### THREE ANSWERS, and each of them is a case below
+### FOUR ANSWERS, and each of them is a case below
 
-- **The word stride is known** — both possibilities ARE the word, so the word arm is right either way.
-  Exactly ONE arm is emitted, into the site's own block: no `element_size@24` load, no compare, and no
-  branch into the arm, because with one successor the arm IS the block.
-- **The BYTE stride is known** — the record is 1 or 8, which are two DIFFERENT single-op arms, so the
-  site still has to ask. The runtime fork stands, and the fork is exactly the question that
-  distinguishes them. (Left open: a byte-stamped site could keep both arms and route the fork's third
-  edge to the WORD arm rather than to the call, which is sound by the same reading and would make a
-  `for v in b` over a `ByteArray` call-free the way the word case is.)
-- **A stride is known that takes NEITHER arm** — a 2- or 4-byte element, an unset stride, or a sub-byte
-  PACKED one (`element_size@24` is signed: a packed element reads `-1`/`-2`/`-4`). The record is that
-  stride or the word, and the CALL is right for both, so nothing is expanded at all. That is strictly
-  better than expanding: an expanded site would pay the load and both compares to reach the very call it
-  makes anyway.
+- **The word stride is known** — the record IS the word. Exactly ONE arm is emitted, into the site's own
+  block: no `element_size@24` load, no compare, and no branch into the arm, because with one successor the arm IS
+  the block.
+- **The BYTE stride is known** — the record IS one byte per element, so exactly ONE arm is emitted, the byte
+  arm, with no fork and no call.
+- **A 16-bit, a 32-bit or a PACKED stride is known** — `element_size@24` is signed, and a packed element
+  reads `-1`/`-2`/`-4`. Exactly ONE arm is emitted as well: a `u16` or `u32` access, or the byte load, shift
+  and mask (a read-modify-write for a store) of a field that shares its byte with its neighbours.
+- **A stamp none of those names is known** — an unset stride. Every fast arm is dead, so nothing is expanded
+  at all: the CALL is right, and expanding would pay the load and the compares to reach the very call the
+  site makes anyway.
 - **Nothing is known** — an opaque `T` element inside the shared body itself, an array reached through
-  an interface or an existential. The full runtime fork is emitted.
+  an interface or an existential. The full runtime fork is emitted: the stamp is compared against 8, 1,
+  -1, 2, 4, -2 and -4 in turn, and each hit is one access.
 
 ### For `__managed_get_unchecked` a known stride removes the CALL as well
 
@@ -87,8 +89,8 @@ callee-saved registers, and this compiler refuses rather than spills.
 parameter occupies). Recording that answer would specialize an `Array with Byte`'s body onto an 8-byte
 access. `containerElementIsOpaque` is the refusal, and `a-shared-generic-body-keeps-the-runtime-fork`
 is its control. Its dual — a record BORN in such a body and read back under a substituted concrete type
-— is what the byte rule above exists for, and
-`a-substituted-container-field-is-word-strided-however-it-is-typed` is the program that pins it.
+— is what the equality of the two stamps above rests on, and
+`a-substituted-container-field-is-byte-strided-as-it-is-typed` is the program that pins it.
 
 ## Tests
 
@@ -171,16 +173,14 @@ end 'main'
 0
 ```
 
-<!-- test: a-byte-stamp-keeps-the-runtime-fork -->
-A `ByteArray` stamps `element_size@24` with 1 — and that is the one known stride the compiler may NOT
-act on, because a record wearing a byte-strided type may still be the word-strided one a shared generic
-body created. 1 and 8 are two DIFFERENT single-op arms, so the site keeps `emitStrideDispatch`: the
-emitted code (`--emit-ir`) shows the `[<rec> + 24]` load, the `cmpRegImm32 …, 8` and the `cmpRegImm32
-…, 1` around a `loadRegBaseDisp.byte` and a `loadRegBaseIndexScale.word64`.
+<!-- test: a-byte-stamp-reads-with-the-byte-arm-alone -->
+A `ByteArray` stamps `element_size@24` with 1, and the record IS one byte per element wherever it was created,
+a shared generic body included. The site therefore emits the byte arm alone: the emitted code (`--emit-ir`) shows
+a `loadRegBaseDisp.byte` with no `[<rec> + 24]` load, no `cmpRegImm32` and no word arm.
 
 ⚠ The values here are all genuinely byte-strided, so this case cannot go RED on its own — it is a
 CODEGEN pin, and the program that makes the rule load-bearing is
-`a-substituted-container-field-is-word-strided-however-it-is-typed` below.
+`a-substituted-container-field-is-byte-strided-as-it-is-typed` below.
 ```maxon
 typealias Total = int(0 to u64.max)
 
@@ -214,13 +214,12 @@ end 'main'
 0
 ```
 
-<!-- test: a-packed-element-is-not-inlined-at-all -->
+<!-- test: a-packed-element-is-read-and-written-through-its-field-arm -->
 <!-- tier: stdlib -->
 A NEGATIVE `element_size@24` IS A WIDTH, NOT AN ERROR. `int(0 to 3)` packs four elements to the byte
-and stamps `-2`, which selects NEITHER single-op arm — so the compiler knows, at compile time, that
-every fast arm this pass could emit is dead, and emits none of them. The emitted code (`--emit-ir`)
-therefore shows a plain `callDirect __managed_get` / `__managed_set` with no `__im_` block anywhere
-around it.
+and stamps `-2`, which selects the two-bit arm — so the pass emits that one arm and nothing else. The
+emitted code (`--emit-ir`) shows the byte load, the shift and the mask of a `get`, and the read-modify-write
+of a `set`, with no `callDirect __managed_get` on the fast path and no stride fork.
 
 The values round-trip across a byte boundary (five elements at four per byte) and the raw stamp is
 asserted, so a specialization that treated `-2` as a byte stride would read one element's two bits as a
@@ -264,8 +263,8 @@ value below is wrong by a factor of eight in one direction or the other if it is
 8-byte access into a byte-strided buffer reads seven bytes of its neighbours, and a `u8` access into a
 word-strided one keeps one byte of every element.
 
-So `Bag.at` and `Bag.put` keep `emitStrideDispatch` — the `element_size@24` load and both compares —
-and that is the shape the emitted code (`--emit-ir`) shows. `main`'s own direct accesses on the same two
+So `Bag.at` and `Bag.put` keep the stride fork — the `element_size@24` load and the compares against each
+stride — and that is the shape the emitted code (`--emit-ir`) shows. `main`'s own direct accesses on the same two
 element types are specialized as usual: the difference between the two is the whole rule.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -333,20 +332,18 @@ end 'main'
 0
 ```
 
-<!-- test: a-substituted-container-field-is-word-strided-however-it-is-typed -->
+<!-- test: a-substituted-container-field-is-byte-strided-as-it-is-typed -->
 <!-- tier: stdlib -->
 ⛔⛔ **THE RED-GATE CONTROL, AND THE PROGRAM THAT PINS THE RULE.** `Bag with Byte`'s `items` is
-declared `Array with Element` inside a SHARED generic body, so its record was created at the opaque
-machine-word slot and stamps `element_size@24` with **8**. Read from OUTSIDE that body it wears the
-SUBSTITUTED type `Array with Byte`, whose static stride is **1**. The two disagree, and the record is
-the one that is true.
+declared `Array with Element` inside a SHARED generic body, and its record stamps `element_size@24` with the
+stride of the instantiation's element, read from the layout descriptor: **1**. Read from OUTSIDE that body it
+wears the SUBSTITUTED type `Array with Byte`, whose static stride is **1** as well. The two agree, and that is
+what lets the byte site emit its one arm and nothing else.
 
-`elementSize()` asserts the record's own stamp, so the disagreement is stated rather than assumed;
-`items.get(1)` then reads element 1 through it. Change `strideDispatchPlanForStamp`'s byte arm from
-`runtimeFork` to `singleArm(SingleOpStride.byte)` and this case answers **0** where 7 is correct —
-one byte out of the middle of an eight-byte slot, exit code 3. With that arm in place this is
-the ONLY case in this file that goes red, `a-byte-stamp-keeps-the-runtime-fork` included, which is why a
-codegen pin could not have stood in for it.
+`elementSize()` asserts the record's own stamp, so the agreement is stated rather than assumed;
+`items.get(1)` then reads element 1 through the one byte arm. A shared body that stamped the machine word
+again would make this case answer **0** where 7 is correct — one byte out of the middle of an eight-byte
+slot — and `elementSize()` would answer 8 first, exit code 1.
 ```maxon
 typealias Byte = int(0 to 255)
 
@@ -369,10 +366,9 @@ function main() returns ExitCode
 	var b = ByteBag.create()
 	b.add(200)
 	b.add(7)
-	// The record was born in the shared body at the machine-word slot, whatever the field's type says.
-	if b.items.managed.elementSize() != 8 'theRecordIsWordStrided'
+	if b.items.managed.elementSize() != 1 'theRecordIsByteStrided'
 		return 1
-	end 'theRecordIsWordStrided'
+	end 'theRecordIsByteStrided'
 	if (try b.items.get(0) otherwise return 2) != 200 'first'
 		return 2
 	end 'first'

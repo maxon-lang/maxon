@@ -4174,6 +4174,8 @@ func @__ms_send_from {
   msviewb:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.shlRegImm8 rcx, rcx, 32
+    x64.sarRegImm8 rcx, rcx, 32
   __il_body#34:
     x64.movRegReg rdx, rcx
     x64.sarRegImm8 rdx, rcx, 63
@@ -4194,6 +4196,8 @@ func @__ms_send_from {
   msownb:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.shlRegImm8 rcx, rcx, 32
+    x64.sarRegImm8 rcx, rcx, 32
   __il_body#40:
     x64.movRegReg rdx, rcx
     x64.sarRegImm8 rdx, rcx, 63
@@ -5411,6 +5415,8 @@ func @__ms_send_from {
   msviewb:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.shlRegImm8 rcx, rcx, 32
+    x64.sarRegImm8 rcx, rcx, 32
   __il_body#22:
     x64.movRegReg rdx, rcx
     x64.sarRegImm8 rdx, rcx, 63
@@ -5431,6 +5437,8 @@ func @__ms_send_from {
   msownb:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.shlRegImm8 rcx, rcx, 32
+    x64.sarRegImm8 rcx, rcx, 32
   __il_body#28:
     x64.movRegReg rdx, rcx
     x64.sarRegImm8 rdx, rcx, 63
@@ -6516,6 +6524,8 @@ func @__ms_send_from {
   msviewb:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+    arm64.lsl x1, x1, 32
+    arm64.asr x1, x1, 32
   __il_body#22:
     arm64.asr x2, x1, 63
     arm64.movImm x16, 18446744073709551615
@@ -6535,6 +6545,8 @@ func @__ms_send_from {
   msownb:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+    arm64.lsl x1, x1, 32
+    arm64.asr x1, x1, 32
   __il_body#28:
     arm64.asr x2, x1, 63
     arm64.movImm x16, 18446744073709551615
@@ -7621,6 +7633,8 @@ func @__ms_send_from {
   msviewb:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+    arm64.lsl x1, x1, 32
+    arm64.asr x1, x1, 32
   __il_body#22:
     arm64.asr x2, x1, 63
     arm64.movImm x16, 18446744073709551615
@@ -7640,6 +7654,8 @@ func @__ms_send_from {
   msownb:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+    arm64.lsl x1, x1, 32
+    arm64.asr x1, x1, 32
   __il_body#28:
     arm64.asr x2, x1, 63
     arm64.movImm x16, 18446744073709551615

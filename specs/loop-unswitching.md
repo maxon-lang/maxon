@@ -33,7 +33,7 @@ re-derives nothing.
 
 - **A call whose effect on a record the runtime does not describe** — `push`, `resize`, `slice`,
   `clone`, `retain`, any user call. Such a loop is left alone. The callee table is what refuses a `push`
-  the inliner left a call (`ir-specs/loop-unswitching.md`, `a-loop-pushing-an-unexpanded-element-stays-unversioned`);
+  the inliner left a call (`ir-specs/loop-unswitching.md`, `a-loop-pushing-onto-a-record-it-just-created-stays-unversioned`);
   an expanded `push` also carries the next refusal.
 - **A store that is not an element store** — an expanded `push`'s write of `length@8` is one, and its slow
   arm still calls `push` (`a-loop-that-pushes-stays-unversioned`) — or a loop-defined value read past the loop in a block no

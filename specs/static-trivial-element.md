@@ -46,10 +46,8 @@ inside a SHARED GENERIC BODY reads `destroyFunc@40` of the threaded layout descr
 trivial instance (`LayoutDescriptor.maxon`); a view (`slice`, `clone`) copies its source record's field.
 Those are two deciders (`typeOwesDrop`, the descriptor's ownership protocol), not one, and they agree in
 the direction that matters: where `typeOwesDrop` is false the descriptor answers nothing. So a record typed over an element
-that owes no drop carries `0` wherever it was born. The trap that makes a BYTE stride untrustworthy — a record
-created at the machine-word slot of a shared body and read back under a substituted type — does not
-arise here: the slot's WIDTH is the body's, but the element's OWNERSHIP is the instantiation's, and the
-descriptor carries that per instantiation.
+that owes no drop carries `0` wherever it was born: the element's OWNERSHIP is the instantiation's, and
+the descriptor carries it per instantiation, as it carries the stride.
 
 The refusal direction is the same as the stride's: an opaque `T` inside the shared body records
 nothing, and such a site keeps both guards.

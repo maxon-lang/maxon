@@ -12089,8 +12089,8 @@ end 'requireByteCodepoint'
 //
 // `LowerMaxonToStd.lowerConstArrayLiteral` lays the blob out one byte per element and stamps
 // `element_size@24 = ByteStringElementSize` to match it; every OTHER `Array with Byte` record — `.create()`,
-// a global's `__managed_create`, a `clone`/`slice` of either — is stamped from `ProgramSignatures.arrayElementSize`,
-// which sizes the element from `Byte`'s DECLARED range. The two agree for the canonical `int(0 to u8.max)`
+// a global's `__managed_create`, a `clone`/`slice` of either — is stamped from `ProgramSignatures.arrayElementStamp`,
+// whose stride sizes the element from `Byte`'s DECLARED range. The two agree for the canonical `int(0 to u8.max)`
 // and for anything narrower, which is the whole of what a byte string is; they do not agree for a wider one.
 //
 // ⚠ **WITHOUT THE GATE THAT DISAGREEMENT IS A SILENT WRONG ANSWER, NOT MERELY AN ABORT.** Measured
@@ -77781,8 +77781,14 @@ export type Parser
 	function parseManagedMemoryCreate(func IrFunction, typeTok Token, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let elementSizeStart = self.pos
 		let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCountParamName, secondParam: ManagedMemoryElementSizeParamName, methodTok: methodTok)
+		let count = try args.get(0) otherwise panic("parseManagedMemoryCreate: the two-int arg list returned fewer than two values")
 		let elementSize = try args.get(1) otherwise panic("parseManagedMemoryCreate: the two-int arg list returned fewer than two values")
-		let created = self.emitOwnedRuntimeResult(ManagedMemCreateName, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: (try self.managedMemoryCreateInstance(typeTok, elementSize: elementSize, argStart: elementSizeStart) as TypeNameId), range: range)
+		let instance = try self.managedMemoryCreateInstance(typeTok, elementSize: elementSize, argStart: elementSizeStart)
+		// The program states a stride; a signed narrow instance is created with its stamp instead, so its
+		// record carries the signed-slot flag.
+		let signedNarrowInstance = self.signatures.arrayElementStamp(instance) as FullRangeInt != self.constOf(elementSize) and self.signatures.arrayElementSize(instance) as FullRangeInt == self.constOf(elementSize)
+		let createArgs = twoArgs(count, second: self.emitInstanceElementSize(instance, range: range)) if signedNarrowInstance else args
+		let created = self.emitOwnedRuntimeResult(ManagedMemCreateName, args: createArgs, resultTag: ValueTypeTag.genericInstance, resultNameId: (instance as TypeNameId), range: range)
 		self.markBufferSurface(created, origin: EmptySourceText)
 		return created
 	end 'parseManagedMemoryCreate'
@@ -80018,16 +80024,19 @@ export type Parser
 	// record — the shared producer for a literal and an `IntArray.create()`. A non-empty `sizing` (the
 	// capacity and the length) makes it `__managed_create_sized(elementSize, capacity, length,
 	// elementDestroy)`, or `__managed_create_fixed` for a FixedArray: the record of a sized container.
-	// Element size is a compile-time constant here (a concrete instance). The element destructor is the ADDRESS of the
+	// Element size is the instance's stamp (`arrayElementStamp`), a compile-time constant here (a concrete
+	// instance). The element destructor is the ADDRESS of the
 	// element's drop callee for an element that owes a drop, stamped into `element_destroy@40` before any
 	// element move (every create stores it inside its body, so it is set at birth); 0 for a
 	// trivial element. NOT tracked owned — the caller decides that (a literal tracks after its pushes,
 	// a `create()` immediately). A create whose element is composed over the enclosing type's parameters
 	// (`containerCreateRoute`'s `composedFromTheCaller`) is emitted without the destructor argument, and the
-	// lowering reads it out of the body's descriptor table (`appendComposedElementStampCreate`).
+	// lowering reads it out of the body's descriptor table (`appendComposedElementStampCreate`). An opaque
+	// element (`opaqueElement`) is emitted without the element size and the destructor both, and the
+	// lowering reads both from the descriptor (`appendOpaqueContainerCreate`).
 	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
 		match self.signatures.containerCreateRoute(giid) 'route'
-			opaqueElement then return self.emitOpaqueArrayCreateOp(giid, range: range, sizing: sizing)
+			opaqueElement then return self.emitArrayCreateCall(giid, leading: ValueIdArray.create(), trailing: ValueIdArray.create(), sizing: sizing, range: range)
 			composedFromTheCaller then return self.emitComposedArrayCreateOp(giid, range: range, sizing: sizing)
 			staticStamp then return try self.emitStampedArrayCreateOp(giid, range: range, sizing: sizing)
 		end 'route'
@@ -80045,7 +80054,7 @@ export type Parser
 	end 'emitStampedArrayCreateOp'
 
 	function emitInstanceElementSize(giid GenericInstanceId, range SourceRange) returns ValueId
-		return self.emitLiteral(self.signatures.arrayElementSize(giid) as FullRangeInt, valueType: MaxonType.integer, range: range)
+		return self.emitLiteral(self.signatures.arrayElementStamp(giid) as FullRangeInt, valueType: MaxonType.integer, range: range)
 	end 'emitInstanceElementSize'
 
 	function emitArrayCreateCall(giid GenericInstanceId, leading ValueIdArray, trailing ValueIdArray, sizing ValueIdArray, range SourceRange) returns ValueId
@@ -80068,30 +80077,6 @@ export type Parser
 
 		panic("arrayCreateCallee: a sizing names {sizing.count()} values, and an array create takes none or the capacity and the length")
 	end 'arrayCreateCallee'
-
-	// ⭐ **CREATE AN OPAQUE-`T` ARRAY inside a shared generic body.** `ElementArray.create()`
-	// where `ElementArray = Array with typeParameter(token)`. Two things differ from a concrete create, both
-	// because the element type is opaque here (the shared body compiles ONCE and serves every concrete
-	// instance through dictionary-passing):
-	//   • element_size of an `Array` is the fixed machine-word slot every opaque `T` occupies
-	//     (`LAYOUT_TYPE_PARAM_SLOT_BYTES`), NOT a source-`sizeof` — a managed element is a pointer and a
-	//     trivial one an inline word, both 8 bytes. A FixedArray's is READ from the descriptor's
-	//     `elementStride@72` at RUN TIME (`opaqueCreateReadsStrideFromDescriptor`), so it strides by the
-	//     concrete element, and the parser emits no element_size argument for it.
-	//   • element_destroy@40 is not known statically, so it is READ from the enclosing instance's threaded
-	//     layout descriptor at RUN TIME (`destroyFunc@40`). The parser emits a `__managed_create` short its
-	//     destructor argument (element_size only, plus the capacity and length of a sized create);
-	//     LowerMaxonToStd supplies the descriptor-read last argument, so the tier that
-	//     owns the descriptor's ValueId (`implicitLayoutValueId`) is the tier that reads it — the same split
-	//     `sizeof(T)` uses. For a TRIVIAL instance the slot reads 0 and the array's drop walk is skipped.
-	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId
-		if opaqueCreateReadsStrideFromDescriptor(self.arrayCreateCallee(giid, sizing: sizing)) 'strideFromTheDescriptor'
-			return self.emitArrayCreateCall(giid, leading: ValueIdArray.create(), trailing: ValueIdArray.create(), sizing: sizing, range: range)
-		end 'strideFromTheDescriptor'
-
-		let sizeVal = self.emitLiteral(LAYOUT_TYPE_PARAM_SLOT_BYTES as FullRangeInt, valueType: MaxonType.integer, range: range)
-		return self.emitArrayCreateCall(giid, leading: argsOf(sizeVal), trailing: ValueIdArray.create(), sizing: sizing, range: range)
-	end 'emitOpaqueArrayCreateOp'
 
 	// Emit the RAW `.text` address of a COMPILER-INTERNAL runtime function (`__str_decref`, `__destruct_<T>`,
 	// `__managed_decref`, `__mm_decref`) as a value. The drop walk invokes it through a plain `callIndirect(ptr)`,
@@ -80133,8 +80118,8 @@ export type Parser
 	// (`Array with Integer`) and an OPAQUE one (`Array with T` inside a generic body) alike —
 	// `emitArrayCreateOp` branches on the element, and the adoption is element-agnostic by construction.
 	//
-	// `create()`: a MANAGED opaque element is fully created here (`emitOpaqueArrayCreateOp` stamps its
-	// `element_destroy@40` from the threaded descriptor); the element READ (borrow),
+	// `create()`: an opaque element is created here without its stride or destructor (`emitArrayCreateOp`'s
+	// `opaqueElement` route; the lowering reads both from the threaded descriptor); the element READ (borrow),
 	// MOVE-OUT (`__drop_type_param`) and COPY (`__managed_*_opaque` via the descriptor `copyFunc@32`) are all
 	// served through the descriptor, never creation.
 	//
@@ -81310,9 +81295,9 @@ export type Parser
 
 	// ⭐ **CREATE AN OPAQUE-`T` CHAIN inside a shared generic body** — `EChain.create()` where
 	// `EChain = __ManagedList with typeParameter(token)`, the shape `stdlib/List.maxon`'s sole field is. It is
-	// `emitOpaqueArrayCreateOp` with the size argument removed, and for the same reason that one has one: a
+	// `emitArrayCreateOp`'s `opaqueElement` route with the stride omitted too: a
 	// chain's node holds ONE MACHINE WORD whatever the element is (`ListRuntime.maxon`'s `value@16`), so unlike
-	// an array there is no stride to state and the descriptor read is the create's ONLY argument. The parser
+	// an array there is no stride to read and the descriptor read is the create's ONLY argument. The parser
 	// therefore emits a ZERO-argument `__list_create`; `LowerMaxonToStd.appendOpaqueContainerCreate` supplies
 	// the `destroyFunc@40` read, so the tier that owns the descriptor's ValueId is the tier that reads it.
 	//
@@ -81959,9 +81944,9 @@ export type Parser
 	// ⭐⭐ **AN OPAQUE `T` IS ADMITTED, AND WHAT IT IS JUDGED BY IS THE INSTANTIATION SET.** *"A fixed array
 	// inside a generic body has no statically known element stride to size its storage with"* is **false**:
 	// a fixed array's storage is the same fused managed
-	// record an array's is, held behind ONE 8-byte field slot, and an opaque `T`'s stride is the uniform
-	// machine word every type parameter occupies under dictionary-passing (`LAYOUT_TYPE_PARAM_SLOT_BYTES`,
-	// which `emitOpaqueArrayCreateOp` stamps for `Array with <type parameter>`).
+	// record an array's is, held behind ONE 8-byte field slot, and an opaque `T`'s stride is the one its
+	// instantiation's layout descriptor names (`elementStride@72`), which the body's create reads at run
+	// time.
 	// The SIZE is not the problem either — `FixedArray with 4 Element` states its 4 in the source, and the
 	// substitution carries it into `FixedArray with 4 Int` through the intern key (`substituteInstanceArgsThrough`
 	// carries `shape` explicitly, for exactly this).
@@ -85094,8 +85079,8 @@ export type Parser
 	// `ProgramSignatures.elementAdmitsEverySlotValue`, whose one-byte case IS `rangeHoldsEveryByte` — so at
 	// the width where the two rules coincide they cannot come to disagree, and above it only this one speaks.
 	//
-	// ⚠ The SLOT is read from `arrayElementSize` — the sole producer of `element_size@24`, so the width this
-	// refusal names is the width the runtime will actually stride, not a second derivation of it.
+	// ⚠ The SLOT is read from `arrayElementSize` — the sole producer of the stride in `element_size@24`, so the
+	// width this refusal names is the width the runtime will actually stride, not a second derivation of it.
 	function requireRawByteWriteFitsItsSlot(giid GenericInstanceId, methodTok Token) throws SourceParseError
 		if self.signatures.elementAdmitsEverySlotValue(giid, readerFilePath: self.job.path) 'fillsItsSlot'
 			return
@@ -85335,7 +85320,8 @@ export type Parser
 	// enrolment against the iterated source is what the 2026-08-26 ruling upheld.
 	//
 	// ⇒ all three exist because a corpus body is compiled ONCE against an opaque `Element`: it reads a slot
-	// with the shared, zero-extending element load and can know nothing the INSTANCE fixes. Where the value
+	// with the shared element load, which sign-extends only through the record's `SignedElementStampFlag`,
+	// and can know nothing else the INSTANCE fixes. Where the value
 	// GOES from there is what splits the doors:
 	//
 	//   1. **`emitContainerElementAccessor`** (here) — a read the compiler emits, which holds the instance.
@@ -85350,11 +85336,8 @@ export type Parser
 	// All three spell it through the same two helpers (`emitNarrowSignedSlotRead`,
 	// `narrowSignedSlotOfLocalType`) so the set cannot drift apart.
 	//
-	// ⚠⚠ **A RULE ADDED AT ONE AND NOT THE OTHERS IS A WRONG ANSWER ON THE REST OF THE SURFACE, MEASURED
-	// TWICE.** With the sign extension at door 1 alone, on a three-case `Signal { minus = -1 }`: `for s in a`
-	// summed **256** where 0 is correct and `a.pop()` answered **255** for `-1`. With doors 1 and 2:
-	// `a.sortBy(cmpSig)` handed the comparator `x=1 y=255` and sorted into the WRONG ORDER. Whatever you add
-	// below, ask what the other two owe.
+	// ⚠⚠ **A RULE ADDED AT ONE AND NOT THE OTHERS IS A WRONG ANSWER ON THE REST OF THE SURFACE.** Whatever
+	// you add below, ask what the other two owe.
 	//
 	// ⚠ **IT SERVES A `List` TOO, WITHOUT A LINE OF ITS OWN — which is what identifies it as a CONTAINER
 	// door rather than an `Array` one.** Everything below reads the instance through `containerElementType`
@@ -85452,23 +85435,20 @@ export type Parser
 				self.giveTemporaryScopeLifetime(container, name: BorrowSourceBindingName)
 			end 'aPromiseTheContainerStillHolds'
 
-			// ⭐⭐ **A NARROW SIGNED SLOT IS SIGN-EXTENDED HERE (`enum-narrow-storage`).** The shared element
-			// load ZERO-EXTENDS — one compiled byte loop, strided by the record's runtime `element_size@24`,
-			// ending in a shift and a width mask (`ManagedMemoryRuntime.emitLoadElemAt`) — and the record carries no
-			// signedness for it to consult. So an `i8`-slotted `Signal.minus` comes back as **255** and not
-			// `-1`, which is the wrong answer `ir-specs/enum-narrow-storage.md:enum-rdata-i8-array` describes in
-			// its own prose and catches twice.
+			// ⭐⭐ **A NARROW SIGNED SLOT IS SIGN-EXTENDED HERE (`enum-narrow-storage`).** The runtime's element
+			// load sign-extends a record whose `element_size@24` stamp carries `SignedElementStampFlag` and
+			// zero-extends every other, so an `i8`-slotted `Signal.minus` is `-1` and not `255` only where the
+			// load or this extension applies. The extension is the identity on a value already extended
+			// (`narrowSignedSlotOf`'s header).
 			//
-			// ⚠⚠ **THIS DOOR IS NOT ENOUGH ON ITS OWN, AND BELIEVING IT WAS COST TWO MEASURED WRONG ANSWERS.**
-			// This function's own header calls itself the door "every element read in the language uses", but `last`/
-			// `pop`/`remove` are CORPUS members (`stdlib/Array.maxon`) and a corpus body is compiled ONCE
-			// against an opaque `Element` — so it cannot know the sign and this door never sees those calls.
-			// MEASURED on a three-case `Signal { minus = -1 }`: `for s in a` summed to **256** where 0 is
-			// correct, and `a.pop()` answered **255** for `-1`, while `get`/`first`/`match` through here were
-			// right. The corpus half is `typeResultThroughInstance`'s, off the SAME `narrowSignedSlotOf` question
-			// — see `emitNarrowSignedSlotRead` for why asking it twice is one derivation and not two.
+			// ⚠⚠ **THIS DOOR IS NOT ENOUGH ON ITS OWN.** This function's own header calls itself the door "every
+			// element read in the language uses", but `last`/`pop`/`remove` are CORPUS members
+			// (`stdlib/Array.maxon`) and a corpus body is compiled ONCE against an opaque `Element` — this door
+			// never sees those calls. The corpus half is `typeResultThroughInstance`'s, off the SAME
+			// `narrowSignedSlotOf` question — see `emitNarrowSignedSlotRead` for why asking it twice is one
+			// derivation and not two.
 			//
-			// ⚠ **THE `for … in` HALF OF THAT MEASUREMENT COMES BACK THROUGH THIS DOOR.** An `Array` is not
+			// ⚠ **THE `for … in` READ OF AN `Array` COMES BACK THROUGH THIS DOOR.** An `Array` is not
 			// rewritten to its cursor (`materializeIterableIterationSource`), so the iteration read is
 			// `parseForStatement`'s `__managed_get_unchecked` — and a narrow signed enum element takes this
 			// arm, so `for s in a` is sign-extended here rather than by the corpus one. The corpus half above is
@@ -97304,14 +97284,12 @@ export type Parser
 
 		self.retypeValue(result, valueType: fixedByTheInstance)
 
-		// ⭐⭐ **A NARROW SIGNED VALUE COMES BACK ZERO-EXTENDED THROUGH THE OPAQUE WORD, FOR THE FLOAT ARM'S
+		// ⭐⭐ **A NARROW SIGNED VALUE IS RE-EXTENDED AFTER IT RIDES THE OPAQUE WORD, FOR THE FLOAT ARM'S
 		// REASON ONE STEP FURTHER ON (`enum-narrow-storage`).** A shared corpus body — `Array.pop`,
 		// `Array.last`, `Array.remove`, `ArrayCursor.current` — is compiled ONCE against an opaque `Element`,
-		// so it reads the slot with the zero-extending shared load and cannot know the element is signed.
-		// Only the CALLER knows, because only the caller has the instance, which is precisely the situation
-		// this whole function exists for. MEASURED before this arm, on a three-case `Signal { minus = -1 }`:
-		// `for s in a` (the cursor's `current()`) summed to **256** where 0 is correct and `a.pop()` answered
-		// **255** for `-1`, while the compiler-emitted `get`/`first` were already right.
+		// so it cannot know the element is signed and its load sign-extends only through the record's
+		// `SignedElementStampFlag`. Only the CALLER knows, because only the caller has the instance, which is
+		// precisely the situation this whole function exists for.
 		//
 		// ⚠ It asks the SUBSTITUTED type, not the declared one, and it does NOT require `declared` to be a bare
 		// type parameter the way the float arm does. A float can only ride the opaque word as an ABI

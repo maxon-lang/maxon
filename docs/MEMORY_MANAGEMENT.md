@@ -196,24 +196,37 @@ __ManagedMemory layout (48 bytes):
 | +0   buffer          (ptr) -> heap data             |
 | +8   length          (i64) -> element count         |
 | +16  capacity        (i64) -> ownership mode        |
-| +24  element_size    (i64) -> stride; <0=bits/elem  |
+| +24  element_size    (i64) -> stamp; stride + flag  |
 | +32  parent          (ptr) -> owed allocation       |
 | +40  element_destroy (ptr) -> per-element destructor |
 +-----------------------------------------------------+
 ```
 
-The `element_size` field at +24 is normally the per-element byte stride (1, 2, 4,
-or 8). A **negative** value marks a *sub-byte-packed* element: the magnitude is the
-element's bit width. `Array with bool` stores `element_size = -1` (1 bit per element,
-8 per byte); a non-negative ranged-int typealias packs the same way — `int(0 to 3)`
-is `-2` (4 per byte) and a nibble `int(0 to 15)` is `-4` (2 per byte). Buffer sizing,
-get/set, and the shift/copy paths all route through shared packed-aware helpers
+The `element_size` field at +24 is a 64-bit stamp. Its low 32 bits are the
+per-element stride, normally a byte stride (1, 2, 4, or 8). A **negative** stride marks
+a *sub-byte-packed* element: the magnitude is the element's bit width. `Array with bool`
+stores `element_size = -1` (1 bit per element, 8 per byte); a non-negative ranged-int
+typealias packs the same way — `int(0 to 3)` is `-2` (4 per byte) and a nibble
+`int(0 to 15)` is `-4` (2 per byte). Buffer sizing, get/set, and the shift/copy paths
+all route through shared packed-aware helpers
 (`__managed_mem_is_packed` / `__managed_mem_buffer_byte_len` /
 `__managed_mem_read_packed` / `__managed_mem_write_packed`), so one code path serves
 every width — the widths are restricted to those dividing 8 (1/2/4) so a field never
 straddles a byte boundary. `element_size == 0` is reserved for an unset / non-container
 record. See [bool-bit-packing](../specs/bool-bit-packing.md) and
 [ranged-int-bit-packing](../specs/ranged-int-bit-packing.md).
+
+Bit 32 of the stamp is set for an element stored in a signed 1-, 2- or 4-byte slot (an
+enum with a negative raw value). Code compiled once for every element type, such as the
+body of a generic type, learns that the slot is signed from this bit, so it sign-extends
+what it reads from a record whose stamp carries it. `arr.managed.elementSize()` returns the
+stride alone. An array created inside a shared generic body is stamped with the stride
+of the concrete element its instantiation binds, which the body reads from the
+instantiation's layout descriptor, so it is the same size as the same array created in
+a concrete body. An element access compares the whole stamp against each stride it
+serves — a machine word, 1, 2 and 4 bytes, 1, 2 and 4 packed bits, and the three signed
+slots — and a stamp none of them names ends the program with
+`fatal error: an array record carries an element size no element access serves`.
 
 The `element_destroy` field at +40 holds a per-element teardown function pointer
 (or `0` for raw/unmanaged elements). When a buffer is a destructor ROOT, the

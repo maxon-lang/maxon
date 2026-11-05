@@ -1930,42 +1930,25 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr
   each:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
-    x64.jmp __il_body#14
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rax, rax, r13
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_body#14
-  __im_slow:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-  __il_body#14:
+  __il_body#10:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#19
-  matcharm#15:
+    x64.jcc notEqual, matchnext#15
+  matcharm#11:
     x64.movRegReg rcx, rbx
     x64.callDirect keepCells
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, -4
-    x64.jcc equal, adoptclone#25
-  critsplit#26:
+    x64.jcc equal, adoptclone#21
+  critsplit#22:
     x64.movRegReg r8, rbx
     x64.jmp forstep
-  matchnext#19:
+  matchnext#15:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#20
-  matcharm#16:
+    x64.jcc notEqual, matchnext#16
+  matcharm#12:
     x64.callDirect freshCells
     x64.movRegReg r14, r8
   matchcont:
@@ -1973,16 +1956,16 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, r14
     x64.jmp forstep
-  matchnext#20:
+  matchnext#16:
     x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, matchdead
-  matcharm#17:
+  matcharm#13:
     x64.movRegReg rcx, rbx
     x64.callDirect keepCells
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, -4
-    x64.jcc equal, adoptclone#23
-  critsplit#27:
+    x64.jcc equal, adoptclone#19
+  critsplit#23:
     x64.movRegReg r8, rbx
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
@@ -2037,7 +2020,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
-  __il_body#12:
+  __il_body#8:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __write_stdout
   __il_cont:
@@ -2055,11 +2038,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  adoptclone#25:
+  adoptclone#21:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_clone
     x64.jmp forstep
-  adoptclone#23:
+  adoptclone#19:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_clone
     x64.jmp forstep
@@ -2192,42 +2175,25 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr
   each:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
-    x64.jmp __il_body#14
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rax, rax, r13
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_body#14
-  __im_slow:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-  __il_body#14:
+  __il_body#10:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext#19
-  matcharm#15:
+    x64.jcc notEqual, matchnext#15
+  matcharm#11:
     x64.movRegReg rcx, rbx
     x64.callDirect keepCells
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, -4
-    x64.jcc equal, adoptclone#25
-  critsplit#26:
+    x64.jcc equal, adoptclone#21
+  critsplit#22:
     x64.movRegReg r8, rbx
     x64.jmp forstep
-  matchnext#19:
+  matchnext#15:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#20
-  matcharm#16:
+    x64.jcc notEqual, matchnext#16
+  matcharm#12:
     x64.callDirect freshCells
     x64.movRegReg r14, r8
   matchcont:
@@ -2235,16 +2201,16 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, r14
     x64.jmp forstep
-  matchnext#20:
+  matchnext#16:
     x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, matchdead
-  matcharm#17:
+  matcharm#13:
     x64.movRegReg rcx, rbx
     x64.callDirect keepCells
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, -4
-    x64.jcc equal, adoptclone#23
-  critsplit#27:
+    x64.jcc equal, adoptclone#19
+  critsplit#23:
     x64.movRegReg r8, rbx
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
@@ -2299,7 +2265,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
-  __il_body#12:
+  __il_body#8:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __write_stdout
   __il_cont:
@@ -2317,11 +2283,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  adoptclone#25:
+  adoptclone#21:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_clone
     x64.jmp forstep
-  adoptclone#23:
+  adoptclone#19:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_clone
     x64.jmp forstep
@@ -2445,41 +2411,25 @@ func @main {
     arm64.movImm x21, 0
     arm64.b forhdr
   each:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x21*8 + 0]
-    arm64.b __il_body#14
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.add x0, x0, x21
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __il_body#14
-  __im_slow:
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_get_unchecked
-  __il_body#14:
+  __il_body#10:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#19
-  matcharm#15:
+    arm64.b.ne matchnext#15
+  matcharm#11:
     arm64.movRegReg x0, x19
     arm64.bl keepCells
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, -4
-    arm64.b.eq adoptclone#25
-  critsplit#26:
+    arm64.b.eq adoptclone#21
+  critsplit#22:
     arm64.movRegReg x0, x19
     arm64.b forstep
-  matchnext#19:
+  matchnext#15:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#20
-  matcharm#16:
+    arm64.b.ne matchnext#16
+  matcharm#12:
     arm64.bl freshCells
     arm64.movRegReg x22, x0
   matchcont:
@@ -2487,16 +2437,16 @@ func @main {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.b forstep
-  matchnext#20:
+  matchnext#16:
     arm64.cmp x0, 2
     arm64.b.ne matchdead
-  matcharm#17:
+  matcharm#13:
     arm64.movRegReg x0, x19
     arm64.bl keepCells
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, -4
-    arm64.b.eq adoptclone#23
-  critsplit#27:
+    arm64.b.eq adoptclone#19
+  critsplit#23:
     arm64.movRegReg x0, x19
   forstep:
     arm64.add x21, x21, 1
@@ -2546,7 +2496,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-  __il_body#12:
+  __il_body#8:
     arm64.movRegReg x0, x25
     arm64.bl __write_stdout
   __il_cont:
@@ -2566,11 +2516,11 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
-  adoptclone#25:
+  adoptclone#21:
     arm64.movRegReg x0, x19
     arm64.bl __managed_clone
     arm64.b forstep
-  adoptclone#23:
+  adoptclone#19:
     arm64.movRegReg x0, x19
     arm64.bl __managed_clone
     arm64.b forstep
@@ -2697,41 +2647,25 @@ func @main {
     arm64.movImm x21, 0
     arm64.b forhdr
   each:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x21*8 + 0]
-    arm64.b __il_body#14
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.add x0, x0, x21
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __il_body#14
-  __im_slow:
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_get_unchecked
-  __il_body#14:
+  __il_body#10:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#19
-  matcharm#15:
+    arm64.b.ne matchnext#15
+  matcharm#11:
     arm64.movRegReg x0, x19
     arm64.bl keepCells
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, -4
-    arm64.b.eq adoptclone#25
-  critsplit#26:
+    arm64.b.eq adoptclone#21
+  critsplit#22:
     arm64.movRegReg x0, x19
     arm64.b forstep
-  matchnext#19:
+  matchnext#15:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#20
-  matcharm#16:
+    arm64.b.ne matchnext#16
+  matcharm#12:
     arm64.bl freshCells
     arm64.movRegReg x22, x0
   matchcont:
@@ -2739,16 +2673,16 @@ func @main {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.b forstep
-  matchnext#20:
+  matchnext#16:
     arm64.cmp x0, 2
     arm64.b.ne matchdead
-  matcharm#17:
+  matcharm#13:
     arm64.movRegReg x0, x19
     arm64.bl keepCells
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, -4
-    arm64.b.eq adoptclone#23
-  critsplit#27:
+    arm64.b.eq adoptclone#19
+  critsplit#23:
     arm64.movRegReg x0, x19
   forstep:
     arm64.add x21, x21, 1
@@ -2798,7 +2732,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-  __il_body#12:
+  __il_body#8:
     arm64.movRegReg x0, x25
     arm64.bl __write_stdout
   __il_cont:
@@ -2818,11 +2752,11 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
-  adoptclone#25:
+  adoptclone#21:
     arm64.movRegReg x0, x19
     arm64.bl __managed_clone
     arm64.b forstep
-  adoptclone#23:
+  adoptclone#19:
     arm64.movRegReg x0, x19
     arm64.bl __managed_clone
     arm64.b forstep

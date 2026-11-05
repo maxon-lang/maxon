@@ -619,7 +619,7 @@ is not a weak result, it is the wrong corpus for it**: nbody and fannkuch's `__m
 
 **WHERE THE FACT COMES FROM, AND WHY IT IS NOT ON THE OP.** `StdOp.call` carries `callee` and `args` and
 NO type — the Std tier is deliberately type-free — so the tier that still HAS the container's type is
-`LowerMaxonToStd`, which writes the stamp against the **Std op index** of the call it is appending
+`LowerMaxonToStd`, which writes the stride against the **Std op index** of the call it is appending
 (`Project.stdOpElementStrides`). A `(blockId, stdOpPos)` table like the range-check sites' could not survive:
 `insertRangeChecks` and `inlineLeaves` both split blocks. The op index does, and for a stated reason —
 `IrModule.ops` allocates indices by `push`, and `inlineLeaves`, which clones a leaf's cold calls with its
@@ -630,39 +630,27 @@ body, runs after `inlineManagedPrimitives` has read the table.
 that two-part test) and not about a roster of primitive names, so it cannot drift from
 `InlineManagedPrimitives`' own dispatch. An entry recorded for a call the pass never expands is never read.
 
-⛔⛔ **THE STATIC STAMP IS NOT ALWAYS THE RECORD'S, AND THE FIRST CUT WAS A WRONG ANSWER.** MEASURED: a
-`Bag with Byte` whose `Array with Element` field is read from OUTSIDE the shared body printed
-`stamp=8 v=0` where 7 is correct. `Parser.emitOpaqueArrayCreateOp` stamps `LAYOUT_TYPE_PARAM_SLOT_BYTES`
-— one machine word, because the ONE compiled body moves elements as words whatever the instantiation —
-while `Parser.slotTypeThroughReceiver` hands the same record back typed `Array with Byte`, stride 1.
-What is provable is `actual ∈ {static stamp, MachineWordBytes}`, and that leaves exactly three answers:
-**word** is safe (both possibilities are the word); **byte** is NOT (1 and 8 are two different arms, so
-the fork is exactly the question that has to be asked); **anything else** keeps the CALL, which reads the
-real stamp and is right for both. The sabotage is recorded: restore the byte arm and
-`static-stride-specialization/a-substituted-container-field-is-word-strided-however-it-is-typed` goes red
-with exit 3 while the whole rest of the suite stays green.
-
-⚠ **THE BYTE ARM IS THEREFORE LEFT ON THE TABLE.** A byte-stamped site could keep BOTH single-op arms and
-route `emitStrideDispatch`'s third edge to the WORD arm rather than to the call — sound by the same
-reading, and enough to make a `for v in b` over a `ByteArray` call-free the way the word case now is. It
-is a third emission shape and this row did not take it. The corpus above cannot see the loss (it holds no
-byte arrays in a hot path); `Map.findSlot`'s `__managed_get` can, and EC3 measured that at 2% of a
-stage-2 self-compile.
+⛔⛔ **THE STATIC STRIDE IS THE RECORD'S STRIDE.** A container declared over a type parameter is created in a
+shared generic body at the stride its instantiation's layout descriptor names (`elementStride@72`, which the
+body's create reads at run time), and `Parser.slotTypeThroughReceiver` hands the same record back typed
+`Array with Byte`, stride 1, with a record that stamps 1. So a known word, byte, 16-bit, 32-bit or packed
+stride selects its own arm with no fork, and a stride no arm names keeps the CALL. Only a site with no
+recorded stride keeps the fork.
+`static-stride-specialization/a-substituted-container-field-is-byte-strided-as-it-is-typed` pins the
+equality of the two.
 
 ⭐ **WHAT WAS REUSED RATHER THAN ADDED**: `isArrayInstanceAt` (the tag+id gate, unchanged),
-`containerElementIsOpaque` (the W57 refusal), `arrayElementSize` (the stamp's sole producer),
+`containerElementIsOpaque` (the W57 refusal), `arrayElementSize` (the stride's sole producer),
 `Project`'s three existing `OpIndex`-keyed side tables as the precedent, and `SingleOpStride` —
-`emitStrideDispatch`'s two constants now come out of `singleOpStrideBytes` too, so the two stamps are
-written ONCE and the compile-time answer cannot disagree with the runtime compares it replaces.
+`emitStrideChain`'s compares and `strideDispatchPlanForStamp` both read their stamps from
+`singleOpStrideStamp`, so the two are written ONCE and the compile-time answer cannot disagree with the
+runtime compares it replaces.
 
 Two same-named non-`export` file-level `let`s in files of different directories each resolve to their own declaration, so
 this pass's labels and `InlineLeaves`' cannot collide;
 `top-level-let/file-private-same-name-three-directories-every-kind` pins it.
 
-**Left open**: the byte arm above; block REORDERING, whose clearest exhibit this loop was and no longer is;
-and the type/layout incoherence itself — a container declared over a type parameter genuinely has a
-different layout from its substituted type's, and every compile-time reader of `arrayElementSize` on such
-a value shares the hazard this row's byte arm ran into.
+**Left open**: block REORDERING.
 
 #### `EC16` · Scaled-index addressing
 
@@ -1653,7 +1641,7 @@ spot). Sabotage at landing (`__managed_push` declared header-pure): the push con
 a freed buffer and exited 1, the two-loop control answered wrong, and the compiler that sabotaged compiler
 built MISCOMPILED ITSELF — the class of defect the table refuses. An inlined `push` refuses its loop through
 its own `length@8` store whatever the table says, so the table's `push` entry is pinned by the emitted code
-of `ir-specs/loop-unswitching.md`'s `a-loop-pushing-an-unexpanded-element-stays-unversioned`. Timed A/B
+of `ir-specs/loop-unswitching.md`'s `a-loop-pushing-onto-a-record-it-just-created-stays-unversioned`. Timed A/B
 (control from the round-3 commit, interleaved, n=11): **4,440 → 3,860 ms**; n=12 **60,716 → 53,436 ms (ratio to C 2.93 → 2.58)**; census ops
 1712 → 2244 (two versions of every versioned loop) and `mgd-call` 54 → 76 (the slow versions). fannkuch:
 7 loops versioned, `flipCount`'s reverse loop is now `cmp/jcc + load` per get and `cmp/jcc + store` per

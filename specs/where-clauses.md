@@ -4041,6 +4041,106 @@ end 'main'
 error E2015: <fragment>:16:23: Unsupported: `async Holder.width(…)` reads the enclosing instance's layout descriptor, which a spawn cannot hand it — the green thread's argument region carries the written arguments only. Call it directly, or spawn a function that carries none
 ```
 
+<!-- test: where-clauses.a-spawned-function-looks-up-a-signed-enum-key-in-a-shared-map-body -->
+<!-- unsupported-targets: wasm32-wasi -->
+A function spawned onto a green thread runs the shared `Map` body over an opaque key. A key from a signed narrow enum is
+stored at its one-byte stride and read back sign-extended inside that body, so the lookup `map.get(Signal.minus)` finds
+the key the spawned function inserted, exactly as the same lookup over a word key does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Signal
+	minus = -1
+	zero = 0
+	plus = 1
+end 'Signal'
+
+typealias WordMap = Map with (Integer, Count)
+typealias SignalMap = Map with (Signal, Count)
+
+function wordLookup(n Count) returns Count
+	sleep(1)
+	var map = WordMap.create()
+	map.upsert(7, value: 3)
+	map.upsert(9, value: 4)
+	let found = try map.get(9) otherwise return 0
+
+	return n + found
+end 'wordLookup'
+
+function signalLookup(n Count) returns Count
+	sleep(1)
+	var map = SignalMap.create()
+	map.upsert(Signal.minus, value: 3)
+	map.upsert(Signal.plus, value: 4)
+	let found = try map.get(Signal.minus) otherwise return 0
+
+	return n + found
+end 'signalLookup'
+
+function main() returns ExitCode
+	let wordPromise = async wordLookup(10)
+	let signalPromise = async signalLookup(20)
+	print("{await wordPromise} {await signalPromise}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+14 23
+```
+
+<!-- test: where-clauses.error.a-spawned-method-reading-an-opaque-arrays-elements-has-no-receiver -->
+<!-- unsupported-targets: wasm32-wasi -->
+A method of a generic type that reads an element of an `Array with T` takes the instance as its receiver, and a spawn
+carries no receiver: the refusal is the one every method spawn gets, and reading an opaque element makes no method
+spawnable that was not.
+```maxon
+enum Signal
+	minus = -1
+	zero = 0
+	plus = 1
+end 'Signal'
+
+type Holder uses T
+	typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function add(value T)
+		items.push(value)
+	end 'add'
+
+	function head() returns Count
+		sleep(1)
+		let first = try items.get(0) otherwise panic("Holder.head: empty")
+		var copy = Items.create()
+		copy.push(first)
+
+		return copy.count()
+	end 'head'
+end 'Holder'
+
+typealias SignalHolder = Holder with Signal
+
+function main() returns ExitCode
+	var holder = SignalHolder.create()
+	holder.add(Signal.minus)
+
+	let promise = async holder.head()
+	print("{await promise}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:36:22: Unsupported: `async holder.…` spawns a method on a VALUE, and a spawn has no receiver: it starts a linked function by address on the argument words it is handed, and nothing carries a receiver or its ownership across the green-thread boundary. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument
+```
+
 <!-- test: where-clauses.a-static-with-conditional-witnesses-called-in-a-closure-passed-to-map -->
 ```maxon
 type Holder uses T where T is Hashable and Equatable

@@ -210,14 +210,10 @@ The stride-1 arm, which has no multiply to absorb: `index * 1` is folded to `ind
 stays a `loadRegBaseDisp.byte`. A fold that rewrote this would be changing code that was already one
 instruction shorter than the scaled form.
 
-⚠ The emitted code (`--emit-ir`) shows BOTH arms, and that is the point of reading it here rather than in the integer
-case: `emitStrideDispatch` emits the word arm (one `loadRegBaseIndexScale`) and the byte arm
-(`leaRegRegReg` + `loadRegBaseDisp.byte`) side by side even for a ByteArray. ⚠ **Static stride
-specialization deliberately does NOT remove the arm this program never takes** — a byte-stamped container's record is stride 1
-or the machine word (a shared generic body creates its `Array with Element` at the word slot and hands
-it back under a substituted concrete type), so the fork is exactly the question that distinguishes them.
+The emitted code (`--emit-ir`) shows the byte arm alone: a byte-stamped container's record is stride 1 wherever it
+was created (a shared generic body stamps the instantiation's element stride too), so static stride specialization
+emits the byte arm (`leaRegRegReg` + `loadRegBaseDisp.byte`) with no fork and no word arm.
 `specs/static-stride-specialization.md` carries the case that fails without it.
-The INTEGER cases above are where it does fire, and their emitted code shows no fork at all.
 ```maxon
 typealias Total = int(0 to u64.max)
 

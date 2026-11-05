@@ -25,6 +25,8 @@ typealias DebugElementTally = int(0 to u32.max)
 typealias DebugRealValue = float(f64.min to f64.max)
 
 let MaxCountableElements = 4294967295
+let StrideWordBytes = (ElementStampStrideBits / BitsPerByte) as DebugWidth
+let MaxStrideBytes = MachineWordBytes as DebuggeeWord
 let UnionFoldedWords = 2
 
 let SingleMantissaBits = 23 as DebugBitShift
@@ -301,7 +303,7 @@ function renderSequence(tree DebugValueTree, memory DebugMemory, symbols DebugSy
 
 	let buffer = try pointerAt(memory, address: managed + ManagedBufferOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
 	let length = try countAt(memory, address: managed + ManagedLengthOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
-	let stride = try countAt(memory, address: managed + ManagedElementSizeOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let stride = try strideAt(memory, address: managed + ManagedElementSizeOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
 
 	if not record.describesAnElement() or stride == 0 'noElementLayout'
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
@@ -534,6 +536,16 @@ end 'addressOf'
 function pointerAt(memory DebugMemory, address DebugAddress) returns DebugAddress throws DebugMemoryError
 	return try addressOf(try readRaw(memory, source: DebugValueSource.address(address), width: DebuggeeWordBytes))
 end 'pointerAt'
+
+function strideAt(memory DebugMemory, address DebugAddress) returns DebugElementTally throws DebugMemoryError
+	let word = try readRaw(memory, source: DebugValueSource.address(address), width: StrideWordBytes)
+
+	if word > MaxStrideBytes 'notAByteStride'
+		throw DebugMemoryError.notReadable
+	end 'notAByteStride'
+
+	return word as DebugElementTally
+end 'strideAt'
 
 function countAt(memory DebugMemory, address DebugAddress) returns DebugElementTally throws DebugMemoryError
 	let word = try readRaw(memory, source: DebugValueSource.address(address), width: DebuggeeWordBytes)
