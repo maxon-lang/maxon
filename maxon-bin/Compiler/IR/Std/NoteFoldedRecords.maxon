@@ -47,7 +47,8 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 	namedOfValue.refill(valueBound, value: 0 as ValueId)
 
 	for (iter, local) in func.debugLocals.withIterator() 'eachBinding'
-		for named in local.valueIds 'eachValue'
+		for version in local.versions 'eachValue'
+			let named = version.value
 			let carrier = resolveThroughPhis(carried, value: named, argBound: argBound)
 			ownerOfValue.set(carrier, value: iter.index() as FoldedOwnerSlot)
 			try namedOfValue.set(carrier, value: named) otherwise panic("noteFoldedRecords: namedOfValue.set OOB at value {carrier} of the {namedOfValue.count()} this function defines")
@@ -87,8 +88,8 @@ function highestNamedValue(func IrFunction) returns ValueId
 	var highest = 0 as ValueId
 
 	for local in func.debugLocals 'eachBinding'
-		for named in local.valueIds 'eachValue'
-			highest = named if named > highest else highest
+		for version in local.versions 'eachValue'
+			highest = version.value if version.value > highest else highest
 		end 'eachValue'
 	end 'eachBinding'
 

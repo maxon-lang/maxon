@@ -1,0 +1,32 @@
+let DeadPhiCaseLabel = "sidecar-a-slot-local-whose-merge-phi-was-pruned-is-not-shown-stale-after-the-join"
+
+let DeadPhiLocalName = "limit"
+let DeadPhiStaleValue = "5"
+let DeadPhiSlotMark = "[rbp-"
+
+test 'a var held in a stack slot whose merge phi was pruned is not read as its older value after the join'
+	let staged = builtFixture(DeadPhiCaseLabel, fixture: DeadPhiFixtureName)
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotRows = 0 as Count
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		slotRows = slotRows + 1 if firstToken(row) == DeadPhiLocalName and row.contains(DeadPhiSlotMark) else slotRows
+	end 'eachLocal'
+
+	Expect.notEqual(slotRows, expected: 0, message: "`{DeadPhiLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let tailAt = anchorLine(staged.join(StagedProgramFileName), anchor: "tail")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(tailAt)}", RunCommand, "{PrintCommand} {DeadPhiLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {DeadPhiLocalName}` printed no `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	Expect.notEqual(textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey), expected: DeadPhiStaleValue, message: "an arm assigns `{DeadPhiLocalName}` and nothing reads it after the join, so the join's phi and the arm's store were deleted and no value carries the new version. The older version's slot still holds {DeadPhiStaleValue}, and a row of it that covers the stop answers with that: a previous value wearing the current name. {said}")
+end 'a var held in a stack slot whose merge phi was pruned is not read as its older value after the join'

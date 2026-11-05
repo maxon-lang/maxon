@@ -173,6 +173,9 @@ end 'inlineSiteOfKey'
 export typealias DebugSiteKey = int(0 to u32.max)
 export typealias DebugSiteKeyColumn = Array with DebugSiteKey
 export typealias DebugNameGroup = int(0 to u32.max) implements ElementIndex
+
+let NoDebugVersionBlock = 0 as BlockId
+
 export typealias DebugNameGroupColumn = Array with DebugNameGroup
 typealias DebugNameGroupByKey = Map with String, DebugNameGroup
 
@@ -216,6 +219,8 @@ export type DebugValueRoster
 	export var siteKeys as DebugSiteKeyColumn
 	export var parentKeys as DebugSiteKeyColumn
 	export var groups as DebugNameGroupColumn
+	export var versionKinds as DebugVersionKindArray
+	export var versionBlocks as BlockIdArray
 
 	export static function of(func IrFunction) returns DebugValueRoster
 		let tally = debugValueTallyOf(func)
@@ -227,10 +232,14 @@ export type DebugValueRoster
 		var valueIds = ValueIdArray.create()
 		var siteKeys = DebugSiteKeyColumn.create()
 		var groups = DebugNameGroupColumn.create()
+		var versionKinds = DebugVersionKindArray.create()
+		var versionBlocks = BlockIdArray.create()
 		var groupByNameAndSite = DebugNameGroupByKey.create()
 		valueIds.reserve(tally)
 		siteKeys.reserve(tally)
 		groups.reserve(tally)
+		versionKinds.reserve(tally)
+		versionBlocks.reserve(tally)
 
 		for local in func.debugLocals 'eachBinding'
 			let key = debugSiteKeyOf(local.inlineSite)
@@ -243,14 +252,16 @@ export type DebugValueRoster
 				groupByNameAndSite.upsert(groupKey, value: group)
 			end 'freshGroup'
 
-			for v in local.valueIds 'eachValue'
-				valueIds.push(v)
+			for version in local.versions 'eachValue'
+				valueIds.push(version.value)
 				siteKeys.push(key)
 				groups.push(group)
+				versionKinds.push(debugVersionKindOf(version.def))
+				versionBlocks.push(debugVersionBlockOf(version.def))
 			end 'eachValue'
 		end 'eachBinding'
 
-		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: siteParentKeysOf(func), groups: groups}
+		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: siteParentKeysOf(func), groups: groups, versionKinds: versionKinds, versionBlocks: versionBlocks}
 	end 'of'
 
 	export function siteKeyCount() returns ElementIndex
@@ -258,7 +269,7 @@ export type DebugValueRoster
 	end 'siteKeyCount'
 
 	export static function empty() returns DebugValueRoster
-		return Self{valueIds: ValueIdArray.create(), siteKeys: DebugSiteKeyColumn.create(), parentKeys: DebugSiteKeyColumn.create(), groups: DebugNameGroupColumn.create()}
+		return Self{valueIds: ValueIdArray.create(), siteKeys: DebugSiteKeyColumn.create(), parentKeys: DebugSiteKeyColumn.create(), groups: DebugNameGroupColumn.create(), versionKinds: DebugVersionKindArray.create(), versionBlocks: BlockIdArray.create()}
 	end 'empty'
 end 'DebugValueRoster'
 
@@ -277,6 +288,30 @@ export type BackendUnit
 	end 'extract'
 end 'BackendUnit'
 
+export enum DebugVersionKind
+	merged
+	definedSomewhere
+	definedIn
+end 'DebugVersionKind'
+
+export typealias DebugVersionKindArray = Array with DebugVersionKind
+
+function debugVersionKindOf(def DebugVersionDef) returns DebugVersionKind
+	return match def 'def'
+		merged gives DebugVersionKind.merged
+		definedSomewhere gives DebugVersionKind.definedSomewhere
+		definedIn gives DebugVersionKind.definedIn
+	end 'def'
+end 'debugVersionKindOf'
+
+function debugVersionBlockOf(def DebugVersionDef) returns BlockId
+	return match def 'def'
+		merged or
+		definedSomewhere gives NoDebugVersionBlock
+		definedIn(block) gives block
+	end 'def'
+end 'debugVersionBlockOf'
+
 // How many values `DebugValueRoster.of` flattens. Its own walk because the splice asks it of every
 // function of every build, and building the roster to measure it would allocate per function for a
 // number.
@@ -284,7 +319,7 @@ function debugValueTallyOf(func IrFunction) returns ElementIndex
 	var tally = 0 as ElementIndex
 
 	for local in func.debugLocals 'eachBinding'
-		tally = tally + local.valueIds.count()
+		tally = tally + local.versions.count()
 	end 'eachBinding'
 
 	return tally

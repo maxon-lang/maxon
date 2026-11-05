@@ -696,6 +696,46 @@ end 'cacheReadExistentialFieldStoreArray'
 //
 // ⇒ `Parser.publishExistentialInstances` unwraps the state and hands over the map, or hands over nothing.
 
+export union DebugVersionDef
+	merged
+	definedSomewhere
+	definedIn(let block BlockId)
+end 'DebugVersionDef'
+
+// @generated library-cache begin
+function cacheWriteDebugVersionDef(writer LibraryCacheWriter, value DebugVersionDef)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		merged then break
+		definedSomewhere then break
+		definedIn(a0) then cacheWriteDebugVersionDefDefinedIn(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteDebugVersionDef'
+
+function cacheWriteDebugVersionDefDefinedIn(writer LibraryCacheWriter, a0 BlockId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteDebugVersionDefDefinedIn'
+
+function cacheReadDebugVersionDef(reader LibraryCacheReader) returns DebugVersionDef throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DebugVersionDef.merged
+		1 gives DebugVersionDef.definedSomewhere
+		2 gives try cacheReadDebugVersionDefDefinedIn(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDebugVersionDef'
+
+function cacheReadDebugVersionDefDefinedIn(reader LibraryCacheReader) returns DebugVersionDef throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as BlockId
+
+	return DebugVersionDef.definedIn(a0)
+end 'cacheReadDebugVersionDefDefinedIn'
+
+// @generated library-cache end
+
 export union DebugFoldedConstant
 	none
 	immediate(value FullRangeInt)
@@ -742,10 +782,72 @@ end 'cacheReadDebugFoldedConstantImmediate'
 //
 // The TYPE is captured with the name because the Std tier erases it: every store below the Maxon boundary
 // carries a width and no source type at all.
+export type DebugLocalVersion
+	export let value as ValueId
+	export let def as DebugVersionDef
+
+	export static function create(value ValueId, def DebugVersionDef) returns DebugLocalVersion
+		return Self{value: value, def: def}
+	end 'create'
+
+	export function splicedDef() returns DebugVersionDef
+		return match self.def 'def'
+			merged gives DebugVersionDef.merged
+			definedSomewhere or
+			definedIn gives DebugVersionDef.definedSomewhere
+		end 'def'
+	end 'splicedDef'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.value as CacheUnsigned)
+		cacheWriteDebugVersionDef(writer, value: self.def)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns DebugLocalVersion throws LibraryCacheDamage
+		let f_value = (try reader.unsigned()) as ValueId
+		let f_def = try cacheReadDebugVersionDef(reader)
+
+		return Self{value: f_value, def: f_def}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(DebugLocalVersion) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'DebugLocalVersion'
+
+export typealias DebugLocalVersionArray = Array with DebugLocalVersion
+
+// @generated library-cache begin
+function cacheWriteDebugLocalVersionArray(writer LibraryCacheWriter, value DebugLocalVersionArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDebugLocalVersionArray'
+
+function cacheReadDebugLocalVersionArray(reader LibraryCacheReader) returns DebugLocalVersionArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DebugLocalVersionArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try DebugLocalVersion.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDebugLocalVersionArray'
+
+// @generated library-cache end
+
 export type DebugLocalDecl
 	export let name as ByteArray
 	export var declaredType as MaxonType
-	export var valueIds as ValueIdArray
+	export var versions as DebugLocalVersionArray
 
 	// The name denotes a cell address, not the value — a `var` another frame may write, or a
 	// by-reference parameter. Its values locate the cell, so a register or a slot stated for one of
@@ -759,25 +861,25 @@ export type DebugLocalDecl
 
 	export var inlineSite = InlineSiteRef.none
 
-	export static function create(name ByteArray, declaredType MaxonType, firstValue ValueId, heldInACell bool) returns DebugLocalDecl
-		var valueIds = ValueIdArray.create()
-		valueIds.push(firstValue)
+	export static function create(name ByteArray, declaredType MaxonType, firstValue ValueId, firstDef DebugVersionDef, heldInACell bool) returns DebugLocalDecl
+		var versions = DebugLocalVersionArray.create()
+		versions.push(DebugLocalVersion.create(firstValue, def: firstDef))
 
-		return Self{name: name, declaredType: declaredType.clone(), valueIds: valueIds, heldInACell: heldInACell}
+		return Self{name: name, declaredType: declaredType.clone(), versions: versions, heldInACell: heldInACell}
 	end 'create'
 
 	export function splicedCopy(subst ValueIdArray, site InlineSiteRef) returns DebugLocalDecl
-		var splicedValues = ValueIdArray.create()
+		var splicedVersions = DebugLocalVersionArray.create()
 
-		for value in self.valueIds 'eachValue'
-			if value >= subst.count() as ValueId 'definedByNoOp'
+		for version in self.versions 'eachVersion'
+			if version.value >= subst.count() as ValueId 'definedByNoOp'
 				continue
 			end 'definedByNoOp'
 
-			splicedValues.push(try subst.get(value) otherwise panic("DebugLocalDecl.splicedCopy: value {value} of '{String.from(self.name)}' is past the {subst.count()} the splice's value column covers"))
-		end 'eachValue'
+			splicedVersions.push(DebugLocalVersion.create(try subst.get(version.value) otherwise panic("DebugLocalDecl.splicedCopy: value {version.value} of '{String.from(self.name)}' is past the {subst.count()} the splice's value column covers"), def: version.splicedDef()))
+		end 'eachVersion'
 
-		return Self{name: self.name, declaredType: self.declaredType, valueIds: splicedValues, heldInACell: self.heldInACell, foldedConstant: self.foldedConstant, foldedRecord: self.foldedRecord, inlineSite: site}
+		return Self{name: self.name, declaredType: self.declaredType, versions: splicedVersions, heldInACell: self.heldInACell, foldedConstant: self.foldedConstant, foldedRecord: self.foldedRecord, inlineSite: site}
 	end 'splicedCopy'
 
 	export function noteFoldedConstant(value ValueId, constant FullRangeInt)
@@ -802,11 +904,11 @@ export type DebugLocalDecl
 	end 'noteFoldedRecord'
 
 	function namesValue(value ValueId) returns bool
-		for named in self.valueIds 'eachValue'
-			if named == value 'thisOne'
+		for version in self.versions 'eachVersion'
+			if version.value == value 'thisOne'
 				return true
 			end 'thisOne'
-		end 'eachValue'
+		end 'eachVersion'
 
 		return false
 	end 'namesValue'
@@ -819,7 +921,7 @@ export type DebugLocalDecl
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
 		cacheWriteMaxonType(writer, value: self.declaredType)
-		cacheWriteValueIdArray(writer, value: self.valueIds)
+		cacheWriteDebugLocalVersionArray(writer, value: self.versions)
 		writer.flag(self.heldInACell)
 		cacheWriteDebugFoldedConstant(writer, value: self.foldedConstant)
 		cacheWriteFullRangeIntArray(writer, value: self.foldedRecord)
@@ -829,13 +931,13 @@ export type DebugLocalDecl
 	static function cacheRead(reader LibraryCacheReader) returns DebugLocalDecl throws LibraryCacheDamage
 		let f_name = try reader.bytes()
 		let f_declaredType = try cacheReadMaxonType(reader)
-		let f_valueIds = try cacheReadValueIdArray(reader)
+		let f_versions = try cacheReadDebugLocalVersionArray(reader)
 		let f_heldInACell = try reader.flag()
 		let f_foldedConstant = try cacheReadDebugFoldedConstant(reader)
 		let f_foldedRecord = try cacheReadFullRangeIntArray(reader)
 		let f_inlineSite = try cacheReadInlineSiteRef(reader)
 
-		return Self{name: f_name, declaredType: f_declaredType, valueIds: f_valueIds, heldInACell: f_heldInACell, foldedConstant: f_foldedConstant, foldedRecord: f_foldedRecord, inlineSite: f_inlineSite}
+		return Self{name: f_name, declaredType: f_declaredType, versions: f_versions, heldInACell: f_heldInACell, foldedConstant: f_foldedConstant, foldedRecord: f_foldedRecord, inlineSite: f_inlineSite}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize56

@@ -41113,7 +41113,7 @@ export type Parser
 	// a location the value is not at where the debugger stops — a confident wrong answer with nothing to
 	// notice it by.
 	function requireDebugRecordIsCurrent(record DebugLocalDecl, current ValueId)
-		let last = try record.valueIds.get(record.valueIds.count() - 1) otherwise panic("requireDebugRecordIsCurrent: '{String.from(record.name)}' has an empty value list, where every record is created holding the value its declaration produced")
+		let last = (try record.versions.get(record.versions.count() - 1) otherwise panic("requireDebugRecordIsCurrent: '{String.from(record.name)}' has an empty value list, where every record is created holding the value its declaration produced")).value
 
 		if last != current 'aWriteBypassedTheDoor'
 			panic("debug info: '{String.from(record.name)}' holds value {current} where the last one recorded for it is {last} — a site assigned `boundValue` without calling `recordDebugRebind` first, so this name's record is missing the value it holds")
@@ -41135,7 +41135,7 @@ export type Parser
 
 		binding.debugLocalRecorded = true
 		binding.debugLocalSlot = self.bodyState.debugLocals.count() as DebugLocalSlot
-		self.bodyState.debugLocals.push(DebugLocalDecl.create(binding.name, declaredType: binding.varType, firstValue: binding.boundValue, heldInACell: binding.isCellBinding))
+		self.bodyState.debugLocals.push(DebugLocalDecl.create(binding.name, declaredType: binding.varType, firstValue: binding.boundValue, firstDef: DebugVersionDef.definedIn(self.bodyState.currentBlock.id), heldInACell: binding.isCellBinding))
 		self.bodyState.debugBindings.push(binding)
 	end 'trackDebugLocal'
 
@@ -41152,14 +41152,14 @@ export type Parser
 	// would make this a function that WRITES through a parameter as far as the whole-program summary is
 	// concerned, and a phi site cannot hand `pv.binding` to such a function at all (E3159) — every one of
 	// them holds its `LoopPhiVar` through a list it does not own.
-	function recordDebugRebind(slot DebugLocalSlot, recorded bool, current ValueId, value ValueId)
+	function recordDebugRebind(slot DebugLocalSlot, recorded bool, current ValueId, value ValueId, def DebugVersionDef)
 		if not recorded 'notRecorded'
 			return
 		end 'notRecorded'
 
 		var record = try self.bodyState.debugLocals.get(slot) otherwise panic("recordDebugRebind: debug-local slot {slot} is past the {self.bodyState.debugLocals.count()} this function has recorded")
 		requireDebugRecordIsCurrent(record, current: current)
-		record.valueIds.push(value)
+		record.versions.push(DebugLocalVersion.create(value, def: def))
 	end 'recordDebugRebind'
 
 	// The same, for the three source-level assignment sites, which hold the name rather than the binding.
@@ -41169,11 +41169,11 @@ export type Parser
 		end 'notCapturing'
 
 		view binding = self.bodyState.scope.getInfo(name)
-		self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: value)
+		self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: value, def: DebugVersionDef.definedIn(self.bodyState.currentBlock.id))
 	end 'recordDebugRebindByName'
 
 	function noteFoldedBinding(record DebugLocalDecl, binding VarInfo)
-		if binding.isCellBinding or record.valueIds.count() != 1 or not self.constIsKnown(binding.boundValue) 'notOneFoldedValue'
+		if binding.isCellBinding or record.versions.count() != 1 or not self.constIsKnown(binding.boundValue) 'notOneFoldedValue'
 			return
 		end 'notOneFoldedValue'
 
@@ -45970,7 +45970,7 @@ export type Parser
 		// the body is one of the two paths reaching the construct's merge, and the drop-gating bit has to
 		// arrive there from the body rather than from whatever the handler goes on to do.
 		let bodyMoveMark = self.captureMoveMark()
-		self.installCarriedPhis(phiVars)
+		self.installCarriedPhis(phiVars, phiBlock: errBlock.id)
 
 		let shape = try self.requireTryBlockOtherwise(tryTok)
 
@@ -52107,11 +52107,11 @@ export type Parser
 			let b = try valsB.get(k) otherwise panic("mergeAtContinuation: valsB.get OOB at {k}")
 
 			if a == b 'same'
-				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: a)
+				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: a, def: DebugVersionDef.merged)
 				binding.setBoundValue(a, ledger: self.bodyState.moveLedger)
 			end 'same' else 'differ'
 				let phiId = self.mintPhiForBinding(cont, binding: binding)
-				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId)
+				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId, def: DebugVersionDef.definedIn(cont.id))
 				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 				self.pushMergedEdgeValue(edgeArgsA, binding: binding, value: a)
 				self.pushMergedEdgeValue(edgeArgsB, binding: binding, value: b)
@@ -52136,7 +52136,7 @@ export type Parser
 		for k in 0 upto bindings.count() 'each'
 			var binding = try bindings.get(k) otherwise panic("restoreBindings: bindings.get OOB at {k}")
 			let saved = try snapshot.get(k) otherwise panic("restoreBindings: snapshot.get OOB at {k}")
-			self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: saved)
+			self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: saved, def: DebugVersionDef.merged)
 			binding.setBoundValue(saved, ledger: self.bodyState.moveLedger)
 		end 'each'
 	end 'restoreBindings'
@@ -52327,7 +52327,7 @@ export type Parser
 	// and installing the phi writes through the binding.
 	function mintLoopHeaderPhis(header IrBlock, carried VarInfoArray) returns LoopPhiVarArray
 		var phiVars = self.mintCarriedPhis(header, carried: carried)
-		self.installCarriedPhis(phiVars)
+		self.installCarriedPhis(phiVars, phiBlock: header.id)
 		return phiVars
 	end 'mintLoopHeaderPhis'
 
@@ -52361,10 +52361,10 @@ export type Parser
 	// Make each carried binding READ its phi from here on — the install half above. Index-based for
 	// `mintCarriedPhis`' reason: a `for x in …` loop variable is immutable, and this writes through the
 	// binding.
-	function installCarriedPhis(phiVars LoopPhiVarArray)
+	function installCarriedPhis(phiVars LoopPhiVarArray, phiBlock BlockId)
 		for k in 0 upto phiVars.count() 'install'
 			var phiVar = try phiVars.get(k) otherwise panic("installCarriedPhis: phiVars.get OOB at {k}")
-			self.recordDebugRebind(phiVar.binding.debugLocalSlot, recorded: phiVar.binding.debugLocalRecorded, current: phiVar.binding.boundValue, value: phiVar.phiId)
+			self.recordDebugRebind(phiVar.binding.debugLocalSlot, recorded: phiVar.binding.debugLocalRecorded, current: phiVar.binding.boundValue, value: phiVar.phiId, def: DebugVersionDef.definedIn(phiBlock))
 			phiVar.binding.setBoundValue(phiVar.phiId, ledger: self.bodyState.moveLedger)
 		end 'install'
 	end 'installCarriedPhis'
@@ -53031,7 +53031,7 @@ export type Parser
 		for k in 0 upto ctx.phiVars.count() 'mkStepPhi'
 			var pv = try ctx.phiVars.get(k) otherwise panic("parseForStatement: phiVars.get OOB at {k}")
 			let stepPhiId = self.mintPhiForBinding(step, binding: pv.binding)
-			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: stepPhiId)
+			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: stepPhiId, def: DebugVersionDef.definedIn(step.id))
 			pv.binding.setBoundValue(stepPhiId, ledger: self.bodyState.moveLedger)
 		end 'mkStepPhi'
 
@@ -53312,7 +53312,7 @@ export type Parser
 		for k in 0 upto phiVars.count() 'mkJoinPhi'
 			var pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
 			let joinPhiId = self.mintPhiForBinding(join, binding: pv.binding)
-			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: joinPhiId)
+			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: joinPhiId, def: DebugVersionDef.definedIn(join.id))
 			pv.binding.setBoundValue(joinPhiId, ledger: self.bodyState.moveLedger)
 		end 'mkJoinPhi'
 
@@ -55100,7 +55100,7 @@ export type Parser
 		if not ctx.hasBreak 'noBreak'
 			for k in 0 upto ctx.phiVars.count() 'inherit'
 				var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
-				self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: pv.phiId)
+				self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: pv.phiId, def: DebugVersionDef.merged)
 				pv.binding.setBoundValue(pv.phiId, ledger: self.bodyState.moveLedger)
 			end 'inherit'
 
@@ -55112,7 +55112,7 @@ export type Parser
 		for k in 0 upto ctx.phiVars.count() 'mkExitPhi'
 			var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
 			let exitPhiId = self.mintPhiForBinding(exit, binding: pv.binding)
-			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: exitPhiId)
+			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: exitPhiId, def: DebugVersionDef.definedIn(exit.id))
 			pv.binding.setBoundValue(exitPhiId, ledger: self.bodyState.moveLedger)
 			self.pushMergedEdgeValue(headerVals, binding: pv.binding, value: pv.phiId)
 		end 'mkExitPhi'
@@ -57360,11 +57360,11 @@ export type Parser
 			let prevV = try prevExitVals.get(k) otherwise panic("setupFallthroughTargetPhis: prevExitVals.get OOB at {k}")
 
 			if entryV == prevV 'same'
-				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: entryV)
+				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: entryV, def: DebugVersionDef.merged)
 				binding.setBoundValue(entryV, ledger: self.bodyState.moveLedger)
 			end 'same' else 'differ'
 				let phiId = self.mintPhiForBinding(bodyBlock, binding: binding)
-				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId)
+				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId, def: DebugVersionDef.definedIn(bodyBlock.id))
 				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 				self.pushMergedEdgeValue(matchEdgeArgs, binding: binding, value: entryV)
 				self.pushMergedEdgeValue(fallthroughEdgeArgs, binding: binding, value: prevV)
@@ -57696,7 +57696,7 @@ export type Parser
 
 			if isDifferent 'phiVar'
 				let phiId = self.mintPhiForBinding(merge, binding: binding)
-				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId)
+				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId, def: DebugVersionDef.definedIn(merge.id))
 				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 				var incoming = ValueIdArray.create()
 
@@ -57708,7 +57708,7 @@ export type Parser
 				self.admitUnsignedLiteralsAcross(incoming)
 			end 'phiVar' else 'common'
 				let commonValue = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
-				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: commonValue)
+				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: commonValue, def: DebugVersionDef.merged)
 				binding.setBoundValue(commonValue, ledger: self.bodyState.moveLedger)
 			end 'common'
 		end 'setBindings'

@@ -1522,7 +1522,7 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 		end 'eachRun'
 	end 'eachBlocksRuns'
 
-	appendSlotExtensions(into, liveness: liveness, roster: roster, locations: locations, names: names, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst, blockLast: blockLast, blockIdOfPlace: blockIdOfPlace, siteKeyOfPlace: siteKeyOfPlace)
+	appendSlotExtensions(into, liveness: liveness, paramCount: func.paramCount, roster: roster, locations: locations, names: names, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst, blockLast: blockLast, blockIdOfPlace: blockIdOfPlace, siteKeyOfPlace: siteKeyOfPlace)
 end 'harvestDebugValueRanges'
 
 // `byValue` lists each value's names in ascending site key — `over` feeds them site by site and
@@ -1691,7 +1691,7 @@ function debugDefSiteAtBlockStart(local ElementIndex, placeOfLocal DebugPlaceCol
 	return DebugDefSite.at(local, anchor: anchor)
 end 'debugDefSiteAtBlockStart'
 
-function appendSlotExtensions(into DebugValueRangeArray, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, ordinalOfOp DebugAnchorColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn, blockLast DebugAnchorColumn, blockIdOfPlace BlockIdColumn, siteKeyOfPlace DebugSiteKeyColumn)
+function appendSlotExtensions(into DebugValueRangeArray, liveness LivenessResult, paramCount ParamCount, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, ordinalOfOp DebugAnchorColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn, blockLast DebugAnchorColumn, blockIdOfPlace BlockIdColumn, siteKeyOfPlace DebugSiteKeyColumn)
 	var anySpilled = false
 
 	for location in locations 'eachLocation'
@@ -1710,29 +1710,56 @@ function appendSlotExtensions(into DebugValueRangeArray, liveness LivenessResult
 	var groupOfOrdinal = CsrColumn.create()
 	var ordinals = CsrColumn.create()
 	var groupCount = 0 as CsrIndex
+	var unplaceableGroups = CsrColumn.create()
+	var parsePlaced = BoolArray.create()
+	parsePlaced.resize(roster.valueIds.count())
 
 	for (iter, value) in roster.valueIds.withIterator() 'eachNamedValue'
 		defLocal.push(EntryBlockLocal)
+		let group = (try roster.groups.get(iter.index()) otherwise panic("appendSlotExtensions: roster.groups.get OOB at {iter.index()}")) as CsrIndex
 
-		if value >= liveness.valueCount 'notInThisFunction'
-			continue
-		end 'notInThisFunction'
+		if group + 1 > groupCount 'moreGroups'
+			groupCount = group + 1
+		end 'moreGroups'
 
-		let site = debugDefSiteOf(index, value: value, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst)
+		var site = DebugDefSite.somewhereIn(EntryBlockLocal)
+
+		if value < liveness.valueCount and (index.defKindOf(value) != ValueDefKind.none or value < paramCount as ValueId) 'placedByTheCode'
+			site = debugDefSiteOf(index, value: value, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst)
+		end 'placedByTheCode' else 'placedByTheParse'
+			let recordedKind = try roster.versionKinds.get(iter.index()) otherwise panic("appendSlotExtensions: roster.versionKinds.get OOB at {iter.index()}")
+
+			if recordedKind == DebugVersionKind.merged 'aMerge'
+				continue
+			end 'aMerge'
+
+			let (placed, recordedLocal) = debugRecordedBlockLocal(try roster.versionBlocks.get(iter.index()) otherwise panic("appendSlotExtensions: roster.versionBlocks.get OOB at {iter.index()}"), topo: topo)
+
+			if recordedKind == DebugVersionKind.definedSomewhere or not placed 'anUnplaceableDefinition'
+				unplaceableGroups.push(group)
+				continue
+			end 'anUnplaceableDefinition'
+
+			site = DebugDefSite.somewhereIn(recordedLocal)
+			try parsePlaced.set(iter.index(), value: true) otherwise panic("appendSlotExtensions: parsePlaced.set OOB at {iter.index()}")
+		end 'placedByTheParse'
+
 		try defLocal.set(iter.index(), value: site.local) otherwise panic("appendSlotExtensions: defLocal.set OOB at {iter.index()}")
 
 		if site.anchorKnown 'anAnchoredDefinition'
 			defAt.set(iter.index(), value: site.anchor)
 		end 'anAnchoredDefinition'
 
-		let group = (try roster.groups.get(iter.index()) otherwise panic("appendSlotExtensions: roster.groups.get OOB at {iter.index()}")) as CsrIndex
 		groupOfOrdinal.push(group)
 		ordinals.push(iter.index() as CsrIndex)
-
-		if group + 1 > groupCount 'moreGroups'
-			groupCount = group + 1
-		end 'moreGroups'
 	end 'eachNamedValue'
+
+	var unplaceable = BoolArray.create()
+	unplaceable.resize(groupCount as ElementIndex)
+
+	for group in unplaceableGroups 'eachUnplaceableGroup'
+		try unplaceable.set(group, value: true) otherwise panic("appendSlotExtensions: unplaceable.set OOB at {group}")
+	end 'eachUnplaceableGroup'
 
 	let byGroup = buildCsr(groupOfOrdinal, to: ordinals, nodeCount: groupCount)
 	var shadowed = CfgIndexArray.create()
@@ -1740,13 +1767,20 @@ function appendSlotExtensions(into DebugValueRangeArray, liveness LivenessResult
 	var pending = CfgIndexArray.create()
 
 	for (iter, location) in locations.withIterator() 'eachSpilledVersion'
-		if location.kind == DebugValueInSpillSlot 'spilled'
-			extendSpilledVersion(into, ordinal: iter.index(), byGroup: byGroup, roster: roster, topo: topo, dom: dom, names: names, placeOfLocal: placeOfLocal, defLocal: defLocal, defAt: defAt, blockFirst: blockFirst, blockLast: blockLast, blockIdOfPlace: blockIdOfPlace, siteKeyOfPlace: siteKeyOfPlace, shadowed: shadowed, pending: pending)
-		end 'spilled'
+		let group = (try roster.groups.get(iter.index()) otherwise panic("appendSlotExtensions: roster.groups.get OOB at {iter.index()}")) as CsrIndex
+
+		if location.kind == DebugValueInSpillSlot and not (try unplaceable.get(group) otherwise panic("appendSlotExtensions: unplaceable.get OOB at {group}")) 'extended'
+			extendSpilledVersion(into, ordinal: iter.index(), byGroup: byGroup, roster: roster, topo: topo, dom: dom, names: names, placeOfLocal: placeOfLocal, defLocal: defLocal, defAt: defAt, blockFirst: blockFirst, blockLast: blockLast, blockIdOfPlace: blockIdOfPlace, siteKeyOfPlace: siteKeyOfPlace, shadowed: shadowed, pending: pending, parsePlaced: parsePlaced)
+		end 'extended'
 	end 'eachSpilledVersion'
 end 'appendSlotExtensions'
 
-function extendSpilledVersion(into DebugValueRangeArray, ordinal ElementIndex, byGroup CsrGraph, roster DebugValueRoster, topo FuncTopology, dom DominatorTree, names DebugNameIndex, placeOfLocal DebugPlaceColumn, defLocal CfgIndexArray, defAt DebugAnchorColumn, blockFirst DebugAnchorColumn, blockLast DebugAnchorColumn, blockIdOfPlace BlockIdColumn, siteKeyOfPlace DebugSiteKeyColumn, shadowed CfgIndexArray, pending CfgIndexArray)
+function debugRecordedBlockLocal(block BlockId, topo FuncTopology) returns (bool, ElementIndex)
+	let local = try topo.localByBlockId.get(block) otherwise return (false, EntryBlockLocal)
+	return (local != topo.numBlocks, local)
+end 'debugRecordedBlockLocal'
+
+function extendSpilledVersion(into DebugValueRangeArray, ordinal ElementIndex, byGroup CsrGraph, roster DebugValueRoster, topo FuncTopology, dom DominatorTree, names DebugNameIndex, placeOfLocal DebugPlaceColumn, defLocal CfgIndexArray, defAt DebugAnchorColumn, blockFirst DebugAnchorColumn, blockLast DebugAnchorColumn, blockIdOfPlace BlockIdColumn, siteKeyOfPlace DebugSiteKeyColumn, shadowed CfgIndexArray, pending CfgIndexArray, parsePlaced BoolArray)
 	let own = try roster.valueIds.get(ordinal) otherwise panic("extendSpilledVersion: roster.valueIds.get OOB at {ordinal}")
 	let ownLocal = try defLocal.get(ordinal) otherwise panic("extendSpilledVersion: defLocal.get OOB at {ordinal}")
 	let group = (try roster.groups.get(ordinal) otherwise panic("extendSpilledVersion: roster.groups.get OOB at {ordinal}")) as CsrIndex
@@ -1756,13 +1790,23 @@ function extendSpilledVersion(into DebugValueRangeArray, ordinal ElementIndex, b
 		let rival = byGroup.neighbour(group, k: k)
 		let rivalLocal = try defLocal.get(rival) otherwise panic("extendSpilledVersion: defLocal.get OOB at {rival}")
 
-		if (try roster.valueIds.get(rival) otherwise panic("extendSpilledVersion: roster.valueIds.get OOB at {rival}")) == own 'theSameVersion'
+		let rivalValue = try roster.valueIds.get(rival) otherwise panic("extendSpilledVersion: roster.valueIds.get OOB at {rival}")
+
+		if rivalValue == own 'theSameVersion'
+			if rival < ordinal 'anEarlierOrdinalOfIt'
+				return
+			end 'anEarlierOrdinalOfIt'
+
 			continue
 		end 'theSameVersion'
 
 		if rivalLocal == ownLocal 'sharesTheDefinitionBlock'
 			return
 		end 'sharesTheDefinitionBlock'
+
+		if rivalValue > own and (try parsePlaced.get(rival) otherwise panic("extendSpilledVersion: parsePlaced.get OOB at {rival}")) and dom.dominates(rivalLocal, y: ownLocal) 'aLaterVersionMaybeBeyondTheSplit'
+			return
+		end 'aLaterVersionMaybeBeyondTheSplit'
 
 		if dom.dominates(ownLocal, y: rivalLocal) 'aLaterVersionBelow'
 			markShadowedBy(rivalLocal, ownLocal: ownLocal, stamp: stamp, topo: topo, dom: dom, shadowed: shadowed, pending: pending)
