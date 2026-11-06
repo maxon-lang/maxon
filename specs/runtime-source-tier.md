@@ -217,6 +217,46 @@ end 'main'
 error E3157: <fragment>:5:8: a runtime body may not spell both '__Raw.ownFrame()' and '__Raw.splicedAtEverySite()': the first says this function's frame is its product and nothing may splice the body away, the second that it has none worth keeping and the inliner must splice it into every call site
 ```
 
+<!-- test: error.an-exit-code-naming-no-runtime-abort-is-refused -->
+⛔⛔ **AN EXIT THE TIER TAKES IS ONE THE COMPILER CAN NAME.** `osExit` ends the process after writing the
+abort's message, and the message belongs to a `RuntimeAbort` case. A code no case carries has no message to
+write, so the process would end silently — the exact defect the row exists to remove — and the refusal is
+at the call that spells it.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_unnamed_abort() returns MachineWord
+	__Raw.osExit(1000)
+
+	return 0
+end '__probe_unnamed_abort'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:8: '__Raw.osExit' requires the exit code of a RuntimeAbort case, but its argument is 1000
+```
+
+<!-- test: error.a-computed-exit-code-is-refused -->
+⛔⛔ **THE CODE IS A COMPILE-TIME CONSTANT, BECAUSE THE MESSAGE IS CHOSEN AT COMPILE TIME.** A computed code
+would leave the compiler no `RuntimeAbort` case to take a message from.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_computed_abort(code MachineWord) returns MachineWord
+	__Raw.osExit(code)
+
+	return 0
+end '__probe_computed_abort'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:8: '__Raw.osExit' requires a compile-time integer constant, but its argument is MachineWord
+```
+
 <!-- test: runtime-file-may-ask-the-machine-for-its-cpu-count -->
 **AN OS ROW WHOSE FACILITY ONLY SOME LANES PROVIDE.** `osCpuCount` is the raw floor's spelling of the one
 question `__cpu_count` exists to answer, and it is the row that carries `HostFacility.cpuCount` — so a lane

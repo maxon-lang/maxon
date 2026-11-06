@@ -1,0 +1,28 @@
+let AnOsRefusedAllocationCaseDirName = "os-allocation-refusal-diagnostic"
+let RequestBeyondEveryAddressSpace = "281474976710656"
+let SlabOsAllocFailedExitCode = 82
+let OutOfMemoryLine = "fatal error: out of memory"
+
+let RefusedReservationSource = "function main() returns ExitCode\n\tvar bytes = ByteArray.create()\n\tbytes.reserve({RequestBeyondEveryAddressSpace})\n\tprint(\"\{bytes.count()}\")\n\treturn 0\nend 'main'\n"
+
+test 'a program whose memory request the operating system refuses prints an out-of-memory diagnostic and exits 82'
+	requireHeldOutsideCheckout(AnOsRefusedAllocationCaseDirName, check: RefusedAllocationSaysSo.create())
+end 'a program whose memory request the operating system refuses prints an out-of-memory diagnostic and exits 82'
+
+type RefusedAllocationSaysSo implements OutsideCheckoutCase
+	static function create() returns RefusedAllocationSaysSo
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagingDir(dir.join(AppDirName).toString())
+		writeStagedFile(app.join(StagedProgramFileName), content: RefusedReservationSource)
+
+		let built = spawnCompiler([BuildCommandWord, AppDirName], staged: dir)
+		try Expect.equal(built.exitCode(), expected: 0, message: "a program that reserves {RequestBeyondEveryAddressSpace} bytes did not build. It wrote to stderr: {built.stderr}")
+
+		let ran = spawnCompiler(StringArray.create(), binary: app.join("{AppDirName}{executableSuffix()}"), staged: dir)
+		try Expect.equal(ran.exitCode(), expected: SlabOsAllocFailedExitCode, message: "the program exited {ran.exitCode()} rather than the allocator's refusal exit. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+		try Expect.isTrue(ran.stderr.contains(OutOfMemoryLine), message: "the allocator ended the process without saying why. It wrote to stderr: {ran.stderr}")
+	end 'requireHeldIn'
+end 'RefusedAllocationSaysSo'

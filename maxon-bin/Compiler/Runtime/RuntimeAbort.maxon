@@ -650,11 +650,44 @@ export union RuntimeAbortReason
 
 	export function message() returns ByteArray
 		return match self 'which'
-			abort(cause) gives "fatal error: runtime abort {cause.rawValue} ({cause.name})\n".toByteArray()
+			abort(cause) gives runtimeAbortMessage(cause)
 			fatal(cause) gives "fatal error: {runtimeFatalReason(cause)}\n".toByteArray()
 		end 'which'
 	end 'message'
 end 'RuntimeAbortReason'
+
+function runtimeAbortMessage(cause RuntimeAbort) returns ByteArray
+	if cause == RuntimeAbort.slabOsAllocFailed 'outOfMemory'
+		return "fatal error: out of memory: the operating system refused to map more memory (runtime abort {cause.rawValue} ({cause.name}))\n".toByteArray()
+	end 'outOfMemory'
+
+	return "fatal error: runtime abort {cause.rawValue} ({cause.name})\n".toByteArray()
+end 'runtimeAbortMessage'
+
+function tierAbortDoorName(abort RuntimeAbort) returns ByteArray
+	return "{TierAbortDoorPrefix}{abort.rawValue}".toByteArray()
+end 'tierAbortDoorName'
+
+let TierAbortDoorPrefix = "__abort_door_"
+
+export function ensureTierAbortDoor(module StdModule, abort RuntimeAbort) returns ByteArray
+	let name = tierAbortDoorName(abort)
+
+	if module.tierAbortDoors.contains(name) 'built'
+		return name
+	end 'built'
+
+	module.tierAbortDoors.insert(name.clone())
+
+	var func = IrFunction.createFromStd(name.clone(), returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	func.keepsItsOwnFrame = true
+	var ids = ValueMinter.create(0)
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)
+	emitRuntimeAbort(module, func: func, block: entry, abort: abort, ids: ids)
+	module.functions.push(func)
+
+	return name
+end 'ensureTierAbortDoor'
 
 typealias RuntimeAbortReasonArray = Array with RuntimeAbortReason
 

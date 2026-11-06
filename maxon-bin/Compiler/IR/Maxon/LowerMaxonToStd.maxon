@@ -2437,7 +2437,7 @@ type MaxonToStdLowering
 			osProcessProbe then self.stdModule.appendOp(dstBlock, op: StdOp.osProcessProbe(result, pidId: rawWordOperand(args, index: 0, intrinsic: intrinsic)))
 			osWaitHandle then self.stdModule.appendOp(dstBlock, op: StdOp.osWaitHandle(result, handleId: rawWordOperand(args, index: 0, intrinsic: intrinsic), timeoutMsId: rawWordOperand(args, index: 1, intrinsic: intrinsic)))
 			osCloseHandle then self.stdModule.appendOp(dstBlock, op: StdOp.osCloseHandle(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
-			osExit then self.stdModule.appendOp(dstBlock, op: StdOp.osExit(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
+			osExit then self.lowerRawOsExit(constant, dstBlock: dstBlock)
 			scratch then self.stdModule.appendOp(dstBlock, op: StdOp.stackRecordAddr(result, slot: constant as SpillSlot))
 			schedNumProcsAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedNumProcsLabel))
 			schedMaxActiveWorkersAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedMaxActiveWorkersLabel))
@@ -2475,6 +2475,19 @@ type MaxonToStdLowering
 			splicedAtEverySite then break
 		end 'row'
 	end 'lowerRawIntrinsic'
+
+	function lowerRawOsExit(code FullRangeInt, dstBlock IrBlock)
+		let abort = try RuntimeAbort.fromRawValue(code) otherwise panic("lowerRawOsExit: exit code {code} names no RuntimeAbort case — `Parser.emitRawIntrinsic` refuses such a code before it reaches this pass")
+		let sitesSpan = self.stdModule.spans.current
+		self.stdModule.spans.current = NoSpanId
+		let door = ensureTierAbortDoor(self.stdModule, abort: abort)
+		self.stdModule.spans.current = sitesSpan
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(self.mintStdValueId(), callee: door, args: ValueIdArray.create()))
+
+		let codeId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(codeId, value: code, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.osExit(codeId))
+	end 'lowerRawOsExit'
 
 	function lowerStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(registerStringLiteralRecord(self.globalData, bytes: bytes, debugStream: self.debugStream))))

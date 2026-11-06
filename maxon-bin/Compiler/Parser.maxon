@@ -11901,6 +11901,7 @@ let IntegerOperandRequirement = "an integer"
 // not at the throw.
 let RawConstantOperandRequirement = "a compile-time integer constant"
 let RawScratchSizeRequirement = "a positive whole number of 8-byte slots"
+let RawExitCodeRequirement = "the exit code of a RuntimeAbort case"
 
 // ⭐ **THE `panic at <file>:<line>: <text>\n` LINE A `panic(…)` HANDS THE RUNTIME, IN THE ONE OF TWO FORMS
 // ITS ARGUMENT ADMITS.** `mrt_panic` reads a NUL-terminated cstr and does not care which; what differs is
@@ -94246,6 +94247,10 @@ export type Parser
 		if intrinsic == RawIntrinsic.scratch 'frameRecord'
 			constant = try self.reserveRawScratchSlot(func, bytes: constant, callee: callee, calleeTok: calleeTok)
 		end 'frameRecord'
+
+		if intrinsic == RawIntrinsic.osExit 'abortCode'
+			_ = try RuntimeAbort.fromRawValue(constant) otherwise throw SourceParseError.builtinOperandPhrase(String.from(callee), required: RawExitCodeRequirement, got: "{constant}", line: calleeTok.line, column: calleeTok.column)
+		end 'abortCode'
 
 		try self.recordFrameDirective(func, intrinsic: intrinsic, calleeTok: calleeTok)
 

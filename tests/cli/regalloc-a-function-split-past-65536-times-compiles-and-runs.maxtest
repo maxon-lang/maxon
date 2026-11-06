@@ -10,15 +10,16 @@ typealias UnitValue = int(0 to u32.max)
 let RegallocAFunctionSplitPast65536TimesCompilesAndRunsCaseDirName = "regalloc-split-past-65536"
 let ValuesSplitFieldPrefix = "valuesSplit="
 
-let Units = 8000 as UnitTally
+let Units = 5000 as UnitTally
 let ValuesPerUnit = 20 as UnitTally
 let SplitsTheFixtureMustNeed = 65537 as ReportedTally
 
 let Low16 = 0xFFFF as UnitValue
 let OpaqueThreshold = 100
+let OpaqueRounds = 3
 let PathLengthMask = 0xFF as UnitValue
 
-let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction opaque(x Word) returns Word\n\tif x > 100 'big'\n\t\treturn (x - 100) and 0xFFFF\n\tend 'big'\n\n\treturn x + 1\nend 'opaque'\n\nfunction work(seed Word) returns Word\n\tvar total = seed\n"
+let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction opaque(x Word) returns Word\n\tvar y = x\n\tvar round = 0 as Word\n\n\twhile round < 3 'rounds'\n\t\ty = (y + 1) as Word\n\n\t\tif y > 100 'big'\n\t\t\ty = ((y - 100) and 0xFFFF) as Word\n\t\tend 'big'\n\n\t\tround = (round + 1) as Word\n\tend 'rounds'\n\n\treturn y\nend 'opaque'\n\nfunction work(seed Word) returns Word\n\tvar total = seed\n"
 let RegallocAFunctionSplitPast65536TimesCompilesAndRunsFixtureFooter = "\treturn total\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tprint(\"\{work((spelled.byteLength() and 0xFF) as Word)\}\")\n\treturn 0\nend 'main'\n"
 
 function splitCountFixtureSource() returns String
@@ -43,11 +44,20 @@ function splitCountFixtureSource() returns String
 end 'splitCountFixtureSource'
 
 function opaque(x UnitValue) returns UnitValue
-	if x > OpaqueThreshold 'big'
-		return (x - OpaqueThreshold) and Low16
-	end 'big'
+	var y = x
+	var round = 0 as UnitValue
 
-	return x + 1
+	while round < OpaqueRounds 'rounds'
+		y = (y + 1) as UnitValue
+
+		if y > OpaqueThreshold 'big'
+			y = (y - OpaqueThreshold) and Low16
+		end 'big'
+
+		round = (round + 1) as UnitValue
+	end 'rounds'
+
+	return y
 end 'opaque'
 
 function expectedAnswer() returns UnitValue
