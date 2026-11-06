@@ -64,14 +64,31 @@ export type LiveRuns
 
 	export function holds(v ValueId, blockLocal ElementIndex) returns bool
 		var run = self.firstRunOf(v)
+		var node = self.leafBase + blockLocal
+		var entry = try self.nodeHead.get(node) otherwise panic("LiveRuns.holds: nodeHead.get OOB at {node}")
 
-		while run != 0 'eachRun'
+		while run != 0 'theShorterOfTheTwoLists'
 			if self.loOf(run) <= blockLocal and blockLocal <= self.hiOf(run) 'covers'
 				return true
 			end 'covers'
 
 			run = self.nextRunOf(run)
-		end 'eachRun'
+
+			while entry == 0 'towardTheRoot'
+				if node <= 1 'noNodeLeft'
+					return false
+				end 'noNodeLeft'
+
+				node = node / 2
+				entry = try self.nodeHead.get(node) otherwise panic("LiveRuns.holds: nodeHead.get OOB at {node}")
+			end 'towardTheRoot'
+
+			if (try self.runValue.get(try self.entryRun.get(entry - 1) otherwise panic("LiveRuns.holds: entryRun.get OOB at {entry - 1}")) otherwise panic("LiveRuns.holds: runValue.get OOB")) == v 'aRunHangingOnThePath'
+				return true
+			end 'aRunHangingOnThePath'
+
+			entry = try self.entryNextAtNode.get(entry - 1) otherwise panic("LiveRuns.holds: entryNextAtNode.get OOB at {entry - 1}")
+		end 'theShorterOfTheTwoLists'
 
 		return false
 	end 'holds'

@@ -157,6 +157,24 @@ export typealias UseRecordIndexArray = Array with ElementIndex
 // rather than a contiguous run, and an addressable k would be an O(k) walk pretending to be an index.
 export typealias UseOrdinal = int(0 to u64.max) implements ElementIndex
 export typealias UseOrdinalArray = Array with UseOrdinal
+typealias UnrolledChainArray = Array with UseRecordIndexArray
+
+let ShortUseThread = 16
+
+export type UseBlockRange
+	export let found as bool
+	export let first as ElementIndex
+	export let last as ElementIndex
+	export let count as UseOrdinal
+
+	static function none() returns UseBlockRange
+		return Self{found: false, first: 0, last: 0, count: 0}
+	end 'none'
+
+	static function of(first ElementIndex, last ElementIndex, count UseOrdinal) returns UseBlockRange
+		return Self{found: true, first: first, last: last, count: count}
+	end 'of'
+end 'UseBlockRange'
 
 // A count of things the allocator DID: functions allocated, copies inserted, hints honoured, values
 // split, liveness mark-steps taken, splitter iterations run. A statistic, never an index into
@@ -664,14 +682,22 @@ export type LiveSets
 
 	function explicitEntryHolds(blockLocal ElementIndex, v ValueId, isOut bool) returns bool
 		var entry = self.firstEntryOf(v)
+		let list = self.explicitOut(blockLocal) if isOut else self.explicitIn(blockLocal)
+		let population = list.count()
+		var at = 0 as ElementIndex
 
-		while entry != 0 'eachEntryOfTheValue'
+		while entry != 0 and at < population 'theShorterOfTheTwoLists'
 			if self.entryBlockAt(entry) == blockLocal and self.entryIsOutAt(entry) == isOut 'theEntry'
 				return true
 			end 'theEntry'
 
+			if (try list.get(at) otherwise panic("LiveSets.explicitEntryHolds: list.get OOB at {at}")) == v 'theListedValue'
+				return true
+			end 'theListedValue'
+
 			entry = self.nextEntryOf(entry)
-		end 'eachEntryOfTheValue'
+			at = at + 1
+		end 'theShorterOfTheTwoLists'
 
 		return false
 	end 'explicitEntryHolds'
@@ -2979,6 +3005,9 @@ export type UseIndex
 	// loop: at loop depth > 0 and not cold (`blockIsOffTheHotPath`).
 	var touchesHotLoop as BoolArray
 
+	var unrolledSlotOf as CfgIndexArray
+	var unrolledChains as UnrolledChainArray
+
 	// An EMPTY index over a `valueCount`-value, `numBlocks`-block function — the shape `buildUseIndex`
 	// fills in place, through the very same mutators a split edits it with.
 	static function create(valueCount ValueId, numBlocks ElementIndex) returns UseIndex
@@ -2997,9 +3026,11 @@ export type UseIndex
 		var phiBlock = CfgIndexArray.create()
 		phiBlock.resize(valueCount)
 		var spillSlot = SpillSlotArray.create()
+		var unrolledSlotOf = CfgIndexArray.create()
+		unrolledSlotOf.resize(valueCount)
 		spillSlot.resize(valueCount)
 
-		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), constDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount)}
+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), constDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount), unrolledSlotOf: unrolledSlotOf, unrolledChains: UnrolledChainArray.create()}
 	end 'create'
 
 	// How many use sites `valueId` has — the BOUND of the walk below, and the only thing that says a
@@ -3064,6 +3095,75 @@ export type UseIndex
 	export function useBlockAt(record ElementIndex) returns ElementIndex
 		return seqBlock(self.useSeqAt(record))
 	end 'useBlockAt'
+
+	export function usesInBlock(valueId ValueId, blockLocal ElementIndex) returns UseBlockRange
+		let total = self.useCount(valueId)
+
+		if total == 0 'neverUsed'
+			return UseBlockRange.none()
+		end 'neverUsed'
+
+		if total <= ShortUseThread 'shortEnoughToWalk'
+			return self.scanUsesInBlock(valueId, blockLocal: blockLocal, total: total)
+		end 'shortEnoughToWalk'
+
+		let slot = try self.unrolledSlotOf.get(valueId) otherwise panic("UseIndex.usesInBlock: unrolledSlotOf.get OOB for value {valueId}")
+		view records = try self.unrolledChains.get(slot - 1) otherwise panic("UseIndex.usesInBlock: value {valueId} has {total} uses and no unrolled chain")
+		let low = self.firstUnrolledInOrAfter(records, block: blockLocal)
+		let past = self.firstUnrolledInOrAfter(records, block: blockLocal + 1)
+
+		if low == past 'readNowhereInTheBlock'
+			return UseBlockRange.none()
+		end 'readNowhereInTheBlock'
+
+		return UseBlockRange.of(try records.get(low) otherwise panic("UseIndex.usesInBlock: records.get OOB at {low}"), last: try records.get(past - 1) otherwise panic("UseIndex.usesInBlock: records.get OOB at {past - 1}"), count: (past - low) as UseOrdinal)
+	end 'usesInBlock'
+
+	function scanUsesInBlock(valueId ValueId, blockLocal ElementIndex, total UseOrdinal) returns UseBlockRange
+		var record = self.firstUseOf(valueId)
+		var first = 0 as ElementIndex
+		var last = 0 as ElementIndex
+		var count = 0 as UseOrdinal
+
+		for _ in 0 upto total 'eachUse'
+			let block = self.useBlockAt(record)
+
+			if block > blockLocal 'pastTheBlock'
+				break
+			end 'pastTheBlock'
+
+			if block == blockLocal 'inTheBlock'
+				first = record if count == 0 else first
+				last = record
+				count = count + 1
+			end 'inTheBlock'
+
+			record = self.nextUseOf(record)
+		end 'eachUse'
+
+		if count == 0 'readNowhereInTheBlock'
+			return UseBlockRange.none()
+		end 'readNowhereInTheBlock'
+
+		return UseBlockRange.of(first, last: last, count: count)
+	end 'scanUsesInBlock'
+
+	function firstUnrolledInOrAfter(records UseRecordIndexArray, block ElementIndex) returns ElementIndex
+		var low = 0 as ElementIndex
+		var high = records.count() as ElementIndex
+
+		while low < high 'narrow'
+			let middle = low + (high - low) / 2
+
+			if self.useBlockAt(try records.get(middle) otherwise panic("UseIndex.firstUnrolledInOrAfter: records.get OOB at {middle}")) < block 'below'
+				low = middle + 1
+			end 'below' else 'inOrAbove'
+				high = middle
+			end 'inOrAbove'
+		end 'narrow'
+
+		return low
+	end 'firstUnrolledInOrAfter'
 
 	// The op the use reads through; for an EDGE use, the block's LAST op (its sequence anchor —
 	// the edge is read after every body op).
@@ -3248,7 +3348,36 @@ export type UseIndex
 
 		try self.lastUseOfValue.set(valueId, value: record) otherwise panic("UseIndex.appendToValueThread: lastUseOfValue.set OOB for value {valueId}")
 		try self.useCountOfValue.set(valueId, value: count + 1) otherwise panic("UseIndex.appendToValueThread: useCountOfValue.set OOB for value {valueId}")
+
+		if count + 1 > ShortUseThread 'longEnoughToUnroll'
+			self.unrollChain(valueId, record: record, total: count + 1)
+		end 'longEnoughToUnroll'
 	end 'appendToValueThread'
+
+	function unrollChain(valueId ValueId, record ElementIndex, total UseOrdinal)
+		var slot = try self.unrolledSlotOf.get(valueId) otherwise panic("UseIndex.unrollChain: unrolledSlotOf.get OOB for value {valueId}")
+
+		if slot == 0 'noChainUnrolledYet'
+			slot = self.unrolledChains.count() + 1
+			self.unrolledChains.push(UseRecordIndexArray.create())
+			try self.unrolledSlotOf.set(valueId, value: slot) otherwise panic("UseIndex.unrollChain: unrolledSlotOf.set OOB for value {valueId}")
+		end 'noChainUnrolledYet'
+
+		var records = try self.unrolledChains.get(slot - 1) otherwise panic("UseIndex.unrollChain: unrolledChains.get OOB at {slot - 1}")
+
+		if records.count() + 1 == total 'oneRecordBehind'
+			records.push(record)
+			return
+		end 'oneRecordBehind'
+
+		records.clear()
+		var walked = self.firstUseOf(valueId)
+
+		for _ in 0 upto total 'eachUse'
+			records.push(walked)
+			walked = self.nextUseOf(walked)
+		end 'eachUse'
+	end 'unrollChain'
 
 	// Push `record` at the HEAD of `blockLocal`'s thread. A block's records have no order to keep, so
 	// the cheap end is the right end — and it is why the block thread needs no tail column.
@@ -3299,6 +3428,12 @@ export type UseIndex
 	// (`addUseRecord` always mints a new record; a detached one is never re-threaded).
 	export function removeUseRecordsOf(valueId ValueId)
 		try self.useCountOfValue.set(valueId, value: 0) otherwise panic("UseIndex.removeUseRecordsOf: value {valueId} out of range (valueCount={self.valueCount})")
+		let slot = try self.unrolledSlotOf.get(valueId) otherwise panic("UseIndex.removeUseRecordsOf: unrolledSlotOf.get OOB for value {valueId}")
+
+		if slot != 0 'anUnrolledChain'
+			var records = try self.unrolledChains.get(slot - 1) otherwise panic("UseIndex.removeUseRecordsOf: unrolledChains.get OOB at {slot - 1}")
+			records.clear()
+		end 'anUnrolledChain'
 	end 'removeUseRecordsOf'
 
 	// Repoint one record's sequence number — what a RE-SPACE costs the uses of the ops it moved
@@ -3425,6 +3560,7 @@ export type UseIndex
 		// beside it is never read until an `addUseRecord` writes it.
 		self.useCountOfValue.growFilled(newValueCount, value: 0)
 		self.lastUseOfValue.growFilled(newValueCount, value: 0)
+		self.unrolledSlotOf.growFilled(newValueCount, value: 0)
 
 		self.hasOpDef.growFilled(newValueCount, value: false)
 		self.constDef.growFilled(newValueCount, value: false)

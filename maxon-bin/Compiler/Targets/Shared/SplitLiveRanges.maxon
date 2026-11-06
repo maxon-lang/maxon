@@ -3243,23 +3243,8 @@ function liveAfterSlot(liveness LivenessResult, pressure PressureIndex, v ValueI
 	end 'liveOnEveryExit'
 
 	let seq = pressure.seqOfSlot(blockLocal, slot: slot)
-	let useSites = index.useCount(v)
-
-	if useSites == 0 'neverRead'
-		return false
-	end 'neverRead'
-
-	var record = index.firstUseOf(v)
-
-	for _ in 0 upto useSites 'eachUse'
-		if index.useBlockAt(record) == blockLocal and index.useSeqAt(record) > seq 'readLaterHere'
-			return true
-		end 'readLaterHere'
-
-		record = index.nextUseOf(record)
-	end 'eachUse'
-
-	return false
+	let reads = index.usesInBlock(v, blockLocal: blockLocal)
+	return reads.found and index.useSeqAt(reads.last) > seq
 end 'liveAfterSlot'
 
 // Re-derive the transients of every op the split can have moved one at: the ops that name the victim or
@@ -3526,25 +3511,25 @@ end 'coldRunClobbersFor'
 // a range `from upto` it is empty exactly when nothing in the run reads `w`.
 function lastReadWithin(index UseIndex, pressure PressureIndex, w ValueId, blockLocal ElementIndex, from ElementIndex, to ElementIndex) returns ElementIndex
 	var lastRead = from
-	let useSites = index.useCount(w)
+	let reads = index.usesInBlock(w, blockLocal: blockLocal)
 
-	if useSites == 0 'neverUsed'
+	if not reads.found 'neverReadHere'
 		return lastRead
-	end 'neverUsed'
+	end 'neverReadHere'
 
-	var record = index.firstUseOf(w)
+	var record = reads.first
 
-	for _ in 0 upto useSites 'eachUse'
-		if index.useBlockAt(record) == blockLocal and index.useKindAt(record) == UseKind.op 'anOpUseHere'
+	for _ in 0 upto reads.count 'eachUseHere'
+		if index.useKindAt(record) == UseKind.op 'anOpUse'
 			let position = usePositionIn(index, pressure: pressure, record: record)
 
 			if position > lastRead and position <= to 'laterInTheRun'
 				lastRead = position
 			end 'laterInTheRun'
-		end 'anOpUseHere'
+		end 'anOpUse'
 
 		record = index.nextUseOf(record)
-	end 'eachUse'
+	end 'eachUseHere'
 
 	return lastRead
 end 'lastReadWithin'
@@ -3567,26 +3552,13 @@ type BlockLastUse
 end 'BlockLastUse'
 
 function lastUsePositionIn(index UseIndex, pressure PressureIndex, w ValueId, blockLocal ElementIndex) returns BlockLastUse
-	let useSites = index.useCount(w)
-	var found = false
-	var position = 0 as BlockUsePos
+	let reads = index.usesInBlock(w, blockLocal: blockLocal)
 
-	if useSites == 0 'neverRead'
+	if not reads.found 'neverReadHere'
 		return BlockLastUse.create(false, position: 0)
-	end 'neverRead'
+	end 'neverReadHere'
 
-	var record = index.firstUseOf(w)
-
-	for _ in 0 upto useSites 'eachUse'
-		if index.useBlockAt(record) == blockLocal 'readHere'
-			found = true
-			position = pressure.positionOfSeq(index.useSeqAt(record)) as BlockUsePos
-		end 'readHere'
-
-		record = index.nextUseOf(record)
-	end 'eachUse'
-
-	return BlockLastUse.create(found, position: position)
+	return BlockLastUse.create(true, position: pressure.positionOfSeq(index.useSeqAt(reads.last)) as BlockUsePos)
 end 'lastUsePositionIn'
 
 // The DEAD block-arg count of the ONE block a split can move it in.
@@ -5311,23 +5283,8 @@ function liveBeforeHolds(liveness LivenessResult, pressure PressureIndex, w Valu
 	end 'liveOnEveryExit'
 
 	let seq = pressure.seqOfPosition(blockLocal, pos: pos)
-	let useSites = index.useCount(w)
-
-	if useSites == 0 'neverRead'
-		return false
-	end 'neverRead'
-
-	var record = index.firstUseOf(w)
-
-	for _ in 0 upto useSites 'eachUse'
-		if index.useBlockAt(record) == blockLocal and index.useSeqAt(record) >= seq 'readFromHereOn'
-			return true
-		end 'readFromHereOn'
-
-		record = index.nextUseOf(record)
-	end 'eachUse'
-
-	return false
+	let reads = index.usesInBlock(w, blockLocal: blockLocal)
+	return reads.found and index.useSeqAt(reads.last) >= seq
 end 'liveBeforeHolds'
 
 function stepRowForwardOverOp(module TargetModule, liveness LivenessResult, scratch SplitScratch, blockLocal ElementIndex, slot PressureSlot, row BitRow)
@@ -7073,16 +7030,16 @@ function unrelievableAtPeak(module TargetModule, index UseIndex, topo FuncTopolo
 		end 'storeKeepsItLive'
 	end 'definedInThePeaksBlock'
 
-	let useSites = index.useCount(valueId)
+	let reads = index.usesInBlock(valueId, blockLocal: anchor.blockLocal)
 
-	if useSites == 0 or not fullPool 'nothingToReloadOrARegisterToSpare'
+	if not reads.found or not fullPool 'nothingToReloadOrARegisterToSpare'
 		return false
 	end 'nothingToReloadOrARegisterToSpare'
 
-	var record = index.firstUseOf(valueId)
+	var record = reads.first
 
-	for _ in 0 upto useSites 'eachUse'
-		if index.useBlockAt(record) == anchor.blockLocal and index.useKindAt(record) == UseKind.op and index.useSeqAt(record) > anchor.seq 'readAfterThePeakHere'
+	for _ in 0 upto reads.count 'eachUse'
+		if index.useKindAt(record) == UseKind.op and index.useSeqAt(record) > anchor.seq 'readAfterThePeakHere'
 			let reloadPos = firstPreMoveBefore(module, pressure: pressure, blockLocal: anchor.blockLocal, pos: opUseReloadPosition(index, pressure: pressure, block: block, record: record), buf: buf, opFacts: opFacts)
 
 			if pressure.seqOfPosition(anchor.blockLocal, pos: reloadPos) <= anchor.seq 'reloadWouldSpanThePeak'
@@ -7099,11 +7056,16 @@ end 'unrelievableAtPeak'
 // Where `valueId`'s spill store sits in `block`, or would: the store it already has there, else its def
 // (`insertStoreAfter`).
 function storePositionOf(module TargetModule, index UseIndex, pressure PressureIndex, blockLocal ElementIndex, valueId ValueId, defPos ElementIndex, opFacts OpVariantFacts) returns ElementIndex
-	let useSites = index.useCount(valueId)
-	var record = index.firstUseOf(valueId)
+	let reads = index.usesInBlock(valueId, blockLocal: blockLocal)
 
-	for _ in 0 upto useSites 'eachUse'
-		if index.useBlockAt(record) == blockLocal and index.useKindAt(record) == UseKind.op and useIsSpillStore(module, index: index, record: record, opFacts: opFacts) 'itsStore'
+	if not reads.found 'readNowhereHere'
+		return defPos
+	end 'readNowhereHere'
+
+	var record = reads.first
+
+	for _ in 0 upto reads.count 'eachUse'
+		if index.useKindAt(record) == UseKind.op and useIsSpillStore(module, index: index, record: record, opFacts: opFacts) 'itsStore'
 			return usePositionIn(index, pressure: pressure, record: record)
 		end 'itsStore'
 

@@ -1,0 +1,63 @@
+let RegallocSplittingStaysLinearOverOneReassignedVariableCaseDirName = "regalloc-splitting-one-variable"
+
+let SmallBranches = 1000
+let LargeBranches = 4000
+let RepeatsPerSize = 3
+let SmallProgramPrefix = "small"
+let LargeProgramPrefix = "large"
+let MostCpuGrowthForFourTimesTheBranches = 8
+
+let SplittingSubPhaseName = "splitting"
+
+let ReassignedVariableHeader = "function main() returns ExitCode\n\tvar bytes = ByteArray.create()\n\n\tfor i in 0 upto 5 'fill'\n\t\tbytes.push((65 + i mod 20) as Byte)\n\tend 'fill'\n\n\tvar x = bytes.count() * 3\n\tvar total = 0 as Count\n\n"
+let ReassignedVariableFooter = "\n\tprint(\"\{x\} \{total\}\\n\")\n\n\treturn 0\nend 'main'\n"
+let SumEvery = 50
+
+typealias BranchCount = int(0 to 65536)
+
+function reassignedVariableSource(branches BranchCount) returns String
+	var out = ReassignedVariableHeader
+
+	for i in 0 upto branches 'eachBranch'
+		out.append("\tif bytes.count() > {i mod 3} 'c{i}'\n\t\tx = x + {i mod 7 + 1}\n\tend 'c{i}' else 'e{i}'\n\t\tx = x * 2 + bytes.count()\n\tend 'e{i}'\n")
+
+		if i mod SumEvery == SumEvery - 1 'aSummingBranch'
+			out.append("\ttotal = total + x\n")
+		end 'aSummingBranch'
+	end 'eachBranch'
+
+	out.append(ReassignedVariableFooter)
+	return out
+end 'reassignedVariableSource'
+
+function leastSplittingCpuFor(dir FilePath, prefix String, branches BranchCount) returns ReportedTally throws TestFailure
+	var least = 0 as ReportedTally
+
+	for repeat in 0 upto RepeatsPerSize 'eachRepeat'
+		let table = try stagedProgramMetrics(dir, name: "{prefix}-{repeat}", source: reassignedVariableSource(branches), described: "the {branches}-branch one-variable fixture")
+		let ticks = metricsCell(table, kind: MetricsRegAllocKind, name: SplittingSubPhaseName, field: MetricsCpuTicksField)
+
+		if repeat == 0 or ticks < least 'aFasterRun'
+			least = ticks
+		end 'aFasterRun'
+	end 'eachRepeat'
+
+	return least
+end 'leastSplittingCpuFor'
+
+test 'splitting a function of branches that reassign one variable costs time in proportion to the branches'
+	requireHeldOutsideCheckout(RegallocSplittingStaysLinearOverOneReassignedVariableCaseDirName, check: SplittingStaysLinearOverOneReassignedVariable.create())
+end 'splitting a function of branches that reassign one variable costs time in proportion to the branches'
+
+type SplittingStaysLinearOverOneReassignedVariable implements OutsideCheckoutCase
+	static function create() returns SplittingStaysLinearOverOneReassignedVariable
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let smallTicks = try leastSplittingCpuFor(dir, prefix: SmallProgramPrefix, branches: SmallBranches)
+		let largeTicks = try leastSplittingCpuFor(dir, prefix: LargeProgramPrefix, branches: LargeBranches)
+
+		try Expect.isTrue(largeTicks < smallTicks * (MostCpuGrowthForFourTimesTheBranches as ReportedTally), message: "the `{SplittingSubPhaseName}` sub-phase took {smallTicks} CPU ticks over {SmallBranches} branches that reassign one variable and {largeTicks} over {LargeBranches} — more than {MostCpuGrowthForFourTimesTheBranches} times as many for four times the branches, where linear is about 4 and a quadratic term reads about 16. Something in the per-split repair walks a long-lived value's whole live range or use list once per block or per use.")
+	end 'requireHeldIn'
+end 'SplittingStaysLinearOverOneReassignedVariable'
