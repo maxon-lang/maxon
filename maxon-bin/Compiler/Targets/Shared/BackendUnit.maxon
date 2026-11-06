@@ -491,7 +491,7 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 end 'spliceBackendUnit'
 
 module function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction)
-	if unitFunc.debugLocalRanges.count() == 0 'noRanges'
+	if unitFunc.debugLocalRanges.count() == 0 and unitFunc.debugLocalSpans.spans.count() == 0 'noRanges'
 		return
 	end 'noRanges'
 
@@ -502,6 +502,11 @@ module function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction)
 		range.first = opOfOrdinal(liveOps, ordinal: range.first)
 		range.last = opOfOrdinal(liveOps, ordinal: range.last)
 	end 'eachRange'
+
+	for position in 0 upto unitFunc.debugLocalSpans.lastAnchors.count() 'eachSpanPosition'
+		let ordinal = try unitFunc.debugLocalSpans.lastAnchors.get(position) otherwise panic("resolveDebugRanges: lastAnchors.get OOB at {position}")
+		try unitFunc.debugLocalSpans.lastAnchors.set(position, value: opOfOrdinal(liveOps, ordinal: ordinal as DebugOpAnchor) as ElementIndex) otherwise panic("resolveDebugRanges: lastAnchors.set OOB at {position}")
+	end 'eachSpanPosition'
 end 'resolveDebugRanges'
 
 function opOfOrdinal(liveOps OpIndexArray, ordinal DebugOpAnchor) returns DebugOpAnchor

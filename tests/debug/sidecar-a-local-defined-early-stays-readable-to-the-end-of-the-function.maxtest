@@ -1,0 +1,26 @@
+let EarlyLocalsCaseLabel = "sidecar-a-local-defined-early-stays-readable-to-the-end-of-the-function"
+
+test 'locals defined at the top of a function are still read at its last line, across every block between'
+	let staged = builtFixture(EarlyLocalsCaseLabel, fixture: EqualBindsFixtureName)
+	let endAt = anchorLine(staged.join(StagedProgramFileName), anchor: "end")
+	let names = ["first", "third", "marker", "w3"]
+	let expected = ["205", "235", "265", "35"]
+	var commandLines = ["{BreakCommand} {lineTarget(endAt)}", RunCommand]
+
+	for name in names 'eachLocal'
+		commandLines.push("{PrintCommand} {name}")
+	end 'eachLocal'
+
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine(commandLines), extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: names.count(), message: "{names.count()} `{PrintCommand}` commands printed {answers.count()} `{ValueEventName}` events. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	for (iter, name) in names.withIterator() 'eachAnswer'
+		let answered = eventAt(answers, index: iter.index() as EventIndex)
+
+		Expect.equal(textOf(answered, node: nodeAt(memberOf(answered, node: answered.root, key: ValueKey), index: 0), key: DisplayKey), expected: try expected.get(iter.index()) otherwise panic("the case names {names.count()} locals and {expected.count()} values"), message: "`{name}` is bound at the top of `main` and read at its last line, so the sidecar's rows for it must cover the code between. {said}")
+	end 'eachAnswer'
+end 'locals defined at the top of a function are still read at its last line, across every block between'

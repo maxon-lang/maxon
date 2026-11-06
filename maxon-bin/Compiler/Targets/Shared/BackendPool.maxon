@@ -517,9 +517,11 @@ export type BackendWorker
 		var refusal = RegAllocRefusalSite.create()
 		var debugLocations = DebugValueLocationArray.create()
 		var debugRanges = DebugValueRangeArray.create()
-		try allocateFunctionCore(lowered.targetModule, func: unitFunc, hasAuthor: body.hasAuthor, pool: self.pool, callerSaved: self.callerSaved, file: self.file, valueClass: lowered.valueClass, opFacts: self.opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: body.debugValues, debugLocations: debugLocations, debugRanges: debugRanges)
+		var debugSpans = DebugSpanRows.create()
+		try allocateFunctionCore(lowered.targetModule, func: unitFunc, hasAuthor: body.hasAuthor, pool: self.pool, callerSaved: self.callerSaved, file: self.file, valueClass: lowered.valueClass, opFacts: self.opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: body.debugValues, debugLocations: debugLocations, debugRanges: debugRanges, debugSpans: debugSpans)
 		unitFunc.debugLocalLocations = debugLocations
 		unitFunc.debugLocalRanges = debugRanges
+		unitFunc.debugLocalSpans = debugSpans
 
 		// Asked HERE because the splitter and SSA destruction have both run, and both mint ops by pushing
 		// onto `ops` directly.
@@ -536,6 +538,7 @@ export type BackendWorker
 
 		// Resolved into the chunk by `encode`; the compaction above renumbers the ops these name.
 		unitFunc.debugLocalRanges = DebugValueRangeArray.create()
+		unitFunc.debugLocalSpans = DebugSpanRows.create()
 
 		return FinishedUnit.create(lowered.targetModule, landing: BackendUnitLanding.create(lowered.rdata, counters: counters, facts: facts, costs: costs, iselCost: iselCost, tail: tail))
 	end 'finish'

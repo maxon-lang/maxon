@@ -467,27 +467,27 @@ export type DebugRunOffsets
 	var armed as bool
 
 	export static function forFunction(func IrFunction, armed bool) returns DebugRunOffsets
-		if not armed or func.debugLocalRanges.count() == 0 'nothingToResolve'
-			return Self{base: 0, starts: CodeOffsetColumn.create(), ends: CodeOffsetColumn.create(), armed: false}
-		end 'nothingToResolve'
-
-		let opening = (try func.debugLocalRanges.get(0) otherwise panic("DebugRunOffsets.forFunction: the roster was asked non-empty before this call")).first
-		var low = opening
-		var high = opening
+		var window = DebugAnchorWindow.empty()
 
 		// Both ends of every run, because an op index is not monotonic in layout order — `compactOps`
 		// hands out dense slots in old-index order — so a run's `last` may sit numerically below its
 		// `first`. A window taken from one field alone is short of the other, and the ops outside it
 		// lose their offsets silently.
 		for range in func.debugLocalRanges 'eachRun'
-			low = debugRunLower(low, other: range.first)
-			low = debugRunLower(low, other: range.last)
-			high = debugRunHigher(high, other: range.first)
-			high = debugRunHigher(high, other: range.last)
+			window.note(range.first)
+			window.note(range.last)
 		end 'eachRun'
 
-		let window = (high - low + 1) as ElementIndex
-		return Self{base: low, starts: CodeOffsetColumn.absent(window), ends: CodeOffsetColumn.absent(window), armed: true}
+		for lastOp in func.debugLocalSpans.lastAnchors 'eachBlockOfASpan'
+			window.note(lastOp as DebugOpAnchor)
+		end 'eachBlockOfASpan'
+
+		if not armed or not window.hasAnchors() 'nothingToResolve'
+			return Self{base: 0, starts: CodeOffsetColumn.create(), ends: CodeOffsetColumn.create(), armed: false}
+		end 'nothingToResolve'
+
+		let size = window.extent()
+		return Self{base: window.opening(), starts: CodeOffsetColumn.absent(size), ends: CodeOffsetColumn.absent(size), armed: true}
 	end 'forFunction'
 
 	export function note(opIdx ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
@@ -525,8 +525,58 @@ export type DebugRunOffsets
 			ranges.push(DebugLocalCodeRange.create(range.valueOrdinal, codeStart: codeStart, codeEnd: codeEnd))
 		end 'eachRun'
 
+		self.resolveSpans(func, blockStarts: blockStarts, blockEnds: blockEnds, into: ranges)
 		return ranges
 	end 'resolve'
+
+	function resolveSpans(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable, into DebugLocalCodeRangeArray)
+		let rows = func.debugLocalSpans
+		var viewOfSpan = CsrColumn.create()
+		var spanIndices = CsrColumn.create()
+
+		for (iter, span) in rows.spans.withIterator() 'eachSpan'
+			viewOfSpan.push(span.view as CsrIndex)
+			spanIndices.push(iter.index() as CsrIndex)
+		end 'eachSpan'
+
+		let spansOfView = buildCsr(viewOfSpan, to: spanIndices, nodeCount: rows.viewCount() as CsrIndex)
+
+		for view in 0 upto rows.viewCount() 'eachView'
+			if spansOfView.degree(view as CsrIndex) == 0 'noSpanReadsIt'
+				continue
+			end 'noSpanReadsIt'
+
+			let resolver = self.spanResolver(rows, view: view, blockStarts: blockStarts, blockEnds: blockEnds)
+
+			for k in 0 upto spansOfView.degree(view as CsrIndex) 'eachSpanOfTheView'
+				let span = try rows.spans.get(spansOfView.neighbour(view as CsrIndex, k: k)) otherwise panic("DebugRunOffsets.resolveSpans: spans.get OOB at {spansOfView.neighbour(view as CsrIndex, k: k)}")
+				resolver.pieces(span.first, past: span.past, into: into, valueOrdinal: span.valueOrdinal)
+			end 'eachSpanOfTheView'
+		end 'eachView'
+	end 'resolveSpans'
+
+	function spanResolver(rows DebugSpanRows, view ElementIndex, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable) returns DebugSpanResolver
+		let viewFirst = rows.viewFirst(view)
+		let viewPast = rows.viewPast(view)
+		var resolver = DebugSpanResolver.create(viewPast - viewFirst)
+
+		for at in viewFirst upto viewPast 'eachBlockOfTheView'
+			let blockId = try rows.blocks.get(at) otherwise panic("DebugRunOffsets.spanResolver: blocks.get OOB at {at}")
+			let blockStart = try blockStarts.get(blockId) otherwise continue
+			let blockEnd = try blockEnds.get(blockId) otherwise continue
+			let lastOp = try rows.lastAnchors.get(at) otherwise panic("DebugRunOffsets.spanResolver: lastAnchors.get OOB at {at}")
+			let codeEnd = self.endOf(lastOp, orElse: blockEnd)
+
+			if codeEnd <= blockStart 'coversNoCode'
+				continue
+			end 'coversNoCode'
+
+			resolver.place(at - viewFirst, codeStart: blockStart, codeEnd: codeEnd)
+		end 'eachBlockOfTheView'
+
+		resolver.seal()
+		return resolver
+	end 'spanResolver'
 
 	function runStart(range DebugValueRange, blockStart CodeOffset, blockEnd CodeOffset) returns CodeOffset
 		if range.fromBlockEntry 'fromTheBlocksFirstByte'
@@ -563,13 +613,44 @@ export type DebugRunOffsets
 	end 'offsetOf'
 end 'DebugRunOffsets'
 
-function debugRunLower(at DebugOpAnchor, other DebugOpAnchor) returns DebugOpAnchor
-	return other if other < at else at
-end 'debugRunLower'
+type DebugAnchorWindow
+	var low as DebugOpAnchor
+	var high as DebugOpAnchor
+	var seeded as bool
 
-function debugRunHigher(at DebugOpAnchor, other DebugOpAnchor) returns DebugOpAnchor
-	return other if other > at else at
-end 'debugRunHigher'
+	static function empty() returns DebugAnchorWindow
+		return Self{low: 0, high: 0, seeded: false}
+	end 'empty'
+
+	function note(anchor DebugOpAnchor)
+		if not self.seeded 'theFirstAnchor'
+			self.low = anchor
+			self.high = anchor
+			self.seeded = true
+			return
+		end 'theFirstAnchor'
+
+		if anchor < self.low 'belowTheWindow'
+			self.low = anchor
+		end 'belowTheWindow'
+
+		if anchor > self.high 'aboveTheWindow'
+			self.high = anchor
+		end 'aboveTheWindow'
+	end 'note'
+
+	function hasAnchors() returns bool
+		return self.seeded
+	end 'hasAnchors'
+
+	function opening() returns ElementIndex
+		return self.low as ElementIndex
+	end 'opening'
+
+	function extent() returns ElementIndex
+		return (self.high - self.low + 1) as ElementIndex
+	end 'extent'
+end 'DebugAnchorWindow'
 
 // One function as the debug-info sidecar names it. Filled at the concat, the one place that holds both
 // a chunk and its whole-`.text` start.

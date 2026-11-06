@@ -40,6 +40,30 @@ export typealias ColumnLengthColumn = Array with ElementIndex
 
 export typealias CfgIndexArray = Array with ElementIndex
 
+// @generated library-cache begin
+module function cacheWriteCfgIndexArray(writer LibraryCacheWriter, value CfgIndexArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteCfgIndexArray'
+
+module function cacheReadCfgIndexArray(reader LibraryCacheReader) returns CfgIndexArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = CfgIndexArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadCfgIndexArray'
+
+// @generated library-cache end
+
 // A block's LOOP NESTING DEPTH: 0 outside every loop, +1 per enclosing natural loop. Rule 2 turns on
 // it — a COLD spill may only be placed where this is 0 — so it is not a block index and must not be
 // mistaken for one.

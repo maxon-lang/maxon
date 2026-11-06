@@ -7,9 +7,11 @@ export type DominatorTree
 	var size as CfgIndexArray
 	var reached as BoolArray
 	export var blockAt as CfgIndexArray
+	export var idom as CfgIndexArray
+	export var reducible as bool
 
 	export static function empty() returns DominatorTree
-		return Self{pre: CfgIndexArray.create(), size: CfgIndexArray.create(), reached: BoolArray.create(), blockAt: CfgIndexArray.create()}
+		return Self{pre: CfgIndexArray.create(), size: CfgIndexArray.create(), reached: BoolArray.create(), blockAt: CfgIndexArray.create(), idom: CfgIndexArray.create(), reducible: true}
 	end 'empty'
 
 	export static function of(topo FuncTopology) returns DominatorTree
@@ -110,8 +112,30 @@ export type DominatorTree
 			end 'notTheEntryEither'
 		end 'eachSubtree'
 
-		return Self{pre: pre, size: size, reached: settled, blockAt: blockAt}
+		var tree = Self{pre: pre, size: size, reached: settled, blockAt: blockAt, idom: idom, reducible: true}
+		tree.reducible = tree.everyRetreatingEdgeIsABackEdge(topo, postIndex: postIndex, postorder: postorder)
+		return tree
 	end 'of'
+
+	function everyRetreatingEdgeIsABackEdge(topo FuncTopology, postIndex CfgIndexArray, postorder CfgIndexArray) returns bool
+		for block in postorder 'eachReached'
+			let blockPost = try postIndex.get(block) otherwise panic("DominatorTree.everyRetreatingEdgeIsABackEdge: postIndex.get OOB at {block}")
+
+			for k in 0 upto topo.succ.degree(block as CsrIndex) 'eachSuccessor'
+				let next = topo.succ.neighbour(block as CsrIndex, k: k)
+
+				if (try postIndex.get(next) otherwise panic("DominatorTree.everyRetreatingEdgeIsABackEdge: postIndex.get OOB at {next}")) >= blockPost and not self.dominates(next, y: block) 'aRetreatingEdgeToANonDominator'
+					return false
+				end 'aRetreatingEdgeToANonDominator'
+			end 'eachSuccessor'
+		end 'eachReached'
+
+		return true
+	end 'everyRetreatingEdgeIsABackEdge'
+
+	export function isReached(x ElementIndex) returns bool
+		return try self.reached.get(x) otherwise panic("DominatorTree.isReached: block {x} out of range")
+	end 'isReached'
 
 	export function dominates(x ElementIndex, y ElementIndex) returns bool
 		if not (try self.reached.get(x) otherwise panic("DominatorTree.dominates: block {x} out of range")) or not (try self.reached.get(y) otherwise panic("DominatorTree.dominates: block {y} out of range")) 'unreached'

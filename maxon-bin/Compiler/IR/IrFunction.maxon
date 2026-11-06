@@ -3381,6 +3381,8 @@ export type IrFunction
 	// scoped to the whole function renders another value's bits as confidently as its own.
 	export var debugLocalRanges as DebugValueRangeArray
 
+	export var debugLocalSpans as DebugSpanRows
+
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
 	// parser must positively widen it — synthesized functions stay file-private.
@@ -3475,7 +3477,8 @@ export type IrFunction
 			inlineSites: placeholders.inlineSites,
 			debugLocals: DebugLocalDeclArray.create(),
 			debugLocalLocations: DebugValueLocationArray.create(),
-			debugLocalRanges: DebugValueRangeArray.create()
+			debugLocalRanges: DebugValueRangeArray.create(),
+			debugLocalSpans: DebugSpanRows.create()
 		}
 	end 'create'
 
@@ -3560,7 +3563,8 @@ export type IrFunction
 			inlineSites: InlineSiteArray.create(),
 			debugLocals: DebugLocalDeclArray.create(),
 			debugLocalLocations: DebugValueLocationArray.create(),
-			debugLocalRanges: DebugValueRangeArray.create()
+			debugLocalRanges: DebugValueRangeArray.create(),
+			debugLocalSpans: DebugSpanRows.create()
 		}
 	end 'createFromStd'
 
@@ -3603,6 +3607,7 @@ export type IrFunction
 			debugLocals: src.debugLocals,
 			debugLocalLocations: src.debugLocalLocations,
 			debugLocalRanges: src.debugLocalRanges,
+			debugLocalSpans: src.debugLocalSpans,
 			valueNameIds: src.valueNameIds,
 			valueBrandIds: src.valueBrandIds,
 			valueMintedSole: src.valueMintedSole,
@@ -3985,6 +3990,7 @@ export type IrFunction
 		cacheWriteDebugLocalDeclArray(writer, value: self.debugLocals)
 		cacheWriteDebugValueLocationArray(writer, value: self.debugLocalLocations)
 		cacheWriteDebugValueRangeArray(writer, value: self.debugLocalRanges)
+		self.debugLocalSpans.cacheWrite(writer)
 	end 'cacheWrite'
 
 	export static function cacheRead(reader LibraryCacheReader) returns IrFunction throws LibraryCacheDamage
@@ -4046,12 +4052,13 @@ export type IrFunction
 		let f_debugLocals = try cacheReadDebugLocalDeclArray(reader)
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
+		let f_debugLocalSpans = try DebugSpanRows.cacheRead(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize472
-		return sizeof(IrFunction) as CacheSize472
+	static function cacheLayoutBytes() returns CacheSize480
+		return sizeof(IrFunction) as CacheSize480
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

@@ -1,0 +1,353 @@
+let DebugPositionSpan = 4294967296
+
+export type DebugValueSpan
+	export let valueOrdinal as ElementIndex
+	export let view as ElementIndex
+	export let first as ElementIndex
+	export let past as ElementIndex
+
+	export static function create(valueOrdinal ElementIndex, view ElementIndex, first ElementIndex, past ElementIndex) returns DebugValueSpan
+		return Self{valueOrdinal: valueOrdinal, view: view, first: first, past: past}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.valueOrdinal as CacheUnsigned)
+		writer.unsigned(self.view as CacheUnsigned)
+		writer.unsigned(self.first as CacheUnsigned)
+		writer.unsigned(self.past as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns DebugValueSpan throws LibraryCacheDamage
+		let f_valueOrdinal = (try reader.unsigned()) as ElementIndex
+		let f_view = (try reader.unsigned()) as ElementIndex
+		let f_first = (try reader.unsigned()) as ElementIndex
+		let f_past = (try reader.unsigned()) as ElementIndex
+
+		return Self{valueOrdinal: f_valueOrdinal, view: f_view, first: f_first, past: f_past}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(DebugValueSpan) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'DebugValueSpan'
+
+export typealias DebugValueSpanArray = Array with DebugValueSpan
+
+// @generated library-cache begin
+function cacheWriteDebugValueSpanArray(writer LibraryCacheWriter, value DebugValueSpanArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDebugValueSpanArray'
+
+function cacheReadDebugValueSpanArray(reader LibraryCacheReader) returns DebugValueSpanArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DebugValueSpanArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try DebugValueSpan.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDebugValueSpanArray'
+
+// @generated library-cache end
+
+export type DebugSpanRows
+	export var spans as DebugValueSpanArray
+	export var viewStarts as CfgIndexArray
+	export var blocks as BlockIdArray
+	export var lastAnchors as CfgIndexArray
+
+	export static function create() returns DebugSpanRows
+		var viewStarts = CfgIndexArray.create()
+		viewStarts.push(0)
+		return Self{spans: DebugValueSpanArray.create(), viewStarts: viewStarts, blocks: BlockIdArray.create(), lastAnchors: CfgIndexArray.create()}
+	end 'create'
+
+	export function viewCount() returns ElementIndex
+		return self.viewStarts.count() - 1
+	end 'viewCount'
+
+	export function closeView() returns ElementIndex
+		self.viewStarts.push(self.blocks.count())
+		return self.viewCount() - 1
+	end 'closeView'
+
+	export function viewFirst(view ElementIndex) returns ElementIndex
+		return try self.viewStarts.get(view) otherwise panic("DebugSpanRows.viewFirst: view {view} is past the {self.viewCount()} closed")
+	end 'viewFirst'
+
+	export function viewPast(view ElementIndex) returns ElementIndex
+		return try self.viewStarts.get(view + 1) otherwise panic("DebugSpanRows.viewPast: view {view} is past the {self.viewCount()} closed")
+	end 'viewPast'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteDebugValueSpanArray(writer, value: self.spans)
+		cacheWriteCfgIndexArray(writer, value: self.viewStarts)
+		cacheWriteBlockIdArray(writer, value: self.blocks)
+		cacheWriteCfgIndexArray(writer, value: self.lastAnchors)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns DebugSpanRows throws LibraryCacheDamage
+		let f_spans = try cacheReadDebugValueSpanArray(reader)
+		let f_viewStarts = try cacheReadCfgIndexArray(reader)
+		let f_blocks = try cacheReadBlockIdArray(reader)
+		let f_lastAnchors = try cacheReadCfgIndexArray(reader)
+
+		return Self{spans: f_spans, viewStarts: f_viewStarts, blocks: f_blocks, lastAnchors: f_lastAnchors}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(DebugSpanRows) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'DebugSpanRows'
+
+type ExtremeTree
+	let count as ElementIndex
+	let wantsMax as bool
+	var keys as CfgIndexArray
+	var nodes as CfgIndexArray
+
+	static function create(count ElementIndex, wantsMax bool) returns ExtremeTree
+		var keys = CfgIndexArray.create()
+		keys.refill(count, value: 0)
+		var nodes = CfgIndexArray.create()
+		nodes.refill(count * 2, value: 0)
+		return Self{count: count, wantsMax: wantsMax, keys: keys, nodes: nodes}
+	end 'create'
+
+	function setKey(position ElementIndex, key ElementIndex)
+		try self.keys.set(position, value: key) otherwise panic("ExtremeTree.setKey: position {position} is past the {self.count} leaves")
+	end 'setKey'
+
+	function keyAt(position ElementIndex) returns ElementIndex
+		return try self.keys.get(position) otherwise panic("ExtremeTree.keyAt: position {position} is past the {self.count} leaves")
+	end 'keyAt'
+
+	function build()
+		for position in 0 upto self.count 'eachLeaf'
+			try self.nodes.set(self.count + position, value: position) otherwise panic("ExtremeTree.build: leaf {position} is past the tree")
+		end 'eachLeaf'
+
+		var node = self.count
+
+		while node > 1 'eachInnerNode'
+			node = node - 1
+			let left = try self.nodes.get(node * 2) otherwise panic("ExtremeTree.build: node {node * 2} is past the tree")
+			let right = try self.nodes.get(node * 2 + 1) otherwise panic("ExtremeTree.build: node {node * 2 + 1} is past the tree")
+			try self.nodes.set(node, value: self.better(left, other: right)) otherwise panic("ExtremeTree.build: node {node} is past the tree")
+		end 'eachInnerNode'
+	end 'build'
+
+	function better(position ElementIndex, other ElementIndex) returns ElementIndex
+		let own = self.keyAt(position)
+		let theirs = self.keyAt(other)
+
+		if self.wantsMax 'largest'
+			return position if own >= theirs else other
+		end 'largest'
+
+		return position if own <= theirs else other
+	end 'better'
+
+	function extremeIn(first ElementIndex, past ElementIndex) returns ElementIndex
+		if first >= past 'nothingInRange'
+			panic("ExtremeTree.extremeIn: the range [{first}, {past}) is empty")
+		end 'nothingInRange'
+
+		var low = first + self.count
+		var high = past + self.count
+		var found = false
+		var result = 0 as ElementIndex
+
+		while low < high 'climb'
+			if low mod 2 == 1 'leftEdge'
+				let node = try self.nodes.get(low) otherwise panic("ExtremeTree.extremeIn: node {low} is past the tree")
+				result = self.better(result, other: node) if found else node
+				found = true
+				low = low + 1
+			end 'leftEdge'
+
+			if high mod 2 == 1 'rightEdge'
+				high = high - 1
+				let node = try self.nodes.get(high) otherwise panic("ExtremeTree.extremeIn: node {high} is past the tree")
+				result = self.better(result, other: node) if found else node
+				found = true
+			end 'rightEdge'
+
+			low = low / 2
+			high = high / 2
+		end 'climb'
+
+		return result
+	end 'extremeIn'
+end 'ExtremeTree'
+
+export type DebugSpanResolver
+	let positionCount as ElementIndex
+	var starts as CodeOffsetArray
+	var ends as CodeOffsetArray
+	var order as CfgIndexArray
+	var finalIndex as CfgIndexArray
+	var startsLow as ExtremeTree
+	var startsHigh as ExtremeTree
+	var endsLow as ExtremeTree
+	var endsHigh as ExtremeTree
+
+	export static function create(positionCount ElementIndex) returns DebugSpanResolver
+		var starts = CodeOffsetArray.create()
+		starts.refill(positionCount, value: 0)
+		var ends = CodeOffsetArray.create()
+		ends.refill(positionCount, value: 0)
+		var finalIndex = CfgIndexArray.create()
+		finalIndex.refill(positionCount, value: 0)
+		return Self{positionCount: positionCount, starts: starts, ends: ends, order: CfgIndexArray.create(), finalIndex: finalIndex, startsLow: ExtremeTree.create(positionCount, wantsMax: false), startsHigh: ExtremeTree.create(positionCount, wantsMax: true), endsLow: ExtremeTree.create(positionCount, wantsMax: false), endsHigh: ExtremeTree.create(positionCount, wantsMax: true)}
+	end 'create'
+
+	export function place(position ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
+		try self.starts.set(position, value: codeStart) otherwise panic("DebugSpanResolver.place: position {position} is past the {self.positionCount} the resolver was sized to")
+		try self.ends.set(position, value: codeEnd) otherwise panic("DebugSpanResolver.place: position {position} is past the {self.positionCount} the resolver was sized to")
+		self.order.push(position)
+	end 'place'
+
+	export function seal()
+		var keyed = CfgIndexArray.create()
+		keyed.reserve(self.order.count())
+
+		for position in self.order 'eachPlaced'
+			keyed.push((self.startOf(position) as ElementIndex) * DebugPositionSpan + position)
+		end 'eachPlaced'
+
+		keyed.sort()
+		self.order.clear()
+
+		for key in keyed 'eachInFinalOrder'
+			let position = key mod DebugPositionSpan
+			try self.finalIndex.set(position, value: self.order.count()) otherwise panic("DebugSpanResolver.seal: position {position} is past the {self.positionCount} the resolver was sized to")
+			self.order.push(position)
+		end 'eachInFinalOrder'
+
+		let absent = self.positionCount + 2
+
+		for position in 0 upto self.positionCount 'eachPosition'
+			self.startsLow.setKey(position, key: absent)
+			self.endsLow.setKey(position, key: absent)
+		end 'eachPosition'
+
+		for at in 0 upto self.order.count() 'eachInOrder'
+			let position = try self.order.get(at) otherwise panic("DebugSpanResolver.seal: order.get OOB at {at}")
+			self.startsLow.setKey(position, key: 0)
+			self.endsLow.setKey(position, key: 0)
+
+			if at > 0 'hasAPredecessor'
+				let before = try self.order.get(at - 1) otherwise panic("DebugSpanResolver.seal: order.get OOB at {at - 1}")
+
+				if self.endOf(before) == self.startOf(position) 'touchesIt'
+					self.startsLow.setKey(position, key: before + 1)
+					self.startsHigh.setKey(position, key: before)
+				end 'touchesIt'
+			end 'hasAPredecessor'
+
+			if at + 1 < self.order.count() 'hasASuccessor'
+				let after = try self.order.get(at + 1) otherwise panic("DebugSpanResolver.seal: order.get OOB at {at + 1}")
+
+				if self.endOf(position) == self.startOf(after) 'touchesNext'
+					self.endsLow.setKey(position, key: after + 1)
+					self.endsHigh.setKey(position, key: after)
+				end 'touchesNext'
+			end 'hasASuccessor'
+		end 'eachInOrder'
+
+		self.startsLow.build()
+		self.startsHigh.build()
+		self.endsLow.build()
+		self.endsHigh.build()
+	end 'seal'
+
+	function startOf(position ElementIndex) returns CodeOffset
+		return try self.starts.get(position) otherwise panic("DebugSpanResolver.startOf: position {position} is past the {self.positionCount} the resolver was sized to")
+	end 'startOf'
+
+	function endOf(position ElementIndex) returns CodeOffset
+		return try self.ends.get(position) otherwise panic("DebugSpanResolver.endOf: position {position} is past the {self.positionCount} the resolver was sized to")
+	end 'endOf'
+
+	export function pieces(first ElementIndex, past ElementIndex, into DebugLocalCodeRangeArray, valueOrdinal ElementIndex)
+		var runStarts = CfgIndexArray.create()
+		var runEnds = CfgIndexArray.create()
+		self.collectRunBoundaries(self.startsLow, wantsMax: false, first: first, past: past, into: runStarts)
+		self.collectRunBoundaries(self.startsHigh, wantsMax: true, first: first, past: past, into: runStarts)
+		self.collectRunBoundaries(self.endsLow, wantsMax: false, first: first, past: past, into: runEnds)
+		self.collectRunBoundaries(self.endsHigh, wantsMax: true, first: first, past: past, into: runEnds)
+
+		if runStarts.count() != runEnds.count() 'aRunWithoutOneEnd'
+			panic("DebugSpanResolver.pieces: the span [{first}, {past}) found {runStarts.count()} run starts and {runEnds.count()} run ends")
+		end 'aRunWithoutOneEnd'
+
+		self.sortInFinalOrder(runStarts)
+		self.sortInFinalOrder(runEnds)
+
+		for at in 0 upto runStarts.count() 'eachRun'
+			let openedAt = try runStarts.get(at) otherwise panic("DebugSpanResolver.pieces: runStarts.get OOB at {at}")
+			let closedAt = try runEnds.get(at) otherwise panic("DebugSpanResolver.pieces: runEnds.get OOB at {at}")
+			into.push(DebugLocalCodeRange.create(valueOrdinal, codeStart: self.startOf(openedAt), codeEnd: self.endOf(closedAt)))
+		end 'eachRun'
+	end 'pieces'
+
+	function collectRunBoundaries(tree ExtremeTree, wantsMax bool, first ElementIndex, past ElementIndex, into CfgIndexArray)
+		var pending = CfgIndexArray.create()
+		pending.push(first)
+		pending.push(past)
+
+		while pending.count() > 0 'untilEveryRangeIsSearched'
+			let high = try pending.pop() otherwise panic("DebugSpanResolver.collectRunBoundaries: pending.pop on a non-empty list failed")
+			let low = try pending.pop() otherwise panic("DebugSpanResolver.collectRunBoundaries: pending.pop on a non-empty list failed")
+
+			if low >= high 'emptyRange'
+				continue
+			end 'emptyRange'
+
+			let candidate = tree.extremeIn(low, past: high)
+			let key = tree.keyAt(candidate)
+			var outside = key <= first
+			outside = key >= past if wantsMax else outside
+
+			if not outside 'nothingOutsideHere'
+				continue
+			end 'nothingOutsideHere'
+
+			into.push(candidate)
+			pending.push(low)
+			pending.push(candidate)
+			pending.push(candidate + 1)
+			pending.push(high)
+		end 'untilEveryRangeIsSearched'
+	end 'collectRunBoundaries'
+
+	function sortInFinalOrder(positions CfgIndexArray)
+		var keyed = CfgIndexArray.create()
+		keyed.reserve(positions.count())
+
+		for position in positions 'eachPosition'
+			keyed.push((try self.finalIndex.get(position) otherwise panic("DebugSpanResolver.sortInFinalOrder: position {position} is past the {self.positionCount} the resolver was sized to")) * DebugPositionSpan + position)
+		end 'eachPosition'
+
+		keyed.sort()
+		positions.clear()
+
+		for key in keyed 'eachInFinalOrder'
+			positions.push(key mod DebugPositionSpan)
+		end 'eachInFinalOrder'
+	end 'sortInFinalOrder'
+end 'DebugSpanResolver'

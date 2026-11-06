@@ -1256,7 +1256,7 @@ function refuseLoweredUnit(project Project, lowered LoweredUnit, authorFilePath 
 	var facts = RegAllocFacts.create()
 
 	// It asks about no named value: the compile is failing, and a diagnostic run has no sidecar to fill.
-	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: DebugValueRoster.empty(), debugLocations: DebugValueLocationArray.create(), debugRanges: DebugValueRangeArray.create()) otherwise 'refusedAgain'
+	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: DebugValueRoster.empty(), debugLocations: DebugValueLocationArray.create(), debugRanges: DebugValueRangeArray.create(), debugSpans: DebugSpanRows.create()) otherwise 'refusedAgain'
 		try renderRegisterPressureRefusal(project, module: lowered.targetModule, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
 	end 'refusedAgain'
 
@@ -1312,7 +1312,7 @@ end 'foldFunctionAllocation'
 // a message that reaches a module `var` is E3143. Everything it measures goes into values its
 // caller hands it. A hot-loop overflow leaves through `refusal` and a `throw`, because E5001 can
 // only be built from tables a `Project` holds.
-module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValues DebugValueRoster, debugLocations DebugValueLocationArray, debugRanges DebugValueRangeArray) throws RegAllocRefusal
+module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValues DebugValueRoster, debugLocations DebugValueLocationArray, debugRanges DebugValueRangeArray, debugSpans DebugSpanRows) throws RegAllocRefusal
 	// Reverse-postorder first, so layout order matches execution order: the cold-spill splitter's
 	// before/after-peak classification and the colorer's dominance walk rest on it, and the parser
 	// emits a nested loop's exit before its inner blocks, which would otherwise misclassify an idle
@@ -1381,7 +1381,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 
 	// After the rewrite, which drops self-moves without renumbering: a run harvested before it would
 	// span ops that never reach the encoder, and every window would name code that is not there.
-	harvestDebugValueRanges(module, func: func, liveness: liveness, roster: debugValues, locations: debugLocations, opFacts: opFacts, into: debugRanges)
+	harvestDebugValueRanges(module, func: func, liveness: liveness, roster: debugValues, locations: debugLocations, opFacts: opFacts, into: debugRanges, spans: debugSpans)
 	costs.record(RegAllocPhase.rewrite.ordinal, probe: rewriteProbe)
 end 'allocateFunctionCore'
 
@@ -1490,7 +1490,7 @@ type DebugBlockPlaces
 	end 'noteOp'
 end 'DebugBlockPlaces'
 
-function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, opFacts OpVariantFacts, into DebugValueRangeArray)
+function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, opFacts OpVariantFacts, into DebugValueRangeArray, spans DebugSpanRows)
 	if roster.valueIds.count() == 0 'nothingNamed'
 		return
 	end 'nothingNamed'
@@ -1507,7 +1507,7 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 
 	var raw = DebugValueRangeArray.create()
 	collectDebugRuns(liveness, roster: roster, names: names, places: places, into: raw)
-	refineDebugRuns(raw, into: into, liveness: liveness, roster: roster, locations: locations, names: names, places: places, paramCount: func.paramCount)
+	refineDebugRuns(raw, into: into, spans: spans, liveness: liveness, roster: roster, locations: locations, names: names, places: places, paramCount: func.paramCount)
 end 'harvestDebugValueRanges'
 
 function collectDebugRuns(liveness LivenessResult, roster DebugValueRoster, names DebugNameIndex, places DebugBlockPlaces, into DebugValueRangeArray)
@@ -1641,6 +1641,14 @@ type DebugNameIndex
 	function siteKeyOf(name CsrIndex) returns DebugSiteKey
 		return debugSiteKeyAt(self.siteKeys, at: name)
 	end 'siteKeyOf'
+
+	function siteCount() returns ElementIndex
+		return self.siteParents.count()
+	end 'siteCount'
+
+	function parentOfSite(site ElementIndex) returns DebugSiteKey
+		return debugSiteKeyAt(self.siteParents, at: site)
+	end 'parentOfSite'
 
 	function appliesAt(slot DebugNamedSlot, siteKey DebugSiteKey) returns bool
 		let own = self.siteKeyOf(slot as CsrIndex)
@@ -2145,6 +2153,7 @@ end 'DebugScopeState'
 
 type DebugRunRefiner
 	var visited as CfgIndexArray
+	var revived as CfgIndexArray
 	var cutStamp as CfgIndexArray
 	var cutBefore as DebugAnchorArray
 	var stopStamp as CfgIndexArray
@@ -2158,17 +2167,50 @@ type DebugRunRefiner
 	var rivalPast as CfgIndexArray
 	var rivalCuts as DebugAnchorArray
 	var rivalCutKnown as BoolArray
+	var stopLocals as CfgIndexArray
+	var holeStarts as CfgIndexArray
+	var holeEnds as CfgIndexArray
+	var candidates as CfgIndexArray
+	var points as CfgIndexArray
+	var frontier as CsrGraph
+	var siteChildren as CsrGraph
+	var siteLocals as CsrGraph
+	var siteWalk as CfgIndexArray
+	var viewOfSite as CfgIndexArray
+	var viewPreorders as CfgIndexArray
 
-	static function over(blockCount ElementIndex) returns DebugRunRefiner
+	static function over(topo FuncTopology, dom DominatorTree, places DebugBlockPlaces, names DebugNameIndex) returns DebugRunRefiner
+		let blockCount = topo.numBlocks
 		var visited = CfgIndexArray.create()
 		visited.refill(blockCount, value: 0)
+		var revived = CfgIndexArray.create()
+		revived.refill(blockCount, value: 0)
 		var cutStamp = CfgIndexArray.create()
 		cutStamp.refill(blockCount, value: 0)
 		var cutBefore = DebugAnchorArray.create()
 		cutBefore.refill(blockCount, value: 0)
 		var stopStamp = CfgIndexArray.create()
 		stopStamp.refill(blockCount, value: 0)
-		return Self{visited: visited, cutStamp: cutStamp, cutBefore: cutBefore, stopStamp: stopStamp, pending: CfgIndexArray.create(), rivals: CfgIndexArray.create(), positionless: false, resumeAfter: CfgIndexArray.create(), scopeLocals: CfgIndexArray.create(), rivalLocals: CfgIndexArray.create(), rivalFirst: CfgIndexArray.create(), rivalPast: CfgIndexArray.create(), rivalCuts: DebugAnchorArray.create(), rivalCutKnown: BoolArray.create()}
+		let siteCount = names.siteCount()
+		var viewOfSite = CfgIndexArray.create()
+		viewOfSite.refill(siteCount, value: 0)
+		var childOf = CsrColumn.create()
+		var children = CsrColumn.create()
+
+		for site in 1 upto siteCount 'eachInlineSite'
+			childOf.push(names.parentOfSite(site) as CsrIndex)
+			children.push(site as CsrIndex)
+		end 'eachInlineSite'
+
+		var siteOf = CsrColumn.create()
+		var localsOf = CsrColumn.create()
+
+		for (place, local) in places.localOfPlace.withIterator() 'eachPlace'
+			siteOf.push(debugSiteKeyAt(places.siteKeyOfPlace, at: place.index()) as CsrIndex)
+			localsOf.push(local as CsrIndex)
+		end 'eachPlace'
+
+		return Self{visited: visited, revived: revived, cutStamp: cutStamp, cutBefore: cutBefore, stopStamp: stopStamp, pending: CfgIndexArray.create(), rivals: CfgIndexArray.create(), positionless: false, resumeAfter: CfgIndexArray.create(), scopeLocals: CfgIndexArray.create(), rivalLocals: CfgIndexArray.create(), rivalFirst: CfgIndexArray.create(), rivalPast: CfgIndexArray.create(), rivalCuts: DebugAnchorArray.create(), rivalCutKnown: BoolArray.create(), stopLocals: CfgIndexArray.create(), holeStarts: CfgIndexArray.create(), holeEnds: CfgIndexArray.create(), candidates: CfgIndexArray.create(), points: CfgIndexArray.create(), frontier: debugDominanceFrontiers(topo, dom: dom), siteChildren: buildCsr(childOf, to: children, nodeCount: siteCount as CsrIndex), siteLocals: buildCsr(siteOf, to: localsOf, nodeCount: siteCount as CsrIndex), siteWalk: CfgIndexArray.create(), viewOfSite: viewOfSite, viewPreorders: CfgIndexArray.create()}
 	end 'over'
 
 	function cutBlockBefore(local ElementIndex, anchor DebugOpAnchor, stamp ElementIndex)
@@ -2185,6 +2227,10 @@ type DebugRunRefiner
 	end 'cutBlockBefore'
 
 	function stopAt(local ElementIndex, stamp ElementIndex)
+		if (try self.stopStamp.get(local) otherwise panic("DebugRunRefiner.stopAt: stopStamp.get OOB at {local}")) != stamp 'aNewStop'
+			self.stopLocals.push(local)
+		end 'aNewStop'
+
 		try self.stopStamp.set(local, value: stamp) otherwise panic("DebugRunRefiner.stopAt: stopStamp.set OOB at {local}")
 	end 'stopAt'
 
@@ -2233,6 +2279,7 @@ type DebugRunRefiner
 		let stamp = ordinal + 1
 		let group = debugGroupAt(roster, ordinal: ordinal)
 		self.resumeAfter.clear()
+		self.stopLocals.clear()
 
 		let ownScope = self.scopeStateOf(ordinal, roster: roster, topo: topo)
 
@@ -2443,7 +2490,7 @@ type DebugRunRefiner
 		return (true, allowed)
 	end 'laterRivalsAllow'
 
-	function refine(ordinal ElementIndex, runsOf CsrGraph, raw DebugValueRangeArray, into DebugValueRangeArray, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+	function refine(ordinal ElementIndex, runsOf CsrGraph, raw DebugValueRangeArray, into DebugValueRangeArray, spans DebugSpanRows, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
 		let location = try locations.get(ordinal) otherwise panic("DebugRunRefiner.refine: locations.get OOB at {ordinal}")
 		var cutsByLaterVersions = false
 		var scopeBounded = false
@@ -2459,7 +2506,7 @@ type DebugRunRefiner
 
 		if settled 'rowsOfTheFlow'
 			if not (try sites.repeatsEarlier.get(ordinal) otherwise panic("DebugRunRefiner.refine: repeatsEarlier.get OOB at {ordinal}")) 'notRepeated'
-				self.extend(ordinal, into: into, names: names, places: places, sites: sites, topo: topo, dom: dom)
+				self.extend(ordinal, into: into, spans: spans, names: names, places: places, sites: sites, topo: topo, dom: dom)
 			end 'notRepeated'
 
 			return
@@ -2480,9 +2527,10 @@ type DebugRunRefiner
 
 		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
 		let dominatedFirst = debugPreorderOf(sites, ordinal: ordinal)
-		let dominatedPast = debugSpanEndOf(sites, ordinal: ordinal)
+		let dominatedPast = debugSpanEndOf(sites, ordinal: ordinal) if dom.isReached(ownLocal) else dominatedFirst
 		let stamp = ordinal + 1
 		self.pending.clear()
+		self.stopLocals.clear()
 		self.pending.push(ownLocal)
 		try self.visited.set(ownLocal, value: stamp) otherwise panic("DebugRunRefiner.markScopeRegion: visited.set OOB at {ownLocal}")
 
@@ -2550,10 +2598,10 @@ type DebugRunRefiner
 		into.push(debugRunRange(range.valueOrdinal, blockId: range.blockId, first: first, last: last, fromBlockEntry: fromBlockEntry, behindAnOp: behindAnOp))
 	end 'keepRun'
 
-	function extend(ordinal ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+	function extendByFlood(ordinal ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
 		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
 		let dominatedFirst = debugPreorderOf(sites, ordinal: ordinal)
-		let dominatedPast = debugSpanEndOf(sites, ordinal: ordinal)
+		let dominatedPast = debugSpanEndOf(sites, ordinal: ordinal) if dom.isReached(ownLocal) else dominatedFirst
 		let stamp = ordinal + 1
 		self.pending.clear()
 		self.pending.push(ownLocal)
@@ -2573,7 +2621,329 @@ type DebugRunRefiner
 
 			self.visitSuccessors(local, ownLocal: ownLocal, stamp: stamp, dominatedFirst: dominatedFirst, dominatedPast: dominatedPast, topo: topo, dom: dom)
 		end 'untilNothingIsPending'
+	end 'extendByFlood'
+
+	function extend(ordinal ElementIndex, into DebugValueRangeArray, spans DebugSpanRows, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+		if dom.reducible and dom.isReached(debugLocalAt(sites, ordinal: ordinal)) 'itsRegionHasAFrontier'
+			self.extendByIntervals(ordinal, into: into, spans: spans, names: names, places: places, sites: sites, topo: topo, dom: dom)
+			return
+		end 'itsRegionHasAFrontier'
+
+		self.extendByFlood(ordinal, into: into, names: names, places: places, sites: sites, topo: topo, dom: dom)
 	end 'extend'
+
+	function extendByIntervals(ordinal ElementIndex, into DebugValueRangeArray, spans DebugSpanRows, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
+		let stamp = ordinal + 1
+		let regionFirst = debugPreorderOf(sites, ordinal: ordinal)
+		let regionPast = debugSpanEndOf(sites, ordinal: ordinal)
+		self.pushRowOfBlock(ordinal, local: ownLocal, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites)
+
+		if (try self.stopStamp.get(ownLocal) otherwise panic("DebugRunRefiner.extendByIntervals: stopStamp.get OOB at {ownLocal}")) == stamp 'theRegionIsTheDefinitionBlock'
+			self.holeStarts.clear()
+			self.holeEnds.clear()
+			self.holeStarts.push(regionFirst + 1)
+			self.holeEnds.push(regionPast)
+		end 'theRegionIsTheDefinitionBlock' else 'theRegionReachesFurther'
+			self.findUnreachable(ownLocal, stamp: stamp, regionFirst: regionFirst, regionPast: regionPast, topo: topo, dom: dom)
+		end 'theRegionReachesFurther'
+
+		self.points.clear()
+		self.points.push(regionFirst)
+
+		for stop in self.stopLocals 'eachStop'
+			if not self.isReachedInside(stop, regionFirst: regionFirst, regionPast: regionPast, dom: dom) 'outsideTheRegion'
+				continue
+			end 'outsideTheRegion'
+
+			self.pushRowOfBlock(ordinal, local: stop, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites)
+			self.points.push(dom.preorderOf(stop))
+		end 'eachStop'
+
+		self.reviveAfterShadowingScopes(ordinal, ownLocal: ownLocal, stamp: stamp, regionFirst: regionFirst, regionPast: regionPast, into: into, names: names, places: places, sites: sites, topo: topo, dom: dom)
+		let view = self.viewOf(names.siteKeyOf(ordinal as CsrIndex), spans: spans, places: places, dom: dom)
+
+		for point in self.points 'eachPointRowedOnItsOwn'
+			self.holeStarts.push(point)
+			self.holeEnds.push(point + 1)
+		end 'eachPointRowedOnItsOwn'
+
+		self.normalizeHoles()
+		var cursor = regionFirst
+
+		for at in 0 upto self.holeStarts.count() 'eachHole'
+			let holeStart = try self.holeStarts.get(at) otherwise panic("DebugRunRefiner.extendByIntervals: holeStarts.get OOB at {at}")
+			let holeEnd = try self.holeEnds.get(at) otherwise panic("DebugRunRefiner.extendByIntervals: holeEnds.get OOB at {at}")
+
+			if holeStart > cursor 'aStretchBeforeTheHole'
+				self.pushSpanOver(ordinal, view: view, first: cursor, past: holeStart, spans: spans)
+			end 'aStretchBeforeTheHole'
+
+			cursor = holeEnd if holeEnd > cursor else cursor
+		end 'eachHole'
+
+		if cursor < regionPast 'aStretchToTheRegionsEnd'
+			self.pushSpanOver(ordinal, view: view, first: cursor, past: regionPast, spans: spans)
+		end 'aStretchToTheRegionsEnd'
+	end 'extendByIntervals'
+
+	function viewOf(siteKey DebugSiteKey, spans DebugSpanRows, places DebugBlockPlaces, dom DominatorTree) returns ElementIndex
+		let known = try self.viewOfSite.get(siteKey as ElementIndex) otherwise panic("DebugRunRefiner.viewOf: viewOfSite.get OOB at {siteKey}")
+
+		if known > 0 'aViewAlreadyBuilt'
+			return known - 1
+		end 'aViewAlreadyBuilt'
+
+		var keyed = CfgIndexArray.create()
+		self.siteWalk.clear()
+		self.siteWalk.push(siteKey as ElementIndex)
+
+		while self.siteWalk.count() > 0 'untilEverySiteIsWalked'
+			let site = (try self.siteWalk.pop() otherwise panic("DebugRunRefiner.viewOf: siteWalk.pop on a non-empty list failed")) as CsrIndex
+
+			for k in 0 upto self.siteLocals.degree(site) 'eachBlockOfTheSite'
+				let local = self.siteLocals.neighbour(site, k: k) as ElementIndex
+
+				if dom.isReached(local) and self.emitsOps(local, places: places) 'aBlockWithCode'
+					keyed.push(dom.preorderOf(local) * DebugOrdinalSpan + local)
+				end 'aBlockWithCode'
+			end 'eachBlockOfTheSite'
+
+			for k in 0 upto self.siteChildren.degree(site) 'eachNestedSite'
+				self.siteWalk.push(self.siteChildren.neighbour(site, k: k) as ElementIndex)
+			end 'eachNestedSite'
+		end 'untilEverySiteIsWalked'
+
+		keyed.sort()
+
+		for key in keyed 'eachBlockInPreorder'
+			let local = key mod DebugOrdinalSpan
+			let place = try places.placeOfLocal.get(local) otherwise panic("DebugRunRefiner.viewOf: block {local} has no place")
+			spans.blocks.push(try places.blockIdOfPlace.get(place) otherwise panic("DebugRunRefiner.viewOf: blockIdOfPlace.get OOB at {place}"))
+			spans.lastAnchors.push((try places.blockLast.get(place) otherwise panic("DebugRunRefiner.viewOf: block {local} emits no ops")) as ElementIndex)
+			self.viewPreorders.push(key / DebugOrdinalSpan)
+		end 'eachBlockInPreorder'
+
+		let view = spans.closeView()
+		try self.viewOfSite.set(siteKey as ElementIndex, value: view + 1) otherwise panic("DebugRunRefiner.viewOf: viewOfSite.set OOB at {siteKey}")
+		return view
+	end 'viewOf'
+
+	function emitsOps(local ElementIndex, places DebugBlockPlaces) returns bool
+		if let place = try places.placeOfLocal.get(local) 'aPlace'
+			return places.blockLast.holds(place)
+		end 'aPlace'
+
+		return false
+	end 'emitsOps'
+
+	function pushSpanOver(ordinal ElementIndex, view ElementIndex, first ElementIndex, past ElementIndex, spans DebugSpanRows)
+		let viewFirst = spans.viewFirst(view)
+		let viewPast = spans.viewPast(view)
+		let rankFirst = self.firstPreorderAtLeast(first, from: viewFirst, past: viewPast)
+		let rankPast = self.firstPreorderAtLeast(past, from: rankFirst, past: viewPast)
+
+		if rankFirst < rankPast 'blocksInTheStretch'
+			spans.spans.push(DebugValueSpan.create(ordinal, view: view, first: rankFirst - viewFirst, past: rankPast - viewFirst))
+		end 'blocksInTheStretch'
+	end 'pushSpanOver'
+
+	function firstPreorderAtLeast(preorder ElementIndex, from ElementIndex, past ElementIndex) returns ElementIndex
+		var low = from
+		var high = past
+
+		while low < high 'narrow'
+			let middle = low + (high - low) / 2
+
+			if (try self.viewPreorders.get(middle) otherwise panic("DebugRunRefiner.firstPreorderAtLeast: viewPreorders.get OOB at {middle}")) < preorder 'below'
+				low = middle + 1
+			end 'below' else 'atOrAbove'
+				high = middle
+			end 'atOrAbove'
+		end 'narrow'
+
+		return low
+	end 'firstPreorderAtLeast'
+
+	function reviveAfterShadowingScopes(ordinal ElementIndex, ownLocal ElementIndex, stamp ElementIndex, regionFirst ElementIndex, regionPast ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+		self.pending.clear()
+
+		for resumed in self.resumeAfter 'eachScopeEnd'
+			self.reviveSuccessors(resumed, ownLocal: ownLocal, stamp: stamp, regionFirst: regionFirst, regionPast: regionPast, topo: topo, dom: dom)
+		end 'eachScopeEnd'
+
+		while self.pending.count() > 0 'untilNothingIsPending'
+			let local = try self.pending.pop() otherwise panic("DebugRunRefiner.reviveAfterShadowingScopes: pending.pop on a non-empty list failed")
+			self.pushRowOfBlock(ordinal, local: local, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites)
+
+			if (try self.stopStamp.get(local) otherwise panic("DebugRunRefiner.reviveAfterShadowingScopes: stopStamp.get OOB at {local}")) == stamp 'aVersionOrTheScopeEndsHere'
+				continue
+			end 'aVersionOrTheScopeEndsHere'
+
+			self.reviveSuccessors(local, ownLocal: ownLocal, stamp: stamp, regionFirst: regionFirst, regionPast: regionPast, topo: topo, dom: dom)
+		end 'untilNothingIsPending'
+	end 'reviveAfterShadowingScopes'
+
+	function reviveSuccessors(local ElementIndex, ownLocal ElementIndex, stamp ElementIndex, regionFirst ElementIndex, regionPast ElementIndex, topo FuncTopology, dom DominatorTree)
+		for k in 0 upto topo.succ.degree(local as CsrIndex) 'eachSuccessor'
+			let next = topo.succ.neighbour(local as CsrIndex, k: k) as ElementIndex
+
+			if next == ownLocal or not dom.isReached(next) 'notABlockOfTheRegion'
+				continue
+			end 'notABlockOfTheRegion'
+
+			let at = dom.preorderOf(next)
+
+			if at < regionFirst or at >= regionPast or not self.insideHole(at) or (try self.revived.get(next) otherwise panic("DebugRunRefiner.reviveSuccessors: revived.get OOB at {next}")) == stamp 'alreadyRowed'
+				continue
+			end 'alreadyRowed'
+
+			try self.revived.set(next, value: stamp) otherwise panic("DebugRunRefiner.reviveSuccessors: revived.set OOB at {next}")
+			self.pending.push(next)
+		end 'eachSuccessor'
+	end 'reviveSuccessors'
+
+	function isReachedInside(local ElementIndex, regionFirst ElementIndex, regionPast ElementIndex, dom DominatorTree) returns bool
+		if not dom.isReached(local) 'unreached'
+			return false
+		end 'unreached'
+
+		let at = dom.preorderOf(local)
+		return at > regionFirst and at < regionPast and not self.insideHole(at)
+	end 'isReachedInside'
+
+	function findUnreachable(ownLocal ElementIndex, stamp ElementIndex, regionFirst ElementIndex, regionPast ElementIndex, topo FuncTopology, dom DominatorTree)
+		self.holeStarts.clear()
+		self.holeEnds.clear()
+		self.candidates.clear()
+
+		for stop in self.stopLocals 'eachStop'
+			if not dom.isReached(stop) or dom.preorderOf(stop) <= regionFirst or dom.preorderOf(stop) >= regionPast 'outsideTheRegion'
+				continue
+			end 'outsideTheRegion'
+
+			self.candidates.push(stop)
+
+			if dom.dominatedCount(stop) > 1 'dominatesSomethingElse'
+				self.holeStarts.push(dom.preorderOf(stop) + 1)
+				self.holeEnds.push(dom.preorderOf(stop) + dom.dominatedCount(stop))
+			end 'dominatesSomethingElse'
+
+			self.pushFrontierOf(stop)
+		end 'eachStop'
+
+		self.normalizeHoles()
+
+		while self.candidates.count() > 0 'untilEveryCandidateIsJudged'
+			let block = try self.candidates.pop() otherwise panic("DebugRunRefiner.findUnreachable: candidates.pop on a non-empty list failed")
+
+			if block == ownLocal or not dom.isReached(block) 'notABlockToJudge'
+				continue
+			end 'notABlockToJudge'
+
+			let first = dom.preorderOf(block)
+
+			if first <= regionFirst or first >= regionPast or self.insideHole(first) or self.hasSupport(block, ownLocal: ownLocal, stamp: stamp, regionFirst: regionFirst, regionPast: regionPast, topo: topo, dom: dom) 'reachedOrOutside'
+				continue
+			end 'reachedOrOutside'
+
+			self.holeStarts.push(first)
+			self.holeEnds.push(first + dom.dominatedCount(block))
+			self.normalizeHoles()
+			self.pushFrontierOf(block)
+		end 'untilEveryCandidateIsJudged'
+	end 'findUnreachable'
+
+	function pushFrontierOf(block ElementIndex)
+		for k in 0 upto self.frontier.degree(block as CsrIndex) 'eachFrontierBlock'
+			self.candidates.push(self.frontier.neighbour(block as CsrIndex, k: k) as ElementIndex)
+		end 'eachFrontierBlock'
+	end 'pushFrontierOf'
+
+	function hasSupport(block ElementIndex, ownLocal ElementIndex, stamp ElementIndex, regionFirst ElementIndex, regionPast ElementIndex, topo FuncTopology, dom DominatorTree) returns bool
+		let first = dom.preorderOf(block)
+		let past = first + dom.dominatedCount(block)
+
+		for k in 0 upto topo.pred.degree(block as CsrIndex) 'eachPredecessor'
+			let pred = topo.pred.neighbour(block as CsrIndex, k: k) as ElementIndex
+
+			if pred == ownLocal 'theDefinitionItself'
+				return true
+			end 'theDefinitionItself'
+
+			if not dom.isReached(pred) 'deadCode'
+				continue
+			end 'deadCode'
+
+			let at = dom.preorderOf(pred)
+
+			if at < regionFirst or at >= regionPast or (at >= first and at < past) or self.insideHole(at) or (try self.stopStamp.get(pred) otherwise panic("DebugRunRefiner.hasSupport: stopStamp.get OOB at {pred}")) == stamp 'givesNothing'
+				continue
+			end 'givesNothing'
+
+			return true
+		end 'eachPredecessor'
+
+		return false
+	end 'hasSupport'
+
+	function insideHole(position ElementIndex) returns bool
+		var low = 0 as ElementIndex
+		var high = self.holeStarts.count() as ElementIndex
+
+		while low < high 'narrow'
+			let middle = low + (high - low) / 2
+
+			if (try self.holeStarts.get(middle) otherwise panic("DebugRunRefiner.insideHole: holeStarts.get OOB at {middle}")) <= position 'startsAtOrBefore'
+				low = middle + 1
+			end 'startsAtOrBefore' else 'startsAfter'
+				high = middle
+			end 'startsAfter'
+		end 'narrow'
+
+		if low == 0 'nothingStartsBefore'
+			return false
+		end 'nothingStartsBefore'
+
+		return position < (try self.holeEnds.get(low - 1) otherwise panic("DebugRunRefiner.insideHole: holeEnds.get OOB at {low - 1}"))
+	end 'insideHole'
+
+	function normalizeHoles()
+		if self.holeStarts.count() < 2 'alreadyOrdered'
+			return
+		end 'alreadyOrdered'
+
+		var keyed = CfgIndexArray.create()
+		keyed.reserve(self.holeStarts.count())
+
+		for at in 0 upto self.holeStarts.count() 'eachHole'
+			keyed.push((try self.holeStarts.get(at) otherwise panic("DebugRunRefiner.normalizeHoles: holeStarts.get OOB at {at}")) * DebugOrdinalSpan + at)
+		end 'eachHole'
+
+		keyed.sort()
+		var starts = CfgIndexArray.create()
+		var ends = CfgIndexArray.create()
+
+		for key in keyed 'eachInOrder'
+			let at = key mod DebugOrdinalSpan
+			let start = try self.holeStarts.get(at) otherwise panic("DebugRunRefiner.normalizeHoles: holeStarts.get OOB at {at}")
+			let stretchEnd = try self.holeEnds.get(at) otherwise panic("DebugRunRefiner.normalizeHoles: holeEnds.get OOB at {at}")
+
+			if ends.count() > 0 and start <= (try ends.get(ends.count() - 1) otherwise panic("DebugRunRefiner.normalizeHoles: ends.get OOB")) 'touchesTheLast'
+				if stretchEnd > (try ends.get(ends.count() - 1) otherwise panic("DebugRunRefiner.normalizeHoles: ends.get OOB")) 'reachesFurther'
+					try ends.set(ends.count() - 1, value: stretchEnd) otherwise panic("DebugRunRefiner.normalizeHoles: ends.set OOB")
+				end 'reachesFurther'
+
+				continue
+			end 'touchesTheLast'
+
+			starts.push(start)
+			ends.push(stretchEnd)
+		end 'eachInOrder'
+
+		self.holeStarts = starts
+		self.holeEnds = ends
+	end 'normalizeHoles'
 
 	function visitSuccessors(local ElementIndex, ownLocal ElementIndex, stamp ElementIndex, dominatedFirst ElementIndex, dominatedPast ElementIndex, topo FuncTopology, dom DominatorTree)
 		for k in 0 upto topo.succ.degree(local as CsrIndex) 'eachSuccessor'
@@ -2657,7 +3027,53 @@ function debugOrderKeyOf(sites DebugBindingSites, ordinal ElementIndex) returns 
 	return try sites.orderKey.get(ordinal) otherwise panic("debugOrderKeyOf: orderKey.get OOB at {ordinal}")
 end 'debugOrderKeyOf'
 
-function refineDebugRuns(raw DebugValueRangeArray, into DebugValueRangeArray, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, places DebugBlockPlaces, paramCount ParamCount)
+function debugDominanceFrontiers(topo FuncTopology, dom DominatorTree) returns CsrGraph
+	var owners = CsrColumn.create()
+	var members = CsrColumn.create()
+	var recorded = CfgIndexArray.create()
+	recorded.refill(topo.numBlocks, value: 0)
+
+	if not dom.reducible 'noFrontierIsNeeded'
+		return buildCsr(owners, to: members, nodeCount: topo.numBlocks as CsrIndex)
+	end 'noFrontierIsNeeded'
+
+	for block in 0 upto topo.numBlocks 'eachBlock'
+		if not dom.isReached(block) or topo.pred.degree(block as CsrIndex) < 2 'contributesNothing'
+			continue
+		end 'contributesNothing'
+
+		let stop = try dom.idom.get(block) otherwise panic("debugDominanceFrontiers: idom.get OOB at {block}")
+
+		for k in 0 upto topo.pred.degree(block as CsrIndex) 'eachPredecessor'
+			var runner = topo.pred.neighbour(block as CsrIndex, k: k) as ElementIndex
+
+			if not dom.isReached(runner) 'deadCode'
+				continue
+			end 'deadCode'
+
+			while runner != stop 'climb'
+				if (try recorded.get(runner) otherwise panic("debugDominanceFrontiers: recorded.get OOB at {runner}")) == block + 1 'alreadyRecordedFromAnotherPredecessor'
+					break
+				end 'alreadyRecordedFromAnotherPredecessor'
+
+				try recorded.set(runner, value: block + 1) otherwise panic("debugDominanceFrontiers: recorded.set OOB at {runner}")
+				owners.push(runner as CsrIndex)
+				members.push(block as CsrIndex)
+				let above = try dom.idom.get(runner) otherwise panic("debugDominanceFrontiers: idom.get OOB at {runner}")
+
+				if above == runner 'reachedTheEntry'
+					break
+				end 'reachedTheEntry'
+
+				runner = above
+			end 'climb'
+		end 'eachPredecessor'
+	end 'eachBlock'
+
+	return buildCsr(owners, to: members, nodeCount: topo.numBlocks as CsrIndex)
+end 'debugDominanceFrontiers'
+
+function refineDebugRuns(raw DebugValueRangeArray, into DebugValueRangeArray, spans DebugSpanRows, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, places DebugBlockPlaces, paramCount ParamCount)
 	let topo = liveness.cfg.topo
 	let dom = DominatorTree.of(topo)
 	let sites = DebugBindingSites.over(roster, liveness: liveness, locations: locations, places: places, topo: topo, dom: dom, paramCount: paramCount)
@@ -2675,11 +3091,11 @@ function refineDebugRuns(raw DebugValueRangeArray, into DebugValueRangeArray, li
 	end 'eachRawRun'
 
 	let runsOf = buildCsr(runOrdinals, to: runIndices, nodeCount: roster.valueIds.count() as CsrIndex)
-	var refiner = DebugRunRefiner.over(topo.numBlocks)
+	var refiner = DebugRunRefiner.over(topo, dom: dom, places: places, names: names)
 
 	for ordinal in 0 upto roster.valueIds.count() 'eachNamedValue'
 		if sites.refinementOf(ordinal) != DebugRunRefinement.none 'refined'
-			refiner.refine(ordinal, runsOf: runsOf, raw: raw, into: into, roster: roster, locations: locations, names: names, places: places, sites: sites, topo: topo, dom: dom)
+			refiner.refine(ordinal, runsOf: runsOf, raw: raw, into: into, spans: spans, roster: roster, locations: locations, names: names, places: places, sites: sites, topo: topo, dom: dom)
 		end 'refined'
 	end 'eachNamedValue'
 end 'refineDebugRuns'
