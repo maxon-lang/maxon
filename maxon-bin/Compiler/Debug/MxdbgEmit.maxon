@@ -559,42 +559,56 @@ function resolveContestedPlaces(records MxdbgLocalDraftArray)
 end 'resolveContestedPlaces'
 
 function resolveContestedPlacesOfOneName(records MxdbgLocalDraftArray, from ElementIndex, past ElementIndex)
-	var handled = MxdbgIndexArray.create()
+	var order = CfgIndexArray.create()
 
-	for first in from upto past 'eachRecord'
-		let site = (try records.get(first) otherwise panic("resolveContestedPlacesOfOneName: records.get OOB at {first}")).site
-
-		if handled.contains(site) 'siteAlreadySettled'
-			continue
-		end 'siteAlreadySettled'
-
-		handled.push(site)
-		let stretches = contestedStretchesOf(records, from: from, past: past, site: site).withoutShortOnes()
-
-		if stretches.starts.count() == 0 'nothingContested'
-			continue
-		end 'nothingContested'
-
-		for at in from upto past 'eachRecordOfTheSite'
-			var record = try records.get(at) otherwise panic("resolveContestedPlacesOfOneName: records.get OOB at {at}")
-
-			if record.site == site 'thisSite'
-				record.rows = rowsWithoutTheContested(record.rows, stretches: stretches)
-			end 'thisSite'
-		end 'eachRecordOfTheSite'
+	for at in from upto past 'eachRecord'
+		order.push(at)
 	end 'eachRecord'
+
+	order.sortBy(function(left ElementIndex, right ElementIndex) gives compareRecordsBySite(records, left: left, right: right))
+	var first = 0 as ElementIndex
+
+	while first < order.count() 'eachSite'
+		let site = siteOfRecord(records, at: try order.get(first) otherwise panic("resolveContestedPlacesOfOneName: order.get OOB at {first}"))
+		var last = first + 1
+
+		while last < order.count() and siteOfRecord(records, at: try order.get(last) otherwise panic("resolveContestedPlacesOfOneName: order.get OOB at {last}")) == site 'eachRecordOfTheSite'
+			last = last + 1
+		end 'eachRecordOfTheSite'
+
+		let stretches = contestedStretchesOf(records, order: order, from: first, past: last).withoutShortOnes()
+
+		if stretches.starts.count() > 0 'somethingContested'
+			for k in first upto last 'eachRecordToTrim'
+				var record = try records.get(try order.get(k) otherwise panic("resolveContestedPlacesOfOneName: order.get OOB at {k}")) otherwise panic("resolveContestedPlacesOfOneName: records.get OOB")
+				record.rows = rowsWithoutTheContested(record.rows, stretches: stretches)
+			end 'eachRecordToTrim'
+		end 'somethingContested'
+
+		first = last
+	end 'eachSite'
 end 'resolveContestedPlacesOfOneName'
 
-function contestedStretchesOf(records MxdbgLocalDraftArray, from ElementIndex, past ElementIndex, site MxdbgIndex) returns MxdbgContestedStretches
+function siteOfRecord(records MxdbgLocalDraftArray, at ElementIndex) returns MxdbgIndex
+	return (try records.get(at) otherwise panic("siteOfRecord: records.get OOB at {at}")).site
+end 'siteOfRecord'
+
+function compareRecordsBySite(records MxdbgLocalDraftArray, left ElementIndex, right ElementIndex) returns Ordering
+	let bySite = siteOfRecord(records, at: left).compare(siteOfRecord(records, at: right))
+
+	if bySite != Ordering.equalTo 'differentSites'
+		return bySite
+	end 'differentSites'
+
+	return left.compare(right)
+end 'compareRecordsBySite'
+
+function contestedStretchesOf(records MxdbgLocalDraftArray, order CfgIndexArray, from ElementIndex, past ElementIndex) returns MxdbgContestedStretches
 	var byStart = MxdbgLocalRowArray.create()
 	var byEnd = MxdbgLocalRowArray.create()
 
-	for at in from upto past 'eachRecord'
-		let record = try records.get(at) otherwise panic("contestedStretchesOf: records.get OOB at {at}")
-
-		if record.site != site 'anotherSite'
-			continue
-		end 'anotherSite'
+	for k in from upto past 'eachRecord'
+		let record = try records.get(try order.get(k) otherwise panic("contestedStretchesOf: order.get OOB at {k}")) otherwise panic("contestedStretchesOf: records.get OOB")
 
 		for row in record.rows 'eachRow'
 			if mxdbgRowHasALocation(row.locKind) 'placed'
