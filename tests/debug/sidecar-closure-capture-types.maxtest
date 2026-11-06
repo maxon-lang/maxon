@@ -1,0 +1,38 @@
+let ClosureCapturesCaseLabel = "sidecar-closure-capture-types"
+let ClosureCapturesFixtureName = "closurecaptures"
+let ClosureCapturesBuildLabel = "closure-captures"
+let CapturingClosureTypeName = "shifted$closure_0"
+let CaptureNameSeparator = " is described as "
+let CapturedGaugeDescription = "gauge is described as Gauge"
+let CapturedProbeDescription = "probe is described as Probe"
+
+test 'every value a closure of a later file captures is described under the type its own file declared it with'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ClosureCapturesCaseLabel, fixture: ClosureCapturesFixtureName)
+	let build = spawnBuild(staged, staged: staged, output: staged.join(OutputFileStem), label: ClosureCapturesBuildLabel, extraArguments: StringArray.create())
+
+	if build.exitCode() != 0 'didNotBuild'
+		panic("{ClosureCapturesCaseLabel}: the gate could not run — the build of the staged two-file project exited {build.exitCode()}, so there is no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
+	end 'didNotBuild'
+
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	Expect.equal(dump.exitCode(), expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+
+	let typeRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpTypesHeading)
+	let captures = typeFieldRowsOf(typeRows, name: CapturingClosureTypeName)
+	let described = listedLines(describedCaptures(captures))
+
+	Expect.equal(captures.count(), expected: 2, message: "the closure `{CapturingClosureTypeName}` captures two values, and the sidecar describes {captures.count()} captures under it, so this case would ask nothing of them. The types section held: {listedLines(typeRows)}")
+	Expect.contains(described, needle: CapturedGaugeDescription, message: "the closure captures `gauge`, declared `Gauge` in a file read after the first, and the sidecar describes it as another type: a debugger would print one type's fields over another's bytes. The captures were: {described}")
+	Expect.contains(described, needle: CapturedProbeDescription, message: "the closure captures `probe`, declared `Probe` in a file read after the first, and the sidecar describes it as another type: a debugger would print one type's fields over another's bytes. The captures were: {described}")
+end 'every value a closure of a later file captures is described under the type its own file declared it with'
+
+// A capture row is `+0x08  <name> : <type>`; each is restated as `<name> is described as <type>`.
+function describedCaptures(captures StringArray) returns StringArray
+	var restated = StringArray.create()
+
+	for row in captures 'eachCapture'
+		restated.push("{try whitespaceTokens(row).get(1) otherwise AbsentEventText}{CaptureNameSeparator}{describedTypeIn(row)}")
+	end 'eachCapture'
+
+	return restated
+end 'describedCaptures'

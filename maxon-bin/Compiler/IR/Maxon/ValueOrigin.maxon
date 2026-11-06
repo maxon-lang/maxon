@@ -1141,6 +1141,13 @@ export type DeferredChainTable
 		return DeferredChainRowLookup.absent
 	end 'rowOf'
 
+	export function remapFunctionIndices(newIndexOfOld FuncIndexArray)
+		for row in 0 upto self.funcIndices.count() 'each'
+			let old = try self.funcIndices.get(row) otherwise panic("DeferredChainTable.remapFunctionIndices: funcIndices.get OOB at {row}")
+			try self.funcIndices.set(row, value: try newIndexOfOld.get(old) otherwise panic("DeferredChainTable.remapFunctionIndices: newIndexOfOld.get OOB at {old}")) otherwise panic("DeferredChainTable.remapFunctionIndices: funcIndices.set OOB at {row}")
+		end 'each'
+	end 'remapFunctionIndices'
+
 	export function appendFrom(source DeferredChainTable, funcOffset ElementIndex)
 		for i in 0 upto source.count() 'each'
 			let f = try source.funcIndices.get(i) otherwise panic("DeferredChainTable.appendFrom: funcIndices.get OOB at {i}")

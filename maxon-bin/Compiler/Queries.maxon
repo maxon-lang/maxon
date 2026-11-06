@@ -2717,7 +2717,7 @@ function emissionRanksFrom(project Project, emissionOrder EmissionSlotArray) ret
 	return ranks
 end 'emissionRanksFrom'
 
-module function compareSourcePositions(leftLine LineNumber, leftColumn ColumnNumber, rightLine LineNumber, rightColumn ColumnNumber) returns Ordering
+function compareSourcePositions(leftLine LineNumber, leftColumn ColumnNumber, rightLine LineNumber, rightColumn ColumnNumber) returns Ordering
 	let byLine = leftLine.compare(rightLine)
 
 	if byLine != Ordering.equalTo 'linesDiffer'
@@ -2726,6 +2726,23 @@ module function compareSourcePositions(leftLine LineNumber, leftColumn ColumnNum
 
 	return leftColumn.compare(rightColumn)
 end 'compareSourcePositions'
+
+module function compareParsedFunctions(left IrFunction, right IrFunction) returns Ordering
+	let leftIsHelper = isParamDefaultHelperName(left.name) or isFieldDefaultHelperName(left.name)
+	let rightIsHelper = isParamDefaultHelperName(right.name) or isFieldDefaultHelperName(right.name)
+
+	if leftIsHelper != rightIsHelper 'helpersFollowTheirFile'
+		return Ordering.greaterThan if leftIsHelper else Ordering.lessThan
+	end 'helpersFollowTheirFile'
+
+	let byPosition = compareSourcePositions(left.nameLine, leftColumn: left.nameColumn, rightLine: right.nameLine, rightColumn: right.nameColumn)
+
+	if byPosition != Ordering.equalTo 'positionsDiffer'
+		return byPosition
+	end 'positionsDiffer'
+
+	return compareBytesOrdinally(left.name, right: right.name)
+end 'compareParsedFunctions'
 
 export type DeclarationPosition
 	export let rank as ElementIndex

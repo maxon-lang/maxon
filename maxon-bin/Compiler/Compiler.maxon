@@ -1196,13 +1196,13 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// `GlobalInitOrder`). That walk must sit between `liveGlobalLabels` and the synthesis for the reason
 	// `liveGlobalLabels`' own position has: `__module_init` opens every global with a `globalAddr` of its own
 	// slot, so a dependency walk run after it would find every global depending on itself.
-	var orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals)) otherwise (failure) 'initOrderRefused'
+	var orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals, fileRanks: project.emissionRanks)) otherwise (failure) 'initOrderRefused'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'initOrderRefused'
 
 	// A `let` no share walk can mark, a `spawn` an initializer reaches, and a `let` initializer reaching a managed
 	// `var` are refused by `semanticCheck`.
-	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, signatures: signatures, defaults: signatures.defaultSlots()) otherwise (failure) 'defaultOrderRefused'
+	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, signatures: signatures, defaults: signatures.defaultSlots(project.emissionRanks)) otherwise (failure) 'defaultOrderRefused'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'defaultOrderRefused'
 

@@ -1053,6 +1053,10 @@ export type ClosureEnvField
 		return Self{name: name, slot: slot, declaredType: declaredType}
 	end 'create'
 
+	function withTypeRenumbered(remap TypeIdRemap) returns ClosureEnvField
+		return Self{name: self.name.clone(), slot: self.slot, declaredType: remapMaxonType(self.declaredType, remap: remap)}
+	end 'withTypeRenumbered'
+
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
@@ -3772,6 +3776,14 @@ export type IrFunction
 		for local in self.debugLocals 'eachDebugLocal'
 			local.renumberTypeIds(remap)
 		end 'eachDebugLocal'
+
+		var captures = ClosureEnvFieldArray.create()
+
+		for capture in self.closureEnvFields 'eachCapture'
+			captures.push(capture.withTypeRenumbered(remap))
+		end 'eachCapture'
+
+		self.closureEnvFields = captures
 	end 'renumberTypeIds'
 
 	// RELOCATION, not copying: a shallow copy that also carries the source's

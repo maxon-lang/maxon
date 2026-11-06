@@ -873,24 +873,33 @@ function compareWithinEmissionRun(module StdModule, left ElementIndex, right Ele
 	end 'aMixedPair'
 
 	if not leftIsParsed 'aSynthesizedFamily'
+		let byOwner = compareBytesOrdinally(synthesizedOwnerName(leftFunc.name), right: synthesizedOwnerName(rightFunc.name))
+
+		if byOwner != Ordering.equalTo 'ownersDiffer'
+			return byOwner
+		end 'ownersDiffer'
+
 		return compareBytesOrdinally(leftFunc.name, right: rightFunc.name)
 	end 'aSynthesizedFamily'
 
-	let leftIsHelper = isParamDefaultHelperName(leftFunc.name) or isFieldDefaultHelperName(leftFunc.name)
-	let rightIsHelper = isParamDefaultHelperName(rightFunc.name) or isFieldDefaultHelperName(rightFunc.name)
-
-	if leftIsHelper != rightIsHelper 'helpersFollowTheirFile'
-		return Ordering.greaterThan if leftIsHelper else Ordering.lessThan
-	end 'helpersFollowTheirFile'
-
-	let byPosition = compareSourcePositions(leftFunc.nameLine, leftColumn: leftFunc.nameColumn, rightLine: rightFunc.nameLine, rightColumn: rightFunc.nameColumn)
-
-	if byPosition != Ordering.equalTo 'positionsDiffer'
-		return byPosition
-	end 'positionsDiffer'
-
-	return compareBytesOrdinally(leftFunc.name, right: rightFunc.name)
+	return compareParsedFunctions(leftFunc, right: rightFunc)
 end 'compareWithinEmissionRun'
+
+function synthesizedOwnerName(name ByteArray) returns ByteArray
+	if bytesStartWith(name, prefix: DestructorPrefix) 'aDestructor'
+		return nameAfterPrefix(name, prefix: DestructorPrefix)
+	end 'aDestructor'
+
+	if bytesStartWith(name, prefix: UnionRetainPrefix) 'aUnionRetain'
+		return nameAfterPrefix(name, prefix: UnionRetainPrefix)
+	end 'aUnionRetain'
+
+	return name.clone()
+end 'synthesizedOwnerName'
+
+function nameAfterPrefix(name ByteArray, prefix ByteArray) returns ByteArray
+	return try name.slice(prefix.count(), endIndex: name.count()) otherwise panic("nameAfterPrefix: slice OOB past the prefix {String.from(prefix)} of {String.from(name)}")
+end 'nameAfterPrefix'
 
 enum SynthesisFamily
 	none
@@ -903,7 +912,7 @@ enum SynthesisFamily
 end 'SynthesisFamily'
 
 function synthesisFamilyOf(module StdModule, name ByteArray) returns SynthesisFamily
-	if bytesStartWith(name, prefix: DestructorPrefix) 'aDestructor'
+	if bytesStartWith(name, prefix: DestructorPrefix) or bytesStartWith(name, prefix: UnionRetainPrefix) 'aDestructor'
 		return SynthesisFamily.destructor
 	end 'aDestructor'
 

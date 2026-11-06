@@ -18506,10 +18506,10 @@ export type ProgramSignatures
 		return live
 	end 'liveWinningDefaults'
 
-	export function defaultSlots() returns DefaultSlotArray
+	export function defaultSlots(fileRanks FileEmissionRankMap) returns DefaultSlotArray
 		var slots = DefaultSlotArray.create()
 
-		for declaration in self.liveWinningDefaults() 'eachBuiltDefault'
+		for declaration in self.liveWinningDefaultsInPositionOrder(fileRanks) 'eachBuiltDefault'
 			let slot = self.defaultSlotOf(declaration)
 
 			if defaultSlotIsRefusedAsUnshareable(slot) 'refusedAtItsDeclaration'
@@ -24111,22 +24111,8 @@ export type ProgramSignatures
 	export function declaredGlobals(live LiveGlobalLabelSet, fileRanks FileEmissionRankMap) returns DataSectionEntryArray
 		var entries = DataSectionEntryArray.create()
 
-		var stored = DeclarationOrder.create()
-		var storedPositions = DeclarationPositionArray.create()
-
-		for i in 0 upto self.settledDeclarations().decls.count() 'eachDeclaration'
-			view candidate = self.declAt(i)
-
-			if not self.contributesStorage(candidate, live: live) 'noReachableSlot'
-				continue
-			end 'noReachableSlot'
-
-			stored.push(i)
-			storedPositions.push(DeclarationPosition.of(fileRanks, path: candidate.declFilePath, line: candidate.nameLine, column: candidate.nameColumn, kind: "the global", name: candidate.name))
-		end 'eachDeclaration'
-
-		for slot in declarationsInPositionOrder(storedPositions) 'each'
-			let decl = self.declAt(try stored.get(slot) otherwise panic("ProgramSignatures.declaredGlobals: stored.get OOB at {slot}"))
+		for index in self.storedDeclarationsInPositionOrder(live, fileRanks: fileRanks) 'each'
+			let decl = self.declAt(index)
 
 			match decl.outcome 'state'
 				value(payload, tag, typeName) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: self.foldedGlobalStdType(tag, typeName: typeName, name: decl.name), value: payload, reach: DataReach.declared))
@@ -24144,20 +24130,53 @@ export type ProgramSignatures
 			end 'state'
 		end 'each'
 
-		let winningDefaults = self.liveWinningDefaults()
-		var defaultPositions = DeclarationPositionArray.create()
-
-		for declaration in winningDefaults 'eachWinningDefault'
-			defaultPositions.push(DeclarationPosition.of(fileRanks, path: declaration.declFilePath, line: declaration.keyLine, column: declaration.keyColumn, kind: "the default", name: declaration.key))
-		end 'eachWinningDefault'
-
-		for slot in declarationsInPositionOrder(defaultPositions) 'eachBuiltDefault'
-			let declaration = try winningDefaults.get(slot) otherwise panic("ProgramSignatures.declaredGlobals: winningDefaults.get OOB at {slot}")
+		for declaration in self.liveWinningDefaultsInPositionOrder(fileRanks) 'eachBuiltDefault'
 			entries.push(DataSectionEntry.create(String.from(defaultSlotLabel(declaration.key)), valueType: StdType.i64, value: ManagedGlobalInitialSlot, reach: DataReach.declared))
 		end 'eachBuiltDefault'
 
 		return entries
 	end 'declaredGlobals'
+
+	function storedDeclarationsInPositionOrder(live LiveGlobalLabelSet, fileRanks FileEmissionRankMap) returns DeclarationOrder
+		var stored = DeclarationOrder.create()
+		var storedPositions = DeclarationPositionArray.create()
+
+		for i in 0 upto self.settledDeclarations().decls.count() 'eachDeclaration'
+			view candidate = self.declAt(i)
+
+			if not self.contributesStorage(candidate, live: live) 'noReachableSlot'
+				continue
+			end 'noReachableSlot'
+
+			stored.push(i)
+			storedPositions.push(DeclarationPosition.of(fileRanks, path: candidate.declFilePath, line: candidate.nameLine, column: candidate.nameColumn, kind: "the global", name: candidate.name))
+		end 'eachDeclaration'
+
+		var ordered = DeclarationOrder.create()
+
+		for slot in declarationsInPositionOrder(storedPositions) 'each'
+			ordered.push(try stored.get(slot) otherwise panic("ProgramSignatures.storedDeclarationsInPositionOrder: stored.get OOB at {slot}"))
+		end 'each'
+
+		return ordered
+	end 'storedDeclarationsInPositionOrder'
+
+	function liveWinningDefaultsInPositionOrder(fileRanks FileEmissionRankMap) returns DefaultDeclarationArray
+		let winning = self.liveWinningDefaults()
+		var positions = DeclarationPositionArray.create()
+
+		for declaration in winning 'eachWinningDefault'
+			positions.push(DeclarationPosition.of(fileRanks, path: declaration.declFilePath, line: declaration.keyLine, column: declaration.keyColumn, kind: "the default", name: declaration.key))
+		end 'eachWinningDefault'
+
+		var ordered = DefaultDeclarationArray.create()
+
+		for slot in declarationsInPositionOrder(positions) 'each'
+			ordered.push(try winning.get(slot) otherwise panic("ProgramSignatures.liveWinningDefaultsInPositionOrder: winning.get OOB at {slot}"))
+		end 'each'
+
+		return ordered
+	end 'liveWinningDefaultsInPositionOrder'
 
 	// The `.data` entry every RECORD-valued global reserves: one machine word of zero, holding the POINTER
 	// `__module_init` writes before `main` — or, for an inline packed record, the VALUE it writes there.
@@ -24233,15 +24252,11 @@ export type ProgramSignatures
 	// quadratic (docs/internals/query-spine.md, Whole-program queries under per-file ones).
 	//
 	// A var whose initializer FAILED contributes nothing: the build has already failed on its diagnostic.
-	export function managedGlobals(live LiveGlobalLabelSet) returns ManagedGlobalArray
+	export function managedGlobals(live LiveGlobalLabelSet, fileRanks FileEmissionRankMap) returns ManagedGlobalArray
 		var entries = ManagedGlobalArray.create()
 
-		for i in 0 upto self.settledDeclarations().decls.count() 'each'
-			let decl = self.declAt(i)
-
-			if not self.contributesStorage(decl, live: live) 'noReachableSlot'
-				continue
-			end 'noReachableSlot'
+		for index in self.storedDeclarationsInPositionOrder(live, fileRanks: fileRanks) 'each'
+			let decl = self.declAt(index)
 
 			match decl.outcome 'state'
 				value or

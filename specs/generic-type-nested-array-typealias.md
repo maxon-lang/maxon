@@ -3928,6 +3928,80 @@ end 'main'
 18 4 6
 ```
 
+<!-- test: a-type-body-and-an-extension-in-two-directories-each-read-their-own-transform -->
+The extension's `Transform` is published after the contested names are settled, and is the second declaration of the name. Each directory reads its own.
+```maxon
+// --- file: a/main.maxon
+typealias Level = int(0 to 125)
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Box uses T
+	typealias Transform = function(Level) returns Level
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Box'
+
+typealias LevelBox = Box with Level
+
+export function runA() returns ExitCode
+	let b = LevelBox.create(3)
+	print("{b.run(5)}")
+	return 0
+end 'runA'
+
+// --- file: b/main.maxon
+function triple(x Count) returns Count
+	return x * 3
+end 'triple'
+
+type Plain uses U
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Plain'
+
+extension Plain
+	typealias Transform = function(Count) returns Count
+
+	function twice(n Count, f Transform = triple) returns Count
+		return f(f(n))
+	end 'twice'
+end 'Plain'
+
+typealias CountPlain = Plain with Count
+
+export function runB() returns ExitCode
+	let p = CountPlain.create(3)
+	print("{p.twice(2)}")
+	return 0
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	_ = a.runA()
+	_ = b.runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+618
+```
+
 <!-- test: the-default-of-a-second-method-is-filled-at-a-call-from-main -->
 ```maxon
 typealias Level = int(0 to 125)

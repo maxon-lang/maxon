@@ -3110,6 +3110,17 @@ end 'InnerAliasRoster'
 
 let noInnerAliases = InnerAliasRoster.unwritten
 
+type FunctionSlot
+	export var func as IrFunction
+	export let oldIndex as ElementIndex
+
+	static function create(func IrFunction, oldIndex ElementIndex) returns FunctionSlot
+		return Self{func: func, oldIndex: oldIndex}
+	end 'create'
+end 'FunctionSlot'
+
+typealias FunctionSlotArray = Array with FunctionSlot
+
 union ScannedAliasNames
 	unwritten
 	entries(names NameRoster)
@@ -20282,6 +20293,8 @@ export type Parser
 		// `Parser.memberAccessedTypeNames`).
 		self.artifact.memberAccessedTypeNames = self.memberAccessedTypeNames
 
+		self.canonicalizeFunctionOrder()
+
 		for position in 0 upto self.artifact.module.functions.count() 'eachFunction'
 			var published = try self.artifact.module.functions.get(position) otherwise panic("parseModule: functions.get OOB at {position}")
 			published.surrenderColumns()
@@ -20289,6 +20302,45 @@ export type Parser
 
 		return self.artifact
 	end 'parseModule'
+
+	function canonicalizeFunctionOrder()
+		view module = self.artifact.module
+		var ascending = true
+
+		for i in 1 upto module.funcCount() 'eachAdjacentPair'
+			if compareParsedFunctions(module.getFunc(i - 1), right: module.getFunc(i)) != Ordering.lessThan 'outOfOrder'
+				ascending = false
+			end 'outOfOrder'
+		end 'eachAdjacentPair'
+
+		if ascending 'alreadyCanonical'
+			return
+		end 'alreadyCanonical'
+
+		var slots = FunctionSlotArray.create()
+
+		for i in 0 upto module.funcCount() 'eachFunction'
+			slots.push(FunctionSlot.create(self.artifact.module.getFunc(i), oldIndex: i))
+		end 'eachFunction'
+
+		slots.sortBy(function(left FunctionSlot, right FunctionSlot) gives compareParsedFunctions(left.func, right: right.func))
+
+		var sorted = IrFunctionArray.create()
+		var newIndexOfOld = FuncIndexArray.create()
+		newIndexOfOld.resize(slots.count())
+		var live = BoolArray.create()
+
+		for position in 0 upto slots.count() 'eachPlaced'
+			var slot = try slots.get(position) otherwise panic("canonicalizeFunctionOrder: slots.get OOB at {position}")
+			sorted.push(slot.func)
+			try newIndexOfOld.set(slot.oldIndex, value: position) otherwise panic("canonicalizeFunctionOrder: newIndexOfOld.set OOB at {slot.oldIndex}")
+			live.push(true)
+		end 'eachPlaced'
+
+		self.artifact.module.functions = sorted
+		self.artifact.valueOrigins.remapFunctionIndices(live, newIndexOfOld: newIndexOfOld)
+		self.artifact.deferredChains.remapFunctionIndices(newIndexOfOld)
+	end 'canonicalizeFunctionOrder'
 
 	function readTopLevelDeclaration() throws SourceParseError
 		let start = self.current()
