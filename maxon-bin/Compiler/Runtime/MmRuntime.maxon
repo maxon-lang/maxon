@@ -2812,9 +2812,26 @@ end 'buildCountedDecref'
 function emitLastOwnerRelease(module StdModule, func IrFunction, release IrBlock, record ValueId, releaseCallee ByteArray, shape DecrefRecordShape, ids ValueMinter)
 	match shape 'shape'
 		box then emitBoxLastOwner(module, func: func, release: release, record: record, releaseCallee: releaseCallee, ids: ids)
-		bufferRecord then emitCallAndReturnVoid(module, block: release, callee: releaseCallee, args: argsOf(record), ids: ids)
+		bufferRecord then emitBufferLastOwner(module, func: func, release: release, record: record, releaseCallee: releaseCallee, ids: ids)
 	end 'shape'
 end 'emitLastOwnerRelease'
+
+function emitBufferLastOwner(module StdModule, func IrFunction, release IrBlock, record ValueId, releaseCallee ByteArray, ids ValueMinter)
+	var owned = module.addBlock(func, label: b"relowned", heat: BlockHeat.normal)
+	var baseJoin = module.addBlock(func, label: b"relbase", heat: BlockHeat.normal)
+	var walk = module.addBlock(func, label: b"relwalk", heat: BlockHeat.normal)
+	var free = module.addBlock(func, label: b"relfree", heat: BlockHeat.normal)
+
+	let destroy = emitLoadField(module, block: release, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	let managed = emitElementIsManaged(module, block: release, destroy: destroy, ids: ids)
+	module.setTerminator(release, op: StdOp.condBranch(managed, thenBlockId: walk.id, elseBlockId: owned.id))
+
+	let base = emitOwedAllocationBase(module, func: func, cur: owned, join: baseJoin, record: record, ids: ids)
+	emitRouteOnOwedBase(module, block: baseJoin, base: base, whenOwed: walk, whenNone: free, ids: ids)
+
+	emitCallAndReturnVoid(module, block: walk, callee: releaseCallee, args: argsOf(record), ids: ids)
+	emitCallAndReturnVoid(module, block: free, callee: MmFreeName, args: argsOf(record), ids: ids)
+end 'emitBufferLastOwner'
 
 function emitBoxLastOwner(module StdModule, func IrFunction, release IrBlock, record ValueId, releaseCallee ByteArray, ids ValueMinter)
 	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.cold)
